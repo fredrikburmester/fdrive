@@ -1,0 +1,44 @@
+from fdrive_indexer.config import Config, parse_roots
+
+
+def test_parse_roots_multiple() -> None:
+    assert parse_roots("sftpgo=/roots/sftpgo,photos=/roots/photos") == {
+        "sftpgo": "/roots/sftpgo",
+        "photos": "/roots/photos",
+    }
+
+
+def test_parse_roots_empty_string() -> None:
+    assert parse_roots("") == {}
+
+
+def test_parse_roots_skips_malformed_pairs() -> None:
+    assert parse_roots("sftpgo=/roots/sftpgo,,broken,=novalue,noeq=") == {"sftpgo": "/roots/sftpgo"}
+
+
+def test_config_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("INDEX_ROOTS", raising=False)
+    monkeypatch.delenv("WATCH", raising=False)
+    cfg = Config()
+    assert cfg.roots == {}
+    assert cfg.watch is True
+    assert cfg.chunk_chars == 1200
+    assert cfg.indexer_port == 8010
+
+
+def test_config_reads_env(monkeypatch) -> None:
+    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/roots/sftpgo")
+    monkeypatch.setenv("WATCH", "false")
+    monkeypatch.setenv("INDEX_WORKERS", "9")
+    cfg = Config()
+    assert cfg.roots == {"sftpgo": "/roots/sftpgo"}
+    assert cfg.watch is False
+    assert cfg.workers == 9
+
+
+def test_config_default_settings_matches_env(monkeypatch) -> None:
+    monkeypatch.setenv("INDEX_WORKERS", "3")
+    cfg = Config()
+    settings = cfg.default_settings()
+    assert settings.workers == 3
+    assert settings.scan_interval_seconds == cfg.scan_interval

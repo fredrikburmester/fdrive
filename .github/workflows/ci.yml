@@ -65,6 +65,39 @@ jobs:
       - name: Run integration tests
         run: pnpm test:integration
 
+  indexer:
+    name: Indexer (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
+
+      - name: Install indexer dependencies
+        working-directory: services/indexer
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        working-directory: services/indexer
+        run: ruff check src tests scripts
+
+      - name: Typecheck
+        working-directory: services/indexer
+        run: mypy src scripts
+
+      - name: Test with coverage
+        working-directory: services/indexer
+        run: pytest -q --cov=fdrive_indexer --cov-report=term-missing --cov-fail-under=95
+
   e2e:
     name: End-to-end tests
     needs: check

@@ -57,3 +57,44 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  # -- index profile: indexer, tika, embed --------------------------------------
+  # Opt in with `--profile index` (see README.md). The indexer walks and watches
+  # `FDRIVE_INDEX_SFTPGO_DIR` (a read-only bind mount of the same directory
+  # SFTPGo serves), extracts text, embeds it, and generates thumbnails. Add more
+  # roots by copying the `indexer` service's volume line and `INDEX_ROOTS` entry
+  # for each additional `name=/roots/<name>` pair.
+  indexer:
+    build:
+      context: ../services/indexer
+      dockerfile: Dockerfile
+    profiles: [index]
+    environment:
+      DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
+      INDEX_ROOTS: sftpgo=/roots/sftpgo
+      TIKA_URL: http://tika:9998
+      EMBED_URL: http://embed:80
+      THUMBS_DIR: /thumbs
+      INDEXER_PORT: "8010"
+    volumes:
+      - ${FDRIVE_INDEX_SFTPGO_DIR}:/roots/sftpgo:ro
+      - ${FDRIVE_DATA_DIR:-./data}/thumbs:/thumbs
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tika:
+    image: apache/tika:3.2.1.0
+    profiles: [index]
+    restart: unless-stopped
+
+  embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
+    profiles: [index]
+    command: ["--model-id", "intfloat/multilingual-e5-small"]
+    volumes:
+      - ${FDRIVE_DATA_DIR:-./data}/models:/data
+    mem_limit: 4g
+    restart: unless-stopped

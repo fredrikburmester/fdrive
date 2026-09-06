@@ -22,6 +22,15 @@ This directory holds the Docker Compose files for running fdrive. Copy
 - `.env.example` — every environment variable used by the files above, with
   placeholder values and comments on what generates a real one.
 
+## The `index` profile
+
+`compose.yaml` also defines `indexer`, `tika`, and `embed` behind an `index`
+Compose profile: search, thumbnails, and content extraction only run when you
+opt in with `--profile index` (see below). `FDRIVE_INDEX_SFTPGO_DIR` in
+`.env` must point at the same host directory SFTPGo itself serves, bind-mounted
+read-only into the indexer at `/roots/sftpgo`. See `docs/INDEXER.md` for what
+gets indexed, the internal HTTP API, and how to add more roots.
+
 ## The external SFTPGo assumption
 
 fdrive never manages SFTPGo's own database and treats it as an external
@@ -54,6 +63,12 @@ Core stack plus ONLYOFFICE editing:
 
 ```sh
 docker compose -f compose.yaml -f compose.office.yaml --profile office up -d
+```
+
+Core stack plus indexing, search, and thumbnails:
+
+```sh
+docker compose -f compose.yaml --profile index up -d
 ```
 
 Validate a compose file's syntax without starting anything:

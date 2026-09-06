@@ -23,7 +23,8 @@
     "dev:seed": "tsx --conditions=development tools/dev/generate-seed.ts",
     "perf": "tsx --conditions=development tools/perf/run.ts",
     "perf:quick": "tsx --conditions=development tools/perf/run.ts --quick",
-    "test:tools": "vitest run --config tools/perf/vitest.config.ts"
+    "test:tools": "vitest run --config tools/perf/vitest.config.ts",
+    "test:indexer": "cd services/indexer && pytest -q --cov=fdrive_indexer --cov-report=term-missing --cov-fail-under=95"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
