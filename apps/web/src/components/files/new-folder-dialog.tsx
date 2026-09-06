@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,12 +30,24 @@ export function NewFolderDialog({
   pending = false,
 }: NewFolderDialogProps) {
   const [name, setName] = useState(DEFAULT_NAME);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setName(DEFAULT_NAME);
     }
   }, [open]);
+
+  /** Selects the whole default name so typing replaces it, rather than inserting into it. */
+  function focusAndSelectAll(): boolean {
+    const input = inputRef.current;
+    if (input === null) {
+      return false;
+    }
+    input.focus();
+    input.select();
+    return false;
+  }
 
   const trimmed = name.trim();
 
@@ -48,7 +60,7 @@ export function NewFolderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent initialFocus={focusAndSelectAll}>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>New folder</DialogTitle>
@@ -56,7 +68,7 @@ export function NewFolderDialog({
           </DialogHeader>
           <Field className="py-4">
             <Input
-              autoFocus
+              ref={inputRef}
               value={name}
               onChange={(event) => setName(event.target.value)}
               aria-label="Folder name"

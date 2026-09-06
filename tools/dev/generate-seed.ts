@@ -23,6 +23,7 @@ import {
   type SeedUser,
   seedFileLayout,
 } from "@fdrive/testkit";
+import { encodeMinimalPdf } from "./pdf.js";
 import { encodePng } from "./png.js";
 
 /** Matches SFTPGO_DATA_DIR used by the testkit and by compose.dev.yaml's sftpgo volume. */
@@ -48,6 +49,32 @@ export function buildSamplePngMarker(): string {
   return toBase64Marker(png);
 }
 
+/**
+ * Generates a 640x400 PNG gradient (a wider blue-to-orange sweep than
+ * `buildSamplePngMarker`'s 16x16 thumbnail), large enough to exercise the
+ * image preview viewer at a realistic size, wrapped in the BASE64: marker
+ * `writeSeedFile` understands.
+ */
+export function buildGradientPngMarker(): string {
+  const width = 640;
+  const height = 400;
+  const png = encodePng(width, height, (x, y) => ({
+    r: Math.round((x / (width - 1)) * 255),
+    g: Math.round(90 + (y / (height - 1)) * 120),
+    b: Math.round(210 - (x / (width - 1)) * 130),
+  }));
+  return toBase64Marker(png);
+}
+
+/**
+ * Generates a small, valid one-page PDF ("Hello, fdrive") for exercising the
+ * PDF preview viewer, wrapped in the BASE64: marker `writeSeedFile`
+ * understands.
+ */
+export function buildSamplePdfMarker(): string {
+  return toBase64Marker(encodeMinimalPdf("Hello, fdrive sample PDF"));
+}
+
 /** The dev-only user: full permissions, meant for exploring the app in a browser. */
 export const DEV_USER: SeedUser = {
   username: "dev",
@@ -69,7 +96,18 @@ export function buildDevSampleFiles(): Record<string, string> {
       "permissions on its home directory. Try uploading, downloading, and\n" +
       "organizing files here.\n",
     "/photo.png": buildSamplePngMarker(),
+    "/gradient.png": buildGradientPngMarker(),
     "/budget.csv": "category,amount\nrent,1200\ngroceries,340\ntransit,60\n",
+    "/notes/todo.md":
+      "# Todo\n\n- [ ] Try renaming a file\n- [ ] Upload a folder\n- [ ] Preview a PDF\n",
+    "/notes/ideas.md":
+      "# Ideas\n\n" +
+      "Random notes and ideas go here. This file exists so the markdown\n" +
+      "preview and the file browser both have more than one document to show.\n",
+    "/code/example.ts":
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal TypeScript source text for the seeded /code/example.ts file, not an accidental template placeholder
+      "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}\n",
+    "/docs/sample.pdf": buildSamplePdfMarker(),
   };
 }
 

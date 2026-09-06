@@ -119,6 +119,8 @@ export function FileGrid({
                     {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
                     <div
                       data-path={entry.path}
+                      data-selected={isSelected}
+                      data-focused={isFocused}
                       draggable
                       onDragStart={(event) => handleDragStart(event, entry)}
                       onDragOver={(event) => handleDragOver(event, entry)}
@@ -126,10 +128,9 @@ export function FileGrid({
                       onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                       onDoubleClick={() => onEntryDoubleClick(entry)}
                       className={cn(
-                        "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none",
-                        isSelected && "bg-primary/10",
-                        isFocused && "ring-1 ring-ring ring-inset",
-                        "hover:bg-muted/60",
+                        "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
+                        "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
+                        "data-[selected=true]:bg-primary/10",
                       )}
                     >
                       <FileIcon
