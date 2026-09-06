@@ -27,3 +27,13 @@ Rules
 
 Report format (final message): what you built, files created or changed, commands run with
 their final summary lines, assumptions made, anything left undone and why.
+
+Frontend rules (apps/web)
+- Every visible control is a shadcn/ui component added with the shadcn CLI into
+  `src/components/ui`. Never hand-roll a button, input, select, dialog, sheet, menu, tooltip,
+  table, or tabs, and never add another component library. Compose shadcn primitives into
+  app-specific components; extend a primitive in place when it lacks something.
+- Design language is Apple-like: quiet neutral surfaces, one accent colour, system font stack,
+  hairline borders and translucency over heavy shadows, brief eased motion, hierarchy by weight
+  and size. Colours only come from the tokens in `globals.css`. Dark mode must look intentional.
+- Icons: lucide, default stroke, never filled variants.

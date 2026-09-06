@@ -410,6 +410,25 @@ Next.js 16 app router, React 19, Tailwind 4, shadcn/ui, TanStack Query, TanStack
 `dnd-kit` for internal drag and drop, native HTML5 drop for OS files, `cmdk` for the palette,
 zustand for selection and the upload queue.
 
+**UI component rule (hard constraint).** Every visible control comes from the latest shadcn/ui
+registry, added through the shadcn CLI into `src/components/ui`. No hand-rolled buttons, inputs,
+menus, dialogs, sheets, tables, or tooltips, and no other component library. Composition of
+shadcn primitives into fdrive-specific components (file row, breadcrumb bar, upload queue) is
+expected; reimplementing a primitive that shadcn already ships is not. When a shadcn component
+needs a behaviour it lacks, extend it in place following shadcn's own patterns rather than
+replacing it. The current scaffold is shadcn's Base UI based generation (`base-nova` style), and
+that is what "latest" means here.
+
+**Design language: Apple-like.** Calm, quiet surfaces with generous whitespace, a restrained
+neutral palette with one accent, system font stack (SF Pro on Apple platforms via
+`-apple-system`), subtle depth through translucency and hairline borders rather than heavy
+shadows, rounded corners consistent with shadcn's radius tokens, motion that is brief and eased,
+and typography hierarchy carried by weight and size rather than colour. Sidebar plus content
+layout in the spirit of Finder and iCloud Drive: sidebar for locations and tags, toolbar for view
+and sort, details in a trailing inspector pane. Dark mode is first-class, not an afterthought.
+Icons from lucide, thin stroke, never filled. Theme tokens live in `globals.css` and are the only
+place colours are defined.
+
 Screens: login; browser (list and grid, virtualized, multi-select, keyboard navigation, context
 menu, breadcrumbs, details pane with tags, favorites, duplicates, similar files); search results
 with snippets and filters (folder, type, date); favorites; recents; tags; account page (identities,
