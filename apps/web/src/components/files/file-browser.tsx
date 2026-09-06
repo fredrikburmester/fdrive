@@ -2,6 +2,7 @@
 
 import type { FsEntry } from "@fdrive/contracts";
 import { baseName, isRoot, joinPath, parentPath } from "@fdrive/core";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import {
@@ -14,11 +15,14 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { NewFileDialog } from "@/components/editor/new-file-dialog";
 import { Inspector } from "@/components/inspector/inspector";
 import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
-import { apiClient, PageHeader } from "@/lib/files/deps";
+import type { NewFileKind } from "@/lib/editor/new-file";
+import { editHref } from "@/lib/editor/route";
+import { apiClient, PageHeader, queryKeys } from "@/lib/files/deps";
 import {
   type AnchorDownloader,
   createAnchorDownloader,
@@ -147,6 +151,7 @@ export function FileBrowser({
   onSelectionChange,
 }: FileBrowserProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { data, isLoading, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
 
@@ -195,6 +200,8 @@ export function FileBrowser({
   const remove = useDelete();
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFileKind, setNewFileKind] = useState<NewFileKind | null>(null);
+  const [newFilePending, setNewFilePending] = useState(false);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
   const [destinationPicker, setDestinationPicker] = useState<{
@@ -303,6 +310,24 @@ export function FileBrowser({
         dispatchSelection({ type: "set", paths: [entry.path] });
       },
     });
+  }
+
+  async function handleCreateFile(name: string) {
+    if (newFileKind === null) {
+      return;
+    }
+    setNewFilePending(true);
+    const targetPath = joinPath(path, name);
+    try {
+      await apiClient.upload(targetPath, new Blob([]), { contentLength: 0 });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(path) });
+      setNewFileKind(null);
+      router.push(toRoute(editHref(targetPath)));
+    } catch (err) {
+      toast.error(describeFsError(err, "Could not create the file."));
+    } finally {
+      setNewFilePending(false);
+    }
   }
 
   function handleRenameSubmit(newName: string) {
@@ -456,6 +481,7 @@ export function FileBrowser({
             sortSpec={sortSpec}
             onSortSpecChange={setSortSpec}
             onNewFolder={() => setNewFolderOpen(true)}
+            onNewFile={setNewFileKind}
             onUploadFiles={handleUploadFiles}
             onUploadFolder={handleUploadFolder}
             detailsOpen={detailsOpen}
@@ -545,6 +571,16 @@ export function FileBrowser({
         onOpenChange={setNewFolderOpen}
         onCreate={handleCreateFolder}
         pending={mkdir.isPending}
+      />
+      <NewFileDialog
+        kind={newFileKind}
+        onOpenChange={(open) => {
+          if (!open) {
+            setNewFileKind(null);
+          }
+        }}
+        onCreate={(name) => void handleCreateFile(name)}
+        pending={newFilePending}
       />
       <RenameDialog
         entry={renameTarget}
