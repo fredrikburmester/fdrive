@@ -121,6 +121,9 @@ rules from the agent file into the prompt.
   packages first (`pnpm --filter <app>... run build`).
 - Next bakes `API_INTERNAL_URL` into the build; the compose proxy owns `/api`, and the web image is
   built with the compose value.
+- Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
+  file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
+  first, list only after it reports `bad_request`.
 - Zod 4's `z.iso.datetime()` rejects `+00:00` offsets unless `{ offset: true }`; Python emits
   offsets.
 - Base UI: `DropdownMenuLabel` must sit inside a group; never nest a `ToggleGroup` in a menu; pass
