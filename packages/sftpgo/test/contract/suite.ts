@@ -40,17 +40,12 @@ async function loginAs(client: SftpgoClient, user: SeedUser): Promise<string> {
 
 /**
  * Creates every missing ancestor directory of `path`, one level at a time.
- * Deliberately does not use the client's own `mkdirParents` option: SFTPGo
- * v2.7.5 does not treat the client's current `mkdir_parents=1`/`0` wire
- * value as true (see the "mkdirParents" upload test below), so a helper
- * that relied on it would be unreliable against the real container.
- *
- * Checks for existence with `list` rather than reacting to a "conflict"
- * from `mkdir`, because the two targets disagree on what mkdir-on an
- * already-existing directory reports (fake: 409 conflict; the real
- * drakkan/sftpgo:v2.7.5 container: 500 server, see the "mkdir" describe
- * block below) and this helper needs to tolerate a directory that a
- * previous test already created on both.
+ * Checks for existence with `list` rather than reacting to an error from
+ * `mkdir`, because mkdir on an already-existing directory reports kind
+ * "server" on both targets (see the "mkdir" describe block below), which
+ * would not distinguish "already exists" from a genuine failure. This
+ * helper needs to tolerate a directory that a previous test already
+ * created.
  */
 async function ensureDir(user: SftpgoUserApi, path: string): Promise<void> {
   if (path === "/") {
@@ -127,9 +122,8 @@ function expectFileEntry(
 
 /**
  * Registers the shared SFTPGo contract as a vitest describe block. `name`
- * identifies the target in test output ("fake" or "container") and, for
- * the one behaviour SFTPGo's fake cannot cheaply reproduce (mkdir on an
- * already-existing directory), selects which side is allowed to diverge.
+ * identifies the target in test output ("fake" or "container"); every `it`
+ * in the suite runs identically against both.
  */
 export function defineSftpgoContract(name: string, setup: () => Promise<ContractTarget>): void {
   describe(`SFTPGo contract (${name})`, () => {
@@ -196,22 +190,12 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
         expectFileEntry(rootEntries, "own.txt", SEED_FILES.carol?.["/own.txt"] ?? "");
       });
 
-      // The real server mounts a virtual folder so it shows up as a
-      // directory in the parent listing. The fake only redirects lookups
-      // made directly under the mount path (see fake/state.ts
-      // resolveVolume) and never synthesizes a listing entry for the mount
-      // itself in its parent directory, so it never shows "shared" here.
-      // The container is the source of truth.
-      const carolSharedMountTest = name === "fake" ? it.fails : it;
-      carolSharedMountTest(
-        "carol's root shows the shared virtual folder mount as a dir",
-        async () => {
-          const carol = findUser(target.users, "carol");
-          const token = await loginAs(target.client, carol);
-          const rootEntries = await target.client.user(token).list("/");
-          expectDirEntry(rootEntries, "shared");
-        },
-      );
+      it("carol's root shows the shared virtual folder mount as a dir", async () => {
+        const carol = findUser(target.users, "carol");
+        const token = await loginAs(target.client, carol);
+        const rootEntries = await target.client.user(token).list("/");
+        expectDirEntry(rootEntries, "shared");
+      });
 
       it("lists /shared with team.txt for carol", async () => {
         const carol = findUser(target.users, "carol");
@@ -342,25 +326,15 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
         expectDirEntry(entries, "newdir");
       });
 
-      // The fake reports a 409 conflict for mkdir on an already-existing
-      // directory; the real drakkan/sftpgo:v2.7.5 container reports a 500
-      // (kind "server") instead, because the underlying os.Mkdir error is
-      // not classified as an "already exists" case there. The container is
-      // the source of truth, so the assertion matches it; the fake case is
-      // marked as an expected failure and reported as a discrepancy.
-      const mkdirConflictTest = name === "fake" ? it.fails : it;
-      mkdirConflictTest(
-        "mkdir on an already-existing directory fails with the real server's error kind",
-        async () => {
-          const alice = findUser(target.users, "alice");
-          const token = await loginAs(target.client, alice);
-          const user = target.client.user(token);
-          await ensureDir(user, "/contract/mkdir-conflict");
-          await expect(user.mkdir("/contract/mkdir-conflict")).rejects.toMatchObject({
-            kind: "server",
-          });
-        },
-      );
+      it("mkdir on an already-existing directory fails with the real server's error kind", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/mkdir-conflict");
+        await expect(user.mkdir("/contract/mkdir-conflict")).rejects.toMatchObject({
+          kind: "server",
+        });
+      });
     });
 
     describe("move, copy, and delete", () => {
@@ -469,25 +443,19 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
     });
 
     describe("zip", () => {
-      // The fake names entries in an authenticated /streamzip request after
-      // just the requested file's basename ("readme.md"); the real
-      // drakkan/sftpgo:v2.7.5 container names them after the full path with
-      // the leading slash stripped ("docs/readme.md"). Matching by suffix
-      // satisfies both without hiding the difference, which is reported as
-      // a fake discrepancy separately.
-      it("zips two paths and both appear in the central directory with their seeded sizes", async () => {
+      it("names entries after the full path with the leading slash stripped, with correct sizes", async () => {
         const alice = findUser(target.users, "alice");
         const token = await loginAs(target.client, alice);
         const user = target.client.user(token);
         const stream = await user.zip(["/docs/readme.md", "/docs/report.pdf"]);
         const entries = parseZipCentralDirectory(await collectStream(stream));
 
-        const readme = entries.find((entry) => entry.name.endsWith("readme.md"));
+        const readme = entries.find((entry) => entry.name === "docs/readme.md");
         expect(readme?.uncompressedSize).toBe(
           encode(SEED_FILES.alice?.["/docs/readme.md"] ?? "").length,
         );
 
-        const report = entries.find((entry) => entry.name.endsWith("report.pdf"));
+        const report = entries.find((entry) => entry.name === "docs/report.pdf");
         expect(report?.uncompressedSize).toBe(
           encode(SEED_FILES.alice?.["/docs/report.pdf"] ?? "").length,
         );
@@ -599,12 +567,7 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
         expect(await collectStream(ranged.body)).toEqual(content.slice(0, 4));
       });
 
-      // The fake names public-zip entries after the share's directory
-      // ("docs/readme.md"); the real container flattens them relative to
-      // the share root and adds an entry for the root directory itself
-      // ("readme.md", plus a "/" entry). Matching by suffix and ignoring
-      // extra entries satisfies both; see the report for the discrepancy.
-      it("public zip returns a zip with the share's entries", async () => {
+      it("public zip flattens entries relative to the shared directory and adds a / entry", async () => {
         const alice = findUser(target.users, "alice");
         const token = await loginAs(target.client, alice);
         const { id } = await target.client.user(token).shares.create({
@@ -614,9 +577,8 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
         });
         const stream = await target.client.publicShare(id).zip();
         const entries = parseZipCentralDirectory(await collectStream(stream));
-        const names = entries.map((entry) => entry.name);
-        expect(names.some((entryName) => entryName.endsWith("readme.md"))).toBe(true);
-        expect(names.some((entryName) => entryName.endsWith("report.pdf"))).toBe(true);
+        const names = entries.map((entry) => entry.name).sort();
+        expect(names).toEqual(["/", "readme.md", "report.pdf"]);
       });
 
       it("a password-protected share rejects public access without the password and accepts it with the password", async () => {

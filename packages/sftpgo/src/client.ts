@@ -169,7 +169,7 @@ function createUserApi(ctx: ClientContext, token: string): SftpgoUserApi {
       assertValidPath(path);
       const url = buildUrl(ctx.baseUrl, "/api/v2/user/files/upload", {
         path,
-        mkdir_parents: options?.mkdirParents ? "1" : "0",
+        mkdir_parents: options?.mkdirParents ? "true" : "false",
       });
       await performUpload(
         ctx,
@@ -185,7 +185,7 @@ function createUserApi(ctx: ClientContext, token: string): SftpgoUserApi {
       assertValidPath(path);
       const url = buildUrl(ctx.baseUrl, "/api/v2/user/dirs", {
         path,
-        mkdir_parents: options?.parents ? "1" : "0",
+        mkdir_parents: options?.parents ? "true" : "false",
       });
       await fetchChecked(ctx.fetchImpl, url, {
         method: "POST",

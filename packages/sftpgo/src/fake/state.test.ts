@@ -119,6 +119,42 @@ describe("FakeState", () => {
     expect(state.folders.size).toBe(0);
   });
 
+  it("virtualFolderMountNamesAt returns the mount's last segment when its parent matches", () => {
+    const state = new FakeState({
+      users: [
+        {
+          username: "carol",
+          password: "secret",
+          permissions: {},
+          virtualFolders: [{ name: "shared", virtualPath: "/shared" }],
+        },
+      ],
+      folders: [{ name: "shared" }],
+    });
+    expect(state.virtualFolderMountNamesAt("carol", "/")).toEqual(["shared"]);
+  });
+
+  it("virtualFolderMountNamesAt returns nothing for a directory with no mount directly beneath it", () => {
+    const state = new FakeState({
+      users: [
+        {
+          username: "carol",
+          password: "secret",
+          permissions: {},
+          virtualFolders: [{ name: "shared", virtualPath: "/nested/shared" }],
+        },
+      ],
+      folders: [{ name: "shared" }],
+    });
+    expect(state.virtualFolderMountNamesAt("carol", "/")).toEqual([]);
+    expect(state.virtualFolderMountNamesAt("carol", "/nested")).toEqual(["shared"]);
+  });
+
+  it("virtualFolderMountNamesAt returns nothing for an unknown user", () => {
+    const state = new FakeState({ users: [] });
+    expect(state.virtualFolderMountNamesAt("nobody", "/")).toEqual([]);
+  });
+
   it("resolveVolume falls back to an empty volume when a virtual folder mount references an undeclared folder", () => {
     const state = new FakeState({
       users: [

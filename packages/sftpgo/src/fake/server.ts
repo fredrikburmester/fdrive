@@ -1,4 +1,4 @@
-import { dirnameOf } from "../path.js";
+import { dirnameOf, normalizePath } from "../path.js";
 import { hasAction, hasAnyAction, resolvePermissions } from "./permissions.js";
 import type { FakeShareRecord, FakeUserRecord } from "./state.js";
 import { FakeState } from "./state.js";
@@ -17,6 +17,8 @@ export interface FakeSftpgoServer {
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const WRITE_SCOPE = 2;
 const REDACTED_PASSWORD_MARKER = "[**redacted**]";
+/** Go's os.ModeDir bit combined with a typical directory permission bitmask. */
+const DIR_MODE = 0x80000000 | 0o755;
 
 function jsonResponse(
   status: number,
@@ -95,7 +97,7 @@ function statusEntry(
   last_modified: string;
 } {
   if (node.kind === "dir") {
-    return { name, size: 0, mode: 0x80000000 | 0o755, last_modified: new Date(0).toISOString() };
+    return { name, size: 0, mode: DIR_MODE, last_modified: new Date(0).toISOString() };
   }
   return {
     name,
@@ -141,9 +143,19 @@ function parseRange(header: string | null, size: number): ParsedRange | "unsatis
 }
 
 // Only ever called with an already-validated absolute path (starts with "/"), so
-// lastIndexOf("/") is always >= 0 and slice(index + 1) always yields the final segment.
-function baseName(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
+// slicing off the leading character always yields the rest of the path.
+function stripLeadingSlash(path: string): string {
+  const normalized = normalizePath(path);
+  return normalized === "/" ? "" : normalized.slice(1);
+}
+
+/**
+ * Joins a zip entry name with a child segment. An empty parent name (used
+ * when flattening entries relative to a share's root directory) yields just
+ * the child's own name, with no leading slash.
+ */
+function zipChildName(name: string, childName: string): string {
+  return name === "" ? childName : `${name}/${childName}`;
 }
 
 function collectZipEntries(
@@ -165,7 +177,7 @@ function collectZipEntries(
   const children = volume.listChildren(path) as VolumeEntry[];
   for (const child of children) {
     const childPath = path === "/" ? `/${child.name}` : `${path}/${child.name}`;
-    collectZipEntries(volume, childPath, `${name}/${child.name}`, entries);
+    collectZipEntries(volume, childPath, zipChildName(name, child.name), entries);
   }
 }
 
@@ -216,10 +228,20 @@ function handleList(state: FakeState, user: FakeUserRecord, url: URL): Response 
       ? errorResponse(400, "not a directory")
       : errorResponse(404, "not found");
   }
-  return jsonResponse(
-    200,
-    children.map((entry) => statusEntry(entry.name, entry.node)),
-  );
+  const entries = children.map((entry) => statusEntry(entry.name, entry.node));
+  // A virtual folder mount is never itself a real entry in the user's own
+  // volume: resolveVolume() redirects every path under (and at) the mount's
+  // virtualPath into the mounted folder, so a name collision here cannot
+  // arise. Synthesize a directory entry for each mount rooted at `path`.
+  for (const mountName of state.virtualFolderMountNamesAt(user.username, path)) {
+    entries.push({
+      name: mountName,
+      size: 0,
+      mode: DIR_MODE,
+      last_modified: state.now().toISOString(),
+    });
+  }
+  return jsonResponse(200, entries);
 }
 
 function handleMkdir(state: FakeState, user: FakeUserRecord, url: URL): Response {
@@ -230,11 +252,15 @@ function handleMkdir(state: FakeState, user: FakeUserRecord, url: URL): Response
   if (!hasAction(resolvePermissions(user.permissions, path), "create_dirs")) {
     return permissionDenied();
   }
-  const parents = url.searchParams.get("mkdir_parents") === "1";
+  const parents = url.searchParams.get("mkdir_parents") === "true";
   const { volume, innerPath } = state.resolveVolume(user.username, path);
   const result = volume.mkdir(innerPath, parents);
   if (result === "conflict") {
-    return errorResponse(409, "already exists");
+    // The real drakkan/sftpgo:v2.7.5 container does not classify the
+    // underlying os.Mkdir "already exists" error as a conflict: it surfaces
+    // as an unhandled 500. Matching that here (rather than a friendlier 409)
+    // keeps the fake's mkdir behaviour identical to the container's.
+    return errorResponse(500, "failed to create directory");
   }
   if (result === "not_found") {
     return errorResponse(404, "parent not found");
@@ -390,7 +416,7 @@ async function handleUpload(
   if (volume.isFile(innerPath) && !hasAction(perms, "overwrite")) {
     return permissionDenied();
   }
-  const mkdirParents = url.searchParams.get("mkdir_parents") === "1";
+  const mkdirParents = url.searchParams.get("mkdir_parents") === "true";
   const body = new Uint8Array(await request.arrayBuffer());
   const mtimeMs = readMtimeHeader(request, state);
   const result = volume.writeFile(innerPath, body, mtimeMs, mkdirParents);
@@ -538,7 +564,7 @@ async function handleZip(
   const entries: ZipEntryInput[] = [];
   for (const path of paths) {
     const { volume, innerPath } = state.resolveVolume(user.username, path);
-    collectZipEntries(volume, innerPath, baseName(path), entries);
+    collectZipEntries(volume, innerPath, stripLeadingSlash(path), entries);
   }
   return new Response(buildZip(entries), {
     status: 200,
@@ -822,9 +848,18 @@ function handlePublicZip(state: FakeState, request: Request, id: string): Respon
   }
   const share = shareOrError;
   const entries: ZipEntryInput[] = [];
-  for (const path of share.paths) {
-    const { volume, innerPath } = state.resolveVolume(share.username, path);
-    collectZipEntries(volume, innerPath, baseName(path), entries);
+  const root = resolveShareRoot(state, share);
+  if (root?.volume.isDir(root.innerPath)) {
+    // A single-directory share is flattened relative to that directory (no
+    // directory-name prefix on its entries), plus a "/" entry for the
+    // directory itself, matching the real drakkan/sftpgo:v2.7.5 container.
+    entries.push({ name: "/", content: new Uint8Array() });
+    collectZipEntries(root.volume, root.innerPath, "", entries);
+  } else {
+    for (const path of share.paths) {
+      const { volume, innerPath } = state.resolveVolume(share.username, path);
+      collectZipEntries(volume, innerPath, stripLeadingSlash(path), entries);
+    }
   }
   touchShare(state, share);
   return new Response(buildZip(entries), {

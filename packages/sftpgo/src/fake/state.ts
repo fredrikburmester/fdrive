@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizePath } from "../path.js";
+import { dirnameOf, normalizePath } from "../path.js";
 import type { FakeSeed } from "./types.js";
 import { Volume } from "./volume.js";
 
@@ -121,5 +121,27 @@ export class FakeState {
     const remainder = normalized.slice(mountPath.length);
     const innerPath = remainder === "" ? "/" : remainder;
     return { volume: folder ?? new Volume(), innerPath };
+  }
+
+  /**
+   * Returns the last path segment of every virtual folder mount whose
+   * immediate parent is `parentPath`, so a directory listing can synthesize
+   * a directory entry for each mount, matching the real server (which
+   * shows a virtual folder mount as a directory in its parent listing).
+   */
+  virtualFolderMountNamesAt(username: string, parentPath: string): readonly string[] {
+    const user = this.users.get(username);
+    if (!user) {
+      return [];
+    }
+    const normalizedParent = normalizePath(parentPath);
+    const names: string[] = [];
+    for (const mount of user.virtualFolders) {
+      const mountPath = normalizePath(mount.virtualPath);
+      if (dirnameOf(mountPath) === normalizedParent) {
+        names.push(mountPath.slice(mountPath.lastIndexOf("/") + 1));
+      }
+    }
+    return names;
   }
 }

@@ -298,6 +298,28 @@ describe("createSftpgoClient - upload", () => {
     expect(stat.size).toBe(3);
   });
 
+  it("sends mkdir_parents=true on upload when mkdirParents is set", async () => {
+    let capturedUrl = "";
+    const fetchImpl = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      capturedUrl = String(input);
+      return new Response(null, { status: 200 });
+    });
+    const client = createSftpgoClient({ baseUrl: "http://host", fetch: fetchImpl });
+    await client.user("tok").upload("/a.txt", new Uint8Array(), { mkdirParents: true });
+    expect(new URL(capturedUrl).searchParams.get("mkdir_parents")).toBe("true");
+  });
+
+  it("sends mkdir_parents=false on upload when mkdirParents is not given", async () => {
+    let capturedUrl = "";
+    const fetchImpl = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      capturedUrl = String(input);
+      return new Response(null, { status: 200 });
+    });
+    const client = createSftpgoClient({ baseUrl: "http://host", fetch: fetchImpl });
+    await client.user("tok").upload("/a.txt", new Uint8Array());
+    expect(new URL(capturedUrl).searchParams.get("mkdir_parents")).toBe("false");
+  });
+
   it("sends the modifiedAt option as X-SFTPGO-MTIME and it is honoured", async () => {
     const { client } = setup(ALICE_SEED);
     const token = await loginAsAlice(client);
@@ -381,13 +403,13 @@ describe("createSftpgoClient - mkdir", () => {
     expect(entries.find((e) => e.name === "newdir")).toMatchObject({ kind: "dir" });
   });
 
-  it("returns conflict when the directory already exists", async () => {
+  it("returns kind server when the directory already exists, matching the real server", async () => {
     const { client } = setup(ALICE_SEED);
     const token = await loginAsAlice(client);
     await client.user(token).mkdir("/newdir");
     await expect(client.user(token).mkdir("/newdir")).rejects.toMatchObject({
-      kind: "conflict",
-      status: 409,
+      kind: "server",
+      status: 500,
     });
   });
 
@@ -403,6 +425,28 @@ describe("createSftpgoClient - mkdir", () => {
     await client.user(token).mkdir("/a/b", { parents: true });
     const entries = await client.user(token).list("/a");
     expect(entries.find((e) => e.name === "b")).toMatchObject({ kind: "dir" });
+  });
+
+  it("sends mkdir_parents=true when parents is requested", async () => {
+    let capturedUrl = "";
+    const fetchImpl = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      capturedUrl = String(input);
+      return new Response(null, { status: 201 });
+    });
+    const client = createSftpgoClient({ baseUrl: "http://host", fetch: fetchImpl });
+    await client.user("tok").mkdir("/a", { parents: true });
+    expect(new URL(capturedUrl).searchParams.get("mkdir_parents")).toBe("true");
+  });
+
+  it("sends mkdir_parents=false when parents is not given", async () => {
+    let capturedUrl = "";
+    const fetchImpl = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+      capturedUrl = String(input);
+      return new Response(null, { status: 201 });
+    });
+    const client = createSftpgoClient({ baseUrl: "http://host", fetch: fetchImpl });
+    await client.user("tok").mkdir("/a");
+    expect(new URL(capturedUrl).searchParams.get("mkdir_parents")).toBe("false");
   });
 });
 

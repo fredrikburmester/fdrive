@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseZipCentralDirectory } from "../../test/contract/zip-parser.js";
 import { createSftpgoClient } from "../client.js";
 import { createFakeSftpgoServer } from "./server.js";
 import type { FakeSeed } from "./types.js";
@@ -7,6 +8,27 @@ const FULL_PERMS = ["*"];
 
 function basicAuth(username: string, password: string): string {
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+}
+
+async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+    total += value.length;
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 describe("fake server - routing edge cases", () => {
@@ -695,5 +717,175 @@ describe("fake server - routing edge cases", () => {
       headers: auth,
     });
     expect(filesResponse.status).toBe(404);
+  });
+
+  it("only accepts mkdir_parents=true, not the legacy 1/0 wire values, on mkdir", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    const auth = { authorization: `Bearer ${token}` };
+
+    const withLegacyOne = await server.fetch(
+      "http://sftpgo.test/api/v2/user/dirs?path=%2Fa%2Fb&mkdir_parents=1",
+      { method: "POST", headers: auth },
+    );
+    expect(withLegacyOne.status).toBe(404);
+
+    const withTrue = await server.fetch(
+      "http://sftpgo.test/api/v2/user/dirs?path=%2Fa%2Fb&mkdir_parents=true",
+      { method: "POST", headers: auth },
+    );
+    expect(withTrue.status).toBe(201);
+  });
+
+  it("only accepts mkdir_parents=true, not the legacy 1/0 wire values, on upload", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    const auth = { authorization: `Bearer ${token}` };
+
+    const withLegacyOne = await server.fetch(
+      "http://sftpgo.test/api/v2/user/files/upload?path=%2Fa%2Fb.txt&mkdir_parents=1",
+      { method: "POST", headers: auth, body: new Uint8Array([1]) },
+    );
+    expect(withLegacyOne.status).toBe(404);
+
+    const withTrue = await server.fetch(
+      "http://sftpgo.test/api/v2/user/files/upload?path=%2Fa%2Fb.txt&mkdir_parents=true",
+      { method: "POST", headers: auth, body: new Uint8Array([1]) },
+    );
+    expect(withTrue.status).toBe(200);
+  });
+
+  it("reports mkdir on an already-existing directory as a 500 with SFTPGo's error body shape", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    await client.user(token).mkdir("/newdir");
+
+    const response = await server.fetch("http://sftpgo.test/api/v2/user/dirs?path=%2Fnewdir", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { message: string; error: string };
+    expect(typeof body.message).toBe("string");
+    expect(typeof body.error).toBe("string");
+
+    await expect(client.user(token).mkdir("/newdir")).rejects.toMatchObject({ kind: "server" });
+  });
+
+  it("shows a virtual folder mount as a directory entry, sized 0, in its parent listing", async () => {
+    const fixed = new Date("2024-07-01T00:00:00Z");
+    const server = createFakeSftpgoServer({
+      users: [
+        {
+          username: "carol",
+          password: "secret",
+          permissions: { "/": FULL_PERMS },
+          virtualFolders: [{ name: "shared", virtualPath: "/shared" }],
+        },
+      ],
+      folders: [{ name: "shared" }],
+      files: { "@shared": { "/team.txt": "hi" }, carol: { "/own.txt": "mine" } },
+      now: () => fixed,
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "carol", password: "secret" })).accessToken;
+
+    const entries = await client.user(token).list("/");
+    const shared = entries.find((entry) => entry.name === "shared");
+    expect(shared).toMatchObject({ kind: "dir", size: 0 });
+    expect(shared?.modifiedAt).toEqual(fixed);
+    expect(entries.map((entry) => entry.name)).toContain("own.txt");
+  });
+
+  it("does not show a mount at a nested path when listing an unrelated directory", async () => {
+    const server = createFakeSftpgoServer({
+      users: [
+        {
+          username: "carol",
+          password: "secret",
+          permissions: { "/": FULL_PERMS },
+          virtualFolders: [{ name: "shared", virtualPath: "/shared" }],
+        },
+      ],
+      folders: [{ name: "shared" }],
+      files: { carol: { "/other/note.txt": "mine" } },
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "carol", password: "secret" })).accessToken;
+    const entries = await client.user(token).list("/other");
+    expect(entries.map((entry) => entry.name)).toEqual(["note.txt"]);
+  });
+
+  it("names authenticated streamzip entries by path relative to the root, directory prefix included", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+      files: { alice: { "/docs/readme.md": "hi", "/docs/report.pdf": "bye" } },
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+
+    const fileStream = await client.user(token).zip(["/docs/readme.md"]);
+    const fileEntries = parseZipCentralDirectory(await readAll(fileStream));
+    expect(fileEntries.map((entry) => entry.name)).toEqual(["docs/readme.md"]);
+
+    const dirStream = await client.user(token).zip(["/docs"]);
+    const dirEntries = parseZipCentralDirectory(await readAll(dirStream));
+    expect(dirEntries.map((entry) => entry.name).sort()).toEqual([
+      "docs/readme.md",
+      "docs/report.pdf",
+    ]);
+  });
+
+  it("zips the root path directly with entry names carrying no leading slash", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+      files: { alice: { "/a.txt": "hi" } },
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    const stream = await client.user(token).zip(["/"]);
+    const entries = parseZipCentralDirectory(await readAll(stream));
+    expect(entries.map((entry) => entry.name)).toEqual(["a.txt"]);
+  });
+
+  it("flattens a public single-directory share zip relative to the share root, plus a / entry", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+      files: { alice: { "/docs/readme.md": "hi", "/docs/report.pdf": "bye" } },
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    const created = await client
+      .user(token)
+      .shares.create({ name: "s", scope: "read", paths: ["/docs"] });
+
+    const stream = await client.publicShare(created.id).zip();
+    const entries = parseZipCentralDirectory(await readAll(stream));
+    expect(entries.map((entry) => entry.name).sort()).toEqual(["/", "readme.md", "report.pdf"]);
+  });
+
+  it("names a public multi-path share's zip entries by path relative to the root", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+      files: { alice: { "/docs/readme.md": "hi", "/photo.jpg": "bin" } },
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    const created = await client
+      .user(token)
+      .shares.create({ name: "s", scope: "read", paths: ["/docs/readme.md", "/photo.jpg"] });
+
+    const stream = await client.publicShare(created.id).zip();
+    const entries = parseZipCentralDirectory(await readAll(stream));
+    expect(entries.map((entry) => entry.name).sort()).toEqual(["docs/readme.md", "photo.jpg"]);
   });
 });
