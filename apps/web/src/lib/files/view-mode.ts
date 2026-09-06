@@ -1,13 +1,13 @@
 import { readJson, type StorageLike, writeJson } from "./storage";
 
-export type ViewMode = "list" | "grid";
+export type ViewMode = "list" | "grid" | "tree";
 
 export const VIEW_MODE_STORAGE_KEY = "fdrive.view";
 
 export const DEFAULT_VIEW_MODE: ViewMode = "list";
 
 function isViewMode(value: unknown): value is ViewMode {
-  return value === "list" || value === "grid";
+  return value === "list" || value === "grid" || value === "tree";
 }
 
 /** Reads the persisted view mode from `storage`, falling back to "list". */

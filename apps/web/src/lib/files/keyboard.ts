@@ -8,7 +8,9 @@ export type FilesActionType =
   | "rename"
   | "download"
   | "newFolder"
-  | "goToParent";
+  | "goToParent"
+  | "expand"
+  | "collapse";
 
 export interface MoveAction {
   readonly type: "move";
@@ -40,12 +42,25 @@ export type Platform = "mac" | "other";
  * On mac, deleting requires the primary modifier (Cmd+Delete/Backspace),
  * matching Finder; elsewhere plain Delete/Backspace deletes, matching
  * Explorer and most file managers (Ctrl+Delete/Backspace also works).
+ *
+ * `treeMode` is true only in the tree view, where Left/Right additionally
+ * collapse/expand the focused folder row; elsewhere those keys are unmapped.
  */
-export function keyToAction(event: KeyLike, platform: Platform): FilesAction | null {
+export function keyToAction(
+  event: KeyLike,
+  platform: Platform,
+  treeMode = false,
+): FilesAction | null {
   const primary = platform === "mac" ? event.metaKey : event.ctrlKey;
   const isDeleteKey = event.key === "Delete" || event.key === "Backspace";
   const letter = event.key.length === 1 ? event.key.toLowerCase() : event.key;
 
+  if (treeMode && event.key === "ArrowRight") {
+    return { type: "expand" };
+  }
+  if (treeMode && event.key === "ArrowLeft") {
+    return { type: "collapse" };
+  }
   if (event.key === "ArrowUp" && primary) {
     return { type: "goToParent" };
   }

@@ -29,6 +29,7 @@ import {
 } from "@/lib/files/download";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
+import { movablePaths } from "@/lib/files/move-guard";
 import { pathToHref, viewHref } from "@/lib/files/path-url";
 import { detectPlatform } from "@/lib/files/platform";
 import {
@@ -39,6 +40,7 @@ import {
   useMkdir,
   useMove,
   useRename,
+  useTreeChildren,
 } from "@/lib/files/queries";
 import {
   EMPTY_SELECTION,
@@ -53,6 +55,16 @@ import {
   sortListing,
   writeSortSpec,
 } from "@/lib/files/sorting";
+import {
+  collapse as collapseTree,
+  EMPTY_TREE_STATE,
+  expand as expandTree,
+  readTreeState,
+  type TreeState,
+  toggle as toggleTree,
+  writeTreeState,
+} from "@/lib/files/tree";
+import { flattenTree } from "@/lib/files/tree-rows";
 import {
   EMPTY_TYPE_AHEAD_BUFFER,
   nextTypeAheadBuffer,
@@ -84,6 +96,9 @@ export interface FileBrowserProps {
   onRequestUpload?: (files?: FileList) => void;
   onSelectionChange?: (entries: FsEntry[]) => void;
 }
+
+/** A stable empty set, so passing "no folders expanded" never busts memoization. */
+const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
 
 function deleteItemKind(entry: FsEntry): "file" | "dir" {
   return entry.kind === "dir" ? "dir" : "file";
@@ -152,9 +167,11 @@ export function FileBrowser({
 
   const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
   const [viewMode, setViewModeState] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  const [treeState, setTreeStateRaw] = useState<TreeState>(EMPTY_TREE_STATE);
   useEffect(() => {
     setSortSpecState(readSortSpec(window.localStorage));
     setViewModeState(readViewMode(window.localStorage));
+    setTreeStateRaw(readTreeState(window.localStorage));
   }, []);
 
   function setSortSpec(spec: SortSpec) {
@@ -165,9 +182,29 @@ export function FileBrowser({
     setViewModeState(mode);
     writeViewMode(window.localStorage, mode);
   }
+  function updateTreeState(updater: (prev: TreeState) => TreeState) {
+    setTreeStateRaw((prev) => {
+      const next = updater(prev);
+      writeTreeState(window.localStorage, next);
+      return next;
+    });
+  }
 
   const sortedEntries = useMemo(() => sortListing(entries, sortSpec), [entries, sortSpec]);
-  const orderedPaths = useMemo(() => sortedEntries.map((entry) => entry.path), [sortedEntries]);
+
+  const activeTreeExpanded = viewMode === "tree" ? treeState.expanded : EMPTY_EXPANDED;
+  const childrenByPath = useTreeChildren(entries, activeTreeExpanded);
+  const treeRows = useMemo(
+    () =>
+      viewMode === "tree" ? flattenTree(entries, treeState.expanded, childrenByPath, sortSpec) : [],
+    [viewMode, entries, treeState.expanded, childrenByPath, sortSpec],
+  );
+  const treeDepths = useMemo(
+    () => new Map(treeRows.map((row) => [row.entry.path, row.depth])),
+    [treeRows],
+  );
+  const displayEntries = viewMode === "tree" ? treeRows.map((row) => row.entry) : sortedEntries;
+  const orderedPaths = useMemo(() => displayEntries.map((entry) => entry.path), [displayEntries]);
 
   const [selection, dispatchSelection] = useReducer(
     (state: SelectionState, action: SelectionAction) =>
@@ -180,8 +217,8 @@ export function FileBrowser({
   }, [orderedPaths]);
 
   const selectedEntries = useMemo(
-    () => sortedEntries.filter((entry) => selection.selected.has(entry.path)),
-    [sortedEntries, selection.selected],
+    () => displayEntries.filter((entry) => selection.selected.has(entry.path)),
+    [displayEntries, selection.selected],
   );
 
   useEffect(() => {
@@ -258,12 +295,13 @@ export function FileBrowser({
   }
 
   function handleInternalMove(paths: string[], targetFolderPath: string) {
-    for (const source of paths) {
-      if (parentPath(source) === targetFolderPath || source === targetFolderPath) {
-        continue;
-      }
+    for (const source of movablePaths(paths, targetFolderPath)) {
       move.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
     }
+  }
+
+  function handleToggleTreeExpand(entry: FsEntry) {
+    updateTreeState((prev) => toggleTree(prev, entry.path));
   }
 
   function handleContextAction(action: RowContextAction, entry: FsEntry) {
@@ -360,7 +398,7 @@ export function FileBrowser({
       typeAheadRef.current = buffer;
       const currentIndex = selection.focus === null ? -1 : orderedPaths.indexOf(selection.focus);
       const matchIndex = typeAheadMatch(
-        sortedEntries.map((entry) => entry.name),
+        displayEntries.map((entry) => entry.name),
         buffer.query,
         currentIndex + 1,
       );
@@ -374,7 +412,7 @@ export function FileBrowser({
     }
 
     const platform = detectPlatform(typeof navigator === "undefined" ? undefined : navigator);
-    const action = keyToAction(event, platform);
+    const action = keyToAction(event, platform, viewMode === "tree");
     if (action === null) {
       return;
     }
@@ -389,14 +427,14 @@ export function FileBrowser({
         });
         break;
       case "open": {
-        const entry = sortedEntries.find((candidate) => candidate.path === selection.focus);
+        const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
         if (entry !== undefined) {
           handleOpen(entry);
         }
         break;
       }
       case "quickLook": {
-        const entry = sortedEntries.find((candidate) => candidate.path === selection.focus);
+        const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
         if (entry !== undefined) {
           router.push(toRoute(viewHref(entry.path)));
         }
@@ -414,9 +452,23 @@ export function FileBrowser({
         dispatchSelection({ type: "clear" });
         break;
       case "rename": {
-        const entry = sortedEntries.find((candidate) => candidate.path === selection.focus);
+        const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
         if (entry !== undefined) {
           setRenameTarget(entry);
+        }
+        break;
+      }
+      case "expand": {
+        const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
+        if (entry !== undefined && entry.kind === "dir") {
+          updateTreeState((prev) => expandTree(prev, entry.path));
+        }
+        break;
+      }
+      case "collapse": {
+        const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
+        if (entry !== undefined && entry.kind === "dir") {
+          updateTreeState((prev) => collapseTree(prev, entry.path));
         }
         break;
       }
@@ -520,7 +572,7 @@ export function FileBrowser({
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalMove}
               />
-            ) : (
+            ) : viewMode === "grid" ? (
               <FileGrid
                 entries={sortedEntries}
                 selected={selection.selected}
@@ -530,6 +582,20 @@ export function FileBrowser({
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalMove}
+              />
+            ) : (
+              <FileList
+                entries={displayEntries}
+                selected={selection.selected}
+                focusedPath={selection.focus}
+                onEntryClick={handleEntryClick}
+                onEntryDoubleClick={handleOpen}
+                onContextAction={handleContextAction}
+                getDragPaths={pathsForAction}
+                onInternalDrop={handleInternalMove}
+                treeDepths={treeDepths}
+                treeExpanded={treeState.expanded}
+                onToggleTreeExpand={handleToggleTreeExpand}
               />
             )}
           </div>

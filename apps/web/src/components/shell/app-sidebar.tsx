@@ -1,10 +1,8 @@
 "use client";
 
-import { ChevronsUpDown, Folder, LogOut, Monitor, Moon, Sun } from "lucide-react";
-import type { Route } from "next";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -25,14 +23,9 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
-  SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useLogout } from "@/lib/api/auth-queries";
-
-// `/files` is served by an optional catch-all route, which Next's typed
-// routes only model as `/files/${string}`, not the bare path.
-const FILES_ROUTE = "/files" as unknown as Route;
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light", Icon: Sun },
@@ -51,7 +44,6 @@ export function isFilesRoute(pathname: string | null): boolean {
 }
 
 export function AppSidebar() {
-  const pathname = usePathname();
   const { data: me } = useShellMe();
   const { theme, setTheme } = useTheme();
   const logout = useLogout();
@@ -70,15 +62,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Locations</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={isFilesRoute(pathname)}
-                  render={<Link href={FILES_ROUTE} />}
-                >
-                  <Folder />
-                  <span>Files</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              <FolderTree />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
