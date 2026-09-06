@@ -1,14 +1,10 @@
-import { fetchApiHealth } from "@/lib/api-health";
+import type { Route } from "next";
+import { redirect } from "next/navigation";
 
-export default async function Home() {
-  const baseUrl = process.env.API_INTERNAL_URL ?? "http://localhost:3001";
-  const health = await fetchApiHealth(fetch, baseUrl);
-  const status = health.ok ? `API: ok, version ${health.version}` : "API unreachable";
+// `/files` is served by an optional catch-all route, which Next's typed
+// routes only model as `/files/${string}`, not the bare path.
+const FILES_ROUTE = "/files" as unknown as Route;
 
-  return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-2 p-8">
-      <h1 className="text-2xl font-semibold">fdrive</h1>
-      <p className="text-sm text-muted-foreground">{status}</p>
-    </main>
-  );
+export default function Home() {
+  redirect(FILES_ROUTE);
 }

@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-test("home page has the fdrive title and heading", async ({ page }) => {
+test("a signed-out visitor is redirected from / to /login", async ({ page }) => {
   await page.goto("/");
 
+  await expect(page).toHaveURL(/\/login$/);
   await expect(page).toHaveTitle("fdrive");
-  await expect(page.getByRole("heading", { name: "fdrive" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
