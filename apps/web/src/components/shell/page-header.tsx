@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { SearchButton } from "@/components/search/search-button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useMe } from "@/lib/api/auth-queries";
@@ -31,7 +32,10 @@ export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
       <SidebarTrigger />
       <Separator orientation="vertical" className="h-4" />
       <div className="flex min-w-0 flex-1 items-center gap-2">{breadcrumbs}</div>
-      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+      <div className="flex shrink-0 items-center gap-2">
+        <SearchButton />
+        {actions}
+      </div>
     </header>
   );
 }

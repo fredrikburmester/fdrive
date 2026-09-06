@@ -28,7 +28,18 @@ function isDevServerMode(): boolean {
 }
 
 export interface RunningEnvironment {
+  /** The seeded Postgres container's connection string, for tests that seed extra rows directly. */
+  readonly databaseUrl: string;
   stop(): Promise<void>;
+}
+
+export interface StartEnvironmentOptions {
+  /**
+   * Extra environment variables merged into the spawned API process's env,
+   * on top of the fixed set below (e.g. `FDRIVE_INDEX_ROOTS` for the search
+   * e2e suite). Empty by default so existing callers are unaffected.
+   */
+  readonly extraApiEnv?: Record<string, string>;
 }
 
 interface EnvironmentState {
@@ -80,7 +91,9 @@ function killProcess(child: ChildProcess): Promise<void> {
  * error is rethrown, so a failed `globalSetup` never leaks a container or
  * process.
  */
-export async function startEnvironment(): Promise<RunningEnvironment> {
+export async function startEnvironment(
+  options: StartEnvironmentOptions = {},
+): Promise<RunningEnvironment> {
   const stopFns: Array<() => Promise<void>> = [];
 
   async function stopAll(): Promise<void> {
@@ -117,6 +130,7 @@ export async function startEnvironment(): Promise<RunningEnvironment> {
           FDRIVE_MASTER_KEY: masterKey,
           FDRIVE_COOKIE_SECURE: "false",
           FDRIVE_AUTO_MIGRATE: "true",
+          ...options.extraApiEnv,
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -207,7 +221,7 @@ export async function startEnvironment(): Promise<RunningEnvironment> {
       webPort: E2E_WEB_PORT,
     });
 
-    return { stop: stopAll };
+    return { databaseUrl: postgres.connectionString, stop: stopAll };
   } catch (error) {
     await stopAll();
     throw error;

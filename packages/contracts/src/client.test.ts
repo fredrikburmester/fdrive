@@ -466,6 +466,76 @@ describe("createApiClient: about", () => {
   });
 });
 
+const VALID_SEARCH_RESPONSE = {
+  query: "readme",
+  sections: { folders: [], files: [], content: [] },
+  degraded: false,
+  unavailable: false,
+  tookMs: 12,
+};
+
+describe("createApiClient: search", () => {
+  it("gets search with just q and returns SearchResponse", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_SEARCH_RESPONSE)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.search("readme");
+
+    expect(result).toEqual(VALID_SEARCH_RESPONSE);
+    expect(calls[0]?.url).toBe("/api/v1/search?q=readme");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("serializes every optional filter", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_SEARCH_RESPONSE)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    await client.search("readme", {
+      limit: 10,
+      ext: "pdf",
+      folder: "/docs",
+      after: "2026-01-01",
+      before: "2026-02-01",
+    });
+
+    expect(calls[0]?.url).toBe(
+      "/api/v1/search?q=readme&limit=10&ext=pdf&folder=%2Fdocs&after=2026-01-01&before=2026-02-01",
+    );
+  });
+});
+
+describe("createApiClient: searchStatus", () => {
+  it("gets search status and returns SearchStatusResponse", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { available: true, semantic: false }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.searchStatus();
+
+    expect(result).toEqual({ available: true, semantic: false });
+    expect(calls[0]?.url).toBe("/api/v1/search/status");
+  });
+});
+
+describe("createApiClient: thumbUrl", () => {
+  it("builds a thumbnail URL with path and size", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+
+    expect(client.thumbUrl("/photos/a.jpg", 256)).toBe(
+      "https://api.test/api/v1/thumb?path=%2Fphotos%2Fa.jpg&size=256",
+    );
+  });
+
+  it("builds a 1024 thumbnail URL", () => {
+    const client = createApiClient({});
+
+    expect(client.thumbUrl("/photos/a.jpg", 1024)).toBe(
+      "/api/v1/thumb?path=%2Fphotos%2Fa.jpg&size=1024",
+    );
+  });
+});
+
 describe("createApiClient: error mapping", () => {
   it("throws ApiClientError with the kind and message from a well-formed ApiError body", async () => {
     const { fetchStub } = createStubFetch([

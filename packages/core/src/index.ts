@@ -8,3 +8,4 @@ export type * from "./ports/clock.ts";
 export type * from "./ports/ids.ts";
 export type * from "./ports/storage.ts";
 export * from "./scope.ts";
+export * from "./search/index.ts";

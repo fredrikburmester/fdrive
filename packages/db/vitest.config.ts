@@ -11,6 +11,7 @@ export default definePackageConfig({
         "src/schema/**",
         "src/bin/**",
         "src/repos/drizzle.ts",
+        "src/repos/index-queries.ts",
       ],
     },
   },

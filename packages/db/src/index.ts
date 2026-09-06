@@ -10,6 +10,23 @@ export { resolveMigrationsFolder } from "./migrationsPath.js";
 export * from "./parseDatabaseUrl.js";
 export { createRepos } from "./repos/drizzle.js";
 export type {
+  ContentHit,
+  DuplicateGroup,
+  DuplicateLocation,
+  FilenameHit,
+  IndexedFile,
+  IndexQueries,
+  IndexStats,
+  ScopeClause,
+  ScopePrefix,
+  SimilarFile,
+} from "./repos/index-queries.js";
+export {
+  createIndexQueries,
+  escapeLikePattern,
+  toScopeClauses,
+} from "./repos/index-queries.js";
+export type {
   Account,
   AccountRepo,
   Credential,

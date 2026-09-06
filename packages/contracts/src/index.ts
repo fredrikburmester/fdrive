@@ -41,3 +41,14 @@ export {
 } from "./jobs.ts";
 export type { Routes } from "./routes.ts";
 export { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
+export {
+  SearchHighlightRange,
+  SearchHit,
+  SearchQuery,
+  SearchResponse,
+  SearchSections,
+  SearchSnippet,
+  SearchStatusResponse,
+} from "./search.ts";
+export type { ThumbSize } from "./thumbs.ts";
+export { THUMB_SIZES, ThumbQuery } from "./thumbs.ts";
