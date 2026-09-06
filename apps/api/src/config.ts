@@ -57,6 +57,10 @@ export interface AppConfig {
   readonly fdriveAdminUsers: readonly string[];
   /** Overrides the randomly generated setup token. Mainly for tests and scripted installs. */
   readonly fdriveSetupToken: string | undefined;
+  /** Base URL of the indexer's internal HTTP API. `undefined` disables the System > Indexer page. */
+  readonly fdriveIndexerUrl: string | undefined;
+  /** Base URL of the OCR service's internal HTTP API. `undefined` disables the System > OCR page. */
+  readonly fdriveOcrUrl: string | undefined;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -254,6 +258,26 @@ const envSchema = z.object({
     (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
     z.string().min(1).optional(),
   ),
+  FDRIVE_INDEXER_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
+  FDRIVE_OCR_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
 });
 
 /**
@@ -294,5 +318,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,
     fdriveAdminUsers: parseAdminUsers(parsed.FDRIVE_ADMIN_USERS),
     fdriveSetupToken: parsed.FDRIVE_SETUP_TOKEN,
+    fdriveIndexerUrl: parsed.FDRIVE_INDEXER_URL,
+    fdriveOcrUrl: parsed.FDRIVE_OCR_URL,
   };
 }

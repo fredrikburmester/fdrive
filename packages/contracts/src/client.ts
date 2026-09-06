@@ -21,6 +21,21 @@ import {
   type SetupCompleteRequest,
   SetupStatusResponse,
 } from "./setup.ts";
+import {
+  IndexerActionResponse,
+  type IndexerReindexRequest,
+  IndexerSettingsResponse,
+  type IndexerSettingsUpdateRequest,
+  type IndexerThumbnailsRebuildRequest,
+  OcrRunResponse,
+  OcrSettingsResponse,
+  type OcrSettingsUpdateRequest,
+  SystemIndexerResponse,
+  SystemOcrResponse,
+  SystemReembedResponse,
+  SystemSearchResponse,
+  SystemThumbnailsResponse,
+} from "./system.ts";
 import type { ThumbSize } from "./thumbs.ts";
 
 export type { IdentitySummary };
@@ -109,6 +124,21 @@ export interface ApiClient {
   adminConnection(): Promise<AdminConnectionResponse>;
   adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse>;
   adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse>;
+  systemIndexer(): Promise<SystemIndexerResponse>;
+  systemUpdateIndexerSettings(
+    settings: IndexerSettingsUpdateRequest,
+  ): Promise<IndexerSettingsResponse>;
+  systemReindex(req: IndexerReindexRequest): Promise<IndexerActionResponse>;
+  systemRebuildIndexerThumbnails(
+    req?: IndexerThumbnailsRebuildRequest,
+  ): Promise<IndexerActionResponse>;
+  systemSearch(): Promise<SystemSearchResponse>;
+  systemReembed(): Promise<SystemReembedResponse>;
+  systemOcr(): Promise<SystemOcrResponse>;
+  systemUpdateOcrSettings(settings: OcrSettingsUpdateRequest): Promise<OcrSettingsResponse>;
+  systemRunOcr(): Promise<OcrRunResponse>;
+  systemThumbnails(): Promise<SystemThumbnailsResponse>;
+  systemRebuildThumbnails(): Promise<IndexerActionResponse>;
 }
 
 interface ClientContext {
@@ -513,6 +543,90 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           jsonBody: baseUrl !== undefined ? { baseUrl } : {},
         },
         ConnectionTestResponse,
+      );
+    },
+
+    systemIndexer(): Promise<SystemIndexerResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.system.indexer },
+        SystemIndexerResponse,
+      );
+    },
+
+    systemUpdateIndexerSettings(
+      settings: IndexerSettingsUpdateRequest,
+    ): Promise<IndexerSettingsResponse> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.indexerSettings, jsonBody: settings },
+        IndexerSettingsResponse,
+      );
+    },
+
+    systemReindex(req: IndexerReindexRequest): Promise<IndexerActionResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.indexerReindex, jsonBody: req },
+        IndexerActionResponse,
+      );
+    },
+
+    systemRebuildIndexerThumbnails(
+      req?: IndexerThumbnailsRebuildRequest,
+    ): Promise<IndexerActionResponse> {
+      return requestJson(
+        ctx,
+        {
+          method: "POST",
+          path: ROUTES.system.indexerThumbnailsRebuild,
+          jsonBody: req ?? {},
+        },
+        IndexerActionResponse,
+      );
+    },
+
+    systemSearch(): Promise<SystemSearchResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.system.search }, SystemSearchResponse);
+    },
+
+    systemReembed(): Promise<SystemReembedResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.searchReembed },
+        SystemReembedResponse,
+      );
+    },
+
+    systemOcr(): Promise<SystemOcrResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.system.ocr }, SystemOcrResponse);
+    },
+
+    systemUpdateOcrSettings(settings: OcrSettingsUpdateRequest): Promise<OcrSettingsResponse> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.ocrSettings, jsonBody: settings },
+        OcrSettingsResponse,
+      );
+    },
+
+    systemRunOcr(): Promise<OcrRunResponse> {
+      return requestJson(ctx, { method: "POST", path: ROUTES.system.ocrRun }, OcrRunResponse);
+    },
+
+    systemThumbnails(): Promise<SystemThumbnailsResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.system.thumbnails },
+        SystemThumbnailsResponse,
+      );
+    },
+
+    systemRebuildThumbnails(): Promise<IndexerActionResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.thumbnailsRebuild },
+        IndexerActionResponse,
       );
     },
   };

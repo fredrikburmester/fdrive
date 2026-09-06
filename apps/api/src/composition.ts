@@ -27,6 +27,10 @@ import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
 import { createSftpgoStorageProvider } from "./storage/sftpgo-provider.js";
+import { createIndexerClient } from "./system/indexer-client.js";
+import { createOcrClient } from "./system/ocr-client.js";
+import { registerSystemRoutes } from "./system/routes.js";
+import { createThumbnailsRepo } from "./system/thumbnails-repo.js";
 import { registerThumbRoutes } from "./thumbs/routes.js";
 
 export interface ComposeAppDeps {
@@ -113,6 +117,19 @@ export async function composeApp(
     clock,
   });
 
+  // System pages (phase 2): sidecar clients are `null` when their base URL
+  // is not configured, so the routes degrade to "not configured" rather
+  // than failing.
+  const indexerClient =
+    config.fdriveIndexerUrl === undefined
+      ? null
+      : createIndexerClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
+  const ocrClient =
+    config.fdriveOcrUrl === undefined
+      ? null
+      : createOcrClient({ baseUrl: config.fdriveOcrUrl, fetch: fetchImpl });
+  const thumbnailsRepo = createThumbnailsRepo(db);
+
   const setupToken = config.fdriveSetupToken ?? generateSetupToken();
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
@@ -167,6 +184,17 @@ export async function composeApp(
         homeTemplate,
         indexRootNames,
         thumbsDir: config.fdriveThumbsDir,
+      });
+      registerSystemRoutes(groups, {
+        settings: repos.settings,
+        indexQueries,
+        thumbnailsRepo,
+        indexerClient,
+        ocrClient,
+        embedUrl: config.fdriveEmbedUrl,
+        thumbsDir: config.fdriveThumbsDir,
+        indexRootNames: Array.from(indexRootNames),
+        fetch: fetchImpl,
       });
     },
   });
