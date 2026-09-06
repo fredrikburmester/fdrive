@@ -5,7 +5,8 @@ import { uniqueName } from "./support/unique.js";
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
 async function createFolder(page: Page, name: string): Promise<void> {
-  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Folder name").fill(name);
   await dialog.getByRole("button", { name: "Create" }).click();

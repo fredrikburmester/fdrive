@@ -16,6 +16,7 @@ import {
   ListIcon,
   ListTreeIcon,
   PanelRightIcon,
+  PlusIcon,
   UploadIcon,
   XIcon,
 } from "lucide-react";
@@ -41,6 +42,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -351,18 +353,19 @@ export function FilesToolbarActions({
         </ToggleGroupItem>
       </ToggleGroup>
 
-      <Button variant="ghost" size="sm" title="New folder" onClick={onNewFolder}>
-        <FolderPlusIcon />
-        <span className="max-[899px]:hidden">New folder</span>
-      </Button>
-
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="New file" />}>
-          <FilePlusIcon />
-          <span className="max-[899px]:hidden">New file</span>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="New" />}>
+          <PlusIcon />
+          <span className="max-[899px]:hidden">New</span>
           <ChevronDownIcon className="text-muted-foreground" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem className="whitespace-nowrap" onClick={onNewFolder}>
+            <FolderPlusIcon />
+            New folder
+            <DropdownMenuShortcut>⌘⇧N</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("text")}>
             <FileTextIcon />
             Text file

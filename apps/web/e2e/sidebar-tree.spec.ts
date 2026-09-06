@@ -31,7 +31,8 @@ test("creating a folder in the listing makes it appear in the sidebar tree", asy
 
   await expect(sidebar(page).getByRole("link", { name })).toBeHidden();
 
-  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Folder name").fill(name);
   await dialog.getByRole("button", { name: "Create" }).click();

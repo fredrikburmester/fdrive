@@ -13,7 +13,8 @@ test("bob cannot create a folder at root, but can inside /inbox", async ({ page 
   await expect(page).toHaveURL(/\/files$/);
 
   const rootAttemptName = uniqueName("bob-root-folder");
-  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
   const rootDialog = page.getByRole("dialog");
   await rootDialog.getByLabel("Folder name").fill(rootAttemptName);
   await rootDialog.getByRole("button", { name: "Create" }).click();
@@ -27,7 +28,8 @@ test("bob cannot create a folder at root, but can inside /inbox", async ({ page 
 
   await page.goto("/files/inbox");
   const inboxFolderName = uniqueName("bob-inbox-folder");
-  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
   const inboxDialog = page.getByRole("dialog");
   await inboxDialog.getByLabel("Folder name").fill(inboxFolderName);
   await inboxDialog.getByRole("button", { name: "Create" }).click();
