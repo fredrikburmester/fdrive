@@ -11,7 +11,13 @@ import type { JobRequest } from "./types";
 export interface RunJobRequestDeps {
   readonly compress: (req: CompressRequest) => Promise<JobAccepted>;
   readonly extract: (req: ExtractRequest) => Promise<JobAccepted>;
-  readonly upsertJob: (job: JobStatus, request?: JobRequest) => void;
+  /**
+   * Adds the placeholder job, without overwriting a job already known
+   * under that id (see `jobsReducer`'s `"seed"` case for why: the job can
+   * reach a terminal state, over SSE, before this placeholder is even
+   * created).
+   */
+  readonly seedJob: (job: JobStatus, request: JobRequest) => void;
   readonly notifySuccess: (message: string) => void;
   readonly notifyError: (message: string) => void;
   readonly now?: () => string;
@@ -26,11 +32,14 @@ function startFailedMessage(kind: JobRequest["kind"]): string {
 }
 
 /**
- * Submits `request` (a compress or extract job) and, on success, adds a
- * placeholder "queued" job to the store under its new id, remembering the
- * request itself for a future retry. The real `job` SSE event overwrites
- * the placeholder by id once it arrives (see `lib/api/sse.ts`). Failures
- * are reported through `notifyError`, never thrown.
+ * Submits `request` (a compress or extract job) and, on success, seeds a
+ * placeholder "queued" job into the store under its new id, remembering
+ * the request itself for a future retry. The real `job` SSE event
+ * overwrites the placeholder by id once it arrives (see `lib/api/sse.ts`);
+ * `seedJob` (rather than a plain upsert) makes sure that, should the SSE
+ * event for this job's terminal state arrive first, the placeholder never
+ * overwrites it back to "queued". Failures are reported through
+ * `notifyError`, never thrown.
  */
 export async function runJobRequest(deps: RunJobRequestDeps, request: JobRequest): Promise<void> {
   try {
@@ -38,7 +47,7 @@ export async function runJobRequest(deps: RunJobRequestDeps, request: JobRequest
       request.kind === "compress"
         ? await deps.compress(request.req)
         : await deps.extract(request.req);
-    deps.upsertJob(placeholderJob(accepted.jobId, request.kind, deps.now), request);
+    deps.seedJob(placeholderJob(accepted.jobId, request.kind, deps.now), request);
     deps.notifySuccess(startedMessage(request.kind));
   } catch (err) {
     deps.notifyError(describeFsError(err, startFailedMessage(request.kind)));

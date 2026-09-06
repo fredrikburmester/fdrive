@@ -59,9 +59,8 @@ interface CollectedFile {
 }
 
 /**
- * Recursively walks `paths` through `storage.list` (each top-level entry
- * either lists as a directory or reports `bad_request`, in which case it is
- * a file, stat'd directly), building the flat list of files to archive.
+ * Recursively walks `paths` (each resolved through `collectPath`, since
+ * their kind is not yet known) building the flat list of files to archive.
  * Entry names are prefixed with each top-level path's own base name, so a
  * folder's contents nest under its own name in the resulting archive.
  */
@@ -72,12 +71,28 @@ async function collectFiles(
 ): Promise<CollectedFile[]> {
   const files: CollectedFile[] = [];
   for (const path of paths) {
-    await collectEntry(storage, path, baseName(path), files, signal);
+    await collectPath(storage, path, baseName(path), files, signal);
   }
   return files;
 }
 
-async function collectEntry(
+/**
+ * Resolves a top-level compress selection, whose kind (file or directory)
+ * fdrive does not already know, and adds it (or its contents) to `out`.
+ *
+ * Tries `statFile` (a `HEAD`) first, not `list` (a `GET` to SFTPGo's `dirs`
+ * endpoint): `statFile` is safe for every outcome here, since it returns
+ * the file's stat directly on success or a clean `bad_request` when `path`
+ * is actually a directory. Calling `list` directly on a path that turns
+ * out to be a plain file would do the same job against the in-memory fake
+ * server this is tested against, but a real SFTPGo server (verified
+ * against v2.7.5) drops the connection outright in that case instead of
+ * responding with a clean error, which surfaces to callers as an
+ * indistinguishable-from-a-real-outage "fetch failed", failing the whole
+ * compress job. Only once `statFile` has ruled out `path` being a file
+ * does this fall through to `collectDirectory`, which lists it.
+ */
+async function collectPath(
   storage: StorageProvider,
   path: string,
   entryName: string,
@@ -86,18 +101,34 @@ async function collectEntry(
 ): Promise<void> {
   throwIfAborted(signal);
 
-  let children: Awaited<ReturnType<StorageProvider["list"]>>;
   try {
-    children = await storage.list(path);
+    const stat = await storage.statFile(path);
+    out.push({ path, entryName, size: stat.size, modifiedAt: stat.modifiedAt ?? new Date(0) });
+    return;
   } catch (error) {
-    if (isStorageError(error) && error.kind === "bad_request") {
-      const stat = await storage.statFile(path);
-      out.push({ path, entryName, size: stat.size, modifiedAt: stat.modifiedAt ?? new Date(0) });
-      return;
+    if (!isStorageError(error) || error.kind !== "bad_request") {
+      throw error;
     }
-    throw error;
   }
 
+  await collectDirectory(storage, path, entryName, out, signal);
+}
+
+/**
+ * Lists `path` (already known to be a directory, either because
+ * `collectPath` ruled out it being a file, or because a parent `list` call
+ * already reported it as a `dir` entry) and recurses into every child.
+ */
+async function collectDirectory(
+  storage: StorageProvider,
+  path: string,
+  entryName: string,
+  out: CollectedFile[],
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+
+  const children = await storage.list(path);
   for (const child of children) {
     // Compressing the root ("/") itself gives every top-level entry an
     // empty `entryName` prefix; without this guard the joined name would
@@ -105,7 +136,7 @@ async function collectEntry(
     // absolute path.
     const childEntryName = entryName.length > 0 ? `${entryName}/${child.name}` : child.name;
     if (child.kind === "dir") {
-      await collectEntry(storage, child.path, childEntryName, out, signal);
+      await collectDirectory(storage, child.path, childEntryName, out, signal);
     } else if (child.kind === "file") {
       out.push({
         path: child.path,

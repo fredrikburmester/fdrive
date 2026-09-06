@@ -20,6 +20,7 @@ export const initialJobsState: JobsState = { byId: {}, order: [], requests: {} }
 export type JobsAction =
   | { readonly type: "hydrate"; readonly jobs: readonly JobStatus[] }
   | { readonly type: "upsert"; readonly job: JobStatus; readonly request?: JobRequest }
+  | { readonly type: "seed"; readonly job: JobStatus; readonly request: JobRequest }
   | { readonly type: "remove"; readonly id: string };
 
 /**
@@ -27,8 +28,18 @@ export type JobsAction =
  * on shell mount, from `apiClient.jobs()`), keeping only the remembered
  * requests whose job id survived. `upsert` adds a job to the end of `order`
  * the first time it is seen and updates it in place afterwards; passing
- * `request` remembers (or overwrites) the request to retry with. `remove`
- * drops a job and its remembered request, used by "Clear finished".
+ * `request` remembers (or overwrites) the request to retry with. `seed`
+ * is like `upsert` but never overwrites a job already in `byId`: it exists
+ * for the placeholder `runJobRequest` adds right after submitting a job,
+ * which can lose a race against that same job's own terminal `job` SSE
+ * event (a job can queue, run, and fail in a few milliseconds, all before
+ * the submitting `POST` even resolves client-side, since the already-open
+ * SSE connection and the response to that `POST` are delivered
+ * independently). Without this, the placeholder would silently overwrite
+ * the real "failed" status with a stale "queued" one. Its `request` is
+ * always remembered, win or lose, so a job that failed before the
+ * placeholder ever lands can still be retried. `remove` drops a job and
+ * its remembered request, used by "Clear finished".
  */
 export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
   switch (action.type) {
@@ -56,6 +67,18 @@ export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
       return {
         byId: { ...state.byId, [action.job.id]: action.job },
         order: exists ? state.order : [...state.order, action.job.id],
+        requests,
+      };
+    }
+
+    case "seed": {
+      const requests = { ...state.requests, [action.job.id]: action.request };
+      if (action.job.id in state.byId) {
+        return { ...state, requests };
+      }
+      return {
+        byId: { ...state.byId, [action.job.id]: action.job },
+        order: [...state.order, action.job.id],
         requests,
       };
     }

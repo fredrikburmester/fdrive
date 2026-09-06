@@ -2,7 +2,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
 import { createMemoryStorage } from "../../test/fixtures/memory-storage.js";
 import type { JobProgressPatch } from "../jobs/types.js";
@@ -161,6 +161,25 @@ describe("compressToTemp", () => {
     expect(destStorage.dump()).toMatchObject({ "/out/docs/a.txt": "alpha" });
   });
 
+  it("never calls list on a top-level file selection (real SFTPGo, unlike the fake, drops the connection instead of returning bad_request for that call)", async () => {
+    const storage = createMemoryStorage({ "/report.txt": "just one file" });
+    const listSpy = vi.fn(storage.list.bind(storage));
+    const spiedOnList: StorageProvider = { ...storage, list: listSpy };
+    const tmpDir = await tmpDirFor("no-list-on-file");
+
+    const result = await compressToTemp({
+      storage: spiedOnList,
+      paths: ["/report.txt"],
+      format: "zip",
+      tmpDir,
+      signal: new AbortController().signal,
+      report: () => {},
+    });
+    tempPaths.push(result.file);
+
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
   it("compresses a single file selection directly (no folder)", async () => {
     const storage = createMemoryStorage({ "/report.txt": "just one file" });
     const tmpDir = await tmpDirFor("single-file");
@@ -264,6 +283,13 @@ describe("compressToTemp", () => {
     const storage = createMemoryStorage();
     const failing: StorageProvider = {
       ...storage,
+      // `path` resolves as a directory (a clean `bad_request` from
+      // `statFile`, exactly as a real directory would), so `collectPath`
+      // falls through to `list`, whose own failure below is asserted to
+      // propagate unchanged.
+      statFile: async () => {
+        throw new StorageError("bad_request", "is a directory");
+      },
       list: async () => {
         throw new StorageError("forbidden", "no access");
       },

@@ -31,10 +31,10 @@ function job(overrides: Partial<JobStatus> & Pick<JobStatus, "id" | "state">): J
 }
 
 describe("runJobRequest", () => {
-  it("submits a compress request and upserts a placeholder job with the request remembered", async () => {
+  it("submits a compress request and seeds a placeholder job with the request remembered", async () => {
     const compress = vi.fn().mockResolvedValue({ jobId: "job-1" });
     const extract = vi.fn();
-    const upsertJob = vi.fn();
+    const seedJob = vi.fn();
     const notifySuccess = vi.fn();
     const notifyError = vi.fn();
 
@@ -42,7 +42,7 @@ describe("runJobRequest", () => {
       {
         compress,
         extract,
-        upsertJob,
+        seedJob,
         notifySuccess,
         notifyError,
         now: () => "2026-09-06T00:00:00.000Z",
@@ -52,7 +52,7 @@ describe("runJobRequest", () => {
 
     expect(compress).toHaveBeenCalledWith(COMPRESS_REQUEST.req);
     expect(extract).not.toHaveBeenCalled();
-    expect(upsertJob).toHaveBeenCalledWith(
+    expect(seedJob).toHaveBeenCalledWith(
       {
         id: "job-1",
         kind: "compress",
@@ -70,12 +70,12 @@ describe("runJobRequest", () => {
   it("submits an extract request", async () => {
     const compress = vi.fn();
     const extract = vi.fn().mockResolvedValue({ jobId: "job-2" });
-    const upsertJob = vi.fn();
+    const seedJob = vi.fn();
     const notifySuccess = vi.fn();
     const notifyError = vi.fn();
 
     await runJobRequest(
-      { compress, extract, upsertJob, notifySuccess, notifyError },
+      { compress, extract, seedJob, notifySuccess, notifyError },
       EXTRACT_REQUEST,
     );
 
@@ -84,21 +84,21 @@ describe("runJobRequest", () => {
     expect(notifySuccess).toHaveBeenCalledWith("Extracting…");
   });
 
-  it("reports the API's error message on failure, and never upserts", async () => {
+  it("reports the API's error message on failure, and never seeds", async () => {
     const compress = vi
       .fn()
       .mockRejectedValue(new ApiClientError("conflict", "already exists", 409));
     const extract = vi.fn();
-    const upsertJob = vi.fn();
+    const seedJob = vi.fn();
     const notifySuccess = vi.fn();
     const notifyError = vi.fn();
 
     await runJobRequest(
-      { compress, extract, upsertJob, notifySuccess, notifyError },
+      { compress, extract, seedJob, notifySuccess, notifyError },
       COMPRESS_REQUEST,
     );
 
-    expect(upsertJob).not.toHaveBeenCalled();
+    expect(seedJob).not.toHaveBeenCalled();
     expect(notifySuccess).not.toHaveBeenCalled();
     expect(notifyError).toHaveBeenCalledWith("already exists");
   });
@@ -109,7 +109,7 @@ describe("runJobRequest", () => {
     const notifyError = vi.fn();
 
     await runJobRequest(
-      { compress, extract, upsertJob: vi.fn(), notifySuccess: vi.fn(), notifyError },
+      { compress, extract, seedJob: vi.fn(), notifySuccess: vi.fn(), notifyError },
       EXTRACT_REQUEST,
     );
 
@@ -122,7 +122,7 @@ describe("retryJob", () => {
     return {
       compress: vi.fn().mockResolvedValue({ jobId: "job-retry" }),
       extract: vi.fn().mockResolvedValue({ jobId: "job-retry" }),
-      upsertJob: vi.fn(),
+      seedJob: vi.fn(),
       notifySuccess: vi.fn(),
       notifyError: vi.fn(),
       getRequest: vi.fn().mockReturnValue(undefined),

@@ -32,6 +32,7 @@ import {
   jobStateLabel,
   jobTitle,
 } from "@/lib/jobs/format";
+import { pollActiveJobs } from "@/lib/jobs/poll";
 import { activeJobs, finishedJobs } from "@/lib/jobs/reducer";
 import { useJobsStore } from "@/lib/jobs/store";
 import type { JobRequest } from "@/lib/jobs/types";
@@ -41,6 +42,12 @@ import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem, UploadStatus } from "@/lib/upload/types";
 
 const SAMPLE_HISTORY_LIMIT = 50;
+/**
+ * How often the panel re-fetches `apiClient.jobs()` while any job is
+ * queued or running, as a safety net alongside the `job` SSE stream (see
+ * `pollActiveJobs`).
+ */
+const JOB_POLL_INTERVAL_MS = 5000;
 
 function toRoute(href: string): Route {
   return href as Route;
@@ -203,6 +210,7 @@ export function ActivityPanel() {
 
   const jobsState = useJobsStore((s) => s.state);
   const upsertJob = useJobsStore((s) => s.upsert);
+  const seedJob = useJobsStore((s) => s.seed);
   const removeJob = useJobsStore((s) => s.remove);
 
   const [collapsed, setCollapsed] = useState(false);
@@ -242,6 +250,24 @@ export function ActivityPanel() {
     wasActiveRef.current = activeCount > 0;
   }, [activeCount]);
 
+  // Safety net alongside the `job` SSE stream: while any job is queued or
+  // running, periodically refresh it from `apiClient.jobs()` too, in case
+  // its own terminal SSE event was dropped, arrived before this session
+  // ever subscribed, or the tab's `EventSource` is throttled in the
+  // background. `jobsState` (rather than `activeJobList`, a fresh array on
+  // every render) is the effect's dependency, so a quiet stretch with no
+  // real updates still polls every `JOB_POLL_INTERVAL_MS`.
+  useEffect(() => {
+    const ids = activeJobs(jobsState).map((j) => j.id);
+    if (ids.length === 0) {
+      return;
+    }
+    const interval = setInterval(() => {
+      void pollActiveJobs({ jobs: () => apiClient.jobs(), upsertJob }, ids);
+    }, JOB_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [jobsState, upsertJob]);
+
   if (total === 0) {
     return null;
   }
@@ -263,7 +289,7 @@ export function ActivityPanel() {
     return {
       compress: (req) => apiClient.compress(req),
       extract: (req) => apiClient.extract(req),
-      upsertJob: (job, request) => upsertJob(job, request),
+      seedJob: (job, request) => seedJob(job, request),
       notifySuccess: (message) => toast.success(message),
       notifyError: (message) => toast.error(message),
       getRequest: (id) => jobsState.requests[id],
