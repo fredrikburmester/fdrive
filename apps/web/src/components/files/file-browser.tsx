@@ -326,7 +326,7 @@ export function FileBrowser({
     return {
       compress: (req: CompressRequest) => apiClient.compress(req),
       extract: (req: ExtractRequest) => apiClient.extract(req),
-      upsertJob: (job, request) => useJobsStore.getState().upsert(job, request),
+      seedJob: (job, request) => useJobsStore.getState().seed(job, request),
       notifySuccess: (message) => toast.success(message),
       notifyError: (message) => toast.error(message),
     };

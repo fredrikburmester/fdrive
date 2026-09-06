@@ -286,6 +286,27 @@ describe("POST /fs/compress and the resulting job", () => {
     expect(listing.entries.map((e) => e.name)).toContain("dir.zip");
   });
 
+  it("keeps running to completion after the submitting request's own signal aborts (the job must not share the request's signal)", async () => {
+    const { app } = await buildHarness();
+    const requestController = new AbortController();
+
+    const res = await app.request("/api/v1/fs/compress", {
+      ...jsonPost({ paths: ["/dir"], format: "zip" }),
+      signal: requestController.signal,
+    });
+    expect(res.status).toBe(202);
+    const { jobId } = (await res.json()) as { jobId: string };
+
+    // The client that made the compress request has moved on (its own
+    // fetch's signal aborts, for example because the browser tab
+    // navigated away); the job it started must keep running regardless.
+    requestController.abort();
+
+    const final = await waitForJobDone(app, jobId);
+    expect(final.state).toBe("done");
+    expect(final.result?.path).toBe("/dir.zip");
+  });
+
   it("defaults the archive name from the single selected file's own name", async () => {
     const { app } = await buildHarness();
 
@@ -611,8 +632,11 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
 
 describe("unmapped storage errors pass through unchanged", () => {
   it("maps a non-bad_request, non-not_found StorageError from the destination check", async () => {
+    // `assertIsDirectory` (the destination check) tries `statFile` first;
+    // this fails there directly, before it would ever fall through to
+    // `list`.
     const storage = makeStubStorage({
-      list: async () => {
+      statFile: async () => {
         throw new StorageError("forbidden", "no access");
       },
     });
@@ -628,7 +652,7 @@ describe("unmapped storage errors pass through unchanged", () => {
 
   it("rethrows a non-StorageError from the destination check as an internal error", async () => {
     const storage = makeStubStorage({
-      list: async () => {
+      statFile: async () => {
         throw new Error("boom");
       },
     });
@@ -643,9 +667,17 @@ describe("unmapped storage errors pass through unchanged", () => {
   });
 
   it("maps a non-bad_request, non-not_found StorageError from the target existence check", async () => {
+    // `statFile("/somewhere")` (the destination check) reports `bad_request`
+    // (as SFTPGo does for a real directory), so `assertIsDirectory` falls
+    // through to `list`, which resolves it as a directory; the failure
+    // this asserts on comes from the *next* `statFile` call, checking
+    // whether the target archive path already exists.
     const storage = makeStubStorage({
       list: async () => [],
-      statFile: async () => {
+      statFile: async (path: string) => {
+        if (path === "/somewhere") {
+          throw new StorageError("bad_request", "is a directory");
+        }
         throw new StorageError("forbidden", "no access");
       },
     });
@@ -662,7 +694,10 @@ describe("unmapped storage errors pass through unchanged", () => {
   it("rethrows a non-StorageError from the target existence check as an internal error", async () => {
     const storage = makeStubStorage({
       list: async () => [],
-      statFile: async () => {
+      statFile: async (path: string) => {
+        if (path === "/somewhere") {
+          throw new StorageError("bad_request", "is a directory");
+        }
         throw new Error("boom");
       },
     });

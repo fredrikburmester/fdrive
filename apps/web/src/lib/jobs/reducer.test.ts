@@ -99,6 +99,53 @@ describe("jobsReducer", () => {
     expect(updated.requests["1"]).toEqual(COMPRESS_REQUEST);
   });
 
+  it("seed adds a new job to the end of order and remembers its request", () => {
+    const state = jobsReducer(initialJobsState, {
+      type: "seed",
+      job: job({ id: "1", state: "queued" }),
+      request: COMPRESS_REQUEST,
+    });
+
+    expect(state.order).toEqual(["1"]);
+    expect(state.byId["1"]?.state).toBe("queued");
+    expect(state.requests["1"]).toEqual(COMPRESS_REQUEST);
+  });
+
+  it("seed never overwrites a job already known under that id (the placeholder-vs-terminal-SSE-event race)", () => {
+    // Models a job that reached "failed" over SSE (an `upsert`) before its
+    // own placeholder is seeded, since the submitting request's own
+    // response and the SSE stream are delivered independently.
+    const withFailure = jobsReducer(initialJobsState, {
+      type: "upsert",
+      job: job({ id: "1", state: "failed", error: "boom" }),
+    });
+
+    const seeded = jobsReducer(withFailure, {
+      type: "seed",
+      job: job({ id: "1", state: "queued" }),
+      request: COMPRESS_REQUEST,
+    });
+
+    expect(seeded.byId["1"]?.state).toBe("failed");
+    expect(seeded.byId["1"]?.error).toBe("boom");
+    expect(seeded.order).toEqual(["1"]);
+  });
+
+  it("seed still remembers the request even when the job already exists (so a job that failed before seeding can be retried)", () => {
+    const withFailure = jobsReducer(initialJobsState, {
+      type: "upsert",
+      job: job({ id: "1", state: "failed" }),
+    });
+
+    const seeded = jobsReducer(withFailure, {
+      type: "seed",
+      job: job({ id: "1", state: "queued" }),
+      request: COMPRESS_REQUEST,
+    });
+
+    expect(seeded.requests["1"]).toEqual(COMPRESS_REQUEST);
+  });
+
   it("remove drops the job, its order entry, and its remembered request", () => {
     const withRequest = jobsReducer(initialJobsState, {
       type: "upsert",

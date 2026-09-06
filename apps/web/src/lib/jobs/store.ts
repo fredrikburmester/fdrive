@@ -9,6 +9,14 @@ export interface JobsStoreState {
   hydrate(jobs: readonly JobStatus[]): void;
   /** Adds or updates a job, optionally remembering the request that started it. */
   upsert(job: JobStatus, request?: JobRequest): void;
+  /**
+   * Adds `job` only if its id is not already known (never overwrites), and
+   * always remembers `request`. See `jobsReducer`'s `"seed"` case for why
+   * this is not just `upsert`: the placeholder `runJobRequest` seeds right
+   * after submitting a job can otherwise lose a race against that same
+   * job's own terminal `job` SSE event.
+   */
+  seed(job: JobStatus, request: JobRequest): void;
   /** Drops a finished job and its remembered request. */
   remove(id: string): void;
 }
@@ -33,6 +41,10 @@ export const useJobsStore = create<JobsStoreState>((set) => ({
         request === undefined ? { type: "upsert", job } : { type: "upsert", job, request },
       ),
     }));
+  },
+
+  seed(job, request) {
+    set((s) => ({ state: jobsReducer(s.state, { type: "seed", job, request }) }));
   },
 
   remove(id) {

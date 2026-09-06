@@ -47,6 +47,23 @@ describe("useJobsStore", () => {
     expect(useJobsStore.getState().state.order).toEqual(["1"]);
   });
 
+  it("seed adds a job and remembers its request", () => {
+    const request: JobRequest = { kind: "extract", req: { path: "/a.zip" } };
+    useJobsStore.getState().seed(job({ id: "1", state: "queued" }), request);
+
+    expect(useJobsStore.getState().state.byId["1"]?.state).toBe("queued");
+    expect(useJobsStore.getState().state.requests["1"]).toEqual(request);
+  });
+
+  it("seed never overwrites a job already in the store", () => {
+    const request: JobRequest = { kind: "extract", req: { path: "/a.zip" } };
+    useJobsStore.getState().upsert(job({ id: "1", state: "failed" }));
+    useJobsStore.getState().seed(job({ id: "1", state: "queued" }), request);
+
+    expect(useJobsStore.getState().state.byId["1"]?.state).toBe("failed");
+    expect(useJobsStore.getState().state.requests["1"]).toEqual(request);
+  });
+
   it("remove drops a job from the store", () => {
     useJobsStore.getState().upsert(job({ id: "1", state: "done" }));
     useJobsStore.getState().remove("1");
