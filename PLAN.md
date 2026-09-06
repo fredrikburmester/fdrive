@@ -430,10 +430,29 @@ Icons from lucide, thin stroke, never filled. Theme tokens live in `globals.css`
 place colours are defined.
 
 Screens: login; browser (list and grid, virtualized, multi-select, keyboard navigation, context
-menu, breadcrumbs, details pane with tags, favorites, duplicates, similar files); search results
-with snippets and filters (folder, type, date); favorites; recents; tags; account page (identities,
-API tokens, scope override); public share page; About with SFTPGo attribution. Previews as a route so the
-back button works. Office files open in an ONLYOFFICE route.
+menu, breadcrumbs, details pane with tags, favorites, duplicates, similar files); a folder tree in
+the sidebar (lazy-loaded, expands on demand, drag targets for moves, keeps in sync with the
+listing); search results with snippets and filters (folder, type, date); favorites; recents; tags;
+account page (identities, API tokens, scope override); public share page; About with SFTPGo
+attribution. Previews as a route so the back button works. Text, code, and markdown files are
+editable in place (CodeMirror 6 inside a shadcn shell, markdown with a side-by-side or toggled
+preview, save through the upload endpoint with a modified-time check so a concurrent change is
+never silently overwritten). Office files open in an ONLYOFFICE route.
+
+**Search bar (phase 2).** A top-right search field opens a command-palette style panel, not a
+plain result list: sections for Folders, Files, Content matches (with snippet and highlighted
+terms), Recent, and Tags; thumbnails for images and PDFs, icons otherwise; keyboard navigation;
+Enter opens, Cmd+Enter reveals in folder; filters as chips (folder, type, date, tag). Powered by
+the hybrid search service, results scoped per identity.
+
+**Sidecar settings in the sidebar (phase 2).** A "System" sidebar section with one page per
+sidecar: Indexer (roots, scan interval, watcher status, queue depth, last scan, errors, reindex
+actions), Search and embeddings (model, dimension, chunks embedded, embedding server health,
+re-embed), OCR (schedule, languages, excluded folders, last run, processed and skipped counts,
+originals location, run now), Thumbnails (cache size, regenerate), and later ONLYOFFICE
+(reachability, WOPI discovery status). Each page reads live status over the internal HTTP
+endpoints of the services and writes options to the `settings` table, which the services pick
+up on their next cycle. All of it is controlled from fdrive web; nothing needs a shell.
 
 Components are covered by Playwright end-to-end tests and a small number of component tests;
 hooks and pure UI helpers (sorting, formatting, selection logic, upload planning) live in
@@ -527,18 +546,19 @@ Done when: an empty API and web boot in compose; the SFTPGo client passes contra
 both fake and container.
 
 **Phase 1 — Browse and transfer (L)**
-Login, encrypted credential store, token re-minting, sessions, list, download with Range, zip, upload queue with drop and
+Login, encrypted credential store, token re-minting, sessions, sidebar folder tree, list, download with Range, zip, upload queue with drop and
 folder drop, mkdir, rename, move, copy, delete, previews for image/video/audio/PDF/text/markdown,
 list and grid views, virtualization, keyboard navigation, context menus, SSE for our own
-mutations. About page with SFTPGo attribution.
+mutations, in-place editing of text, code, and markdown files. About page with SFTPGo attribution.
 Done when: daily use no longer needs Filestash; Playwright covers every action; perf budgets for
 list and download measured.
 
 **Phase 2 — Index and search (M)**
 Indexer moved in, multi-root, thumbnails, events, internal HTTP; migrations own the schema;
-one-shot import from the filesai DB; search service in core with scoping; search page and command
-palette; duplicates and similar-files panels; MCP in TypeScript with per-account tokens; Raycast
-repointed. filesai stack retired on the box.
+one-shot import from the filesai DB; search service in core with scoping; the sectioned search
+panel with thumbnails (§9); the System sidebar section with settings and stats pages for the
+indexer, embeddings, OCR, and thumbnails (§9); duplicates and similar-files panels; MCP in
+TypeScript with per-account tokens; Raycast repointed. filesai stack retired on the box.
 Done when: search results match the old MCP for the same queries; a second SFTPGo user only ever
 sees their own scope in every index-backed endpoint (tested).
 
