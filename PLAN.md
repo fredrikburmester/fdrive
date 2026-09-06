@@ -437,7 +437,22 @@ account page (identities, API tokens, scope override); public share page; About 
 attribution. Previews as a route so the back button works. Text, code, and markdown files are
 editable in place (CodeMirror 6 inside a shadcn shell, markdown with a side-by-side or toggled
 preview, save through the upload endpoint with a modified-time check so a concurrent change is
-never silently overwritten). Office files open in an ONLYOFFICE route.
+never silently overwritten). Saving is explicit (Save button and Cmd+S) with a dirty indicator
+and an unsaved-changes guard; a debounced autosave is a later opt-in preference, not the default,
+because every save is an upload that the indexer re-extracts and re-embeds. Office files open in an
+ONLYOFFICE route.
+
+**Duplicate, compress, extract.** Duplicate copies an entry next to itself with a unique name
+("report copy.pdf", "report copy 2.pdf"). Compress builds an archive from the selection in one of
+`zip`, `tar.gz`, or `tar.zst` and writes it beside the selection (name and destination editable);
+Extract unpacks `zip`, `tar`, `tar.gz`, `tgz`, `tar.zst`, and `gz` into a folder named after the
+archive (destination editable). SFTPGo has no server-side archiving, so the API does the work:
+it streams the sources from SFTPGo, spools to a temp file where the format needs random access
+(zip extraction), and uploads the result. These are long-running, so they run as jobs: `POST`
+returns a job id, progress arrives over the existing SSE stream as `job` events, and the Activity
+panel (the upload panel, generalised) shows them with cancel. Zip-slip is prevented by normalising
+every entry path and refusing anything that escapes the destination. Temp space is configurable
+(`FDRIVE_TMP_DIR`) and capped per job.
 
 **Search bar (phase 2).** A top-right search field opens a command-palette style panel, not a
 plain result list: sections for Folders, Files, Content matches (with snippet and highlighted
@@ -549,7 +564,8 @@ both fake and container.
 Login, encrypted credential store, token re-minting, sessions, sidebar folder tree, list, download with Range, zip, upload queue with drop and
 folder drop, mkdir, rename, move, copy, delete, previews for image/video/audio/PDF/text/markdown,
 list and grid views, virtualization, keyboard navigation, context menus, SSE for our own
-mutations, in-place editing of text, code, and markdown files. About page with SFTPGo attribution.
+mutations, in-place editing of text, code, and markdown files, duplicate, compress, and extract as
+jobs with progress. About page with SFTPGo attribution.
 Done when: daily use no longer needs Filestash; Playwright covers every action; perf budgets for
 list and download measured.
 
