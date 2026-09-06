@@ -460,6 +460,16 @@ terms), Recent, and Tags; thumbnails for images and PDFs, icons otherwise; keybo
 Enter opens, Cmd+Enter reveals in folder; filters as chips (folder, type, date, tag). Powered by
 the hybrid search service, results scoped per identity.
 
+**Setup and administration (phase 2).** The SFTPGo connection is configured either by
+environment (`SFTPGO_URL`, `FDRIVE_HOME_TEMPLATE`) or through a first-run `/setup` page shown
+while no provider exists: it asks for the SFTPGo URL, tests the connection, sets the home
+template, and stores the result in the `settings` table. The page is protected by a one-time
+setup token printed to the API log at start, so a fresh install cannot be claimed by a stranger.
+The account that completes setup becomes the administrator; `FDRIVE_ADMIN_USERS` can name more
+SFTPGo usernames. Administrators see the System sidebar section (connection, home template,
+sidecar pages below, later ONLYOFFICE). The login page says "Sign in with your SFTPGo account"
+and shows the server host from a public config endpoint, never "fdrive account".
+
 **Sidecar settings in the sidebar (phase 2).** A "System" sidebar section with one page per
 sidecar: Indexer (roots, scan interval, watcher status, queue depth, last scan, errors, reindex
 actions), Search and embeddings (model, dimension, chunks embedded, embedding server health,
