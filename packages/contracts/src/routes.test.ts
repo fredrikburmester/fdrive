@@ -60,6 +60,22 @@ describe("ROUTES", () => {
       connectionTest: "/api/v1/admin/connection/test",
     });
   });
+
+  it("defines every system route under /api/v1/system", () => {
+    expect(ROUTES.system).toEqual({
+      indexer: "/api/v1/system/indexer",
+      indexerSettings: "/api/v1/system/indexer/settings",
+      indexerReindex: "/api/v1/system/indexer/reindex",
+      indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
+      search: "/api/v1/system/search",
+      searchReembed: "/api/v1/system/search/reembed",
+      ocr: "/api/v1/system/ocr",
+      ocrSettings: "/api/v1/system/ocr/settings",
+      ocrRun: "/api/v1/system/ocr/run",
+      thumbnails: "/api/v1/system/thumbnails",
+      thumbnailsRebuild: "/api/v1/system/thumbnails/rebuild",
+    });
+  });
 });
 
 describe("jobRoute", () => {

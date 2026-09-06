@@ -142,6 +142,8 @@ describe("loadConfig", () => {
       fdriveThumbsDir: undefined,
       fdriveAdminUsers: [],
       fdriveSetupToken: undefined,
+      fdriveIndexerUrl: undefined,
+      fdriveOcrUrl: undefined,
     });
   });
 
@@ -183,6 +185,8 @@ describe("loadConfig", () => {
       FDRIVE_THUMBS_DIR: "/data/thumbs",
       FDRIVE_ADMIN_USERS: "alice, bob",
       FDRIVE_SETUP_TOKEN: "fixed-token",
+      FDRIVE_INDEXER_URL: "http://indexer:8010",
+      FDRIVE_OCR_URL: "http://ocr:8020",
     });
 
     expect(config).toEqual({
@@ -207,6 +211,8 @@ describe("loadConfig", () => {
       fdriveThumbsDir: "/data/thumbs",
       fdriveAdminUsers: ["alice", "bob"],
       fdriveSetupToken: "fixed-token",
+      fdriveIndexerUrl: "http://indexer:8010",
+      fdriveOcrUrl: "http://ocr:8020",
     });
   });
 
@@ -215,6 +221,30 @@ describe("loadConfig", () => {
     expect(config.fdriveIndexRoots).toBeNull();
     expect(config.fdriveEmbedUrl).toBeUndefined();
     expect(config.fdriveThumbsDir).toBeUndefined();
+  });
+
+  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset", () => {
+    const config = loadConfig(REQUIRED_ENV);
+    expect(config.fdriveIndexerUrl).toBeUndefined();
+    expect(config.fdriveOcrUrl).toBeUndefined();
+  });
+
+  it("rejects a non-http FDRIVE_INDEXER_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "not a url" })).toThrow(
+      /FDRIVE_INDEXER_URL/,
+    );
+  });
+
+  it("rejects a non-http FDRIVE_OCR_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_OCR_URL: "not a url" })).toThrow(
+      /FDRIVE_OCR_URL/,
+    );
+  });
+
+  it("treats an empty FDRIVE_INDEXER_URL as unset", () => {
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "" }).fdriveIndexerUrl,
+    ).toBeUndefined();
   });
 
   it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {

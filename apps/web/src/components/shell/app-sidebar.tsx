@@ -1,6 +1,17 @@
 "use client";
 
-import { ChevronsUpDown, LogOut, Monitor, Moon, Settings2, Sun } from "lucide-react";
+import {
+  ChevronsUpDown,
+  Database,
+  Image,
+  LogOut,
+  Monitor,
+  Moon,
+  ScanText,
+  Search,
+  Settings2,
+  Sun,
+} from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -57,6 +68,18 @@ export function isSystemRoute(pathname: string | null): boolean {
 }
 
 const SYSTEM_CONNECTION_ROUTE = "/system/connection" as Route;
+const SYSTEM_INDEXER_ROUTE = "/system/indexer" as Route;
+const SYSTEM_SEARCH_ROUTE = "/system/search" as Route;
+const SYSTEM_OCR_ROUTE = "/system/ocr" as Route;
+const SYSTEM_THUMBNAILS_ROUTE = "/system/thumbnails" as Route;
+
+const SYSTEM_NAV_ITEMS = [
+  { href: SYSTEM_CONNECTION_ROUTE, label: "Connection", Icon: Settings2 },
+  { href: SYSTEM_INDEXER_ROUTE, label: "Indexer", Icon: Database },
+  { href: SYSTEM_SEARCH_ROUTE, label: "Search", Icon: Search },
+  { href: SYSTEM_OCR_ROUTE, label: "OCR", Icon: ScanText },
+  { href: SYSTEM_THUMBNAILS_ROUTE, label: "Thumbnails", Icon: Image },
+] as const;
 
 export function AppSidebar() {
   const { data: me } = useShellMe();
@@ -87,13 +110,16 @@ export function AppSidebar() {
             <SidebarGroupLabel>System</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <SidebarMenuButton
-                  isActive={isSystemRoute(pathname)}
-                  render={<Link href={SYSTEM_CONNECTION_ROUTE} />}
-                >
-                  <Settings2 />
-                  <span>Connection</span>
-                </SidebarMenuButton>
+                {SYSTEM_NAV_ITEMS.map(({ href, label, Icon }) => (
+                  <SidebarMenuButton
+                    key={href}
+                    isActive={pathname === href}
+                    render={<Link href={href} />}
+                  >
+                    <Icon />
+                    <span>{label}</span>
+                  </SidebarMenuButton>
+                ))}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

@@ -17,4 +17,10 @@ export const queryKeys = {
   admin: {
     connection: () => ["admin", "connection"] as const,
   },
+  system: {
+    indexer: () => ["system", "indexer"] as const,
+    search: () => ["system", "search"] as const,
+    ocr: () => ["system", "ocr"] as const,
+    thumbnails: () => ["system", "thumbnails"] as const,
+  },
 } as const;

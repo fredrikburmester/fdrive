@@ -1,9 +1,19 @@
 "use client";
 
-import type { AdminConnectionUpdateRequest, SetupCompleteRequest } from "@fdrive/contracts";
+import type {
+  AdminConnectionUpdateRequest,
+  IndexerReindexRequest,
+  IndexerSettingsUpdateRequest,
+  IndexerThumbnailsRebuildRequest,
+  OcrSettingsUpdateRequest,
+  SetupCompleteRequest,
+} from "@fdrive/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { queryKeys } from "./keys";
+
+/** How often the System pages re-poll their sidecar status while mounted. */
+const SYSTEM_REFETCH_INTERVAL_MS = 5000;
 
 /** Whether setup is required and whether `SFTPGO_URL` is set by environment. Powers `/setup`. */
 export function useSetupStatus() {
@@ -62,5 +72,129 @@ export function useAdminUpdateConnection() {
 export function useAdminTestConnection() {
   return useMutation({
     mutationFn: (baseUrl?: string) => apiClient.adminTestConnection(baseUrl),
+  });
+}
+
+/** Indexer health, stats, and settings for `System > Indexer`. Polls every 5s while mounted. */
+export function useSystemIndexer() {
+  return useQuery({
+    queryKey: queryKeys.system.indexer(),
+    queryFn: () => apiClient.systemIndexer(),
+    refetchInterval: SYSTEM_REFETCH_INTERVAL_MS,
+  });
+}
+
+/** Saves the indexer's settings and refreshes the `System > Indexer` cache. */
+export function useUpdateIndexerSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (settings: IndexerSettingsUpdateRequest) =>
+      apiClient.systemUpdateIndexerSettings(settings),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
+    },
+  });
+}
+
+/** Marks a root (or one path within it) pending on the indexer. */
+export function useReindex() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (req: IndexerReindexRequest) => apiClient.systemReindex(req),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
+    },
+  });
+}
+
+/** Marks every (or one root's) thumbnail pending for regeneration on the indexer. */
+export function useRebuildIndexerThumbnails() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (req?: IndexerThumbnailsRebuildRequest) =>
+      apiClient.systemRebuildIndexerThumbnails(req),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
+    },
+  });
+}
+
+/** Semantic search status and index totals for `System > Search`. Polls every 5s while mounted. */
+export function useSystemSearch() {
+  return useQuery({
+    queryKey: queryKeys.system.search(),
+    queryFn: () => apiClient.systemSearch(),
+    refetchInterval: SYSTEM_REFETCH_INTERVAL_MS,
+  });
+}
+
+/** Triggers a full re-extraction and re-embed of every configured root. */
+export function useReembed() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => apiClient.systemReembed(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.search() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
+    },
+  });
+}
+
+/** OCR schedule, last run, and settings for `System > OCR`. Polls every 5s while mounted. */
+export function useSystemOcr() {
+  return useQuery({
+    queryKey: queryKeys.system.ocr(),
+    queryFn: () => apiClient.systemOcr(),
+    refetchInterval: SYSTEM_REFETCH_INTERVAL_MS,
+  });
+}
+
+/** Saves the OCR service's settings and refreshes the `System > OCR` cache. */
+export function useUpdateOcrSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (settings: OcrSettingsUpdateRequest) => apiClient.systemUpdateOcrSettings(settings),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
+    },
+  });
+}
+
+/** Runs the OCR pass now. */
+export function useRunOcr() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => apiClient.systemRunOcr(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
+    },
+  });
+}
+
+/** Thumbnail cache size for `System > Thumbnails`. Polls every 5s while mounted. */
+export function useSystemThumbnails() {
+  return useQuery({
+    queryKey: queryKeys.system.thumbnails(),
+    queryFn: () => apiClient.systemThumbnails(),
+    refetchInterval: SYSTEM_REFETCH_INTERVAL_MS,
+  });
+}
+
+/** Rebuilds every missing thumbnail. */
+export function useRebuildThumbnails() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => apiClient.systemRebuildThumbnails(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
+    },
   });
 }

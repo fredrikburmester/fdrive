@@ -72,6 +72,30 @@ export const ROUTES = {
     /** POST, admin only: probe the active or a candidate connection -> `ConnectionTestResponse`. */
     connectionTest: "/api/v1/admin/connection/test",
   },
+  system: {
+    /** GET, admin only: indexer health, stats, and settings -> `SystemIndexerResponse`. */
+    indexer: "/api/v1/system/indexer",
+    /** PUT, admin only: update the indexer's settings -> `IndexerSettingsResponse`. */
+    indexerSettings: "/api/v1/system/indexer/settings",
+    /** POST, admin only: mark files pending on the indexer -> `IndexerActionResponse`. */
+    indexerReindex: "/api/v1/system/indexer/reindex",
+    /** POST, admin only: mark thumbnails pending on the indexer -> `IndexerActionResponse`. */
+    indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
+    /** GET, admin only: semantic search and index totals -> `SystemSearchResponse`. */
+    search: "/api/v1/system/search",
+    /** POST, admin only: re-extract and re-embed every root -> `SystemReembedResponse`. */
+    searchReembed: "/api/v1/system/search/reembed",
+    /** GET, admin only: OCR schedule, last run, and settings -> `SystemOcrResponse`. */
+    ocr: "/api/v1/system/ocr",
+    /** PUT, admin only: update the OCR service's settings -> `OcrSettingsResponse`. */
+    ocrSettings: "/api/v1/system/ocr/settings",
+    /** POST, admin only: run the OCR pass now -> `OcrRunResponse`. */
+    ocrRun: "/api/v1/system/ocr/run",
+    /** GET, admin only: thumbnail cache size -> `SystemThumbnailsResponse`. */
+    thumbnails: "/api/v1/system/thumbnails",
+    /** POST, admin only: rebuild every missing thumbnail -> `IndexerActionResponse`. */
+    thumbnailsRebuild: "/api/v1/system/thumbnails/rebuild",
+  },
 } as const;
 
 export type Routes = typeof ROUTES;

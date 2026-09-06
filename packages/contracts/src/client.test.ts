@@ -625,6 +625,174 @@ describe("createApiClient: admin", () => {
   });
 });
 
+describe("createApiClient: system", () => {
+  const INDEXER_SETTINGS = {
+    values: {
+      scanIntervalSeconds: 900,
+      workers: 4,
+      textExcludeGlobs: [],
+      ocrImageGlobs: [],
+      tesseractLangs: "swe+eng",
+    },
+    sources: {
+      scanIntervalSeconds: "default",
+      workers: "default",
+      textExcludeGlobs: "default",
+      ocrImageGlobs: "default",
+      tesseractLangs: "default",
+    },
+  };
+
+  const VALID_INDEXER = {
+    configured: true,
+    reachable: true,
+    health: {
+      ok: true,
+      roots: ["sftpgo"],
+      watcher: { sftpgo: true },
+      embedOk: true,
+      schemaVersion: 1,
+    },
+    stats: { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] },
+    settings: INDEXER_SETTINGS,
+  };
+
+  const OCR_SETTINGS = {
+    values: { hour: 3, langs: "swe+eng", excludeGlobs: [], maxMb: 200, keepOriginals: false },
+    sources: {
+      hour: "default",
+      langs: "default",
+      excludeGlobs: "default",
+      maxMb: "default",
+      keepOriginals: "default",
+    },
+  };
+
+  const VALID_OCR = { configured: false, reachable: false, settings: OCR_SETTINGS };
+
+  it("gets system/indexer", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_INDEXER)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemIndexer()).toEqual(VALID_INDEXER);
+    expect(calls[0]?.url).toBe("/api/v1/system/indexer");
+  });
+
+  it("puts system/indexer/settings with the settings body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, INDEXER_SETTINGS)]);
+    const client = createApiClient({ fetch: fetchStub });
+    const patch = {
+      scanIntervalSeconds: 60,
+      workers: 2,
+      textExcludeGlobs: ["**/tmp/**"],
+      ocrImageGlobs: [],
+      tesseractLangs: "eng",
+    };
+
+    expect(await client.systemUpdateIndexerSettings(patch)).toEqual(INDEXER_SETTINGS);
+    expect(calls[0]?.init.method).toBe("PUT");
+    expect(calls[0]?.url).toBe("/api/v1/system/indexer/settings");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(patch);
+  });
+
+  it("posts system/indexer/reindex with the root and optional path", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemReindex({ root: "sftpgo", path: "folder" })).toEqual({ marked: 3 });
+    expect(calls[0]?.url).toBe("/api/v1/system/indexer/reindex");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo", path: "folder" });
+  });
+
+  it("posts system/indexer/thumbnails/rebuild with an empty body by default", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 10 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemRebuildIndexerThumbnails()).toEqual({ marked: 10 });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
+  });
+
+  it("posts system/indexer/thumbnails/rebuild scoped to a root", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 4 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemRebuildIndexerThumbnails({ root: "sftpgo" })).toEqual({ marked: 4 });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo" });
+  });
+
+  it("gets system/search", async () => {
+    const result = {
+      configured: true,
+      semantic: { configured: true, healthy: true },
+      roots: ["sftpgo"],
+      index: { files: 1, withText: 1, chunks: 1, embedded: 1 },
+    };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemSearch()).toEqual(result);
+    expect(calls[0]?.url).toBe("/api/v1/system/search");
+  });
+
+  it("posts system/search/reembed", async () => {
+    const result = { marked: 7, roots: ["sftpgo"] };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemReembed()).toEqual(result);
+    expect(calls[0]?.init.method).toBe("POST");
+  });
+
+  it("gets system/ocr", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_OCR)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemOcr()).toEqual(VALID_OCR);
+    expect(calls[0]?.url).toBe("/api/v1/system/ocr");
+  });
+
+  it("puts system/ocr/settings with the settings body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, OCR_SETTINGS)]);
+    const client = createApiClient({ fetch: fetchStub });
+    const patch = {
+      hour: 4,
+      langs: "eng",
+      excludeGlobs: [],
+      maxMb: 100,
+      keepOriginals: true,
+    };
+
+    expect(await client.systemUpdateOcrSettings(patch)).toEqual(OCR_SETTINGS);
+    expect(calls[0]?.init.method).toBe("PUT");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(patch);
+  });
+
+  it("posts system/ocr/run", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemRunOcr()).toEqual({ started: true });
+    expect(calls[0]?.url).toBe("/api/v1/system/ocr/run");
+  });
+
+  it("gets system/thumbnails", async () => {
+    const result = { configured: true, count: 4, bytes: 2048 };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemThumbnails()).toEqual(result);
+    expect(calls[0]?.url).toBe("/api/v1/system/thumbnails");
+  });
+
+  it("posts system/thumbnails/rebuild", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 12 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemRebuildThumbnails()).toEqual({ marked: 12 });
+    expect(calls[0]?.url).toBe("/api/v1/system/thumbnails/rebuild");
+  });
+});
+
 describe("createApiClient: error mapping", () => {
   it("throws ApiClientError with the kind and message from a well-formed ApiError body", async () => {
     const { fetchStub } = createStubFetch([

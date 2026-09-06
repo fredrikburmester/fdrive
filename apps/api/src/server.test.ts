@@ -37,6 +37,8 @@ function buildConfig(): AppConfig {
     fdriveThumbsDir: undefined,
     fdriveAdminUsers: [],
     fdriveSetupToken: undefined,
+    fdriveIndexerUrl: undefined,
+    fdriveOcrUrl: undefined,
   };
 }
 
