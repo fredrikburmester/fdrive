@@ -4,7 +4,7 @@ A self-hosted Google Drive / Filestash replacement that runs **on top of an exis
 It absorbs the `filesai` stack (index, search, OCR, embeddings, MCP) and adds a modern web UI,
 tags, favorites, multi-account login, and ONLYOFFICE editing. One Docker Compose stack.
 
-Status: plan v1, 2026-09-06. Investigation notes that back this plan: filesai source read in
+Status: plan v1, 2026-09-06. Progress: phase 0 and phase 1 done; phase 2 waves 1 and 2 merged (indexer, search, admin setup, System pages, OCR service, MCP with API tokens); phase 3 next. Investigation notes that back this plan: filesai source read in
 full; SFTPGo verified against the OpenAPI spec on `main` (v2.7.0) and Go source, stable release
 v2.7.5; ONLYOFFICE verified against Document Server 9.4 docs and source, Microsoft WOPI spec, and oCIS.
 
