@@ -16,6 +16,13 @@ RUN corepack enable && corepack prepare pnpm@10.11.0 --activate
 WORKDIR /repo
 
 FROM base AS build
+# Next.js bakes the rewrites() destination into the build at `next build`
+# time; `next start` does not re-read this variable at runtime. The default
+# (http://api:3001) matches the compose service name so the image works
+# out of the box, but any deployment that changes the api's reachable
+# address must pass --build-arg API_INTERNAL_URL=... to get a correct build.
+ARG API_INTERNAL_URL=http://api:3001
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
 COPY . .
 RUN pnpm install --filter @fdrive/web... --frozen-lockfile
 RUN pnpm --filter @fdrive/web... run build
@@ -24,6 +31,11 @@ FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+# Not read by `next start` (see the build stage comment above), but kept so
+# server components and any code that reads process.env.API_INTERNAL_URL
+# directly see the same value the build was baked with.
+ARG API_INTERNAL_URL=http://api:3001
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
 WORKDIR /app
 RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
 

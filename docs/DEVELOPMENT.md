@@ -48,6 +48,13 @@ pnpm --filter @fdrive/web dev
 The web app is at http://localhost:3000, and it proxies `/api/*` to the api
 dev server at http://127.0.0.1:3001.
 
+This proxy is `apps/web/next.config.ts`'s `rewrites()`, which reads
+`API_INTERNAL_URL` from `apps/web/.env.local`. Unlike a production build,
+`next dev` re-reads this file on every request, but only what is present
+when the dev server starts: if you add or change `API_INTERNAL_URL` in
+`.env.local`, restart `pnpm --filter @fdrive/web dev` for it to take effect.
+`pnpm dev:env` writes a working default the first time it creates the file.
+
 ## Dev users
 
 The SFTPGo instance is seeded with the same fixtures the automated tests

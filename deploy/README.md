@@ -22,6 +22,16 @@ This directory holds the Docker Compose files for running fdrive. Copy
 - `.env.example` — every environment variable used by the files above, with
   placeholder values and comments on what generates a real one.
 
+## How requests flow
+
+The browser only ever talks to `proxy` (Caddy) on one origin. Caddy routes
+`/api/*`, `/wopi/*`, and `/mcp*` straight to the `api` service; every other
+path goes to `web`, which only serves pages. This means the web app's own
+`/api/:path*` rewrite (see `apps/web/next.config.ts`) never runs in this
+deployment: Caddy intercepts those paths before they reach `web`. The
+`API_INTERNAL_URL` build arg on the `web` service exists only as a fallback
+for anyone who runs the `fdrive-web` image without a proxy in front of it.
+
 ## The `index` profile
 
 `compose.yaml` also defines `indexer`, `tika`, `embed`, and `ocr` behind an

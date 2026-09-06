@@ -17,6 +17,11 @@ const nextConfig: NextConfig = {
   // Caddy (see PLAN.md §3), Caddy's own compression would have the same
   // problem for this route and needs the same exclusion.
   compress: false,
+  // The destination below is fixed at `next build` time (Next.js does not
+  // re-read API_INTERNAL_URL at `next start`), so it only matters for local
+  // `next dev`. In the compose deployment (see deploy/README.md), Caddy
+  // routes /api/* straight to the api service and this rewrite never runs;
+  // the production proxy owns /api.
   async rewrites() {
     return [
       {
