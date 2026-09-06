@@ -1,0 +1,462 @@
+import {
+  CopyRequest,
+  DeleteRequest,
+  DownloadQuery,
+  EntryResponse,
+  type FsEntry,
+  FsEvent,
+  ListResponse,
+  MkdirRequest,
+  MODIFIED_AT_HEADER,
+  MoveRequest,
+  OkResponse,
+  PathQuery,
+  RenameRequest,
+  ROUTES,
+  UploadQuery,
+  ZipRequest,
+} from "@fdrive/contracts";
+import {
+  baseName,
+  type CoreError,
+  changeBaseName,
+  contentDisposition,
+  extensionOf,
+  type FileEntry,
+  isInlinePreviewable,
+  isStorageError,
+  mimeFromExtension,
+  normalizePath,
+  parentPath,
+  parseRangeHeader,
+  type StorageError,
+  type StorageProvider,
+} from "@fdrive/core";
+import type { Context } from "hono";
+import type { z } from "zod";
+import type { AppHono, AppVariables, AuthedHono } from "../app.js";
+import type { Principal, PrincipalVariables } from "../auth/principal.js";
+import { ApiHttpError } from "../errors.js";
+import type { EventBus } from "../events/bus.js";
+
+const API_PREFIX = "/api/v1";
+
+/** Strips the `/api/v1` prefix from a `ROUTES.fs.*` path, since `authed` is already mounted there. */
+function routePath(fullPath: string): string {
+  return fullPath.slice(API_PREFIX.length);
+}
+
+export interface FsRoutesDeps {
+  readonly bus: EventBus;
+  readonly clock: () => Date;
+}
+
+type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
+
+function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
+  const result = schema.safeParse(query);
+  if (!result.success) {
+    throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
+  }
+  return result.data;
+}
+
+async function parseBody<T>(schema: z.ZodType<T>, c: FsContext): Promise<T> {
+  let json: unknown;
+  try {
+    json = await c.req.json();
+  } catch {
+    throw new ApiHttpError("bad_request", "invalid JSON body");
+  }
+  const result = schema.safeParse(json);
+  if (!result.success) {
+    throw new ApiHttpError("bad_request", "invalid body", { issues: result.error.issues });
+  }
+  return result.data;
+}
+
+/**
+ * Normalizes a virtual path, mapping the `CoreError` `normalizePath` throws
+ * on an invalid path (its only failure mode) into a `bad_request`.
+ */
+function normalizeOrThrow(path: string): string {
+  try {
+    return normalizePath(path);
+  } catch (error) {
+    // `normalizePath` only ever throws `CoreError("invalid_path")`.
+    const coreError = error as CoreError;
+    throw new ApiHttpError("bad_request", coreError.message, coreError.details);
+  }
+}
+
+/** Maps a `StorageError` to the `ApiHttpError` of the matching kind ("unauthorized" becomes "reauth_required"). */
+function toApiHttpError(error: StorageError): ApiHttpError {
+  const kind = error.kind === "unauthorized" ? "reauth_required" : error.kind;
+  return new ApiHttpError(kind, error.message, error.details);
+}
+
+async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (isStorageError(error)) {
+      throw toApiHttpError(error);
+    }
+    throw error;
+  }
+}
+
+function serializeEntry(entry: FileEntry): FsEntry {
+  return {
+    name: entry.name,
+    path: entry.path,
+    kind: entry.kind,
+    size: entry.size,
+    modifiedAt: entry.modifiedAt.toISOString(),
+    ext: entry.ext,
+    mime: mimeFromExtension(entry.ext),
+  };
+}
+
+/**
+ * Stats `path` via `storage.statFile`. When that fails because `path` is a
+ * directory (a provider reports this as `bad_request`), falls back to
+ * listing the parent directory and finding the matching entry there.
+ */
+async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
+  try {
+    const stat = await storage.statFile(path);
+    return {
+      name: baseName(path),
+      path,
+      kind: "file",
+      size: stat.size,
+      modifiedAt: stat.modifiedAt ?? new Date(0),
+      ext: extensionOf(baseName(path)),
+    };
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "bad_request") {
+      return statViaParentListing(storage, path);
+    }
+    if (isStorageError(error)) {
+      throw toApiHttpError(error);
+    }
+    throw error;
+  }
+}
+
+async function statViaParentListing(storage: StorageProvider, path: string): Promise<FileEntry> {
+  const parent = parentPath(path);
+  const name = baseName(path);
+  const entries = await runStorageCall(() => storage.list(parent));
+  const match = entries.find((entry) => entry.name === name);
+  if (match === undefined) {
+    throw new ApiHttpError("not_found", `path not found: ${path}`);
+  }
+  return match;
+}
+
+function publishFsEvent(
+  deps: FsRoutesDeps,
+  principal: Principal,
+  op: FsEvent["op"],
+  paths: string[],
+  targetPaths?: string[],
+): void {
+  const event: FsEvent = FsEvent.parse({
+    type: "fs",
+    op,
+    identityId: principal.identityId,
+    paths,
+    at: deps.clock().toISOString(),
+    ...(targetPaths !== undefined ? { targetPaths } : {}),
+  });
+  deps.bus.publish(event);
+}
+
+interface DownloadCallOpts {
+  range?: { start: number; end?: number };
+  signal?: AbortSignal;
+  ifRange?: string;
+}
+
+function buildDownloadOpts(
+  ifRangeHeader: string | undefined,
+  signal: AbortSignal,
+  range?: { start: number; end?: number },
+): DownloadCallOpts {
+  const opts: DownloadCallOpts = { signal };
+  if (ifRangeHeader !== undefined) {
+    opts.ifRange = ifRangeHeader;
+  }
+  if (range !== undefined) {
+    opts.range = range;
+  }
+  return opts;
+}
+
+type DownloadResult = Awaited<ReturnType<StorageProvider["download"]>>;
+
+type DownloadOutcome =
+  | { kind: "stream"; result: DownloadResult }
+  | { kind: "range-not-satisfiable"; size: number | null };
+
+/**
+ * Resolves a `GET/HEAD /fs/download` request into either a stream to
+ * return, or a "range not satisfiable" outcome (416). When a `Range`
+ * header is present, opportunistically stats the file first to know its
+ * size (used to validate the range and, on an invalid range, to report it
+ * in the 416's `Content-Range`); a failed stat here is not surfaced, since
+ * the subsequent `download` call below will raise the real error itself.
+ */
+async function resolveDownload(
+  storage: StorageProvider,
+  path: string,
+  rangeHeader: string | null,
+  ifRangeHeader: string | undefined,
+  signal: AbortSignal,
+): Promise<DownloadOutcome> {
+  if (rangeHeader === null) {
+    const result = await runStorageCall(() =>
+      storage.download(path, buildDownloadOpts(ifRangeHeader, signal)),
+    );
+    return { kind: "stream", result };
+  }
+
+  let knownSize: number | null = null;
+  try {
+    knownSize = (await storage.statFile(path)).size;
+  } catch {
+    knownSize = null;
+  }
+
+  const parsed = parseRangeHeader(rangeHeader, knownSize);
+  if (parsed.kind === "invalid") {
+    return { kind: "range-not-satisfiable", size: knownSize };
+  }
+
+  // `rangeHeader` is non-null here, so `parseRangeHeader` cannot have
+  // returned its "none" variant (that only happens for a null header).
+  const single = parsed as Extract<typeof parsed, { kind: "single" }>;
+  const range =
+    single.end !== undefined ? { start: single.start, end: single.end } : { start: single.start };
+  const result = await runStorageCall(() =>
+    storage.download(path, buildDownloadOpts(ifRangeHeader, signal, range)),
+  );
+  return { kind: "stream", result };
+}
+
+async function handleDownload(c: FsContext): Promise<Response> {
+  const principal = c.get("principal");
+  const query = parseQuery(DownloadQuery, c.req.query());
+  const path = normalizeOrThrow(query.path);
+  const rangeHeader = c.req.header("range") ?? null;
+  const ifRangeHeader = c.req.header("if-range");
+
+  const outcome = await resolveDownload(
+    principal.storage,
+    path,
+    rangeHeader,
+    ifRangeHeader,
+    c.req.raw.signal,
+  );
+
+  if (outcome.kind === "range-not-satisfiable") {
+    const headers: Record<string, string> =
+      outcome.size !== null ? { "Content-Range": `bytes */${outcome.size}` } : {};
+    return c.body(null, 416, headers);
+  }
+
+  const result = outcome.result;
+  const mime =
+    result.contentType ??
+    mimeFromExtension(extensionOf(baseName(path))) ??
+    "application/octet-stream";
+  const inline = query.inline === "1" && isInlinePreviewable(mime);
+  const disposition = contentDisposition(inline ? "inline" : "attachment", baseName(path));
+
+  const headers: Record<string, string> = {
+    "Content-Type": mime,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, no-store",
+    "Content-Disposition": disposition,
+  };
+  if (result.contentLength !== null) {
+    headers["Content-Length"] = String(result.contentLength);
+  }
+  if (result.contentRange !== null) {
+    headers["Content-Range"] = result.contentRange;
+  }
+  if (result.lastModified !== null) {
+    headers["Last-Modified"] = result.lastModified.toUTCString();
+  }
+
+  if (c.req.method === "HEAD") {
+    await result.body.cancel();
+    return c.body(null, result.status, headers);
+  }
+
+  return c.body(result.body, result.status, headers);
+}
+
+/**
+ * Registers every `/fs/*` route (list, stat, download, zip, upload, mkdir,
+ * move, copy, rename, delete) on the authed group, using `ROUTES.fs.*`
+ * (minus the `/api/v1` prefix, since `authed` is already mounted there).
+ */
+export function registerFsRoutes(
+  groups: { public: AppHono; authed: AuthedHono },
+  deps: FsRoutesDeps,
+): void {
+  const { authed } = groups;
+
+  authed.get(routePath(ROUTES.fs.list), async (c) => {
+    const principal = c.get("principal");
+    const query = parseQuery(PathQuery, c.req.query());
+    const path = normalizeOrThrow(query.path);
+    const entries = await runStorageCall(() => principal.storage.list(path));
+    const body: ListResponse = ListResponse.parse({ path, entries: entries.map(serializeEntry) });
+    return c.json(body);
+  });
+
+  authed.get(routePath(ROUTES.fs.stat), async (c) => {
+    const principal = c.get("principal");
+    const query = parseQuery(PathQuery, c.req.query());
+    const path = normalizeOrThrow(query.path);
+    const entry = await statEntry(principal.storage, path);
+    const body: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    return c.json(body);
+  });
+
+  authed.get(routePath(ROUTES.fs.download), handleDownload);
+  authed.on("HEAD", routePath(ROUTES.fs.download), handleDownload);
+
+  authed.post(routePath(ROUTES.fs.zip), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(ZipRequest, c);
+    const paths = body.paths.map((p) => normalizeOrThrow(p));
+    const stream = await runStorageCall(() => principal.storage.zip(paths));
+    // `ZipRequest.paths` has `.min(1)`, so `paths[0]` always exists here.
+    const firstPath = paths[0] as string;
+    const derivedName = baseName(firstPath);
+    const zipName = `${body.name ?? (derivedName.length > 0 ? derivedName : "download")}.zip`;
+    return c.body(stream, 200, {
+      "Content-Type": "application/zip",
+      "Content-Disposition": contentDisposition("attachment", zipName),
+    });
+  });
+
+  authed.put(routePath(ROUTES.fs.upload), async (c) => {
+    const principal = c.get("principal");
+    const query = parseQuery(UploadQuery, c.req.query());
+    const path = normalizeOrThrow(query.path);
+
+    const uploadOpts: {
+      mkdirParents?: boolean;
+      modifiedAt?: Date;
+      contentLength?: number;
+    } = {};
+    if (query.mkdirParents !== undefined) {
+      uploadOpts.mkdirParents = query.mkdirParents === "true";
+    }
+    const modifiedAtHeader = c.req.header(MODIFIED_AT_HEADER);
+    if (modifiedAtHeader !== undefined) {
+      const modifiedAtMs = Number(modifiedAtHeader);
+      if (Number.isFinite(modifiedAtMs)) {
+        uploadOpts.modifiedAt = new Date(modifiedAtMs);
+      }
+    }
+    const contentLengthHeader = c.req.header("content-length");
+    if (contentLengthHeader !== undefined) {
+      const contentLength = Number(contentLengthHeader);
+      if (Number.isFinite(contentLength)) {
+        uploadOpts.contentLength = contentLength;
+      }
+    }
+
+    await runStorageCall(() =>
+      principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
+    );
+
+    const entry = await statEntry(principal.storage, path);
+    publishFsEvent(deps, principal, "create", [path]);
+    const body: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    return c.json(body, 201);
+  });
+
+  authed.post(routePath(ROUTES.fs.mkdir), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(MkdirRequest, c);
+    const path = normalizeOrThrow(body.path);
+    await runStorageCall(() => principal.storage.mkdir(path));
+    const entry = await statEntry(principal.storage, path);
+    publishFsEvent(deps, principal, "mkdir", [path]);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    return c.json(responseBody, 201);
+  });
+
+  authed.post(routePath(ROUTES.fs.move), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(MoveRequest, c);
+    const path = normalizeOrThrow(body.path);
+    const target = normalizeOrThrow(body.target);
+    await runStorageCall(() => principal.storage.move(path, target));
+    const entry = await statEntry(principal.storage, target);
+    publishFsEvent(deps, principal, "move", [path], [target]);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    return c.json(responseBody);
+  });
+
+  authed.post(routePath(ROUTES.fs.copy), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(CopyRequest, c);
+    const path = normalizeOrThrow(body.path);
+    const target = normalizeOrThrow(body.target);
+    await runStorageCall(() => principal.storage.copy(path, target));
+    const entry = await statEntry(principal.storage, target);
+    publishFsEvent(deps, principal, "copy", [path], [target]);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    return c.json(responseBody);
+  });
+
+  authed.post(routePath(ROUTES.fs.rename), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(RenameRequest, c);
+    const path = normalizeOrThrow(body.path);
+    const target = changeBaseName(path, body.newName);
+    await runStorageCall(() => principal.storage.move(path, target));
+    const entry = await statEntry(principal.storage, target);
+    publishFsEvent(deps, principal, "move", [path], [target]);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    return c.json(responseBody);
+  });
+
+  authed.post(routePath(ROUTES.fs.delete), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(DeleteRequest, c);
+    const removed: string[] = [];
+    for (const item of body.items) {
+      const path = normalizeOrThrow(item.path);
+      try {
+        if (item.kind === "dir") {
+          await principal.storage.deleteDir(path);
+        } else {
+          await principal.storage.deleteFile(path);
+        }
+      } catch (error) {
+        if (isStorageError(error)) {
+          const mapped = toApiHttpError(error);
+          throw new ApiHttpError(mapped.kind, mapped.message, {
+            ...(mapped.details ?? {}),
+            failedPath: path,
+          });
+        }
+        throw error;
+      }
+      removed.push(path);
+    }
+    publishFsEvent(deps, principal, "delete", removed);
+    const body2: OkResponse = OkResponse.parse({ ok: true });
+    return c.json(body2);
+  });
+}
