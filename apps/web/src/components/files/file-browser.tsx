@@ -4,7 +4,7 @@ import type { ArchiveFormat, CompressRequest, ExtractRequest, FsEntry } from "@f
 import { baseName, isRoot, joinPath, parentPath } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -49,6 +49,7 @@ import {
   useRename,
   useTreeChildren,
 } from "@/lib/files/queries";
+import { parseSelectParam } from "@/lib/files/reveal";
 import {
   contextEntries,
   EMPTY_SELECTION,
@@ -174,6 +175,8 @@ export function FileBrowser({
   onSelectionChange,
 }: FileBrowserProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const selectName = parseSelectParam(searchParams.toString());
   const queryClient = useQueryClient();
   const { data, isLoading, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
@@ -282,6 +285,27 @@ export function FileBrowser({
   const { isDraggingOver } = useExternalDrop(listingRef, (files) => {
     uploadFiles(files, path, existingNames);
   });
+
+  // "Reveal in folder" (from the search panel): once this folder's listing
+  // has loaded and contains the named item, select it, scroll it into
+  // view, and drop the `select` param so a reload does not re-select it.
+  useEffect(() => {
+    if (selectName === null || isLoading) {
+      return;
+    }
+    const targetPath = joinPath(path, selectName);
+    if (!orderedPaths.includes(targetPath)) {
+      return;
+    }
+    dispatchSelection({ type: "set", paths: [targetPath] });
+    const row = listingRef.current
+      ? Array.from(listingRef.current.querySelectorAll<HTMLElement>("[data-path]")).find(
+          (element) => element.dataset.path === targetPath,
+        )
+      : undefined;
+    row?.scrollIntoView({ block: "nearest" });
+    router.replace(toRoute(pathToHref(path)));
+  }, [selectName, isLoading, orderedPaths, path, router]);
 
   function getAnchorDownloader(): AnchorDownloader {
     if (anchorRef.current === null) {
