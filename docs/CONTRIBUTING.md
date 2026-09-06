@@ -36,3 +36,17 @@ Docker-backed tests (SFTPGo, Postgres, and embedding containers via testcontaine
 each package's `test/integration/` directory and are excluded from the regular unit test run so
 that `pnpm test` and `pnpm test:coverage` never require Docker. CI runs them as a separate job,
 after the lint, typecheck, and unit test job passes.
+
+`apps/web`'s `pnpm test:e2e` (Playwright) is safe to run more than once on the same machine at
+the same time, e.g. two agents in separate worktrees, or a developer running it next to a CI-like
+job: `E2E_API_PORT` and `E2E_WEB_PORT` pin the API and web ports when set, otherwise
+`global-setup.ts` binds a free ephemeral port for each; the shared state file (storage state,
+process ids) always lives under a fresh `fs.mkdtemp` directory per run, never a fixed path. The
+production web build needed one more fix beyond ports: `next.config.ts` bakes `API_INTERNAL_URL`
+into `.next/routes-manifest.json` at build time (it is the `/api/*` rewrite destination), so two
+runs with different API ports cannot share one `apps/web/.next` directory without one silently
+serving the other's requests to the wrong API port. Rather than serialize builds behind a lock
+file and accept that only the build that runs last is actually correct, `support/environment.ts`
+builds each run in its own `apps/web-e2e-<ports>` "shadow" directory (a sibling of `apps/web`
+populated with symlinks back to it, so `next build`'s output never collides), removed again once
+the run finishes.

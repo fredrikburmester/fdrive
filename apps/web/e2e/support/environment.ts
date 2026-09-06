@@ -1,23 +1,24 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startPostgres, startSftpgo } from "@fdrive/testkit";
 import {
-  API_BASE_URL,
-  E2E_API_PORT,
   E2E_HOST,
-  E2E_WEB_PORT,
-  ENV_STATE_PATH,
-  STATE_DIRECTORY,
-  WEB_BASE_URL,
+  getApiBaseUrl,
+  getApiPort,
+  getEnvStatePath,
+  getStateDirectory,
+  getWebBaseUrl,
+  getWebPort,
 } from "./paths.js";
 import { waitForHttpOk } from "./wait.js";
 
 const supportDir = dirname(fileURLToPath(import.meta.url));
 const webDir = resolve(supportDir, "..", "..");
 const apiDir = resolve(webDir, "..", "api");
+const appsDir = resolve(webDir, "..");
 const repoRoot = resolve(webDir, "..", "..");
 
 const SERVER_READY_TIMEOUT_MS = 90_000;
@@ -50,8 +51,54 @@ interface EnvironmentState {
 }
 
 async function persistState(state: EnvironmentState): Promise<void> {
-  await mkdir(STATE_DIRECTORY, { recursive: true });
-  await writeFile(ENV_STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+  await mkdir(getStateDirectory(), { recursive: true });
+  await writeFile(getEnvStatePath(), JSON.stringify(state, null, 2), "utf-8");
+}
+
+/**
+ * The top-level entries of `apps/web` that a production build actually
+ * needs (source, config, and dependencies), symlinked one by one into a
+ * per-run "shadow" directory so `next build` never shares a `.next` output
+ * directory across two runs. This matters because `next.config.ts` reads
+ * `API_INTERNAL_URL` at build time (to bake the `/api/*` rewrite
+ * destination into `.next/routes-manifest.json`); two runs with different
+ * API ports sharing one `.next` would silently make both serve whichever
+ * run built last. `node_modules` is included wholesale rather than
+ * reconstructed, so workspace packages and the `next` binary resolve
+ * exactly as they do in `apps/web` itself.
+ */
+const BUILD_SHADOW_ENTRIES = [
+  "src",
+  "public",
+  "package.json",
+  "next.config.ts",
+  "tsconfig.json",
+  "postcss.config.mjs",
+  "components.json",
+  "biome.json",
+  "node_modules",
+];
+
+/**
+ * Creates (replacing any stale leftovers from a previous run with the same
+ * ports) a shadow build directory as a *sibling* of `apps/web`, i.e. under
+ * `apps/`, not nested inside it: `next.config.ts`'s `tsconfig.json` extends
+ * `../../tsconfig.base.json` relative to its own (symlinked) location, so
+ * the shadow directory has to sit at the exact same depth from the repo
+ * root as `apps/web` for that relative path to still resolve. A directory
+ * nested one level *inside* `apps/web` breaks it (`extends` would need an
+ * extra `../`); a directory entirely outside the repo breaks Turbopack in a
+ * different way (it treats symlinks pointing outside its own project root
+ * as invalid).
+ */
+async function createBuildShadow(apiPort: number, webPort: number): Promise<string> {
+  const shadowDir = join(appsDir, `web-e2e-shadow-${apiPort}-${webPort}`);
+  await rm(shadowDir, { recursive: true, force: true });
+  await mkdir(shadowDir, { recursive: true });
+  for (const entry of BUILD_SHADOW_ENTRIES) {
+    await symlink(join(webDir, entry), join(shadowDir, entry));
+  }
+  return shadowDir;
 }
 
 /** Buffers a child process's stdout/stderr so it can be dumped if startup fails. */
@@ -106,6 +153,11 @@ export async function startEnvironment(
   }
 
   try {
+    const apiPort = getApiPort();
+    const webPort = getWebPort();
+    const apiBaseUrl = getApiBaseUrl();
+    const webBaseUrl = getWebBaseUrl();
+
     const postgres = await startPostgres();
     stopFns.push(() => postgres.stop());
 
@@ -121,7 +173,7 @@ export async function startEnvironment(
         cwd: apiDir,
         env: {
           ...process.env,
-          PORT: String(E2E_API_PORT),
+          PORT: String(apiPort),
           HOST: E2E_HOST,
           LOG_LEVEL: "warn",
           NODE_ENV: "test",
@@ -143,7 +195,7 @@ export async function startEnvironment(
     stopFns.push(() => killProcess(apiChild));
 
     try {
-      await waitForHttpOk(`${API_BASE_URL}/api/v1/health`, SERVER_READY_TIMEOUT_MS);
+      await waitForHttpOk(`${apiBaseUrl}/api/v1/health`, SERVER_READY_TIMEOUT_MS);
     } catch (error) {
       throw new Error(
         `fdrive e2e: API never became healthy.\n${apiOutput.dump()}\n${String(error)}`,
@@ -153,8 +205,8 @@ export async function startEnvironment(
     const nodeEnv: "development" | "production" = isDevServerMode() ? "development" : "production";
     const webEnv = {
       ...process.env,
-      API_INTERNAL_URL: API_BASE_URL,
-      PORT: String(E2E_WEB_PORT),
+      API_INTERNAL_URL: apiBaseUrl,
+      PORT: String(webPort),
       HOSTNAME: E2E_HOST,
       NODE_ENV: nodeEnv,
     };
@@ -163,7 +215,7 @@ export async function startEnvironment(
     if (isDevServerMode()) {
       webChild = spawn(
         join(webDir, "node_modules", ".bin", "next"),
-        ["dev", "-p", String(E2E_WEB_PORT), "-H", E2E_HOST],
+        ["dev", "-p", String(webPort), "-H", E2E_HOST],
         {
           cwd: webDir,
           env: webEnv,
@@ -174,13 +226,40 @@ export async function startEnvironment(
       // `next build` runs in the "production" export condition, which
       // `@fdrive/core` and `@fdrive/contracts` only satisfy via their
       // built `dist/index.js` (their `exports` map has no "production"
-      // key, so it falls through to "default"). Build through pnpm's
-      // dependency-ordered filter (`@fdrive/web...`, "the package and
-      // everything it depends on") rather than calling `next build`
-      // directly, so those workspace packages are compiled first.
+      // key, so it falls through to "default"). Build the workspace
+      // dependencies (everything `@fdrive/web` depends on, `^...`,
+      // *excluding* `@fdrive/web` itself) through pnpm's dependency-ordered
+      // filter first; the web app itself is then built directly (see
+      // `createBuildShadow` above) in its own per-run shadow directory, so
+      // its `.next` output never collides with a concurrently running
+      // suite's build.
       await new Promise<void>((resolvePromise, rejectPromise) => {
-        const build = spawn("pnpm", ["--filter", "@fdrive/web...", "run", "build"], {
+        const build = spawn("pnpm", ["--filter", "@fdrive/web^...", "run", "build"], {
           cwd: repoRoot,
+          env: webEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const buildOutput = captureOutput(build, "deps:build");
+        build.once("exit", (code) => {
+          if (code === 0) {
+            resolvePromise();
+          } else {
+            rejectPromise(
+              new Error(
+                `fdrive e2e: workspace deps build failed (exit ${code}).\n${buildOutput.dump()}`,
+              ),
+            );
+          }
+        });
+        build.once("error", rejectPromise);
+      });
+
+      const buildShadowDir = await createBuildShadow(apiPort, webPort);
+      stopFns.push(() => rm(buildShadowDir, { recursive: true, force: true }));
+
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        const build = spawn(join(webDir, "node_modules", ".bin", "next"), ["build"], {
+          cwd: buildShadowDir,
           env: webEnv,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -199,9 +278,9 @@ export async function startEnvironment(
 
       webChild = spawn(
         join(webDir, "node_modules", ".bin", "next"),
-        ["start", "-p", String(E2E_WEB_PORT), "-H", E2E_HOST],
+        ["start", "-p", String(webPort), "-H", E2E_HOST],
         {
-          cwd: webDir,
+          cwd: buildShadowDir,
           env: webEnv,
           stdio: ["ignore", "pipe", "pipe"],
         },
@@ -211,7 +290,7 @@ export async function startEnvironment(
     stopFns.push(() => killProcess(webChild));
 
     try {
-      await waitForHttpOk(`${WEB_BASE_URL}/login`, SERVER_READY_TIMEOUT_MS);
+      await waitForHttpOk(`${webBaseUrl}/login`, SERVER_READY_TIMEOUT_MS);
     } catch (error) {
       throw new Error(
         `fdrive e2e: web app never became ready.\n${webOutput.dump()}\n${String(error)}`,
@@ -221,8 +300,8 @@ export async function startEnvironment(
     await persistState({
       apiPid: apiChild.pid,
       webPid: webChild.pid,
-      apiPort: E2E_API_PORT,
-      webPort: E2E_WEB_PORT,
+      apiPort,
+      webPort,
     });
 
     return { databaseUrl: postgres.connectionString, stop: stopAll };

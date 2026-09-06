@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SEED_FILES } from "@fdrive/testkit";
 import { Client } from "pg";
 import { startEnvironment } from "./support/environment.js";
+import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
+import { resolvePort } from "./support/ports.js";
 import { registry } from "./support/registry.js";
 
 /**
@@ -90,18 +95,58 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
 }
 
 /**
- * Playwright's global setup: boots Postgres, SFTPGo, the API (with
- * `FDRIVE_INDEX_ROOTS` set so search is available), and the web app once
- * for the whole run (see `support/environment.ts`); seeds the search index
- * for `search.spec.ts`; and stashes the environment handle for
- * `global-teardown.ts`. Never used to seed *file* data through the UI or
- * SFTPGo directly; each spec creates the folders and files it needs under
- * unique names, so tests stay independent of each other. The search index
- * rows are the one exception, since they must exist before any spec runs
- * and are keyed to the fixed, shared testkit seed data rather than
- * anything a spec creates itself.
+ * Resolves this run's ports and state directory and exports them onto
+ * `process.env`, so two suites started at once on one machine (two agents,
+ * or a developer next to a CI-like run) never collide: `E2E_API_PORT` and
+ * `E2E_WEB_PORT` win when set, otherwise a free port is bound on the fly
+ * (see `support/ports.ts`); the state directory is always a fresh
+ * `fs.mkdtemp` directory, named after the resolved ports so two runs never
+ * share one even by coincidence.
+ *
+ * Playwright runs `globalSetup` in the same process that resolved
+ * `playwright.config.ts`, and forks every worker process from that same
+ * process afterwards with its current `process.env` (Playwright reloads the
+ * config fresh in each worker, so a worker's own `baseURL` and
+ * `storageState` correctly reflect the values set here, not whatever
+ * `support/paths.ts` saw before this function ran). `E2E_STATE_DIR` is set
+ * on `process.env` for that normal, same-machine-fork case, and mirrored
+ * into a pointer file keyed by this process's pid (see
+ * `support/paths.ts#getStateDirectory`) as a fallback for any process that,
+ * for whatever reason, does not inherit it.
+ */
+async function resolveRunEnvironment(): Promise<{
+  apiPort: number;
+  webPort: number;
+  stateDir: string;
+}> {
+  const apiPort = await resolvePort("E2E_API_PORT", E2E_HOST);
+  const webPort = await resolvePort("E2E_WEB_PORT", E2E_HOST);
+  process.env.E2E_API_PORT = String(apiPort);
+  process.env.E2E_WEB_PORT = String(webPort);
+
+  const stateDir = await mkdtemp(join(tmpdir(), `fdrive-e2e-${apiPort}-${webPort}-`));
+  process.env.E2E_STATE_DIR = stateDir;
+  writeStateDirPointer(process.pid, stateDir);
+
+  return { apiPort, webPort, stateDir };
+}
+
+/**
+ * Playwright's global setup: resolves this run's ports and state directory
+ * (see `resolveRunEnvironment` above) so concurrent suites never collide;
+ * boots Postgres, SFTPGo, the API (with `FDRIVE_INDEX_ROOTS` set so search
+ * is available), and the web app once for the whole run (see
+ * `support/environment.ts`); seeds the search index for `search.spec.ts`;
+ * and stashes the environment handle for `global-teardown.ts`. Never used
+ * to seed *file* data through the UI or SFTPGo directly; each spec creates
+ * the folders and files it needs under unique names, so tests stay
+ * independent of each other. The search index rows are the one exception,
+ * since they must exist before any spec runs and are keyed to the fixed,
+ * shared testkit seed data rather than anything a spec creates itself.
  */
 export default async function globalSetup(): Promise<void> {
+  await resolveRunEnvironment();
+
   const indexRoots = JSON.stringify([
     { name: INDEX_ROOT_NAME, sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
   ]);

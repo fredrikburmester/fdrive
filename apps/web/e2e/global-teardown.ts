@@ -1,5 +1,5 @@
 import { readFile, rm } from "node:fs/promises";
-import { ALICE_STORAGE_STATE_PATH, ENV_STATE_PATH } from "./support/paths.js";
+import { getEnvStatePath, getStateDirectory, removeStateDirPointer } from "./support/paths.js";
 import { registry } from "./support/registry.js";
 
 interface PersistedEnvironmentState {
@@ -31,7 +31,7 @@ function killPidIfAlive(pid: number | undefined): void {
 async function stopFromPersistedState(): Promise<void> {
   let raw: string;
   try {
-    raw = await readFile(ENV_STATE_PATH, "utf-8");
+    raw = await readFile(getEnvStatePath(), "utf-8");
   } catch {
     return;
   }
@@ -45,7 +45,13 @@ async function stopFromPersistedState(): Promise<void> {
  * Playwright's global teardown: stops everything `global-setup.ts` started.
  * Prefers the in-process handle (the normal case, since Playwright runs
  * setup and teardown in the same runner process); falls back to killing the
- * recorded process ids when that handle is unavailable.
+ * recorded process ids when that handle is unavailable. `getStateDirectory`
+ * and `getEnvStatePath` are called here rather than imported as constants
+ * deliberately: `support/paths.ts` was already imported once, before
+ * `global-setup.ts` resolved this run's actual state directory, by whatever
+ * first loaded `playwright.config.ts` in this same process, so a value
+ * frozen at that import would still point at the pre-resolution fallback
+ * location instead of the real one.
  */
 export default async function globalTeardown(): Promise<void> {
   if (registry.current !== null) {
@@ -55,6 +61,9 @@ export default async function globalTeardown(): Promise<void> {
     await stopFromPersistedState();
   }
 
-  await rm(ENV_STATE_PATH, { force: true });
-  await rm(ALICE_STORAGE_STATE_PATH, { force: true });
+  // The whole state directory is this run's own `fs.mkdtemp` directory (see
+  // `global-setup.ts`), so removing it recursively is safe and simpler than
+  // removing its two known files one at a time.
+  await rm(getStateDirectory(), { recursive: true, force: true });
+  removeStateDirPointer(process.pid);
 }
