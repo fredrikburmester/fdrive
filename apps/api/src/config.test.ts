@@ -71,6 +71,7 @@ describe("loadConfig", () => {
       fdriveCookieSecure: "auto",
       fdrivePublicUrl: undefined,
       nodeEnv: "development",
+      fdriveAutoMigrate: true,
     });
   });
 
@@ -91,6 +92,7 @@ describe("loadConfig", () => {
       FDRIVE_COOKIE_SECURE: "true",
       FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
       NODE_ENV: "production",
+      FDRIVE_AUTO_MIGRATE: "false",
     });
 
     expect(config).toEqual({
@@ -105,7 +107,24 @@ describe("loadConfig", () => {
       fdriveCookieSecure: "true",
       fdrivePublicUrl: "https://fdrive.example.com",
       nodeEnv: "production",
+      fdriveAutoMigrate: false,
     });
+  });
+
+  it("defaults FDRIVE_AUTO_MIGRATE to true and accepts an explicit false", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveAutoMigrate).toBe(true);
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "true" }).fdriveAutoMigrate).toBe(
+      true,
+    );
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "false" }).fdriveAutoMigrate).toBe(
+      false,
+    );
+  });
+
+  it("rejects an invalid FDRIVE_AUTO_MIGRATE value", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "yes" })).toThrow(
+      /FDRIVE_AUTO_MIGRATE/,
+    );
   });
 
   it("throws listing every invalid variable at once", () => {

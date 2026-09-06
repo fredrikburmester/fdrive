@@ -1,7 +1,7 @@
 import type { Repos } from "@fdrive/db";
 import { type SftpgoClient, SftpgoError } from "@fdrive/sftpgo";
 import { ApiHttpError } from "../errors.js";
-import { open, seal } from "./crypto.js";
+import { CryptoError, open, seal } from "./crypto.js";
 
 /** Re-mints and caches SFTPGo JWTs for identities, unsealing stored passwords on demand. */
 export interface TokenSource {
@@ -15,6 +15,14 @@ export interface TokenSource {
    * and retries `fn` exactly once.
    */
   withToken<T>(identityId: string, fn: (token: string) => Promise<T>): Promise<T>;
+  /**
+   * Seals and stores `token` for `identityId` (in the database) and fills
+   * the in-process cache with it, without minting a new one. Lets a caller
+   * that already has a fresh token from its own `sftpgo.login` call (for
+   * example the login flow) reuse it here instead of `get` minting a
+   * second, redundant token.
+   */
+  prime(identityId: string, token: { accessToken: string; expiresAt: Date }): Promise<void>;
 }
 
 export interface CreateTokenSourceDeps {
@@ -40,9 +48,41 @@ function hasMargin(expiresAt: Date, nowMs: number): boolean {
   return expiresAt.getTime() - nowMs > REFRESH_MARGIN_MS;
 }
 
+/**
+ * Unseals `blob`, turning a `CryptoError` (for example after a master key
+ * rotation makes previously-sealed data unreadable) into
+ * `ApiHttpError("reauth_required", ...)` instead of letting it escape as an
+ * unhandled 500.
+ */
+function openOrReauth(master: Uint8Array, blob: Uint8Array, aad: string): Uint8Array {
+  try {
+    return open(master, blob, aad);
+  } catch (err) {
+    if (err instanceof CryptoError) {
+      throw new ApiHttpError(
+        "reauth_required",
+        "stored credentials cannot be decrypted; sign in again",
+      );
+    }
+    throw err;
+  }
+}
+
 /** Creates a `TokenSource` backed by `deps.repos` for storage and `deps.sftpgo` for minting. */
 export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
   const cache = new Map<string, CachedToken>();
+
+  async function storeAndCache(
+    identityId: string,
+    token: { accessToken: string; expiresAt: Date },
+  ): Promise<void> {
+    const sealedToken = seal(deps.master, new TextEncoder().encode(token.accessToken), identityId);
+    await deps.repos.credentials.setCachedToken(identityId, {
+      sealed: Buffer.from(sealedToken).toString("base64"),
+      expiresAt: token.expiresAt,
+    });
+    cache.set(identityId, { token: token.accessToken, expiresAt: token.expiresAt });
+  }
 
   async function mintAndStore(identityId: string): Promise<CachedToken> {
     const identity = await deps.repos.identities.get(identityId);
@@ -54,7 +94,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
       throw new ApiHttpError("reauth_required", "no stored credentials; sign in again");
     }
 
-    const plaintext = open(deps.master, credential.ciphertext, identityId);
+    const plaintext = openOrReauth(deps.master, credential.ciphertext, identityId);
     const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as StoredPassword;
 
     let minted: { accessToken: string; expiresAt: Date };
@@ -73,15 +113,8 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
       throw new ApiHttpError("upstream_unavailable", "SFTPGo is unavailable");
     }
 
-    const sealedToken = seal(deps.master, new TextEncoder().encode(minted.accessToken), identityId);
-    await deps.repos.credentials.setCachedToken(identityId, {
-      sealed: Buffer.from(sealedToken).toString("base64"),
-      expiresAt: minted.expiresAt,
-    });
-
-    const result: CachedToken = { token: minted.accessToken, expiresAt: minted.expiresAt };
-    cache.set(identityId, result);
-    return result;
+    await storeAndCache(identityId, minted);
+    return { token: minted.accessToken, expiresAt: minted.expiresAt };
   }
 
   async function get(identityId: string): Promise<string> {
@@ -100,7 +133,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
       hasMargin(credential.cachedTokenExpiresAt, nowMs)
     ) {
       const sealedBytes = new Uint8Array(Buffer.from(credential.cachedToken, "base64"));
-      const plaintext = open(deps.master, sealedBytes, identityId);
+      const plaintext = openOrReauth(deps.master, sealedBytes, identityId);
       const token = new TextDecoder().decode(plaintext);
       cache.set(identityId, { token, expiresAt: credential.cachedTokenExpiresAt });
       return token;
@@ -118,6 +151,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
   return {
     get,
     invalidate,
+    prime: storeAndCache,
     async withToken<T>(identityId: string, fn: (token: string) => Promise<T>): Promise<T> {
       const token = await get(identityId);
       try {

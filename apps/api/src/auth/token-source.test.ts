@@ -320,4 +320,60 @@ describe("createTokenSource", () => {
       ApiHttpError,
     );
   });
+
+  it("throws reauth_required (not a raw CryptoError) when the stored password was sealed under a different master key", async () => {
+    const rotatedMaster = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
+    const tokenSource = createTokenSource({
+      repos,
+      sftpgo,
+      master: rotatedMaster,
+      clock: clockCtl.clock,
+    });
+
+    await expect(tokenSource.get(identityId)).rejects.toMatchObject({
+      kind: "reauth_required",
+      message: expect.stringContaining("cannot be decrypted"),
+    });
+  });
+
+  it("throws reauth_required when a fresh DB-cached token was sealed under a different master key", async () => {
+    const firstSource = createTokenSource({
+      repos,
+      sftpgo,
+      master: MASTER,
+      clock: clockCtl.clock,
+    });
+    await firstSource.get(identityId);
+
+    const rotatedMaster = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
+    const secondSource = createTokenSource({
+      repos,
+      sftpgo,
+      master: rotatedMaster,
+      clock: clockCtl.clock,
+    });
+
+    await expect(secondSource.get(identityId)).rejects.toMatchObject({
+      kind: "reauth_required",
+    });
+  });
+
+  it("prime seals and stores a caller-supplied token without minting a new one", async () => {
+    const tokenSource = createTokenSource({
+      repos,
+      sftpgo,
+      master: MASTER,
+      clock: clockCtl.clock,
+    });
+    const expiresAt = new Date(clockCtl.clock().getTime() + 20 * 60 * 1000);
+
+    await tokenSource.prime(identityId, { accessToken: "primed-token", expiresAt });
+
+    expect(await tokenSource.get(identityId)).toBe("primed-token");
+    const credential = await repos.credentials.get(identityId);
+    expect(credential?.cachedToken).not.toBeNull();
+    expect(credential?.cachedTokenExpiresAt).toEqual(expiresAt);
+    // No SFTPGo login happened: `prime` only seals and caches what it is given.
+    expect(server.state.tokens.size).toBe(0);
+  });
 });

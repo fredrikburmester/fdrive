@@ -12,10 +12,18 @@ export interface LoginLimiter {
 
 export interface CreateLoginLimiterOptions {
   readonly clock: () => Date;
-  readonly maxFailures: number;
-  readonly windowMs: number;
-  readonly blockMs: number;
+  /** Failures before a key is blocked. Defaults to `DEFAULT_MAX_FAILURES`. */
+  readonly maxFailures?: number;
+  /** The rolling window failures are counted within. Defaults to `DEFAULT_WINDOW_MS`. */
+  readonly windowMs?: number;
+  /** How long a key stays blocked once `maxFailures` is reached. Defaults to `DEFAULT_BLOCK_MS`. */
+  readonly blockMs?: number;
 }
+
+/** The fixed login rate-limit policy fdrive uses everywhere it does not override it. */
+export const DEFAULT_MAX_FAILURES = 5;
+export const DEFAULT_WINDOW_MS = 60_000;
+export const DEFAULT_BLOCK_MS = 60_000;
 
 interface KeyState {
   /** Failure timestamps (ms since epoch) within the current window. */
@@ -30,11 +38,14 @@ interface KeyState {
  * limiter never needs a background sweep.
  */
 export function createLoginLimiter(opts: CreateLoginLimiterOptions): LoginLimiter {
+  const maxFailures = opts.maxFailures ?? DEFAULT_MAX_FAILURES;
+  const windowMs = opts.windowMs ?? DEFAULT_WINDOW_MS;
+  const blockMs = opts.blockMs ?? DEFAULT_BLOCK_MS;
   const states = new Map<string, KeyState>();
 
   function pruneAndGet(key: string, nowMs: number): KeyState {
     const state = states.get(key) ?? { failures: [], blockedUntil: null };
-    state.failures = state.failures.filter((at) => nowMs - at < opts.windowMs);
+    state.failures = state.failures.filter((at) => nowMs - at < windowMs);
     if (state.blockedUntil !== null && state.blockedUntil <= nowMs) {
       state.blockedUntil = null;
     }
@@ -56,8 +67,8 @@ export function createLoginLimiter(opts: CreateLoginLimiterOptions): LoginLimite
       const nowMs = opts.clock().getTime();
       const state = pruneAndGet(key, nowMs);
       state.failures.push(nowMs);
-      if (state.failures.length >= opts.maxFailures) {
-        state.blockedUntil = nowMs + opts.blockMs;
+      if (state.failures.length >= maxFailures) {
+        state.blockedUntil = nowMs + blockMs;
         state.failures = [];
       }
     },

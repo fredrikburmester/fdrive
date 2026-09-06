@@ -92,8 +92,9 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       password: input.password,
       ...(input.otp !== undefined ? { otp: input.otp } : {}),
     };
+    let token: { accessToken: string; expiresAt: Date };
     try {
-      await deps.sftpgo.login(loginParams);
+      token = await deps.sftpgo.login(loginParams);
     } catch (err) {
       if (err instanceof SftpgoError) {
         if (err.kind === "unauthorized") {
@@ -139,10 +140,11 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       keyId: KEY_ID,
     });
 
-    // Primes the token cache (in-process and sealed in the database) from the
-    // credential just stored, so the first authenticated request after login
-    // does not need to mint a fresh SFTPGo JWT itself.
-    await deps.tokenSource.get(identity.id);
+    // Primes the token cache (in-process and sealed in the database) from
+    // the token this call to sftpgo.login already minted, so the first
+    // authenticated request after login reuses it instead of tokenSource.get
+    // minting a second, redundant token.
+    await deps.tokenSource.prime(identity.id, token);
 
     await deps.repos.identities.touchLogin(identity.id, deps.clock());
 
