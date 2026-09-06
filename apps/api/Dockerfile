@@ -19,7 +19,7 @@
 # every workspace package it depends on, in dependency order, so this stays
 # correct as dependencies are added.
 
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 RUN corepack enable
 
@@ -33,7 +33,7 @@ RUN pnpm install --frozen-lockfile --filter @fdrive/api...
 RUN pnpm --filter @fdrive/api... build
 RUN pnpm deploy --filter @fdrive/api --prod --legacy /out
 
-FROM node:22-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 RUN addgroup -S fdrive && adduser -S fdrive -G fdrive
 
