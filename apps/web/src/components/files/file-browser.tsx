@@ -31,6 +31,7 @@ import {
   type DownloadDeps,
   downloadMany,
   downloadSingle,
+  needsZipDownload,
 } from "@/lib/files/download";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
@@ -49,6 +50,7 @@ import {
   useTreeChildren,
 } from "@/lib/files/queries";
 import {
+  contextEntries,
   EMPTY_SELECTION,
   type SelectionAction,
   type SelectionState,
@@ -324,10 +326,7 @@ export function FileBrowser({
   }
 
   function entriesForAction(entry: FsEntry): FsEntry[] {
-    if (selection.selected.has(entry.path) && selection.selected.size > 1) {
-      return selectedEntries;
-    }
-    return [entry];
+    return contextEntries(entry, displayEntries, selection.selected);
   }
 
   function handleOpen(entry: FsEntry) {
@@ -364,10 +363,13 @@ export function FileBrowser({
       case "download": {
         const paths = pathsForAction(entry);
         const deps = buildDownloadDeps(getAnchorDownloader());
-        if (paths.length === 1 && paths[0] !== undefined) {
-          downloadSingle(paths[0], deps);
+        const first = paths[0];
+        if (!needsZipDownload(entriesForAction(entry)) && first !== undefined) {
+          downloadSingle(first, deps);
         } else {
-          downloadMany(paths, deps).catch(() => toast.error("Could not download the selection."));
+          downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`).catch(() =>
+            toast.error("Could not download the selection."),
+          );
         }
         break;
       }
@@ -630,13 +632,13 @@ export function FileBrowser({
         }
         const deps = buildDownloadDeps(getAnchorDownloader());
         const first = selectedEntries[0];
-        if (selectedEntries.length === 1 && first !== undefined) {
+        const paths = selectedEntries.map((selectedEntry) => selectedEntry.path);
+        if (!needsZipDownload(selectedEntries) && first !== undefined) {
           downloadSingle(first.path, deps);
         } else {
-          downloadMany(
-            selectedEntries.map((entry) => entry.path),
-            deps,
-          ).catch(() => toast.error("Could not download the selection."));
+          downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`).catch(() =>
+            toast.error("Could not download the selection."),
+          );
         }
         break;
       }
@@ -704,7 +706,7 @@ export function FileBrowser({
             className="h-full outline-none"
           >
             {isLoading ? (
-              <ListingSkeleton />
+              <ListingSkeleton variant={viewMode === "grid" ? "grid" : "list"} />
             ) : isError ? (
               <ErrorState
                 message={describeFsError(error, "Something went wrong.")}

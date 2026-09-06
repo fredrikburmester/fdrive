@@ -47,6 +47,15 @@ export interface DownloadDeps {
   revokeObjectUrl(url: string): void;
 }
 
+/**
+ * Whether downloading `entries` should go through the zip path rather than
+ * a direct single-file download: any selection of more than one entry, or a
+ * single folder (folders have no direct-download byte stream of their own).
+ */
+export function needsZipDownload(entries: readonly { kind: string }[]): boolean {
+  return entries.length !== 1 || entries.some((entry) => entry.kind === "dir");
+}
+
 /** Navigates a hidden anchor to the direct download URL for `path`. */
 export function downloadSingle(path: string, deps: DownloadDeps): void {
   const url = deps.downloadUrl(path, { inline: false });

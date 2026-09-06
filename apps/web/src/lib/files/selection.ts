@@ -212,3 +212,20 @@ export function selectionReducer(
 export function contextSelectionCount(path: string, selected: ReadonlySet<string>): number {
   return selected.has(path) ? Math.max(selected.size, 1) : 1;
 }
+
+/**
+ * The group of entries a context-menu or toolbar action on `entry` would
+ * apply to: every selected entry (in `entries`' order) when `entry` is part
+ * of a multi-entry selection, else just `entry` itself, mirroring
+ * `contextSelectionCount`'s rule for how many entries an action targets.
+ */
+export function contextEntries<T extends { path: string }>(
+  entry: T,
+  entries: readonly T[],
+  selected: ReadonlySet<string>,
+): T[] {
+  if (selected.has(entry.path) && selected.size > 1) {
+    return entries.filter((candidate) => selected.has(candidate.path));
+  }
+  return [entry];
+}

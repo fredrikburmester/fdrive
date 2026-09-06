@@ -127,4 +127,23 @@ test.describe("uploads and downloads", () => {
 
     expect(download.suggestedFilename()).toMatch(/\.zip$/);
   });
+
+  test("right-clicking a folder offers Download as zip and downloads it as a zip", async ({
+    page,
+  }) => {
+    const folderName = uniqueName("subfolder");
+    await page.getByRole("button", { name: "New folder" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Folder name").fill(folderName);
+    await dialog.getByRole("button", { name: "Create" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(fileListRow(page, folderName)).toBeVisible();
+
+    await fileListRow(page, folderName).click({ button: "right" });
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: "Download as zip" }).click();
+    const download = await downloadPromise;
+
+    expect(download.suggestedFilename()).toMatch(/\.zip$/);
+  });
 });

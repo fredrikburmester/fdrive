@@ -6,14 +6,18 @@ import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
-import { contextSelectionCount } from "@/lib/files/selection";
+import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { cn } from "@/lib/utils";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 import type { ClickModifierKeys } from "./file-list";
 
-const TILE_WIDTH = 112;
-const TILE_HEIGHT = 104;
+/** A grid tile's fixed footprint, in pixels: used to compute how many
+ * columns fit and, in `ListingSkeleton`, to size its placeholder tiles. */
+export const GRID_TILE_WIDTH = 112;
+export const GRID_TILE_HEIGHT = 104;
+const TILE_WIDTH = GRID_TILE_WIDTH;
+const TILE_HEIGHT = GRID_TILE_HEIGHT;
 
 export interface FileGridProps {
   entries: readonly FsEntry[];
@@ -137,6 +141,9 @@ export function FileGrid({
                       entry={entry}
                       onAction={onContextAction}
                       selectionCount={contextSelectionCount(entry.path, selected)}
+                      includesFolder={contextEntries(entry, entries, selected).some(
+                        (candidate) => candidate.kind === "dir",
+                      )}
                     >
                       {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
                       {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
