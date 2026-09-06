@@ -42,7 +42,7 @@ describe("uploadReducer / enqueue", () => {
     const updatedA = makeItem("a", { status: "done", progress: 1 });
     state = uploadReducer(state, { type: "enqueue", items: [updatedA] });
     expect(state.order).toEqual(["a", "b"]);
-    expect(state.items["a"]?.status).toBe("done");
+    expect(state.items.a?.status).toBe("done");
   });
 });
 
@@ -50,13 +50,13 @@ describe("uploadReducer / start", () => {
   it("moves a queued item to uploading and increments attempts", () => {
     const state = stateWith([makeItem("a")]);
     const next = uploadReducer(state, { type: "start", id: "a" });
-    expect(next.items["a"]).toMatchObject({ status: "uploading", progress: 0, attempts: 1 });
+    expect(next.items.a).toMatchObject({ status: "uploading", progress: 0, attempts: 1 });
   });
 
   it("clears a stale error when restarting", () => {
     const state = stateWith([makeItem("a", { status: "queued", error: "old" })]);
     const next = uploadReducer(state, { type: "start", id: "a" });
-    expect(next.items["a"]?.error).toBeUndefined();
+    expect(next.items.a?.error).toBeUndefined();
   });
 
   it("is a no-op for an item that is not queued", () => {
@@ -75,25 +75,25 @@ describe("uploadReducer / progress", () => {
   it("sets a clamped fraction while uploading", () => {
     const state = stateWith([makeItem("a", { status: "uploading", size: 100 })]);
     const next = uploadReducer(state, { type: "progress", id: "a", loaded: 50 });
-    expect(next.items["a"]?.progress).toBe(0.5);
+    expect(next.items.a?.progress).toBe(0.5);
   });
 
   it("clamps above 1", () => {
     const state = stateWith([makeItem("a", { status: "uploading", size: 100 })]);
     const next = uploadReducer(state, { type: "progress", id: "a", loaded: 500 });
-    expect(next.items["a"]?.progress).toBe(1);
+    expect(next.items.a?.progress).toBe(1);
   });
 
   it("treats a zero-size file as fully progressed", () => {
     const state = stateWith([makeItem("a", { status: "uploading", size: 0 })]);
     const next = uploadReducer(state, { type: "progress", id: "a", loaded: 0 });
-    expect(next.items["a"]?.progress).toBe(1);
+    expect(next.items.a?.progress).toBe(1);
   });
 
   it("treats a NaN fraction as 0 progress", () => {
     const state = stateWith([makeItem("a", { status: "uploading", size: 100 })]);
     const next = uploadReducer(state, { type: "progress", id: "a", loaded: Number.NaN });
-    expect(next.items["a"]?.progress).toBe(0);
+    expect(next.items.a?.progress).toBe(0);
   });
 
   it("is a no-op when not uploading", () => {
@@ -109,8 +109,8 @@ describe("uploadReducer / succeed", () => {
       makeItem("a", { status: "uploading", progress: 0.4, error: "flaky" }),
     ]);
     const next = uploadReducer(state, { type: "succeed", id: "a" });
-    expect(next.items["a"]).toMatchObject({ status: "done", progress: 1 });
-    expect(next.items["a"]?.error).toBeUndefined();
+    expect(next.items.a).toMatchObject({ status: "done", progress: 1 });
+    expect(next.items.a?.error).toBeUndefined();
   });
 });
 
@@ -118,7 +118,7 @@ describe("uploadReducer / fail", () => {
   it("marks an uploading item as errored with a message", () => {
     const state = stateWith([makeItem("a", { status: "uploading" })]);
     const next = uploadReducer(state, { type: "fail", id: "a", message: "500" });
-    expect(next.items["a"]).toMatchObject({ status: "error", error: "500" });
+    expect(next.items.a).toMatchObject({ status: "error", error: "500" });
   });
 
   it("is a no-op for an item that is not uploading", () => {
@@ -132,7 +132,7 @@ describe("uploadReducer / skip", () => {
   it("marks a queued item as skipped", () => {
     const state = stateWith([makeItem("a")]);
     const next = uploadReducer(state, { type: "skip", id: "a" });
-    expect(next.items["a"]?.status).toBe("skipped");
+    expect(next.items.a?.status).toBe("skipped");
   });
 
   it("is a no-op for an item that is not queued", () => {
@@ -146,14 +146,14 @@ describe("uploadReducer / cancel", () => {
   it("cancels a queued item", () => {
     const state = stateWith([makeItem("a")]);
     const next = uploadReducer(state, { type: "cancel", id: "a" });
-    expect(next.items["a"]?.status).toBe("cancelled");
+    expect(next.items.a?.status).toBe("cancelled");
   });
 
   it("cancels an uploading item and clears its error", () => {
     const state = stateWith([makeItem("a", { status: "uploading", error: "x" })]);
     const next = uploadReducer(state, { type: "cancel", id: "a" });
-    expect(next.items["a"]?.status).toBe("cancelled");
-    expect(next.items["a"]?.error).toBeUndefined();
+    expect(next.items.a?.status).toBe("cancelled");
+    expect(next.items.a?.error).toBeUndefined();
   });
 
   it("is a no-op for an already finished item", () => {
@@ -167,14 +167,14 @@ describe("uploadReducer / retry", () => {
   it("requeues an errored item and clears the error", () => {
     const state = stateWith([makeItem("a", { status: "error", error: "boom", progress: 0.3 })]);
     const next = uploadReducer(state, { type: "retry", id: "a" });
-    expect(next.items["a"]).toMatchObject({ status: "queued", progress: 0 });
-    expect(next.items["a"]?.error).toBeUndefined();
+    expect(next.items.a).toMatchObject({ status: "queued", progress: 0 });
+    expect(next.items.a?.error).toBeUndefined();
   });
 
   it("requeues a cancelled item", () => {
     const state = stateWith([makeItem("a", { status: "cancelled" })]);
     const next = uploadReducer(state, { type: "retry", id: "a" });
-    expect(next.items["a"]?.status).toBe("queued");
+    expect(next.items.a?.status).toBe("queued");
   });
 
   it("is a no-op for a queued or done item", () => {

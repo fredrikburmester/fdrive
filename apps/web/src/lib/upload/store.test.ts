@@ -136,9 +136,9 @@ describe("createUploadStore", () => {
     store.getState().enqueue([makeItem("a"), makeItem("b"), makeItem("c")]);
 
     const { state } = store.getState();
-    expect(state.items["a"]?.status).toBe("uploading");
-    expect(state.items["b"]?.status).toBe("uploading");
-    expect(state.items["c"]?.status).toBe("queued");
+    expect(state.items.a?.status).toBe("uploading");
+    expect(state.items.b?.status).toBe("uploading");
+    expect(state.items.c?.status).toBe("queued");
     expect(xhrs).toHaveLength(2);
   });
 
@@ -161,7 +161,7 @@ describe("createUploadStore", () => {
 
     xhrs[0]?.emitProgress({ lengthComputable: true, loaded: 40, total: 100 });
 
-    expect(store.getState().state.items["a"]?.progress).toBe(0.4);
+    expect(store.getState().state.items.a?.progress).toBe(0.4);
   });
 
   it("marks a successful upload done, calls onUploaded with the parent path, and starts the next item", async () => {
@@ -171,9 +171,9 @@ describe("createUploadStore", () => {
     xhrs[0]?.finishWith(201, JSON.stringify({ path: "/dest/a.txt" }));
     await flush();
 
-    expect(store.getState().state.items["a"]?.status).toBe("done");
+    expect(store.getState().state.items.a?.status).toBe("done");
     expect(onUploaded).toHaveBeenCalledWith("/dest");
-    expect(store.getState().state.items["b"]?.status).toBe("uploading");
+    expect(store.getState().state.items.b?.status).toBe("uploading");
     expect(xhrs).toHaveLength(2);
   });
 
@@ -184,7 +184,7 @@ describe("createUploadStore", () => {
     xhrs[0]?.finishWith(409, JSON.stringify({ error: { kind: "conflict", message: "exists" } }));
     await flush();
 
-    expect(store.getState().state.items["a"]).toMatchObject({ status: "error", error: "exists" });
+    expect(store.getState().state.items.a).toMatchObject({ status: "error", error: "exists" });
   });
 
   it("marks a network error as failed", async () => {
@@ -194,7 +194,7 @@ describe("createUploadStore", () => {
     xhrs[0]?.emit("error");
     await flush();
 
-    expect(store.getState().state.items["a"]?.status).toBe("error");
+    expect(store.getState().state.items.a?.status).toBe("error");
   });
 
   it("cancels a queued item directly, without touching any xhr", () => {
@@ -203,7 +203,7 @@ describe("createUploadStore", () => {
 
     store.getState().cancel("b");
 
-    expect(store.getState().state.items["b"]?.status).toBe("cancelled");
+    expect(store.getState().state.items.b?.status).toBe("cancelled");
     expect(xhrs).toHaveLength(1);
   });
 
@@ -215,7 +215,7 @@ describe("createUploadStore", () => {
     await flush();
 
     expect(xhrs[0]?.aborted).toBe(true);
-    expect(store.getState().state.items["a"]?.status).toBe("cancelled");
+    expect(store.getState().state.items.a?.status).toBe("cancelled");
   });
 
   it("is a no-op to cancel an id that does not exist and has no controller", () => {
@@ -228,11 +228,11 @@ describe("createUploadStore", () => {
     store.getState().enqueue([makeItem("a")]);
     xhrs[0]?.finishWith(500, "");
     await flush();
-    expect(store.getState().state.items["a"]?.status).toBe("error");
+    expect(store.getState().state.items.a?.status).toBe("error");
 
     store.getState().retry("a");
 
-    expect(store.getState().state.items["a"]?.status).toBe("uploading");
+    expect(store.getState().state.items.a?.status).toBe("uploading");
     expect(xhrs).toHaveLength(2);
   });
 
@@ -244,7 +244,7 @@ describe("createUploadStore", () => {
 
     store.getState().clearFinished();
 
-    expect(store.getState().state.items["a"]).toBeUndefined();
+    expect(store.getState().state.items.a).toBeUndefined();
   });
 
   it("omits the identity header and uses a no-op onUploaded when neither is configured", async () => {
@@ -262,7 +262,7 @@ describe("createUploadStore", () => {
 
     xhrs[0]?.finishWith(200, JSON.stringify({ path: "/dest/a.txt" }));
     await flush();
-    expect(store.getState().state.items["a"]?.status).toBe("done");
+    expect(store.getState().state.items.a?.status).toBe("done");
   });
 
   it("falls back to a real XMLHttpRequest when createXhr is not configured", async () => {
@@ -272,7 +272,7 @@ describe("createUploadStore", () => {
 
     // No XMLHttpRequest global in this test environment, so the upload
     // rejects and the item ends up failed rather than hanging forever.
-    expect(store.getState().state.items["a"]?.status).toBe("error");
+    expect(store.getState().state.items.a?.status).toBe("error");
   });
 
   it("lets the shell replace onUploaded after construction", async () => {
