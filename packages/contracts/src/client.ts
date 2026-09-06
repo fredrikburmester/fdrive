@@ -2,8 +2,17 @@ import type { z } from "zod";
 import { AboutResponse } from "./about.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
-import { type DeleteRequest, EntryResponse, type FsEntry, ListResponse, OkResponse } from "./fs.ts";
-import { IDENTITY_HEADER, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
+import {
+  type CompressRequest,
+  type DeleteRequest,
+  EntryResponse,
+  type ExtractRequest,
+  type FsEntry,
+  ListResponse,
+  OkResponse,
+} from "./fs.ts";
+import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
+import { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
 
 export type { IdentitySummary };
 
@@ -66,6 +75,12 @@ export interface ApiClient {
   zip(paths: string[], name?: string): Promise<Response>;
   downloadUrl(path: string, opts?: { inline?: boolean }): string;
   upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry>;
+  duplicate(path: string): Promise<FsEntry>;
+  compress(req: CompressRequest): Promise<JobAccepted>;
+  extract(req: ExtractRequest): Promise<JobAccepted>;
+  jobs(): Promise<JobStatus[]>;
+  job(id: string): Promise<JobStatus>;
+  cancelJob(id: string): Promise<JobStatus>;
   about(): Promise<AboutResponse>;
 }
 
@@ -346,6 +361,43 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         },
         EntryResponse,
       );
+    },
+
+    duplicate(path: string): Promise<FsEntry> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.fs.duplicate, jsonBody: { path } },
+        EntryResponse,
+      );
+    },
+
+    compress(req: CompressRequest): Promise<JobAccepted> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.fs.compress, jsonBody: req },
+        JobAccepted,
+      );
+    },
+
+    extract(req: ExtractRequest): Promise<JobAccepted> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.fs.extract, jsonBody: req },
+        JobAccepted,
+      );
+    },
+
+    async jobs(): Promise<JobStatus[]> {
+      const res = await requestJson(ctx, { method: "GET", path: ROUTES.fs.jobs }, JobsResponse);
+      return res.jobs;
+    },
+
+    job(id: string): Promise<JobStatus> {
+      return requestJson(ctx, { method: "GET", path: jobRoute(id) }, JobStatus);
+    },
+
+    cancelJob(id: string): Promise<JobStatus> {
+      return requestJson(ctx, { method: "POST", path: jobCancelRoute(id) }, JobStatus);
     },
 
     about(): Promise<AboutResponse> {

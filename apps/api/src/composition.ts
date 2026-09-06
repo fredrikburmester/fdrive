@@ -16,6 +16,7 @@ import type { AppConfig } from "./config.js";
 import { createEventBus } from "./events/bus.js";
 import { registerEventRoutes } from "./events/routes.js";
 import { registerFsRoutes } from "./fs/routes.js";
+import { createJobRunner } from "./jobs/runner.js";
 import { createSftpgoStorageProvider } from "./storage/sftpgo-provider.js";
 
 export interface ComposeAppDeps {
@@ -57,6 +58,7 @@ export async function composeApp(
   const sftpgo = createSftpgoClient(sftpgoOptions);
 
   const bus = createEventBus();
+  const jobRunner = createJobRunner({ clock, bus });
   const limiter = createLoginLimiter({ clock });
   const tokenSource = createTokenSource({ repos, sftpgo, master, clock });
 
@@ -87,7 +89,13 @@ export async function composeApp(
     principalResolver: auth.principalResolver,
     registerRoutes: (groups) => {
       auth.registerRoutes(groups);
-      registerFsRoutes(groups, { bus, clock });
+      registerFsRoutes(groups, {
+        bus,
+        clock,
+        jobRunner,
+        tmpDir: config.fdriveTmpDir,
+        jobMaxBytes: config.fdriveJobMaxBytes,
+      });
       registerEventRoutes(groups, { bus, clock });
     },
   });

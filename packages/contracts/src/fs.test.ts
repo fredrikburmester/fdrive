@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  CompressRequest,
   CopyRequest,
   DeleteRequest,
   DownloadQuery,
+  DuplicateRequest,
   EntryKind,
   EntryResponse,
+  ExtractRequest,
   FsEntry,
   isValidEntryName,
   ListResponse,
@@ -250,5 +253,64 @@ describe("OkResponse", () => {
 
   it("rejects { ok: false }", () => {
     expect(OkResponse.safeParse({ ok: false }).success).toBe(false);
+  });
+});
+
+describe("DuplicateRequest", () => {
+  it("parses a path", () => {
+    expect(DuplicateRequest.safeParse({ path: "/a.txt" }).success).toBe(true);
+  });
+
+  it("rejects a missing path", () => {
+    expect(DuplicateRequest.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("CompressRequest", () => {
+  it("parses the minimal form", () => {
+    expect(CompressRequest.safeParse({ paths: ["/a"], format: "zip" }).success).toBe(true);
+  });
+
+  it("parses with name and destination", () => {
+    const payload = { paths: ["/a", "/b"], format: "tar.gz", name: "bundle", destination: "/out" };
+    expect(CompressRequest.parse(payload)).toEqual(payload);
+  });
+
+  it.each(["zip", "tar.gz", "tar.zst"])("accepts format %s", (format) => {
+    expect(CompressRequest.safeParse({ paths: ["/a"], format }).success).toBe(true);
+  });
+
+  it("rejects an unknown format", () => {
+    expect(CompressRequest.safeParse({ paths: ["/a"], format: "rar" }).success).toBe(false);
+  });
+
+  it("rejects an empty paths array", () => {
+    expect(CompressRequest.safeParse({ paths: [], format: "zip" }).success).toBe(false);
+  });
+
+  it("rejects more than 1000 paths", () => {
+    const paths = Array.from({ length: 1001 }, (_, i) => `/${i}`);
+    expect(CompressRequest.safeParse({ paths, format: "zip" }).success).toBe(false);
+  });
+
+  it("rejects an empty name", () => {
+    expect(CompressRequest.safeParse({ paths: ["/a"], format: "zip", name: "" }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("ExtractRequest", () => {
+  it("parses a path without a destination", () => {
+    expect(ExtractRequest.safeParse({ path: "/a.zip" }).success).toBe(true);
+  });
+
+  it("parses a path with a destination", () => {
+    const payload = { path: "/a.zip", destination: "/out" };
+    expect(ExtractRequest.parse(payload)).toEqual(payload);
+  });
+
+  it("rejects a missing path", () => {
+    expect(ExtractRequest.safeParse({}).success).toBe(false);
   });
 });

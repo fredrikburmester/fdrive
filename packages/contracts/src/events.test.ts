@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { FsEvent, PingEvent, SseEvent } from "./events";
+import { FsEvent, JobEvent, PingEvent, SseEvent } from "./events";
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
 const AT = "2026-01-01T00:00:00.000Z";
+
+const VALID_JOB_STATUS = {
+  id: "job-1",
+  kind: "compress",
+  state: "running",
+  createdAt: AT,
+  updatedAt: AT,
+  progress: { processed: 1, total: 4, bytes: 10 },
+};
 
 describe("FsEvent", () => {
   const valid = {
@@ -50,6 +59,18 @@ describe("PingEvent", () => {
   });
 });
 
+describe("JobEvent", () => {
+  it("parses a valid job event", () => {
+    const valid = { type: "job", job: VALID_JOB_STATUS, at: AT };
+    expect(JobEvent.parse(valid)).toEqual(valid);
+  });
+
+  it("rejects a job event with an invalid job", () => {
+    const invalid = { type: "job", job: { ...VALID_JOB_STATUS, state: "unknown" }, at: AT };
+    expect(JobEvent.safeParse(invalid).success).toBe(false);
+  });
+});
+
 describe("SseEvent", () => {
   it("discriminates an fs event", () => {
     const payload = {
@@ -65,6 +86,11 @@ describe("SseEvent", () => {
 
   it("discriminates a ping event", () => {
     const result = SseEvent.safeParse({ type: "ping", at: AT });
+    expect(result.success).toBe(true);
+  });
+
+  it("discriminates a job event", () => {
+    const result = SseEvent.safeParse({ type: "job", job: VALID_JOB_STATUS, at: AT });
     expect(result.success).toBe(true);
   });
 

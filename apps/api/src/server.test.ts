@@ -30,6 +30,8 @@ function buildConfig(): AppConfig {
     fdrivePublicUrl: undefined,
     nodeEnv: "test",
     fdriveAutoMigrate: true,
+    fdriveTmpDir: "/tmp",
+    fdriveJobMaxBytes: 1_000_000_000,
   };
 }
 

@@ -368,6 +368,94 @@ describe("createApiClient: upload", () => {
   });
 });
 
+const VALID_JOB_STATUS = {
+  id: "job-1",
+  kind: "compress",
+  state: "queued",
+  createdAt: AT,
+  updatedAt: AT,
+  progress: { processed: 0, total: null, bytes: 0 },
+};
+
+describe("createApiClient: duplicate", () => {
+  it("posts fs/duplicate with the path", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ENTRY)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.duplicate("/a.txt");
+
+    expect(result).toEqual(VALID_ENTRY);
+    expect(calls[0]?.url).toBe("/api/v1/fs/duplicate");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt" }));
+  });
+});
+
+describe("createApiClient: compress", () => {
+  it("posts fs/compress and returns the accepted job id", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(202, { jobId: "job-1" })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.compress({ paths: ["/a"], format: "zip" });
+
+    expect(result).toEqual({ jobId: "job-1" });
+    expect(calls[0]?.url).toBe("/api/v1/fs/compress");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ paths: ["/a"], format: "zip" }));
+  });
+});
+
+describe("createApiClient: extract", () => {
+  it("posts fs/extract and returns the accepted job id", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(202, { jobId: "job-2" })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.extract({ path: "/a.zip" });
+
+    expect(result).toEqual({ jobId: "job-2" });
+    expect(calls[0]?.url).toBe("/api/v1/fs/extract");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.zip" }));
+  });
+});
+
+describe("createApiClient: jobs", () => {
+  it("gets fs/jobs and unwraps the jobs array", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { jobs: [VALID_JOB_STATUS] })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.jobs();
+
+    expect(result).toEqual([VALID_JOB_STATUS]);
+    expect(calls[0]?.url).toBe("/api/v1/fs/jobs");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+});
+
+describe("createApiClient: job", () => {
+  it("gets a single job by id", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_JOB_STATUS)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.job("job-1");
+
+    expect(result).toEqual(VALID_JOB_STATUS);
+    expect(calls[0]?.url).toBe("/api/v1/fs/jobs/job-1");
+  });
+});
+
+describe("createApiClient: cancelJob", () => {
+  it("posts to the job's cancel route", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { ...VALID_JOB_STATUS, state: "cancelled" }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.cancelJob("job-1");
+
+    expect(result).toEqual({ ...VALID_JOB_STATUS, state: "cancelled" });
+    expect(calls[0]?.url).toBe("/api/v1/fs/jobs/job-1/cancel");
+    expect(calls[0]?.init.method).toBe("POST");
+  });
+});
+
 describe("createApiClient: about", () => {
   it("gets about and returns AboutResponse", async () => {
     const { fetchStub } = createStubFetch([jsonResponse(200, VALID_ABOUT)]);

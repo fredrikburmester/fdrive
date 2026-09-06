@@ -1,5 +1,12 @@
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { isBase64Of32Bytes, isHttpUrl, loadConfig, withDefault } from "./config";
+import {
+  DEFAULT_JOB_MAX_BYTES,
+  isBase64Of32Bytes,
+  isHttpUrl,
+  loadConfig,
+  withDefault,
+} from "./config";
 
 const MASTER_KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
 
@@ -72,6 +79,8 @@ describe("loadConfig", () => {
       fdrivePublicUrl: undefined,
       nodeEnv: "development",
       fdriveAutoMigrate: true,
+      fdriveTmpDir: tmpdir(),
+      fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
     });
   });
 
@@ -93,6 +102,8 @@ describe("loadConfig", () => {
       FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
       NODE_ENV: "production",
       FDRIVE_AUTO_MIGRATE: "false",
+      FDRIVE_TMP_DIR: "/var/tmp/fdrive",
+      FDRIVE_JOB_MAX_BYTES: "1000",
     });
 
     expect(config).toEqual({
@@ -108,6 +119,8 @@ describe("loadConfig", () => {
       fdrivePublicUrl: "https://fdrive.example.com",
       nodeEnv: "production",
       fdriveAutoMigrate: false,
+      fdriveTmpDir: "/var/tmp/fdrive",
+      fdriveJobMaxBytes: 1000,
     });
   });
 
@@ -170,5 +183,31 @@ describe("loadConfig", () => {
 
   it("falls back to the default host when HOST is an empty string", () => {
     expect(loadConfig({ ...REQUIRED_ENV, HOST: "" }).host).toBe("0.0.0.0");
+  });
+
+  it("defaults FDRIVE_TMP_DIR to the OS temp dir", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveTmpDir).toBe(tmpdir());
+  });
+
+  it("accepts a custom FDRIVE_TMP_DIR", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_TMP_DIR: "/data/tmp" }).fdriveTmpDir).toBe(
+      "/data/tmp",
+    );
+  });
+
+  it("defaults FDRIVE_JOB_MAX_BYTES to 10 GiB", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveJobMaxBytes).toBe(DEFAULT_JOB_MAX_BYTES);
+  });
+
+  it("rejects a non-integer FDRIVE_JOB_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JOB_MAX_BYTES: "lots" })).toThrow(
+      /FDRIVE_JOB_MAX_BYTES/,
+    );
+  });
+
+  it("rejects a zero FDRIVE_JOB_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JOB_MAX_BYTES: "0" })).toThrow(
+      /FDRIVE_JOB_MAX_BYTES/,
+    );
   });
 });

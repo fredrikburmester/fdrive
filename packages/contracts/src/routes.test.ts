@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IDENTITY_HEADER, MODIFIED_AT_HEADER, ROUTES } from "./routes";
+import { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes";
 
 describe("ROUTES", () => {
   it("defines every auth route under /api/v1/auth", () => {
@@ -22,12 +22,32 @@ describe("ROUTES", () => {
       copy: "/api/v1/fs/copy",
       rename: "/api/v1/fs/rename",
       delete: "/api/v1/fs/delete",
+      duplicate: "/api/v1/fs/duplicate",
+      compress: "/api/v1/fs/compress",
+      extract: "/api/v1/fs/extract",
+      jobs: "/api/v1/fs/jobs",
     });
   });
 
   it("defines events and about routes", () => {
     expect(ROUTES.events).toBe("/api/v1/events");
     expect(ROUTES.about).toBe("/api/v1/about");
+  });
+});
+
+describe("jobRoute", () => {
+  it("builds the path for a single job", () => {
+    expect(jobRoute("job-1")).toBe("/api/v1/fs/jobs/job-1");
+  });
+
+  it("url-encodes the id", () => {
+    expect(jobRoute("a/b")).toBe("/api/v1/fs/jobs/a%2Fb");
+  });
+});
+
+describe("jobCancelRoute", () => {
+  it("builds the cancel path for a job", () => {
+    expect(jobCancelRoute("job-1")).toBe("/api/v1/fs/jobs/job-1/cancel");
   });
 });
 

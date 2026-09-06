@@ -35,6 +35,14 @@ export const ROUTES = {
     rename: "/api/v1/fs/rename",
     /** POST: delete one or more paths. */
     delete: "/api/v1/fs/delete",
+    /** POST: copy a path next to itself with a unique name -> `EntryResponse`. */
+    duplicate: "/api/v1/fs/duplicate",
+    /** POST: build an archive from a selection as a job -> `JobAccepted` (202). */
+    compress: "/api/v1/fs/compress",
+    /** POST: extract an archive as a job -> `JobAccepted` (202). */
+    extract: "/api/v1/fs/extract",
+    /** GET: the caller's jobs -> `JobsResponse`. */
+    jobs: "/api/v1/fs/jobs",
   },
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
@@ -43,6 +51,16 @@ export const ROUTES = {
 } as const;
 
 export type Routes = typeof ROUTES;
+
+/** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
+export function jobRoute(id: string): string {
+  return `${ROUTES.fs.jobs}/${encodeURIComponent(id)}`;
+}
+
+/** POST: cancel a job -> `JobStatus`. 404 for a job that belongs to another identity. */
+export function jobCancelRoute(id: string): string {
+  return `${jobRoute(id)}/cancel`;
+}
 
 /**
  * Optional request header selecting which linked identity a request acts

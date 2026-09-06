@@ -1,5 +1,6 @@
-import type { FsEvent } from "@fdrive/contracts";
+import type { FsEvent, JobEvent } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
+import type { BusEvent } from "./bus.js";
 import { createEventBus } from "./bus.js";
 
 function makeEvent(overrides: Partial<FsEvent> = {}): FsEvent {
@@ -21,7 +22,7 @@ describe("createEventBus", () => {
 
   it("delivers a published event to a matching subscriber", () => {
     const bus = createEventBus();
-    const received: FsEvent[] = [];
+    const received: BusEvent[] = [];
     bus.subscribe({ identityId: "identity-1" }, (event) => received.push(event));
 
     const event = makeEvent();
@@ -32,7 +33,7 @@ describe("createEventBus", () => {
 
   it("does not deliver an event to a subscriber of a different identity", () => {
     const bus = createEventBus();
-    const received: FsEvent[] = [];
+    const received: BusEvent[] = [];
     bus.subscribe({ identityId: "identity-2" }, (event) => received.push(event));
 
     bus.publish(makeEvent({ identityId: "identity-1" }));
@@ -42,8 +43,8 @@ describe("createEventBus", () => {
 
   it("delivers to multiple subscribers of the same identity", () => {
     const bus = createEventBus();
-    const receivedA: FsEvent[] = [];
-    const receivedB: FsEvent[] = [];
+    const receivedA: BusEvent[] = [];
+    const receivedB: BusEvent[] = [];
     bus.subscribe({ identityId: "identity-1" }, (event) => receivedA.push(event));
     bus.subscribe({ identityId: "identity-1" }, (event) => receivedB.push(event));
 
@@ -65,7 +66,7 @@ describe("createEventBus", () => {
 
   it("stops delivering after unsubscribe", () => {
     const bus = createEventBus();
-    const received: FsEvent[] = [];
+    const received: BusEvent[] = [];
     const unsubscribe = bus.subscribe({ identityId: "identity-1" }, (event) =>
       received.push(event),
     );
@@ -87,9 +88,32 @@ describe("createEventBus", () => {
     expect(bus.subscriberCount()).toBe(0);
   });
 
+  it("delivers a job event to a subscriber of the job's identity", () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: "identity-1" }, (event) => received.push(event));
+
+    const jobEvent: JobEvent & { identityId: string } = {
+      type: "job",
+      identityId: "identity-1",
+      at: "2024-01-01T00:00:00.000Z",
+      job: {
+        id: "job-1",
+        kind: "compress",
+        state: "running",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        progress: { processed: 0, total: null, bytes: 0 },
+      },
+    };
+    bus.publish(jobEvent);
+
+    expect(received).toEqual([jobEvent]);
+  });
+
   it("swallows an error thrown by one handler and still delivers to the others", () => {
     const bus = createEventBus();
-    const received: FsEvent[] = [];
+    const received: BusEvent[] = [];
     bus.subscribe({ identityId: "identity-1" }, () => {
       throw new Error("boom");
     });
