@@ -216,3 +216,39 @@ export function rightAction(
   }
   return { type: "none" };
 }
+
+/** What is known so far about a folder's own listing, for `chevronStateFor`. */
+export type FolderListingKnowledge =
+  | { readonly status: "unknown" }
+  | { readonly status: "known"; readonly hasSubfolders: boolean };
+
+/**
+ * `"unknown"`, `"expandable"`, or `"leaf"`: which chevron a folder row
+ * should show, given what is known about its own listing.
+ *
+ * - `"unknown"` while the listing has not resolved yet: the row shows a
+ *   muted chevron so the layout does not jump once the answer arrives.
+ * - `"expandable"` once the listing is known to contain subfolders: a
+ *   normal, interactive chevron.
+ * - `"leaf"` once the listing is known to contain none: no chevron: the row
+ *   is not expandable, though clicking it still navigates.
+ */
+export function chevronStateFor(knowledge: FolderListingKnowledge): ChevronState {
+  if (knowledge.status === "unknown") {
+    return "unknown";
+  }
+  return knowledge.hasSubfolders ? "expandable" : "leaf";
+}
+
+export type ChevronState = "unknown" | "expandable" | "leaf";
+
+/**
+ * Whether a folder's expansion, waiting on a listing that started loading
+ * at `startedAt` (ms epoch), should show a loading skeleton at time `now`
+ * given a `delayMs` grace period: `false` for the first `delayMs`
+ * milliseconds so a fast answer never flashes one, `true` once the wait has
+ * gone on that long without a result.
+ */
+export function shouldShowSkeleton(startedAt: number, now: number, delayMs: number): boolean {
+  return now - startedAt >= delayMs;
+}

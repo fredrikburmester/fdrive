@@ -28,9 +28,16 @@ import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/d
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { movablePaths } from "@/lib/files/move-guard";
 import { pathFromFilesPathname, pathToHref } from "@/lib/files/path-url";
-import { useCopy, useListing, useMove } from "@/lib/files/queries";
+import {
+  type ListingSnapshot,
+  useCopy,
+  useDelayedFlag,
+  useListings,
+  useMove,
+} from "@/lib/files/queries";
 import { DEFAULT_SORT_SPEC, sortListing } from "@/lib/files/sorting";
 import {
+  chevronStateFor,
   collapse,
   EMPTY_TREE_STATE,
   expand,
@@ -46,6 +53,9 @@ import {
 import { cn } from "@/lib/utils";
 
 const ROOT_PATH = "/";
+
+/** After how long a wait an expansion shows a loading skeleton (see `useDelayedFlag`). */
+const SKELETON_DELAY_MS = 200;
 
 // `/files` is served by an optional catch-all route, which Next's typed
 // routes only model as `/files/${string}`, not the bare path.
@@ -71,15 +81,31 @@ function sameChildren(a: readonly string[] | undefined, b: readonly string[]): b
   return a !== undefined && a.length === b.length && a.every((path, index) => path === b[index]);
 }
 
+/**
+ * What `chevronStateFor` needs for `path`, straight from its `useListings`
+ * snapshot: `"unknown"` while the listing has not resolved yet, otherwise
+ * whether it contains any subfolders.
+ */
+function chevronStateForPath(listings: ReadonlyMap<string, ListingSnapshot>, path: string) {
+  const snapshot = listings.get(path);
+  if (snapshot?.data === undefined) {
+    return chevronStateFor({ status: "unknown" });
+  }
+  return chevronStateFor({
+    status: "known",
+    hasSubfolders: dirChildPaths(snapshot.data.entries).length > 0,
+  });
+}
+
 interface FolderTreeRowProps {
   path: string;
   treeState: TreeState;
   currentPath: string | null;
   focusPath: string | null;
   childrenByPath: ReadonlyMap<string, readonly string[]>;
+  listings: ReadonlyMap<string, ListingSnapshot>;
   onSetExpanded: (path: string, open: boolean) => void;
   onFocusPath: (path: string) => void;
-  onChildrenLoaded: (path: string, children: string[]) => void;
   onDropMove: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
 }
 
@@ -90,23 +116,20 @@ function FolderTreeRow({
   currentPath,
   focusPath,
   childrenByPath,
+  listings,
   onSetExpanded,
   onFocusPath,
-  onChildrenLoaded,
   onDropMove,
 }: FolderTreeRowProps) {
   const isExpanded = treeState.expanded.has(path);
-  const { data, isLoading } = useListing(path, { enabled: isExpanded });
   const [isDropTarget, setIsDropTarget] = useState(false);
 
-  useEffect(() => {
-    if (data !== undefined) {
-      onChildrenLoaded(path, dirChildPaths(data.entries));
-    }
-  }, [data, path, onChildrenLoaded]);
+  const snapshot = listings.get(path);
+  const isPending = snapshot?.data === undefined;
+  const chevronState = chevronStateForPath(listings, path);
+  const showSkeleton = useDelayedFlag(isExpanded && isPending, SKELETON_DELAY_MS);
 
   const knownChildren = childrenByPath.get(path);
-  const hasChevron = knownChildren === undefined || knownChildren.length > 0;
   const name = baseName(path);
   const isActive = path === currentPath;
   const isFocused = path === focusPath;
@@ -140,22 +163,26 @@ function FolderTreeRow({
   }
 
   return (
-    <SidebarMenuSubItem>
+    <SidebarMenuSubItem data-path={path}>
       <Collapsible open={isExpanded} onOpenChange={(open) => onSetExpanded(path, open)}>
         <div className="flex items-center gap-0.5">
-          {hasChevron ? (
+          {chevronState === "leaf" ? (
+            <span className="size-4 shrink-0" />
+          ) : (
             <CollapsibleTrigger
               aria-label={isExpanded ? `Collapse ${name}` : `Expand ${name}`}
+              data-chevron-state={chevronState}
               onClick={(event) => event.stopPropagation()}
               onDoubleClick={(event) => event.stopPropagation()}
-              className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+              className={cn(
+                "flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground",
+                chevronState === "unknown" && "opacity-40 hover:text-muted-foreground",
+              )}
             >
               <ChevronRightIcon
                 className={cn("size-3.5 transition-transform", isExpanded && "rotate-90")}
               />
             </CollapsibleTrigger>
-          ) : (
-            <span className="size-4 shrink-0" />
           )}
           <SidebarMenuSubButton
             isActive={isActive}
@@ -172,31 +199,31 @@ function FolderTreeRow({
           </SidebarMenuSubButton>
         </div>
         <CollapsibleContent>
-          {isLoading ? (
-            <div className="py-1 pl-8">
-              <Skeleton className="h-4 w-3/4" />
-            </div>
-          ) : (
-            knownChildren !== undefined &&
-            knownChildren.length > 0 && (
-              <SidebarMenuSub className="mx-0 border-l-0 pl-3.5">
-                {knownChildren.map((childPath) => (
-                  <FolderTreeRow
-                    key={childPath}
-                    path={childPath}
-                    treeState={treeState}
-                    currentPath={currentPath}
-                    focusPath={focusPath}
-                    childrenByPath={childrenByPath}
-                    onSetExpanded={onSetExpanded}
-                    onFocusPath={onFocusPath}
-                    onChildrenLoaded={onChildrenLoaded}
-                    onDropMove={onDropMove}
-                  />
-                ))}
-              </SidebarMenuSub>
-            )
-          )}
+          {isPending
+            ? showSkeleton && (
+                <div className="py-1 pl-8" data-slot="tree-row-skeleton">
+                  <Skeleton className="h-4 w-3/4" />
+                </div>
+              )
+            : knownChildren !== undefined &&
+              knownChildren.length > 0 && (
+                <SidebarMenuSub className="mx-0 border-l-0 pl-3.5">
+                  {knownChildren.map((childPath) => (
+                    <FolderTreeRow
+                      key={childPath}
+                      path={childPath}
+                      treeState={treeState}
+                      currentPath={currentPath}
+                      focusPath={focusPath}
+                      childrenByPath={childrenByPath}
+                      listings={listings}
+                      onSetExpanded={onSetExpanded}
+                      onFocusPath={onFocusPath}
+                      onDropMove={onDropMove}
+                    />
+                  ))}
+                </SidebarMenuSub>
+              )}
         </CollapsibleContent>
       </Collapsible>
     </SidebarMenuSubItem>
@@ -206,6 +233,16 @@ function FolderTreeRow({
 /**
  * The sidebar's Finder-like folder tree: a lazily-expanding "Files" root and
  * its folder descendants. Mounted under the Files item in `AppSidebar`.
+ *
+ * Every currently visible folder (the root, plus any folder reachable by
+ * following already-expanded ancestors) has its own listing prefetched in
+ * the background through `useListings`, one level ahead of what the user
+ * has clicked: this is what lets a folder's chevron reflect whether it has
+ * subfolders (`chevronStateFor`) before it is ever expanded, and what makes
+ * expanding a folder that only contains files reveal nothing instantly
+ * instead of flashing a "loading" state for an answer that was always empty.
+ * The fetch never recurses into a collapsed folder, since a folder not
+ * reachable this way is never added to `visiblePaths`.
  */
 export function FolderTree() {
   const pathname = usePathname();
@@ -234,16 +271,31 @@ export function FolderTree() {
   const [childrenByPath, setChildrenByPath] = useState<Map<string, readonly string[]>>(
     () => new Map(),
   );
-  const handleChildrenLoaded = useCallback((path: string, children: string[]) => {
+
+  const visiblePaths = useMemo(
+    () => flattenVisibleTree([ROOT_PATH], childrenByPath, treeState.expanded).map((n) => n.path),
+    [childrenByPath, treeState.expanded],
+  );
+  const listings = useListings(visiblePaths);
+
+  useEffect(() => {
     setChildrenByPath((prev) => {
-      if (sameChildren(prev.get(path), children)) {
-        return prev;
-      }
+      let changed = false;
       const next = new Map(prev);
-      next.set(path, children);
-      return next;
+      for (const path of visiblePaths) {
+        const entries = listings.get(path)?.data?.entries;
+        if (entries === undefined) {
+          continue;
+        }
+        const children = dirChildPaths(entries);
+        if (!sameChildren(next.get(path), children)) {
+          next.set(path, children);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
     });
-  }, []);
+  }, [visiblePaths, listings]);
 
   const move = useMove();
   const copy = useCopy();
@@ -267,17 +319,12 @@ export function FolderTree() {
   );
 
   const isRootExpanded = treeState.expanded.has(ROOT_PATH);
-  const { data: rootData, isLoading: isRootLoading } = useListing(ROOT_PATH, {
-    enabled: isRootExpanded,
-  });
-  useEffect(() => {
-    if (rootData !== undefined) {
-      handleChildrenLoaded(ROOT_PATH, dirChildPaths(rootData.entries));
-    }
-  }, [rootData, handleChildrenLoaded]);
+  const rootSnapshot = listings.get(ROOT_PATH);
+  const rootIsPending = rootSnapshot?.data === undefined;
+  const rootChevronState = chevronStateForPath(listings, ROOT_PATH);
+  const rootShowSkeleton = useDelayedFlag(isRootExpanded && rootIsPending, SKELETON_DELAY_MS);
 
   const rootChildren = childrenByPath.get(ROOT_PATH);
-  const rootHasChevron = rootChildren === undefined || rootChildren.length > 0;
   const rootFocused = focusPath === ROOT_PATH;
   const [isRootDropTarget, setIsRootDropTarget] = useState(false);
 
@@ -359,19 +406,23 @@ export function FolderTree() {
         onOpenChange={(open) => handleSetExpanded(ROOT_PATH, open)}
       >
         <div className="flex items-center gap-0.5">
-          {rootHasChevron ? (
+          {rootChevronState === "leaf" ? (
+            <span className="size-5 shrink-0" />
+          ) : (
             <CollapsibleTrigger
               aria-label={isRootExpanded ? "Collapse Files" : "Expand Files"}
+              data-chevron-state={rootChevronState}
               onClick={(event) => event.stopPropagation()}
               onDoubleClick={(event) => event.stopPropagation()}
-              className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+              className={cn(
+                "flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground",
+                rootChevronState === "unknown" && "opacity-40 hover:text-muted-foreground",
+              )}
             >
               <ChevronRightIcon
                 className={cn("size-3.5 transition-transform", isRootExpanded && "rotate-90")}
               />
             </CollapsibleTrigger>
-          ) : (
-            <span className="size-5 shrink-0" />
           )}
           <SidebarMenuButton
             isActive={isFilesRoute(pathname)}
@@ -389,31 +440,31 @@ export function FolderTree() {
           </SidebarMenuButton>
         </div>
         <CollapsibleContent>
-          {isRootLoading ? (
-            <div className="py-1 pl-8">
-              <Skeleton className="h-4 w-3/4" />
-            </div>
-          ) : (
-            rootChildren !== undefined &&
-            rootChildren.length > 0 && (
-              <SidebarMenuSub className="mx-0 mt-0.5 border-l-0 pl-3.5">
-                {rootChildren.map((childPath) => (
-                  <FolderTreeRow
-                    key={childPath}
-                    path={childPath}
-                    treeState={treeState}
-                    currentPath={currentPath}
-                    focusPath={focusPath}
-                    childrenByPath={childrenByPath}
-                    onSetExpanded={handleSetExpanded}
-                    onFocusPath={setFocusPath}
-                    onChildrenLoaded={handleChildrenLoaded}
-                    onDropMove={handleDropMove}
-                  />
-                ))}
-              </SidebarMenuSub>
-            )
-          )}
+          {rootIsPending
+            ? rootShowSkeleton && (
+                <div className="py-1 pl-8" data-slot="tree-row-skeleton">
+                  <Skeleton className="h-4 w-3/4" />
+                </div>
+              )
+            : rootChildren !== undefined &&
+              rootChildren.length > 0 && (
+                <SidebarMenuSub className="mx-0 mt-0.5 border-l-0 pl-3.5">
+                  {rootChildren.map((childPath) => (
+                    <FolderTreeRow
+                      key={childPath}
+                      path={childPath}
+                      treeState={treeState}
+                      currentPath={currentPath}
+                      focusPath={focusPath}
+                      childrenByPath={childrenByPath}
+                      listings={listings}
+                      onSetExpanded={handleSetExpanded}
+                      onFocusPath={setFocusPath}
+                      onDropMove={handleDropMove}
+                    />
+                  ))}
+                </SidebarMenuSub>
+              )}
         </CollapsibleContent>
       </Collapsible>
     </SidebarMenuItem>
