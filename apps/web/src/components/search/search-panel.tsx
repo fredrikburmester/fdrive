@@ -2,10 +2,11 @@
 
 import type { FsEntry, SearchHit, SearchSnippet } from "@fdrive/contracts";
 import { baseName } from "@fdrive/core";
-import { FolderIcon } from "lucide-react";
+import { FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandDialog,
@@ -19,6 +20,7 @@ import {
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createDebouncer, type Debounced } from "@/lib/search/debounce";
 import {
   apiClient,
@@ -27,6 +29,12 @@ import {
   pathToHref,
   viewHref,
 } from "@/lib/search/deps";
+import {
+  DEFAULT_ENTER_ACTION,
+  type EnterAction,
+  readEnterAction,
+  writeEnterAction,
+} from "@/lib/search/enter-action";
 import {
   DEFAULT_SEARCH_CHIPS,
   SEARCH_TYPE_FILTERS,
@@ -112,6 +120,38 @@ function HitRow({ hit }: { hit: SearchHit }) {
   );
 }
 
+/**
+ * The trailing "reveal in folder" action for a Files/Content result row:
+ * visible on hover or keyboard focus (see `command.tsx`'s
+ * `group/command-item`), hidden otherwise so rows stay uncluttered. Stops
+ * the click from bubbling to the `CommandItem`'s own `onSelect`, so
+ * revealing never also opens the file.
+ */
+function RevealButton({ path, onReveal }: { path: string; onReveal: (path: string) => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Reveal in folder"
+            className="ml-auto shrink-0 opacity-0 focus-visible:opacity-100 group-hover/command-item:opacity-100 group-focus-within/command-item:opacity-100"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onReveal(path);
+            }}
+          />
+        }
+      >
+        <FolderOpenIcon />
+      </TooltipTrigger>
+      <TooltipContent>Reveal in folder</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function FolderRow({ folder }: { folder: FsEntry }) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -142,9 +182,13 @@ function RecentRow({ item }: { item: RecentItem }) {
 /**
  * The command-palette style search panel: filter chips, sectioned results
  * (Folders, Files, Content matches) or, for an empty query, a Recent
- * section from `localStorage`. Enter opens the highlighted item; Cmd/Ctrl+
- * Enter reveals it in its parent folder instead. Global Cmd/Ctrl+K to open
- * is wired by `SearchButton`, which owns this component's `open` state.
+ * section from `localStorage`. By default Enter opens the highlighted item
+ * and Cmd/Ctrl+Enter reveals it in its parent folder instead; the footer's
+ * "Enter opens" preference (persisted via `lib/search/enter-action.ts`) can
+ * swap that. Folders always just open, regardless of the preference. Each
+ * Files/Content row also has its own "Reveal in folder" button. Global
+ * Cmd/Ctrl+K to open is wired by `SearchButton`, which owns this
+ * component's `open` state.
  */
 export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const router = useRouter();
@@ -156,6 +200,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [chips, setChips] = useState<SearchChipState>(DEFAULT_SEARCH_CHIPS);
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const [selectedValue, setSelectedValue] = useState("");
+  const [enterAction, setEnterActionState] = useState<EnterAction>(DEFAULT_ENTER_ACTION);
 
   const debouncerRef = useRef<Debounced<string> | null>(null);
   if (debouncerRef.current === null) {
@@ -174,11 +219,17 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       return;
     }
     setRecent(readRecent(window.localStorage));
+    setEnterActionState(readEnterAction(window.localStorage));
   }, [open]);
 
   const handleInputChange = useCallback((value: string) => {
     setInputValue(value);
     debouncerRef.current?.run(value);
+  }, []);
+
+  const handleEnterActionChange = useCallback((action: EnterAction) => {
+    setEnterActionState(action);
+    writeEnterAction(window.localStorage, action);
   }, []);
 
   const trimmedQuery = committedQuery.trim();
@@ -212,9 +263,13 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       if (target === null) {
         return;
       }
+      if (target.kind !== "folder" && enterAction === "folder") {
+        revealItem(target.path);
+        return;
+      }
       openItem(target.kind === "folder" ? "folder" : "file", target.path);
     },
-    [openItem],
+    [openItem, revealItem, enterAction],
   );
 
   const handleInputKeyDownCapture = useCallback(
@@ -228,9 +283,13 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       }
       event.preventDefault();
       event.stopPropagation();
+      if (target.kind !== "folder" && enterAction === "folder") {
+        openItem("file", target.path);
+        return;
+      }
       revealItem(target.path);
     },
-    [selectedValue, revealItem],
+    [selectedValue, revealItem, openItem, enterAction],
   );
 
   const showRecent = trimmedQuery.length === 0;
@@ -342,6 +401,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                         onSelect={handleSelect}
                       >
                         <HitRow hit={hit} />
+                        <RevealButton path={hit.path} onReveal={revealItem} />
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -357,6 +417,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                       onSelect={handleSelect}
                     >
                       <HitRow hit={hit} />
+                      <RevealButton path={hit.path} onReveal={revealItem} />
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -364,16 +425,48 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             </>
           )}
         </CommandList>
-        <div className="flex items-center justify-end gap-3 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
-          <KbdGroup>
-            <Kbd>Enter</Kbd>
-            <span>open</span>
-          </KbdGroup>
-          <KbdGroup>
-            <Kbd>⌘</Kbd>
-            <Kbd>Enter</Kbd>
-            <span>reveal</span>
-          </KbdGroup>
+        <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <span>Enter opens:</span>
+            <ToggleGroup
+              value={[enterAction]}
+              onValueChange={(values) => {
+                const next = values[0];
+                if (next === "file" || next === "folder") {
+                  handleEnterActionChange(next);
+                }
+              }}
+              size="sm"
+            >
+              <ToggleGroupItem value="file">File</ToggleGroupItem>
+              <ToggleGroupItem value="folder">Enclosing folder</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+          {enterAction === "folder" ? (
+            <div className="flex items-center gap-3">
+              <KbdGroup>
+                <Kbd>Enter</Kbd>
+                <span>reveal</span>
+              </KbdGroup>
+              <KbdGroup>
+                <Kbd>⌘</Kbd>
+                <Kbd>Enter</Kbd>
+                <span>open</span>
+              </KbdGroup>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <KbdGroup>
+                <Kbd>Enter</Kbd>
+                <span>open</span>
+              </KbdGroup>
+              <KbdGroup>
+                <Kbd>⌘</Kbd>
+                <Kbd>Enter</Kbd>
+                <span>reveal</span>
+              </KbdGroup>
+            </div>
+          )}
         </div>
       </Command>
     </CommandDialog>

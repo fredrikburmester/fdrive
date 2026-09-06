@@ -51,6 +51,63 @@ test("Enter opens the preview", async ({ page }) => {
   await expect(page).toHaveURL(/\/view\/docs\/readme\.md$/);
 });
 
+test("clicking a Files result's reveal button opens its enclosing folder with it selected", async ({
+  page,
+}) => {
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+
+  // `.first()` targets the Files section's row (see the first test's note).
+  const fileRow = dialog.getByRole("option").filter({ hasText: "readme.md" }).first();
+  await fileRow.getByRole("button", { name: "Reveal in folder" }).click();
+
+  await expect(page).toHaveURL(/\/files\/docs$/);
+  await expect(page.getByText("1 selected")).toBeVisible();
+});
+
+test("switching the Enter preference to Enclosing folder makes Enter reveal instead of open", async ({
+  page,
+}) => {
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Enclosing folder" }).click();
+
+  // Re-focus the search input (clicking the preference button above moved
+  // focus away from it) so ArrowDown/Enter drive cmdk's own navigation.
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).click();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/\/files\/docs$/);
+  await expect(page.getByText("1 selected")).toBeVisible();
+});
+
+test("reloading after a reveal shows nothing selected", async ({ page }) => {
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+
+  const fileRow = dialog.getByRole("option").filter({ hasText: "readme.md" }).first();
+  await fileRow.getByRole("button", { name: "Reveal in folder" }).click();
+
+  await expect(page).toHaveURL(/\/files\/docs$/);
+  await expect(page.getByText("1 selected")).toBeVisible();
+
+  await page.reload();
+
+  await expect(page.getByText("1 selected")).toBeHidden();
+});
+
 test.describe("scoping", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 

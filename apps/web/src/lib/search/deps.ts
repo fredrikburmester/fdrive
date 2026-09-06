@@ -8,5 +8,6 @@
 export { FileIcon } from "@/components/files/file-icon";
 export { apiClient } from "@/lib/api/client";
 export { pathFromFilesPathname, pathToHref, viewHref } from "@/lib/files/path-url";
+export { revealTarget } from "@/lib/files/reveal";
 export type { StorageLike } from "@/lib/files/storage";
 export { readJson, writeJson } from "@/lib/files/storage";
