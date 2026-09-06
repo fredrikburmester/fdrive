@@ -121,6 +121,11 @@ rules from the agent file into the prompt.
   packages first (`pnpm --filter <app>... run build`).
 - Next bakes `API_INTERNAL_URL` into the build; the compose proxy owns `/api`, and the web image is
   built with the compose value.
+- Never run `pnpm test:coverage` (or any turbo task) while a Playwright run is active in the same
+  checkout: the e2e harness creates `apps/web-e2e-shadow-<ports>/`, which turbo rejects as a
+  duplicate workspace. Run them one after the other.
+- Sidebar Favorites, Recents, and Tags sections render nothing until they have content; do not
+  read their absence in a fresh dev database as a bug.
 - Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
   file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
   first, list only after it reports `bad_request`.
