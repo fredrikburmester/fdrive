@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
 import { Inspector } from "@/components/inspector/inspector";
+import { TagsEditDialog } from "@/components/metadata/tags-edit-dialog";
 import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
@@ -89,6 +90,14 @@ import {
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
 import type { JobRequest } from "@/lib/jobs/types";
+import type { TagColor } from "@/lib/metadata/colors";
+import {
+  useSetFileTags,
+  useTagMutations,
+  useTags,
+  useToggleFavorite,
+} from "@/lib/metadata/queries";
+import { tagCheckState as computeTagCheckState, toggleTagId } from "@/lib/metadata/tag-set";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
 import { DeleteDialog } from "./delete-dialog";
@@ -248,6 +257,13 @@ export function FileBrowser({
   const remove = useDelete();
   const duplicate = useDuplicate();
 
+  const tagsQuery = useTags();
+  const tags = tagsQuery.data ?? [];
+  const setFileTags = useSetFileTags();
+  const toggleFavorite = useToggleFavorite();
+  const { createTag } = useTagMutations();
+  const [tagsEditorEntries, setTagsEditorEntries] = useState<FsEntry[] | null>(null);
+
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFileKind, setNewFileKind] = useState<NewFileKind | null>(null);
   const [newFilePending, setNewFilePending] = useState(false);
@@ -378,6 +394,43 @@ export function FileBrowser({
 
   function handleToggleSelectAll() {
     dispatchSelection({ type: "toggleAll", visiblePaths: orderedPaths });
+  }
+
+  function currentTagIds(path: string): readonly string[] {
+    return entries.find((candidate) => candidate.path === path)?.meta?.tagIds ?? [];
+  }
+
+  function handleToggleTag(paths: readonly string[], tagId: string, checked: boolean) {
+    setFileTags.mutate(
+      paths.map((path) => ({ path, tagIds: toggleTagId(currentTagIds(path), tagId, checked) })),
+    );
+  }
+
+  function handleOpenTagsEditor(targets: readonly FsEntry[]) {
+    setTagsEditorEntries([...targets]);
+  }
+
+  function handleToggleFavorite(paths: readonly string[], next: boolean) {
+    for (const path of paths) {
+      toggleFavorite.mutate({ path, favorite: next });
+    }
+  }
+
+  function handleCreateTagFromEditor(name: string, color: TagColor) {
+    createTag.mutate(
+      { name, color: color === "none" ? null : color },
+      {
+        onSuccess: (tag) => {
+          const targets = tagsEditorEntries ?? [];
+          setFileTags.mutate(
+            targets.map((target) => ({
+              path: target.path,
+              tagIds: [...currentTagIds(target.path), tag.id],
+            })),
+          );
+        },
+      },
+    );
   }
 
   function handleContextAction(action: RowContextAction, entry: FsEntry) {
@@ -761,6 +814,10 @@ export function FileBrowser({
                 onToggleSelectAll={handleToggleSelectAll}
                 onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
                 onClearSelection={() => dispatchSelection({ type: "clear" })}
+                tags={tags}
+                onToggleTag={handleToggleTag}
+                onOpenTagsEditor={handleOpenTagsEditor}
+                onToggleFavorite={handleToggleFavorite}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -775,6 +832,10 @@ export function FileBrowser({
                 onToggleSelectAll={handleToggleSelectAll}
                 onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
                 onClearSelection={() => dispatchSelection({ type: "clear" })}
+                tags={tags}
+                onToggleTag={handleToggleTag}
+                onOpenTagsEditor={handleOpenTagsEditor}
+                onToggleFavorite={handleToggleFavorite}
               />
             ) : (
               <FileList
@@ -792,6 +853,10 @@ export function FileBrowser({
                 treeDepths={treeDepths}
                 treeExpanded={treeState.expanded}
                 onToggleTreeExpand={handleToggleTreeExpand}
+                tags={tags}
+                onToggleTag={handleToggleTag}
+                onOpenTagsEditor={handleOpenTagsEditor}
+                onToggleFavorite={handleToggleFavorite}
               />
             )}
           </div>
@@ -873,6 +938,31 @@ export function FileBrowser({
         }
         onChangeDestination={() => setDestinationPicker({ mode: "compressDestination", paths: [] })}
         onSubmit={handleCompressSubmit}
+      />
+      <TagsEditDialog
+        open={tagsEditorEntries !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTagsEditorEntries(null);
+          }
+        }}
+        count={tagsEditorEntries?.length ?? 0}
+        tags={tags}
+        checkState={(tagId) =>
+          computeTagCheckState(
+            (tagsEditorEntries ?? []).map((target) => ({ tagIds: target.meta?.tagIds ?? [] })),
+            tagId,
+          )
+        }
+        onToggle={(tagId, checked) =>
+          handleToggleTag(
+            (tagsEditorEntries ?? []).map((target) => target.path),
+            tagId,
+            checked,
+          )
+        }
+        onCreate={handleCreateTagFromEditor}
+        creating={createTag.isPending}
       />
     </>
   );

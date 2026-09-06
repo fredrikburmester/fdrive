@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EntryMetadataSection } from "@/components/metadata/entry-metadata-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -97,6 +98,7 @@ function SingleEntryBody({ entry }: { entry: FsEntry }) {
           </div>
         ))}
       </dl>
+      <EntryMetadataSection entries={[entry]} />
     </div>
   );
 }
@@ -105,11 +107,14 @@ function MultiEntryBody({ entries }: { entries: readonly FsEntry[] }) {
   const summary = summarizeSelection(entries);
 
   return (
-    <div className="flex flex-col items-center gap-3 p-4 py-10">
-      <Badge variant="secondary" className="text-sm">
-        {summary.count} items selected
-      </Badge>
-      <p className="text-sm text-muted-foreground">{formatBytes(summary.totalSize)} total</p>
+    <div className="flex flex-col">
+      <div className="flex flex-col items-center gap-3 p-4 py-10">
+        <Badge variant="secondary" className="text-sm">
+          {summary.count} items selected
+        </Badge>
+        <p className="text-sm text-muted-foreground">{formatBytes(summary.totalSize)} total</p>
+      </div>
+      <EntryMetadataSection entries={entries} />
     </div>
   );
 }

@@ -61,10 +61,29 @@ describe("keysToInvalidate", () => {
   });
 
   it("also invalidates the parent of every target path", () => {
-    const event = fsEvent({ op: "move", paths: ["/a/b.txt"], targetPaths: ["/c/d.txt"] });
+    const event = fsEvent({ op: "copy", paths: ["/a/b.txt"], targetPaths: ["/c/d.txt"] });
     expect(keysToInvalidate(event)).toEqual([
       ["fs", "list", "/a"],
       ["fs", "list", "/c"],
+    ]);
+  });
+
+  it("also invalidates favorites, recents, and tag files for a move or delete (metadataKeysToInvalidate)", () => {
+    const moveEvent = fsEvent({ op: "move", paths: ["/a/b.txt"], targetPaths: ["/c/d.txt"] });
+    expect(keysToInvalidate(moveEvent)).toEqual([
+      ["fs", "list", "/a"],
+      ["fs", "list", "/c"],
+      ["favorites", "list"],
+      ["recents", "list"],
+      ["tags", "files"],
+    ]);
+
+    const deleteEvent = fsEvent({ op: "delete", paths: ["/a/b.txt"] });
+    expect(keysToInvalidate(deleteEvent)).toEqual([
+      ["fs", "list", "/a"],
+      ["favorites", "list"],
+      ["recents", "list"],
+      ["tags", "files"],
     ]);
   });
 

@@ -5,6 +5,7 @@ import { parentPath } from "@fdrive/core";
 import { type QueryClient, type QueryKey, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { useJobsStore } from "../jobs/store";
+import { metadataKeysToInvalidate } from "../metadata/invalidation";
 import { queryKeys } from "./keys";
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -51,7 +52,10 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
     parents.add(parentPath(path));
   }
 
-  return [...parents].map((parent) => queryKeys.fs.list(parent));
+  return [
+    ...[...parents].map((parent) => queryKeys.fs.list(parent)),
+    ...metadataKeysToInvalidate(event),
+  ];
 }
 
 /** The slice of the jobs store `useFsEvents` needs to apply a `job` event. */

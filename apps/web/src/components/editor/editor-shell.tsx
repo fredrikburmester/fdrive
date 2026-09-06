@@ -36,6 +36,7 @@ import {
   describeApiError,
   detectPlatform,
   queryKeys,
+  useTouchRecent,
   viewHref,
 } from "@/lib/editor/deps";
 import { guardBeforeUnload, isDirty } from "@/lib/editor/dirty";
@@ -104,6 +105,13 @@ export function EditorShell({ path }: EditorShellProps) {
   const queryClient = useQueryClient();
   const parent = parentPath(path);
   const backHref = viewHref(path);
+
+  const touchRecent = useTouchRecent();
+  const touchRecentRef = useRef(touchRecent.mutate);
+  touchRecentRef.current = touchRecent.mutate;
+  useEffect(() => {
+    touchRecentRef.current(path);
+  }, [path]);
 
   const [generation, setGeneration] = useState(0);
   const loadState: EditorLoadState = useEditorLoad(path, generation);

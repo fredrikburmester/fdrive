@@ -39,6 +39,13 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-tag-red: var(--tag-red);
+  --color-tag-orange: var(--tag-orange);
+  --color-tag-yellow: var(--tag-yellow);
+  --color-tag-green: var(--tag-green);
+  --color-tag-blue: var(--tag-blue);
+  --color-tag-purple: var(--tag-purple);
+  --color-tag-gray: var(--tag-gray);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -91,6 +98,16 @@
   --sidebar-accent-foreground: oklch(0.585 0.208 260.5);
   --sidebar-border: oklch(0.145 0 0 / 8%);
   --sidebar-ring: oklch(0.585 0.208 260.5);
+
+  /* Finder-like tag dots: a fixed, Apple-ish palette, tuned to read clearly
+     on both light and dark surfaces without separate dark-mode values. */
+  --tag-red: oklch(0.637 0.237 25.331);
+  --tag-orange: oklch(0.705 0.213 47.604);
+  --tag-yellow: oklch(0.795 0.184 86.047);
+  --tag-green: oklch(0.723 0.219 149.579);
+  --tag-blue: oklch(0.623 0.214 259.815);
+  --tag-purple: oklch(0.606 0.25 292.717);
+  --tag-gray: oklch(0.551 0 0);
 }
 
 .dark {

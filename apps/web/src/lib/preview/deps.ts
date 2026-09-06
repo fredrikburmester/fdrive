@@ -12,4 +12,5 @@ import type { ApiClient } from "@fdrive/contracts";
 export { apiClient } from "@/lib/api/client";
 export { queryKeys } from "@/lib/api/keys";
 export { pathToHref, segmentsToPath, viewHref } from "@/lib/files/path-url";
+export { useTouchRecent } from "@/lib/metadata/queries";
 export type { ApiClient };
