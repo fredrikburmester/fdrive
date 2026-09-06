@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -222,6 +222,9 @@ export function OcrPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <FieldDescription>
+                      Hour of the day, in the server's time zone, when the nightly pass starts.
+                    </FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="ocr-langs">Languages</FieldLabel>
@@ -230,7 +233,10 @@ export function OcrPage() {
                       value={draft.langs}
                       onChange={(event) => setDraft({ ...draft, langs: event.target.value })}
                     />
-                    <FieldDescription>e.g. "eng" or "swe+eng".</FieldDescription>
+                    <FieldDescription>
+                      Tesseract language codes joined with "+", e.g. "swe+eng". Each language must
+                      already be installed in the OCR image.
+                    </FieldDescription>
                   </Field>
                   <GlobsField
                     id="ocr-exclude-globs"
@@ -248,9 +254,17 @@ export function OcrPage() {
                       value={draft.maxMb}
                       onChange={(event) => setDraft({ ...draft, maxMb: event.target.value })}
                     />
+                    <FieldDescription>PDFs larger than this are skipped.</FieldDescription>
                   </Field>
                   <Field orientation="horizontal">
-                    <FieldLabel htmlFor="ocr-keep-originals">Keep originals</FieldLabel>
+                    <FieldContent>
+                      <FieldLabel htmlFor="ocr-keep-originals">Keep originals</FieldLabel>
+                      <FieldDescription>
+                        When OCR rewrites a PDF to add a text layer, the original file is saved
+                        under the OCR state directory so it can be restored. Turning this off saves
+                        disk space but makes OCR irreversible.
+                      </FieldDescription>
+                    </FieldContent>
                     <Switch
                       id="ocr-keep-originals"
                       checked={draft.keepOriginals}

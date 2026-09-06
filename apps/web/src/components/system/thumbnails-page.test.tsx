@@ -64,6 +64,17 @@ describe("ThumbnailsPage", () => {
     expect(screen.getByText("FDRIVE_THUMBS_DIR is configured.")).toBeTruthy();
   });
 
+  it("renders the rebuild-versus-clear description", async () => {
+    mockConfigured();
+    render(<ThumbnailsPage />);
+
+    expect(
+      await screen.findByText(
+        "Rebuild marks every file pending so the indexer regenerates any thumbnail missing on disk. Existing thumbnails are left as-is; there is no way to force a regenerate yet. Clearing the whole cache is not available yet. It is coming in a later release.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("renders the thumbnail count and cache size stat cards", async () => {
     mockConfigured();
     render(<ThumbnailsPage />);

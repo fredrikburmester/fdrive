@@ -113,6 +113,11 @@ export function ConnectionPage() {
                 <FieldDescription>
                   {homeTemplatePreview(homeTemplateDraft, username ?? "")}
                 </FieldDescription>
+                <FieldDescription>
+                  Every account's home directory is computed from this template each time it is
+                  needed, not stored per account, so saving a change immediately moves everyone's
+                  home directory.
+                </FieldDescription>
               </Field>
               {updateConnection.isError ? (
                 <FieldError>{describeApiError(updateConnection.error)}</FieldError>

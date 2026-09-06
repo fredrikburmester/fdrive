@@ -70,16 +70,28 @@ export function SearchPage() {
                 The embedding server (TEI) fdrive queries at search time.
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
-              <StatusBadge
-                status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
-              />
-              {data.semantic.model !== undefined ? (
-                <Badge variant="secondary">{data.semantic.model}</Badge>
-              ) : null}
-              {data.semantic.maxInputLength !== undefined ? (
-                <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
-              ) : null}
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <StatusBadge
+                  status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
+                />
+                {data.semantic.model !== undefined ? (
+                  <Badge variant="secondary">{data.semantic.model}</Badge>
+                ) : null}
+                {data.semantic.maxInputLength !== undefined ? (
+                  <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
+                ) : null}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Each chunk of text is turned into a 384-dimension vector by this model, so search
+                can rank results by meaning, not just matching words. The badge above shows the
+                model's own limit on how much text it can embed at once.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Re-embed re-extracts and re-embeds every file in every configured root from scratch,
+                not just the embeddings. On a large index this can take a long time and loads the
+                indexer with work.
+              </p>
             </CardContent>
           </Card>
 

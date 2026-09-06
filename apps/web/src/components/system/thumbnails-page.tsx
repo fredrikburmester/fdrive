@@ -71,8 +71,13 @@ export function ThumbnailsPage() {
                   : "FDRIVE_THUMBS_DIR is not set; thumbnails are disabled."}
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-3">
               <StatusBadge status={sidecarStatus(data.configured, data.configured)} />
+              <p className="text-sm text-muted-foreground">
+                Rebuild marks every file pending so the indexer regenerates any thumbnail missing on
+                disk. Existing thumbnails are left as-is; there is no way to force a regenerate yet.
+                Clearing the whole cache is not available yet. It is coming in a later release.
+              </p>
             </CardContent>
           </Card>
 

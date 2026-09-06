@@ -81,6 +81,22 @@ describe("SearchPage", () => {
     expect(screen.getAllByText("10").length).toBeGreaterThan(0);
   });
 
+  it("renders the model, dimension, and re-embed cost descriptions", async () => {
+    mockConfigured();
+    render(<SearchPage />);
+
+    expect(
+      await screen.findByText(
+        "Each chunk of text is turned into a 384-dimension vector by this model, so search can rank results by meaning, not just matching words. The badge above shows the model's own limit on how much text it can embed at once.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Re-embed re-extracts and re-embeds every file in every configured root from scratch, not just the embeddings. On a large index this can take a long time and loads the indexer with work.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("renders the configured roots", async () => {
     mockConfigured();
     render(<SearchPage />);

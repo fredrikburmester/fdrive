@@ -126,6 +126,17 @@ describe("OcrPage", () => {
     expect(screen.getByLabelText("Max file size (MB)")).toHaveProperty("value", "200");
   });
 
+  it("renders the Keep originals description explaining reversibility", async () => {
+    mockConfigured();
+    render(<OcrPage />);
+
+    expect(
+      await screen.findByText(
+        "When OCR rewrites a PDF to add a text layer, the original file is saved under the OCR state directory so it can be restored. Turning this off saves disk space but makes OCR irreversible.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("keeps the not-configured branch for a sidecar with no FDRIVE_OCR_URL", () => {
     useSystemOcrMock.mockReturnValue({
       data: NOT_CONFIGURED_FIXTURE,
