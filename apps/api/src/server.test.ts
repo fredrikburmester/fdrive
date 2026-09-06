@@ -35,6 +35,8 @@ function buildConfig(): AppConfig {
     fdriveIndexRoots: null,
     fdriveEmbedUrl: undefined,
     fdriveThumbsDir: undefined,
+    fdriveAdminUsers: [],
+    fdriveSetupToken: undefined,
   };
 }
 

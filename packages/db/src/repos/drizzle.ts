@@ -1,6 +1,6 @@
 import { and, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { accounts, credentials, identities, providers, sessions } from "../schema/app.js";
+import { accounts, credentials, identities, providers, sessions, settings } from "../schema/app.js";
 import type {
   Account,
   AccountRepo,
@@ -13,6 +13,7 @@ import type {
   Repos,
   Session,
   SessionRepo,
+  SettingsRepo,
 } from "./types.js";
 
 function toProvider(row: typeof providers.$inferSelect): Provider {
@@ -20,7 +21,12 @@ function toProvider(row: typeof providers.$inferSelect): Provider {
 }
 
 function toAccount(row: typeof accounts.$inferSelect): Account {
-  return { id: row.id, displayName: row.displayName, createdAt: row.createdAt };
+  return {
+    id: row.id,
+    displayName: row.displayName,
+    createdAt: row.createdAt,
+    isAdmin: row.isAdmin,
+  };
 }
 
 function toIdentity(row: typeof identities.$inferSelect): Identity {
@@ -92,6 +98,9 @@ function createAccountRepo(db: Db): AccountRepo {
     async get(id) {
       const [row] = await db.select().from(accounts).where(eq(accounts.id, id));
       return row ? toAccount(row) : null;
+    },
+    async setAdmin(id, isAdmin) {
+      await db.update(accounts).set({ isAdmin }).where(eq(accounts.id, id));
     },
   };
 }
@@ -219,6 +228,32 @@ function createSessionRepo(db: Db): SessionRepo {
   };
 }
 
+function createSettingsRepo(db: Db): SettingsRepo {
+  return {
+    async get<T>(key: string) {
+      const [row] = await db.select().from(settings).where(eq(settings.key, key));
+      return row ? (row.value as T) : null;
+    },
+    async set(key, value) {
+      await db
+        .insert(settings)
+        .values({ key, value })
+        .onConflictDoUpdate({
+          target: settings.key,
+          set: { value, updatedAt: new Date() },
+        });
+    },
+    async all() {
+      const rows = await db.select().from(settings);
+      const result: Record<string, unknown> = {};
+      for (const row of rows) {
+        result[row.key] = row.value;
+      }
+      return result;
+    },
+  };
+}
+
 /** Builds every `Repos` interface as Drizzle queries against `db`. */
 export function createRepos(db: Db): Repos {
   return {
@@ -227,5 +262,6 @@ export function createRepos(db: Db): Repos {
     identities: createIdentityRepo(db),
     credentials: createCredentialRepo(db),
     sessions: createSessionRepo(db),
+    settings: createSettingsRepo(db),
   };
 }

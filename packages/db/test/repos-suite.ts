@@ -75,6 +75,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
         expect(account.displayName).toBe("Alice");
         expect(account.id).toEqual(expect.any(String));
+        expect(account.isAdmin).toBe(false);
       });
 
       it("creates an account with a null display name", async () => {
@@ -95,6 +96,23 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const fetched = await repos.accounts.get("00000000-0000-0000-0000-000000000000");
 
         expect(fetched).toBeNull();
+      });
+
+      it("sets and clears the admin flag", async () => {
+        const account = await repos.accounts.create({ displayName: "Grace" });
+        expect(account.isAdmin).toBe(false);
+
+        await repos.accounts.setAdmin(account.id, true);
+        expect((await repos.accounts.get(account.id))?.isAdmin).toBe(true);
+
+        await repos.accounts.setAdmin(account.id, false);
+        expect((await repos.accounts.get(account.id))?.isAdmin).toBe(false);
+      });
+
+      it("setAdmin on an unknown account id is a no-op", async () => {
+        await expect(
+          repos.accounts.setAdmin("00000000-0000-0000-0000-000000000000", true),
+        ).resolves.toBeUndefined();
       });
     });
 
@@ -457,6 +475,38 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
         expect(count).toBe(2);
         expect(await repos.sessions.getByIdHash("still-alive", now)).not.toBeNull();
+      });
+    });
+
+    describe("settings", () => {
+      it("returns null for a key that was never set", async () => {
+        expect(await repos.settings.get("connection.sftpgo")).toBeNull();
+      });
+
+      it("stores and retrieves a JSON value", async () => {
+        const value = { baseUrl: "http://sftpgo:8080", homeTemplate: "sftpgo:/{username}" };
+
+        await repos.settings.set("connection.sftpgo", value);
+
+        expect(await repos.settings.get("connection.sftpgo")).toEqual(value);
+      });
+
+      it("overwrites a value stored at the same key", async () => {
+        await repos.settings.set("k", { a: 1 });
+        await repos.settings.set("k", { a: 2 });
+
+        expect(await repos.settings.get("k")).toEqual({ a: 2 });
+      });
+
+      it("lists every setting keyed by its key", async () => {
+        await repos.settings.set("a", 1);
+        await repos.settings.set("b", "two");
+
+        expect(await repos.settings.all()).toEqual({ a: 1, b: "two" });
+      });
+
+      it("returns an empty object when no settings exist", async () => {
+        expect(await repos.settings.all()).toEqual({});
       });
     });
   });

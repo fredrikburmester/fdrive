@@ -56,6 +56,22 @@ export const ROUTES = {
   events: "/api/v1/events",
   /** GET: version and SFTPGo attribution -> `AboutResponse`. */
   about: "/api/v1/about",
+  setup: {
+    /** GET, public: whether setup is required -> `SetupStatusResponse`. */
+    status: "/api/v1/setup/status",
+    /** POST, setup token required: probe a candidate SFTPGo -> `ConnectionTestResponse`. */
+    test: "/api/v1/setup/test",
+    /** POST, setup token required: store the connection, create the admin account -> `MeResponse`. */
+    complete: "/api/v1/setup/complete",
+  },
+  admin: {
+    /** GET, admin only: the active connection -> `AdminConnectionResponse`. */
+    connection: "/api/v1/admin/connection",
+    /** PUT, admin only: update the connection -> `AdminConnectionResponse`. */
+    connectionUpdate: "/api/v1/admin/connection",
+    /** POST, admin only: probe the active or a candidate connection -> `ConnectionTestResponse`. */
+    connectionTest: "/api/v1/admin/connection/test",
+  },
 } as const;
 
 export type Routes = typeof ROUTES;

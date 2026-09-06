@@ -96,6 +96,7 @@ function buildApp(deps: BuildAppOptions = {}, username = "alice") {
     identityId: "00000000-0000-4000-8000-0000000000a1",
     username,
     storage,
+    isAdmin: false,
   };
 
   const { useRealFileReader, ...overrides } = deps;

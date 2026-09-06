@@ -5,6 +5,7 @@ import {
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
+  parseAdminUsers,
   parseIndexRoots,
   undefinedWhenEmpty,
   withDefault,
@@ -139,13 +140,26 @@ describe("loadConfig", () => {
       fdriveIndexRoots: null,
       fdriveEmbedUrl: undefined,
       fdriveThumbsDir: undefined,
+      fdriveAdminUsers: [],
+      fdriveSetupToken: undefined,
     });
   });
 
   it("throws when a required variable is missing", () => {
-    expect(() => loadConfig({})).toThrowError(
-      /DATABASE_URL.*\n.*SFTPGO_URL.*\n.*FDRIVE_MASTER_KEY/s,
-    );
+    expect(() => loadConfig({})).toThrowError(/DATABASE_URL.*\n.*FDRIVE_MASTER_KEY/s);
+  });
+
+  it("leaves sftpgoUrl undefined when SFTPGO_URL is not set", () => {
+    const { SFTPGO_URL: _drop, ...rest } = REQUIRED_ENV;
+    expect(loadConfig(rest).sftpgoUrl).toBeUndefined();
+  });
+
+  it("leaves sftpgoUrl undefined when SFTPGO_URL is an empty string", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "" }).sftpgoUrl).toBeUndefined();
+  });
+
+  it("rejects a non-empty, non-http(s) SFTPGO_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "not a url" })).toThrow(/SFTPGO_URL/);
   });
 
   it("parses every variable when all are set validly", () => {
@@ -167,6 +181,8 @@ describe("loadConfig", () => {
       ]),
       FDRIVE_EMBED_URL: "http://embed:8081",
       FDRIVE_THUMBS_DIR: "/data/thumbs",
+      FDRIVE_ADMIN_USERS: "alice, bob",
+      FDRIVE_SETUP_TOKEN: "fixed-token",
     });
 
     expect(config).toEqual({
@@ -189,6 +205,8 @@ describe("loadConfig", () => {
       ],
       fdriveEmbedUrl: "http://embed:8081",
       fdriveThumbsDir: "/data/thumbs",
+      fdriveAdminUsers: ["alice", "bob"],
+      fdriveSetupToken: "fixed-token",
     });
   });
 
@@ -256,6 +274,10 @@ describe("loadConfig", () => {
     );
   });
 
+  it("treats an empty FDRIVE_PUBLIC_URL as unset", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_PUBLIC_URL: "" }).fdrivePublicUrl).toBeUndefined();
+  });
+
   it("rejects a non-integer FDRIVE_SESSION_TTL_DAYS", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SESSION_TTL_DAYS: "soon" })).toThrow(
       /FDRIVE_SESSION_TTL_DAYS/,
@@ -296,5 +318,34 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JOB_MAX_BYTES: "0" })).toThrow(
       /FDRIVE_JOB_MAX_BYTES/,
     );
+  });
+
+  it("defaults FDRIVE_SETUP_TOKEN to undefined when it is an empty string", () => {
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_SETUP_TOKEN: "" }).fdriveSetupToken,
+    ).toBeUndefined();
+  });
+});
+
+describe("parseAdminUsers", () => {
+  it("returns an empty array for undefined", () => {
+    expect(parseAdminUsers(undefined)).toEqual([]);
+  });
+
+  it("returns an empty array for an empty or whitespace-only string", () => {
+    expect(parseAdminUsers("")).toEqual([]);
+    expect(parseAdminUsers("   ")).toEqual([]);
+  });
+
+  it("splits a comma-separated list and trims whitespace", () => {
+    expect(parseAdminUsers("alice, bob ,carol")).toEqual(["alice", "bob", "carol"]);
+  });
+
+  it("drops empty entries from stray commas", () => {
+    expect(parseAdminUsers("alice,,bob,")).toEqual(["alice", "bob"]);
+  });
+
+  it("returns a single-element array for one username", () => {
+    expect(parseAdminUsers("alice")).toEqual(["alice"]);
   });
 });

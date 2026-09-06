@@ -14,6 +14,7 @@ describe("ApiErrorKind", () => {
       "rate_limited",
       "internal",
       "upstream_unavailable",
+      "setup_required",
     ];
 
     for (const kind of kinds) {
@@ -97,5 +98,6 @@ describe("statusForKind", () => {
     expect(statusForKind("rate_limited")).toBe(429);
     expect(statusForKind("internal")).toBe(500);
     expect(statusForKind("upstream_unavailable")).toBe(502);
+    expect(statusForKind("setup_required")).toBe(503);
   });
 });

@@ -6,10 +6,16 @@ describe("AboutResponse", () => {
     version: "1.0.0",
     builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
     provider: { type: "sftpgo", label: "localhost:8080" },
+    setupRequired: false,
   };
 
   it("parses a valid payload", () => {
     expect(AboutResponse.parse(valid)).toEqual(valid);
+  });
+
+  it("parses a payload with a null provider and setupRequired true", () => {
+    const payload = { ...valid, provider: null, setupRequired: true };
+    expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 
   it("rejects a builtOn.name other than SFTPGo", () => {
@@ -32,8 +38,13 @@ describe("AboutResponse", () => {
     expect(AboutResponse.safeParse(payload).success).toBe(false);
   });
 
-  it("rejects a missing provider", () => {
+  it("rejects a missing provider field", () => {
     const { provider: _drop, ...rest } = valid;
+    expect(AboutResponse.safeParse(rest).success).toBe(false);
+  });
+
+  it("rejects a missing setupRequired", () => {
+    const { setupRequired: _drop, ...rest } = valid;
     expect(AboutResponse.safeParse(rest).success).toBe(false);
   });
 });

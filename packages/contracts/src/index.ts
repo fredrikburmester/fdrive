@@ -1,4 +1,10 @@
 export { AboutResponse } from "./about.ts";
+export {
+  AdminConnectionResponse,
+  AdminConnectionTestRequest,
+  AdminConnectionUpdateRequest,
+  ConnectionSource,
+} from "./admin.ts";
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export type {
   ApiClient,
@@ -30,6 +36,7 @@ export {
   ZipRequest,
 } from "./fs.ts";
 export { HealthResponse } from "./health.ts";
+export { HttpUrl, isHttpUrl } from "./http-url.ts";
 export {
   ArchiveFormat,
   JobAccepted,
@@ -50,5 +57,12 @@ export {
   SearchSnippet,
   SearchStatusResponse,
 } from "./search.ts";
+export {
+  ConnectionTestResponse,
+  SETUP_TOKEN_HEADER,
+  SetupCompleteRequest,
+  SetupStatusResponse,
+  SetupTestRequest,
+} from "./setup.ts";
 export type { ThumbSize } from "./thumbs.ts";
 export { THUMB_SIZES, ThumbQuery } from "./thumbs.ts";

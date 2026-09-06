@@ -2,7 +2,7 @@ import { AboutResponse, HealthResponse } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
-import { createApp, sftpgoHostLabel } from "./app";
+import { createApp, isSetupExempt, sftpgoHostLabel } from "./app";
 import { loadConfig } from "./config";
 import { ApiHttpError } from "./errors";
 
@@ -144,6 +144,7 @@ describe("createApp about route", () => {
       version: "1.2.3",
       builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
       provider: { type: "sftpgo", label: "localhost:8080" },
+      setupRequired: false,
     });
   });
 
@@ -156,6 +157,79 @@ describe("createApp about route", () => {
     const body = await res.json();
 
     expect(body).toMatchObject({ provider: { type: "sftpgo", label: "sftpgo.internal:9443" } });
+  });
+
+  it("reports setupRequired and a null provider when connectionStatus says so", async () => {
+    const { app } = buildApp({
+      connectionStatus: async () => ({ required: true, host: null }),
+    });
+
+    const res = await app.request("/api/v1/about");
+    const body = await res.json();
+
+    expect(AboutResponse.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ provider: null, setupRequired: true });
+  });
+
+  it("defaults to setupRequired when config.sftpgoUrl is undefined and no connectionStatus is given", async () => {
+    const { SFTPGO_URL: _drop, ...envWithoutSftpgo } = REQUIRED_ENV;
+    const { app } = buildApp({ config: loadConfig(envWithoutSftpgo) });
+
+    const res = await app.request("/api/v1/about");
+    const body = await res.json();
+
+    expect(body).toMatchObject({ provider: null, setupRequired: true });
+  });
+});
+
+describe("isSetupExempt", () => {
+  it("exempts health, about, and every setup route", () => {
+    expect(isSetupExempt("/api/v1/health")).toBe(true);
+    expect(isSetupExempt("/api/v1/about")).toBe(true);
+    expect(isSetupExempt("/api/v1/setup/status")).toBe(true);
+    expect(isSetupExempt("/api/v1/setup/test")).toBe(true);
+  });
+
+  it("does not exempt other routes", () => {
+    expect(isSetupExempt("/api/v1/auth/login")).toBe(false);
+    expect(isSetupExempt("/api/v1/fs/list")).toBe(false);
+  });
+});
+
+describe("createApp setup gate", () => {
+  it("responds 503 setup_required for a non-exempt route while setup is required", async () => {
+    const { app } = buildApp({
+      connectionStatus: async () => ({ required: true, host: null }),
+      registerRoutes: ({ public: pub }) => {
+        pub.get("/ping", (c) => c.json({ ok: true }));
+      },
+    });
+
+    const res = await app.request("/api/v1/ping");
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: { kind: "setup_required" } });
+  });
+
+  it("still serves health and about while setup is required", async () => {
+    const { app } = buildApp({ connectionStatus: async () => ({ required: true, host: null }) });
+
+    expect((await app.request("/api/v1/health")).status).toBe(200);
+    expect((await app.request("/api/v1/about")).status).toBe(200);
+  });
+
+  it("serves non-exempt routes normally once setup is not required", async () => {
+    const { app } = buildApp({
+      connectionStatus: async () => ({ required: false, host: "sftpgo:8080" }),
+      registerRoutes: ({ public: pub }) => {
+        pub.get("/ping", (c) => c.json({ ok: true }));
+      },
+    });
+
+    const res = await app.request("/api/v1/ping");
+
+    expect(res.status).toBe(200);
   });
 });
 
@@ -321,6 +395,7 @@ describe("createApp authed group wiring", () => {
         identityId: "identity-1",
         username: "alice",
         storage: FAKE_STORAGE,
+        isAdmin: false,
       }),
       registerRoutes: ({ authed }) => {
         authed.get("/whoami", (c) => c.json({ username: c.get("principal").username }));

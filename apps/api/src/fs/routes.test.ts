@@ -77,7 +77,13 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
   const storage = createSftpgoStorageProvider({ client, withToken });
 
   const identityId = username === "alice" ? ALICE_IDENTITY_ID : BOB_IDENTITY_ID;
-  const principal: Principal = { accountId: ACCOUNT_ID, identityId, username, storage };
+  const principal: Principal = {
+    accountId: ACCOUNT_ID,
+    identityId,
+    username,
+    storage,
+    isAdmin: false,
+  };
 
   const bus = createEventBus();
   const events: BusEvent[] = [];
@@ -153,6 +159,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     identityId: ALICE_IDENTITY_ID,
     username: "alice",
     storage,
+    isAdmin: false,
   };
 
   const bus = createEventBus();

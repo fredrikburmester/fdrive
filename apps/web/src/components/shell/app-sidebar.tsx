@@ -1,6 +1,9 @@
 "use client";
 
-import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react";
+import { ChevronsUpDown, LogOut, Monitor, Moon, Settings2, Sun } from "lucide-react";
+import type { Route } from "next";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
@@ -48,10 +51,18 @@ export function isFilesRoute(pathname: string | null): boolean {
   return pathname === "/files" || (pathname?.startsWith("/files/") ?? false);
 }
 
+/** True when `pathname` is the System location or a path within it. */
+export function isSystemRoute(pathname: string | null): boolean {
+  return pathname === "/system" || (pathname?.startsWith("/system/") ?? false);
+}
+
+const SYSTEM_CONNECTION_ROUTE = "/system/connection" as Route;
+
 export function AppSidebar() {
   const { data: me } = useShellMe();
   const { theme, setTheme } = useTheme();
   const logout = useLogout();
+  const pathname = usePathname();
 
   const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
 
@@ -71,6 +82,22 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {me?.isAdmin ? (
+          <SidebarGroup>
+            <SidebarGroupLabel>System</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuButton
+                  isActive={isSystemRoute(pathname)}
+                  render={<Link href={SYSTEM_CONNECTION_ROUTE} />}
+                >
+                  <Settings2 />
+                  <span>Connection</span>
+                </SidebarMenuButton>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
       <SidebarFooter>
         <DropdownMenu>

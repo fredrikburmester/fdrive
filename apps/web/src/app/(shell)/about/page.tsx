@@ -33,7 +33,7 @@ export default async function AboutPage() {
               </a>
               .
             </p>
-            <p>Connected to SFTPGo at {about.provider.label}.</p>
+            {about.provider ? <p>Connected to SFTPGo at {about.provider.label}.</p> : null}
             <p>fdrive is licensed under the AGPL-3.0 license.</p>
           </CardContent>
         </Card>

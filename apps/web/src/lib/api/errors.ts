@@ -13,6 +13,7 @@ const MESSAGE_BY_KIND: Record<ApiErrorKind, string> = {
   rate_limited: "Too many requests. Try again in a moment.",
   internal: "Something went wrong on the server. Please try again.",
   upstream_unavailable: "fdrive can't reach the server. Check your connection and try again.",
+  setup_required: "fdrive has not been set up yet.",
 };
 
 /**

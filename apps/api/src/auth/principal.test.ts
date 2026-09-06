@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ApiHttpError } from "../errors";
 import {
   createCsrfGuard,
+  createRequireAdmin,
   createRequireAuth,
   type Principal,
   type PrincipalResolver,
@@ -33,7 +34,10 @@ const PRINCIPAL: Principal = {
   identityId: "identity-1",
   username: "alice",
   storage: FAKE_STORAGE,
+  isAdmin: false,
 };
+
+const ADMIN_PRINCIPAL: Principal = { ...PRINCIPAL, isAdmin: true };
 
 function buildAuthedApp(resolve: PrincipalResolver) {
   const app = new Hono<{ Variables: PrincipalVariables }>();
@@ -68,6 +72,43 @@ describe("createRequireAuth", () => {
 
     expect(res.status).toBe(401);
     expect(await res.json()).toMatchObject({ kind: "unauthorized" });
+  });
+});
+
+function buildAdminGuardedApp(resolve: PrincipalResolver) {
+  const app = new Hono<{ Variables: PrincipalVariables }>();
+  app.use("*", createRequireAuth(resolve));
+  app.use("*", createRequireAdmin());
+  app.get("/admin-only", (c) => c.json({ username: c.get("principal").username }));
+  app.onError((err, c) => {
+    if (err instanceof ApiHttpError) {
+      return c.json(
+        { kind: err.kind, message: err.message },
+        err.kind === "unauthorized" ? 401 : 403,
+      );
+    }
+    throw err;
+  });
+  return app;
+}
+
+describe("createRequireAdmin", () => {
+  it("calls through for an admin principal", async () => {
+    const app = buildAdminGuardedApp(async () => ADMIN_PRINCIPAL);
+
+    const res = await app.request("/admin-only");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ username: "alice" });
+  });
+
+  it("throws a forbidden ApiHttpError for a non-admin principal", async () => {
+    const app = buildAdminGuardedApp(async () => PRINCIPAL);
+
+    const res = await app.request("/admin-only");
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ kind: "forbidden" });
   });
 });
 

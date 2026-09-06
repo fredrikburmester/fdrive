@@ -85,10 +85,16 @@ describe("MeResponse", () => {
       },
     ],
     activeIdentityId: VALID_UUID,
+    isAdmin: false,
   };
 
   it("parses a valid payload", () => {
     expect(MeResponse.parse(valid)).toEqual(valid);
+  });
+
+  it("rejects a missing isAdmin", () => {
+    const { isAdmin: _drop, ...rest } = valid;
+    expect(MeResponse.safeParse(rest).success).toBe(false);
   });
 
   it("accepts a null displayName", () => {

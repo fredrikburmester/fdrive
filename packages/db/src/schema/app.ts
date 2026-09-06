@@ -39,6 +39,7 @@ export const accounts = appSchema.table("accounts", {
   id: uuid("id").primaryKey().defaultRandom(),
   displayName: text("display_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  isAdmin: boolean("is_admin").notNull().default(false),
 });
 
 export const identities = appSchema.table(
