@@ -50,6 +50,13 @@ export interface IdentityRepo {
   get(id: string): Promise<Identity | null>;
   listByAccount(accountId: string): Promise<Identity[]>;
   touchLogin(id: string, at: Date): Promise<void>;
+  /**
+   * Every identity across every account. Used by the indexer event listener
+   * to resolve which identities a filesystem change under a given root and
+   * path is visible to, since a change is not scoped to one account ahead of
+   * time the way a request is.
+   */
+  listAll(): Promise<Identity[]>;
 }
 
 /**
@@ -150,6 +157,100 @@ export interface ApiTokenRepo {
   delete(id: string, accountId: string): Promise<void>;
 }
 
+/**
+ * Thrown by `TagRepo.create`/`.update` when the requested name already
+ * exists for that account (`app.tags` is unique on `(account_id, name)`).
+ */
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
+/** A tag an account can attach to files and folders across every identity's paths. */
+export interface Tag {
+  readonly id: string;
+  readonly accountId: string;
+  readonly name: string;
+  readonly color: string | null;
+}
+
+export interface TagRepo {
+  list(accountId: string): Promise<Tag[]>;
+  /** Throws `ConflictError` when `input.name` already exists for `accountId`. */
+  create(accountId: string, input: { name: string; color: string | null }): Promise<Tag>;
+  /**
+   * Updates the tag, scoped to `accountId` so one account can never edit
+   * another's tag. `null` when no such tag exists for that account. Throws
+   * `ConflictError` when `patch.name` collides with a different existing tag.
+   */
+  update(
+    id: string,
+    accountId: string,
+    patch: { name?: string; color?: string | null },
+  ): Promise<Tag | null>;
+  /** Deletes the tag (cascading to `file_tags`), scoped to `accountId`. A no-op when not found. */
+  delete(id: string, accountId: string): Promise<void>;
+}
+
+/** One (identity, path, tag) assignment. */
+export interface FileTagRepo {
+  /** The tag ids assigned to each of `paths`, keyed by path. Paths with no tags are omitted. */
+  tagsForPaths(identityId: string, paths: readonly string[]): Promise<Map<string, string[]>>;
+  /** Replaces the full set of tags assigned to `path` with exactly `tagIds`. */
+  setTags(identityId: string, path: string, tagIds: readonly string[]): Promise<void>;
+  /** Every path tagged with `tagId` for `identityId`. */
+  pathsForTag(identityId: string, tagId: string): Promise<string[]>;
+  /**
+   * Rewrites `oldPath` to `newPath` for `identityId`: the exact path always,
+   * plus (when `isDir`) every row nested under it. A row already present at
+   * a computed destination is replaced.
+   */
+  movePrefix(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
+  /** Deletes `path` (and, when `isDir`, everything nested under it) for `identityId`. */
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
+}
+
+/** The kind of entry a favorite points at, since it is not looked up again to render the list. */
+export type FavoriteKind = "file" | "dir";
+
+export interface Favorite {
+  readonly identityId: string;
+  readonly path: string;
+  readonly kind: FavoriteKind;
+  readonly createdAt: Date;
+}
+
+export interface FavoriteRepo {
+  list(identityId: string): Promise<Favorite[]>;
+  /** Idempotent: favoriting an already-favorited path updates its `kind`. */
+  add(identityId: string, path: string, kind: FavoriteKind): Promise<void>;
+  /** A no-op when `path` is not favorited. */
+  remove(identityId: string, path: string): Promise<void>;
+  /** The subset of `paths` that are favorited for `identityId`. */
+  has(identityId: string, paths: readonly string[]): Promise<Set<string>>;
+  movePrefix(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
+}
+
+export interface Recent {
+  readonly identityId: string;
+  readonly path: string;
+  readonly openedAt: Date;
+}
+
+export interface RecentRepo {
+  /** The most recently opened paths for `identityId`, most recent first. */
+  list(identityId: string, limit: number): Promise<Recent[]>;
+  /** Records `path` as opened now (or updates its `openedAt` when already recorded). */
+  touch(identityId: string, path: string): Promise<void>;
+  movePrefix(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
+  /** Deletes every row for `identityId` beyond the `keep` most recently opened. */
+  prune(identityId: string, keep: number): Promise<void>;
+}
+
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
   readonly providers: ProviderRepo;
@@ -159,4 +260,8 @@ export interface Repos {
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
   readonly apiTokens: ApiTokenRepo;
+  readonly tags: TagRepo;
+  readonly fileTags: FileTagRepo;
+  readonly favorites: FavoriteRepo;
+  readonly recents: RecentRepo;
 }

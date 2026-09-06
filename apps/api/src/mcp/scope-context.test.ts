@@ -24,6 +24,8 @@ function stubIndexQueries(rootIdsByName: () => Promise<Record<string, number>>):
     thumbnail: async () => fail("thumbnail"),
     recordMove: async () => fail("recordMove"),
     recentMoves: async () => fail("recentMoves"),
+    deletedRowSha: async () => fail("deletedRowSha"),
+    liveRowsBySha: async () => fail("liveRowsBySha"),
   };
 }
 

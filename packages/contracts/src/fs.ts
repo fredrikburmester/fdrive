@@ -10,10 +10,20 @@ export const EntryKind = z.enum(["file", "dir", "symlink", "other"]);
 
 export type EntryKind = z.infer<typeof EntryKind>;
 
+/** Tag and favorite metadata attached to an `FsEntry`, when the caller's identity has any. */
+export const FsEntryMeta = z.object({
+  tagIds: z.array(z.string()),
+  favorite: z.boolean(),
+});
+
+export type FsEntryMeta = z.infer<typeof FsEntryMeta>;
+
 /**
  * One entry as returned to the browser: normalized kind, size, an ISO
  * `modifiedAt`, and a best-effort `mime` guess (`null` when unknown, always
- * `null` for directories).
+ * `null` for directories). `meta` is present when the response was decorated
+ * with tag and favorite data (currently only `GET /fs/list`); absent
+ * elsewhere.
  */
 export const FsEntry = z.object({
   name: z.string(),
@@ -23,6 +33,7 @@ export const FsEntry = z.object({
   modifiedAt: z.iso.datetime(),
   ext: z.string(),
   mime: z.string().nullable(),
+  meta: FsEntryMeta.optional(),
 });
 
 export type FsEntry = z.infer<typeof FsEntry>;

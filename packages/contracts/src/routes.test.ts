@@ -6,6 +6,8 @@ import {
   jobRoute,
   MODIFIED_AT_HEADER,
   ROUTES,
+  tagFilesRoute,
+  tagRoute,
 } from "./routes";
 
 describe("ROUTES", () => {
@@ -33,6 +35,22 @@ describe("ROUTES", () => {
       compress: "/api/v1/fs/compress",
       extract: "/api/v1/fs/extract",
       jobs: "/api/v1/fs/jobs",
+      tags: "/api/v1/fs/tags",
+    });
+  });
+
+  it("defines the tags route", () => {
+    expect(ROUTES.tags).toBe("/api/v1/tags");
+  });
+
+  it("defines the favorites route", () => {
+    expect(ROUTES.favorites).toEqual({ base: "/api/v1/favorites" });
+  });
+
+  it("defines every recents route under /api/v1/recents", () => {
+    expect(ROUTES.recents).toEqual({
+      list: "/api/v1/recents",
+      touch: "/api/v1/recents/touch",
     });
   });
 
@@ -112,6 +130,22 @@ describe("accountTokenRoute", () => {
 
   it("url-encodes the id", () => {
     expect(accountTokenRoute("a/b")).toBe("/api/v1/account/tokens/a%2Fb");
+  });
+});
+
+describe("tagRoute", () => {
+  it("builds the path for a single tag", () => {
+    expect(tagRoute("tag-1")).toBe("/api/v1/tags/tag-1");
+  });
+
+  it("url-encodes the id", () => {
+    expect(tagRoute("a/b")).toBe("/api/v1/tags/a%2Fb");
+  });
+});
+
+describe("tagFilesRoute", () => {
+  it("builds the files path for a single tag", () => {
+    expect(tagFilesRoute("tag-1")).toBe("/api/v1/tags/tag-1/files");
   });
 });
 

@@ -145,6 +145,8 @@ export const favorites = appSchema.table(
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
+    /** "file" or "dir": what kind of entry was favorited, since the fs entry itself is not looked up again for display. */
+    kind: text("kind").notNull().default("file"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.identityId, table.path] })],

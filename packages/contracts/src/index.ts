@@ -25,6 +25,7 @@ export {
   EntryResponse,
   ExtractRequest,
   FsEntry,
+  FsEntryMeta,
   isValidEntryName,
   ListResponse,
   MkdirRequest,
@@ -46,6 +47,21 @@ export {
   JobStatus,
   JobsResponse,
 } from "./jobs.ts";
+export {
+  CreateTagRequest,
+  FavoriteItem,
+  FavoriteKind,
+  FavoriteRequest,
+  FavoritesResponse,
+  RecentItem,
+  RecentsResponse,
+  RecentTouchRequest,
+  SetFileTagsRequest,
+  Tag,
+  TagFilesResponse,
+  TagsResponse,
+  UpdateTagRequest,
+} from "./metadata.ts";
 export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
@@ -54,6 +70,8 @@ export {
   jobRoute,
   MODIFIED_AT_HEADER,
   ROUTES,
+  tagFilesRoute,
+  tagRoute,
 } from "./routes.ts";
 export {
   SearchHighlightRange,

@@ -1,13 +1,17 @@
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import {
   accounts,
   apiTokens,
   credentials,
+  favorites,
+  fileTags,
   identities,
   providers,
+  recents,
   sessions,
   settings,
+  tags,
 } from "../schema/app.js";
 import type {
   Account,
@@ -16,15 +20,51 @@ import type {
   ApiTokenRepo,
   Credential,
   CredentialRepo,
+  Favorite,
+  FavoriteKind,
+  FavoriteRepo,
+  FileTagRepo,
   Identity,
   IdentityRepo,
   Provider,
   ProviderRepo,
+  Recent,
+  RecentRepo,
   Repos,
   Session,
   SessionRepo,
   SettingsRepo,
+  Tag,
+  TagRepo,
 } from "./types.js";
+import { ConflictError } from "./types.js";
+
+/** The Postgres SQLSTATE for a unique-constraint violation. */
+const UNIQUE_VIOLATION_CODE = "23505";
+
+function hasCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
+}
+
+/**
+ * True when `error` is a Postgres unique-constraint violation. node-postgres
+ * throws the raw driver error with `.code` set directly, but Drizzle wraps
+ * it in its own `DrizzleQueryError` with the driver error attached as
+ * `.cause`, so both shapes are checked.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  if (hasCode(error, UNIQUE_VIOLATION_CODE)) {
+    return true;
+  }
+  const cause =
+    typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined;
+  return hasCode(cause, UNIQUE_VIOLATION_CODE);
+}
 
 function toProvider(row: typeof providers.$inferSelect): Provider {
   return { id: row.id, type: row.type, baseUrl: row.baseUrl, createdAt: row.createdAt };
@@ -150,6 +190,10 @@ function createIdentityRepo(db: Db): IdentityRepo {
     },
     async touchLogin(id, at) {
       await db.update(identities).set({ lastLoginAt: at }).where(eq(identities.id, id));
+    },
+    async listAll() {
+      const rows = await db.select().from(identities);
+      return rows.map(toIdentity);
     },
   };
 }
@@ -314,6 +358,276 @@ function createSettingsRepo(db: Db): SettingsRepo {
   };
 }
 
+function toTag(row: typeof tags.$inferSelect): Tag {
+  return { id: row.id, accountId: row.accountId, name: row.name, color: row.color };
+}
+
+function createTagRepo(db: Db): TagRepo {
+  return {
+    async list(accountId) {
+      const rows = await db.select().from(tags).where(eq(tags.accountId, accountId));
+      return rows.map(toTag);
+    },
+    async create(accountId, input) {
+      try {
+        const [row] = await db
+          .insert(tags)
+          .values({ accountId, name: input.name, color: input.color })
+          .returning();
+        if (!row) {
+          throw new Error("tags.create: insert returned no row");
+        }
+        return toTag(row);
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictError(`tag name already exists: ${input.name}`);
+        }
+        throw error;
+      }
+    },
+    async update(id, accountId, patch) {
+      try {
+        const [row] = await db
+          .update(tags)
+          .set({
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.color !== undefined ? { color: patch.color } : {}),
+          })
+          .where(and(eq(tags.id, id), eq(tags.accountId, accountId)))
+          .returning();
+        return row ? toTag(row) : null;
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictError(`tag name already exists: ${patch.name ?? ""}`);
+        }
+        throw error;
+      }
+    },
+    async delete(id, accountId) {
+      await db.delete(tags).where(and(eq(tags.id, id), eq(tags.accountId, accountId)));
+    },
+  };
+}
+
+function createFileTagRepo(db: Db): FileTagRepo {
+  return {
+    async tagsForPaths(identityId, paths) {
+      const result = new Map<string, string[]>();
+      if (paths.length === 0) {
+        return result;
+      }
+      const rows = await db
+        .select({ path: fileTags.path, tagId: fileTags.tagId })
+        .from(fileTags)
+        .where(and(eq(fileTags.identityId, identityId), inArray(fileTags.path, [...paths])));
+      for (const row of rows) {
+        const existing = result.get(row.path);
+        if (existing) {
+          existing.push(row.tagId);
+        } else {
+          result.set(row.path, [row.tagId]);
+        }
+      }
+      return result;
+    },
+    async setTags(identityId, path, tagIds) {
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(fileTags)
+          .where(and(eq(fileTags.identityId, identityId), eq(fileTags.path, path)));
+        if (tagIds.length > 0) {
+          await tx
+            .insert(fileTags)
+            .values(tagIds.map((tagId) => ({ identityId, path, tagId })))
+            .onConflictDoNothing();
+        }
+      });
+    },
+    async pathsForTag(identityId, tagId) {
+      const rows = await db
+        .select({ path: fileTags.path })
+        .from(fileTags)
+        .where(and(eq(fileTags.identityId, identityId), eq(fileTags.tagId, tagId)));
+      return rows.map((row) => row.path);
+    },
+    async movePrefix(identityId, oldPath, newPath, isDir) {
+      const oldPrefix = `${oldPath}/`;
+      const newPrefix = `${newPath}/`;
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          delete from "app"."file_tags" f
+          using "app"."file_tags" s
+          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+            and f.path <> s.path
+            and (
+              (s.path = ${oldPath} and f.path = ${newPath})
+              or (${isDir} and s.path like ${`${oldPrefix}%`} and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+            )
+        `);
+        await tx.execute(sql`
+          update "app"."file_tags"
+          set path = case when path = ${oldPath} then ${newPath}
+                          else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
+          where identity_id = ${identityId}
+            and (path = ${oldPath} or (${isDir} and path like ${`${oldPrefix}%`}))
+        `);
+      });
+    },
+    async deletePrefix(identityId, path, isDir) {
+      const likePattern = `${path}/%`;
+      await db.execute(sql`
+        delete from "app"."file_tags"
+        where identity_id = ${identityId}
+          and (path = ${path} or (${isDir} and path like ${likePattern}))
+      `);
+    },
+  };
+}
+
+function toFavorite(row: typeof favorites.$inferSelect): Favorite {
+  return {
+    identityId: row.identityId,
+    path: row.path,
+    kind: row.kind as FavoriteKind,
+    createdAt: row.createdAt,
+  };
+}
+
+function createFavoriteRepo(db: Db): FavoriteRepo {
+  return {
+    async list(identityId) {
+      const rows = await db.select().from(favorites).where(eq(favorites.identityId, identityId));
+      return rows.map(toFavorite);
+    },
+    async add(identityId, path, kind) {
+      await db
+        .insert(favorites)
+        .values({ identityId, path, kind })
+        .onConflictDoUpdate({
+          target: [favorites.identityId, favorites.path],
+          set: { kind },
+        });
+    },
+    async remove(identityId, path) {
+      await db
+        .delete(favorites)
+        .where(and(eq(favorites.identityId, identityId), eq(favorites.path, path)));
+    },
+    async has(identityId, paths) {
+      if (paths.length === 0) {
+        return new Set();
+      }
+      const rows = await db
+        .select({ path: favorites.path })
+        .from(favorites)
+        .where(and(eq(favorites.identityId, identityId), inArray(favorites.path, [...paths])));
+      return new Set(rows.map((row) => row.path));
+    },
+    async movePrefix(identityId, oldPath, newPath, isDir) {
+      const oldPrefix = `${oldPath}/`;
+      const newPrefix = `${newPath}/`;
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          delete from "app"."favorites" f
+          using "app"."favorites" s
+          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+            and f.path <> s.path
+            and (
+              (s.path = ${oldPath} and f.path = ${newPath})
+              or (${isDir} and s.path like ${`${oldPrefix}%`} and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+            )
+        `);
+        await tx.execute(sql`
+          update "app"."favorites"
+          set path = case when path = ${oldPath} then ${newPath}
+                          else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
+          where identity_id = ${identityId}
+            and (path = ${oldPath} or (${isDir} and path like ${`${oldPrefix}%`}))
+        `);
+      });
+    },
+    async deletePrefix(identityId, path, isDir) {
+      const likePattern = `${path}/%`;
+      await db.execute(sql`
+        delete from "app"."favorites"
+        where identity_id = ${identityId}
+          and (path = ${path} or (${isDir} and path like ${likePattern}))
+      `);
+    },
+  };
+}
+
+function toRecent(row: typeof recents.$inferSelect): Recent {
+  return { identityId: row.identityId, path: row.path, openedAt: row.openedAt };
+}
+
+function createRecentRepo(db: Db): RecentRepo {
+  return {
+    async list(identityId, limit) {
+      const rows = await db
+        .select()
+        .from(recents)
+        .where(eq(recents.identityId, identityId))
+        .orderBy(sql`${recents.openedAt} desc`)
+        .limit(limit);
+      return rows.map(toRecent);
+    },
+    async touch(identityId, path) {
+      const now = new Date();
+      await db
+        .insert(recents)
+        .values({ identityId, path, openedAt: now })
+        .onConflictDoUpdate({
+          target: [recents.identityId, recents.path],
+          set: { openedAt: now },
+        });
+    },
+    async movePrefix(identityId, oldPath, newPath, isDir) {
+      const oldPrefix = `${oldPath}/`;
+      const newPrefix = `${newPath}/`;
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          delete from "app"."recents" f
+          using "app"."recents" s
+          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+            and f.path <> s.path
+            and (
+              (s.path = ${oldPath} and f.path = ${newPath})
+              or (${isDir} and s.path like ${`${oldPrefix}%`} and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+            )
+        `);
+        await tx.execute(sql`
+          update "app"."recents"
+          set path = case when path = ${oldPath} then ${newPath}
+                          else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
+          where identity_id = ${identityId}
+            and (path = ${oldPath} or (${isDir} and path like ${`${oldPrefix}%`}))
+        `);
+      });
+    },
+    async deletePrefix(identityId, path, isDir) {
+      const likePattern = `${path}/%`;
+      await db.execute(sql`
+        delete from "app"."recents"
+        where identity_id = ${identityId}
+          and (path = ${path} or (${isDir} and path like ${likePattern}))
+      `);
+    },
+    async prune(identityId, keep) {
+      await db.execute(sql`
+        delete from "app"."recents"
+        where identity_id = ${identityId}
+          and path not in (
+            select path from "app"."recents"
+            where identity_id = ${identityId}
+            order by opened_at desc
+            limit ${keep}
+          )
+      `);
+    },
+  };
+}
+
 /** Builds every `Repos` interface as Drizzle queries against `db`. */
 export function createRepos(db: Db): Repos {
   return {
@@ -324,5 +638,9 @@ export function createRepos(db: Db): Repos {
     sessions: createSessionRepo(db),
     settings: createSettingsRepo(db),
     apiTokens: createApiTokenRepo(db),
+    tags: createTagRepo(db),
+    fileTags: createFileTagRepo(db),
+    favorites: createFavoriteRepo(db),
+    recents: createRecentRepo(db),
   };
 }

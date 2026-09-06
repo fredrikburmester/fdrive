@@ -199,6 +199,16 @@ export interface IndexQueries {
     sha256: string,
     excludeId: number,
   ): Promise<IndexedFile[]>;
+  /**
+   * The sha256 of the most recently soft-deleted row at exactly
+   * `(rootId, path)`, or `null` when there is no deleted row there, or it
+   * never had a hash. Used by the metadata sha256 relink fallback: a
+   * `deleted` event whose path had tags or a favorite is checked against
+   * this before being treated as a real delete.
+   */
+  deletedRowSha(rootId: number, path: string): Promise<string | null>;
+  /** Every live (non-deleted) file in `rootId` with `sha256`, in no particular order. */
+  liveRowsBySha(rootId: number, sha256: string): Promise<IndexedFile[]>;
   /** Every configured root's database id, keyed by name. */
   rootIdsByName(): Promise<Record<string, number>>;
   /** Aggregate file and chunk counts over a scope. */
@@ -410,6 +420,24 @@ export function createIndexQueries(db: Db): IndexQueries {
           ),
         )
         .orderBy(files.path);
+      return rows.map(toIndexedFile);
+    },
+
+    async deletedRowSha(rootId, path) {
+      const [row] = await db
+        .select({ sha256: files.sha256 })
+        .from(files)
+        .where(and(eq(files.rootId, rootId), eq(files.path, path), isNotNull(files.deletedAt)))
+        .orderBy(desc(files.deletedAt))
+        .limit(1);
+      return row?.sha256 ?? null;
+    },
+
+    async liveRowsBySha(rootId, sha256) {
+      const rows = await db
+        .select()
+        .from(files)
+        .where(and(eq(files.rootId, rootId), eq(files.sha256, sha256), isNull(files.deletedAt)));
       return rows.map(toIndexedFile);
     },
 

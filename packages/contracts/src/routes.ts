@@ -43,6 +43,30 @@ export const ROUTES = {
     extract: "/api/v1/fs/extract",
     /** GET: the caller's jobs -> `JobsResponse`. */
     jobs: "/api/v1/fs/jobs",
+    /** PUT: replace the full set of tags on a path -> `OkResponse`. */
+    tags: "/api/v1/fs/tags",
+  },
+  /**
+   * GET: the caller's tags -> `TagsResponse`.
+   * POST: create a tag -> `Tag`. 409 on a duplicate name.
+   * `:id` PATCH: update a tag -> `Tag`. 404 for a tag owned by another account.
+   * `:id` DELETE: delete a tag -> `OkResponse`. A no-op (200) when already gone.
+   * `:id/files` GET: every path (for the caller's active identity) with that tag -> `TagFilesResponse`.
+   */
+  tags: "/api/v1/tags",
+  favorites: {
+    /**
+     * GET: the caller's favorites -> `FavoritesResponse`.
+     * POST: favorite a path -> `OkResponse`.
+     * DELETE: unfavorite a path (body `{ path }`) -> `OkResponse`.
+     */
+    base: "/api/v1/favorites",
+  },
+  recents: {
+    /** GET: the caller's recently opened paths -> `RecentsResponse`. */
+    list: "/api/v1/recents",
+    /** POST: record a path as opened now -> `OkResponse`. */
+    touch: "/api/v1/recents/touch",
   },
   search: {
     /** GET: hybrid search (semantic + full-text + filename) -> `SearchResponse`. 400 for an empty `q`. */
@@ -122,6 +146,16 @@ export function jobCancelRoute(id: string): string {
 /** DELETE: revoke one API token -> `OkResponse`. 404 for a token that belongs to another account. */
 export function accountTokenRoute(id: string): string {
   return `${ROUTES.account.tokens}/${encodeURIComponent(id)}`;
+}
+
+/** PATCH/DELETE: one tag by id -> `Tag` / `OkResponse`. */
+export function tagRoute(id: string): string {
+  return `${ROUTES.tags}/${encodeURIComponent(id)}`;
+}
+
+/** GET: every path tagged with `id` -> `TagFilesResponse`. */
+export function tagFilesRoute(id: string): string {
+  return `${tagRoute(id)}/files`;
 }
 
 /**

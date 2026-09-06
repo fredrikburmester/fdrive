@@ -14,12 +14,26 @@ import {
 } from "./fs.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import {
+  type CreateTagRequest,
+  type FavoriteRequest,
+  FavoritesResponse,
+  RecentsResponse,
+  type RecentTouchRequest,
+  type SetFileTagsRequest,
+  Tag,
+  TagFilesResponse,
+  TagsResponse,
+  type UpdateTagRequest,
+} from "./metadata.ts";
+import {
   accountTokenRoute,
   IDENTITY_HEADER,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
   ROUTES,
+  tagFilesRoute,
+  tagRoute,
 } from "./routes.ts";
 import { SearchResponse, SearchStatusResponse } from "./search.ts";
 import {
@@ -150,6 +164,17 @@ export interface ApiClient {
   listApiTokens(): Promise<ApiTokensResponse>;
   createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResponse>;
   revokeApiToken(id: string): Promise<OkResponse>;
+  listTags(): Promise<TagsResponse>;
+  createTag(req: CreateTagRequest): Promise<Tag>;
+  updateTag(id: string, req: UpdateTagRequest): Promise<Tag>;
+  deleteTag(id: string): Promise<OkResponse>;
+  tagFiles(id: string): Promise<TagFilesResponse>;
+  setFileTags(req: SetFileTagsRequest): Promise<OkResponse>;
+  listFavorites(): Promise<FavoritesResponse>;
+  addFavorite(req: FavoriteRequest): Promise<OkResponse>;
+  removeFavorite(req: FavoriteRequest): Promise<OkResponse>;
+  listRecents(): Promise<RecentsResponse>;
+  touchRecent(req: RecentTouchRequest): Promise<OkResponse>;
 }
 
 interface ClientContext {
@@ -655,6 +680,62 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     revokeApiToken(id: string): Promise<OkResponse> {
       return requestJson(ctx, { method: "DELETE", path: accountTokenRoute(id) }, OkResponse);
+    },
+
+    listTags(): Promise<TagsResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.tags }, TagsResponse);
+    },
+
+    createTag(req: CreateTagRequest): Promise<Tag> {
+      return requestJson(ctx, { method: "POST", path: ROUTES.tags, jsonBody: req }, Tag);
+    },
+
+    updateTag(id: string, req: UpdateTagRequest): Promise<Tag> {
+      return requestJson(ctx, { method: "PATCH", path: tagRoute(id), jsonBody: req }, Tag);
+    },
+
+    deleteTag(id: string): Promise<OkResponse> {
+      return requestJson(ctx, { method: "DELETE", path: tagRoute(id) }, OkResponse);
+    },
+
+    tagFiles(id: string): Promise<TagFilesResponse> {
+      return requestJson(ctx, { method: "GET", path: tagFilesRoute(id) }, TagFilesResponse);
+    },
+
+    setFileTags(req: SetFileTagsRequest): Promise<OkResponse> {
+      return requestJson(ctx, { method: "PUT", path: ROUTES.fs.tags, jsonBody: req }, OkResponse);
+    },
+
+    listFavorites(): Promise<FavoritesResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.favorites.base }, FavoritesResponse);
+    },
+
+    addFavorite(req: FavoriteRequest): Promise<OkResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.favorites.base, jsonBody: req },
+        OkResponse,
+      );
+    },
+
+    removeFavorite(req: FavoriteRequest): Promise<OkResponse> {
+      return requestJson(
+        ctx,
+        { method: "DELETE", path: ROUTES.favorites.base, jsonBody: req },
+        OkResponse,
+      );
+    },
+
+    listRecents(): Promise<RecentsResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.recents.list }, RecentsResponse);
+    },
+
+    touchRecent(req: RecentTouchRequest): Promise<OkResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.recents.touch, jsonBody: req },
+        OkResponse,
+      );
     },
   };
 }

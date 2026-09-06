@@ -46,6 +46,8 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     thumbnail: notImplemented,
     recordMove: notImplemented,
     recentMoves: notImplemented,
+    deletedRowSha: notImplemented,
+    liveRowsBySha: notImplemented,
     ...overrides,
   };
 }
