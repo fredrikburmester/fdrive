@@ -311,6 +311,10 @@ export function FileBrowser({
     updateTreeState((prev) => toggleTree(prev, entry.path));
   }
 
+  function handleToggleSelectAll() {
+    dispatchSelection({ type: "toggleAll", visiblePaths: orderedPaths });
+  }
+
   function handleContextAction(action: RowContextAction, entry: FsEntry) {
     switch (action) {
       case "open":
@@ -401,15 +405,20 @@ export function FileBrowser({
   }
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
     const files = event.target.files;
+    // Copy the FileList before resetting `input.value`: resetting first can
+    // clear (or invalidate, depending on the browser) the same FileList
+    // object this handler is about to read, making the selection appear
+    // empty. Copying to a plain array first, then resetting, is safe.
+    const collected = files === null ? [] : Array.from(files);
     event.target.value = "";
-    if (files === null || files.length === 0) {
+    if (collected.length === 0) {
       return;
     }
     if (onRequestUpload) {
-      onRequestUpload(files);
+      onRequestUpload(files ?? undefined);
       return;
     }
-    uploadFiles(collectInputFiles(files), path, existingNames);
+    uploadFiles(collectInputFiles(collected), path, existingNames);
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -538,6 +547,8 @@ export function FileBrowser({
             onUploadFolder={handleUploadFolder}
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
+            selectedCount={selection.selected.size}
+            onClearSelection={() => dispatchSelection({ type: "clear" })}
           />
         }
       />
@@ -597,6 +608,7 @@ export function FileBrowser({
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalMove}
+                onToggleSelectAll={handleToggleSelectAll}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -608,6 +620,7 @@ export function FileBrowser({
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalMove}
+                onToggleSelectAll={handleToggleSelectAll}
               />
             ) : (
               <FileList
@@ -619,6 +632,7 @@ export function FileBrowser({
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalMove}
+                onToggleSelectAll={handleToggleSelectAll}
                 treeDepths={treeDepths}
                 treeExpanded={treeState.expanded}
                 onToggleTreeExpand={handleToggleTreeExpand}

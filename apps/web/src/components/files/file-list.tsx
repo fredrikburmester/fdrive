@@ -31,6 +31,8 @@ export interface FileListProps {
   onContextAction: (action: RowContextAction, entry: FsEntry) => void;
   getDragPaths: (entry: FsEntry) => string[];
   onInternalDrop: (paths: string[], targetPath: string) => void;
+  /** Toggles between selecting every visible row and none, from the header checkbox. */
+  onToggleSelectAll: () => void;
   /**
    * Present only in tree view: each row's indent depth, keyed by path. Rows
    * missing from the map (or when this prop is absent entirely) render
@@ -57,11 +59,15 @@ export function FileList({
   onContextAction,
   getDragPaths,
   onInternalDrop,
+  onToggleSelectAll,
   treeDepths,
   treeExpanded,
   onToggleTreeExpand,
 }: FileListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
+  const allSelected = entries.length > 0 && selectedCount === entries.length;
+  const someSelected = selectedCount > 0 && !allSelected;
 
   const virtualizer = useVirtualizer({
     count: entries.length,
@@ -100,7 +106,12 @@ export function FileList({
   return (
     <div ref={parentRef} className="h-full overflow-auto" data-slot="file-list">
       <div className="sticky top-0 z-10 flex h-9 items-center gap-3 border-border border-b bg-background/95 px-3 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75">
-        <span className="w-4" />
+        <Checkbox
+          checked={allSelected}
+          indeterminate={someSelected}
+          onCheckedChange={onToggleSelectAll}
+          aria-label={allSelected ? "Deselect all" : "Select all"}
+        />
         <span className="flex-1">Name</span>
         <span className="w-20 text-right">Size</span>
         <span className="w-28">Modified</span>

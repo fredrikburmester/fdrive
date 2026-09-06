@@ -109,8 +109,11 @@ function collectFromFileList(files: ArrayLike<File>): DroppedFile[] {
 /**
  * Collects every file dropped onto the page, walking directory entries
  * recursively via `webkitGetAsEntry`. Falls back to the flat `files` list
- * (no folder structure) when the browser does not expose entries. Skips
- * `.DS_Store` and `Thumbs.db` at any depth.
+ * (no folder structure) when the browser does not expose entries, or when
+ * every item's `webkitGetAsEntry()` call returns null (synthetic drops
+ * built via `new DataTransfer().items.add(...)`, as some test harnesses and
+ * a few real browsers do, only populate entries for a genuine OS drag).
+ * Skips `.DS_Store` and `Thumbs.db` at any depth.
  */
 export async function collectDroppedFiles(dataTransfer: DataTransferLike): Promise<DroppedFile[]> {
   const items = dataTransfer.items;
@@ -119,6 +122,7 @@ export async function collectDroppedFiles(dataTransfer: DataTransferLike): Promi
   }
 
   const out: DroppedFile[] = [];
+  let sawEntry = false;
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (item === undefined || item.kind !== "file" || item.webkitGetAsEntry === undefined) {
@@ -128,7 +132,11 @@ export async function collectDroppedFiles(dataTransfer: DataTransferLike): Promi
     if (entry === null) {
       continue;
     }
+    sawEntry = true;
     await walkEntry(entry, "", out);
+  }
+  if (!sawEntry) {
+    return collectFromFileList(dataTransfer.files);
   }
   return out;
 }

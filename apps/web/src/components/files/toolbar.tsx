@@ -15,6 +15,7 @@ import {
   ListTreeIcon,
   PanelRightIcon,
   UploadIcon,
+  XIcon,
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
@@ -145,6 +146,9 @@ export interface FilesToolbarActionsProps {
   onUploadFolder: () => void;
   detailsOpen: boolean;
   onToggleDetails: () => void;
+  /** Number of currently selected rows; shows an "N selected" pill when > 0. */
+  selectedCount: number;
+  onClearSelection: () => void;
 }
 
 /** View toggle, sort menu, new folder, upload menu, and the inspector toggle. */
@@ -159,28 +163,49 @@ export function FilesToolbarActions({
   onUploadFolder,
   detailsOpen,
   onToggleDetails,
+  selectedCount,
+  onClearSelection,
 }: FilesToolbarActionsProps) {
   return (
     <div className="flex items-center gap-1.5">
+      {selectedCount > 0 && (
+        <div className="flex items-center gap-1 rounded-md bg-muted py-1 pr-1 pl-2 text-muted-foreground text-xs">
+          <span className="tabular-nums">{selectedCount} selected</span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Clear selection"
+            onClick={onClearSelection}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      )}
+
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="ghost" size="sm" title={`Sort by ${SORT_LABELS[sortSpec.key]}`} />
+          }
+        >
           {sortSpec.direction === "asc" ? <ArrowUpNarrowWideIcon /> : <ArrowDownWideNarrowIcon />}
-          {SORT_LABELS[sortSpec.key]}
+          <span className="max-[899px]:hidden">{SORT_LABELS[sortSpec.key]}</span>
           <ChevronDownIcon className="text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="min-w-40">
           <DropdownMenuRadioGroup
             value={sortSpec.key}
             onValueChange={(key) => onSortSpecChange({ ...sortSpec, key: key as SortKey })}
           >
             {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
-              <DropdownMenuRadioItem key={key} value={key}>
+              <DropdownMenuRadioItem key={key} value={key} className="whitespace-nowrap">
                 {SORT_LABELS[key]}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
           <DropdownMenuSeparator />
           <DropdownMenuCheckboxItem
+            className="whitespace-nowrap"
             checked={sortSpec.direction === "desc"}
             onCheckedChange={(checked) =>
               onSortSpecChange({ ...sortSpec, direction: checked ? "desc" : "asc" })
@@ -213,23 +238,23 @@ export function FilesToolbarActions({
         </ToggleGroupItem>
       </ToggleGroup>
 
-      <Button variant="ghost" size="sm" onClick={onNewFolder}>
+      <Button variant="ghost" size="sm" title="New folder" onClick={onNewFolder}>
         <FolderPlusIcon />
-        New folder
+        <span className="max-[899px]:hidden">New folder</span>
       </Button>
 
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="New file" />}>
           <FilePlusIcon />
-          New file
+          <span className="max-[899px]:hidden">New file</span>
           <ChevronDownIcon className="text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => onNewFile("text")}>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("text")}>
             <FileTextIcon />
             Text file
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onNewFile("markdown")}>
+          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("markdown")}>
             <FileCodeIcon />
             Markdown file
           </DropdownMenuItem>
@@ -237,17 +262,17 @@ export function FilesToolbarActions({
       </DropdownMenu>
 
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="Upload" />}>
           <UploadIcon />
-          Upload
+          <span className="max-[899px]:hidden">Upload</span>
           <ChevronDownIcon className="text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={onUploadFiles}>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem className="whitespace-nowrap" onClick={onUploadFiles}>
             <FilePlusIcon />
             Upload files
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onUploadFolder}>
+          <DropdownMenuItem className="whitespace-nowrap" onClick={onUploadFolder}>
             <FolderUpIcon />
             Upload folder
           </DropdownMenuItem>

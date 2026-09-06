@@ -111,6 +111,31 @@ describe("collectDroppedFiles", () => {
     expect(await collectDroppedFiles(dt)).toEqual([]);
   });
 
+  it("falls back to the flat file list when every item's entry resolves to null", async () => {
+    // Reproduces synthetic drops built via `new DataTransfer().items.add(...)`
+    // (as Playwright/CDP and some browsers do): `webkitGetAsEntry` exists on
+    // every item but always returns null, so the walk finds nothing and
+    // must fall back to `dataTransfer.files` instead of silently dropping
+    // the files.
+    const a = new File(["a"], "dropped.txt");
+    const dt: DataTransferLike = {
+      items: [{ kind: "file", webkitGetAsEntry: () => null }],
+      files: [a],
+    };
+    expect(await collectDroppedFiles(dt)).toEqual([{ file: a, relativePath: "dropped.txt" }]);
+  });
+
+  it("does not fall back to the flat file list when at least one item resolves an entry", async () => {
+    // A mix of a working entry and a null one should just skip the null
+    // one, not fall back and double-count files.
+    const a = new File(["a"], "a.txt");
+    const dt: DataTransferLike = {
+      items: [{ kind: "file", webkitGetAsEntry: () => null }, itemFor(fileEntry("a.txt", a))],
+      files: [a],
+    };
+    expect(await collectDroppedFiles(dt)).toEqual([{ file: a, relativePath: "a.txt" }]);
+  });
+
   it("falls back to the flat file list when entries are unsupported", async () => {
     const a = new File(["a"], "a.txt");
     const dsStore = new File(["."], ".DS_Store");

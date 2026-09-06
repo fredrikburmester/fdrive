@@ -9,6 +9,7 @@ import {
   selectAll,
   selectionReducer,
   set,
+  toggleAll,
 } from "./selection";
 
 const order = ["/a", "/b", "/c", "/d"];
@@ -175,6 +176,40 @@ describe("reconcile", () => {
   });
 });
 
+describe("toggleAll", () => {
+  it("selects every visible path from an empty selection", () => {
+    const state = toggleAll(EMPTY_SELECTION, order);
+    expect(state.selected).toEqual(new Set(order));
+  });
+
+  it("selects every visible path from a partial selection", () => {
+    const partial: SelectionState = { anchor: "/a", focus: "/a", selected: new Set(["/a"]) };
+    const state = toggleAll(partial, order);
+    expect(state.selected).toEqual(new Set(order));
+  });
+
+  it("clears the selection when every visible path is already selected", () => {
+    const full = selectAll(order);
+    const state = toggleAll(full, order);
+    expect(state).toEqual(EMPTY_SELECTION);
+  });
+
+  it("returns the empty selection for an empty list of visible paths", () => {
+    expect(toggleAll(EMPTY_SELECTION, [])).toEqual(EMPTY_SELECTION);
+  });
+
+  it("ignores a selection outside the visible paths when deciding whether all are selected", () => {
+    const state: SelectionState = {
+      anchor: "/z",
+      focus: "/z",
+      selected: new Set(["/z", ...order]),
+    };
+    // Every visible path is selected (plus one that is not visible), so this
+    // should still clear rather than re-select.
+    expect(toggleAll(state, order)).toEqual(EMPTY_SELECTION);
+  });
+});
+
 describe("selectionReducer", () => {
   it("dispatches click", () => {
     const state = selectionReducer(EMPTY_SELECTION, { type: "click", path: "/b" }, order);
@@ -216,5 +251,16 @@ describe("selectionReducer", () => {
     const first = selectionReducer(EMPTY_SELECTION, { type: "selectAll" }, order);
     const second = selectionReducer(first, { type: "reconcile", paths: ["/a"] }, order);
     expect(second.selected).toEqual(new Set(["/a"]));
+  });
+
+  it("dispatches toggleAll", () => {
+    const first = selectionReducer(
+      EMPTY_SELECTION,
+      { type: "toggleAll", visiblePaths: order },
+      order,
+    );
+    expect(first.selected).toEqual(new Set(order));
+    const second = selectionReducer(first, { type: "toggleAll", visiblePaths: order }, order);
+    expect(second).toEqual(EMPTY_SELECTION);
   });
 });

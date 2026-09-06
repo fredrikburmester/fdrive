@@ -28,6 +28,7 @@ import { editHref } from "@/lib/editor/route";
 import { apiClient, pathToHref, queryKeys, viewHref } from "@/lib/preview/deps";
 import { previewKindFor } from "@/lib/preview/kind";
 import { siblingNavigation } from "@/lib/preview/siblings";
+import { skeletonKindFor } from "@/lib/preview/skeleton";
 import { PreviewViewer } from "./preview-viewer";
 
 /** Kinds the in-place editor (chunk P1-EDIT) can open. */
@@ -39,6 +40,39 @@ export interface PreviewShellProps {
 
 function capitalize(word: string): string {
   return word.length === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/** Line widths (percent), cycled to give a block of skeleton lines varying,
+ * realistic-looking ragged right edges instead of one uniform bar. */
+const LINE_WIDTHS = [92, 78, 85, 60, 95, 70, 88, 55, 80, 65, 90, 72];
+
+/**
+ * A loading placeholder shaped like the kind of preview `path` will
+ * eventually show, so a `.ts` source file never reads as a video frame (or
+ * any other kind/shape mismatch) while its `stat` call is still in flight.
+ */
+function PreviewLoadingSkeleton({ path }: { path: string }) {
+  const kind = skeletonKindFor(path);
+
+  switch (kind) {
+    case "lines":
+      return (
+        <div className="flex w-full max-w-2xl flex-col gap-2 font-mono">
+          {LINE_WIDTHS.map((width, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a static, never-reordered list of placeholder widths
+            <Skeleton key={index} className="h-3.5" style={{ width: `${width}%` }} />
+          ))}
+        </div>
+      );
+    case "media":
+      return <Skeleton className="aspect-video w-full max-w-2xl" />;
+    case "page":
+      return <Skeleton className="aspect-[3/4] h-full max-h-[32rem] w-auto" />;
+    case "audio":
+      return <Skeleton className="h-16 w-full max-w-md" />;
+    case "card":
+      return <Skeleton className="h-24 w-full max-w-xs" />;
+  }
 }
 
 /**
@@ -245,7 +279,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
           <div className="min-w-0 flex-1">
             {entryQuery.status === "pending" && (
               <div className="flex h-full flex-col items-center justify-center gap-3 p-8">
-                <Skeleton className="h-48 w-full max-w-md" />
+                <PreviewLoadingSkeleton path={path} />
                 <Skeleton className="h-4 w-40" />
               </div>
             )}

@@ -4,6 +4,7 @@ import type { FsEntry } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useRef, useState } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { cn } from "@/lib/utils";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
@@ -22,6 +23,8 @@ export interface FileGridProps {
   onContextAction: (action: RowContextAction, entry: FsEntry) => void;
   getDragPaths: (entry: FsEntry) => string[];
   onInternalDrop: (paths: string[], targetPath: string) => void;
+  /** Toggles between selecting every visible tile and none, from the header checkbox. */
+  onToggleSelectAll: () => void;
 }
 
 function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
@@ -38,9 +41,13 @@ export function FileGrid({
   onContextAction,
   getDragPaths,
   onInternalDrop,
+  onToggleSelectAll,
 }: FileGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(1);
+  const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
+  const allSelected = entries.length > 0 && selectedCount === entries.length;
+  const someSelected = selectedCount > 0 && !allSelected;
 
   useEffect(() => {
     const el = parentRef.current;
@@ -93,60 +100,73 @@ export function FileGrid({
   }
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto p-2" data-slot="file-grid">
-      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-        {virtualizer.getVirtualItems().map((virtualRow) => {
-          const start = virtualRow.index * columns;
-          const rowEntries = entries.slice(start, start + columns);
+    <div className="flex h-full flex-col" data-slot="file-grid">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b bg-background/95 px-3 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75">
+        <Checkbox
+          checked={allSelected}
+          indeterminate={someSelected}
+          onCheckedChange={onToggleSelectAll}
+          aria-label={allSelected ? "Deselect all" : "Select all"}
+        />
+        <span>{selectedCount > 0 ? `${selectedCount} selected` : "Select all"}</span>
+      </div>
+      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-2">
+        <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const start = virtualRow.index * columns;
+            const rowEntries = entries.slice(start, start + columns);
 
-          return (
-            <div
-              key={virtualRow.key}
-              className="absolute inset-x-0 grid gap-1"
-              style={{
-                height: virtualRow.size,
-                transform: `translateY(${virtualRow.start}px)`,
-                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              }}
-            >
-              {rowEntries.map((entry) => {
-                const isSelected = selected.has(entry.path);
-                const isFocused = focusedPath === entry.path;
+            return (
+              <div
+                key={virtualRow.key}
+                className="absolute inset-x-0 grid gap-1"
+                style={{
+                  height: virtualRow.size,
+                  transform: `translateY(${virtualRow.start}px)`,
+                  gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                }}
+              >
+                {rowEntries.map((entry) => {
+                  const isSelected = selected.has(entry.path);
+                  const isFocused = focusedPath === entry.path;
 
-                return (
-                  <FileContextMenu key={entry.path} entry={entry} onAction={onContextAction}>
-                    {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
-                    {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
-                    <div
-                      data-path={entry.path}
-                      data-selected={isSelected}
-                      data-focused={isFocused}
-                      draggable
-                      onDragStart={(event) => handleDragStart(event, entry)}
-                      onDragOver={(event) => handleDragOver(event, entry)}
-                      onDrop={(event) => handleDrop(event, entry)}
-                      onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
-                      onDoubleClick={() => onEntryDoubleClick(entry)}
-                      className={cn(
-                        "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
-                        "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
-                        "data-[selected=true]:bg-primary/10",
-                      )}
-                    >
-                      <FileIcon
-                        kind={entry.kind}
-                        ext={entry.ext}
-                        mime={entry.mime}
-                        className="size-8"
-                      />
-                      <span className="line-clamp-2 w-full break-words text-xs">{entry.name}</span>
-                    </div>
-                  </FileContextMenu>
-                );
-              })}
-            </div>
-          );
-        })}
+                  return (
+                    <FileContextMenu key={entry.path} entry={entry} onAction={onContextAction}>
+                      {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
+                      {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
+                      <div
+                        data-path={entry.path}
+                        data-selected={isSelected}
+                        data-focused={isFocused}
+                        draggable
+                        onDragStart={(event) => handleDragStart(event, entry)}
+                        onDragOver={(event) => handleDragOver(event, entry)}
+                        onDrop={(event) => handleDrop(event, entry)}
+                        onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
+                        onDoubleClick={() => onEntryDoubleClick(entry)}
+                        className={cn(
+                          "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
+                          "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
+                          "data-[selected=true]:bg-primary/10",
+                        )}
+                      >
+                        <FileIcon
+                          kind={entry.kind}
+                          ext={entry.ext}
+                          mime={entry.mime}
+                          className="size-8"
+                        />
+                        <span className="line-clamp-2 w-full break-words text-xs">
+                          {entry.name}
+                        </span>
+                      </div>
+                    </FileContextMenu>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

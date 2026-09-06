@@ -90,21 +90,7 @@ test.describe("uploads and downloads", () => {
     await page.dispatchEvent('[data-slot="file-list"]', "drop", { dataTransfer });
 
     const droppedRow = fileListRow(page, "dropped.txt");
-    const appeared = await droppedRow.isVisible({ timeout: 5_000 }).catch(() => false);
-    if (!appeared) {
-      test.fixme(
-        true,
-        "collectDroppedFiles (src/lib/upload/traverse.ts) walks DataTransferItem.webkitGetAsEntry() " +
-          "when any item exposes that method, but Chromium returns null from it for a File added " +
-          "via `new DataTransfer().items.add(new File(...))` (it is only populated for a real OS " +
-          "drag), so the synthetic drop is silently treated as carrying zero files. Needs either a " +
-          "CDP-level native drag simulation or a source-level fallback to the flat file list when " +
-          "every item's entry comes back null.",
-      );
-      return;
-    }
-
-    await expect(droppedRow).toBeVisible();
+    await expect(droppedRow).toBeVisible({ timeout: 5_000 });
   });
 
   test("downloading a single file suggests its own filename", async ({ page }) => {

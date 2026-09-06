@@ -120,6 +120,19 @@ export function clear(): SelectionState {
   return EMPTY_SELECTION;
 }
 
+/**
+ * Toggles between "every visible row selected" and "none selected", for a
+ * header checkbox. Selects all of `visiblePaths` unless every one of them is
+ * already selected, in which case it clears the selection instead (matching
+ * a tri-state checkbox: unchecked or indeterminate both toggle to checked,
+ * checked toggles to unchecked).
+ */
+export function toggleAll(state: SelectionState, visiblePaths: readonly string[]): SelectionState {
+  const allSelected =
+    visiblePaths.length > 0 && visiblePaths.every((path) => state.selected.has(path));
+  return allSelected ? clear() : selectAll(visiblePaths);
+}
+
 /** Replaces the selection with exactly `paths`. */
 export function set(paths: readonly string[]): SelectionState {
   if (paths.length === 0) {
@@ -163,7 +176,8 @@ export type SelectionAction =
   | { readonly type: "selectAll" }
   | { readonly type: "clear" }
   | { readonly type: "set"; readonly paths: readonly string[] }
-  | { readonly type: "reconcile"; readonly paths: readonly string[] };
+  | { readonly type: "reconcile"; readonly paths: readonly string[] }
+  | { readonly type: "toggleAll"; readonly visiblePaths: readonly string[] };
 
 /** Applies `action` to `state`, given the current listing `order`. */
 export function selectionReducer(
@@ -184,5 +198,7 @@ export function selectionReducer(
       return set(action.paths);
     case "reconcile":
       return reconcile(state, action.paths);
+    case "toggleAll":
+      return toggleAll(state, action.visiblePaths);
   }
 }

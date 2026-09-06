@@ -8,9 +8,15 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -24,7 +30,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
 } from "@/components/ui/sidebar";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useLogout } from "@/lib/api/auth-queries";
 
 const THEME_OPTIONS = [
@@ -90,30 +95,35 @@ export function AppSidebar() {
             }
           />
           <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel>Appearance</DropdownMenuLabel>
-            <div className="px-2 pb-2">
-              <ToggleGroup
-                value={[theme ?? "system"]}
-                onValueChange={(values) => {
-                  const next = values[0];
-                  if (next !== undefined) {
-                    setTheme(next);
-                  }
-                }}
-                className="w-full"
-              >
-                {THEME_OPTIONS.map(({ value, label, Icon }) => (
-                  <ToggleGroupItem key={value} value={value} aria-label={label} className="flex-1">
-                    <Icon />
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </div>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{activeIdentity?.username ?? "Account"}</DropdownMenuLabel>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Monitor />
+                  Appearance
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuRadioGroup
+                    value={theme ?? "system"}
+                    onValueChange={(value) => setTheme(value)}
+                  >
+                    {THEME_OPTIONS.map(({ value, label, Icon }) => (
+                      <DropdownMenuRadioItem key={value} value={value}>
+                        <Icon />
+                        {label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => logout.mutate()}>
-              <LogOut />
-              Sign out
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={() => logout.mutate()}>
+                <LogOut />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>

@@ -37,9 +37,9 @@ test("Enter in the password field submits the form", async ({ page }) => {
 test("sign out from the account menu returns to /login", async ({ page }) => {
   await loginAs(page, "alice", "alice-password");
 
-  // Attached before the click, not after: the crash this guards against
-  // happens synchronously within the click's own event handling, so
-  // waiting for the event only after clicking can miss it.
+  // Attached before the click, not after: a crash in the account menu would
+  // happen synchronously within the click's own event handling, so waiting
+  // for the event only after clicking could miss it.
   const pageErrorPromise = page.waitForEvent("pageerror", { timeout: 2_000 }).catch(() => null);
 
   // The account menu trigger is the sidebar footer button showing the
@@ -47,19 +47,7 @@ test("sign out from the account menu returns to /login", async ({ page }) => {
   await page.getByRole("button", { name: "alice" }).click();
 
   const error = await pageErrorPromise;
-  if (error !== null) {
-    test.fixme(
-      true,
-      "Opening the account menu (AppSidebar's DropdownMenu, which nests a ToggleGroup for the " +
-        `appearance switcher directly inside it) throws "${error.message}" and crashes the whole ` +
-        "React tree (no error boundary catches it, so Next's default error UI, \"This page couldn't " +
-        'load", replaces the page). Reproducible on every attempt to open this menu in the ' +
-        "production build; see the PR description for full repro steps. Needs a source-level fix " +
-        "(likely restructuring the nested ToggleGroup, or filing/checking a Base UI issue for " +
-        "error #31) before this can be tested through the real menu.",
-    );
-    return;
-  }
+  expect(error).toBeNull();
 
   await page.getByRole("menuitem", { name: "Sign out" }).click();
 
