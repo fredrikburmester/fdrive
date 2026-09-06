@@ -46,6 +46,14 @@ export interface FileContextMenuProps {
    * both only ever make sense for a single entry.
    */
   selectionCount?: number;
+  /**
+   * Whether the group of entries this menu's download action would apply to
+   * (see `selectionCount`) includes at least one folder. Folders have no
+   * direct download of their own, so the download item reads "Download as
+   * zip" and zips the group instead of streaming a single file. Defaults to
+   * whether `entry` itself is a folder.
+   */
+  includesFolder?: boolean;
 }
 
 /** The right-click menu shared by list rows and grid tiles. */
@@ -54,6 +62,7 @@ export function FileContextMenu({
   children,
   onAction,
   selectionCount = 1,
+  includesFolder = entry.kind === "dir",
 }: FileContextMenuProps) {
   const isMultiSelection = selectionCount > 1;
   const archiveKind = entry.kind !== "dir" ? detectArchiveKind(entry.name) : null;
@@ -102,15 +111,11 @@ export function FileContextMenu({
           </>
         )}
         <ContextMenuSeparator />
-        {entry.kind !== "dir" && (
-          <>
-            <ContextMenuItem onClick={() => onAction("download", entry)}>
-              <DownloadIcon />
-              Download
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
+        <ContextMenuItem onClick={() => onAction("download", entry)}>
+          <DownloadIcon />
+          {includesFolder ? "Download as zip" : "Download"}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={() => onAction("delete", entry)}>
           <Trash2Icon />
           Delete

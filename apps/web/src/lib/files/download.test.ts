@@ -6,6 +6,7 @@ import {
   type DownloadDeps,
   downloadMany,
   downloadSingle,
+  needsZipDownload,
 } from "./download";
 
 function fakeDocument() {
@@ -54,6 +55,28 @@ describe("createAnchorDownloader", () => {
     downloader.click("https://example.test/z.zip", "archive.zip");
 
     expect(anchor.download).toBe("archive.zip");
+  });
+});
+
+describe("needsZipDownload", () => {
+  it("is false for a single file", () => {
+    expect(needsZipDownload([{ kind: "file" }])).toBe(false);
+  });
+
+  it("is true for a single folder", () => {
+    expect(needsZipDownload([{ kind: "dir" }])).toBe(true);
+  });
+
+  it("is true for several files", () => {
+    expect(needsZipDownload([{ kind: "file" }, { kind: "file" }])).toBe(true);
+  });
+
+  it("is true for a mixed selection of files and folders", () => {
+    expect(needsZipDownload([{ kind: "file" }, { kind: "dir" }])).toBe(true);
+  });
+
+  it("is true for an empty selection", () => {
+    expect(needsZipDownload([])).toBe(true);
   });
 });
 

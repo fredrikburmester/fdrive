@@ -3,6 +3,7 @@ import {
   arrow,
   clear,
   click,
+  contextEntries,
   contextSelectionCount,
   EMPTY_SELECTION,
   reconcile,
@@ -283,5 +284,30 @@ describe("contextSelectionCount", () => {
 
   it("returns 1 for an empty selection", () => {
     expect(contextSelectionCount("/a", new Set())).toBe(1);
+  });
+});
+
+describe("contextEntries", () => {
+  const a = { path: "/a" };
+  const b = { path: "/b" };
+  const c = { path: "/c" };
+  const entries = [a, b, c];
+
+  it("returns every selected entry when the target is part of a multi-selection", () => {
+    const selected = new Set(["/a", "/c"]);
+    expect(contextEntries(a, entries, selected)).toEqual([a, c]);
+  });
+
+  it("returns just the target entry for a single-entry selection", () => {
+    expect(contextEntries(a, entries, new Set(["/a"]))).toEqual([a]);
+  });
+
+  it("returns just the target entry when it is not part of the selection", () => {
+    const selected = new Set(["/b", "/c"]);
+    expect(contextEntries(a, entries, selected)).toEqual([a]);
+  });
+
+  it("returns just the target entry for an empty selection", () => {
+    expect(contextEntries(a, entries, new Set())).toEqual([a]);
   });
 });
