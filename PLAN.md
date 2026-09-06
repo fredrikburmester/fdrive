@@ -96,7 +96,7 @@ its own test suite and coverage gate.
 ```
  browser ──► Caddy (TLS, one origin)
                ├── /            → web   (Next.js 16, React 19)
-               ├── /api/*       → api   (Hono on Node 22)
+               ├── /api/*       → api   (Hono on Node 24)
                ├── /wopi/*      → api
                ├── /mcp         → api
                ├── /s/*        → web   (public share pages, §6.1)
@@ -531,7 +531,7 @@ fdrive/
   raycast/               existing extension, repointed
 ```
 
-Tooling: pnpm workspaces, Turborepo, Node 22, TypeScript 5.x strict, Biome, Changesets not needed
+Tooling: pnpm workspaces, Turborepo, Node 24, TypeScript 5.x strict, Biome, Changesets not needed
 (single deployable), Docker multi-stage images published to GHCR.
 
 ---
@@ -542,7 +542,7 @@ Tooling: pnpm workspaces, Turborepo, Node 22, TypeScript 5.x strict, Biome, Chan
 |---|---|---|
 | `proxy` | Caddy | Single origin, TLS optional (behind your NPM it stays HTTP). Large bodies, websockets for ONLYOFFICE. |
 | `web` | fdrive-web | Next standalone output. |
-| `api` | fdrive-api | Node 22, non-root. Env: SFTPGo URL, master key, DB URL, roots, home template, ONLYOFFICE URL + secret. |
+| `api` | fdrive-api | Node 24, non-root. Env: SFTPGo URL, master key, DB URL, roots, home template, ONLYOFFICE URL + secret. |
 | `db` | pgvector/pgvector:pg17 | App and index schemas. Own volume. Never SFTPGo's DB. |
 | `indexer` | fdrive-indexer | Roots bind-mounted read-only at `/roots/<name>`; thumbnail volume read-write. |
 | `ocr` | fdrive-ocr | Roots read-write, nightly. Optional profile `ocr`. |
