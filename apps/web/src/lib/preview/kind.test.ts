@@ -40,6 +40,24 @@ describe("previewKindFor", () => {
     expect(previewKindFor(entry(".py", null))).toBe("code");
   });
 
+  it("resolves .ts, .mts, .cts, and .tsx as code even when the mime collides with video", () => {
+    // `.ts` (and `.mts`) can also be reported as `video/mp2t` (MPEG
+    // transport stream / AVCHD); the extension must win so these open in
+    // the code viewer, not the video viewer.
+    expect(previewKindFor(entry(".ts", "video/mp2t"))).toBe("code");
+    expect(previewKindFor(entry(".mts", "video/mp2t"))).toBe("code");
+    expect(previewKindFor(entry(".cts", null))).toBe("code");
+    expect(previewKindFor(entry(".tsx", null))).toBe("code");
+  });
+
+  it("still detects a real video file by extension and mime", () => {
+    expect(previewKindFor(entry(".mp4", "video/mp4"))).toBe("video");
+  });
+
+  it("detects .m2ts as video, since it is not a code extension", () => {
+    expect(previewKindFor(entry(".m2ts", "video/mp2t"))).toBe("video");
+  });
+
   it("detects office documents", () => {
     expect(previewKindFor(entry(".docx", null))).toBe("office");
     expect(previewKindFor(entry(".xlsx", null))).toBe("office");
@@ -97,6 +115,12 @@ describe("languageFor", () => {
     expect(languageFor(".ts")).toBe("typescript");
     expect(languageFor(".py")).toBe("python");
     expect(languageFor(".rs")).toBe("rust");
+  });
+
+  it("maps .mts and .cts to typescript, and keeps .tsx distinct as tsx", () => {
+    expect(languageFor(".mts")).toBe("typescript");
+    expect(languageFor(".cts")).toBe("typescript");
+    expect(languageFor(".tsx")).toBe("tsx");
   });
 
   it("is case-insensitive", () => {

@@ -73,7 +73,13 @@ const ARCHIVE_EXTENSIONS = new Set([
 
 /** Extension to language identifier, for `code-viewer`'s language badge. */
 const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
+  // `.ts` collides with the MPEG transport stream video extension
+  // (`video/mp2t`), and `.mts` further collides with AVCHD video. Both
+  // resolve to TypeScript here: see `baseKindFor`, where extension-based
+  // code detection is checked before any mime-based media detection.
   ".ts": "typescript",
+  ".mts": "typescript",
+  ".cts": "typescript",
   ".tsx": "tsx",
   ".js": "javascript",
   ".jsx": "jsx",
@@ -120,9 +126,36 @@ export function languageFor(ext: string): string {
   return LANGUAGE_BY_EXTENSION[ext.toLowerCase()] ?? "plaintext";
 }
 
+/**
+ * Determines the base preview kind for `entry`, before the text-size cap is
+ * applied. Extension-based detection for code, markdown, office, archive,
+ * and plain-text extensions always runs first, ahead of any mime-based
+ * image/video/audio/pdf decision. This matters because a few code
+ * extensions collide with legacy media mime types (`.ts` and `video/mp2t`,
+ * the MPEG transport stream type, most notably): trusting the extension
+ * keeps those files in the code viewer instead of the video viewer. Once
+ * the extension is not one of those known non-media kinds, media kinds fall
+ * back to the mime type (or a matching media extension).
+ */
 function baseKindFor(entry: PreviewableEntry): PreviewKind {
   const ext = entry.ext.toLowerCase();
   const mime = entry.mime ?? "";
+
+  if (MARKDOWN_EXTENSIONS.has(ext)) {
+    return "markdown";
+  }
+  if (CODE_EXTENSIONS.has(ext)) {
+    return "code";
+  }
+  if (OFFICE_EXTENSIONS.has(ext)) {
+    return "office";
+  }
+  if (ARCHIVE_EXTENSIONS.has(ext)) {
+    return "archive";
+  }
+  if (TEXT_EXTENSIONS.has(ext)) {
+    return "text";
+  }
 
   if (mime.startsWith("image/") || IMAGE_EXTENSIONS.has(ext)) {
     return "image";
@@ -136,19 +169,7 @@ function baseKindFor(entry: PreviewableEntry): PreviewKind {
   if (mime === "application/pdf" || ext === ".pdf") {
     return "pdf";
   }
-  if (MARKDOWN_EXTENSIONS.has(ext)) {
-    return "markdown";
-  }
-  if (CODE_EXTENSIONS.has(ext)) {
-    return "code";
-  }
-  if (OFFICE_EXTENSIONS.has(ext)) {
-    return "office";
-  }
-  if (ARCHIVE_EXTENSIONS.has(ext)) {
-    return "archive";
-  }
-  if (mime.startsWith("text/") || TEXT_EXTENSIONS.has(ext)) {
+  if (mime.startsWith("text/")) {
     return "text";
   }
   return "none";

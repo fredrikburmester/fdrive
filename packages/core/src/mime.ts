@@ -53,7 +53,7 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".mpeg": "video/mpeg",
   ".mpg": "video/mpeg",
   ".3gp": "video/3gpp",
-  ".ts": "video/mp2t",
+  ".m2ts": "video/mp2t",
 
   // Documents
   ".pdf": "application/pdf",
@@ -96,6 +96,14 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".rar": "application/vnd.rar",
 
   // Code
+  // `.ts` is ambiguous: TypeScript source vs. an MPEG transport stream
+  // video. A file manager reading `.ts` files is the far more common case,
+  // so TypeScript wins here. Same reasoning for `.mts`/`.cts`, where `.mts`
+  // also collides with AVCHD video (that container uses `.m2ts` instead, see
+  // above, so the collision is avoided in practice).
+  ".ts": "text/typescript",
+  ".mts": "text/typescript",
+  ".cts": "text/typescript",
   ".tsx": "text/tsx",
   ".jsx": "text/jsx",
   ".py": "text/x-python",
@@ -109,7 +117,7 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".hpp": "text/x-c++",
   ".cs": "text/x-csharp",
   ".php": "application/x-httpd-php",
-  ".sh": "application/x-sh",
+  ".sh": "text/x-sh",
   ".yaml": "application/yaml",
   ".yml": "application/yaml",
   ".toml": "application/toml",

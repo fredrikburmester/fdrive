@@ -33,6 +33,8 @@ const CODE_EXTS = new Set([
   ".jsx",
   ".ts",
   ".tsx",
+  ".mts",
+  ".cts",
   ".mjs",
   ".cjs",
   ".py",
@@ -72,25 +74,18 @@ export interface FileIconInput {
 }
 
 /**
- * Chooses which icon a file browser row should show, preferring the
- * server-provided `mime` guess for images/video/audio and falling back to
- * the file extension for everything else. Directories are always "folder".
+ * Chooses which icon a file browser row should show. Extension-based
+ * detection (code, archive, presentation, table, text) always takes
+ * precedence over the server-provided `mime` guess, because a handful of
+ * code extensions (notably `.ts`) collide with legacy media mime types
+ * (`video/mp2t`); trusting the extension keeps those files showing a code
+ * icon instead of a media one. Media (image/video/audio) is only decided
+ * from `mime` once the extension is not recognized as one of those known
+ * non-media kinds. Directories are always "folder".
  */
 export function fileIconKind(entry: FileIconInput): FileIconKind {
   if (entry.kind === "dir") {
     return "folder";
-  }
-
-  if (entry.mime !== null) {
-    if (entry.mime.startsWith("image/")) {
-      return "image";
-    }
-    if (entry.mime.startsWith("video/")) {
-      return "video";
-    }
-    if (entry.mime.startsWith("audio/")) {
-      return "audio";
-    }
   }
 
   const ext = entry.ext.toLowerCase();
@@ -108,6 +103,18 @@ export function fileIconKind(entry: FileIconInput): FileIconKind {
   }
   if (TEXT_EXTS.has(ext)) {
     return "text";
+  }
+
+  if (entry.mime !== null) {
+    if (entry.mime.startsWith("image/")) {
+      return "image";
+    }
+    if (entry.mime.startsWith("video/")) {
+      return "video";
+    }
+    if (entry.mime.startsWith("audio/")) {
+      return "audio";
+    }
   }
 
   return "file";
