@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemIndexerResponse } from "@fdrive/contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -99,7 +99,9 @@ function mockConfigured() {
   useSystemIndexerMock.mockReturnValue({
     data: CONFIGURED_FIXTURE,
     isLoading: false,
+    error: null,
     dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+    refetch: vi.fn(),
   });
   useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
   useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
@@ -174,7 +176,13 @@ describe("IndexerPage", () => {
   });
 
   it("shows Loading while the query has not resolved yet", () => {
-    useSystemIndexerMock.mockReturnValue({ data: undefined, isLoading: true, dataUpdatedAt: 0 });
+    useSystemIndexerMock.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      dataUpdatedAt: 0,
+      refetch: vi.fn(),
+    });
     useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
     useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
     useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
@@ -182,5 +190,26 @@ describe("IndexerPage", () => {
     render(<IndexerPage />);
 
     expect(screen.getByText("Loading…")).toBeTruthy();
+  });
+
+  it("shows the error state, distinct from Loading, when the query fails", () => {
+    const refetch = vi.fn();
+    useSystemIndexerMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("indexer unreachable"),
+      dataUpdatedAt: 0,
+      refetch,
+    });
+    useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<IndexerPage />);
+
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(screen.getByText("indexer unreachable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

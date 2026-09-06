@@ -39,6 +39,7 @@ import { sidecarStatus } from "@/lib/system/status";
 import { GlobsField, SettingsFormShell } from "./settings-form";
 import { StatCard } from "./stat-card";
 import { StatusBadge } from "./status-badge";
+import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 
 interface SettingsDraft {
@@ -73,7 +74,7 @@ const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 /** Admin page: `System > OCR`. Schedule, last run, originals, settings, and run-now. */
 export function OcrPage() {
-  const { data, isLoading, dataUpdatedAt } = useSystemOcr();
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemOcr();
   const updateSettings = useUpdateOcrSettings();
   const runNow = useRunOcr();
 
@@ -151,9 +152,11 @@ export function OcrPage() {
         </Button>
       }
     >
-      {isLoading || data === undefined ? (
+      {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : (
+      ) : error ? (
+        <SystemErrorState error={error} onRetry={() => void refetch()} />
+      ) : data === undefined ? null : (
         <>
           <Card>
             <CardHeader>

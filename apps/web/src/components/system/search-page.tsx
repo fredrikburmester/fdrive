@@ -20,11 +20,12 @@ import { useReembed, useSystemSearch } from "@/lib/api/system-queries";
 import { sidecarStatus } from "@/lib/system/status";
 import { StatCard } from "./stat-card";
 import { StatusBadge } from "./status-badge";
+import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 
 /** Admin page: `System > Search`. Semantic status, index totals, and a re-embed action. */
 export function SearchPage() {
-  const { data, isLoading, dataUpdatedAt } = useSystemSearch();
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemSearch();
   const reembed = useReembed();
   const [reembedOpen, setReembedOpen] = useState(false);
 
@@ -56,9 +57,11 @@ export function SearchPage() {
         </Button>
       }
     >
-      {isLoading || data === undefined ? (
+      {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : (
+      ) : error ? (
+        <SystemErrorState error={error} onRetry={() => void refetch()} />
+      ) : data === undefined ? null : (
         <>
           <Card>
             <CardHeader>

@@ -59,6 +59,7 @@ import { sidecarStatus } from "@/lib/system/status";
 import { GlobsField, SettingsFormShell } from "./settings-form";
 import { StatCard } from "./stat-card";
 import { StatusBadge } from "./status-badge";
+import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 
 interface SettingsDraft {
@@ -91,7 +92,7 @@ function valuesFromDraft(draft: SettingsDraft): IndexerSettingsValue {
 
 /** Admin page: `System > Indexer`. Health, stats, settings, reindex, and thumbnail rebuild. */
 export function IndexerPage() {
-  const { data, isLoading, dataUpdatedAt } = useSystemIndexer();
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemIndexer();
   const updateSettings = useUpdateIndexerSettings();
   const reindex = useReindex();
   const rebuildThumbnails = useRebuildIndexerThumbnails();
@@ -198,9 +199,11 @@ export function IndexerPage() {
         </>
       }
     >
-      {isLoading || data === undefined ? (
+      {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : (
+      ) : error ? (
+        <SystemErrorState error={error} onRetry={() => void refetch()} />
+      ) : data === undefined ? null : (
         <>
           <Card>
             <CardHeader>

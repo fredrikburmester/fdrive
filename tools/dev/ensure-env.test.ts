@@ -40,10 +40,11 @@ describe("buildWebEnvLocal", () => {
 });
 
 describe("buildDevSearchEnv", () => {
-  it("builds every search and thumbnails key under the given repo root", () => {
+  it("builds every search, OCR, and thumbnails key under the given repo root", () => {
     const additions = buildDevSearchEnv("/repo");
     expect(additions.FDRIVE_EMBED_URL).toBe("http://127.0.0.1:58081");
     expect(additions.FDRIVE_INDEXER_URL).toBe("http://127.0.0.1:58010");
+    expect(additions.FDRIVE_OCR_URL).toBe("http://127.0.0.1:58011");
     expect(additions.FDRIVE_ADMIN_USERS).toBe("dev");
     expect(additions.FDRIVE_THUMBS_DIR).toBe(join("/repo", "deploy", "dev", ".data", "thumbs"));
     expect(JSON.parse(additions.FDRIVE_INDEX_ROOTS ?? "")).toEqual([
@@ -51,13 +52,14 @@ describe("buildDevSearchEnv", () => {
     ]);
   });
 
-  it("returns exactly the five documented keys", () => {
+  it("returns exactly the six documented keys", () => {
     expect(Object.keys(buildDevSearchEnv("/repo")).sort()).toEqual(
       [
         "FDRIVE_ADMIN_USERS",
         "FDRIVE_EMBED_URL",
         "FDRIVE_INDEXER_URL",
         "FDRIVE_INDEX_ROOTS",
+        "FDRIVE_OCR_URL",
         "FDRIVE_THUMBS_DIR",
       ].sort(),
     );

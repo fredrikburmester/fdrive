@@ -89,10 +89,12 @@ working dev fixtures without running the generator first.
 | SFTPGo SFTP        | 52022 (override with `FDRIVE_DEV_SFTPGO_SFTP_PORT`) |
 | Indexer HTTP       | 58010 (override with `FDRIVE_DEV_INDEXER_HTTP_PORT`), `index` profile only |
 | Embedding server (TEI) | 58081 (override with `FDRIVE_DEV_EMBED_PORT`), `index` profile only |
+| OCR service        | 58011 (override with `FDRIVE_DEV_OCR_HTTP_PORT`), `index` profile only |
 
-The embedding server and indexer are published on the host, unlike in the
-production-shaped `deploy/compose.yaml` stack, because the api dev server
-runs on the host with `tsx watch` rather than inside the compose network.
+The embedding server, indexer, and OCR service are published on the host,
+unlike in the production-shaped `deploy/compose.yaml` stack, because the api
+dev server runs on the host with `tsx watch` rather than inside the compose
+network.
 
 ## Search, thumbnails, and the System pages
 
@@ -101,8 +103,8 @@ thumbnails to `deploy/dev/.data/thumbs` on the host (bind-mounted into the
 indexer container at `/thumbs`, not a named volume, so the host api dev
 server can read the files it generates). `apps/api/.env.dev`'s
 `FDRIVE_THUMBS_DIR` points at that same directory, and its
-`FDRIVE_EMBED_URL` and `FDRIVE_INDEXER_URL` point at the published host
-ports above.
+`FDRIVE_EMBED_URL`, `FDRIVE_INDEXER_URL`, and `FDRIVE_OCR_URL` point at the
+published host ports above.
 
 `FDRIVE_ADMIN_USERS=dev` in `apps/api/.env.dev` makes the `dev` user an
 admin in the dev environment, so the account menu's System pages (indexer

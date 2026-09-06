@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemThumbnailsResponse } from "@fdrive/contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -43,7 +43,9 @@ function mockConfigured() {
   useSystemThumbnailsMock.mockReturnValue({
     data: CONFIGURED_FIXTURE,
     isLoading: false,
+    error: null,
     dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+    refetch: vi.fn(),
   });
   useRebuildThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 }
@@ -77,12 +79,33 @@ describe("ThumbnailsPage", () => {
     useSystemThumbnailsMock.mockReturnValue({
       data: undefined,
       isLoading: true,
+      error: null,
       dataUpdatedAt: 0,
+      refetch: vi.fn(),
     });
     useRebuildThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 
     render(<ThumbnailsPage />);
 
     expect(screen.getByText("Loading…")).toBeTruthy();
+  });
+
+  it("shows the error state, distinct from Loading, when the query fails", () => {
+    const refetch = vi.fn();
+    useSystemThumbnailsMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("thumbnails cache unreachable"),
+      dataUpdatedAt: 0,
+      refetch,
+    });
+    useRebuildThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<ThumbnailsPage />);
+
+    expect(screen.queryByText("Loading…")).toBeNull();
+    expect(screen.getByText("thumbnails cache unreachable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

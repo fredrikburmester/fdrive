@@ -20,11 +20,12 @@ import { formatBytes } from "@/lib/format";
 import { sidecarStatus } from "@/lib/system/status";
 import { StatCard } from "./stat-card";
 import { StatusBadge } from "./status-badge";
+import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 
 /** Admin page: `System > Thumbnails`. Cache size on disk and a rebuild action. */
 export function ThumbnailsPage() {
-  const { data, isLoading, dataUpdatedAt } = useSystemThumbnails();
+  const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemThumbnails();
   const rebuild = useRebuildThumbnails();
   const [rebuildOpen, setRebuildOpen] = useState(false);
 
@@ -55,9 +56,11 @@ export function ThumbnailsPage() {
         </Button>
       }
     >
-      {isLoading || data === undefined ? (
+      {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : (
+      ) : error ? (
+        <SystemErrorState error={error} onRetry={() => void refetch()} />
+      ) : data === undefined ? null : (
         <>
           <Card>
             <CardHeader>
