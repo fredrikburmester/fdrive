@@ -47,6 +47,23 @@ export function segmentsToPath(segments: readonly string[] | undefined): string 
 }
 
 /**
+ * The virtual fs path implied by a browser `pathname`, when it is a Files
+ * route ("/files" or "/files/..."), or `null` for any other route (so
+ * callers, like the sidebar tree, can tell "not on a Files page" apart from
+ * "on the Files root").
+ */
+export function pathFromFilesPathname(pathname: string | null): string | null {
+  if (pathname === "/files") {
+    return "/";
+  }
+  if (pathname === null || !pathname.startsWith("/files/")) {
+    return null;
+  }
+  const segments = pathname.slice("/files/".length).split("/");
+  return segmentsToPath(segments);
+}
+
+/**
  * Builds the breadcrumb trail for `path`: "Home" for the root, followed by
  * one entry per segment, each linking to `pathToHref` of its own path.
  */

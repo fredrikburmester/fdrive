@@ -1,8 +1,10 @@
 import { ApiClientError, type DeleteRequest, type FsEntry } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { apiClient, queryKeys } from "./deps";
+import { reachableExpandedDirs } from "./tree-rows";
 
 export type ListQueryKey = readonly ["fs", "list", string];
 
@@ -66,11 +68,18 @@ export function describeFsError(error: unknown, fallback: string): string {
   return fallback;
 }
 
+export interface UseListingOptions {
+  /** Skips fetching (and marks the query idle) while `false`, for the tree
+   * views' lazily-expanded folders. Fetches normally when omitted. */
+  readonly enabled?: boolean;
+}
+
 /** Lists the entries at `path`, keyed so mutations can invalidate it. */
-export function useListing(path: string) {
+export function useListing(path: string, options?: UseListingOptions) {
   return useQuery({
     queryKey: queryKeys.fs.list(path),
     queryFn: () => apiClient.list(path),
+    ...(options?.enabled === undefined ? {} : { enabled: options.enabled }),
   });
 }
 
@@ -147,6 +156,52 @@ export function useCopy() {
     toAffected: (vars) => ({ op: "copy", paths: [vars.path], targets: [vars.target] }),
     errorFallback: "Could not copy.",
   });
+}
+
+/**
+ * Fetches (and shares the cache and invalidation of) the listing for every
+ * directory that is expanded and reachable from `rootEntries`, for the tree
+ * view. Returns a map from folder path to its entries, filled in
+ * incrementally: each render that discovers newly-expanded folders one
+ * level deeper triggers the fetches for that level, converging once every
+ * expanded folder's ancestors are loaded.
+ */
+export function useTreeChildren(
+  rootEntries: readonly FsEntry[],
+  expanded: ReadonlySet<string>,
+): ReadonlyMap<string, readonly FsEntry[]> {
+  const [childrenByPath, setChildrenByPath] = useState<Map<string, readonly FsEntry[]>>(
+    () => new Map(),
+  );
+
+  const expandedDirs = useMemo(
+    () => reachableExpandedDirs(rootEntries, expanded, childrenByPath),
+    [rootEntries, expanded, childrenByPath],
+  );
+
+  const results = useQueries({
+    queries: expandedDirs.map((path) => ({
+      queryKey: queryKeys.fs.list(path),
+      queryFn: () => apiClient.list(path),
+    })),
+  });
+
+  useEffect(() => {
+    setChildrenByPath((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      expandedDirs.forEach((path, index) => {
+        const entries = results[index]?.data?.entries;
+        if (entries !== undefined && next.get(path) !== entries) {
+          next.set(path, entries);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [expandedDirs, results]);
+
+  return childrenByPath;
 }
 
 /** Deletes `items`, invalidating each deleted entry's parent listing. */

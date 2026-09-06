@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildBreadcrumbs, pathToHref, segmentsToPath, viewHref } from "./path-url";
+import {
+  buildBreadcrumbs,
+  pathFromFilesPathname,
+  pathToHref,
+  segmentsToPath,
+  viewHref,
+} from "./path-url";
 
 describe("pathToHref", () => {
   it("maps the root to /files", () => {
@@ -59,6 +65,24 @@ describe("segmentsToPath", () => {
     const href = pathToHref(original);
     const segments = href.slice("/files/".length).split("/");
     expect(segmentsToPath(segments)).toBe(original);
+  });
+});
+
+describe("pathFromFilesPathname", () => {
+  it("maps the Files root to /", () => {
+    expect(pathFromFilesPathname("/files")).toBe("/");
+  });
+
+  it("decodes a nested Files path", () => {
+    expect(pathFromFilesPathname("/files/a/b%20c")).toBe("/a/b c");
+  });
+
+  it("returns null for null", () => {
+    expect(pathFromFilesPathname(null)).toBeNull();
+  });
+
+  it("returns null for an unrelated route", () => {
+    expect(pathFromFilesPathname("/about")).toBeNull();
   });
 });
 

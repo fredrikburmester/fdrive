@@ -2,15 +2,20 @@
 
 import type { FsEntry } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useRef } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { formatBytes, formatDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 
 export const FILE_ROW_HEIGHT = 36;
+
+/** Indent, in pixels, added per tree depth level in tree view. */
+export const TREE_INDENT_PX = 20;
 
 export interface ClickModifierKeys {
   shift: boolean;
@@ -26,6 +31,16 @@ export interface FileListProps {
   onContextAction: (action: RowContextAction, entry: FsEntry) => void;
   getDragPaths: (entry: FsEntry) => string[];
   onInternalDrop: (paths: string[], targetPath: string) => void;
+  /**
+   * Present only in tree view: each row's indent depth, keyed by path. Rows
+   * missing from the map (or when this prop is absent entirely) render
+   * without a disclosure chevron, at depth 0, as in the plain list view.
+   */
+  treeDepths?: ReadonlyMap<string, number>;
+  /** Which folder paths are expanded, for the chevron's rotation, in tree view. */
+  treeExpanded?: ReadonlySet<string>;
+  /** Called when a folder row's disclosure chevron is toggled, in tree view. */
+  onToggleTreeExpand?: (entry: FsEntry) => void;
 }
 
 function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
@@ -42,6 +57,9 @@ export function FileList({
   onContextAction,
   getDragPaths,
   onInternalDrop,
+  treeDepths,
+  treeExpanded,
+  onToggleTreeExpand,
 }: FileListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +113,9 @@ export function FileList({
           }
           const isSelected = selected.has(entry.path);
           const isFocused = focusedPath === entry.path;
+          const isTreeRow = treeDepths !== undefined;
+          const depth = treeDepths?.get(entry.path) ?? 0;
+          const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
 
           return (
             <FileContextMenu key={entry.path} entry={entry} onAction={onContextAction}>
@@ -110,9 +131,37 @@ export function FileList({
                 onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                 onDoubleClick={() => onEntryDoubleClick(entry)}
                 className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
-                style={{ height: virtualRow.size, transform: `translateY(${virtualRow.start}px)` }}
+                style={{
+                  height: virtualRow.size,
+                  transform: `translateY(${virtualRow.start}px)`,
+                  paddingLeft: 12 + depth * TREE_INDENT_PX,
+                  paddingRight: 12,
+                }}
                 data-focused={isFocused}
               >
+                {isTreeRow &&
+                  (entry.kind === "dir" ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleTreeExpand?.(entry);
+                      }}
+                      aria-label={
+                        isExpandedFolder ? `Collapse ${entry.name}` : `Expand ${entry.name}`
+                      }
+                      className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+                    >
+                      <ChevronRightIcon
+                        className={cn(
+                          "size-3.5 transition-transform",
+                          isExpandedFolder && "rotate-90",
+                        )}
+                      />
+                    </button>
+                  ) : (
+                    <span className="size-4 shrink-0" />
+                  ))}
                 <Checkbox
                   checked={isSelected}
                   onClick={(event) => event.stopPropagation()}

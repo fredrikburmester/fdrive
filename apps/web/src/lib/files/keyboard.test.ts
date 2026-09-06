@@ -119,4 +119,17 @@ describe("keyToAction", () => {
   it("returns null for a plain letter with no modifier", () => {
     expect(keyToAction(key({ key: "d" }), "mac")).toBeNull();
   });
+
+  it("maps ArrowRight to expand in tree mode", () => {
+    expect(keyToAction(key({ key: "ArrowRight" }), "mac", true)).toEqual({ type: "expand" });
+  });
+
+  it("maps ArrowLeft to collapse in tree mode", () => {
+    expect(keyToAction(key({ key: "ArrowLeft" }), "mac", true)).toEqual({ type: "collapse" });
+  });
+
+  it("does not map ArrowRight/ArrowLeft outside tree mode", () => {
+    expect(keyToAction(key({ key: "ArrowRight" }), "mac")).toBeNull();
+    expect(keyToAction(key({ key: "ArrowLeft" }), "mac", false)).toBeNull();
+  });
 });

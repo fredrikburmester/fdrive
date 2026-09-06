@@ -12,6 +12,7 @@ import {
   FolderUpIcon,
   LayoutGridIcon,
   ListIcon,
+  ListTreeIcon,
   PanelRightIcon,
   UploadIcon,
 } from "lucide-react";
@@ -194,7 +195,7 @@ export function FilesToolbarActions({
         value={[viewMode]}
         onValueChange={(values) => {
           const next = values[0];
-          if (next === "list" || next === "grid") {
+          if (next === "list" || next === "grid" || next === "tree") {
             onViewModeChange(next);
           }
         }}
@@ -206,6 +207,9 @@ export function FilesToolbarActions({
         </ToggleGroupItem>
         <ToggleGroupItem value="grid" aria-label="Grid view">
           <LayoutGridIcon />
+        </ToggleGroupItem>
+        <ToggleGroupItem value="tree" aria-label="Tree view">
+          <ListTreeIcon />
         </ToggleGroupItem>
       </ToggleGroup>
 

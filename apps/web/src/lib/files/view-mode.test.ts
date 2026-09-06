@@ -22,6 +22,11 @@ describe("readViewMode", () => {
     expect(readViewMode(storage)).toBe("grid");
   });
 
+  it("returns a previously stored tree mode", () => {
+    const storage = memoryStorage({ "fdrive.view": JSON.stringify("tree") });
+    expect(readViewMode(storage)).toBe("tree");
+  });
+
   it("falls back to default for an unrecognized value", () => {
     const storage = memoryStorage({ "fdrive.view": JSON.stringify("carousel") });
     expect(readViewMode(storage)).toBe(DEFAULT_VIEW_MODE);

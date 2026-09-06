@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
-import { ApiClientError } from "@fdrive/contracts";
+import { ApiClientError, type FsEntry } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { affectedListKeys, describeFsError } from "./queries";
+
+function entry(overrides: Partial<FsEntry> & Pick<FsEntry, "path" | "kind">): FsEntry {
+  return {
+    name: overrides.path.split("/").at(-1) ?? overrides.path,
+    size: 0,
+    modifiedAt: "2024-01-01T00:00:00.000Z",
+    ext: "",
+    mime: null,
+    ...overrides,
+  };
+}
 
 const listMock = vi.fn();
 const mkdirMock = vi.fn();
@@ -127,6 +138,18 @@ describe("useListing", () => {
   });
 });
 
+describe("useListing options", () => {
+  it("does not fetch while enabled is false", async () => {
+    const { useListing } = await import("./queries");
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useListing("/a", { enabled: false }), { wrapper });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(listMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("useMkdir", () => {
   it("invalidates the parent listing on success", async () => {
     const { useMkdir } = await import("./queries");
@@ -233,6 +256,76 @@ describe("useCopy", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(copyMock).toHaveBeenCalledWith("/a/x", "/b/x");
     expect(invalidateSpy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["fs", "list", "/b"] });
+  });
+});
+
+describe("useTreeChildren", () => {
+  it("returns an empty map when nothing is expanded", async () => {
+    const { useTreeChildren } = await import("./queries");
+    const { wrapper } = createWrapper();
+    const dirA = entry({ path: "/a", kind: "dir" });
+
+    const { result } = renderHook(() => useTreeChildren([dirA], new Set()), { wrapper });
+
+    expect(result.current.size).toBe(0);
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches an expanded root-level directory's entries", async () => {
+    const { useTreeChildren } = await import("./queries");
+    const dirA = entry({ path: "/a", kind: "dir" });
+    const fileX = entry({ path: "/a/x.txt", kind: "file" });
+    listMock.mockResolvedValue({ path: "/a", entries: [fileX] });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useTreeChildren([dirA], new Set(["/a"])), { wrapper });
+
+    await waitFor(() => expect(result.current.get("/a")).toEqual([fileX]));
+    expect(listMock).toHaveBeenCalledWith("/a");
+  });
+
+  it("converges on nested expanded directories across renders", async () => {
+    const { useTreeChildren } = await import("./queries");
+    const dirA = entry({ path: "/a", kind: "dir" });
+    const dirAB = entry({ path: "/a/b", kind: "dir" });
+    const fileABC = entry({ path: "/a/b/c.txt", kind: "file" });
+    listMock.mockImplementation((path: string) => {
+      if (path === "/a") {
+        return Promise.resolve({ path, entries: [dirAB] });
+      }
+      if (path === "/a/b") {
+        return Promise.resolve({ path, entries: [fileABC] });
+      }
+      return Promise.resolve({ path, entries: [] });
+    });
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useTreeChildren([dirA], new Set(["/a", "/a/b"])), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(result.current.get("/a/b")).toEqual([fileABC]));
+    expect(result.current.get("/a")).toEqual([dirAB]);
+  });
+
+  it("re-fetches once the reachable set changes on a later render", async () => {
+    const { useTreeChildren } = await import("./queries");
+    const dirA = entry({ path: "/a", kind: "dir" });
+    listMock.mockResolvedValue({ path: "/a", entries: [] });
+    const { wrapper } = createWrapper();
+
+    const { result, rerender } = renderHook(
+      ({ expanded }: { expanded: ReadonlySet<string> }) => useTreeChildren([dirA], expanded),
+      { wrapper, initialProps: { expanded: new Set<string>() } },
+    );
+
+    expect(result.current.size).toBe(0);
+
+    act(() => {
+      rerender({ expanded: new Set(["/a"]) });
+    });
+
+    await waitFor(() => expect(result.current.get("/a")).toEqual([]));
   });
 });
 
