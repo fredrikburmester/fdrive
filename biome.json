@@ -16,7 +16,9 @@
       "!**/.turbo",
       "!**/*.gen.ts",
       "!**/pnpm-lock.yaml",
-      "!**/.claude/worktrees"
+      "!**/.claude/worktrees",
+      "!**/playwright-report",
+      "!**/test-results"
     ]
   },
   "formatter": {
