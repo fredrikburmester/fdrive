@@ -6,6 +6,7 @@ import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
+import { contextSelectionCount } from "@/lib/files/selection";
 import { cn } from "@/lib/utils";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
@@ -131,7 +132,12 @@ export function FileGrid({
                   const isFocused = focusedPath === entry.path;
 
                   return (
-                    <FileContextMenu key={entry.path} entry={entry} onAction={onContextAction}>
+                    <FileContextMenu
+                      key={entry.path}
+                      entry={entry}
+                      onAction={onContextAction}
+                      selectionCount={contextSelectionCount(entry.path, selected)}
+                    >
                       {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
                       {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
                       <div

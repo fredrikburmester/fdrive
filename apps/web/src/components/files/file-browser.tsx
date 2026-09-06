@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import type { ArchiveFormat, CompressRequest, ExtractRequest, FsEntry } from "@fdrive/contracts";
 import { baseName, isRoot, joinPath, parentPath } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
@@ -22,6 +22,7 @@ import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { editHref } from "@/lib/editor/route";
+import { defaultArchiveName, extractDestinationUnder } from "@/lib/files/archive";
 import { apiClient, PageHeader, queryKeys } from "@/lib/files/deps";
 import {
   type AnchorDownloader,
@@ -40,6 +41,7 @@ import {
   describeFsError,
   useCopy,
   useDelete,
+  useDuplicate,
   useListing,
   useMkdir,
   useMove,
@@ -81,7 +83,11 @@ import {
   type ViewMode,
   writeViewMode,
 } from "@/lib/files/view-mode";
+import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
+import { useJobsStore } from "@/lib/jobs/store";
+import type { JobRequest } from "@/lib/jobs/types";
 import { collectInputFiles } from "@/lib/upload/traverse";
+import { CompressDialog, type CompressDialogState } from "./compress-dialog";
 import { DeleteDialog } from "./delete-dialog";
 import { DestinationPicker, type DestinationPickerMode } from "./destination-picker";
 import { EmptyState } from "./empty-state";
@@ -235,6 +241,7 @@ export function FileBrowser({
   const move = useMove();
   const copy = useCopy();
   const remove = useDelete();
+  const duplicate = useDuplicate();
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFileKind, setNewFileKind] = useState<NewFileKind | null>(null);
@@ -245,6 +252,12 @@ export function FileBrowser({
     mode: DestinationPickerMode;
     paths: string[];
   } | null>(null);
+  const [compressState, setCompressState] = useState<CompressDialogState | null>(null);
+  // Hidden (not unmounted, so its own state survives) while the "Change
+  // destination" flow's own DestinationPicker is open, so the two dialogs
+  // never show at once.
+  const compressDialogState =
+    destinationPicker?.mode === "compressDestination" ? null : compressState;
   const [detailsOpen, setDetailsOpenState] = useState(false);
   useEffect(() => {
     setDetailsOpenState(readInspectorOpen(window.localStorage));
@@ -280,6 +293,34 @@ export function FileBrowser({
       return [...selection.selected];
     }
     return [entry.path];
+  }
+
+  /** Wires `runJobRequest` (compress/extract) to the real API client, jobs store, and toasts. */
+  function buildJobRequestDeps(): RunJobRequestDeps {
+    return {
+      compress: (req: CompressRequest) => apiClient.compress(req),
+      extract: (req: ExtractRequest) => apiClient.extract(req),
+      upsertJob: (job, request) => useJobsStore.getState().upsert(job, request),
+      notifySuccess: (message) => toast.success(message),
+      notifyError: (message) => toast.error(message),
+    };
+  }
+
+  function submitJobRequest(request: JobRequest) {
+    void runJobRequest(buildJobRequestDeps(), request);
+  }
+
+  function openCompressDialog(paths: string[]) {
+    const first = paths[0];
+    if (first === undefined) {
+      return;
+    }
+    setCompressState({
+      paths,
+      format: "zip",
+      name: defaultArchiveName(paths),
+      destination: parentPath(first),
+    });
   }
 
   function entriesForAction(entry: FsEntry): FsEntry[] {
@@ -342,7 +383,44 @@ export function FileBrowser({
       case "delete":
         setDeleteTargets(entriesForAction(entry));
         break;
+      case "duplicate":
+        duplicate.mutate(entry.path, {
+          onSuccess: (newEntry) => {
+            toast.success(`Duplicated as "${newEntry.name}"`);
+            dispatchSelection({ type: "set", paths: [newEntry.path] });
+          },
+        });
+        break;
+      case "compress":
+        openCompressDialog(pathsForAction(entry));
+        break;
+      case "extractHere":
+        submitJobRequest({ kind: "extract", req: { path: entry.path } });
+        break;
+      case "extractTo":
+        setDestinationPicker({ mode: "extractTo", paths: [entry.path] });
+        break;
     }
+  }
+
+  function handleDuplicateSelection() {
+    const only = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
+    if (only === undefined) {
+      return;
+    }
+    duplicate.mutate(only.path, {
+      onSuccess: (newEntry) => {
+        toast.success(`Duplicated as "${newEntry.name}"`);
+        dispatchSelection({ type: "set", paths: [newEntry.path] });
+      },
+    });
+  }
+
+  function handleCompressSelection() {
+    if (selectedEntries.length === 0) {
+      return;
+    }
+    openCompressDialog(selectedEntries.map((entry) => entry.path));
   }
 
   function handleCreateFolder(name: string) {
@@ -390,11 +468,51 @@ export function FileBrowser({
     if (destinationPicker === null) {
       return;
     }
+
+    if (destinationPicker.mode === "compressDestination") {
+      setCompressState((prev) => (prev === null ? prev : { ...prev, destination: destinationDir }));
+      setDestinationPicker(null);
+      return;
+    }
+
+    if (destinationPicker.mode === "extractTo") {
+      const archivePath = destinationPicker.paths[0];
+      setDestinationPicker(null);
+      if (archivePath !== undefined) {
+        submitJobRequest({
+          kind: "extract",
+          req: {
+            path: archivePath,
+            destination: extractDestinationUnder(archivePath, destinationDir),
+          },
+        });
+      }
+      return;
+    }
+
     const mutation = destinationPicker.mode === "move" ? move : copy;
     for (const source of destinationPicker.paths) {
       mutation.mutate({ path: source, target: joinPath(destinationDir, baseName(source)) });
     }
     setDestinationPicker(null);
+  }
+
+  function handleCompressSubmit() {
+    if (compressState === null) {
+      return;
+    }
+    const name = compressState.name.trim();
+    if (name.length === 0) {
+      return;
+    }
+    const req: CompressRequest = {
+      paths: [...compressState.paths],
+      format: compressState.format,
+      name,
+      destination: compressState.destination,
+    };
+    setCompressState(null);
+    submitJobRequest({ kind: "compress", req });
   }
 
   function handleUploadFiles() {
@@ -549,6 +667,8 @@ export function FileBrowser({
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
             selectedCount={selection.selected.size}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
+            onDuplicateSelection={handleDuplicateSelection}
+            onCompressSelection={handleCompressSelection}
           />
         }
       />
@@ -693,9 +813,31 @@ export function FileBrowser({
             }
           }}
           onConfirm={handleDestinationConfirm}
-          pending={destinationPicker.mode === "move" ? move.isPending : copy.isPending}
+          pending={
+            destinationPicker.mode === "move"
+              ? move.isPending
+              : destinationPicker.mode === "copy"
+                ? copy.isPending
+                : false
+          }
         />
       )}
+      <CompressDialog
+        state={compressDialogState}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCompressState(null);
+          }
+        }}
+        onFormatChange={(format: ArchiveFormat) =>
+          setCompressState((prev) => (prev === null ? prev : { ...prev, format }))
+        }
+        onNameChange={(name) =>
+          setCompressState((prev) => (prev === null ? prev : { ...prev, name }))
+        }
+        onChangeDestination={() => setDestinationPicker({ mode: "compressDestination", paths: [] })}
+        onSubmit={handleCompressSubmit}
+      />
     </>
   );
 }

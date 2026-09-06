@@ -1,15 +1,16 @@
 "use client";
 
 import { createContext, type ReactNode, useContext } from "react";
+import { ActivityPanel } from "@/components/activity/activity-panel";
 import { ConflictDialog } from "./conflict-dialog";
-import { UploadPanel } from "./upload-panel";
 import { type UseUploadFilesResult, useUploadFiles } from "./use-upload-files";
 
 const UploadFilesContext = createContext<UseUploadFilesResult | null>(null);
 
 /**
- * Mounts the app's single upload UI once: the floating `UploadPanel` and
- * the `ConflictDialog`. Also exposes the `useUploadFiles` result
+ * Mounts the app's single upload UI once: the floating `ActivityPanel`
+ * (uploads and compress/extract jobs, see `components/activity/activity-panel.tsx`)
+ * and the `ConflictDialog`. Also exposes the `useUploadFiles` result
  * (`uploadFiles`, `conflictDialog`) to every descendant via
  * `useUploadFilesContext`, so any page that can start an upload (currently
  * just the file browser) shares the exact conflict-resolution state shown
@@ -21,7 +22,7 @@ export function UploadFilesProvider({ children }: { children: ReactNode }) {
   return (
     <UploadFilesContext.Provider value={uploadFiles}>
       {children}
-      <UploadPanel />
+      <ActivityPanel />
       <ConflictDialog {...uploadFiles.conflictDialog} />
     </UploadFilesContext.Provider>
   );

@@ -8,7 +8,7 @@ import { reachableExpandedDirs } from "./tree-rows";
 
 export type ListQueryKey = readonly ["fs", "list", string];
 
-export type FsMutationOp = "mkdir" | "rename" | "move" | "copy" | "delete";
+export type FsMutationOp = "mkdir" | "rename" | "move" | "copy" | "delete" | "duplicate";
 
 export interface AffectedListKeysInput {
   /** The mutation kind, which decides how `paths` and `targets` are used. */
@@ -37,6 +37,7 @@ export function affectedListKeys(input: AffectedListKeysInput): ListQueryKey[] {
   switch (input.op) {
     case "mkdir":
     case "delete":
+    case "duplicate":
       for (const path of input.paths) {
         dirs.add(parentPath(path));
       }
@@ -113,6 +114,15 @@ export function useMkdir() {
     mutationFn: (path) => apiClient.mkdir(path),
     toAffected: (path) => ({ op: "mkdir", paths: [path] }),
     errorFallback: "Could not create the folder.",
+  });
+}
+
+/** Copies `path` next to itself under a unique name, invalidating its parent's listing. */
+export function useDuplicate() {
+  return useFsMutation<string, FsEntry>({
+    mutationFn: (path) => apiClient.duplicate(path),
+    toAffected: (_path, result) => ({ op: "duplicate", paths: [result.path] }),
+    errorFallback: "Could not duplicate.",
   });
 }
 

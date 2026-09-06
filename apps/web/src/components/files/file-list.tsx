@@ -7,6 +7,7 @@ import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useRef } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
+import { contextSelectionCount } from "@/lib/files/selection";
 import { formatBytes, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
@@ -129,7 +130,12 @@ export function FileList({
           const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
 
           return (
-            <FileContextMenu key={entry.path} entry={entry} onAction={onContextAction}>
+            <FileContextMenu
+              key={entry.path}
+              entry={entry}
+              onAction={onContextAction}
+              selectionCount={contextSelectionCount(entry.path, selected)}
+            >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
               {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
               <div
