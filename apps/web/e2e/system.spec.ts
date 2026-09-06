@@ -146,9 +146,11 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
 
   await expect(page.getByText("Reachable")).toBeVisible();
 
-  // The "Thumbnails" stat card: scoped to a card so this does not also match
-  // the page's own "Thumbnails" heading.
-  const thumbnailsCard = page.locator('[data-slot="card"]').filter({ hasText: "Thumbnails" });
+  // The "Thumbnails" stat card: matched by its exact label so this hits neither
+  // the page's own "Thumbnails" heading nor the Status card's prose.
+  const thumbnailsCard = page
+    .locator('[data-slot="card"]')
+    .filter({ has: page.getByText("Thumbnails", { exact: true }) });
   await expect(thumbnailsCard).toBeVisible();
 
   await page.getByRole("button", { name: "Rebuild…" }).click();

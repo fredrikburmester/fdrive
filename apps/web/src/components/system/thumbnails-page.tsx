@@ -76,9 +76,10 @@ export function ThumbnailsPage() {
             <CardContent className="flex flex-col gap-3">
               <StatusBadge status={sidecarStatus(data.configured, data.configured)} />
               <p className="text-sm text-muted-foreground">
-                Rebuild marks every file pending so the indexer regenerates any thumbnail missing on
-                disk. Existing thumbnails are left as-is; there is no way to force a regenerate yet.
-                Clearing the whole cache is not available yet. It is coming in a later release.
+                Rebuild runs a background pass over every image, PDF, and video in the index and
+                writes any preview that is missing on disk. It never re-extracts text or embeddings.
+                Existing previews are kept; forcing a regenerate and clearing the cache are coming
+                in a later release.
               </p>
             </CardContent>
           </Card>
@@ -95,8 +96,8 @@ export function ThumbnailsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Rebuild every thumbnail?</AlertDialogTitle>
             <AlertDialogDescription>
-              Marks every file pending so the indexer regenerates any thumbnail missing on disk.
-              This can take a while for a large index.
+              Runs a background pass that writes any preview missing on disk. Text extraction and
+              embeddings are not touched. This can take a while for a large index.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
