@@ -10,6 +10,7 @@ export default definePackageConfig({
         "src/**/index.ts",
         "src/schema/**",
         "src/bin/**",
+        "src/repos/drizzle.ts",
       ],
     },
   },

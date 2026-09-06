@@ -8,6 +8,20 @@ import * as idxSchema from "./schema/idx.js";
 
 export { resolveMigrationsFolder } from "./migrationsPath.js";
 export * from "./parseDatabaseUrl.js";
+export { createRepos } from "./repos/drizzle.js";
+export type {
+  Account,
+  AccountRepo,
+  Credential,
+  CredentialRepo,
+  Identity,
+  IdentityRepo,
+  Provider,
+  ProviderRepo,
+  Repos,
+  Session,
+  SessionRepo,
+} from "./repos/types.js";
 export * from "./vector.js";
 
 export const schema = { ...appSchema, ...idxSchema };
