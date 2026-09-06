@@ -135,7 +135,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("succeeds with correct credentials, returns MeResponse, and sets a non-Secure cookie over plain http", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app, server } = buildTestApp({ clockCtl });
 
     const res = await login(app, { username: "alice", password: "wonderland" });
 
@@ -152,6 +152,26 @@ describe("auth routes: POST /auth/login", () => {
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Lax");
     expect(setCookie).not.toContain("Secure");
+
+    // Exactly one SFTPGo login per fdrive login: `authService.login` primes
+    // the token cache from its own `sftpgo.login` result rather than having
+    // `tokenSource.get` mint a second token right after.
+    expect(server.state.tokens.size).toBe(1);
+  });
+
+  it("mints exactly one SFTPGo token per fdrive login, reused by the first authenticated request", async () => {
+    const { app, server } = buildTestApp({ clockCtl });
+
+    const loginRes = await login(app, { username: "alice", password: "wonderland" });
+    const cookie = extractCookie(loginRes);
+    expect(server.state.tokens.size).toBe(1);
+
+    const meRes = await app.request(ROUTES.auth.me, { headers: { cookie } });
+    expect(meRes.status).toBe(200);
+
+    // `GET /auth/me` never touches storage, so it does not mint a token
+    // either; the count stays at the one from login.
+    expect(server.state.tokens.size).toBe(1);
   });
 
   it("sets a Secure cookie when the request arrived over a forwarded https connection", async () => {

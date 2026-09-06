@@ -7,7 +7,7 @@ import { createLoginLimiter, type LoginLimiter } from "./login-limiter.js";
 import type { PrincipalResolver } from "./principal.js";
 import { registerAuthRoutes } from "./routes.js";
 import { createAuthService } from "./service.js";
-import { createTokenSource } from "./token-source.js";
+import { createTokenSource, type TokenSource } from "./token-source.js";
 
 export { CryptoError, KEY_ID, open, parseMasterKey, seal } from "./crypto.js";
 export type { LoginLimiter } from "./login-limiter.js";
@@ -37,6 +37,14 @@ export interface CreateAuthModuleDeps {
   readonly config: AppConfig;
   readonly storageFactory: (identityId: string) => StorageProvider;
   readonly limiter?: LoginLimiter;
+  /**
+   * The `TokenSource` the auth service uses to prime and re-mint SFTPGo
+   * JWTs. Defaults to a freshly built one when omitted; a caller that also
+   * needs a `TokenSource` elsewhere (for example to build the storage
+   * provider passed as `storageFactory`) should build it once and pass it
+   * here so both share the same in-process token cache.
+   */
+  readonly tokenSource?: TokenSource;
 }
 
 export interface AuthModule {
@@ -61,12 +69,14 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
       blockMs: LOGIN_BLOCK_MS,
     });
 
-  const tokenSource = createTokenSource({
-    repos: deps.repos,
-    sftpgo: deps.sftpgo,
-    master: deps.master,
-    clock: deps.clock,
-  });
+  const tokenSource =
+    deps.tokenSource ??
+    createTokenSource({
+      repos: deps.repos,
+      sftpgo: deps.sftpgo,
+      master: deps.master,
+      clock: deps.clock,
+    });
 
   const service = createAuthService({
     repos: deps.repos,

@@ -167,6 +167,22 @@ describe("createLoginLimiter", () => {
     expect(limiter.check("127.0.0.1|bob")).toEqual({ allowed: true });
   });
 
+  it("uses the default policy (5 failures, 60s window and block) when none is given", () => {
+    const { clock, advance } = createClock(0);
+    const limiter = createLoginLimiter({ clock });
+
+    for (let i = 0; i < 4; i += 1) {
+      limiter.recordFailure(KEY);
+    }
+    expect(limiter.check(KEY)).toEqual({ allowed: true });
+
+    limiter.recordFailure(KEY);
+    expect(limiter.check(KEY)).toEqual({ allowed: false, retryAfterMs: 60_000 });
+
+    advance(60_001);
+    expect(limiter.check(KEY)).toEqual({ allowed: true });
+  });
+
   it("recordFailure on an already-blocked key keeps it blocked without resetting the window early", () => {
     const { clock, advance } = createClock(0);
     const limiter = createLoginLimiter({

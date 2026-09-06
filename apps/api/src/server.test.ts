@@ -29,6 +29,7 @@ function buildConfig(): AppConfig {
     fdriveCookieSecure: "auto",
     fdrivePublicUrl: undefined,
     nodeEnv: "test",
+    fdriveAutoMigrate: true,
   };
 }
 

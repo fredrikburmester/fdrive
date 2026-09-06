@@ -20,6 +20,7 @@ export interface AppConfig {
   readonly fdriveCookieSecure: CookieSecureMode;
   readonly fdrivePublicUrl: string | undefined;
   readonly nodeEnv: NodeEnv;
+  readonly fdriveAutoMigrate: boolean;
 }
 
 /**
@@ -105,6 +106,10 @@ const envSchema = z.object({
       }),
   ),
   NODE_ENV: z.preprocess((value) => withDefault(value, "development"), z.enum(NODE_ENVS)),
+  FDRIVE_AUTO_MIGRATE: z.preprocess(
+    (value) => withDefault(value, "true"),
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ),
 });
 
 /**
@@ -137,5 +142,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,
     fdrivePublicUrl: parsed.FDRIVE_PUBLIC_URL,
     nodeEnv: parsed.NODE_ENV,
+    fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
   };
 }
