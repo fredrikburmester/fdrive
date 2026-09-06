@@ -287,6 +287,20 @@ def test_upsert_thumbnail_and_count(db_conn: psycopg.Connection) -> None:
         assert cur.fetchone() == (300, 150)
 
 
+def test_media_files_excludes_deleted(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    db.upsert_file(db_conn, root_id, "a.png", "a.png", ".png", 100, 1, "sha1", "image/png")
+    db.upsert_file(db_conn, root_id, "b.pdf", "b.pdf", ".pdf", 200, 1, "sha2", "application/pdf")
+    db.mark_deleted(db_conn, root_id, "b.pdf", False)
+    rows = db.media_files(db_conn, root_id)
+    assert rows == [("a.png", ".png", "sha1", 100)]
+
+
+def test_media_files_empty_root(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    assert db.media_files(db_conn, root_id) == []
+
+
 def test_root_stats_counts_and_chunks(db_conn: psycopg.Connection) -> None:
     root_id = db.upsert_root(db_conn, "sftpgo")
     f1 = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)

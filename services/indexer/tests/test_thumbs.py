@@ -1,7 +1,11 @@
 from fdrive_indexer.thumbs import (
     SIZES,
+    is_thumbnail_candidate,
     kind_for_ext,
+    normalize_scope,
     resize_dimensions,
+    select_candidates,
+    should_regenerate,
     should_skip_existing,
     storage_path,
     within_size_budget,
@@ -64,3 +68,66 @@ def test_should_skip_existing_true() -> None:
 
 def test_should_skip_existing_false() -> None:
     assert should_skip_existing(False) is False
+
+
+def test_should_regenerate_forced_even_when_exists() -> None:
+    assert should_regenerate(exists=True, force=True) is True
+
+
+def test_should_regenerate_missing_without_force() -> None:
+    assert should_regenerate(exists=False, force=False) is True
+
+
+def test_should_regenerate_skips_existing_without_force() -> None:
+    assert should_regenerate(exists=True, force=False) is False
+
+
+def test_normalize_scope_none_is_whole_root() -> None:
+    assert normalize_scope(None) == ""
+
+
+def test_normalize_scope_strips_slashes() -> None:
+    assert normalize_scope("/photos/2024/") == "photos/2024"
+
+
+def test_is_thumbnail_candidate_wrong_extension() -> None:
+    assert is_thumbnail_candidate(".txt", "notes.txt", "") is False
+
+
+def test_is_thumbnail_candidate_whole_root_matches_anything() -> None:
+    assert is_thumbnail_candidate(".png", "any/where.png", "") is True
+
+
+def test_is_thumbnail_candidate_exact_path_match() -> None:
+    assert is_thumbnail_candidate(".png", "photos/a.png", "photos/a.png") is True
+
+
+def test_is_thumbnail_candidate_under_prefix() -> None:
+    assert is_thumbnail_candidate(".png", "photos/2024/a.png", "photos") is True
+
+
+def test_is_thumbnail_candidate_outside_prefix() -> None:
+    assert is_thumbnail_candidate(".png", "docs/a.png", "photos") is False
+
+
+def test_is_thumbnail_candidate_sibling_name_prefix_is_not_a_match() -> None:
+    # "photos2/a.png" must not match scope "photos" just because it starts with
+    # the same characters; only "photos" itself or "photos/..." should match.
+    assert is_thumbnail_candidate(".png", "photos2/a.png", "photos") is False
+
+
+def test_select_candidates_filters_extension_and_scope() -> None:
+    rows = [
+        ("photos/a.png", ".png", "sha1", 100),
+        ("photos/a.txt", ".txt", "sha2", 50),
+        ("docs/b.pdf", ".pdf", "sha3", 200),
+    ]
+    assert select_candidates(rows, "photos") == [("photos/a.png", ".png", "sha1", 100)]
+
+
+def test_select_candidates_whole_root() -> None:
+    rows = [
+        ("photos/a.png", ".png", "sha1", 100),
+        ("clip.mp4", ".mp4", "sha4", 300),
+    ]
+    assert select_candidates(rows, "") == rows

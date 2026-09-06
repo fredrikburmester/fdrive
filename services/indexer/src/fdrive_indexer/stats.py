@@ -37,6 +37,7 @@ def shape_stats(
     thumbnails_count: int,
     queue_depth: int,
     errors_sample: list[dict[str, Any]] | None = None,
+    thumbnail_rebuild: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors_sample = errors_sample if errors_sample is not None else []
     return {
@@ -53,4 +54,5 @@ def shape_stats(
         "thumbnails": thumbnails_count,
         "queue_depth": queue_depth,
         "errors_sample": list(errors_sample),
+        "thumbnail_rebuild": thumbnail_rebuild,
     }

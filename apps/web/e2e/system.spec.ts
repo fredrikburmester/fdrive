@@ -92,7 +92,7 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
   await expect(page.getByText(/FileDataError/)).toBeVisible();
 });
 
-test("alice (admin) can reindex the sftpgo root and sees a toast reporting how many files were marked", async ({
+test("alice (admin) can reindex the sftpgo root, optionally with thumbnails, and sees a toast reporting how many files were marked", async ({
   page,
 }) => {
   await page.goto("/system/indexer");
@@ -100,14 +100,42 @@ test("alice (admin) can reindex the sftpgo root and sees a toast reporting how m
   await page.getByRole("button", { name: "Reindex…" }).click();
   const dialog = page.getByRole("dialog").filter({ hasText: "Reindex" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/Re-extracts text and re-embeds/)).toBeVisible();
 
   await dialog.getByLabel("Root").click();
   await page.getByRole("option", { name: "sftpgo" }).click();
+  await dialog.getByRole("checkbox", { name: "Also regenerate thumbnails" }).click();
 
   await dialog.getByRole("button", { name: "Reindex", exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(
     page.locator("[data-sonner-toast]").filter({ hasText: "Marked 3 files for reindex." }),
+  ).toBeVisible();
+});
+
+test("alice (admin) can rebuild thumbnails from the Indexer page with the honest, thumbnail-only dialog", async ({
+  page,
+}) => {
+  await page.goto("/system/indexer");
+
+  await page.getByRole("button", { name: "Rebuild thumbnails" }).click();
+  const dialog = page.getByRole("dialog").filter({ hasText: "Rebuild thumbnails" });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByText(/Regenerates preview images for photos, PDFs, and videos/),
+  ).toBeVisible();
+  await expect(dialog.getByText(/Text and search data are not touched/)).toBeVisible();
+
+  // Root defaults to "All roots"; scope to the fake's one root and turn on
+  // force to exercise every field this dialog now sends.
+  await dialog.getByLabel("Root").click();
+  await page.getByRole("option", { name: "sftpgo" }).click();
+  await dialog.getByRole("switch", { name: "Regenerate existing thumbnails" }).click();
+
+  await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.locator("[data-sonner-toast]").filter({ hasText: "Rebuilding 6 thumbnails…" }),
   ).toBeVisible();
 });
 
@@ -130,7 +158,7 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
 
   await expect(dialog).toBeHidden();
   await expect(
-    page.locator("[data-sonner-toast]").filter({ hasText: "Marked 6 thumbnails to rebuild." }),
+    page.locator("[data-sonner-toast]").filter({ hasText: "Rebuilding 6 thumbnails…" }),
   ).toBeVisible();
 });
 

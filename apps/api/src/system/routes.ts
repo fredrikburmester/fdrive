@@ -4,6 +4,7 @@ import {
   type IndexerSettingsResponse,
   IndexerSettingsUpdateRequest,
   IndexerThumbnailsRebuildRequest,
+  type IndexerThumbnailsRebuildResponse,
   type OcrRunResponse,
   type OcrSettingsResponse,
   OcrSettingsUpdateRequest,
@@ -63,6 +64,23 @@ export interface SystemRoutesDeps {
 
 function sidecarErrorMessage(service: string, result: { reason: string; detail: string }): string {
   return `${service} is ${result.reason === "unreachable" ? "unreachable" : "returning an unexpected response"}: ${result.detail}`;
+}
+
+/**
+ * Throws for a failed `thumbnailsRebuild` call: a `409` (a rebuild is already
+ * running, process-wide, per `docs/INDEXER.md`) becomes a `conflict` rather
+ * than the generic `upstream_unavailable` every other sidecar failure maps
+ * to, so the web app can show "already running" instead of "unreachable".
+ */
+function throwForThumbnailsRebuildFailure(result: {
+  reason: string;
+  detail: string;
+  status?: number;
+}): never {
+  if (result.status === 409) {
+    throw new ApiHttpError("conflict", "a thumbnail rebuild is already running");
+  }
+  throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
 }
 
 /**
@@ -133,7 +151,11 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
 
-    const result = await deps.indexerClient.reindex(parsed.data.root, parsed.data.path);
+    const result = await deps.indexerClient.reindex(
+      parsed.data.root,
+      parsed.data.path,
+      parsed.data.thumbnails,
+    );
     if (!result.ok) {
       throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
     }
@@ -158,13 +180,13 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
         });
       }
 
-      const result = await deps.indexerClient.thumbnailsRebuild(parsed.data.root);
+      const result = await deps.indexerClient.thumbnailsRebuild(parsed.data);
       if (!result.ok) {
-        throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
+        throwForThumbnailsRebuildFailure(result);
       }
 
-      const body: IndexerActionResponse = result.data;
-      return c.json(body);
+      const body: IndexerThumbnailsRebuildResponse = result.data;
+      return c.json(body, 202);
     },
   );
 
@@ -297,10 +319,10 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
     const result = await deps.indexerClient.thumbnailsRebuild();
     if (!result.ok) {
-      throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
+      throwForThumbnailsRebuildFailure(result);
     }
 
-    const body: IndexerActionResponse = result.data;
-    return c.json(body);
+    const body: IndexerThumbnailsRebuildResponse = result.data;
+    return c.json(body, 202);
   });
 }

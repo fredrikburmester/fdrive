@@ -704,20 +704,34 @@ describe("createApiClient: system", () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo", path: "folder" });
   });
 
-  it("posts system/indexer/thumbnails/rebuild with an empty body by default", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 10 })]);
+  it("posts system/indexer/reindex with thumbnails: true", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(await client.systemRebuildIndexerThumbnails()).toEqual({ marked: 10 });
+    await client.systemReindex({ root: "sftpgo", thumbnails: true });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo", thumbnails: true });
+  });
+
+  it("posts system/indexer/thumbnails/rebuild with an empty body by default", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 10 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemRebuildIndexerThumbnails()).toEqual({ started: true, total: 10 });
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
   });
 
-  it("posts system/indexer/thumbnails/rebuild scoped to a root", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 4 })]);
+  it("posts system/indexer/thumbnails/rebuild scoped to a root, path, and force", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 4 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(await client.systemRebuildIndexerThumbnails({ root: "sftpgo" })).toEqual({ marked: 4 });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo" });
+    expect(
+      await client.systemRebuildIndexerThumbnails({ root: "sftpgo", path: "folder", force: true }),
+    ).toEqual({ started: true, total: 4 });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      root: "sftpgo",
+      path: "folder",
+      force: true,
+    });
   });
 
   it("gets system/search", async () => {
@@ -785,10 +799,10 @@ describe("createApiClient: system", () => {
   });
 
   it("posts system/thumbnails/rebuild", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 12 })]);
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 12 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(await client.systemRebuildThumbnails()).toEqual({ marked: 12 });
+    expect(await client.systemRebuildThumbnails()).toEqual({ started: true, total: 12 });
     expect(calls[0]?.url).toBe("/api/v1/system/thumbnails/rebuild");
   });
 });

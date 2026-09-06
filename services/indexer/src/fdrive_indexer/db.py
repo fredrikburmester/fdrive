@@ -318,6 +318,17 @@ def thumbnails_count(conn: psycopg.Connection) -> int:
         return int(row[0]) if row else 0
 
 
+def media_files(conn: psycopg.Connection, root_id: int) -> list[tuple[str, str, str, int]]:
+    """`(path, ext, sha256, size)` for every live file in a root, for the
+    rebuild-thumbnails pass to filter down to thumbnailable extensions and scope."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT path, ext, sha256, size FROM "idx"."files" WHERE root_id = %s AND deleted_at IS NULL',
+            (root_id,),
+        )
+        return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall()]
+
+
 def root_stats(conn: psycopg.Connection, root: str, root_id: int) -> RootStats:
     with conn.cursor() as cur:
         cur.execute(

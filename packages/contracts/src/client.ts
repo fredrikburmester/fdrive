@@ -48,6 +48,7 @@ import {
   IndexerSettingsResponse,
   type IndexerSettingsUpdateRequest,
   type IndexerThumbnailsRebuildRequest,
+  IndexerThumbnailsRebuildResponse,
   OcrRunResponse,
   OcrSettingsResponse,
   type OcrSettingsUpdateRequest,
@@ -153,14 +154,14 @@ export interface ApiClient {
   systemReindex(req: IndexerReindexRequest): Promise<IndexerActionResponse>;
   systemRebuildIndexerThumbnails(
     req?: IndexerThumbnailsRebuildRequest,
-  ): Promise<IndexerActionResponse>;
+  ): Promise<IndexerThumbnailsRebuildResponse>;
   systemSearch(): Promise<SystemSearchResponse>;
   systemReembed(): Promise<SystemReembedResponse>;
   systemOcr(): Promise<SystemOcrResponse>;
   systemUpdateOcrSettings(settings: OcrSettingsUpdateRequest): Promise<OcrSettingsResponse>;
   systemRunOcr(): Promise<OcrRunResponse>;
   systemThumbnails(): Promise<SystemThumbnailsResponse>;
-  systemRebuildThumbnails(): Promise<IndexerActionResponse>;
+  systemRebuildThumbnails(): Promise<IndexerThumbnailsRebuildResponse>;
   listApiTokens(): Promise<ApiTokensResponse>;
   createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResponse>;
   revokeApiToken(id: string): Promise<OkResponse>;
@@ -610,7 +611,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     systemRebuildIndexerThumbnails(
       req?: IndexerThumbnailsRebuildRequest,
-    ): Promise<IndexerActionResponse> {
+    ): Promise<IndexerThumbnailsRebuildResponse> {
       return requestJson(
         ctx,
         {
@@ -618,7 +619,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           path: ROUTES.system.indexerThumbnailsRebuild,
           jsonBody: req ?? {},
         },
-        IndexerActionResponse,
+        IndexerThumbnailsRebuildResponse,
       );
     },
 
@@ -658,11 +659,11 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       );
     },
 
-    systemRebuildThumbnails(): Promise<IndexerActionResponse> {
+    systemRebuildThumbnails(): Promise<IndexerThumbnailsRebuildResponse> {
       return requestJson(
         ctx,
         { method: "POST", path: ROUTES.system.thumbnailsRebuild },
-        IndexerActionResponse,
+        IndexerThumbnailsRebuildResponse,
       );
     },
 

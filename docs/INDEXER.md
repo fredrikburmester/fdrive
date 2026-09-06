@@ -46,6 +46,17 @@ written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 the same thumbnail twice. Thumbnail failures are logged and never fail the
 file's own indexing.
 
+`POST /thumbnails/rebuild` (`thumb_rebuild.py`) is a separate, thumbnail-only
+pass for when the WebP files themselves need regenerating, for example after
+changing thumbnail sizes or quality, without paying the cost of a full
+reindex (re-extraction and re-embedding). It walks `idx.files` rather than the
+filesystem, filters down to thumbnailable extensions with the same rules as
+above, and, with `force`, deletes the existing WebP files first so both sizes
+are always rewritten; without `force`, existing ones are left alone and only
+missing sizes are filled in. It runs in a background thread (at most one at a
+time process-wide) and its progress is visible at `GET /stats` under
+`thumbnail_rebuild`.
+
 ## `text_status` values
 
 | Status | Meaning |
@@ -107,10 +118,10 @@ a published port in the non-dev compose file.
 | Endpoint | Method | Body | Returns |
 | --- | --- | --- | --- |
 | `/health` | GET | — | `{ ok, roots, watcher, embed_ok, schema_version }` |
-| `/stats` | GET | — | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, a sample of recent errors. |
+| `/stats` | GET | — | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, a sample of recent errors, and `thumbnail_rebuild: { running, processed, total, started_at, finished_at, errors }` for the most recent `/thumbnails/rebuild` pass (all zero/`null`/`false` if none has run yet). |
 | `/extract` | POST | `{ root, path, offset?, max_chars? }` | Live text extraction for one file (not persisted), sliced by `offset`/`max_chars`. Used for the web app's live text preview. |
-| `/reindex` | POST | `{ root, path? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan. Returns `{ count }`. |
-| `/thumbnails/rebuild` | POST | `{ root? }` | Best-effort: marks the scoped rows pending, which regenerates any thumbnail missing on disk on the next scan (existing thumbnails are left as-is; there is no forced-regenerate switch in v1). |
+| `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
+| `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is the candidate count computed up front), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
 
 ## Compose
 
@@ -171,10 +182,11 @@ the same source and target is a no-op the second time, because it upserts on
 
 Pure modules (`paths.py`, `chunking.py`, `rules.py`, `events.py`, `thumbs.py`,
 `settings.py`, `stats.py`) have no I/O and are covered at 100%. I/O modules
-(`db.py`, `extract.py`, `thumbs_io.py`, `indexer.py`, `server.py`, `main.py`)
-are tested against a real Postgres via `testcontainers`, with the repo's own
-`packages/db/drizzle/*.sql` migrations applied in a fixture, and a `tmp_path`
-directory tree standing in for a root.
+(`db.py`, `extract.py`, `thumbs_io.py`, `indexer.py`, `thumb_rebuild.py`,
+`server.py`, `main.py`) are tested against a real Postgres via
+`testcontainers`, with the repo's own `packages/db/drizzle/*.sql` migrations
+applied in a fixture, and a `tmp_path` directory tree (with a real small PNG
+and PDF for the thumbnail tests) standing in for a root.
 
 `watcher.py` calls `ctypes.CDLL("libc.so.6")` at import time, so it only works
 on Linux; its tests are `skipif(sys.platform != "linux")`. To run the full

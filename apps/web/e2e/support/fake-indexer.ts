@@ -43,18 +43,33 @@ const STATS_BODY = {
         "FileDataError: Failed to open file '/roots/sftpgo/alice/docs/report.pdf' as type pdf.",
     },
   ],
+  // No rebuild has run in this static fixture; matches a real indexer that
+  // has never had `POST /thumbnails/rebuild` called since it started.
+  thumbnail_rebuild: {
+    running: false,
+    processed: 0,
+    total: 0,
+    started_at: null,
+    finished_at: null,
+    errors: 0,
+  },
 };
 
 /**
- * `POST /reindex` and `POST /thumbnails/rebuild` both mark matching rows
- * pending and return how many, `{ count }` (see `docs/INDEXER.md`'s internal
- * HTTP API table and `IndexerCountRaw` in `indexer-client.ts`); the fake
- * always reports fixed counts regardless of the request body, since
- * `system.spec.ts` only asserts on the resulting toast, not on which root or
- * path was requested.
+ * `POST /reindex` marks matching rows pending and returns how many,
+ * `{ count }` (see `docs/INDEXER.md`'s internal HTTP API table and
+ * `IndexerCountRaw` in `indexer-client.ts`); the fake always reports a fixed
+ * count regardless of the request body (including the `thumbnails` flag),
+ * since `system.spec.ts` only asserts on the resulting toast, not on which
+ * root or path was requested.
+ *
+ * `POST /thumbnails/rebuild` now runs the pass in the background and answers
+ * `202 { started, total }` up front (see `IndexerThumbnailsRebuildResponse`);
+ * the fake reports a fixed `total` the same way, regardless of `root`,
+ * `path`, or `force`.
  */
 const REINDEX_MARKED = 3;
-const THUMBNAILS_REBUILD_MARKED = 6;
+const THUMBNAILS_REBUILD_TOTAL = 6;
 
 function readBody(req: IncomingMessage): Promise<void> {
   return new Promise((resolveBody, rejectBody) => {
@@ -92,7 +107,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   }
   if (method === "POST" && url === "/thumbnails/rebuild") {
     await readBody(req);
-    sendJson(res, 200, { count: THUMBNAILS_REBUILD_MARKED });
+    sendJson(res, 202, { started: true, total: THUMBNAILS_REBUILD_TOTAL });
     return;
   }
   if (method === "POST" && url === "/extract") {

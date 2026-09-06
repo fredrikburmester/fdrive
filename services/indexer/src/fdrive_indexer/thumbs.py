@@ -5,12 +5,16 @@ imported here; the actual generation lives in `thumbs_io.py`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal
 
 from .chunking import IMAGE_EXTS, PDF_EXTS, VIDEO_EXTS
 
 ThumbKind = Literal["image", "pdf", "video"]
 SIZES: tuple[int, int] = (256, 1024)
+
+# `(path, ext, sha256, size)`, the shape `db.media_files` returns.
+MediaRow = tuple[str, str, str, int]
 
 
 def kind_for_ext(ext: str) -> ThumbKind | None:
@@ -51,3 +55,33 @@ def should_skip_existing(exists: bool) -> bool:
     """Thumbnails are content-addressed by sha256, so an existing file for the same
     sha and size never needs regenerating."""
     return exists
+
+
+def should_regenerate(exists: bool, force: bool) -> bool:
+    """The other side of `should_skip_existing`: whether a given size needs
+    (re)writing. Always true under `force` (the rebuild-thumbnails pass deletes the
+    old file first), otherwise only when it is missing on disk."""
+    return force or not exists
+
+
+def normalize_scope(path: str | None) -> str:
+    """Normalize a thumbnail-rebuild scope path to what `is_thumbnail_candidate`
+    expects: `""` for the whole root (path omitted), otherwise the path with any
+    leading or trailing slashes stripped."""
+    if path is None:
+        return ""
+    return path.strip("/")
+
+
+def is_thumbnail_candidate(ext: str, rel_path: str, scope: str) -> bool:
+    """Whether a file both has a thumbnailable extension and lives under `scope`
+    (the empty string matches every path, i.e. the whole root)."""
+    if kind_for_ext(ext) is None:
+        return False
+    return scope == "" or rel_path == scope or rel_path.startswith(scope + "/")
+
+
+def select_candidates(rows: Sequence[MediaRow], scope: str) -> list[MediaRow]:
+    """Filter live file rows down to the ones the rebuild-thumbnails pass should
+    touch: a thumbnailable extension, under `scope`."""
+    return [row for row in rows if is_thumbnail_candidate(row[1], row[0], scope)]

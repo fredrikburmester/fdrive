@@ -106,6 +106,45 @@ describe("createIndexerClient: stats", () => {
     });
   });
 
+  it("maps thumbnail_rebuild to thumbnailRebuild when present", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        ...STATS_RAW,
+        thumbnail_rebuild: {
+          running: true,
+          processed: 2,
+          total: 10,
+          started_at: "2026-01-01T00:00:00+00:00",
+          finished_at: null,
+          errors: 1,
+        },
+      }),
+    );
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.stats();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data.thumbnailRebuild).toEqual({
+      running: true,
+      processed: 2,
+      total: 10,
+      startedAt: "2026-01-01T00:00:00+00:00",
+      finishedAt: null,
+      errors: 1,
+    });
+  });
+
+  it("omits thumbnailRebuild when the indexer does not send it (older indexer)", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, STATS_RAW));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.stats();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data.thumbnailRebuild).toBeUndefined();
+  });
+
   it("maps a null last_scan through to a null lastScan", async () => {
     const fetchStub = vi.fn().mockResolvedValue(
       jsonResponse(200, {
@@ -153,27 +192,51 @@ describe("createIndexerClient: reindex", () => {
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", path: "folder/sub" });
   });
+
+  it("posts { root, thumbnails: true } when a thumbnail rebuild is also requested", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 1 }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    await client.reindex("sftpgo", undefined, true);
+
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", thumbnails: true });
+  });
 });
 
 describe("createIndexerClient: thumbnailsRebuild", () => {
-  it("posts an empty body and maps count to marked when no root is given", async () => {
-    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 40 }));
+  it("posts an empty body when no options are given", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 40 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
     const result = await client.thumbnailsRebuild();
 
-    expect(result).toEqual({ ok: true, data: { marked: 40 } });
+    expect(result).toEqual({ ok: true, data: { started: true, total: 40 } });
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({});
   });
 
-  it("scopes the request to a root when given", async () => {
-    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 5 }));
+  it("scopes the request to a root, path, and force when given", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 5 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.thumbnailsRebuild("sftpgo");
+    await client.thumbnailsRebuild({ root: "sftpgo", path: "folder", force: true });
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo" });
+    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", path: "folder", force: true });
+  });
+
+  it("carries the sidecar's status through on failure (e.g. 409 already running)", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(409, { error: "already running" }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.thumbnailsRebuild();
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 409",
+      status: 409,
+    });
   });
 });
