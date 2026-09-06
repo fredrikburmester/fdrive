@@ -21,10 +21,13 @@ function buildConfig(): AppConfig {
     port: 0,
     host: "127.0.0.1",
     logLevel: "silent",
-    databaseUrl: undefined,
-    sftpgoUrl: undefined,
-    fdriveMasterKey: undefined,
+    databaseUrl: "postgres://localhost/fdrive",
+    sftpgoUrl: "http://localhost:8080",
+    fdriveMasterKey: Buffer.alloc(32, 7).toString("base64"),
     fdriveHomeTemplate: "sftpgo:/{username}",
+    fdriveSessionTtlDays: 30,
+    fdriveCookieSecure: "auto",
+    fdrivePublicUrl: undefined,
     nodeEnv: "test",
   };
 }

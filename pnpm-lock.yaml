@@ -32,6 +32,9 @@ importers:
       '@fdrive/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@fdrive/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@hono/node-server':
         specifier: ^1.19.5
         version: 1.19.17(hono@4.13.7)
@@ -90,9 +93,6 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
-      shadcn:
-        specifier: ^4.21.0
-        version: 4.21.0(typescript@5.9.3)
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -118,6 +118,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^5.0.0
         version: 5.0.0(vitest@5.0.0)
+      shadcn:
+        specifier: ^4.21.0
+        version: 4.21.0(typescript@5.9.3)
       tailwindcss:
         specifier: ^4
         version: 4.3.3
@@ -4761,7 +4764,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
+      vitest: 5.0.0(@types/node@22.20.1)(@vitest/coverage-v8@5.0.0)(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
   '@vitest/istanbul-lib-coverage@1.0.1': {}
 

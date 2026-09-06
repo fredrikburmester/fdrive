@@ -3,6 +3,12 @@ import { isBase64Of32Bytes, isHttpUrl, loadConfig, withDefault } from "./config"
 
 const MASTER_KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
 
+const REQUIRED_ENV = {
+  DATABASE_URL: "postgres://localhost/fdrive",
+  SFTPGO_URL: "http://localhost:8080",
+  FDRIVE_MASTER_KEY: MASTER_KEY_32_BYTES,
+};
+
 describe("withDefault", () => {
   it("returns the fallback for undefined", () => {
     expect(withDefault(undefined, "fallback")).toBe("fallback");
@@ -50,30 +56,40 @@ describe("isBase64Of32Bytes", () => {
 });
 
 describe("loadConfig", () => {
-  it("applies defaults when no variables are set", () => {
-    const config = loadConfig({});
+  it("applies defaults when only the required variables are set", () => {
+    const config = loadConfig(REQUIRED_ENV);
 
     expect(config).toEqual({
       port: 3001,
       host: "0.0.0.0",
       logLevel: "info",
-      databaseUrl: undefined,
-      sftpgoUrl: undefined,
-      fdriveMasterKey: undefined,
+      databaseUrl: "postgres://localhost/fdrive",
+      sftpgoUrl: "http://localhost:8080",
+      fdriveMasterKey: MASTER_KEY_32_BYTES,
       fdriveHomeTemplate: "sftpgo:/{username}",
+      fdriveSessionTtlDays: 30,
+      fdriveCookieSecure: "auto",
+      fdrivePublicUrl: undefined,
       nodeEnv: "development",
     });
   });
 
+  it("throws when a required variable is missing", () => {
+    expect(() => loadConfig({})).toThrowError(
+      /DATABASE_URL.*\n.*SFTPGO_URL.*\n.*FDRIVE_MASTER_KEY/s,
+    );
+  });
+
   it("parses every variable when all are set validly", () => {
     const config = loadConfig({
+      ...REQUIRED_ENV,
       PORT: "8080",
       HOST: "127.0.0.1",
       LOG_LEVEL: "debug",
-      DATABASE_URL: "postgres://localhost/fdrive",
-      SFTPGO_URL: "https://sftpgo.internal:9000",
-      FDRIVE_MASTER_KEY: MASTER_KEY_32_BYTES,
       FDRIVE_HOME_TEMPLATE: "sftpgo:/home/{username}",
+      FDRIVE_SESSION_TTL_DAYS: "7",
+      FDRIVE_COOKIE_SECURE: "true",
+      FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
       NODE_ENV: "production",
     });
 
@@ -82,9 +98,12 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       logLevel: "debug",
       databaseUrl: "postgres://localhost/fdrive",
-      sftpgoUrl: "https://sftpgo.internal:9000",
+      sftpgoUrl: "http://localhost:8080",
       fdriveMasterKey: MASTER_KEY_32_BYTES,
       fdriveHomeTemplate: "sftpgo:/home/{username}",
+      fdriveSessionTtlDays: 7,
+      fdriveCookieSecure: "true",
+      fdrivePublicUrl: "https://fdrive.example.com",
       nodeEnv: "production",
     });
   });
@@ -92,6 +111,7 @@ describe("loadConfig", () => {
   it("throws listing every invalid variable at once", () => {
     expect(() =>
       loadConfig({
+        ...REQUIRED_ENV,
         PORT: "not-a-number",
         LOG_LEVEL: "verbose",
         SFTPGO_URL: "not a url",
@@ -102,7 +122,25 @@ describe("loadConfig", () => {
   });
 
   it("rejects a port outside the valid range", () => {
-    expect(() => loadConfig({ PORT: "70000" })).toThrow();
+    expect(() => loadConfig({ ...REQUIRED_ENV, PORT: "70000" })).toThrow();
+  });
+
+  it("rejects an invalid FDRIVE_COOKIE_SECURE value", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_COOKIE_SECURE: "maybe" })).toThrow(
+      /FDRIVE_COOKIE_SECURE/,
+    );
+  });
+
+  it("rejects a non-http FDRIVE_PUBLIC_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_PUBLIC_URL: "not a url" })).toThrow(
+      /FDRIVE_PUBLIC_URL/,
+    );
+  });
+
+  it("rejects a non-integer FDRIVE_SESSION_TTL_DAYS", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SESSION_TTL_DAYS: "soon" })).toThrow(
+      /FDRIVE_SESSION_TTL_DAYS/,
+    );
   });
 
   it("labels a root-level validation issue as (root)", () => {
@@ -112,6 +150,6 @@ describe("loadConfig", () => {
   });
 
   it("falls back to the default host when HOST is an empty string", () => {
-    expect(loadConfig({ HOST: "" }).host).toBe("0.0.0.0");
+    expect(loadConfig({ ...REQUIRED_ENV, HOST: "" }).host).toBe("0.0.0.0");
   });
 });

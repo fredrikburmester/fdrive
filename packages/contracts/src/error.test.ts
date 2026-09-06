@@ -6,6 +6,7 @@ describe("ApiErrorKind", () => {
     const kinds = [
       "bad_request",
       "unauthorized",
+      "reauth_required",
       "forbidden",
       "not_found",
       "conflict",
@@ -88,6 +89,7 @@ describe("statusForKind", () => {
   it("maps every kind to its documented status code", () => {
     expect(statusForKind("bad_request")).toBe(400);
     expect(statusForKind("unauthorized")).toBe(401);
+    expect(statusForKind("reauth_required")).toBe(401);
     expect(statusForKind("forbidden")).toBe(403);
     expect(statusForKind("not_found")).toBe(404);
     expect(statusForKind("conflict")).toBe(409);

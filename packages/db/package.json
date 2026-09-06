@@ -4,9 +4,21 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./schema/app": "./src/schema/app.ts",
-    "./schema/idx": "./src/schema/idx.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema/app": {
+      "types": "./src/schema/app.ts",
+      "development": "./src/schema/app.ts",
+      "default": "./dist/schema/app.js"
+    },
+    "./schema/idx": {
+      "types": "./src/schema/idx.ts",
+      "development": "./src/schema/idx.ts",
+      "default": "./dist/schema/idx.js"
+    }
   },
   "bin": {
     "fdrive-migrate": "./dist/bin/migrate.js"

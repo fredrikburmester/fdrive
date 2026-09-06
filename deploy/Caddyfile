@@ -4,12 +4,13 @@
 		max_size 0
 	}
 
-	encode zstd gzip
-
 	header {
 		-Server
 	}
 
+	# File downloads (and WOPI/MCP payloads) must pass through untouched so
+	# Range and Content-Length survive: compression is scoped to the web
+	# handle below, never applied here.
 	handle /api/* {
 		reverse_proxy api:3001
 	}
@@ -23,6 +24,7 @@
 	}
 
 	handle {
+		encode zstd gzip
 		reverse_proxy web:3000
 	}
 }

@@ -8,6 +8,7 @@ import { z } from "zod";
 export const ApiErrorKind = z.enum([
   "bad_request",
   "unauthorized",
+  "reauth_required",
   "forbidden",
   "not_found",
   "conflict",
@@ -33,6 +34,7 @@ export type ApiError = z.infer<typeof ApiError>;
 const STATUS_BY_KIND: Record<ApiErrorKind, number> = {
   bad_request: 400,
   unauthorized: 401,
+  reauth_required: 401,
   forbidden: 403,
   not_found: 404,
   conflict: 409,

@@ -1,0 +1,42 @@
+import { describe, expect, it } from "vitest";
+import { IDENTITY_HEADER, MODIFIED_AT_HEADER, ROUTES } from "./routes";
+
+describe("ROUTES", () => {
+  it("defines every auth route under /api/v1/auth", () => {
+    expect(ROUTES.auth).toEqual({
+      login: "/api/v1/auth/login",
+      logout: "/api/v1/auth/logout",
+      me: "/api/v1/auth/me",
+    });
+  });
+
+  it("defines every fs route under /api/v1/fs", () => {
+    expect(ROUTES.fs).toEqual({
+      list: "/api/v1/fs/list",
+      stat: "/api/v1/fs/stat",
+      download: "/api/v1/fs/download",
+      zip: "/api/v1/fs/zip",
+      upload: "/api/v1/fs/upload",
+      mkdir: "/api/v1/fs/mkdir",
+      move: "/api/v1/fs/move",
+      copy: "/api/v1/fs/copy",
+      rename: "/api/v1/fs/rename",
+      delete: "/api/v1/fs/delete",
+    });
+  });
+
+  it("defines events and about routes", () => {
+    expect(ROUTES.events).toBe("/api/v1/events");
+    expect(ROUTES.about).toBe("/api/v1/about");
+  });
+});
+
+describe("headers", () => {
+  it("IDENTITY_HEADER is x-identity-id", () => {
+    expect(IDENTITY_HEADER).toBe("x-identity-id");
+  });
+
+  it("MODIFIED_AT_HEADER is x-modified-at", () => {
+    expect(MODIFIED_AT_HEADER).toBe("x-modified-at");
+  });
+});

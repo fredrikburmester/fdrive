@@ -2,18 +2,23 @@ import { z } from "zod";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 const NODE_ENVS = ["development", "production", "test"] as const;
+const COOKIE_SECURE_MODES = ["auto", "true", "false"] as const;
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
 export type NodeEnv = (typeof NODE_ENVS)[number];
+export type CookieSecureMode = (typeof COOKIE_SECURE_MODES)[number];
 
 export interface AppConfig {
   readonly port: number;
   readonly host: string;
   readonly logLevel: LogLevel;
-  readonly databaseUrl: string | undefined;
-  readonly sftpgoUrl: string | undefined;
-  readonly fdriveMasterKey: string | undefined;
+  readonly databaseUrl: string;
+  readonly sftpgoUrl: string;
+  readonly fdriveMasterKey: string;
   readonly fdriveHomeTemplate: string;
+  readonly fdriveSessionTtlDays: number;
+  readonly fdriveCookieSecure: CookieSecureMode;
+  readonly fdrivePublicUrl: string | undefined;
   readonly nodeEnv: NodeEnv;
 }
 
@@ -62,24 +67,42 @@ const envSchema = z.object({
   ),
   HOST: z.preprocess((value) => withDefault(value, "0.0.0.0"), z.string().min(1)),
   LOG_LEVEL: z.preprocess((value) => withDefault(value, "info"), z.enum(LOG_LEVELS)),
-  DATABASE_URL: z.string().min(1).optional(),
+  DATABASE_URL: z.string().min(1, "is required"),
   SFTPGO_URL: z
     .string()
-    .min(1)
-    .optional()
-    .refine((value) => value === undefined || isHttpUrl(value), {
-      message: "must be an http(s) URL",
-    }),
+    .min(1, "is required")
+    .refine((value) => isHttpUrl(value), { message: "must be an http(s) URL" }),
   FDRIVE_MASTER_KEY: z
     .string()
-    .min(1)
-    .optional()
-    .refine((value) => value === undefined || isBase64Of32Bytes(value), {
+    .min(1, "is required")
+    .refine((value) => isBase64Of32Bytes(value), {
       message: "must be base64-encoded 32 bytes",
     }),
   FDRIVE_HOME_TEMPLATE: z.preprocess(
     (value) => withDefault(value, "sftpgo:/{username}"),
     z.string().min(1),
+  ),
+  FDRIVE_SESSION_TTL_DAYS: z.preprocess(
+    (value) => withDefault(value, "30"),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1)),
+  ),
+  FDRIVE_COOKIE_SECURE: z.preprocess(
+    (value) => withDefault(value, "auto"),
+    z.enum(COOKIE_SECURE_MODES),
+  ),
+  FDRIVE_PUBLIC_URL: z.preprocess(
+    (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
   ),
   NODE_ENV: z.preprocess((value) => withDefault(value, "development"), z.enum(NODE_ENVS)),
 });
@@ -110,6 +133,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     sftpgoUrl: parsed.SFTPGO_URL,
     fdriveMasterKey: parsed.FDRIVE_MASTER_KEY,
     fdriveHomeTemplate: parsed.FDRIVE_HOME_TEMPLATE,
+    fdriveSessionTtlDays: parsed.FDRIVE_SESSION_TTL_DAYS,
+    fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,
+    fdrivePublicUrl: parsed.FDRIVE_PUBLIC_URL,
     nodeEnv: parsed.NODE_ENV,
   };
 }
