@@ -1,0 +1,28 @@
+:80 {
+	# No request body limit: uploads can be large files.
+	request_body {
+		max_size 0
+	}
+
+	encode zstd gzip
+
+	header {
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	handle /wopi/* {
+		reverse_proxy api:3001
+	}
+
+	handle /mcp* {
+		reverse_proxy api:3001
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

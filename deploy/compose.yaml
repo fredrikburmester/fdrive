@@ -1,0 +1,56 @@
+name: fdrive
+
+# Core stack: proxy, web, api, db. SFTPGo is expected to already exist
+# somewhere reachable from `api` (see README.md and
+# compose.sftpgo-network.example.yaml). Only people who have no SFTPGo yet
+# should add compose.sftpgo.yaml on top of this file.
+
+services:
+  proxy:
+    image: caddy:2
+    ports:
+      - "${FDRIVE_HTTP_PORT:-8090}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_INTERNAL_URL: http://api:3001
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
+      SFTPGO_URL: ${SFTPGO_URL}
+      FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
+      FDRIVE_HOME_TEMPLATE: ${FDRIVE_HOME_TEMPLATE}
+      PORT: "3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: fdrive
+      POSTGRES_USER: fdrive
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${FDRIVE_DATA_DIR:-./data}/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fdrive -d fdrive"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped

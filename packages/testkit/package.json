@@ -1,0 +1,26 @@
+{
+  "name": "@fdrive/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "testcontainers": "^12.1.0",
+    "@testcontainers/postgresql": "^12.1.0"
+  },
+  "devDependencies": {
+    "@fdrive/config": "workspace:*",
+    "@vitest/coverage-v8": "^5.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
+  }
+}

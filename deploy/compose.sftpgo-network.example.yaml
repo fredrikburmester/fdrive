@@ -1,0 +1,21 @@
+# Example override for attaching `api` to an existing external Docker
+# network that your SFTPGo instance already lives on (for example a
+# `backend` network created by a separate SFTPGo compose stack).
+#
+# Copy this file, drop the ".example" suffix, adjust the network name, and
+# start the stack with both files:
+#
+#   docker compose -f compose.yaml -f compose.sftpgo-network.yaml up -d
+#
+# Then set SFTPGO_URL in your .env to the SFTPGo container's address on that
+# network, e.g. http://sftpgo:8080.
+
+services:
+  api:
+    networks:
+      - default
+      - backend
+
+networks:
+  backend:
+    external: true
