@@ -15,6 +15,11 @@ export default definePackageConfig({
   },
   test: {
     environment: "node",
+    // The base preset's `include` only matches `.test.ts`; this app also has
+    // jsdom-environment component tests (`.test.tsx`, opted into jsdom per
+    // file via a `// @vitest-environment jsdom` docblock), which need their
+    // own pattern here or they are silently never run.
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "test/**/*.test.ts"],
     coverage: {
       include: ["src/lib/**"],
     },
