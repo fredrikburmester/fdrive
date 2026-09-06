@@ -7,8 +7,10 @@ import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
+import { createConnectionStore } from "../connection/store";
 import { parseMasterKey } from "./crypto";
 import { createAuthModule } from "./index";
+import { registerAuthRoutes } from "./routes";
 
 function notImplemented(): never {
   throw new Error("not implemented in this fake");
@@ -74,6 +76,12 @@ function buildTestApp(opts: {
   const sftpgo = createSftpgoClient({ baseUrl: "http://sftpgo.internal:8080", fetch: fetchImpl });
   const repos: Repos = createMemoryRepos();
   const config = loadConfig({ ...REQUIRED_ENV, ...opts.envOverrides });
+  const connectionStore = createConnectionStore({
+    settings: repos.settings,
+    envUrl: config.sftpgoUrl,
+    defaultHomeTemplate: config.fdriveHomeTemplate,
+    clock: opts.clockCtl.clock,
+  });
   const authModule = createAuthModule({
     repos,
     sftpgo,
@@ -81,6 +89,7 @@ function buildTestApp(opts: {
     clock: opts.clockCtl.clock,
     config,
     storageFactory: () => FAKE_STORAGE,
+    connectionStore,
   });
   const app = createApp({
     config,
@@ -132,6 +141,51 @@ describe("auth routes: POST /auth/login", () => {
 
   beforeEach(() => {
     clockCtl = createClock(Date.now());
+  });
+
+  it("responds setup_required when the auth service's own connection store has no connection", async () => {
+    // Exercises `requireConnection` in isolation from the app-level setup
+    // gate (which derives its own status from `config.sftpgoUrl`, set in
+    // `REQUIRED_ENV`): the auth service is wired with a connection store
+    // that has nothing configured.
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
+      now: clockCtl.clock,
+    });
+    const sftpgo = createSftpgoClient({
+      baseUrl: "http://sftpgo.internal:8080",
+      fetch: server.fetch,
+    });
+    const repos: Repos = createMemoryRepos();
+    const config = loadConfig(REQUIRED_ENV);
+    const connectionStore = createConnectionStore({
+      settings: repos.settings,
+      envUrl: undefined,
+      defaultHomeTemplate: config.fdriveHomeTemplate,
+      clock: clockCtl.clock,
+    });
+    const authModule = createAuthModule({
+      repos,
+      sftpgo,
+      master: parseMasterKey(config.fdriveMasterKey),
+      clock: clockCtl.clock,
+      config,
+      storageFactory: () => FAKE_STORAGE,
+      connectionStore,
+    });
+    const app = createApp({
+      config,
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date(0),
+      clock: clockCtl.clock,
+      principalResolver: authModule.principalResolver,
+      registerRoutes: authModule.registerRoutes,
+    });
+
+    const res = await login(app, { username: "alice", password: "wonderland" });
+
+    expect(res.status).toBe(503);
   });
 
   it("succeeds with correct credentials, returns MeResponse, and sets a non-Secure cookie over plain http", async () => {
@@ -466,6 +520,42 @@ describe("auth routes: POST /auth/logout", () => {
     });
 
     expect(res.status).toBe(403);
+  });
+
+  it("is a no-op on the service when there is no session cookie to clear", async () => {
+    // Exercises the defensive branch in the route handler directly: a
+    // principal resolved without a session cookie present (which
+    // `createRequireAuth` never actually produces in normal operation,
+    // since resolving one requires the cookie) must not call
+    // `service.logout` with `undefined`.
+    const logout = vi.fn();
+    const app = createApp({
+      config: loadConfig(REQUIRED_ENV),
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date(0),
+      principalResolver: async () => ({
+        accountId: "a",
+        identityId: "i",
+        username: "alice",
+        storage: FAKE_STORAGE,
+        isAdmin: false,
+      }),
+      registerRoutes: (groups) => {
+        registerAuthRoutes(groups, {
+          service: { logout } as unknown as Parameters<typeof registerAuthRoutes>[1]["service"],
+          config: loadConfig(REQUIRED_ENV),
+        });
+      },
+    });
+
+    const res = await app.request(ROUTES.auth.logout, {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(logout).not.toHaveBeenCalled();
   });
 });
 

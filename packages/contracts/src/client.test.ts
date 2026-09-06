@@ -10,6 +10,7 @@ const VALID_ME = {
     { id: VALID_UUID, username: "alice", providerType: "sftpgo", providerLabel: "Home" },
   ],
   activeIdentityId: VALID_UUID,
+  isAdmin: false,
 };
 
 const VALID_ENTRY = {
@@ -27,6 +28,7 @@ const VALID_ABOUT = {
   version: "1.0.0",
   builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
   provider: { type: "sftpgo", label: "localhost:8080" },
+  setupRequired: false,
 };
 
 interface RecordedCall {
@@ -463,6 +465,93 @@ describe("createApiClient: about", () => {
     const client = createApiClient({ fetch: fetchStub });
 
     expect(await client.about()).toEqual(VALID_ABOUT);
+  });
+});
+
+describe("createApiClient: setup", () => {
+  it("gets setup/status", async () => {
+    const status = { required: true, hasEnvUrl: false };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, status)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.setupStatus()).toEqual(status);
+    expect(calls[0]?.url).toBe("/api/v1/setup/status");
+  });
+
+  it("posts setup/test with the setup token header and baseUrl body", async () => {
+    const result = { ok: true, detail: "reachable" };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.setupTest("tok-1", "http://sftpgo:8080")).toEqual(result);
+    expect(calls[0]?.url).toBe("/api/v1/setup/test");
+    expect(headerValue(calls[0]?.init ?? {}, "x-setup-token")).toBe("tok-1");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ baseUrl: "http://sftpgo:8080" });
+  });
+
+  it("posts setup/complete with the setup token header and returns MeResponse", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
+    const client = createApiClient({ fetch: fetchStub });
+    const req = {
+      baseUrl: "http://sftpgo:8080",
+      homeTemplate: "sftpgo:/{username}",
+      username: "alice",
+      password: "hunter2",
+    };
+
+    expect(await client.setupComplete("tok-1", req)).toEqual(VALID_ME);
+    expect(calls[0]?.url).toBe("/api/v1/setup/complete");
+    expect(headerValue(calls[0]?.init ?? {}, "x-setup-token")).toBe("tok-1");
+  });
+});
+
+describe("createApiClient: admin", () => {
+  const VALID_CONNECTION = {
+    baseUrl: "http://sftpgo:8080",
+    host: "sftpgo:8080",
+    homeTemplate: "sftpgo:/{username}",
+    source: "env",
+    reachable: true,
+    checkedAt: AT,
+  };
+
+  it("gets admin/connection", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_CONNECTION)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.adminConnection()).toEqual(VALID_CONNECTION);
+    expect(calls[0]?.url).toBe("/api/v1/admin/connection");
+  });
+
+  it("puts admin/connection with the patch body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_CONNECTION)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.adminUpdateConnection({ homeTemplate: "sftpgo:/{username}" })).toEqual(
+      VALID_CONNECTION,
+    );
+    expect(calls[0]?.init.method).toBe("PUT");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      homeTemplate: "sftpgo:/{username}",
+    });
+  });
+
+  it("posts admin/connection/test with no body when baseUrl is omitted", async () => {
+    const result = { ok: true, detail: "reachable" };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.adminTestConnection()).toEqual(result);
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
+  });
+
+  it("posts admin/connection/test with the candidate baseUrl", async () => {
+    const result = { ok: false, detail: "unreachable" };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.adminTestConnection("http://other:8080")).toEqual(result);
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ baseUrl: "http://other:8080" });
   });
 });
 

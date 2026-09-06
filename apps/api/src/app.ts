@@ -22,6 +22,16 @@ export type AppHono = Hono<{ Variables: AppVariables }>;
 /** The `/api/v1` sub-app mounted behind `createRequireAuth`. */
 export type AuthedHono = Hono<{ Variables: AppVariables & PrincipalVariables }>;
 
+/**
+ * Whether fdrive setup is still required, and the SFTPGo host to show on
+ * the public `/about` route when it is not. `host` is null exactly when
+ * `required` is true.
+ */
+export interface ConnectionStatus {
+  readonly required: boolean;
+  readonly host: string | null;
+}
+
 export interface AppDeps {
   readonly config: AppConfig;
   readonly logger: Logger;
@@ -35,6 +45,14 @@ export interface AppDeps {
    */
   readonly principalResolver?: PrincipalResolver;
   /**
+   * Reports whether fdrive setup is required and the SFTPGo host to show on
+   * `/about`. Defaults to deriving this from `config.sftpgoUrl` alone
+   * (required when unset), which is enough for tests that do not exercise
+   * the `settings`-backed connection; `composeApp` wires the real
+   * `ConnectionStore`-backed version.
+   */
+  readonly connectionStatus?: () => Promise<ConnectionStatus>;
+  /**
    * Lets route-chunks (and tests) add routes to the public or authed
    * `/api/v1` sub-apps without `createApp` knowing about every feature.
    * `public` has no auth requirement; `authed` runs `createRequireAuth`
@@ -45,6 +63,14 @@ export interface AppDeps {
 
 const REQUEST_ID_HEADER = "X-Request-Id";
 const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
+
+/** Path prefixes reachable even while `ConnectionStatus.required` is true. */
+const SETUP_EXEMPT_PREFIXES = ["/api/v1/health", "/api/v1/about", "/api/v1/setup/"];
+
+/** True when `path` is one of the routes that must work while setup is required. */
+export function isSetupExempt(path: string): boolean {
+  return SETUP_EXEMPT_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix));
+}
 
 /**
  * Extracts the host (hostname and, when non-default for the scheme, port)
@@ -66,6 +92,12 @@ export function sftpgoHostLabel(sftpgoUrl: string): string {
 export function createApp(deps: AppDeps): AppHono {
   const clock = deps.clock ?? (() => new Date());
   const principalResolver: PrincipalResolver = deps.principalResolver ?? (async () => null);
+  const connectionStatus: () => Promise<ConnectionStatus> =
+    deps.connectionStatus ??
+    (async () =>
+      deps.config.sftpgoUrl === undefined
+        ? { required: true, host: null }
+        : { required: false, host: sftpgoHostLabel(deps.config.sftpgoUrl) });
   const app: AppHono = new Hono();
 
   app.use("*", requestIdMiddleware({ headerName: REQUEST_ID_HEADER }));
@@ -89,6 +121,16 @@ export function createApp(deps: AppDeps): AppHono {
 
   app.use("/api/v1/*", createCsrfGuard());
 
+  app.use("/api/v1/*", async (c, next) => {
+    if (!isSetupExempt(c.req.path)) {
+      const status = await connectionStatus();
+      if (status.required) {
+        throw new ApiHttpError("setup_required", "fdrive setup has not been completed yet");
+      }
+    }
+    await next();
+  });
+
   const v1: AppHono = new Hono();
 
   v1.get("/health", (c) => {
@@ -102,11 +144,13 @@ export function createApp(deps: AppDeps): AppHono {
     return c.json(body);
   });
 
-  v1.get("/about", (c) => {
+  v1.get("/about", async (c) => {
+    const status = await connectionStatus();
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
       builtOn: { name: "SFTPGo", sourceUrl: SFTPGO_SOURCE_URL },
-      provider: { type: "sftpgo", label: sftpgoHostLabel(deps.config.sftpgoUrl) },
+      provider: status.host === null ? null : { type: "sftpgo", label: status.host },
+      setupRequired: status.required,
     });
     return c.json(body);
   });

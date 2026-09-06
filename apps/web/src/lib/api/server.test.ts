@@ -58,6 +58,7 @@ describe("serverApiClient", () => {
       version: "1.0.0",
       builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
       provider: { type: "sftpgo", label: "localhost:8080" },
+      setupRequired: false,
     };
     const fetchImpl = vi
       .fn()

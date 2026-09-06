@@ -5,6 +5,7 @@ import { type SftpgoClient, SftpgoError } from "@fdrive/sftpgo";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import type { AppConfig } from "../config.js";
+import type { ConnectionStore } from "../connection/store.js";
 import { ApiHttpError } from "../errors.js";
 import { KEY_ID, seal } from "./crypto.js";
 import type { LoginLimiter } from "./login-limiter.js";
@@ -45,15 +46,26 @@ export interface CreateAuthServiceDeps {
   readonly limiter: LoginLimiter;
   readonly tokenSource: TokenSource;
   readonly storageFactory: (identityId: string) => StorageProvider;
+  /** Resolves the active SFTPGo connection: its base URL for `providers.ensure` and its label. */
+  readonly connectionStore: ConnectionStore;
+  /** SFTPGo usernames always treated as admins, in addition to `accounts.is_admin`. */
+  readonly adminUsernames: readonly string[];
 }
 
-/**
- * The host portion of the SFTPGo base URL, used as `IdentitySummary.providerLabel`.
- * `config.sftpgoUrl` is validated as an http(s) URL when the config loads, so
- * this never needs to fall back to the raw string.
- */
-function providerLabelFor(config: Pick<AppConfig, "sftpgoUrl">): string {
-  return new URL(config.sftpgoUrl).host;
+/** The host portion of a SFTPGo base URL, used as `IdentitySummary.providerLabel`. */
+function providerLabelFor(baseUrl: string): string {
+  return new URL(baseUrl).host;
+}
+
+/** Resolves the active connection, translating "no connection" into `ApiHttpError("setup_required")`. */
+async function requireConnection(
+  connectionStore: ConnectionStore,
+): Promise<{ baseUrl: string; homeTemplate: string }> {
+  const connection = await connectionStore.current();
+  if (connection === null) {
+    throw new ApiHttpError("setup_required", "no SFTPGo connection is configured yet");
+  }
+  return connection;
 }
 
 /** Builds the `AuthService`, the credential-mode login/session/identity flow for the API. */
@@ -64,7 +76,13 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       throw new ApiHttpError("internal", "account for active session no longer exists");
     }
     const identities = await deps.repos.identities.listByAccount(accountId);
-    const providerLabel = providerLabelFor(deps.config);
+    const connection = await requireConnection(deps.connectionStore);
+    const providerLabel = providerLabelFor(connection.baseUrl);
+    const activeIdentity = identities.find((identity) => identity.id === activeIdentityId);
+    const isAdmin =
+      account.isAdmin ||
+      (activeIdentity !== undefined &&
+        deps.adminUsernames.includes(activeIdentity.externalUsername));
 
     return {
       account: { id: account.id, displayName: account.displayName },
@@ -75,10 +93,13 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
         providerLabel,
       })),
       activeIdentityId,
+      isAdmin,
     };
   }
 
   async function login(input: LoginInput): Promise<LoginResult> {
+    const connection = await requireConnection(deps.connectionStore);
+
     const limiterKey = `${input.ip}|${input.username}`;
     const limiterStatus = deps.limiter.check(limiterKey);
     if (!limiterStatus.allowed) {
@@ -112,7 +133,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
 
     const provider = await deps.repos.providers.ensure({
       type: "sftpgo",
-      baseUrl: deps.config.sftpgoUrl,
+      baseUrl: connection.baseUrl,
     });
 
     let identity = await deps.repos.identities.findByProviderUsername(provider.id, input.username);
@@ -199,11 +220,16 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       return null;
     }
 
+    const account = await deps.repos.accounts.get(session.accountId);
+    const isAdmin =
+      (account?.isAdmin ?? false) || deps.adminUsernames.includes(identity.externalUsername);
+
     return {
       accountId: session.accountId,
       identityId: identity.id,
       username: identity.externalUsername,
       storage: deps.storageFactory(identity.id),
+      isAdmin,
     };
   }
 

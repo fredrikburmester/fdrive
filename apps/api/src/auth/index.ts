@@ -3,6 +3,7 @@ import type { Repos } from "@fdrive/db";
 import type { SftpgoClient } from "@fdrive/sftpgo";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
+import type { ConnectionStore } from "../connection/store.js";
 import { createLoginLimiter, type LoginLimiter } from "./login-limiter.js";
 import type { PrincipalResolver } from "./principal.js";
 import { registerAuthRoutes } from "./routes.js";
@@ -37,6 +38,13 @@ export interface CreateAuthModuleDeps {
   readonly config: AppConfig;
   readonly storageFactory: (identityId: string) => StorageProvider;
   readonly limiter?: LoginLimiter;
+  /** Resolves the active SFTPGo connection for `providers.ensure` and the provider label. */
+  readonly connectionStore: ConnectionStore;
+  /**
+   * SFTPGo usernames always treated as admins, in addition to
+   * `accounts.is_admin`. Defaults to `config.fdriveAdminUsers`.
+   */
+  readonly adminUsernames?: readonly string[];
   /**
    * The `TokenSource` the auth service uses to prime and re-mint SFTPGo
    * JWTs. Defaults to a freshly built one when omitted; a caller that also
@@ -87,6 +95,8 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
     limiter,
     tokenSource,
     storageFactory: deps.storageFactory,
+    connectionStore: deps.connectionStore,
+    adminUsernames: deps.adminUsernames ?? deps.config.fdriveAdminUsers,
   });
 
   return {

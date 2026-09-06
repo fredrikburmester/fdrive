@@ -3,6 +3,7 @@ import { getCookie } from "hono/cookie";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { extractClientIp } from "../net.js";
 import type { AuthService } from "./service.js";
 import { buildCookie, COOKIE_NAME, clearCookie, cookieSecureFor } from "./sessions.js";
 
@@ -35,12 +36,7 @@ export function registerAuthRoutes(
       });
     }
 
-    const forwardedFor = c.req.header("x-forwarded-for");
-    const firstForwardedIp = forwardedFor?.split(",")[0]?.trim();
-    const ip =
-      firstForwardedIp && firstForwardedIp.length > 0
-        ? firstForwardedIp
-        : (c.req.header("x-real-ip") ?? "unknown");
+    const ip = extractClientIp(c);
     const userAgent = c.req.header("user-agent") ?? null;
 
     const result = await deps.service.login({

@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { AboutResponse } from "./about.ts";
+import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./admin.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import {
@@ -13,6 +14,12 @@ import {
 } from "./fs.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
+import {
+  ConnectionTestResponse,
+  SETUP_TOKEN_HEADER,
+  type SetupCompleteRequest,
+  SetupStatusResponse,
+} from "./setup.ts";
 
 export type { IdentitySummary };
 
@@ -82,6 +89,12 @@ export interface ApiClient {
   job(id: string): Promise<JobStatus>;
   cancelJob(id: string): Promise<JobStatus>;
   about(): Promise<AboutResponse>;
+  setupStatus(): Promise<SetupStatusResponse>;
+  setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse>;
+  setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
+  adminConnection(): Promise<AdminConnectionResponse>;
+  adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse>;
+  adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse>;
 }
 
 interface ClientContext {
@@ -402,6 +415,64 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     about(): Promise<AboutResponse> {
       return requestJson(ctx, { method: "GET", path: ROUTES.about }, AboutResponse);
+    },
+
+    setupStatus(): Promise<SetupStatusResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.setup.status }, SetupStatusResponse);
+    },
+
+    setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse> {
+      return requestJson(
+        ctx,
+        {
+          method: "POST",
+          path: ROUTES.setup.test,
+          jsonBody: { baseUrl },
+          extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
+        },
+        ConnectionTestResponse,
+      );
+    },
+
+    setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse> {
+      return requestJson(
+        ctx,
+        {
+          method: "POST",
+          path: ROUTES.setup.complete,
+          jsonBody: req,
+          extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
+        },
+        MeResponse,
+      );
+    },
+
+    adminConnection(): Promise<AdminConnectionResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.admin.connection },
+        AdminConnectionResponse,
+      );
+    },
+
+    adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.admin.connectionUpdate, jsonBody: patch },
+        AdminConnectionResponse,
+      );
+    },
+
+    adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse> {
+      return requestJson(
+        ctx,
+        {
+          method: "POST",
+          path: ROUTES.admin.connectionTest,
+          jsonBody: baseUrl !== undefined ? { baseUrl } : {},
+        },
+        ConnectionTestResponse,
+      );
     },
   };
 }

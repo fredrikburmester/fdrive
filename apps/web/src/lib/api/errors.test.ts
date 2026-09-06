@@ -13,6 +13,7 @@ const ALL_KINDS: ApiErrorKind[] = [
   "rate_limited",
   "internal",
   "upstream_unavailable",
+  "setup_required",
 ];
 
 describe("describeApiError", () => {

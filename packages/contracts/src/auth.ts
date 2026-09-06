@@ -36,6 +36,8 @@ export const MeResponse = z.object({
   }),
   identities: z.array(IdentitySummary),
   activeIdentityId: z.uuid(),
+  /** True when the signed-in account can reach the System admin pages. */
+  isAdmin: z.boolean(),
 });
 
 export type MeResponse = z.infer<typeof MeResponse>;

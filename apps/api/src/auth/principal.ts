@@ -12,6 +12,8 @@ export interface Principal {
   readonly identityId: string;
   readonly username: string;
   readonly storage: StorageProvider;
+  /** True when this account can reach the System admin routes and pages. */
+  readonly isAdmin: boolean;
 }
 
 /** Hono `Variables` shape for routes mounted behind `createRequireAuth`. */
@@ -41,6 +43,21 @@ export function createRequireAuth(
       throw new ApiHttpError("unauthorized", "authentication required");
     }
     c.set("principal", principal);
+    await next();
+  };
+}
+
+/**
+ * Builds middleware that requires the already-resolved `principal` (must
+ * run behind `createRequireAuth`) to be an admin. Throws
+ * `ApiHttpError("forbidden", ...)` otherwise.
+ */
+export function createRequireAdmin(): MiddlewareHandler<{ Variables: PrincipalVariables }> {
+  return async (c, next) => {
+    const principal = c.get("principal");
+    if (!principal.isAdmin) {
+      throw new ApiHttpError("forbidden", "admin access required");
+    }
     await next();
   };
 }

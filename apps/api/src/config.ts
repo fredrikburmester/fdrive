@@ -14,7 +14,13 @@ export interface AppConfig {
   readonly host: string;
   readonly logLevel: LogLevel;
   readonly databaseUrl: string;
-  readonly sftpgoUrl: string;
+  /**
+   * The SFTPGo base URL, when configured by environment. Undefined means
+   * the connection must come from `settings` (configured through `/setup`
+   * or the admin connection page) or setup is still required. See
+   * `src/connection/store.ts`.
+   */
+  readonly sftpgoUrl: string | undefined;
   readonly fdriveMasterKey: string;
   readonly fdriveHomeTemplate: string;
   readonly fdriveSessionTtlDays: number;
@@ -26,6 +32,10 @@ export interface AppConfig {
   readonly fdriveTmpDir: string;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
+  /** SFTPGo usernames that are always treated as admins, in addition to `accounts.is_admin`. */
+  readonly fdriveAdminUsers: readonly string[];
+  /** Overrides the randomly generated setup token. Mainly for tests and scripted installs. */
+  readonly fdriveSetupToken: string | undefined;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -65,6 +75,21 @@ export function withDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
+/**
+ * Splits a comma-separated list of SFTPGo usernames (`FDRIVE_ADMIN_USERS`)
+ * into a trimmed, non-empty array. An empty or missing value yields an
+ * empty array.
+ */
+export function parseAdminUsers(value: string | undefined): readonly string[] {
+  if (value === undefined || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((username) => username.trim())
+    .filter((username) => username.length > 0);
+}
+
 const envSchema = z.object({
   PORT: z.preprocess(
     (value) => withDefault(value, "3001"),
@@ -77,10 +102,16 @@ const envSchema = z.object({
   HOST: z.preprocess((value) => withDefault(value, "0.0.0.0"), z.string().min(1)),
   LOG_LEVEL: z.preprocess((value) => withDefault(value, "info"), z.enum(LOG_LEVELS)),
   DATABASE_URL: z.string().min(1, "is required"),
-  SFTPGO_URL: z
-    .string()
-    .min(1, "is required")
-    .refine((value) => isHttpUrl(value), { message: "must be an http(s) URL" }),
+  SFTPGO_URL: z.preprocess(
+    (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
   FDRIVE_MASTER_KEY: z
     .string()
     .min(1, "is required")
@@ -127,6 +158,11 @@ const envSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1)),
   ),
+  FDRIVE_ADMIN_USERS: z.string().optional(),
+  FDRIVE_SETUP_TOKEN: z.preprocess(
+    (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
+    z.string().min(1).optional(),
+  ),
 });
 
 /**
@@ -162,5 +198,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
+    fdriveAdminUsers: parseAdminUsers(parsed.FDRIVE_ADMIN_USERS),
+    fdriveSetupToken: parsed.FDRIVE_SETUP_TOKEN,
   };
 }

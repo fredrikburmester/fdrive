@@ -21,6 +21,7 @@ export type {
   Repos,
   Session,
   SessionRepo,
+  SettingsRepo,
 } from "./repos/types.js";
 export * from "./vector.js";
 

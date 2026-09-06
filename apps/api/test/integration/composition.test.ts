@@ -19,6 +19,39 @@ function createTestLogger(): Logger {
   } as unknown as Logger;
 }
 
+/** A logger that records every string passed to `info`, so a test can recover the logged setup token. */
+function createCapturingLogger(): { logger: Logger; messages: string[] } {
+  const messages: string[] = [];
+  const logger = {
+    info: (arg: unknown) => {
+      if (typeof arg === "string") {
+        messages.push(arg);
+      }
+    },
+    error: () => undefined,
+    warn: () => undefined,
+    debug: () => undefined,
+    fatal: () => undefined,
+    trace: () => undefined,
+  } as unknown as Logger;
+  return { logger, messages };
+}
+
+/**
+ * Wraps a fetch implementation (typically a fake SFTPGo server's `fetch`)
+ * with a `/healthz` handler returning `200 "ok"`, since the fake does not
+ * implement it and `probeConnection` requires it.
+ */
+function withHealthz(fetchImpl: typeof globalThis.fetch): typeof globalThis.fetch {
+  return (async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.endsWith("/healthz")) {
+      return new Response("ok", { status: 200 });
+    }
+    return fetchImpl(input, init);
+  }) as typeof globalThis.fetch;
+}
+
 function extractCookie(res: Response): string {
   const setCookie = res.headers.get("set-cookie");
   if (setCookie === null) {
@@ -120,6 +153,106 @@ describe("composeApp", () => {
       // Aborting lets the route's own cleanup (clearing its ping interval and
       // unsubscribing from the bus) run, rather than leaking a timer.
       eventsController.abort();
+    } finally {
+      await composed.close();
+    }
+  });
+
+  it("boots in setup mode, walks the setup flow, then serves normal routes with the completing account as admin", async () => {
+    const server = createFakeSftpgoServer({
+      users: [...SEED_USERS],
+      folders: [...SEED_FOLDERS],
+      files: { ...SEED_FILES },
+    });
+    const fetchImpl = withHealthz(server.fetch);
+
+    // No SFTPGO_URL: the connection must come from `/setup`.
+    const config = loadConfig({
+      DATABASE_URL: postgres.connectionString,
+      FDRIVE_MASTER_KEY: Buffer.alloc(32, 6).toString("base64"),
+    });
+
+    const { logger, messages } = createCapturingLogger();
+    const composed = await composeApp(config, logger, () => new Date(), { fetch: fetchImpl });
+
+    try {
+      const aboutRes = await composed.app.request("/api/v1/about");
+      expect(aboutRes.status).toBe(200);
+      expect(await aboutRes.json()).toMatchObject({ setupRequired: true, provider: null });
+
+      const blockedRes = await composed.app.request("/api/v1/fs/list?path=/");
+      expect(blockedRes.status).toBe(503);
+      expect(await blockedRes.json()).toMatchObject({ error: { kind: "setup_required" } });
+
+      const statusRes = await composed.app.request("/api/v1/setup/status");
+      expect(await statusRes.json()).toEqual({ required: true, hasEnvUrl: false });
+
+      const tokenLine = messages.find((message) => message.startsWith("setup token: "));
+      if (tokenLine === undefined) {
+        throw new Error("expected the setup token to be logged");
+      }
+      const setupToken = tokenLine.slice("setup token: ".length);
+
+      const testRes = await composed.app.request("/api/v1/setup/test", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-requested-with": "fdrive",
+          "x-setup-token": setupToken,
+        },
+        body: JSON.stringify({ baseUrl: "http://sftpgo.internal:8080" }),
+      });
+      expect(testRes.status).toBe(200);
+      expect(await testRes.json()).toMatchObject({ ok: true });
+
+      const completeRes = await composed.app.request("/api/v1/setup/complete", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-requested-with": "fdrive",
+          "x-setup-token": setupToken,
+        },
+        body: JSON.stringify({
+          baseUrl: "http://sftpgo.internal:8080",
+          homeTemplate: "sftpgo:/{username}",
+          username: "alice",
+          password: "alice-password",
+        }),
+      });
+      expect(completeRes.status).toBe(200);
+      const completeBody = await completeRes.json();
+      expect(completeBody).toMatchObject({
+        isAdmin: true,
+        account: { displayName: "alice" },
+      });
+      const cookie = extractCookie(completeRes);
+
+      // The setup token cannot be replayed: setup is no longer required.
+      const reuseRes = await composed.app.request("/api/v1/setup/test", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-requested-with": "fdrive",
+          "x-setup-token": setupToken,
+        },
+        body: JSON.stringify({ baseUrl: "http://sftpgo.internal:8080" }),
+      });
+      expect(reuseRes.status).toBe(404);
+
+      const aboutAfterRes = await composed.app.request("/api/v1/about");
+      expect(await aboutAfterRes.json()).toMatchObject({
+        setupRequired: false,
+        provider: { type: "sftpgo" },
+      });
+
+      const listRes = await composed.app.request("/api/v1/fs/list?path=/", {
+        headers: { cookie },
+      });
+      expect(listRes.status).toBe(200);
+
+      const meRes = await composed.app.request("/api/v1/auth/me", { headers: { cookie } });
+      expect(meRes.status).toBe(200);
+      expect(await meRes.json()).toMatchObject({ isAdmin: true });
     } finally {
       await composed.close();
     }

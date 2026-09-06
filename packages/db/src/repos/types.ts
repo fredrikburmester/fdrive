@@ -20,11 +20,14 @@ export interface Account {
   readonly id: string;
   readonly displayName: string | null;
   readonly createdAt: Date;
+  readonly isAdmin: boolean;
 }
 
 export interface AccountRepo {
   create(input: { displayName: string | null }): Promise<Account>;
   get(id: string): Promise<Account | null>;
+  /** Sets the account's admin flag. A no-op when the account does not exist. */
+  setAdmin(id: string, isAdmin: boolean): Promise<void>;
 }
 
 /** A login on a provider. Belongs to exactly one account. */
@@ -101,6 +104,19 @@ export interface SessionRepo {
   deleteExpired(now: Date): Promise<number>;
 }
 
+/**
+ * Key/value settings storage over `app.settings`. Values are stored as
+ * JSON; callers are responsible for the shape at a given key.
+ */
+export interface SettingsRepo {
+  /** Returns the value stored at `key`, or null when no row exists. */
+  get<T>(key: string): Promise<T | null>;
+  /** Upserts the value stored at `key`. */
+  set(key: string, value: unknown): Promise<void>;
+  /** Returns every setting as a plain object keyed by its setting key. */
+  all(): Promise<Record<string, unknown>>;
+}
+
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
   readonly providers: ProviderRepo;
@@ -108,4 +124,5 @@ export interface Repos {
   readonly identities: IdentityRepo;
   readonly credentials: CredentialRepo;
   readonly sessions: SessionRepo;
+  readonly settings: SettingsRepo;
 }

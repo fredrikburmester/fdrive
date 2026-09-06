@@ -30,6 +30,7 @@ const PRINCIPAL: Principal = {
   identityId: "00000000-0000-4000-8000-000000000002",
   username: "alice",
   storage: FAKE_STORAGE,
+  isAdmin: false,
 };
 
 const REQUIRED_ENV = {

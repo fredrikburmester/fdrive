@@ -33,6 +33,22 @@ describe("ROUTES", () => {
     expect(ROUTES.events).toBe("/api/v1/events");
     expect(ROUTES.about).toBe("/api/v1/about");
   });
+
+  it("defines every setup route under /api/v1/setup", () => {
+    expect(ROUTES.setup).toEqual({
+      status: "/api/v1/setup/status",
+      test: "/api/v1/setup/test",
+      complete: "/api/v1/setup/complete",
+    });
+  });
+
+  it("defines every admin route under /api/v1/admin", () => {
+    expect(ROUTES.admin).toEqual({
+      connection: "/api/v1/admin/connection",
+      connectionUpdate: "/api/v1/admin/connection",
+      connectionTest: "/api/v1/admin/connection/test",
+    });
+  });
 });
 
 describe("jobRoute", () => {
