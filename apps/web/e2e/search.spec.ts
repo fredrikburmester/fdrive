@@ -114,6 +114,15 @@ test.describe("scoping", () => {
   test("bob's search for readme returns nothing", async ({ page }) => {
     await loginAs(page, "bob", "bob-password");
 
+    // `loginAs` resolves as soon as the client-side redirect lands on
+    // `/files` (a SPA navigation, unlike the other tests' `page.goto`,
+    // which waits for a full load event). The search button's Cmd+K
+    // listener is bound in a `useEffect` that only runs once React commits,
+    // so pressing the shortcut immediately after login can race that
+    // hydration. Waiting for the button to render and become enabled first
+    // guarantees the listener is already attached.
+    await expect(page.getByRole("button", { name: "Search" })).toBeEnabled();
+
     await page.keyboard.press("Control+k");
     const dialog = page.getByRole("dialog");
     await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
