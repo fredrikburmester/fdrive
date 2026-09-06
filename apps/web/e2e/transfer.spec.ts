@@ -1,19 +1,21 @@
 import { expect, type Page, test } from "@playwright/test";
+import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
 /**
- * The listing row for `name`, scoped to the file list rather than a bare
- * `getByText`. The upload panel shows the same filename as its own row
- * while an upload is in flight, so an unscoped query can resolve to that
- * transient element instead of the actual listing row, making a wait
- * "succeed" before the listing (and therefore `existingNames`, which the
- * conflict check depends on) has actually updated.
+ * The listing row for `name`, scoped to the file listing rather than a bare
+ * `getByText`. This avoids two different sources of false positives: the
+ * upload panel shows the same filename as its own row while an upload is in
+ * flight (an unscoped query could resolve to that transient element instead
+ * of the actual listing row, making a wait "succeed" before the listing has
+ * actually updated), and the sidebar's folder tree can show the same name
+ * as a link once it auto-expands to the current folder.
  */
 function fileListRow(page: Page, name: string) {
-  return page.locator('[data-slot="file-list"]').getByText(name, { exact: true });
+  return listing(page).getByText(name, { exact: true });
 }
 
 /**
@@ -39,7 +41,7 @@ test.describe("uploads and downloads", () => {
     await dialog.getByLabel("Folder name").fill(sandbox);
     await dialog.getByRole("button", { name: "Create" }).click();
     await expect(dialog).toBeHidden();
-    await page.getByText(sandbox, { exact: true }).dblclick();
+    await listing(page).getByText(sandbox, { exact: true }).dblclick();
     await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
   });
 

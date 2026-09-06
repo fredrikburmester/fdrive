@@ -1,8 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
+import { listing } from "./support/regions.js";
 
 /** The `data-path` values of every currently-rendered listing row, in DOM order. */
 async function visibleRowPaths(page: Page): Promise<string[]> {
-  const rows = page.locator("[data-path]");
+  const rows = listing(page).locator("[data-path]");
   const paths = await rows.evaluateAll((elements) =>
     elements.map((el) => el.getAttribute("data-path")),
   );
@@ -12,13 +13,13 @@ async function visibleRowPaths(page: Page): Promise<string[]> {
 test("root listing shows docs and photo.jpg", async ({ page }) => {
   await page.goto("/files");
 
-  await expect(page.getByText("docs", { exact: true })).toBeVisible();
-  await expect(page.getByText("photo.jpg", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("docs", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
 });
 
 test("folders sort first even when sorting by name descending", async ({ page }) => {
   await page.goto("/files");
-  await expect(page.getByText("photo.jpg", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Name" }).click();
   await page.getByRole("menuitemcheckbox", { name: "Descending" }).click();
@@ -33,26 +34,26 @@ test("folders sort first even when sorting by name descending", async ({ page })
 test("double-clicking docs navigates into it and shows its contents", async ({ page }) => {
   await page.goto("/files");
 
-  await page.getByText("docs", { exact: true }).dblclick();
+  await listing(page).getByText("docs", { exact: true }).dblclick();
 
   await expect(page).toHaveURL(/\/files\/docs$/);
-  await expect(page.getByText("readme.md", { exact: true })).toBeVisible();
-  await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("report.pdf", { exact: true })).toBeVisible();
 });
 
 test("clicking the Home breadcrumb returns to root", async ({ page }) => {
   await page.goto("/files/docs");
-  await expect(page.getByText("readme.md", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Home" }).click();
 
   await expect(page).toHaveURL(/\/files$/);
-  await expect(page.getByText("photo.jpg", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
 });
 
 test("the view toggle switches to grid and back, and persists across reload", async ({ page }) => {
   await page.goto("/files");
-  await expect(page.getByText("photo.jpg", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
   await expect(page.locator('[data-slot="file-list"]')).toBeVisible();
 
   await page.getByRole("button", { name: "Grid view" }).click();
@@ -67,7 +68,7 @@ test("the view toggle switches to grid and back, and persists across reload", as
 
 test("sorting by size flips the order of docs' contents", async ({ page }) => {
   await page.goto("/files/docs");
-  await expect(page.getByText("report.pdf", { exact: true })).toBeVisible();
+  await expect(listing(page).getByText("report.pdf", { exact: true })).toBeVisible();
 
   const byName = await visibleRowPaths(page);
   expect(byName.indexOf("/docs/readme.md")).toBeLessThan(byName.indexOf("/docs/report.pdf"));

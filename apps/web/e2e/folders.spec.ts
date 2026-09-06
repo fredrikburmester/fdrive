@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -12,7 +13,7 @@ async function createFolder(page: Page, name: string): Promise<void> {
 }
 
 async function deleteEntry(page: Page, name: string): Promise<void> {
-  await page.getByText(name, { exact: true }).click({ button: "right" });
+  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete" }).click();
   const confirmDialog = page.getByRole("alertdialog");
   await confirmDialog.getByRole("button", { name: "Delete" }).click();
@@ -25,7 +26,7 @@ test("the New folder dialog creates a folder that appears in the list", async ({
 
   await createFolder(page, name);
 
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
+  await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
   await deleteEntry(page, name);
 });
@@ -36,15 +37,15 @@ test("renaming a folder via the context menu updates its name in the list", asyn
   await page.goto("/files");
   await createFolder(page, originalName);
 
-  await page.getByText(originalName, { exact: true }).click({ button: "right" });
+  await listing(page).getByText(originalName, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("New name").fill(newName);
   await dialog.getByRole("button", { name: "Rename" }).click();
   await expect(dialog).toBeHidden();
 
-  await expect(page.getByText(newName, { exact: true })).toBeVisible();
-  await expect(page.getByText(originalName, { exact: true })).toBeHidden();
+  await expect(listing(page).getByText(newName, { exact: true })).toBeVisible();
+  await expect(listing(page).getByText(originalName, { exact: true })).toBeHidden();
 
   await deleteEntry(page, newName);
 });
@@ -55,9 +56,9 @@ test("deleting a folder via the context menu asks for confirmation, then removes
   const name = uniqueName("delete-me");
   await page.goto("/files");
   await createFolder(page, name);
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
+  await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
-  await page.getByText(name, { exact: true }).click({ button: "right" });
+  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete" }).click();
 
   const confirmDialog = page.getByRole("alertdialog");
@@ -66,7 +67,7 @@ test("deleting a folder via the context menu asks for confirmation, then removes
 
   await confirmDialog.getByRole("button", { name: "Delete" }).click();
 
-  await expect(page.getByText(name, { exact: true })).toBeHidden();
+  await expect(listing(page).getByText(name, { exact: true })).toBeHidden();
 });
 
 test("keyboard navigation: arrow down moves focus, Enter opens a folder, and select-all checks every row", async ({
@@ -78,17 +79,17 @@ test("keyboard navigation: arrow down moves focus, Enter opens a folder, and sel
 
   await page.goto("/files");
   await createFolder(page, sandbox);
-  await page.getByText(sandbox, { exact: true }).dblclick();
+  await listing(page).getByText(sandbox, { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await createFolder(page, folderA);
   await createFolder(page, folderB);
-  await expect(page.getByText(folderB, { exact: true })).toBeVisible();
+  await expect(listing(page).getByText(folderB, { exact: true })).toBeVisible();
 
   // Click folder A: selects and focuses it, and gives the listing container
   // keyboard focus (clicking a non-focusable row delegates focus to its
   // nearest focusable ancestor, the listing container).
-  await page.getByText(folderA, { exact: true }).click();
+  await listing(page).getByText(folderA, { exact: true }).click();
 
   await page.keyboard.press("ArrowDown");
   await expect(page.locator(`[data-path$="/${folderB}"][data-focused="true"]`)).toHaveCount(1);
@@ -99,10 +100,12 @@ test("keyboard navigation: arrow down moves focus, Enter opens a folder, and sel
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
-  await page.getByText(folderA, { exact: true }).click();
+  await listing(page).getByText(folderA, { exact: true }).click();
   await page.keyboard.press(`${PRIMARY_MODIFIER}+a`);
 
-  await expect(page.getByRole("checkbox", { checked: true })).toHaveCount(2);
+  // Both rows plus the header "select all" checkbox (which reflects every
+  // row being selected) read as checked.
+  await expect(listing(page).getByRole("checkbox", { checked: true })).toHaveCount(3);
 
   // Both folders are still multi-selected here, so a single Delete (right-
   // clicking either row acts on the whole selection, not just that row)
