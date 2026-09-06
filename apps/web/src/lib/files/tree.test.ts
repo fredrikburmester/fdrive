@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StorageLike } from "./storage";
 import {
   ancestorsOf,
+  chevronStateFor,
   collapse,
   EMPTY_TREE_STATE,
   expand,
@@ -13,6 +14,7 @@ import {
   readTreeState,
   reconcile,
   rightAction,
+  shouldShowSkeleton,
   TREE_STORAGE_KEY,
   type TreeState,
   toggle,
@@ -253,6 +255,38 @@ describe("readTreeState", () => {
   it("falls back when the stored value is not an array of strings", () => {
     const storage = memoryStorage({ [TREE_STORAGE_KEY]: JSON.stringify({ nope: true }) });
     expect(readTreeState(storage).expanded.size).toBe(0);
+  });
+});
+
+describe("chevronStateFor", () => {
+  it("is unknown while the listing has not resolved", () => {
+    expect(chevronStateFor({ status: "unknown" })).toBe("unknown");
+  });
+
+  it("is expandable once the listing is known to contain subfolders", () => {
+    expect(chevronStateFor({ status: "known", hasSubfolders: true })).toBe("expandable");
+  });
+
+  it("is leaf once the listing is known to contain none", () => {
+    expect(chevronStateFor({ status: "known", hasSubfolders: false })).toBe("leaf");
+  });
+});
+
+describe("shouldShowSkeleton", () => {
+  it("is false before the delay has elapsed", () => {
+    expect(shouldShowSkeleton(1_000, 1_100, 200)).toBe(false);
+  });
+
+  it("is true once the delay has elapsed", () => {
+    expect(shouldShowSkeleton(1_000, 1_200, 200)).toBe(true);
+  });
+
+  it("is true well past the delay", () => {
+    expect(shouldShowSkeleton(1_000, 5_000, 200)).toBe(true);
+  });
+
+  it("is false at the instant loading started", () => {
+    expect(shouldShowSkeleton(1_000, 1_000, 200)).toBe(false);
   });
 });
 

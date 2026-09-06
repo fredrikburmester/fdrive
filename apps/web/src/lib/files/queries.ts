@@ -1,9 +1,15 @@
-import { ApiClientError, type DeleteRequest, type FsEntry } from "@fdrive/contracts";
+import {
+  ApiClientError,
+  type DeleteRequest,
+  type FsEntry,
+  type ListResponse,
+} from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { apiClient, queryKeys } from "./deps";
+import { shouldShowSkeleton } from "./tree";
 import { reachableExpandedDirs } from "./tree-rows";
 
 export type ListQueryKey = readonly ["fs", "list", string];
@@ -82,6 +88,71 @@ export function useListing(path: string, options?: UseListingOptions) {
     queryFn: () => apiClient.list(path),
     ...(options?.enabled === undefined ? {} : { enabled: options.enabled }),
   });
+}
+
+export interface ListingSnapshot {
+  /** The listing, once it has resolved; `undefined` while in flight or unfetched. */
+  readonly data: ListResponse | undefined;
+  readonly isLoading: boolean;
+}
+
+/**
+ * Fetches the listing for every path in `paths` in the background, sharing
+ * the same `fs.list` query keys (and therefore the same cache and
+ * `staleTime`) as `useListing` and the file browser itself: a path already
+ * cached from any of those is never refetched, and a path fetched here is
+ * instant if the user later navigates into it or expands it.
+ *
+ * Used by the sidebar's folder tree to prefetch one level ahead: for every
+ * currently visible folder, its own listing is fetched here before the user
+ * clicks it, so the tree already knows whether it has subfolders (see
+ * `chevronStateFor` in `./tree`). The caller decides what is visible;
+ * this never recurses into anything not present in `paths`, so it never
+ * fetches into a collapsed folder's descendants.
+ */
+export function useListings(paths: readonly string[]): ReadonlyMap<string, ListingSnapshot> {
+  const results = useQueries({
+    queries: paths.map((path) => ({
+      queryKey: queryKeys.fs.list(path),
+      queryFn: () => apiClient.list(path),
+    })),
+  });
+
+  return useMemo(() => {
+    const map = new Map<string, ListingSnapshot>();
+    paths.forEach((path, index) => {
+      const result = results[index];
+      if (result !== undefined) {
+        map.set(path, { data: result.data, isLoading: result.isLoading });
+      }
+    });
+    return map;
+  }, [paths, results]);
+}
+
+/**
+ * `true` only once `active` has been continuously true for at least
+ * `delayMs` milliseconds; resets to `false` the instant `active` goes
+ * false. Backs the tree's loading skeleton (see `shouldShowSkeleton` in
+ * `./tree`), so a folder listing that resolves quickly (the common case,
+ * since `useListings` prefetches ahead of the click) never flashes one.
+ */
+export function useDelayedFlag(active: boolean, delayMs: number): boolean {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!active) {
+      setVisible(false);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setTimeout(() => {
+      setVisible(shouldShowSkeleton(startedAt, Date.now(), delayMs));
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, [active, delayMs]);
+
+  return visible;
 }
 
 function useInvalidateAffected() {

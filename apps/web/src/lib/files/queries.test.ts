@@ -3,7 +3,7 @@ import { ApiClientError, type FsEntry } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { affectedListKeys, describeFsError } from "./queries";
 
 function entry(overrides: Partial<FsEntry> & Pick<FsEntry, "path" | "kind">): FsEntry {
@@ -112,9 +112,12 @@ describe("describeFsError", () => {
   });
 });
 
-function createWrapper() {
+function createWrapper(options?: { staleTime?: number }) {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, staleTime: options?.staleTime ?? 0 },
+      mutations: { retry: false },
+    },
   });
   function wrapper({ children }: { children: ReactNode }) {
     return createElement(QueryClientProvider, { client: queryClient }, children);
@@ -371,6 +374,152 @@ describe("useTreeChildren", () => {
     });
 
     await waitFor(() => expect(result.current.get("/a")).toEqual([]));
+  });
+});
+
+describe("useListings", () => {
+  it("returns an empty map for no paths and fetches nothing", async () => {
+    const { useListings } = await import("./queries");
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useListings([]), { wrapper });
+
+    expect(result.current.size).toBe(0);
+    expect(listMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches every given path independently and keys results by path", async () => {
+    const { useListings } = await import("./queries");
+    listMock.mockImplementation((path: string) =>
+      Promise.resolve({
+        path,
+        entries: path === "/a" ? [entry({ path: "/a/x", kind: "dir" })] : [],
+      }),
+    );
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useListings(["/a", "/b"]), { wrapper });
+
+    await waitFor(() => expect(result.current.get("/a")?.data).toBeDefined());
+    await waitFor(() => expect(result.current.get("/b")?.data).toBeDefined());
+    expect(listMock).toHaveBeenCalledWith("/a");
+    expect(listMock).toHaveBeenCalledWith("/b");
+    expect(result.current.get("/a")?.data?.entries).toEqual([entry({ path: "/a/x", kind: "dir" })]);
+    expect(result.current.get("/b")?.data?.entries).toEqual([]);
+  });
+
+  it("reports isLoading true before a path's listing resolves", async () => {
+    const { useListings } = await import("./queries");
+    let resolveList: (() => void) | undefined;
+    listMock.mockImplementation(
+      (path: string) =>
+        new Promise((resolve) => {
+          resolveList = () => resolve({ path, entries: [] });
+        }),
+    );
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useListings(["/a"]), { wrapper });
+
+    expect(result.current.get("/a")?.isLoading).toBe(true);
+    expect(result.current.get("/a")?.data).toBeUndefined();
+
+    resolveList?.();
+    await waitFor(() => expect(result.current.get("/a")?.isLoading).toBe(false));
+  });
+
+  it("shares the cache with useListing for the same path", async () => {
+    const { useListing, useListings } = await import("./queries");
+    listMock.mockResolvedValue({ path: "/a", entries: [] });
+    // A non-zero staleTime, matching the app's real default (see
+    // `app/providers.tsx`), so the second mount reuses the cached value
+    // instead of refetching in the background: the whole point of sharing
+    // `fs.list` query keys between `useListing` and `useListings`.
+    const { wrapper } = createWrapper({ staleTime: 60_000 });
+
+    const first = renderHook(() => useListing("/a"), { wrapper });
+    await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+    listMock.mockClear();
+
+    const second = renderHook(() => useListings(["/a"]), { wrapper });
+    expect(second.result.current.get("/a")?.data).toEqual({ path: "/a", entries: [] });
+    expect(listMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDelayedFlag", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("starts false", async () => {
+    const { useDelayedFlag } = await import("./queries");
+    const { result } = renderHook(() => useDelayedFlag(true, 200));
+    expect(result.current).toBe(false);
+  });
+
+  it("stays false before the delay elapses", async () => {
+    const { useDelayedFlag } = await import("./queries");
+    const { result } = renderHook(() => useDelayedFlag(true, 200));
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(result.current).toBe(false);
+  });
+
+  it("becomes true once the delay elapses while still active", async () => {
+    const { useDelayedFlag } = await import("./queries");
+    const { result } = renderHook(() => useDelayedFlag(true, 200));
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(result.current).toBe(true);
+  });
+
+  it("never becomes true once active goes false before the delay", async () => {
+    const { useDelayedFlag } = await import("./queries");
+    const { result, rerender } = renderHook(
+      ({ active }: { active: boolean }) => useDelayedFlag(active, 200),
+      {
+        initialProps: { active: true },
+      },
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    rerender({ active: false });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    expect(result.current).toBe(false);
+  });
+
+  it("resets to false when active flips back off after becoming true", async () => {
+    const { useDelayedFlag } = await import("./queries");
+    const { result, rerender } = renderHook(
+      ({ active }: { active: boolean }) => useDelayedFlag(active, 200),
+      {
+        initialProps: { active: true },
+      },
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(result.current).toBe(true);
+
+    rerender({ active: false });
+    expect(result.current).toBe(false);
   });
 });
 
