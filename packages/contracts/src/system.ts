@@ -25,10 +25,15 @@ export const IndexerHealth = z.object({
 
 export type IndexerHealth = z.infer<typeof IndexerHealth>;
 
-/** One root's most recent completed scan, mirrored from the indexer's `idx.scans`. */
+/**
+ * One root's most recent completed scan, mirrored from the indexer's
+ * `idx.scans`. The indexer is Python and emits `datetime.isoformat()`, which
+ * renders UTC as a `+00:00` offset rather than a `Z` suffix, so both
+ * timestamps must accept an explicit offset.
+ */
 export const IndexerLastScan = z.object({
-  startedAt: z.iso.datetime(),
-  finishedAt: z.iso.datetime().nullable(),
+  startedAt: z.iso.datetime({ offset: true }),
+  finishedAt: z.iso.datetime({ offset: true }).nullable(),
   filesSeen: z.number().int(),
   filesChanged: z.number().int(),
   filesDeleted: z.number().int(),
@@ -204,10 +209,13 @@ export const OcrHealth = z.object({
 
 export type OcrHealth = z.infer<typeof OcrHealth>;
 
-/** The OCR service's most recent nightly run. */
+/**
+ * The OCR service's most recent nightly run. Also a Python service (see
+ * `IndexerLastScan`), so both timestamps must accept a `+00:00`-style offset.
+ */
 export const OcrLastRun = z.object({
-  startedAt: z.iso.datetime(),
-  finishedAt: z.iso.datetime().nullable(),
+  startedAt: z.iso.datetime({ offset: true }),
+  finishedAt: z.iso.datetime({ offset: true }).nullable(),
   seen: z.number().int(),
   ocred: z.number().int(),
   skipped: z.number().int(),
@@ -219,7 +227,7 @@ export type OcrLastRun = z.infer<typeof OcrLastRun>;
 /** Shape of `GET /api/v1/system/ocr`'s `stats` field, mirrored from the OCR service's `GET /stats`. */
 export const OcrStats = z.object({
   lastRun: OcrLastRun.nullable(),
-  nextRunAt: z.iso.datetime().nullable(),
+  nextRunAt: z.iso.datetime({ offset: true }).nullable(),
   scheduleHour: z.number().int().min(0).max(23),
   langs: z.string(),
   excludeGlobs: z.array(z.string()),

@@ -81,6 +81,15 @@ describe("IndexerLastScan", () => {
   it("rejects a non-datetime startedAt", () => {
     expect(IndexerLastScan.safeParse({ ...valid, startedAt: "not a date" }).success).toBe(false);
   });
+
+  it("accepts the indexer's Python isoformat +00:00 offset (not a Z suffix)", () => {
+    const pythonIsoformat = {
+      ...valid,
+      startedAt: "2026-09-06T18:21:28.128513+00:00",
+      finishedAt: "2026-09-06T18:21:28.141420+00:00",
+    };
+    expect(IndexerLastScan.safeParse(pythonIsoformat).success).toBe(true);
+  });
 });
 
 describe("IndexerRootStats", () => {
@@ -319,6 +328,15 @@ describe("OcrLastRun", () => {
   it("parses a valid payload", () => {
     expect(OcrLastRun.parse(valid)).toEqual(valid);
   });
+
+  it("accepts the OCR service's Python isoformat +00:00 offset (not a Z suffix)", () => {
+    const pythonIsoformat = {
+      ...valid,
+      startedAt: "2026-09-06T03:00:00.000000+00:00",
+      finishedAt: "2026-09-06T03:10:00.000000+00:00",
+    };
+    expect(OcrLastRun.safeParse(pythonIsoformat).success).toBe(true);
+  });
 });
 
 describe("OcrStats", () => {
@@ -352,6 +370,22 @@ describe("OcrStats", () => {
       running: false,
     };
     expect(OcrStats.safeParse(valid).success).toBe(false);
+  });
+
+  it("accepts a nextRunAt with a +00:00 offset", () => {
+    const valid = {
+      lastRun: null,
+      nextRunAt: "2026-09-07T03:00:00+00:00",
+      scheduleHour: 3,
+      langs: "swe+eng",
+      excludeGlobs: [],
+      maxMb: 200,
+      keepOriginals: false,
+      originalsCount: 0,
+      originalsBytes: 0,
+      running: false,
+    };
+    expect(OcrStats.safeParse(valid).success).toBe(true);
   });
 });
 
