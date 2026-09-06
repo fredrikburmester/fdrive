@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { z } from "zod";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
@@ -21,7 +22,14 @@ export interface AppConfig {
   readonly fdrivePublicUrl: string | undefined;
   readonly nodeEnv: NodeEnv;
   readonly fdriveAutoMigrate: boolean;
+  /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
+  readonly fdriveTmpDir: string;
+  /** Total bytes a single archive/extract job may read before it fails. */
+  readonly fdriveJobMaxBytes: number;
 }
+
+/** Default cap on the bytes a single archive job may read: 10 GiB. */
+export const DEFAULT_JOB_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 
 /**
  * True when `value` parses as an absolute URL whose protocol is http or
@@ -110,6 +118,15 @@ const envSchema = z.object({
     (value) => withDefault(value, "true"),
     z.enum(["true", "false"]).transform((value) => value === "true"),
   ),
+  FDRIVE_TMP_DIR: z.preprocess((value) => withDefault(value, tmpdir()), z.string().min(1)),
+  FDRIVE_JOB_MAX_BYTES: z.preprocess(
+    (value) => withDefault(value, String(DEFAULT_JOB_MAX_BYTES)),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1)),
+  ),
 });
 
 /**
@@ -143,5 +160,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdrivePublicUrl: parsed.FDRIVE_PUBLIC_URL,
     nodeEnv: parsed.NODE_ENV,
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
+    fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
+    fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
   };
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ArchiveFormat } from "./jobs.ts";
 
 /**
  * The kind of filesystem entry, mirroring `@fdrive/core`'s `EntryKind` and
@@ -130,3 +131,36 @@ export const OkResponse = z.object({
 });
 
 export type OkResponse = z.infer<typeof OkResponse>;
+
+export const DuplicateRequest = z.object({
+  path: z.string(),
+});
+
+export type DuplicateRequest = z.infer<typeof DuplicateRequest>;
+
+/**
+ * Builds an archive from `paths` (all of which must live in the same parent
+ * folder) in `format`, named `name` (default: derived from the selection)
+ * without an extension, written to `destination` (default: the paths'
+ * common parent folder). Runs as a job; the response is a `JobAccepted`.
+ */
+export const CompressRequest = z.object({
+  paths: z.array(z.string()).min(1).max(1000),
+  format: ArchiveFormat,
+  name: z.string().min(1).optional(),
+  destination: z.string().optional(),
+});
+
+export type CompressRequest = z.infer<typeof CompressRequest>;
+
+/**
+ * Extracts the archive at `path` into `destination` (default: a folder
+ * beside the archive named after it, minus its archive extension). Runs as
+ * a job; the response is a `JobAccepted`.
+ */
+export const ExtractRequest = z.object({
+  path: z.string(),
+  destination: z.string().optional(),
+});
+
+export type ExtractRequest = z.infer<typeof ExtractRequest>;

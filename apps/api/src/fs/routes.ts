@@ -38,6 +38,8 @@ import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
+import type { JobRunner } from "../jobs/runner.js";
+import { registerArchiveRoutes } from "./archive-routes.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -49,9 +51,14 @@ function routePath(fullPath: string): string {
 export interface FsRoutesDeps {
   readonly bus: EventBus;
   readonly clock: () => Date;
+  readonly jobRunner: JobRunner;
+  /** Directory archive jobs spool temp files into. */
+  readonly tmpDir: string;
+  /** Total bytes a single extract job may read before it fails. */
+  readonly jobMaxBytes: number;
 }
 
-type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
+export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
 
 function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
   const result = schema.safeParse(query);
@@ -61,7 +68,8 @@ function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | unde
   return result.data;
 }
 
-async function parseBody<T>(schema: z.ZodType<T>, c: FsContext): Promise<T> {
+/** Parses `c`'s JSON body against `schema`, throwing `bad_request` on invalid JSON or a schema mismatch. */
+export async function parseBody<T>(schema: z.ZodType<T>, c: FsContext): Promise<T> {
   let json: unknown;
   try {
     json = await c.req.json();
@@ -79,7 +87,7 @@ async function parseBody<T>(schema: z.ZodType<T>, c: FsContext): Promise<T> {
  * Normalizes a virtual path, mapping the `CoreError` `normalizePath` throws
  * on an invalid path (its only failure mode) into a `bad_request`.
  */
-function normalizeOrThrow(path: string): string {
+export function normalizeOrThrow(path: string): string {
   try {
     return normalizePath(path);
   } catch (error) {
@@ -90,12 +98,13 @@ function normalizeOrThrow(path: string): string {
 }
 
 /** Maps a `StorageError` to the `ApiHttpError` of the matching kind ("unauthorized" becomes "reauth_required"). */
-function toApiHttpError(error: StorageError): ApiHttpError {
+export function toApiHttpError(error: StorageError): ApiHttpError {
   const kind = error.kind === "unauthorized" ? "reauth_required" : error.kind;
   return new ApiHttpError(kind, error.message, error.details);
 }
 
-async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
+/** Runs `fn`, mapping any `StorageError` it throws into the matching `ApiHttpError`. */
+export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (error) {
@@ -106,7 +115,7 @@ async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-function serializeEntry(entry: FileEntry): FsEntry {
+export function serializeEntry(entry: FileEntry): FsEntry {
   return {
     name: entry.name,
     path: entry.path,
@@ -123,7 +132,7 @@ function serializeEntry(entry: FileEntry): FsEntry {
  * directory (a provider reports this as `bad_request`), falls back to
  * listing the parent directory and finding the matching entry there.
  */
-async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
+export async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
   try {
     const stat = await storage.statFile(path);
     return {
@@ -156,7 +165,7 @@ async function statViaParentListing(storage: StorageProvider, path: string): Pro
   return match;
 }
 
-function publishFsEvent(
+export function publishFsEvent(
   deps: FsRoutesDeps,
   principal: Principal,
   op: FsEvent["op"],
@@ -459,4 +468,6 @@ export function registerFsRoutes(
     const body2: OkResponse = OkResponse.parse({ ok: true });
     return c.json(body2);
   });
+
+  registerArchiveRoutes(groups, deps);
 }

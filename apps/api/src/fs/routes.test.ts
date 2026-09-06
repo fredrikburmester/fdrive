@@ -1,4 +1,3 @@
-import type { FsEvent } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
@@ -6,9 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { createEventBus, type EventBus } from "../events/bus.js";
+import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
+import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerFsRoutes } from "./routes.js";
+
+function buildJobRunner(): JobRunner {
+  return createJobRunner({
+    clock: () => new Date("2024-06-01T00:00:00.000Z"),
+    bus: createEventBus(),
+  });
+}
 
 const FULL_PERMS = ["*"];
 
@@ -60,7 +67,7 @@ async function withTokenFor(
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
   readonly bus: EventBus;
-  readonly events: FsEvent[];
+  readonly events: BusEvent[];
 }
 
 async function buildHarness(seed: FakeSeed = SEED, username = "alice", password = "secret") {
@@ -73,7 +80,7 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
   const principal: Principal = { accountId: ACCOUNT_ID, identityId, username, storage };
 
   const bus = createEventBus();
-  const events: FsEvent[] = [];
+  const events: BusEvent[] = [];
   bus.subscribe({ identityId }, (event) => events.push(event));
 
   const config = loadConfig(REQUIRED_ENV);
@@ -86,7 +93,14 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    registerRoutes: (groups) => registerFsRoutes(groups, { bus, clock }),
+    registerRoutes: (groups) =>
+      registerFsRoutes(groups, {
+        bus,
+        clock,
+        jobRunner: buildJobRunner(),
+        tmpDir: "/tmp",
+        jobMaxBytes: 1_000_000_000,
+      }),
   });
 
   const harness: Harness = { app, bus, events };
@@ -142,7 +156,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
   };
 
   const bus = createEventBus();
-  const events: FsEvent[] = [];
+  const events: BusEvent[] = [];
   bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
 
   const config = loadConfig(REQUIRED_ENV);
@@ -155,7 +169,14 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    registerRoutes: (groups) => registerFsRoutes(groups, { bus, clock }),
+    registerRoutes: (groups) =>
+      registerFsRoutes(groups, {
+        bus,
+        clock,
+        jobRunner: buildJobRunner(),
+        tmpDir: "/tmp",
+        jobMaxBytes: 1_000_000_000,
+      }),
   });
 
   return { app, bus, events };

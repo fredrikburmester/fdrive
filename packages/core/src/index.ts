@@ -1,3 +1,4 @@
+export * from "./archive-names.ts";
 export * from "./entries.ts";
 export * from "./errors.ts";
 export * from "./http-range.ts";

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { JobStatus } from "./jobs.ts";
 
 /**
  * A change to the filesystem, broadcast over `/api/v1/events` (SSE) so open
@@ -23,6 +24,19 @@ export const PingEvent = z.object({
 
 export type PingEvent = z.infer<typeof PingEvent>;
 
-export const SseEvent = z.discriminatedUnion("type", [FsEvent, PingEvent]);
+/**
+ * A job's state or progress changed, broadcast over `/api/v1/events` (SSE)
+ * so the Activity panel can show live progress without polling
+ * `GET /fs/jobs/:id`.
+ */
+export const JobEvent = z.object({
+  type: z.literal("job"),
+  job: JobStatus,
+  at: z.iso.datetime(),
+});
+
+export type JobEvent = z.infer<typeof JobEvent>;
+
+export const SseEvent = z.discriminatedUnion("type", [FsEvent, PingEvent, JobEvent]);
 
 export type SseEvent = z.infer<typeof SseEvent>;

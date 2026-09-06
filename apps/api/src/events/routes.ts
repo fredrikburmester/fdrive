@@ -1,7 +1,7 @@
 import { ROUTES, type SseEvent } from "@fdrive/contracts";
 import { streamSSE } from "hono/streaming";
 import type { AppHono, AuthedHono } from "../app.js";
-import type { EventBus } from "./bus.js";
+import type { BusEvent, EventBus } from "./bus.js";
 
 const API_PREFIX = "/api/v1";
 const DEFAULT_PING_INTERVAL_MS = 25_000;
@@ -14,6 +14,20 @@ export interface EventRoutesDeps {
 
 function pingEvent(clock: () => Date): SseEvent {
   return { type: "ping", at: clock().toISOString() };
+}
+
+/**
+ * Converts a `BusEvent` into the wire `SseEvent` shape: an `FsEvent` is
+ * already wire-shaped, while a job event's bus-only `identityId` (used to
+ * route it to the right subscriber) is stripped, since the wire `JobEvent`
+ * has no such field.
+ */
+function toWireEvent(event: BusEvent): SseEvent {
+  if (event.type === "fs") {
+    return event;
+  }
+  const { identityId: _identityId, ...jobEvent } = event;
+  return jobEvent;
 }
 
 /**
@@ -38,7 +52,8 @@ export function registerEventRoutes(
 
     const response = streamSSE(c, async (stream) => {
       const unsubscribe = deps.bus.subscribe({ identityId: principal.identityId }, (event) => {
-        void stream.writeSSE({ event: "fs", data: JSON.stringify(event) });
+        const wireEvent = toWireEvent(event);
+        void stream.writeSSE({ event: wireEvent.type, data: JSON.stringify(wireEvent) });
       });
 
       // Registered before the timer exists so an abort that races the very

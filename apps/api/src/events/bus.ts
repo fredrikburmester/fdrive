@@ -1,16 +1,25 @@
-import type { FsEvent } from "@fdrive/contracts";
+import type { FsEvent, JobEvent } from "@fdrive/contracts";
 
-export type FsEventHandler = (event: FsEvent) => void;
+/**
+ * What flows through the bus: an `FsEvent` (which already carries its own
+ * `identityId`), or a `JobEvent` paired with the identity it belongs to
+ * (the wire `JobEvent` shape has no `identityId` of its own, since a job
+ * belongs to one identity only and doesn't need to say so on every event;
+ * `events/routes.ts` strips this field before it reaches the client).
+ */
+export type BusEvent = FsEvent | (JobEvent & { identityId: string });
+
+export type BusEventHandler = (event: BusEvent) => void;
 
 export interface EventBus {
   /** Publishes an event to every subscriber whose identity matches `event.identityId`. */
-  publish(event: FsEvent): void;
+  publish(event: BusEvent): void;
   /**
    * Registers `handler` for every future event whose `identityId` matches
    * `filter.identityId`. Returns an unsubscribe function; calling it more
    * than once is a no-op.
    */
-  subscribe(filter: { identityId: string }, handler: FsEventHandler): () => void;
+  subscribe(filter: { identityId: string }, handler: BusEventHandler): () => void;
   /**
    * The number of active subscribers, optionally narrowed to one identity.
    * For tests: asserting a subscriber was added or removed.
@@ -20,7 +29,7 @@ export interface EventBus {
 
 interface Subscription {
   readonly identityId: string;
-  readonly handler: FsEventHandler;
+  readonly handler: BusEventHandler;
 }
 
 /**
@@ -33,7 +42,7 @@ export function createEventBus(): EventBus {
   const subscriptions = new Set<Subscription>();
 
   return {
-    publish(event: FsEvent): void {
+    publish(event: BusEvent): void {
       for (const subscription of subscriptions) {
         if (subscription.identityId === event.identityId) {
           try {
@@ -46,7 +55,7 @@ export function createEventBus(): EventBus {
       }
     },
 
-    subscribe(filter: { identityId: string }, handler: FsEventHandler): () => void {
+    subscribe(filter: { identityId: string }, handler: BusEventHandler): () => void {
       const subscription: Subscription = { identityId: filter.identityId, handler };
       subscriptions.add(subscription);
       return () => {
