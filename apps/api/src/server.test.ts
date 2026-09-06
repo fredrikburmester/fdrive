@@ -1,0 +1,70 @@
+import type { Logger } from "pino";
+import { describe, expect, it, vi } from "vitest";
+import { createApp } from "./app";
+import type { AppConfig } from "./config";
+import { startServer } from "./server";
+
+function createTestLogger(): Logger {
+  const logger = {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+  };
+  return logger as unknown as Logger;
+}
+
+function buildConfig(): AppConfig {
+  return {
+    port: 0,
+    host: "127.0.0.1",
+    logLevel: "silent",
+    databaseUrl: undefined,
+    sftpgoUrl: undefined,
+    fdriveMasterKey: undefined,
+    fdriveHomeTemplate: "sftpgo:/{username}",
+    nodeEnv: "test",
+  };
+}
+
+describe("startServer", () => {
+  it("serves the app on an ephemeral port and logs on listen", async () => {
+    const logger = createTestLogger();
+    const config = buildConfig();
+    const app = createApp({ config, logger, version: "1.0.0", startedAt: new Date() });
+
+    const server = startServer(app, config, logger);
+
+    try {
+      await vi.waitFor(() => {
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({ host: "127.0.0.1", port: expect.any(Number) }),
+          "server listening",
+        );
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects a second close() once the server is already stopped", async () => {
+    const logger = createTestLogger();
+    const config = buildConfig();
+    const app = createApp({ config, logger, version: "1.0.0", startedAt: new Date() });
+
+    const server = startServer(app, config, logger);
+
+    await vi.waitFor(() => {
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ host: "127.0.0.1" }),
+        "server listening",
+      );
+    });
+
+    await server.close();
+
+    await expect(server.close()).rejects.toThrow();
+  });
+});

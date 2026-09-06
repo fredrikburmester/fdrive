@@ -1,0 +1,115 @@
+import { z } from "zod";
+
+const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
+const NODE_ENVS = ["development", "production", "test"] as const;
+
+export type LogLevel = (typeof LOG_LEVELS)[number];
+export type NodeEnv = (typeof NODE_ENVS)[number];
+
+export interface AppConfig {
+  readonly port: number;
+  readonly host: string;
+  readonly logLevel: LogLevel;
+  readonly databaseUrl: string | undefined;
+  readonly sftpgoUrl: string | undefined;
+  readonly fdriveMasterKey: string | undefined;
+  readonly fdriveHomeTemplate: string;
+  readonly nodeEnv: NodeEnv;
+}
+
+/**
+ * True when `value` parses as an absolute URL whose protocol is http or
+ * https.
+ */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * True when `value` is valid base64 that decodes to exactly 32 bytes.
+ */
+export function isBase64Of32Bytes(value: string): boolean {
+  if (!BASE64_PATTERN.test(value)) {
+    return false;
+  }
+  return Buffer.from(value, "base64").length === 32;
+}
+
+/**
+ * Returns `value` when it is a non-empty string, otherwise `fallback`. Used
+ * to apply defaults to environment variables before the rest of the schema
+ * validates the (now always-present) string.
+ */
+export function withDefault(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+const envSchema = z.object({
+  PORT: z.preprocess(
+    (value) => withDefault(value, "3001"),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(65535)),
+  ),
+  HOST: z.preprocess((value) => withDefault(value, "0.0.0.0"), z.string().min(1)),
+  LOG_LEVEL: z.preprocess((value) => withDefault(value, "info"), z.enum(LOG_LEVELS)),
+  DATABASE_URL: z.string().min(1).optional(),
+  SFTPGO_URL: z
+    .string()
+    .min(1)
+    .optional()
+    .refine((value) => value === undefined || isHttpUrl(value), {
+      message: "must be an http(s) URL",
+    }),
+  FDRIVE_MASTER_KEY: z
+    .string()
+    .min(1)
+    .optional()
+    .refine((value) => value === undefined || isBase64Of32Bytes(value), {
+      message: "must be base64-encoded 32 bytes",
+    }),
+  FDRIVE_HOME_TEMPLATE: z.preprocess(
+    (value) => withDefault(value, "sftpgo:/{username}"),
+    z.string().min(1),
+  ),
+  NODE_ENV: z.preprocess((value) => withDefault(value, "development"), z.enum(NODE_ENVS)),
+});
+
+/**
+ * Parses process-environment-shaped input into a typed `AppConfig`. Throws
+ * an `Error` whose message lists every invalid variable when validation
+ * fails, rather than stopping at the first problem.
+ */
+export function loadConfig(env: Record<string, string | undefined>): AppConfig {
+  const result = envSchema.safeParse(env);
+
+  if (!result.success) {
+    const problems = result.error.issues.map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+      return `${path}: ${issue.message}`;
+    });
+    throw new Error(`Invalid environment configuration:\n${problems.join("\n")}`);
+  }
+
+  const parsed = result.data;
+
+  return {
+    port: parsed.PORT,
+    host: parsed.HOST,
+    logLevel: parsed.LOG_LEVEL,
+    databaseUrl: parsed.DATABASE_URL,
+    sftpgoUrl: parsed.SFTPGO_URL,
+    fdriveMasterKey: parsed.FDRIVE_MASTER_KEY,
+    fdriveHomeTemplate: parsed.FDRIVE_HOME_TEMPLATE,
+    nodeEnv: parsed.NODE_ENV,
+  };
+}
