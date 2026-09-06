@@ -58,6 +58,8 @@ function stubIndexQueries(): IndexQueries {
     thumbnail: async () => fail("thumbnail"),
     recordMove: async () => undefined,
     recentMoves: async () => [],
+    deletedRowSha: async () => null,
+    liveRowsBySha: async () => [],
   };
 }
 

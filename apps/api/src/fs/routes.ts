@@ -39,6 +39,7 @@ import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
+import type { MetadataService } from "../metadata/service.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 
 const API_PREFIX = "/api/v1";
@@ -56,6 +57,13 @@ export interface FsRoutesDeps {
   readonly tmpDir: string;
   /** Total bytes a single extract job may read before it fails. */
   readonly jobMaxBytes: number;
+  /**
+   * Decorates `fs/list` entries with tag/favorite metadata and keeps tag,
+   * favorite, and recent rows in sync with moves, renames, and deletes made
+   * through these routes. Optional so route tests that do not exercise
+   * metadata can omit it; `composition.ts` always wires the real service.
+   */
+  readonly metadata?: MetadataService;
 }
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
@@ -324,7 +332,12 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    const body: ListResponse = ListResponse.parse({ path, entries: entries.map(serializeEntry) });
+    const serialized = entries.map(serializeEntry);
+    const decorated =
+      deps.metadata !== undefined
+        ? await deps.metadata.decorate(principal.identityId, serialized)
+        : serialized;
+    const body: ListResponse = ListResponse.parse({ path, entries: decorated });
     return c.json(body);
   });
 
@@ -411,6 +424,9 @@ export function registerFsRoutes(
     const target = normalizeOrThrow(body.target);
     await runStorageCall(() => principal.storage.move(path, target));
     const entry = await statEntry(principal.storage, target);
+    if (deps.metadata !== undefined) {
+      await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
+    }
     publishFsEvent(deps, principal, "move", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
@@ -423,6 +439,7 @@ export function registerFsRoutes(
     const target = normalizeOrThrow(body.target);
     await runStorageCall(() => principal.storage.copy(path, target));
     const entry = await statEntry(principal.storage, target);
+    deps.metadata?.onCopied(principal.identityId, path, target);
     publishFsEvent(deps, principal, "copy", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
@@ -435,6 +452,9 @@ export function registerFsRoutes(
     const target = changeBaseName(path, body.newName);
     await runStorageCall(() => principal.storage.move(path, target));
     const entry = await statEntry(principal.storage, target);
+    if (deps.metadata !== undefined) {
+      await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
+    }
     publishFsEvent(deps, principal, "move", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
@@ -461,6 +481,9 @@ export function registerFsRoutes(
           });
         }
         throw error;
+      }
+      if (deps.metadata !== undefined) {
+        await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
       }
       removed.push(path);
     }

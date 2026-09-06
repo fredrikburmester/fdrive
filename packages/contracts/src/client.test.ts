@@ -834,6 +834,124 @@ describe("createApiClient: account tokens", () => {
   });
 });
 
+describe("createApiClient: tags", () => {
+  const VALID_TAG = { id: VALID_UUID, name: "Work", color: "#ff0000" };
+
+  it("gets tags and unwraps the list", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { tags: [VALID_TAG] })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.listTags()).toEqual({ tags: [VALID_TAG] });
+    expect(calls[0]?.url).toBe("/api/v1/tags");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("posts tags with the create request body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_TAG)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.createTag({ name: "Work", color: "#ff0000" })).toEqual(VALID_TAG);
+    expect(calls[0]?.url).toBe("/api/v1/tags");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ name: "Work", color: "#ff0000" }));
+  });
+
+  it("patches a tag by id", async () => {
+    const updated = { ...VALID_TAG, name: "Job" };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, updated)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.updateTag("tag-1", { name: "Job" })).toEqual(updated);
+    expect(calls[0]?.url).toBe("/api/v1/tags/tag-1");
+    expect(calls[0]?.init.method).toBe("PATCH");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ name: "Job" }));
+  });
+
+  it("deletes a tag by id", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.deleteTag("tag-1")).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/tags/tag-1");
+    expect(calls[0]?.init.method).toBe("DELETE");
+  });
+
+  it("gets the paths tagged with a given tag", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { paths: ["/a.txt"] })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.tagFiles("tag-1")).toEqual({ paths: ["/a.txt"] });
+    expect(calls[0]?.url).toBe("/api/v1/tags/tag-1/files");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("puts fs/tags to replace a path's tags", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.setFileTags({ path: "/a.txt", tagIds: ["tag-1"] })).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/fs/tags");
+    expect(calls[0]?.init.method).toBe("PUT");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt", tagIds: ["tag-1"] }));
+  });
+});
+
+describe("createApiClient: favorites", () => {
+  const VALID_FAVORITE = { path: "/a.txt", kind: "file", addedAt: AT };
+
+  it("gets favorites and unwraps items", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { items: [VALID_FAVORITE] })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.listFavorites()).toEqual({ items: [VALID_FAVORITE] });
+    expect(calls[0]?.url).toBe("/api/v1/favorites");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("posts favorites with the path body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.addFavorite({ path: "/a.txt" })).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/favorites");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt" }));
+  });
+
+  it("deletes favorites with the path body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.removeFavorite({ path: "/a.txt" })).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/favorites");
+    expect(calls[0]?.init.method).toBe("DELETE");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt" }));
+  });
+});
+
+describe("createApiClient: recents", () => {
+  const VALID_RECENT = { path: "/a.txt", openedAt: AT };
+
+  it("gets recents and unwraps items", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { items: [VALID_RECENT] })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.listRecents()).toEqual({ items: [VALID_RECENT] });
+    expect(calls[0]?.url).toBe("/api/v1/recents");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("posts recents/touch with the path body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.touchRecent({ path: "/a.txt" })).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/recents/touch");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt" }));
+  });
+});
+
 describe("createApiClient: error mapping", () => {
   it("throws ApiClientError with the kind and message from a well-formed ApiError body", async () => {
     const { fetchStub } = createStubFetch([

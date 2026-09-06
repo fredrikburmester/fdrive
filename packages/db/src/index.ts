@@ -36,15 +36,24 @@ export type {
   ApiTokenRepo,
   Credential,
   CredentialRepo,
+  Favorite,
+  FavoriteKind,
+  FavoriteRepo,
+  FileTagRepo,
   Identity,
   IdentityRepo,
   Provider,
   ProviderRepo,
+  Recent,
+  RecentRepo,
   Repos,
   Session,
   SessionRepo,
   SettingsRepo,
+  Tag,
+  TagRepo,
 } from "./repos/types.js";
+export { ConflictError } from "./repos/types.js";
 export * from "./vector.js";
 
 export const schema = { ...appSchema, ...idxSchema };

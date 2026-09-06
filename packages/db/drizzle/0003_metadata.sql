@@ -1,0 +1,1 @@
+ALTER TABLE "app"."favorites" ADD COLUMN "kind" text DEFAULT 'file' NOT NULL;

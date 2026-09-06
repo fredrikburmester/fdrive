@@ -17,11 +17,14 @@ import type { AppConfig } from "./config.js";
 import { createLazySftpgoClient } from "./connection/lazy-sftpgo-client.js";
 import { createConnectionStore } from "./connection/store.js";
 import { createEventBus } from "./events/bus.js";
+import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
 import { registerEventRoutes } from "./events/routes.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
+import { registerMetadataRoutes } from "./metadata/routes.js";
+import { createMetadataService } from "./metadata/service.js";
 import { createEmbedClient } from "./search/embeddings.js";
 import { registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
@@ -122,6 +125,36 @@ export async function composeApp(
     clock,
   });
 
+  // Metadata (phase 3): tags, favorites, recents. `onMoved`/`onDeleted` are
+  // called both from the fs routes below (moves and deletes made through
+  // fdrive) and from the indexer listener (changes seen over SFTP or any
+  // other client), so metadata survives renames from either source.
+  const metadataService = createMetadataService(repos);
+
+  // The indexer's `LISTEN idx_events` connection only has anything to listen
+  // for once at least one index root is configured; it is otherwise left
+  // unstarted so a deployment without an indexer never opens a spare
+  // Postgres connection.
+  const indexerListener =
+    config.fdriveIndexRoots === null
+      ? null
+      : createIndexerListener({
+          createClient: () => createPgNotificationClient(config.databaseUrl),
+          identities: repos.identities,
+          indexQueries,
+          fileTags: repos.fileTags,
+          favorites: repos.favorites,
+          metadata: metadataService,
+          bus,
+          homeTemplate,
+          indexRootNames,
+          clock,
+          logger,
+        });
+  if (indexerListener !== null) {
+    await indexerListener.start();
+  }
+
   // System pages (phase 2): sidecar clients are `null` when their base URL
   // is not configured, so the routes degrade to "not configured" rather
   // than failing.
@@ -205,7 +238,9 @@ export async function composeApp(
         jobRunner,
         tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
+        metadata: metadataService,
       });
+      registerMetadataRoutes(groups, { metadata: metadataService });
       registerEventRoutes(groups, { bus, clock });
       registerSearchRoutes(groups, { searchService });
       registerThumbRoutes(groups, {
@@ -248,7 +283,12 @@ export async function composeApp(
 
   return {
     app,
-    close: () => pool.end(),
+    close: async () => {
+      if (indexerListener !== null) {
+        await indexerListener.stop();
+      }
+      await pool.end();
+    },
   };
 }
 

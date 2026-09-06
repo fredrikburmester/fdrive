@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Repos } from "../src/repos/types.js";
+import { ConflictError } from "../src/repos/types.js";
 
 /**
  * Behaviour shared by every `Repos` implementation. `setup` is called
@@ -234,6 +235,26 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await expect(
           repos.identities.touchLogin("00000000-0000-0000-0000-000000000000", new Date()),
         ).resolves.toBeUndefined();
+      });
+
+      it("listAll returns every identity across every account", async () => {
+        const { provider, account } = await seedProviderAndAccount();
+        const first = await repos.identities.create({
+          accountId: account.id,
+          providerId: provider.id,
+          externalUsername: "carol",
+        });
+        const otherAccount = await repos.accounts.create({ displayName: "Dave" });
+        const second = await repos.identities.create({
+          accountId: otherAccount.id,
+          providerId: provider.id,
+          externalUsername: "dave",
+        });
+
+        const all = await repos.identities.listAll();
+
+        const ids = all.map((identity) => identity.id);
+        expect(ids).toEqual(expect.arrayContaining([first.id, second.id]));
       });
     });
 
@@ -663,6 +684,540 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("returns an empty object when no settings exist", async () => {
         expect(await repos.settings.all()).toEqual({});
+      });
+    });
+
+    describe("tags", () => {
+      async function seedAccount() {
+        return repos.accounts.create({ displayName: "Kim" });
+      }
+
+      it("creates a tag", async () => {
+        const account = await seedAccount();
+
+        const tag = await repos.tags.create(account.id, { name: "Work", color: "#ff0000" });
+
+        expect(tag.id).toEqual(expect.any(String));
+        expect(tag.name).toBe("Work");
+        expect(tag.color).toBe("#ff0000");
+      });
+
+      it("creates a tag with a null color", async () => {
+        const account = await seedAccount();
+
+        const tag = await repos.tags.create(account.id, { name: "Personal", color: null });
+
+        expect(tag.color).toBeNull();
+      });
+
+      it("lists tags for an account, empty for an account with none", async () => {
+        const account = await seedAccount();
+        await repos.tags.create(account.id, { name: "Work", color: null });
+        await repos.tags.create(account.id, { name: "Personal", color: null });
+        const other = await seedAccount();
+
+        const listed = await repos.tags.list(account.id);
+
+        expect(listed.map((t) => t.name).sort()).toEqual(["Personal", "Work"]);
+        expect(await repos.tags.list(other.id)).toEqual([]);
+      });
+
+      it("rejects a duplicate name for the same account", async () => {
+        const account = await seedAccount();
+        await repos.tags.create(account.id, { name: "Work", color: null });
+
+        await expect(repos.tags.create(account.id, { name: "Work", color: null })).rejects.toThrow(
+          ConflictError,
+        );
+      });
+
+      it("allows the same name across different accounts", async () => {
+        const account = await seedAccount();
+        const other = await seedAccount();
+        await repos.tags.create(account.id, { name: "Work", color: null });
+
+        await expect(
+          repos.tags.create(other.id, { name: "Work", color: null }),
+        ).resolves.toBeTruthy();
+      });
+
+      it("updates a tag's name and color", async () => {
+        const account = await seedAccount();
+        const tag = await repos.tags.create(account.id, { name: "Work", color: null });
+
+        const updated = await repos.tags.update(tag.id, account.id, {
+          name: "Job",
+          color: "#00ff00",
+        });
+
+        expect(updated).toMatchObject({ id: tag.id, name: "Job", color: "#00ff00" });
+      });
+
+      it("update returns null for a tag not owned by the account", async () => {
+        const account = await seedAccount();
+        const other = await seedAccount();
+        const tag = await repos.tags.create(account.id, { name: "Work", color: null });
+
+        expect(await repos.tags.update(tag.id, other.id, { name: "Stolen" })).toBeNull();
+      });
+
+      it("update rejects renaming onto an existing name", async () => {
+        const account = await seedAccount();
+        await repos.tags.create(account.id, { name: "Work", color: null });
+        const tag = await repos.tags.create(account.id, { name: "Personal", color: null });
+
+        await expect(repos.tags.update(tag.id, account.id, { name: "Work" })).rejects.toThrow(
+          ConflictError,
+        );
+      });
+
+      it("deletes a tag scoped to the owning account", async () => {
+        const account = await seedAccount();
+        const tag = await repos.tags.create(account.id, { name: "Work", color: null });
+
+        await repos.tags.delete(tag.id, account.id);
+
+        expect(await repos.tags.list(account.id)).toEqual([]);
+      });
+
+      it("does not delete a tag belonging to a different account", async () => {
+        const account = await seedAccount();
+        const other = await seedAccount();
+        const tag = await repos.tags.create(account.id, { name: "Work", color: null });
+
+        await repos.tags.delete(tag.id, other.id);
+
+        expect(await repos.tags.list(account.id)).toHaveLength(1);
+      });
+
+      it("delete on an unknown id is a no-op", async () => {
+        const account = await seedAccount();
+        await expect(
+          repos.tags.delete("00000000-0000-0000-0000-000000000000", account.id),
+        ).resolves.toBeUndefined();
+      });
+    });
+
+    describe("fileTags", () => {
+      async function seedIdentityAndTags() {
+        const provider = await repos.providers.ensure({
+          type: "sftpgo",
+          baseUrl: "http://sftpgo:8080",
+        });
+        const account = await repos.accounts.create({ displayName: "Liam" });
+        const identity = await repos.identities.create({
+          accountId: account.id,
+          providerId: provider.id,
+          externalUsername: "liam",
+        });
+        const work = await repos.tags.create(account.id, { name: "Work", color: null });
+        const personal = await repos.tags.create(account.id, { name: "Personal", color: null });
+        return { account, identity, work, personal };
+      }
+
+      it("returns no tags for paths with none assigned", async () => {
+        const { identity } = await seedIdentityAndTags();
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/a.txt"]);
+
+        expect(result.size).toBe(0);
+      });
+
+      it("pathsForTag, movePrefix, and deletePrefix are no-ops for an identity that never set any tags", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+
+        expect(await repos.fileTags.pathsForTag(identity.id, work.id)).toEqual([]);
+        await expect(
+          repos.fileTags.movePrefix(identity.id, "/a.txt", "/b.txt", false),
+        ).resolves.toBeUndefined();
+        await expect(
+          repos.fileTags.deletePrefix(identity.id, "/a.txt", false),
+        ).resolves.toBeUndefined();
+      });
+
+      it("sets and reads tags for a path", async () => {
+        const { identity, work, personal } = await seedIdentityAndTags();
+
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id, personal.id]);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/a.txt", "/b.txt"]);
+        expect(result.get("/a.txt")?.sort()).toEqual([personal.id, work.id].sort());
+        expect(result.has("/b.txt")).toBe(false);
+      });
+
+      it("setTags replaces the previous set", async () => {
+        const { identity, work, personal } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+
+        await repos.fileTags.setTags(identity.id, "/a.txt", [personal.id]);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/a.txt"]);
+        expect(result.get("/a.txt")).toEqual([personal.id]);
+      });
+
+      it("setTags with an empty array clears every tag", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+
+        await repos.fileTags.setTags(identity.id, "/a.txt", []);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/a.txt"]);
+        expect(result.has("/a.txt")).toBe(false);
+      });
+
+      it("pathsForTag lists every path with that tag", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+        await repos.fileTags.setTags(identity.id, "/b.txt", [work.id]);
+
+        const paths = await repos.fileTags.pathsForTag(identity.id, work.id);
+
+        expect(paths.sort()).toEqual(["/a.txt", "/b.txt"]);
+      });
+
+      it("movePrefix renames an exact path", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+
+        await repos.fileTags.movePrefix(identity.id, "/a.txt", "/b.txt", false);
+
+        expect((await repos.fileTags.tagsForPaths(identity.id, ["/b.txt"])).get("/b.txt")).toEqual([
+          work.id,
+        ]);
+        expect((await repos.fileTags.tagsForPaths(identity.id, ["/a.txt"])).has("/a.txt")).toBe(
+          false,
+        );
+      });
+
+      it("movePrefix rewrites nested paths when isDir is true", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/dir/a.txt", [work.id]);
+        await repos.fileTags.setTags(identity.id, "/dir/sub/b.txt", [work.id]);
+        await repos.fileTags.setTags(identity.id, "/dirsibling.txt", [work.id]);
+
+        await repos.fileTags.movePrefix(identity.id, "/dir", "/moved", true);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, [
+          "/moved/a.txt",
+          "/moved/sub/b.txt",
+          "/dirsibling.txt",
+        ]);
+        expect(result.get("/moved/a.txt")).toEqual([work.id]);
+        expect(result.get("/moved/sub/b.txt")).toEqual([work.id]);
+        expect(result.get("/dirsibling.txt")).toEqual([work.id]);
+      });
+
+      it("movePrefix without isDir leaves nested paths untouched", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/dir/a.txt", [work.id]);
+
+        await repos.fileTags.movePrefix(identity.id, "/dir", "/moved", false);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/dir/a.txt"]);
+        expect(result.get("/dir/a.txt")).toEqual([work.id]);
+      });
+
+      it("movePrefix replaces a tag already present at the destination", async () => {
+        const { identity, work, personal } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+        await repos.fileTags.setTags(identity.id, "/b.txt", [personal.id]);
+
+        await repos.fileTags.movePrefix(identity.id, "/a.txt", "/b.txt", false);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/b.txt"]);
+        expect(result.get("/b.txt")).toEqual([work.id]);
+      });
+
+      it("deletePrefix removes an exact path", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+
+        await repos.fileTags.deletePrefix(identity.id, "/a.txt", false);
+
+        expect((await repos.fileTags.tagsForPaths(identity.id, ["/a.txt"])).has("/a.txt")).toBe(
+          false,
+        );
+      });
+
+      it("deletePrefix removes nested paths when isDir is true", async () => {
+        const { identity, work } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/dir/a.txt", [work.id]);
+        await repos.fileTags.setTags(identity.id, "/dirsibling.txt", [work.id]);
+
+        await repos.fileTags.deletePrefix(identity.id, "/dir", true);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, [
+          "/dir/a.txt",
+          "/dirsibling.txt",
+        ]);
+        expect(result.has("/dir/a.txt")).toBe(false);
+        expect(result.get("/dirsibling.txt")).toEqual([work.id]);
+      });
+
+      it("deleting a tag removes it from every path it was assigned to", async () => {
+        const { identity, work, account } = await seedIdentityAndTags();
+        await repos.fileTags.setTags(identity.id, "/a.txt", [work.id]);
+
+        await repos.tags.delete(work.id, account.id);
+
+        const result = await repos.fileTags.tagsForPaths(identity.id, ["/a.txt"]);
+        expect(result.has("/a.txt")).toBe(false);
+      });
+    });
+
+    describe("favorites", () => {
+      async function seedIdentity() {
+        const provider = await repos.providers.ensure({
+          type: "sftpgo",
+          baseUrl: "http://sftpgo:8080",
+        });
+        const account = await repos.accounts.create({ displayName: "Mona" });
+        return repos.identities.create({
+          accountId: account.id,
+          providerId: provider.id,
+          externalUsername: "mona",
+        });
+      }
+
+      it("lists no favorites initially", async () => {
+        const identity = await seedIdentity();
+        expect(await repos.favorites.list(identity.id)).toEqual([]);
+      });
+
+      it("movePrefix and deletePrefix are no-ops for an identity with no favorites", async () => {
+        const identity = await seedIdentity();
+
+        await expect(
+          repos.favorites.movePrefix(identity.id, "/a.txt", "/b.txt", false),
+        ).resolves.toBeUndefined();
+        await expect(
+          repos.favorites.deletePrefix(identity.id, "/a.txt", false),
+        ).resolves.toBeUndefined();
+      });
+
+      it("adds and lists a favorite", async () => {
+        const identity = await seedIdentity();
+
+        await repos.favorites.add(identity.id, "/a.txt", "file");
+
+        const listed = await repos.favorites.list(identity.id);
+        expect(listed).toHaveLength(1);
+        expect(listed[0]).toMatchObject({ path: "/a.txt", kind: "file" });
+        expect(listed[0]?.createdAt).toBeInstanceOf(Date);
+      });
+
+      it("adding an already-favorited path updates its kind", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/a", "file");
+
+        await repos.favorites.add(identity.id, "/a", "dir");
+
+        const listed = await repos.favorites.list(identity.id);
+        expect(listed).toHaveLength(1);
+        expect(listed[0]?.kind).toBe("dir");
+      });
+
+      it("removes a favorite", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/a.txt", "file");
+
+        await repos.favorites.remove(identity.id, "/a.txt");
+
+        expect(await repos.favorites.list(identity.id)).toEqual([]);
+      });
+
+      it("remove on a path that is not favorited is a no-op", async () => {
+        const identity = await seedIdentity();
+        await expect(repos.favorites.remove(identity.id, "/nope")).resolves.toBeUndefined();
+      });
+
+      it("has returns the subset of paths that are favorited", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/a.txt", "file");
+
+        const result = await repos.favorites.has(identity.id, ["/a.txt", "/b.txt"]);
+
+        expect(result).toEqual(new Set(["/a.txt"]));
+      });
+
+      it("has returns an empty set for an empty paths list", async () => {
+        const identity = await seedIdentity();
+        expect(await repos.favorites.has(identity.id, [])).toEqual(new Set());
+      });
+
+      it("movePrefix renames an exact favorited path", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/a.txt", "file");
+
+        await repos.favorites.movePrefix(identity.id, "/a.txt", "/b.txt", false);
+
+        expect(await repos.favorites.has(identity.id, ["/b.txt"])).toEqual(new Set(["/b.txt"]));
+        expect(await repos.favorites.has(identity.id, ["/a.txt"])).toEqual(new Set());
+      });
+
+      it("movePrefix rewrites a favorited folder and its nested favorites", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/dir", "dir");
+        await repos.favorites.add(identity.id, "/dir/a.txt", "file");
+
+        await repos.favorites.movePrefix(identity.id, "/dir", "/moved", true);
+
+        const listed = await repos.favorites.list(identity.id);
+        expect(listed.map((f) => f.path).sort()).toEqual(["/moved", "/moved/a.txt"]);
+      });
+
+      it("movePrefix replaces a favorite already at the destination", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/a.txt", "file");
+        await repos.favorites.add(identity.id, "/b.txt", "dir");
+
+        await repos.favorites.movePrefix(identity.id, "/a.txt", "/b.txt", false);
+
+        const listed = await repos.favorites.list(identity.id);
+        expect(listed).toHaveLength(1);
+        expect(listed[0]).toMatchObject({ path: "/b.txt", kind: "file" });
+      });
+
+      it("deletePrefix removes an exact favorited path", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/a.txt", "file");
+
+        await repos.favorites.deletePrefix(identity.id, "/a.txt", false);
+
+        expect(await repos.favorites.list(identity.id)).toEqual([]);
+      });
+
+      it("deletePrefix removes nested favorites when isDir is true", async () => {
+        const identity = await seedIdentity();
+        await repos.favorites.add(identity.id, "/dir/a.txt", "file");
+        await repos.favorites.add(identity.id, "/other.txt", "file");
+
+        await repos.favorites.deletePrefix(identity.id, "/dir", true);
+
+        const listed = await repos.favorites.list(identity.id);
+        expect(listed.map((f) => f.path)).toEqual(["/other.txt"]);
+      });
+    });
+
+    describe("recents", () => {
+      async function seedIdentity() {
+        const provider = await repos.providers.ensure({
+          type: "sftpgo",
+          baseUrl: "http://sftpgo:8080",
+        });
+        const account = await repos.accounts.create({ displayName: "Nora" });
+        return repos.identities.create({
+          accountId: account.id,
+          providerId: provider.id,
+          externalUsername: "nora",
+        });
+      }
+
+      it("lists nothing initially", async () => {
+        const identity = await seedIdentity();
+        expect(await repos.recents.list(identity.id, 10)).toEqual([]);
+      });
+
+      it("movePrefix, deletePrefix, and prune are no-ops for an identity with no recents", async () => {
+        const identity = await seedIdentity();
+
+        await expect(
+          repos.recents.movePrefix(identity.id, "/a.txt", "/b.txt", false),
+        ).resolves.toBeUndefined();
+        await expect(
+          repos.recents.deletePrefix(identity.id, "/a.txt", false),
+        ).resolves.toBeUndefined();
+        await expect(repos.recents.prune(identity.id, 5)).resolves.toBeUndefined();
+      });
+
+      it("touch records a path as recently opened", async () => {
+        const identity = await seedIdentity();
+
+        await repos.recents.touch(identity.id, "/a.txt");
+
+        const listed = await repos.recents.list(identity.id, 10);
+        expect(listed).toHaveLength(1);
+        expect(listed[0]?.path).toBe("/a.txt");
+        expect(listed[0]?.openedAt).toBeInstanceOf(Date);
+      });
+
+      it("touching an already-recent path updates its openedAt without duplicating it", async () => {
+        const identity = await seedIdentity();
+        await repos.recents.touch(identity.id, "/a.txt");
+
+        await repos.recents.touch(identity.id, "/a.txt");
+
+        expect(await repos.recents.list(identity.id, 10)).toHaveLength(1);
+      });
+
+      it("lists most recently opened first, respecting limit", async () => {
+        const identity = await seedIdentity();
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+        await repos.recents.touch(identity.id, "/a.txt");
+        await sleep(5);
+        await repos.recents.touch(identity.id, "/b.txt");
+        await sleep(5);
+        await repos.recents.touch(identity.id, "/c.txt");
+
+        const listed = await repos.recents.list(identity.id, 2);
+
+        expect(listed).toHaveLength(2);
+        expect(listed.map((r) => r.path)).toEqual(["/c.txt", "/b.txt"]);
+      });
+
+      it("movePrefix renames an exact recent path", async () => {
+        const identity = await seedIdentity();
+        await repos.recents.touch(identity.id, "/a.txt");
+
+        await repos.recents.movePrefix(identity.id, "/a.txt", "/b.txt", false);
+
+        const listed = await repos.recents.list(identity.id, 10);
+        expect(listed.map((r) => r.path)).toEqual(["/b.txt"]);
+      });
+
+      it("movePrefix rewrites nested recent paths when isDir is true", async () => {
+        const identity = await seedIdentity();
+        await repos.recents.touch(identity.id, "/dir/a.txt");
+
+        await repos.recents.movePrefix(identity.id, "/dir", "/moved", true);
+
+        const listed = await repos.recents.list(identity.id, 10);
+        expect(listed.map((r) => r.path)).toEqual(["/moved/a.txt"]);
+      });
+
+      it("deletePrefix removes an exact recent path", async () => {
+        const identity = await seedIdentity();
+        await repos.recents.touch(identity.id, "/a.txt");
+
+        await repos.recents.deletePrefix(identity.id, "/a.txt", false);
+
+        expect(await repos.recents.list(identity.id, 10)).toEqual([]);
+      });
+
+      it("deletePrefix removes nested recents when isDir is true", async () => {
+        const identity = await seedIdentity();
+        await repos.recents.touch(identity.id, "/dir/a.txt");
+        await repos.recents.touch(identity.id, "/other.txt");
+
+        await repos.recents.deletePrefix(identity.id, "/dir", true);
+
+        const listed = await repos.recents.list(identity.id, 10);
+        expect(listed.map((r) => r.path)).toEqual(["/other.txt"]);
+      });
+
+      it("prune keeps only the most recently opened rows", async () => {
+        const identity = await seedIdentity();
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+        await repos.recents.touch(identity.id, "/a.txt");
+        await sleep(5);
+        await repos.recents.touch(identity.id, "/b.txt");
+        await sleep(5);
+        await repos.recents.touch(identity.id, "/c.txt");
+
+        await repos.recents.prune(identity.id, 2);
+
+        const listed = await repos.recents.list(identity.id, 10);
+        expect(listed.map((r) => r.path).sort()).toEqual(["/b.txt", "/c.txt"]);
       });
     });
   });
