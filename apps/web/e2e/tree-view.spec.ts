@@ -36,3 +36,22 @@ test("tree view expansion persists across reload", async ({ page }) => {
   await expect(listing(page).getByText("report.pdf", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/files$/);
 });
+
+test("double-clicking the disclosure chevron toggles the row without navigating into it", async ({
+  page,
+}) => {
+  await page.goto("/files");
+  await page.getByRole("button", { name: "Tree view" }).click();
+
+  const docsRow = listing(page).locator('[data-path="/docs"]');
+  await expect(docsRow).toBeVisible();
+  const chevron = docsRow.getByRole("button", { name: "Expand docs" });
+
+  await chevron.dblclick();
+
+  // A double-click toggles twice (expand, then collapse), ending up
+  // collapsed again, and never navigates into the folder: docs' own
+  // children never appear, and the URL stays put.
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeHidden();
+  await expect(page).toHaveURL(/\/files$/);
+});

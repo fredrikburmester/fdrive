@@ -24,10 +24,11 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
+import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
+import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { movablePaths } from "@/lib/files/move-guard";
 import { pathFromFilesPathname, pathToHref } from "@/lib/files/path-url";
-import { useListing, useMove } from "@/lib/files/queries";
+import { useCopy, useListing, useMove } from "@/lib/files/queries";
 import { DEFAULT_SORT_SPEC, sortListing } from "@/lib/files/sorting";
 import {
   collapse,
@@ -79,7 +80,7 @@ interface FolderTreeRowProps {
   onSetExpanded: (path: string, open: boolean) => void;
   onFocusPath: (path: string) => void;
   onChildrenLoaded: (path: string, children: string[]) => void;
-  onDropMove: (paths: string[], targetPath: string) => void;
+  onDropMove: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
 }
 
 /** One folder in the sidebar tree, and (when expanded) its own children. */
@@ -96,6 +97,7 @@ function FolderTreeRow({
 }: FolderTreeRowProps) {
   const isExpanded = treeState.expanded.has(path);
   const { data, isLoading } = useListing(path, { enabled: isExpanded });
+  const [isDropTarget, setIsDropTarget] = useState(false);
 
   useEffect(() => {
     if (data !== undefined) {
@@ -110,17 +112,30 @@ function FolderTreeRow({
   const isFocused = path === focusPath;
 
   function handleDragOver(event: DragEvent<HTMLElement>) {
-    if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
+    if (!event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
+      return;
     }
+    const draggedPaths = getActiveDragPaths() ?? [];
+    if (dropTargetState(draggedPaths, path) !== "valid") {
+      event.dataTransfer.dropEffect = "none";
+      setIsDropTarget(false);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = effectFor(event);
+    setIsDropTarget(true);
+  }
+
+  function handleDragLeave() {
+    setIsDropTarget(false);
   }
 
   function handleDrop(event: DragEvent<HTMLElement>) {
     const paths = readDraggedPaths(event.dataTransfer);
+    setIsDropTarget(false);
     if (paths !== null && paths.length > 0) {
       event.preventDefault();
-      onDropMove(paths, path);
+      onDropMove(paths, path, effectFor(event));
     }
   }
 
@@ -131,6 +146,8 @@ function FolderTreeRow({
           {hasChevron ? (
             <CollapsibleTrigger
               aria-label={isExpanded ? `Collapse ${name}` : `Expand ${name}`}
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
               className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
             >
               <ChevronRightIcon
@@ -143,11 +160,13 @@ function FolderTreeRow({
           <SidebarMenuSubButton
             isActive={isActive}
             data-focused={isFocused}
+            data-drop-target={isDropTarget}
             render={<Link href={toRoute(pathToHref(path))} />}
             onFocus={() => onFocusPath(path)}
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className="flex-1 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
+            className="flex-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
           >
             <span className="truncate">{name}</span>
           </SidebarMenuSubButton>
@@ -227,13 +246,15 @@ export function FolderTree() {
   }, []);
 
   const move = useMove();
+  const copy = useCopy();
   const handleDropMove = useCallback(
-    (paths: string[], targetPath: string) => {
+    (paths: string[], targetPath: string, effect: "move" | "copy") => {
+      const mutation = effect === "copy" ? copy : move;
       for (const source of movablePaths(paths, targetPath)) {
-        move.mutate({ path: source, target: joinPath(targetPath, baseName(source)) });
+        mutation.mutate({ path: source, target: joinPath(targetPath, baseName(source)) });
       }
     },
-    [move],
+    [move, copy],
   );
 
   const [focusPath, setFocusPath] = useState<string | null>(null);
@@ -258,19 +279,33 @@ export function FolderTree() {
   const rootChildren = childrenByPath.get(ROOT_PATH);
   const rootHasChevron = rootChildren === undefined || rootChildren.length > 0;
   const rootFocused = focusPath === ROOT_PATH;
+  const [isRootDropTarget, setIsRootDropTarget] = useState(false);
 
   function handleRootDragOver(event: DragEvent<HTMLElement>) {
-    if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
+    if (!event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
+      return;
     }
+    const draggedPaths = getActiveDragPaths() ?? [];
+    if (dropTargetState(draggedPaths, ROOT_PATH) !== "valid") {
+      event.dataTransfer.dropEffect = "none";
+      setIsRootDropTarget(false);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = effectFor(event);
+    setIsRootDropTarget(true);
+  }
+
+  function handleRootDragLeave() {
+    setIsRootDropTarget(false);
   }
 
   function handleRootDrop(event: DragEvent<HTMLElement>) {
     const paths = readDraggedPaths(event.dataTransfer);
+    setIsRootDropTarget(false);
     if (paths !== null && paths.length > 0) {
       event.preventDefault();
-      handleDropMove(paths, ROOT_PATH);
+      handleDropMove(paths, ROOT_PATH, effectFor(event));
     }
   }
 
@@ -327,6 +362,8 @@ export function FolderTree() {
           {rootHasChevron ? (
             <CollapsibleTrigger
               aria-label={isRootExpanded ? "Collapse Files" : "Expand Files"}
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
               className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
             >
               <ChevronRightIcon
@@ -339,11 +376,13 @@ export function FolderTree() {
           <SidebarMenuButton
             isActive={isFilesRoute(pathname)}
             data-focused={rootFocused}
+            data-drop-target={isRootDropTarget}
             render={<Link href={FILES_ROUTE} />}
             onFocus={() => setFocusPath(ROOT_PATH)}
             onDragOver={handleRootDragOver}
+            onDragLeave={handleRootDragLeave}
             onDrop={handleRootDrop}
-            className="flex-1 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
+            className="flex-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
           >
             <FolderIcon />
             <span>Files</span>

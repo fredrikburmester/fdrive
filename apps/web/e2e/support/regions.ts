@@ -26,3 +26,16 @@ export function listing(page: Page): Locator {
 export function sidebar(page: Page): Locator {
   return page.locator('[data-slot="sidebar"]');
 }
+
+/**
+ * The breadcrumb trail in the page header (`FilesBreadcrumb` in
+ * `components/files/toolbar.tsx`), identified by its `aria-label`. Scope
+ * breadcrumb link queries to this locator instead of `page` globally: the
+ * sidebar's folder tree auto-expands ancestors of the current route and
+ * renders the very same folder names as links, so an unscoped
+ * `page.getByRole("link", { name })` can resolve to two elements once a
+ * folder with that name is visible both in the tree and in the breadcrumb.
+ */
+export function breadcrumb(page: Page): Locator {
+  return page.getByRole("navigation", { name: "breadcrumb" });
+}

@@ -5,12 +5,17 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
+import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
+import { buildGridLayout } from "@/lib/files/marquee";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { cn } from "@/lib/utils";
+import { createDragImageElement } from "./drag-image";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 import type { ClickModifierKeys } from "./file-list";
+import { useMarqueeSelection } from "./use-marquee-selection";
 
 /** A grid tile's fixed footprint, in pixels: used to compute how many
  * columns fit and, in `ListingSkeleton`, to size its placeholder tiles. */
@@ -27,9 +32,13 @@ export interface FileGridProps {
   onEntryDoubleClick: (entry: FsEntry) => void;
   onContextAction: (action: RowContextAction, entry: FsEntry) => void;
   getDragPaths: (entry: FsEntry) => string[];
-  onInternalDrop: (paths: string[], targetPath: string) => void;
+  onInternalDrop: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
   /** Toggles between selecting every visible tile and none, from the header checkbox. */
   onToggleSelectAll: () => void;
+  /** Replaces the current selection outright, for a marquee drag. */
+  onChangeSelection: (paths: string[]) => void;
+  /** Clears the selection, for a plain click on empty listing space. */
+  onClearSelection: () => void;
 }
 
 function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
@@ -47,9 +56,12 @@ export function FileGrid({
   getDragPaths,
   onInternalDrop,
   onToggleSelectAll,
+  onChangeSelection,
+  onClearSelection,
 }: FileGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(1);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
   const allSelected = entries.length > 0 && selectedCount === entries.length;
   const someSelected = selectedCount > 0 && !allSelected;
@@ -77,18 +89,60 @@ export function FileGrid({
     overscan: 4,
   });
 
+  const marquee = useMarqueeSelection({
+    containerRef: parentRef,
+    getSelected: () => [...selected],
+    onChangeSelection,
+    onClearSelection,
+    getLayout: () =>
+      buildGridLayout(
+        entries.map((entry) => entry.path),
+        virtualizer.getVirtualItems().map((item) => ({
+          index: item.index,
+          start: item.start,
+          size: item.size,
+        })),
+        columns,
+        TILE_WIDTH,
+        TILE_HEIGHT,
+      ),
+  });
+
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
-    writeDraggedPaths(event.dataTransfer, getDragPaths(entry));
-    event.dataTransfer.effectAllowed = "move";
+    const paths = getDragPaths(entry);
+    writeDraggedPaths(event.dataTransfer, paths);
+    event.dataTransfer.effectAllowed = "copyMove";
+    startDragSession(paths);
+    const dragImage = createDragImageElement(document, entry.name, paths.length);
+    event.dataTransfer.setDragImage(dragImage, 12, 12);
+    window.setTimeout(() => dragImage.remove(), 0);
+  }
+
+  function handleDragEnd() {
+    endDragSession();
+    setDropTarget(null);
   }
 
   function handleDragOver(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
-    if (entry.kind !== "dir") {
+    if (entry.kind !== "dir" || !event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
       return;
     }
-    if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
+    const draggedPaths = getActiveDragPaths() ?? [];
+    if (dropTargetState(draggedPaths, entry.path) !== "valid") {
+      event.dataTransfer.dropEffect = "none";
+      if (dropTarget === entry.path) {
+        setDropTarget(null);
+      }
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = effectFor(event);
+    setDropTarget(entry.path);
+  }
+
+  function handleDragLeave(entry: FsEntry) {
+    if (dropTarget === entry.path) {
+      setDropTarget(null);
     }
   }
 
@@ -97,10 +151,11 @@ export function FileGrid({
       return;
     }
     const paths = readDraggedPaths(event.dataTransfer);
+    setDropTarget(null);
     if (paths !== null && paths.length > 0) {
       event.preventDefault();
       event.stopPropagation();
-      onInternalDrop(paths, entry.path);
+      onInternalDrop(paths, entry.path, effectFor(event));
     }
   }
 
@@ -115,7 +170,7 @@ export function FileGrid({
         />
         <span>{selectedCount > 0 ? `${selectedCount} selected` : "Select all"}</span>
       </div>
-      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto p-2">
+      <div ref={parentRef} className="relative min-h-0 flex-1 overflow-auto p-2">
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const start = virtualRow.index * columns;
@@ -151,14 +206,18 @@ export function FileGrid({
                         data-path={entry.path}
                         data-selected={isSelected}
                         data-focused={isFocused}
+                        data-drop-target={dropTarget === entry.path}
                         draggable
                         onDragStart={(event) => handleDragStart(event, entry)}
+                        onDragEnd={handleDragEnd}
                         onDragOver={(event) => handleDragOver(event, entry)}
+                        onDragLeave={() => handleDragLeave(entry)}
                         onDrop={(event) => handleDrop(event, entry)}
                         onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                         onDoubleClick={() => onEntryDoubleClick(entry)}
                         className={cn(
                           "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
+                          "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
                           "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
                           "data-[selected=true]:bg-primary/10",
                         )}
@@ -180,6 +239,19 @@ export function FileGrid({
             );
           })}
         </div>
+        {marquee.rect !== null && (
+          <div
+            aria-hidden
+            data-slot="marquee-rect"
+            className="pointer-events-none absolute rounded-sm border border-foreground/25 bg-foreground/10"
+            style={{
+              left: marquee.rect.left,
+              top: marquee.rect.top,
+              width: marquee.rect.width,
+              height: marquee.rect.height,
+            }}
+          />
+        )}
       </div>
     </div>
   );

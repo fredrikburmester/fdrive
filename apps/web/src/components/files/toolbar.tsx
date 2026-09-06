@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
+import type { DragEvent } from "react";
+import { useState } from "react";
 import {
   Breadcrumb,
   BreadcrumbEllipsis,
@@ -43,10 +45,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
 import type { NewFileKind } from "@/lib/editor/new-file";
+import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { SortSpec } from "@/lib/files/sorting";
 import type { ViewMode } from "@/lib/files/view-mode";
+import { cn } from "@/lib/utils";
 
 const SORT_LABELS: Record<SortKey, string> = {
   name: "Name",
@@ -69,10 +74,13 @@ function toRoute(href: string): Route {
 
 export interface FilesBreadcrumbProps {
   path: string;
+  /** Called when an internal drag drops onto a breadcrumb segment (moving
+   * the dragged entries up to that ancestor folder, or the current one). */
+  onInternalDrop?: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
 }
 
 /** The current folder's breadcrumb trail, collapsing the middle when long. */
-export function FilesBreadcrumb({ path }: FilesBreadcrumbProps) {
+export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) {
   const crumbs = buildBreadcrumbs(path);
   const shouldCollapse = crumbs.length > COLLAPSE_THRESHOLD;
   const visible = shouldCollapse
@@ -91,6 +99,7 @@ export function FilesBreadcrumb({ path }: FilesBreadcrumbProps) {
             key={crumb.path}
             crumb={crumb}
             isLast={!shouldCollapse && index === visible.head.length - 1}
+            onInternalDrop={onInternalDrop}
           />
         ))}
         {shouldCollapse && (
@@ -111,7 +120,12 @@ export function FilesBreadcrumb({ path }: FilesBreadcrumbProps) {
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             {visible.tail.map((crumb, index) => (
-              <CrumbRow key={crumb.path} crumb={crumb} isLast={index === visible.tail.length - 1} />
+              <CrumbRow
+                key={crumb.path}
+                crumb={crumb}
+                isLast={index === visible.tail.length - 1}
+                onInternalDrop={onInternalDrop}
+              />
             ))}
           </>
         )}
@@ -120,14 +134,74 @@ export function FilesBreadcrumb({ path }: FilesBreadcrumbProps) {
   );
 }
 
-function CrumbRow({ crumb, isLast }: { crumb: BreadcrumbEntry; isLast: boolean }) {
+interface CrumbRowProps {
+  crumb: BreadcrumbEntry;
+  isLast: boolean;
+  onInternalDrop?:
+    | ((paths: string[], targetPath: string, effect: "move" | "copy") => void)
+    | undefined;
+}
+
+/** One breadcrumb segment, including Home; every segment (even the current,
+ * non-linked one) accepts an internal drag-and-drop, so dropping a file onto
+ * an ancestor moves it up out of the current folder, matching Finder's path
+ * bar. */
+function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
+  const [isDropTarget, setIsDropTarget] = useState(false);
+
+  function handleDragOver(event: DragEvent<HTMLElement>) {
+    if (!event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
+      return;
+    }
+    const draggedPaths = getActiveDragPaths() ?? [];
+    if (dropTargetState(draggedPaths, crumb.path) !== "valid") {
+      event.dataTransfer.dropEffect = "none";
+      setIsDropTarget(false);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = effectFor(event);
+    setIsDropTarget(true);
+  }
+
+  function handleDragLeave() {
+    setIsDropTarget(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    const paths = readDraggedPaths(event.dataTransfer);
+    setIsDropTarget(false);
+    if (paths !== null && paths.length > 0) {
+      event.preventDefault();
+      onInternalDrop?.(paths, crumb.path, effectFor(event));
+    }
+  }
+
   return (
     <>
       <BreadcrumbItem>
         {isLast ? (
-          <BreadcrumbPage className="truncate">{crumb.name}</BreadcrumbPage>
+          <BreadcrumbPage
+            data-drop-target={isDropTarget}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className="max-w-48 truncate rounded-sm px-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50"
+          >
+            {crumb.name}
+          </BreadcrumbPage>
         ) : (
-          <BreadcrumbLink render={<Link href={toRoute(crumb.href)} />} className="truncate">
+          <BreadcrumbLink
+            render={<Link href={toRoute(crumb.href)} />}
+            data-drop-target={isDropTarget}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={cn(
+              "max-w-48 truncate rounded-sm px-1",
+              "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
+            )}
+          >
             {crumb.name}
           </BreadcrumbLink>
         )}
