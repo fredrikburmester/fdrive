@@ -1,0 +1,76 @@
+name: fdrive-dev
+
+# Standalone local development environment. Not layered on top of
+# compose.yaml: it runs only the two backing services a developer needs to
+# run the api and web dev servers with hot reload on the host (Postgres and
+# a seeded SFTPGo), pre-populated with the same alice/bob/carol fixtures the
+# testkit uses plus a friendlier "dev" user with sample files.
+#
+# Usage: see docs/DEVELOPMENT.md, or the root `dev:env` / `dev:env:down` /
+# `dev:env:reset` scripts.
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: fdrive
+      POSTGRES_USER: fdrive
+      POSTGRES_PASSWORD: fdrive-dev
+    ports:
+      - "${FDRIVE_DEV_DB_PORT:-55432}:5432"
+    volumes:
+      - fdrive-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fdrive -d fdrive"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # SFTPGo copies seed files in as root, which leaves them unwritable by the
+  # uid 1000 the sftpgo process runs as (see packages/testkit's
+  # startSftpgo). This one-shot service copies the generated seed files into
+  # the named data volume and fixes ownership before sftpgo ever starts.
+  sftpgo-seed:
+    image: alpine:3.20
+    volumes:
+      - ./dev/files:/seed-files:ro
+      - fdrive-dev-sftpgo-data:/srv/sftpgo/data
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /srv/sftpgo/data
+        cp -a /seed-files/. /srv/sftpgo/data/
+        chown -R 1000:1000 /srv/sftpgo/data
+
+  sftpgo:
+    image: drakkan/sftpgo:v2.7.5
+    ports:
+      - "${FDRIVE_DEV_SFTPGO_HTTP_PORT:-58080}:8080"
+      - "${FDRIVE_DEV_SFTPGO_SFTP_PORT:-52022}:2022"
+    environment:
+      SFTPGO_HTTPD__BINDINGS__0__PORT: "8080"
+      SFTPGO_HTTPD__BINDINGS__0__ADDRESS: ""
+      SFTPGO_LOADDATA_FROM: /seed/sftpgo-seed.json
+      SFTPGO_LOADDATA_MODE: "0"
+      SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"
+      SFTPGO_DEFAULT_ADMIN_USERNAME: admin
+      SFTPGO_DEFAULT_ADMIN_PASSWORD: admin-dev-password
+    volumes:
+      - ./dev/sftpgo-seed.json:/seed/sftpgo-seed.json:ro
+      - fdrive-dev-sftpgo-data:/srv/sftpgo/data
+    depends_on:
+      sftpgo-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      # The image ships neither curl nor wget; sftpgo's own "ping"
+      # subcommand exists specifically for environments like this one.
+      test: ["CMD", "sftpgo", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  fdrive-dev-pgdata:
+  fdrive-dev-sftpgo-data:

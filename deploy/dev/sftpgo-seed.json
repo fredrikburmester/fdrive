@@ -1,0 +1,56 @@
+{
+  "users": [
+    {
+      "username": "alice",
+      "password": "alice-password",
+      "status": 1,
+      "home_dir": "/srv/sftpgo/data/alice",
+      "permissions": {
+        "/": ["*"]
+      },
+      "virtual_folders": []
+    },
+    {
+      "username": "bob",
+      "password": "bob-password",
+      "status": 1,
+      "home_dir": "/srv/sftpgo/data/bob",
+      "permissions": {
+        "/": ["list", "download"],
+        "/inbox": ["list", "upload", "create_dirs"]
+      },
+      "virtual_folders": []
+    },
+    {
+      "username": "carol",
+      "password": "carol-password",
+      "status": 1,
+      "home_dir": "/srv/sftpgo/data/carol",
+      "permissions": {
+        "/": ["*"]
+      },
+      "virtual_folders": [
+        {
+          "name": "shared",
+          "virtual_path": "/shared"
+        }
+      ]
+    },
+    {
+      "username": "dev",
+      "password": "dev",
+      "status": 1,
+      "home_dir": "/srv/sftpgo/data/dev",
+      "permissions": {
+        "/": ["*"]
+      },
+      "virtual_folders": []
+    }
+  ],
+  "folders": [
+    {
+      "name": "shared",
+      "mapped_path": "/srv/sftpgo/data/_folders/shared"
+    }
+  ]
+}

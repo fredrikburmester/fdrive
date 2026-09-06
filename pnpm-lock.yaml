@@ -11,12 +11,18 @@ importers:
       '@biomejs/biome':
         specifier: ^2.5.12
         version: 2.5.12
+      '@fdrive/testkit':
+        specifier: workspace:*
+        version: link:packages/testkit
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
       '@vitest/coverage-v8':
         specifier: ^5.0.0
         version: 5.0.0(vitest@5.0.0)
+      tsx:
+        specifier: ^4.20.6
+        version: 4.23.13
       turbo:
         specifier: ^2.10.12
         version: 2.10.12
