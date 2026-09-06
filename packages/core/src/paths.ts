@@ -1,4 +1,4 @@
-import { CoreError } from "./errors.js";
+import { CoreError } from "./errors.ts";
 
 const MAX_SEGMENT_BYTES = 255;
 

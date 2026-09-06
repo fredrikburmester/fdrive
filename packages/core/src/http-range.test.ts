@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentDisposition, parseRangeHeader } from "./http-range.js";
+import { contentDisposition, parseRangeHeader } from "./http-range.ts";
 
 describe("parseRangeHeader", () => {
   it("returns kind none when there is no header", () => {

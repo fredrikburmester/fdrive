@@ -1,6 +1,6 @@
 import { ApiClientError, type ApiErrorKind } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
-import { describeApiError, isReauthRequired } from "./errors.js";
+import { describeApiError, isReauthRequired } from "./errors.ts";
 
 const ALL_KINDS: ApiErrorKind[] = [
   "bad_request",

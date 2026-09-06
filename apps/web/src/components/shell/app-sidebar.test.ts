@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatarInitials, isFilesRoute } from "./app-sidebar.js";
+import { avatarInitials, isFilesRoute } from "./app-sidebar.tsx";
 
 describe("avatarInitials", () => {
   it("upper-cases the first two letters of the username", () => {

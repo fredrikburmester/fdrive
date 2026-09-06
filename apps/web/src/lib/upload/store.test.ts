@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createUploadStore, networkErrorMessage, parseUploadErrorMessage } from "./store.js";
-import type { UploadItem } from "./types.js";
-import type { ProgressEventLike, XhrLike } from "./xhr.js";
+import { createUploadStore, networkErrorMessage, parseUploadErrorMessage } from "./store.ts";
+import type { UploadItem } from "./types.ts";
+import type { ProgressEventLike, XhrLike } from "./xhr.ts";
 
 class FakeXhr implements XhrLike {
   status = 0;
@@ -60,10 +60,15 @@ class FakeXhr implements XhrLike {
   }
 }
 
+// Fixed so `x-modified-at` assertions never race two `Date.now()` calls
+// against each other (the DOM's default `lastModified` when not given
+// explicitly).
+const FIXED_LAST_MODIFIED_MS = 1_700_000_000_000;
+
 function makeItem(id: string, overrides: Partial<UploadItem> = {}): UploadItem {
   return {
     id,
-    file: new File(["x".repeat(10)], `${id}.txt`),
+    file: new File(["x".repeat(10)], `${id}.txt`, { lastModified: FIXED_LAST_MODIFIED_MS }),
     targetPath: `/dest/${id}.txt`,
     relativePath: `${id}.txt`,
     size: 10,
@@ -147,7 +152,7 @@ describe("createUploadStore", () => {
     expect(xhrs[0]?.headers["x-requested-with"]).toBe("fdrive");
     expect(xhrs[0]?.headers["x-identity-id"]).toBe("id-1");
     expect(xhrs[0]?.withCredentials).toBe(true);
-    expect(xhrs[0]?.headers["x-modified-at"]).toBe(String(makeItem("a").file.lastModified));
+    expect(xhrs[0]?.headers["x-modified-at"]).toBe(String(FIXED_LAST_MODIFIED_MS));
   });
 
   it("dispatches progress updates from the xhr's upload progress events", () => {

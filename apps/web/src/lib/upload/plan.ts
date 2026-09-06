@@ -1,6 +1,6 @@
 import { joinPath } from "@fdrive/core";
-import type { DroppedFile } from "./traverse.js";
-import type { UploadItem } from "./types.js";
+import type { DroppedFile } from "./traverse.ts";
+import type { UploadItem } from "./types.ts";
 
 export type ConflictPolicy = "replace" | "skip" | "ask";
 

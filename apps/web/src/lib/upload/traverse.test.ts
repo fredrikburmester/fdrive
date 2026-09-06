@@ -6,7 +6,7 @@ import {
   type DataTransferLike,
   type EntryLike,
   type EntryReaderLike,
-} from "./traverse.js";
+} from "./traverse.ts";
 
 function fileEntry(name: string, file: File): EntryLike {
   return {

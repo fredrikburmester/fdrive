@@ -1,4 +1,4 @@
-import { formatBytes } from "../format.js";
+import { formatBytes } from "../format.ts";
 
 /** One throughput sample: bytes transferred so far, as of `timestampMs`. */
 export interface ThroughputSample {

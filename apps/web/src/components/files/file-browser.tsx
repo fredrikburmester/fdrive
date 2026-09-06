@@ -1,12 +1,11 @@
 "use client";
 
 import type { FsEntry } from "@fdrive/contracts";
-import { baseName, joinPath, parentPath } from "@fdrive/core";
+import { baseName, isRoot, joinPath, parentPath } from "@fdrive/core";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import {
   type ChangeEvent,
-  type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useMemo,
@@ -15,8 +14,11 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { Inspector } from "@/components/inspector/inspector";
 import { Button } from "@/components/ui/button";
-import { apiClient, INTERNAL_DND_TYPE, PageHeader } from "@/lib/files/deps";
+import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
+import { useUploadFilesContext } from "@/components/upload/upload-provider";
+import { apiClient, PageHeader } from "@/lib/files/deps";
 import {
   type AnchorDownloader,
   createAnchorDownloader,
@@ -25,6 +27,7 @@ import {
   downloadMany,
   downloadSingle,
 } from "@/lib/files/download";
+import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
 import { pathToHref, viewHref } from "@/lib/files/path-url";
 import { detectPlatform } from "@/lib/files/platform";
@@ -62,6 +65,7 @@ import {
   type ViewMode,
   writeViewMode,
 } from "@/lib/files/view-mode";
+import { collectInputFiles } from "@/lib/upload/traverse";
 import { DeleteDialog } from "./delete-dialog";
 import { DestinationPicker, type DestinationPickerMode } from "./destination-picker";
 import { EmptyState } from "./empty-state";
@@ -197,12 +201,28 @@ export function FileBrowser({
     mode: DestinationPickerMode;
     paths: string[];
   } | null>(null);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpenState] = useState(false);
+  useEffect(() => {
+    setDetailsOpenState(readInspectorOpen(window.localStorage));
+  }, []);
+
+  function setDetailsOpen(open: boolean) {
+    setDetailsOpenState(open);
+    writeInspectorOpen(window.localStorage, open);
+  }
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<DirectoryInputElement | null>(null);
   const typeAheadRef = useRef<TypeAheadBuffer>(EMPTY_TYPE_AHEAD_BUFFER);
   const anchorRef = useRef<AnchorDownloader | null>(null);
+  const listingRef = useRef<HTMLDivElement>(null);
+
+  const { uploadFiles } = useUploadFilesContext();
+  const existingNames = useMemo(() => new Set(entries.map((entry) => entry.name)), [entries]);
+  const destinationName = isRoot(path) ? "Home" : baseName(path);
+  const { isDraggingOver } = useExternalDrop(listingRef, (files) => {
+    uploadFiles(files, path, existingNames);
+  });
 
   function getAnchorDownloader(): AnchorDownloader {
     if (anchorRef.current === null) {
@@ -317,26 +337,16 @@ export function FileBrowser({
     folderInputRef.current?.click();
   }
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
-    onRequestUpload?.(event.target.files ?? undefined);
+    const files = event.target.files;
     event.target.value = "";
-  }
-
-  function handleContainerDragOver(event: DragEvent<HTMLDivElement>) {
-    const types = event.dataTransfer.types;
-    if (!types.includes(INTERNAL_DND_TYPE) && types.includes("Files")) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "copy";
-    }
-  }
-
-  function handleContainerDrop(event: DragEvent<HTMLDivElement>) {
-    if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
+    if (files === null || files.length === 0) {
       return;
     }
-    if (event.dataTransfer.files.length > 0) {
-      event.preventDefault();
-      onRequestUpload?.(event.dataTransfer.files);
+    if (onRequestUpload) {
+      onRequestUpload(files);
+      return;
     }
+    uploadFiles(collectInputFiles(files), path, existingNames);
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -438,7 +448,7 @@ export function FileBrowser({
   return (
     <>
       <PageHeader
-        breadcrumb={<FilesBreadcrumb path={path} />}
+        breadcrumbs={<FilesBreadcrumb path={path} />}
         actions={
           <FilesToolbarActions
             viewMode={viewMode}
@@ -449,7 +459,7 @@ export function FileBrowser({
             onUploadFiles={handleUploadFiles}
             onUploadFolder={handleUploadFolder}
             detailsOpen={detailsOpen}
-            onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onToggleDetails={() => setDetailsOpen(!detailsOpen)}
           />
         }
       />
@@ -474,52 +484,59 @@ export function FileBrowser({
         onChange={handleFileInputChange}
       />
 
-      {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the keyboard and drop host for the whole listing, like Finder's content view; the interactive rows inside handle their own semantics */}
-      <div
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: this hosts roving keyboard navigation across the virtualized rows, like Finder's content view
-        tabIndex={0}
-        onKeyDown={handleKeyDown}
-        onDragOver={handleContainerDragOver}
-        onDrop={handleContainerDrop}
-        className="min-h-0 flex-1 outline-none"
-      >
-        {isLoading ? (
-          <ListingSkeleton />
-        ) : isError ? (
-          <ErrorState
-            message={describeFsError(error, "Something went wrong.")}
-            onRetry={() => refetch()}
-          />
-        ) : sortedEntries.length === 0 ? (
-          <EmptyState
-            action={
-              <Button variant="outline" size="sm" onClick={handleUploadFiles}>
-                Upload
-              </Button>
-            }
-          />
-        ) : viewMode === "list" ? (
-          <FileList
-            entries={sortedEntries}
-            selected={selection.selected}
-            focusedPath={selection.focus}
-            onEntryClick={handleEntryClick}
-            onEntryDoubleClick={handleOpen}
-            onContextAction={handleContextAction}
-            getDragPaths={pathsForAction}
-            onInternalDrop={handleInternalMove}
-          />
-        ) : (
-          <FileGrid
-            entries={sortedEntries}
-            selected={selection.selected}
-            focusedPath={selection.focus}
-            onEntryClick={handleEntryClick}
-            onEntryDoubleClick={handleOpen}
-            onContextAction={handleContextAction}
-            getDragPaths={pathsForAction}
-            onInternalDrop={handleInternalMove}
-          />
+      <div className="flex min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1">
+          {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the keyboard and drop host for the whole listing, like Finder's content view; the interactive rows inside handle their own semantics */}
+          <div
+            ref={listingRef}
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: this hosts roving keyboard navigation across the virtualized rows, like Finder's content view
+            tabIndex={0}
+            onKeyDown={handleKeyDown}
+            className="h-full outline-none"
+          >
+            {isLoading ? (
+              <ListingSkeleton />
+            ) : isError ? (
+              <ErrorState
+                message={describeFsError(error, "Something went wrong.")}
+                onRetry={() => refetch()}
+              />
+            ) : sortedEntries.length === 0 ? (
+              <EmptyState
+                action={
+                  <Button variant="outline" size="sm" onClick={handleUploadFiles}>
+                    Upload
+                  </Button>
+                }
+              />
+            ) : viewMode === "list" ? (
+              <FileList
+                entries={sortedEntries}
+                selected={selection.selected}
+                focusedPath={selection.focus}
+                onEntryClick={handleEntryClick}
+                onEntryDoubleClick={handleOpen}
+                onContextAction={handleContextAction}
+                getDragPaths={pathsForAction}
+                onInternalDrop={handleInternalMove}
+              />
+            ) : (
+              <FileGrid
+                entries={sortedEntries}
+                selected={selection.selected}
+                focusedPath={selection.focus}
+                onEntryClick={handleEntryClick}
+                onEntryDoubleClick={handleOpen}
+                onContextAction={handleContextAction}
+                getDragPaths={pathsForAction}
+                onInternalDrop={handleInternalMove}
+              />
+            )}
+          </div>
+          <DropOverlay visible={isDraggingOver} destinationName={destinationName} />
+        </div>
+        {detailsOpen && (
+          <Inspector entries={selectedEntries} onClose={() => setDetailsOpen(false)} />
         )}
       </div>
 

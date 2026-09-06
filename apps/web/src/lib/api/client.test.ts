@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apiClient } from "./client.js";
+import { apiClient } from "./client.ts";
 
 describe("apiClient", () => {
   it("is a fully built ApiClient with a same-origin base URL", () => {

@@ -1,9 +1,9 @@
 import type { z } from "zod";
-import { AboutResponse } from "./about.js";
-import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.js";
-import { ApiError, type ApiErrorKind } from "./error.js";
-import { type DeleteRequest, EntryResponse, type FsEntry, ListResponse, OkResponse } from "./fs.js";
-import { IDENTITY_HEADER, MODIFIED_AT_HEADER, ROUTES } from "./routes.js";
+import { AboutResponse } from "./about.ts";
+import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
+import { ApiError, type ApiErrorKind } from "./error.ts";
+import { type DeleteRequest, EntryResponse, type FsEntry, ListResponse, OkResponse } from "./fs.ts";
+import { IDENTITY_HEADER, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
 
 export type { IdentitySummary };
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CoreError, isCoreError, isStorageError, StorageError } from "./errors.js";
+import { CoreError, isCoreError, isStorageError, StorageError } from "./errors.ts";
 
 describe("CoreError", () => {
   it("carries a kind and message", () => {

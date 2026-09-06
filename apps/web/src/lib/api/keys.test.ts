@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { queryKeys } from "./keys.js";
+import { queryKeys } from "./keys.ts";
 
 describe("queryKeys", () => {
   it("auth.me() builds a stable key", () => {

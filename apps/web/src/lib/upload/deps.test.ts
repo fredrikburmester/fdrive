@@ -1,8 +1,8 @@
 import type { ApiClient } from "@fdrive/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiClient, createDefaultOnUploaded, queryKeys } from "./deps.js";
+import { apiClient, createDefaultOnUploaded, queryKeys } from "./deps.ts";
 
-describe("deps stand-ins", () => {
+describe("deps", () => {
   it("queryKeys.fs.list builds a stable, path-scoped key", () => {
     expect(queryKeys.fs.list("/a/b")).toEqual(["fs", "list", "/a/b"]);
   });

@@ -1,4 +1,4 @@
-import { extensionOf, joinPath } from "./paths.js";
+import { extensionOf, joinPath } from "./paths.ts";
 
 export type EntryKind = "file" | "dir" | "symlink" | "other";
 
