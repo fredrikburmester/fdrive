@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type DndDataTransferLike,
+  endDragSession,
+  getActiveDragPaths,
   INTERNAL_DND_TYPE,
   isExternalFileDrag,
   readDraggedPaths,
+  startDragSession,
+  subscribeDragSession,
   writeDraggedPaths,
 } from "./dnd.ts";
 
@@ -68,5 +72,41 @@ describe("isExternalFileDrag", () => {
 
   it("is false when there is no Files type", () => {
     expect(isExternalFileDrag(new FakeDataTransfer(["text/plain"]))).toBe(false);
+  });
+});
+
+describe("drag session", () => {
+  afterEach(() => {
+    endDragSession();
+  });
+
+  it("has no active paths before any session starts", () => {
+    expect(getActiveDragPaths()).toBeNull();
+  });
+
+  it("records the dragged paths once a session starts", () => {
+    startDragSession(["/a", "/b"]);
+    expect(getActiveDragPaths()).toEqual(["/a", "/b"]);
+  });
+
+  it("clears the active paths when the session ends", () => {
+    startDragSession(["/a"]);
+    endDragSession();
+    expect(getActiveDragPaths()).toBeNull();
+  });
+
+  it("notifies subscribers on start and end", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeDragSession(listener);
+
+    startDragSession(["/a"]);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    endDragSession();
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    startDragSession(["/b"]);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

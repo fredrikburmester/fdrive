@@ -341,9 +341,10 @@ export function FileBrowser({
     dispatchSelection({ type: "click", path: entry.path, modifiers });
   }
 
-  function handleInternalMove(paths: string[], targetFolderPath: string) {
+  function handleInternalDrop(paths: string[], targetFolderPath: string, effect: "move" | "copy") {
+    const mutation = effect === "copy" ? copy : move;
     for (const source of movablePaths(paths, targetFolderPath)) {
-      move.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
+      mutation.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
     }
   }
 
@@ -654,7 +655,7 @@ export function FileBrowser({
   return (
     <>
       <PageHeader
-        breadcrumbs={<FilesBreadcrumb path={path} />}
+        breadcrumbs={<FilesBreadcrumb path={path} onInternalDrop={handleInternalDrop} />}
         actions={
           <FilesToolbarActions
             viewMode={viewMode}
@@ -695,8 +696,8 @@ export function FileBrowser({
         onChange={handleFileInputChange}
       />
 
-      <div className="flex min-h-0 flex-1">
-        <div className="relative min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <div className="relative min-h-0 min-w-0 flex-1">
           {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the keyboard and drop host for the whole listing, like Finder's content view; the interactive rows inside handle their own semantics */}
           <div
             ref={listingRef}
@@ -729,8 +730,10 @@ export function FileBrowser({
                 onEntryDoubleClick={handleOpen}
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
-                onInternalDrop={handleInternalMove}
+                onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
+                onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
+                onClearSelection={() => dispatchSelection({ type: "clear" })}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -741,8 +744,10 @@ export function FileBrowser({
                 onEntryDoubleClick={handleOpen}
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
-                onInternalDrop={handleInternalMove}
+                onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
+                onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
+                onClearSelection={() => dispatchSelection({ type: "clear" })}
               />
             ) : (
               <FileList
@@ -753,8 +758,10 @@ export function FileBrowser({
                 onEntryDoubleClick={handleOpen}
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
-                onInternalDrop={handleInternalMove}
+                onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
+                onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
+                onClearSelection={() => dispatchSelection({ type: "clear" })}
                 treeDepths={treeDepths}
                 treeExpanded={treeState.expanded}
                 onToggleTreeExpand={handleToggleTreeExpand}

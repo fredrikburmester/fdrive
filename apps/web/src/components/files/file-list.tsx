@@ -4,16 +4,31 @@ import type { FsEntry } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
+import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
+import { buildListLayout } from "@/lib/files/marquee";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { formatBytes, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { createDragImageElement } from "./drag-image";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
+import { useMarqueeSelection } from "./use-marquee-selection";
+
+/** Width used for every row's marquee hit box: wide enough that a marquee
+ * drag anywhere horizontally within the listing still counts as overlapping
+ * the row, since list/tree selection does not need horizontal precision. */
+const MARQUEE_ROW_WIDTH = 100_000;
 
 export const FILE_ROW_HEIGHT = 36;
+
+/** The sticky column header's height, in pixels (matches its `h-9` class):
+ * rows are offset by this much within the scroll container, since the
+ * header sits in normal flow above the virtualized rows' own wrapper. */
+const HEADER_HEIGHT = 36;
 
 /** Indent, in pixels, added per tree depth level in tree view. */
 export const TREE_INDENT_PX = 20;
@@ -31,9 +46,13 @@ export interface FileListProps {
   onEntryDoubleClick: (entry: FsEntry) => void;
   onContextAction: (action: RowContextAction, entry: FsEntry) => void;
   getDragPaths: (entry: FsEntry) => string[];
-  onInternalDrop: (paths: string[], targetPath: string) => void;
+  onInternalDrop: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
   /** Toggles between selecting every visible row and none, from the header checkbox. */
   onToggleSelectAll: () => void;
+  /** Replaces the current selection outright, for a marquee drag. */
+  onChangeSelection: (paths: string[]) => void;
+  /** Clears the selection, for a plain click on empty listing space. */
+  onClearSelection: () => void;
   /**
    * Present only in tree view: each row's indent depth, keyed by path. Rows
    * missing from the map (or when this prop is absent entirely) render
@@ -61,11 +80,14 @@ export function FileList({
   getDragPaths,
   onInternalDrop,
   onToggleSelectAll,
+  onChangeSelection,
+  onClearSelection,
   treeDepths,
   treeExpanded,
   onToggleTreeExpand,
 }: FileListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
   const allSelected = entries.length > 0 && selectedCount === entries.length;
   const someSelected = selectedCount > 0 && !allSelected;
@@ -77,18 +99,59 @@ export function FileList({
     overscan: 10,
   });
 
+  const marquee = useMarqueeSelection({
+    containerRef: parentRef,
+    getSelected: () => [...selected],
+    onChangeSelection,
+    onClearSelection,
+    getLayout: () =>
+      buildListLayout(
+        entries.map((entry) => entry.path),
+        virtualizer.getVirtualItems().map((item) => ({
+          index: item.index,
+          start: item.start + HEADER_HEIGHT,
+          size: item.size,
+        })),
+        FILE_ROW_HEIGHT,
+        MARQUEE_ROW_WIDTH,
+      ),
+  });
+
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
-    writeDraggedPaths(event.dataTransfer, getDragPaths(entry));
-    event.dataTransfer.effectAllowed = "move";
+    const paths = getDragPaths(entry);
+    writeDraggedPaths(event.dataTransfer, paths);
+    event.dataTransfer.effectAllowed = "copyMove";
+    startDragSession(paths);
+    const dragImage = createDragImageElement(document, entry.name, paths.length);
+    event.dataTransfer.setDragImage(dragImage, 12, 12);
+    window.setTimeout(() => dragImage.remove(), 0);
+  }
+
+  function handleDragEnd() {
+    endDragSession();
+    setDropTarget(null);
   }
 
   function handleDragOver(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
-    if (entry.kind !== "dir") {
+    if (entry.kind !== "dir" || !event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
       return;
     }
-    if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
+    const draggedPaths = getActiveDragPaths() ?? [];
+    if (dropTargetState(draggedPaths, entry.path) !== "valid") {
+      event.dataTransfer.dropEffect = "none";
+      if (dropTarget === entry.path) {
+        setDropTarget(null);
+      }
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = effectFor(event);
+    setDropTarget(entry.path);
+  }
+
+  function handleDragLeave(entry: FsEntry) {
+    if (dropTarget === entry.path) {
+      setDropTarget(null);
     }
   }
 
@@ -97,16 +160,25 @@ export function FileList({
       return;
     }
     const paths = readDraggedPaths(event.dataTransfer);
+    setDropTarget(null);
     if (paths !== null && paths.length > 0) {
       event.preventDefault();
       event.stopPropagation();
-      onInternalDrop(paths, entry.path);
+      onInternalDrop(paths, entry.path, effectFor(event));
     }
   }
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto" data-slot="file-list">
-      <div className="sticky top-0 z-10 flex h-9 items-center gap-3 border-border border-b bg-background/95 px-3 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75">
+    <div ref={parentRef} className="relative h-full overflow-auto" data-slot="file-list">
+      {/**
+       * `data-marquee-exclude`: this header lives inside the same scroll
+       * container the marquee listens on (so it stays `sticky` to it), but
+       * its own controls are not listing content; see `isMarqueeStartTarget`.
+       */}
+      <div
+        data-marquee-exclude
+        className="sticky top-0 z-10 flex h-9 items-center gap-3 border-border border-b bg-background/95 px-3 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75"
+      >
         <Checkbox
           checked={allSelected}
           indeterminate={someSelected}
@@ -144,13 +216,13 @@ export function FileList({
               <div
                 data-path={entry.path}
                 data-selected={isSelected}
-                draggable
-                onDragStart={(event) => handleDragStart(event, entry)}
+                data-drop-target={dropTarget === entry.path}
                 onDragOver={(event) => handleDragOver(event, entry)}
+                onDragLeave={() => handleDragLeave(entry)}
                 onDrop={(event) => handleDrop(event, entry)}
                 onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                 onDoubleClick={() => onEntryDoubleClick(entry)}
-                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
+                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-inset data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
                 style={{
                   height: virtualRow.size,
                   transform: `translateY(${virtualRow.start}px)`,
@@ -167,6 +239,7 @@ export function FileList({
                         event.stopPropagation();
                         onToggleTreeExpand?.(entry);
                       }}
+                      onDoubleClick={(event) => event.stopPropagation()}
                       aria-label={
                         isExpandedFolder ? `Collapse ${entry.name}` : `Expand ${entry.name}`
                       }
@@ -182,25 +255,55 @@ export function FileList({
                   ) : (
                     <span className="size-4 shrink-0" />
                   ))}
-                <Checkbox
-                  checked={isSelected}
-                  onClick={(event) => event.stopPropagation()}
-                  onCheckedChange={() => onEntryClick(entry, { shift: false, meta: true })}
-                  aria-label={`Select ${entry.name}`}
-                />
-                <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />
-                <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
-                  {entry.kind === "dir" ? "--" : formatBytes(entry.size)}
-                </span>
-                <span className="w-28 shrink-0 text-muted-foreground text-xs">
-                  {formatDate(new Date(entry.modifiedAt))}
-                </span>
+                {/**
+                 * Only this inner wrapper (the checkbox through the date
+                 * column) is `draggable`, not the row itself: the row's own
+                 * padding and this wrapper's leading gap stay plain, un-
+                 * draggable background, so a marquee drag can start there
+                 * (see `isMarqueeStartTarget`) without the browser mistaking
+                 * it for the start of a native HTML5 drag.
+                 */}
+                {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the row's drag handle; click/selection semantics live on the row above it */}
+                <div
+                  draggable
+                  onDragStart={(event) => handleDragStart(event, entry)}
+                  onDragEnd={handleDragEnd}
+                  className="flex min-w-0 flex-1 items-center gap-3"
+                >
+                  <Checkbox
+                    checked={isSelected}
+                    onClick={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                    onCheckedChange={() => onEntryClick(entry, { shift: false, meta: true })}
+                    aria-label={`Select ${entry.name}`}
+                  />
+                  <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />
+                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
+                    {entry.kind === "dir" ? "--" : formatBytes(entry.size)}
+                  </span>
+                  <span className="w-28 shrink-0 text-muted-foreground text-xs">
+                    {formatDate(new Date(entry.modifiedAt))}
+                  </span>
+                </div>
               </div>
             </FileContextMenu>
           );
         })}
       </div>
+      {marquee.rect !== null && (
+        <div
+          aria-hidden
+          data-slot="marquee-rect"
+          className="pointer-events-none absolute rounded-sm border border-foreground/25 bg-foreground/10"
+          style={{
+            left: marquee.rect.left,
+            top: marquee.rect.top,
+            width: marquee.rect.width,
+            height: marquee.rect.height,
+          }}
+        />
+      )}
     </div>
   );
 }
