@@ -2,7 +2,15 @@
 
 import { parentPath } from "@fdrive/core";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Info, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  Info,
+  SquarePenIcon,
+  X,
+} from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -16,10 +24,14 @@ import { Kbd } from "@/components/ui/kbd";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { editHref } from "@/lib/editor/route";
 import { apiClient, pathToHref, queryKeys, viewHref } from "@/lib/preview/deps";
 import { previewKindFor } from "@/lib/preview/kind";
 import { siblingNavigation } from "@/lib/preview/siblings";
 import { PreviewViewer } from "./preview-viewer";
+
+/** Kinds the in-place editor (chunk P1-EDIT) can open. */
+const EDITABLE_KINDS = new Set(["text", "code", "markdown"]);
 
 export interface PreviewShellProps {
   readonly path: string;
@@ -128,6 +140,8 @@ function PreviewShellContent({ path }: PreviewShellProps) {
   const backHref = pathToHref(parent);
   const prevHref = siblings.prev !== null ? viewHref(siblings.prev) : undefined;
   const nextHref = siblings.next !== null ? viewHref(siblings.next) : undefined;
+  const entry = entryQuery.data;
+  const isEditable = entry !== undefined && EDITABLE_KINDS.has(previewKindFor(entry));
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -141,14 +155,18 @@ function PreviewShellContent({ path }: PreviewShellProps) {
       }
       if (event.key === "ArrowRight" && siblings.next !== null) {
         router.push(toRoute(viewHref(siblings.next)));
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e" && isEditable) {
+        event.preventDefault();
+        router.push(toRoute(editHref(path)));
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [router, backHref, siblings.prev, siblings.next]);
+  }, [router, backHref, siblings.prev, siblings.next, isEditable, path]);
 
-  const entry = entryQuery.data;
   const downloadUrl = apiClient.downloadUrl(path);
   const inlineUrl = apiClient.downloadUrl(path, { inline: true });
 
@@ -167,6 +185,13 @@ function PreviewShellContent({ path }: PreviewShellProps) {
 
           {entry !== undefined && (
             <Badge variant="secondary">{capitalize(previewKindFor(entry))}</Badge>
+          )}
+
+          {isEditable && (
+            <TopBarAction label="Edit" shortcut="⌘E" route={editHref(path)}>
+              <SquarePenIcon />
+              <span className="sr-only">Edit</span>
+            </TopBarAction>
           )}
 
           <div className="flex flex-1 items-center justify-center gap-1">

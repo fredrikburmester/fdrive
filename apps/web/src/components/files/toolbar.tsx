@@ -5,7 +5,9 @@ import {
   ArrowDownWideNarrowIcon,
   ArrowUpNarrowWideIcon,
   ChevronDownIcon,
+  FileCodeIcon,
   FilePlusIcon,
+  FileTextIcon,
   FolderPlusIcon,
   FolderUpIcon,
   LayoutGridIcon,
@@ -37,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { NewFileKind } from "@/lib/editor/new-file";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { SortSpec } from "@/lib/files/sorting";
 import type { ViewMode } from "@/lib/files/view-mode";
@@ -136,6 +139,7 @@ export interface FilesToolbarActionsProps {
   sortSpec: SortSpec;
   onSortSpecChange: (spec: SortSpec) => void;
   onNewFolder: () => void;
+  onNewFile: (kind: NewFileKind) => void;
   onUploadFiles: () => void;
   onUploadFolder: () => void;
   detailsOpen: boolean;
@@ -149,6 +153,7 @@ export function FilesToolbarActions({
   sortSpec,
   onSortSpecChange,
   onNewFolder,
+  onNewFile,
   onUploadFiles,
   onUploadFolder,
   detailsOpen,
@@ -208,6 +213,24 @@ export function FilesToolbarActions({
         <FolderPlusIcon />
         New folder
       </Button>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+          <FilePlusIcon />
+          New file
+          <ChevronDownIcon className="text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => onNewFile("text")}>
+            <FileTextIcon />
+            Text file
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onNewFile("markdown")}>
+            <FileCodeIcon />
+            Markdown file
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
