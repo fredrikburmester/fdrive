@@ -142,6 +142,8 @@ describe("loadConfig", () => {
       fdriveThumbsDir: undefined,
       fdriveAdminUsers: [],
       fdriveSetupToken: undefined,
+      fdriveIndexerUrl: undefined,
+      fdriveMcpWrites: false,
     });
   });
 
@@ -183,6 +185,8 @@ describe("loadConfig", () => {
       FDRIVE_THUMBS_DIR: "/data/thumbs",
       FDRIVE_ADMIN_USERS: "alice, bob",
       FDRIVE_SETUP_TOKEN: "fixed-token",
+      FDRIVE_INDEXER_URL: "http://indexer:8090",
+      FDRIVE_MCP_WRITES: "true",
     });
 
     expect(config).toEqual({
@@ -207,6 +211,8 @@ describe("loadConfig", () => {
       fdriveThumbsDir: "/data/thumbs",
       fdriveAdminUsers: ["alice", "bob"],
       fdriveSetupToken: "fixed-token",
+      fdriveIndexerUrl: "http://indexer:8090",
+      fdriveMcpWrites: true,
     });
   });
 
@@ -215,6 +221,32 @@ describe("loadConfig", () => {
     expect(config.fdriveIndexRoots).toBeNull();
     expect(config.fdriveEmbedUrl).toBeUndefined();
     expect(config.fdriveThumbsDir).toBeUndefined();
+  });
+
+  it("defaults FDRIVE_INDEXER_URL to unset and FDRIVE_MCP_WRITES to false", () => {
+    const config = loadConfig(REQUIRED_ENV);
+    expect(config.fdriveIndexerUrl).toBeUndefined();
+    expect(config.fdriveMcpWrites).toBe(false);
+  });
+
+  it("rejects a non-http FDRIVE_INDEXER_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "not a url" })).toThrow(
+      /FDRIVE_INDEXER_URL/,
+    );
+  });
+
+  it("treats an empty FDRIVE_INDEXER_URL as unset", () => {
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "" }).fdriveIndexerUrl,
+    ).toBeUndefined();
+  });
+
+  it("parses FDRIVE_MCP_WRITES=true and rejects an invalid value", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "true" }).fdriveMcpWrites).toBe(true);
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "false" }).fdriveMcpWrites).toBe(false);
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "yes" })).toThrow(
+      /FDRIVE_MCP_WRITES/,
+    );
   });
 
   it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {

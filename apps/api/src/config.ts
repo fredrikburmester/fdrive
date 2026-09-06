@@ -57,6 +57,10 @@ export interface AppConfig {
   readonly fdriveAdminUsers: readonly string[];
   /** Overrides the randomly generated setup token. Mainly for tests and scripted installs. */
   readonly fdriveSetupToken: string | undefined;
+  /** Base URL of the indexer's internal `POST /extract` endpoint. `undefined` disables the MCP `read_file_text` tool. */
+  readonly fdriveIndexerUrl: string | undefined;
+  /** Enables the MCP write tools (`create_folder`, `move_path`). Off by default. */
+  readonly fdriveMcpWrites: boolean;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -254,6 +258,20 @@ const envSchema = z.object({
     (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
     z.string().min(1).optional(),
   ),
+  FDRIVE_INDEXER_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
+  FDRIVE_MCP_WRITES: z.preprocess(
+    (value) => withDefault(value, "false"),
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ),
 });
 
 /**
@@ -294,5 +312,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,
     fdriveAdminUsers: parseAdminUsers(parsed.FDRIVE_ADMIN_USERS),
     fdriveSetupToken: parsed.FDRIVE_SETUP_TOKEN,
+    fdriveIndexerUrl: parsed.FDRIVE_INDEXER_URL,
+    fdriveMcpWrites: parsed.FDRIVE_MCP_WRITES,
   };
 }

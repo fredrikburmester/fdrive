@@ -625,6 +625,47 @@ describe("createApiClient: admin", () => {
   });
 });
 
+describe("createApiClient: account tokens", () => {
+  const VALID_TOKEN_SUMMARY = {
+    id: VALID_UUID,
+    name: "Claude",
+    identityId: VALID_UUID,
+    createdAt: AT,
+    lastUsedAt: null,
+    expiresAt: null,
+  };
+
+  it("gets account/tokens and unwraps items", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { items: [VALID_TOKEN_SUMMARY] }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.listApiTokens()).toEqual({ items: [VALID_TOKEN_SUMMARY] });
+    expect(calls[0]?.url).toBe("/api/v1/account/tokens");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("posts account/tokens with the create request body", async () => {
+    const result = { token: "fdr_abc123", item: VALID_TOKEN_SUMMARY };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.createApiToken({ name: "Claude", expiresInDays: 90 })).toEqual(result);
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ name: "Claude", expiresInDays: 90 });
+  });
+
+  it("deletes an api token by id", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.revokeApiToken("token-1")).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/account/tokens/token-1");
+    expect(calls[0]?.init.method).toBe("DELETE");
+  });
+});
+
 describe("createApiClient: error mapping", () => {
   it("throws ApiClientError with the kind and message from a well-formed ApiError body", async () => {
     const { fetchStub } = createStubFetch([

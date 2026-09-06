@@ -17,4 +17,7 @@ export const queryKeys = {
   admin: {
     connection: () => ["admin", "connection"] as const,
   },
+  account: {
+    tokens: () => ["account", "tokens"] as const,
+  },
 } as const;

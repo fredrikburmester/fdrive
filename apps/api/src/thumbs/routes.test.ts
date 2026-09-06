@@ -40,12 +40,16 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     filename: overrides.filename ?? (async () => fail("filename")),
     filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
+    listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
+    filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
     rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
     stats: overrides.stats ?? (async () => fail("stats")),
     duplicates: overrides.duplicates ?? (async () => fail("duplicates")),
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
     thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
+    recordMove: overrides.recordMove ?? (async () => fail("recordMove")),
+    recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
   };
 }
 

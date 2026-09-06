@@ -20,6 +20,8 @@ import { createEventBus } from "./events/bus.js";
 import { registerEventRoutes } from "./events/routes.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import { createIndexerExtractClient } from "./mcp/indexer-client.js";
+import { registerMcpRoutes } from "./mcp/routes.js";
 import { createEmbedClient } from "./search/embeddings.js";
 import { registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
@@ -28,6 +30,9 @@ import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
 import { createSftpgoStorageProvider } from "./storage/sftpgo-provider.js";
 import { registerThumbRoutes } from "./thumbs/routes.js";
+import { createResolveTokenPrincipal } from "./tokens/principal.js";
+import { registerTokenRoutes } from "./tokens/routes.js";
+import { createTokenService } from "./tokens/service.js";
 
 export interface ComposeAppDeps {
   /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
@@ -113,6 +118,26 @@ export async function composeApp(
     clock,
   });
 
+  const tokenService = createTokenService({
+    apiTokens: repos.apiTokens,
+    identities: repos.identities,
+    clock,
+  });
+  const resolveTokenPrincipal = createResolveTokenPrincipal({
+    apiTokens: repos.apiTokens,
+    identities: repos.identities,
+    clock,
+    storageFactory: (identityId) =>
+      createSftpgoStorageProvider({
+        client: sftpgo,
+        withToken: (fn) => tokenSource.withToken(identityId, fn),
+      }),
+  });
+  const indexerClient =
+    config.fdriveIndexerUrl === undefined
+      ? null
+      : createIndexerExtractClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
+
   const setupToken = config.fdriveSetupToken ?? generateSetupToken();
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
@@ -168,6 +193,24 @@ export async function composeApp(
         indexRootNames,
         thumbsDir: config.fdriveThumbsDir,
       });
+      registerTokenRoutes(groups, { service: tokenService });
+    },
+  });
+
+  // Mounted directly on the top-level app, outside `/api/v1`: the MCP
+  // endpoint is bearer- (or path-token-) authenticated, not session/CSRF
+  // guarded, and `resolveMcpPrincipal` never touches the session cookie.
+  registerMcpRoutes(app, {
+    resolveToken: resolveTokenPrincipal,
+    toolDeps: {
+      indexQueries,
+      homeTemplate,
+      indexRootNames,
+      searchService,
+      fdrivePublicUrl: config.fdrivePublicUrl,
+      indexerClient,
+      writesEnabled: config.fdriveMcpWrites,
+      clock,
     },
   });
 

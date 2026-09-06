@@ -31,6 +31,7 @@ defineReposSuite("drizzle", async () => {
   await db.execute(sql`
     truncate table
       app.sessions,
+      app.api_tokens,
       app.credentials,
       app.identities,
       app.accounts,

@@ -72,6 +72,14 @@ export const ROUTES = {
     /** POST, admin only: probe the active or a candidate connection -> `ConnectionTestResponse`. */
     connectionTest: "/api/v1/admin/connection/test",
   },
+  account: {
+    /**
+     * GET: the caller's API tokens (never their secrets) -> `ApiTokensResponse`.
+     * POST: create a token, shown once -> `CreateApiTokenResponse`.
+     * Session-authenticated only; never reachable with a bearer token.
+     */
+    tokens: "/api/v1/account/tokens",
+  },
 } as const;
 
 export type Routes = typeof ROUTES;
@@ -84,6 +92,11 @@ export function jobRoute(id: string): string {
 /** POST: cancel a job -> `JobStatus`. 404 for a job that belongs to another identity. */
 export function jobCancelRoute(id: string): string {
   return `${jobRoute(id)}/cancel`;
+}
+
+/** DELETE: revoke one API token -> `OkResponse`. 404 for a token that belongs to another account. */
+export function accountTokenRoute(id: string): string {
+  return `${ROUTES.account.tokens}/${encodeURIComponent(id)}`;
 }
 
 /**

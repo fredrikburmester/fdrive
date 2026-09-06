@@ -47,7 +47,14 @@ export {
   JobsResponse,
 } from "./jobs.ts";
 export type { Routes } from "./routes.ts";
-export { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
+export {
+  accountTokenRoute,
+  IDENTITY_HEADER,
+  jobCancelRoute,
+  jobRoute,
+  MODIFIED_AT_HEADER,
+  ROUTES,
+} from "./routes.ts";
 export {
   SearchHighlightRange,
   SearchHit,
@@ -66,3 +73,10 @@ export {
 } from "./setup.ts";
 export type { ThumbSize } from "./thumbs.ts";
 export { THUMB_SIZES, ThumbQuery } from "./thumbs.ts";
+export {
+  ApiTokenExpiresInDays,
+  ApiTokenSummary,
+  ApiTokensResponse,
+  CreateApiTokenRequest,
+  CreateApiTokenResponse,
+} from "./tokens.ts";

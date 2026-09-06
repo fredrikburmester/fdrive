@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronsUpDown, LogOut, Monitor, Moon, Settings2, Sun } from "lucide-react";
+import { ChevronsUpDown, LogOut, Monitor, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -57,6 +57,7 @@ export function isSystemRoute(pathname: string | null): boolean {
 }
 
 const SYSTEM_CONNECTION_ROUTE = "/system/connection" as Route;
+const ACCOUNT_ROUTE = "/account" as Route;
 
 export function AppSidebar() {
   const { data: me } = useShellMe();
@@ -143,6 +144,13 @@ export function AppSidebar() {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem render={<Link href={ACCOUNT_ROUTE} />}>
+                <UserRound />
+                Account
+              </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
