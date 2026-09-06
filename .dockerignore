@@ -5,6 +5,7 @@
 **/.turbo
 **/playwright-report
 **/test-results
+**/.claude
 **/*.log
 .git
 .DS_Store
