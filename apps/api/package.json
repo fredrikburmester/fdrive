@@ -3,6 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./composition": {
+      "types": "./src/composition.ts",
+      "development": "./src/composition.ts",
+      "default": "./dist/composition.js"
+    },
+    "./config": {
+      "types": "./src/config.ts",
+      "development": "./src/config.ts",
+      "default": "./dist/config.js"
+    }
+  },
   "scripts": {
     "dev": "tsx watch --conditions=development --env-file-if-exists=.env.dev src/main.ts",
     "build": "tsc -p tsconfig.build.json",
