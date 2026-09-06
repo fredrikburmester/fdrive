@@ -120,6 +120,42 @@ describe("keyToAction", () => {
     expect(keyToAction(key({ key: "d" }), "mac")).toBeNull();
   });
 
+  it("maps Cmd+1 to setView list", () => {
+    expect(keyToAction(key({ key: "1", metaKey: true }), "mac")).toEqual({
+      type: "setView",
+      mode: "list",
+    });
+  });
+
+  it("maps Cmd+2 to setView grid", () => {
+    expect(keyToAction(key({ key: "2", metaKey: true }), "mac")).toEqual({
+      type: "setView",
+      mode: "grid",
+    });
+  });
+
+  it("maps Cmd+3 to setView tree", () => {
+    expect(keyToAction(key({ key: "3", metaKey: true }), "mac")).toEqual({
+      type: "setView",
+      mode: "tree",
+    });
+  });
+
+  it("maps Ctrl+1 elsewhere to setView list", () => {
+    expect(keyToAction(key({ key: "1", ctrlKey: true }), "other")).toEqual({
+      type: "setView",
+      mode: "list",
+    });
+  });
+
+  it("does not setView when Alt is also held", () => {
+    expect(keyToAction(key({ key: "1", metaKey: true, altKey: true }), "mac")).toBeNull();
+  });
+
+  it("does not setView without the primary modifier", () => {
+    expect(keyToAction(key({ key: "1" }), "mac")).toBeNull();
+  });
+
   it("maps ArrowRight to expand in tree mode", () => {
     expect(keyToAction(key({ key: "ArrowRight" }), "mac", true)).toEqual({ type: "expand" });
   });

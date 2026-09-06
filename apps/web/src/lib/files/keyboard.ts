@@ -1,5 +1,8 @@
+import type { ViewMode } from "./view-mode";
+
 export type FilesActionType =
   | "move"
+  | "setView"
   | "open"
   | "quickLook"
   | "delete"
@@ -18,11 +21,16 @@ export interface MoveAction {
   readonly extend: boolean;
 }
 
-export interface SimpleAction {
-  readonly type: Exclude<FilesActionType, "move">;
+export interface SetViewAction {
+  readonly type: "setView";
+  readonly mode: ViewMode;
 }
 
-export type FilesAction = MoveAction | SimpleAction;
+export interface SimpleAction {
+  readonly type: Exclude<FilesActionType, "move" | "setView">;
+}
+
+export type FilesAction = MoveAction | SetViewAction | SimpleAction;
 
 /** The subset of a `KeyboardEvent` this module reasons about. */
 export interface KeyLike {
@@ -93,6 +101,15 @@ export function keyToAction(
   }
   if (primary && !event.altKey && letter === "d") {
     return { type: "download" };
+  }
+  if (primary && !event.altKey && event.key === "1") {
+    return { type: "setView", mode: "list" };
+  }
+  if (primary && !event.altKey && event.key === "2") {
+    return { type: "setView", mode: "grid" };
+  }
+  if (primary && !event.altKey && event.key === "3") {
+    return { type: "setView", mode: "tree" };
   }
 
   return null;

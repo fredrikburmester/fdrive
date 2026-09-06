@@ -673,6 +673,9 @@ export function FileBrowser({
       case "goToParent":
         router.push(toRoute(pathToHref(parentPath(path))));
         break;
+      case "setView":
+        setViewMode(action.mode);
+        break;
     }
   }
 

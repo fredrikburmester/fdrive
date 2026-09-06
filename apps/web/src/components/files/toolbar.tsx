@@ -1,9 +1,7 @@
 "use client";
 
-import type { SortKey } from "@fdrive/core";
+import type { SortDirection, SortKey } from "@fdrive/core";
 import {
-  ArrowDownWideNarrowIcon,
-  ArrowUpNarrowWideIcon,
   ChevronDownIcon,
   CopyIcon,
   FileArchiveIcon,
@@ -36,16 +34,16 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
 import type { NewFileKind } from "@/lib/editor/new-file";
@@ -58,8 +56,14 @@ import { cn } from "@/lib/utils";
 const SORT_LABELS: Record<SortKey, string> = {
   name: "Name",
   size: "Size",
-  modifiedAt: "Date modified",
+  modifiedAt: "Modified",
   ext: "Kind",
+};
+
+const VIEW_MODE_ICONS: Record<ViewMode, typeof ListIcon> = {
+  list: ListIcon,
+  grid: LayoutGridIcon,
+  tree: ListTreeIcon,
 };
 
 const COLLAPSE_THRESHOLD = 4;
@@ -250,8 +254,110 @@ export function FilesToolbarActions({
   onDuplicateSelection,
   onCompressSelection,
 }: FilesToolbarActionsProps) {
+  const ViewIcon = VIEW_MODE_ICONS[viewMode];
+
   return (
     <div className="flex items-center gap-1.5">
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="View" />}>
+          <ViewIcon />
+          <span className="max-[899px]:hidden">View</span>
+          <ChevronDownIcon className="text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-48">
+          <DropdownMenuRadioGroup
+            value={viewMode}
+            onValueChange={(mode) => onViewModeChange(mode as ViewMode)}
+          >
+            <DropdownMenuRadioItem value="list" closeOnClick className="whitespace-nowrap">
+              <ListIcon />
+              List
+              <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="grid" closeOnClick className="whitespace-nowrap">
+              <LayoutGridIcon />
+              Grid
+              <DropdownMenuShortcut>⌘2</DropdownMenuShortcut>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="tree" closeOnClick className="whitespace-nowrap">
+              <ListTreeIcon />
+              Tree
+              <DropdownMenuShortcut>⌘3</DropdownMenuShortcut>
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={sortSpec.key}
+              onValueChange={(key) => onSortSpecChange({ ...sortSpec, key: key as SortKey })}
+            >
+              {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                <DropdownMenuRadioItem key={key} value={key} className="whitespace-nowrap">
+                  {SORT_LABELS[key]}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuRadioGroup
+            value={sortSpec.direction}
+            onValueChange={(direction) =>
+              onSortSpecChange({ ...sortSpec, direction: direction as SortDirection })
+            }
+          >
+            <DropdownMenuRadioItem value="asc" className="whitespace-nowrap">
+              Ascending
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="desc" className="whitespace-nowrap">
+              Descending
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="New" />}>
+          <PlusIcon />
+          <span className="max-[899px]:hidden">New</span>
+          <ChevronDownIcon className="text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem className="whitespace-nowrap" onClick={onNewFolder}>
+            <FolderPlusIcon />
+            New folder
+            <DropdownMenuShortcut>⌘⇧N</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("text")}>
+            <FileTextIcon />
+            Text file
+          </DropdownMenuItem>
+          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("markdown")}>
+            <FileCodeIcon />
+            Markdown file
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="Upload" />}>
+          <UploadIcon />
+          <span className="max-[899px]:hidden">Upload</span>
+          <ChevronDownIcon className="text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenuItem className="whitespace-nowrap" onClick={onUploadFiles}>
+            <FilePlusIcon />
+            Upload files
+          </DropdownMenuItem>
+          <DropdownMenuItem className="whitespace-nowrap" onClick={onUploadFolder}>
+            <FolderUpIcon />
+            Upload folder
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       {selectedCount > 0 && (
         <div className="flex items-center gap-1 rounded-md bg-muted py-1 pr-1 pl-2 text-muted-foreground text-xs">
           <span className="tabular-nums">{selectedCount} selected</span>
@@ -296,104 +402,6 @@ export function FilesToolbarActions({
           </Button>
         </div>
       )}
-
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button variant="ghost" size="sm" title={`Sort by ${SORT_LABELS[sortSpec.key]}`} />
-          }
-        >
-          {sortSpec.direction === "asc" ? <ArrowUpNarrowWideIcon /> : <ArrowDownWideNarrowIcon />}
-          <span className="max-[899px]:hidden">{SORT_LABELS[sortSpec.key]}</span>
-          <ChevronDownIcon className="text-muted-foreground" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-40">
-          <DropdownMenuRadioGroup
-            value={sortSpec.key}
-            onValueChange={(key) => onSortSpecChange({ ...sortSpec, key: key as SortKey })}
-          >
-            {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
-              <DropdownMenuRadioItem key={key} value={key} className="whitespace-nowrap">
-                {SORT_LABELS[key]}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuCheckboxItem
-            className="whitespace-nowrap"
-            checked={sortSpec.direction === "desc"}
-            onCheckedChange={(checked) =>
-              onSortSpecChange({ ...sortSpec, direction: checked ? "desc" : "asc" })
-            }
-          >
-            Descending
-          </DropdownMenuCheckboxItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <ToggleGroup
-        value={[viewMode]}
-        onValueChange={(values) => {
-          const next = values[0];
-          if (next === "list" || next === "grid" || next === "tree") {
-            onViewModeChange(next);
-          }
-        }}
-        variant="outline"
-        size="sm"
-      >
-        <ToggleGroupItem value="list" aria-label="List view">
-          <ListIcon />
-        </ToggleGroupItem>
-        <ToggleGroupItem value="grid" aria-label="Grid view">
-          <LayoutGridIcon />
-        </ToggleGroupItem>
-        <ToggleGroupItem value="tree" aria-label="Tree view">
-          <ListTreeIcon />
-        </ToggleGroupItem>
-      </ToggleGroup>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="New" />}>
-          <PlusIcon />
-          <span className="max-[899px]:hidden">New</span>
-          <ChevronDownIcon className="text-muted-foreground" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-48">
-          <DropdownMenuItem className="whitespace-nowrap" onClick={onNewFolder}>
-            <FolderPlusIcon />
-            New folder
-            <DropdownMenuShortcut>⌘⇧N</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("text")}>
-            <FileTextIcon />
-            Text file
-          </DropdownMenuItem>
-          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("markdown")}>
-            <FileCodeIcon />
-            Markdown file
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="Upload" />}>
-          <UploadIcon />
-          <span className="max-[899px]:hidden">Upload</span>
-          <ChevronDownIcon className="text-muted-foreground" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-48">
-          <DropdownMenuItem className="whitespace-nowrap" onClick={onUploadFiles}>
-            <FilePlusIcon />
-            Upload files
-          </DropdownMenuItem>
-          <DropdownMenuItem className="whitespace-nowrap" onClick={onUploadFolder}>
-            <FolderUpIcon />
-            Upload folder
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
 
       <Tooltip>
         <TooltipTrigger
