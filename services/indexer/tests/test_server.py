@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
@@ -7,16 +8,35 @@ import pytest
 from starlette.testclient import TestClient
 
 from fdrive_indexer import db, server
+from fdrive_indexer import thumb_rebuild as thumb_rebuild_module
 from fdrive_indexer.chunking import normalize
 from fdrive_indexer.config import Config
 from fdrive_indexer.extract import Extractor
 from fdrive_indexer.indexer import RootContext
 
 
+class _SyncThread:
+    """Runs the rebuild synchronously so tests do not need to poll a background
+    thread for completion."""
+
+    def __init__(self, target: object, daemon: bool = True, name: str | None = None) -> None:
+        self._target = target
+
+    def start(self) -> None:
+        self._target()  # type: ignore[operator]
+
+
+def _write_png(path: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (200, 100), color="red").save(path)
+
+
 def _make_ctx(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, root: str, abs_path: str) -> RootContext:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
     monkeypatch.setenv("INDEX_ROOTS", f"{root}={abs_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
+    monkeypatch.setenv("THUMBS_DIR", os.path.join(abs_path, "_thumbs_test"))
     cfg = Config()
     conn = db.connect(postgres_dsn)
     root_id = db.upsert_root(conn, root)
@@ -85,6 +105,24 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
     assert body["roots"][0]["counts_by_status"] == {"indexed": 1}
     assert body["thumbnails"] == 1
     assert body["queue_depth"] == 0
+    assert body["thumbnail_rebuild"] == {
+        "running": False,
+        "processed": 0,
+        "total": 0,
+        "started_at": None,
+        "finished_at": None,
+        "errors": 0,
+    }
+
+
+def test_stats_reports_running_thumbnail_rebuild(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    client.app.state.server_state.thumbnail_job.try_start(3)
+    resp = client.get("/stats")
+    body = resp.json()
+    assert body["thumbnail_rebuild"]["running"] is True
+    assert body["thumbnail_rebuild"]["total"] == 3
 
 
 def test_extract_returns_text_for_known_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -197,18 +235,6 @@ def test_reindex_without_wake_event_registered(postgres_dsn: str, monkeypatch: p
     assert resp.status_code == 200
 
 
-def test_thumbnails_rebuild_without_wake_event_registered(
-    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
-    state = server.ServerState(
-        contexts={ctx.name: ctx}, watchers={}, wake_events={}, conn_factory=ctx.conn, schema_version=lambda: 1
-    )
-    client = TestClient(server.create_app(state))
-    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
-    assert resp.status_code == 200
-
-
 def test_reindex_missing_root_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
     client = _make_client(ctx)
@@ -223,28 +249,125 @@ def test_reindex_unknown_root_is_404(postgres_dsn: str, monkeypatch: pytest.Monk
     assert resp.status_code == 404
 
 
-def test_thumbnails_rebuild_specific_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_reindex_with_thumbnails_true_also_queues_rebuild(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
     ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
-    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
-    db.update_file_status(ctx.conn(), file_id, "indexed", 5, None)
+    png = tmp_path / "a.png"
+    _write_png(png)
+    st = png.stat()
+    db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
     client = _make_client(ctx)
-    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
+    resp = client.post("/reindex", json={"root": "sftpgo", "thumbnails": True})
     assert resp.status_code == 200
     assert resp.json() == {"count": 1}
+    assert db.thumbnails_count(ctx.conn()) == 2
+
+
+def test_reindex_without_thumbnails_flag_does_not_touch_thumbnails(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    png = tmp_path / "a.png"
+    _write_png(png)
+    st = png.stat()
+    db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
+    client = _make_client(ctx)
+    resp = client.post("/reindex", json={"root": "sftpgo"})
+    assert resp.status_code == 200
+    assert db.thumbnails_count(ctx.conn()) == 0
+
+
+def test_reindex_thumbnails_true_ignored_when_rebuild_already_running(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    client.app.state.server_state.thumbnail_job.try_start(1)
+    resp = client.post("/reindex", json={"root": "sftpgo", "thumbnails": True})
+    assert resp.status_code == 200
+
+
+def test_thumbnails_rebuild_specific_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    png = tmp_path / "a.png"
+    _write_png(png)
+    st = png.stat()
+    db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
+    client = _make_client(ctx)
+    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 1}
+    assert db.thumbnails_count(ctx.conn()) == 2
 
 
 def test_thumbnails_rebuild_all_roots_no_body(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
     ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
-    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
-    db.update_file_status(ctx.conn(), file_id, "indexed", 5, None)
+    png = tmp_path / "a.png"
+    _write_png(png)
+    st = png.stat()
+    db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild")
-    assert resp.status_code == 200
-    assert resp.json() == {"count": 1}
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 1}
 
 
 def test_thumbnails_rebuild_unknown_root_is_ignored(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
     ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "unknown"})
-    assert resp.json() == {"count": 0}
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 0}
+
+
+def test_thumbnails_rebuild_force_and_path_are_forwarded(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "skip").mkdir()
+    keep_png, skip_png = tmp_path / "keep" / "a.png", tmp_path / "skip" / "b.png"
+    _write_png(keep_png)
+    _write_png(skip_png)
+    for rel, p in [("keep/a.png", keep_png), ("skip/b.png", skip_png)]:
+        st = p.stat()
+        db.upsert_file(ctx.conn(), ctx.root_id, rel, p.name, ".png", st.st_size, st.st_mtime_ns, rel, "image/png")
+    client = _make_client(ctx)
+    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": "keep", "force": True})
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 1}
+    assert db.thumbnails_count(ctx.conn()) == 2
+
+
+def test_thumbnails_rebuild_returns_409_when_already_running(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    client.app.state.server_state.thumbnail_job.try_start(1)
+    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
+    assert resp.status_code == 409
+
+
+def test_thumbnails_rebuild_invalid_root_type_is_400(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    resp = client.post("/thumbnails/rebuild", json={"root": 123})
+    assert resp.status_code == 400
+
+
+def test_thumbnails_rebuild_invalid_path_type_is_400(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": 123})
+    assert resp.status_code == 400

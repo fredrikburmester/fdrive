@@ -3,6 +3,8 @@ import type {
   IndexerHealth,
   IndexerRootStats,
   IndexerStats,
+  IndexerThumbnailRebuildJob,
+  IndexerThumbnailsRebuildResponse,
 } from "@fdrive/contracts";
 import { z } from "zod";
 import { callSidecar, type SidecarRequestDeps, type SidecarResult } from "./sidecar-client.js";
@@ -43,14 +45,35 @@ const IndexerErrorSampleRaw = z.object({
   error: z.string().nullable(),
 });
 
+/**
+ * `.optional()` on every field (not just the object) so an older indexer
+ * that has not yet added `thumbnail_rebuild` to `/stats`, or one that omits
+ * a field this client does not know about yet, still parses; `toIndexerStats`
+ * below only includes `thumbnailRebuild` when the raw object was present.
+ */
+const IndexerThumbnailRebuildRaw = z.object({
+  running: z.boolean(),
+  processed: z.number().int(),
+  total: z.number().int(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  errors: z.number().int(),
+});
+
 const IndexerStatsRaw = z.object({
   roots: z.array(IndexerRootStatsRaw),
   thumbnails: z.number().int(),
   queue_depth: z.number().int(),
   errors_sample: z.array(IndexerErrorSampleRaw),
+  thumbnail_rebuild: IndexerThumbnailRebuildRaw.optional(),
 });
 
 const IndexerCountRaw = z.object({ count: z.number().int() });
+
+const IndexerThumbnailsRebuildRaw = z.object({
+  started: z.boolean(),
+  total: z.number().int(),
+});
 
 function toIndexerHealth(raw: z.infer<typeof IndexerHealthRaw>): IndexerHealth {
   return {
@@ -86,12 +109,28 @@ function toIndexerErrorSample(raw: z.infer<typeof IndexerErrorSampleRaw>): Index
   return { path: raw.path, error: raw.error };
 }
 
+function toIndexerThumbnailRebuildJob(
+  raw: z.infer<typeof IndexerThumbnailRebuildRaw>,
+): IndexerThumbnailRebuildJob {
+  return {
+    running: raw.running,
+    processed: raw.processed,
+    total: raw.total,
+    startedAt: raw.started_at,
+    finishedAt: raw.finished_at,
+    errors: raw.errors,
+  };
+}
+
 function toIndexerStats(raw: z.infer<typeof IndexerStatsRaw>): IndexerStats {
   return {
     roots: raw.roots.map(toIndexerRootStats),
     thumbnails: raw.thumbnails,
     queueDepth: raw.queue_depth,
     errorsSample: raw.errors_sample.map(toIndexerErrorSample),
+    ...(raw.thumbnail_rebuild !== undefined
+      ? { thumbnailRebuild: toIndexerThumbnailRebuildJob(raw.thumbnail_rebuild) }
+      : {}),
   };
 }
 
@@ -99,12 +138,35 @@ export interface IndexerClientDeps extends SidecarRequestDeps {
   readonly baseUrl: string;
 }
 
+/**
+ * Options for `IndexerClient.thumbnailsRebuild`. See `docs/INDEXER.md`. Every
+ * field explicitly allows `undefined` (rather than only being absent) so a
+ * `IndexerThumbnailsRebuildRequest` parsed by zod, whose `.optional()` fields
+ * are typed the same way, can be passed straight through under
+ * `exactOptionalPropertyTypes`.
+ */
+export interface ThumbnailsRebuildOptions {
+  /** Omitted rebuilds every configured root. */
+  readonly root?: string | undefined;
+  /** Omitted rebuilds the whole root; otherwise a single file or directory subtree. */
+  readonly path?: string | undefined;
+  /** Delete and rewrite thumbnails that already exist, instead of only filling in missing ones. */
+  readonly force?: boolean | undefined;
+}
+
 /** A typed client for the indexer's internal HTTP API. See `docs/INDEXER.md`. */
 export interface IndexerClient {
   health(): Promise<SidecarResult<IndexerHealth>>;
   stats(): Promise<SidecarResult<IndexerStats>>;
-  reindex(root: string, path?: string): Promise<SidecarResult<{ marked: number }>>;
-  thumbnailsRebuild(root?: string): Promise<SidecarResult<{ marked: number }>>;
+  /** `thumbnails: true` also queues a best-effort thumbnail rebuild over the same scope. */
+  reindex(
+    root: string,
+    path?: string,
+    thumbnails?: boolean,
+  ): Promise<SidecarResult<{ marked: number }>>;
+  thumbnailsRebuild(
+    options?: ThumbnailsRebuildOptions,
+  ): Promise<SidecarResult<IndexerThumbnailsRebuildResponse>>;
 }
 
 /** Builds an `IndexerClient` calling `deps.baseUrl` with `deps.fetch`. */
@@ -120,26 +182,40 @@ export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
       return result.ok ? { ok: true, data: toIndexerStats(result.data) } : result;
     },
 
-    async reindex(root, path) {
+    async reindex(root, path, thumbnails) {
       const result = await callSidecar(
         deps.baseUrl,
         "/reindex",
         IndexerCountRaw,
-        { method: "POST", jsonBody: path !== undefined ? { root, path } : { root } },
+        {
+          method: "POST",
+          jsonBody: {
+            root,
+            ...(path !== undefined ? { path } : {}),
+            ...(thumbnails !== undefined ? { thumbnails } : {}),
+          },
+        },
         deps,
       );
       return result.ok ? { ok: true, data: { marked: result.data.count } } : result;
     },
 
-    async thumbnailsRebuild(root) {
+    async thumbnailsRebuild(options) {
       const result = await callSidecar(
         deps.baseUrl,
         "/thumbnails/rebuild",
-        IndexerCountRaw,
-        { method: "POST", jsonBody: root !== undefined ? { root } : {} },
+        IndexerThumbnailsRebuildRaw,
+        {
+          method: "POST",
+          jsonBody: {
+            ...(options?.root !== undefined ? { root: options.root } : {}),
+            ...(options?.path !== undefined ? { path: options.path } : {}),
+            ...(options?.force !== undefined ? { force: options.force } : {}),
+          },
+        },
         deps,
       );
-      return result.ok ? { ok: true, data: { marked: result.data.count } } : result;
+      return result;
     },
   };
 }

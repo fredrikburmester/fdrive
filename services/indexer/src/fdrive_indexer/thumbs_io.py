@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 
-from .thumbs import SIZES, kind_for_ext, resize_dimensions, storage_path, within_size_budget
+from .thumbs import SIZES, kind_for_ext, resize_dimensions, should_regenerate, storage_path, within_size_budget
 
 
 def _save_webp(image: object, dest: str, size: int) -> tuple[int, int]:
@@ -84,15 +84,18 @@ def generate(
     size_bytes: int,
     thumbs_dir: str,
     max_bytes: int,
+    force: bool = False,
     exists: Callable[[str], bool] = os.path.exists,
+    remove: Callable[[str], None] = os.remove,
     log: Callable[[str], None] = lambda _msg: None,
 ) -> list[tuple[int, str, int, int]]:
     """Generate the missing thumbnail sizes for one file. Returns
-    `[(size, storage_path_relative, width, height), ...]` for sizes actually written
-    (existing ones are skipped and not returned, since the caller only needs to
-    upsert manifest rows for what changed... callers should still upsert existing
-    rows too, so this returns every size that has a thumbnail on disk after the
-    call, whether newly written or already present)."""
+    `[(size, storage_path_relative, width, height), ...]` for every size that has a
+    thumbnail on disk after the call, whether newly written or already present.
+
+    With `force`, every size is deleted (if present) and rewritten, which is how
+    the rebuild-thumbnails pass regenerates thumbnails that already exist; without
+    it, an existing file for the same sha256 and size is left alone."""
     kind = kind_for_ext(ext)
     if kind is None:
         return []
@@ -106,12 +109,15 @@ def generate(
         for size in SIZES:
             rel = storage_path(sha256, size)
             dest = os.path.join(thumbs_dir, rel)
-            if exists(dest):
+            file_exists = exists(dest)
+            if not should_regenerate(file_exists, force):
                 from PIL import Image as PILImage
 
                 with PILImage.open(dest) as existing:
                     results.append((size, rel, existing.width, existing.height))
                 continue
+            if file_exists:
+                remove(dest)
             if image is None:
                 if kind == "image":
                     image = _open_image(abs_path)

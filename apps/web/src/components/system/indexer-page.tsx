@@ -3,19 +3,10 @@
 import type { IndexerSettingsValue } from "@fdrive/contracts";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -61,6 +53,9 @@ import { StatCard } from "./stat-card";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+
+/** Sentinel `root` select value meaning "every configured root" (the API's `root` omitted). */
+const ALL_ROOTS = "__all__";
 
 interface SettingsDraft {
   scanIntervalSeconds: string;
@@ -101,7 +96,11 @@ export function IndexerPage() {
   const [reindexOpen, setReindexOpen] = useState(false);
   const [reindexRoot, setReindexRoot] = useState<string | undefined>(undefined);
   const [reindexPath, setReindexPath] = useState("");
+  const [reindexThumbnails, setReindexThumbnails] = useState(false);
   const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [rebuildRoot, setRebuildRoot] = useState(ALL_ROOTS);
+  const [rebuildPath, setRebuildPath] = useState("");
+  const [rebuildForce, setRebuildForce] = useState(false);
 
   useEffect(() => {
     if (data !== undefined) {
@@ -124,6 +123,12 @@ export function IndexerPage() {
   );
   const totalChunks = roots.reduce((sum, root) => sum + root.chunks, 0);
   const totalEmbedded = roots.reduce((sum, root) => sum + root.chunksEmbedded, 0);
+
+  const thumbnailRebuild = data?.stats?.thumbnailRebuild;
+  const thumbnailRebuildHint =
+    thumbnailRebuild?.running === true
+      ? `Rebuilding… ${thumbnailRebuild.processed.toLocaleString()} of ${thumbnailRebuild.total.toLocaleString()}`
+      : undefined;
 
   const draftValues = draft !== null ? valuesFromDraft(draft) : null;
   const dirty =
@@ -153,7 +158,11 @@ export function IndexerPage() {
       return;
     }
     reindex.mutate(
-      { root: reindexRoot, ...(reindexPath.trim().length > 0 ? { path: reindexPath.trim() } : {}) },
+      {
+        root: reindexRoot,
+        ...(reindexPath.trim().length > 0 ? { path: reindexPath.trim() } : {}),
+        ...(reindexThumbnails ? { thumbnails: true } : {}),
+      },
       {
         onSuccess: (result) => {
           toast.success(
@@ -161,6 +170,7 @@ export function IndexerPage() {
           );
           setReindexOpen(false);
           setReindexPath("");
+          setReindexThumbnails(false);
         },
         onError: (err) => toast.error(describeApiError(err)),
       },
@@ -168,15 +178,27 @@ export function IndexerPage() {
   }
 
   function handleRebuildConfirm() {
-    rebuildThumbnails.mutate(undefined, {
-      onSuccess: (result) => {
-        toast.success(
-          `Marked ${result.marked} thumbnail${result.marked === 1 ? "" : "s"} to rebuild.`,
-        );
-        setRebuildOpen(false);
+    rebuildThumbnails.mutate(
+      {
+        ...(rebuildRoot !== ALL_ROOTS ? { root: rebuildRoot } : {}),
+        ...(rebuildPath.trim().length > 0 ? { path: rebuildPath.trim() } : {}),
+        ...(rebuildForce ? { force: true } : {}),
       },
-      onError: (err) => toast.error(describeApiError(err)),
-    });
+      {
+        onSuccess: (result) => {
+          toast.success(
+            result.total > 0
+              ? `Rebuilding ${result.total} thumbnail${result.total === 1 ? "" : "s"}…`
+              : "No thumbnails need rebuilding.",
+          );
+          setRebuildOpen(false);
+          setRebuildRoot(ALL_ROOTS);
+          setRebuildPath("");
+          setRebuildForce(false);
+        },
+        onError: (err) => toast.error(describeApiError(err)),
+      },
+    );
   }
 
   return (
@@ -229,7 +251,11 @@ export function IndexerPage() {
             <StatCard label="With text" value={withText.toLocaleString()} />
             <StatCard label="Chunks" value={totalChunks.toLocaleString()} />
             <StatCard label="Embedded" value={totalEmbedded.toLocaleString()} />
-            <StatCard label="Thumbnails" value={(data.stats?.thumbnails ?? 0).toLocaleString()} />
+            <StatCard
+              label="Thumbnails"
+              value={(data.stats?.thumbnails ?? 0).toLocaleString()}
+              {...(thumbnailRebuildHint !== undefined ? { hint: thumbnailRebuildHint } : {})}
+            />
             <StatCard label="Queue depth" value={(data.stats?.queueDepth ?? 0).toLocaleString()} />
           </div>
 
@@ -396,7 +422,8 @@ export function IndexerPage() {
           <DialogHeader>
             <DialogTitle>Reindex</DialogTitle>
             <DialogDescription>
-              Marks files pending so the indexer re-extracts them on its next scan.
+              Re-extracts text and re-embeds every file in the selected scope on the indexer's next
+              scan. This can take a while for a large index.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4 py-2">
@@ -427,6 +454,14 @@ export function IndexerPage() {
                 placeholder="Leave empty to reindex the whole root"
               />
             </Field>
+            <Field orientation="horizontal">
+              <FieldLabel htmlFor="reindex-thumbnails">Also regenerate thumbnails</FieldLabel>
+              <Checkbox
+                id="reindex-thumbnails"
+                checked={reindexThumbnails}
+                onCheckedChange={setReindexThumbnails}
+              />
+            </Field>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setReindexOpen(false)}>
@@ -443,26 +478,67 @@ export function IndexerPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={rebuildOpen} onOpenChange={setRebuildOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Rebuild thumbnails?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Marks every file pending so the indexer regenerates any thumbnail missing on disk.
-              This can take a while for a large index.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
+      <Dialog open={rebuildOpen} onOpenChange={setRebuildOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rebuild thumbnails</DialogTitle>
+            <DialogDescription>
+              Regenerates preview images for photos, PDFs, and videos. Text and search data are not
+              touched.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-2">
+            <Field>
+              <FieldLabel htmlFor="rebuild-root">Root</FieldLabel>
+              <Select
+                value={rebuildRoot}
+                onValueChange={(value) => setRebuildRoot(value ?? ALL_ROOTS)}
+              >
+                <SelectTrigger id="rebuild-root">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_ROOTS}>All roots</SelectItem>
+                  {rootNames.map((root) => (
+                    <SelectItem key={root} value={root}>
+                      {root}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rebuild-path">Path (optional)</FieldLabel>
+              <Input
+                id="rebuild-path"
+                value={rebuildPath}
+                onChange={(event) => setRebuildPath(event.target.value)}
+                placeholder="Leave empty to rebuild the whole root"
+              />
+            </Field>
+            <Field orientation="horizontal">
+              <FieldLabel htmlFor="rebuild-force">Regenerate existing thumbnails</FieldLabel>
+              <Switch id="rebuild-force" checked={rebuildForce} onCheckedChange={setRebuildForce} />
+            </Field>
+            <FieldDescription>
+              Off only fills in thumbnails missing on disk; on deletes and rewrites every thumbnail
+              in scope.
+            </FieldDescription>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRebuildOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
               disabled={rebuildThumbnails.isPending}
               onClick={handleRebuildConfirm}
             >
               Rebuild
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SystemPage>
   );
 }

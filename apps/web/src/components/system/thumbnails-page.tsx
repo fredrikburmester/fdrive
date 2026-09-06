@@ -33,7 +33,9 @@ export function ThumbnailsPage() {
     rebuild.mutate(undefined, {
       onSuccess: (result) => {
         toast.success(
-          `Marked ${result.marked} thumbnail${result.marked === 1 ? "" : "s"} to rebuild.`,
+          result.total > 0
+            ? `Rebuilding ${result.total} thumbnail${result.total === 1 ? "" : "s"}…`
+            : "No thumbnails need rebuilding.",
         );
         setRebuildOpen(false);
       },

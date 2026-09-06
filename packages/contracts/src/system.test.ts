@@ -9,7 +9,9 @@ import {
   IndexerSettingsResponse,
   IndexerSettingsUpdateRequest,
   IndexerStats,
+  IndexerThumbnailRebuildJob,
   IndexerThumbnailsRebuildRequest,
+  IndexerThumbnailsRebuildResponse,
   OcrHealth,
   OcrLastRun,
   OcrRunResponse,
@@ -120,6 +122,51 @@ describe("IndexerStats", () => {
       errorsSample: [{ path: "a.pdf", error: "boom" }],
     };
     expect(IndexerStats.parse(valid)).toEqual(valid);
+  });
+
+  it("parses without thumbnailRebuild (older indexer)", () => {
+    const valid = { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] };
+    const result = IndexerStats.parse(valid);
+    expect(result.thumbnailRebuild).toBeUndefined();
+  });
+
+  it("parses with a thumbnailRebuild job", () => {
+    const valid = {
+      roots: [],
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+      thumbnailRebuild: {
+        running: true,
+        processed: 2,
+        total: 10,
+        startedAt: "2026-09-06T18:21:28.128513+00:00",
+        finishedAt: null,
+        errors: 0,
+      },
+    };
+    expect(IndexerStats.parse(valid)).toEqual(valid);
+  });
+});
+
+describe("IndexerThumbnailRebuildJob", () => {
+  const valid = {
+    running: false,
+    processed: 3,
+    total: 3,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    finishedAt: "2026-01-01T00:01:00.000Z",
+    errors: 0,
+  };
+
+  it("parses a valid payload", () => {
+    expect(IndexerThumbnailRebuildJob.parse(valid)).toEqual(valid);
+  });
+
+  it("accepts null startedAt and finishedAt (never run)", () => {
+    expect(
+      IndexerThumbnailRebuildJob.safeParse({ ...valid, startedAt: null, finishedAt: null }).success,
+    ).toBe(true);
   });
 });
 
@@ -241,6 +288,11 @@ describe("IndexerReindexRequest", () => {
     expect(IndexerReindexRequest.safeParse({ root: "sftpgo", path: "folder" }).success).toBe(true);
   });
 
+  it("accepts a thumbnails flag", () => {
+    const result = IndexerReindexRequest.safeParse({ root: "sftpgo", thumbnails: true });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects an empty root", () => {
     expect(IndexerReindexRequest.safeParse({ root: "" }).success).toBe(false);
   });
@@ -253,6 +305,32 @@ describe("IndexerThumbnailsRebuildRequest", () => {
 
   it("accepts a root", () => {
     expect(IndexerThumbnailsRebuildRequest.safeParse({ root: "sftpgo" }).success).toBe(true);
+  });
+
+  it("accepts a path and force", () => {
+    const result = IndexerThumbnailsRebuildRequest.safeParse({
+      root: "sftpgo",
+      path: "folder",
+      force: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty path", () => {
+    expect(IndexerThumbnailsRebuildRequest.safeParse({ path: "" }).success).toBe(false);
+  });
+});
+
+describe("IndexerThumbnailsRebuildResponse", () => {
+  it("parses a valid payload", () => {
+    const valid = { started: true, total: 12 };
+    expect(IndexerThumbnailsRebuildResponse.parse(valid)).toEqual(valid);
+  });
+
+  it("accepts started: false with a zero total (already running)", () => {
+    expect(IndexerThumbnailsRebuildResponse.safeParse({ started: false, total: 0 }).success).toBe(
+      true,
+    );
   });
 });
 

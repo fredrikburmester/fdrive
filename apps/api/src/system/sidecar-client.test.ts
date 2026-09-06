@@ -104,7 +104,21 @@ describe("callSidecar", () => {
       { fetch: fetchStub },
     );
 
-    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 500" });
+    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 500", status: 500 });
+  });
+
+  it("carries the status through for a 409 response", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(409, { error: "already running" }));
+
+    const result = await callSidecar(
+      "http://indexer:8010",
+      "/thumbnails/rebuild",
+      SCHEMA,
+      { method: "POST" },
+      { fetch: fetchStub },
+    );
+
+    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 409", status: 409 });
   });
 
   it("reports invalid when the body is not valid JSON", async () => {

@@ -61,12 +61,31 @@ export const IndexerErrorSample = z.object({
 
 export type IndexerErrorSample = z.infer<typeof IndexerErrorSample>;
 
+/**
+ * Progress of the most recent `POST /api/v1/system/indexer/thumbnails/rebuild`
+ * pass, mirrored from the indexer's `GET /stats`'s `thumbnail_rebuild` field.
+ * All zero/`null`/`false` when no rebuild has run since the indexer started.
+ * Optional here (rather than on `IndexerStats` itself) so an older indexer
+ * that does not emit this field still parses.
+ */
+export const IndexerThumbnailRebuildJob = z.object({
+  running: z.boolean(),
+  processed: z.number().int(),
+  total: z.number().int(),
+  startedAt: z.iso.datetime({ offset: true }).nullable(),
+  finishedAt: z.iso.datetime({ offset: true }).nullable(),
+  errors: z.number().int(),
+});
+
+export type IndexerThumbnailRebuildJob = z.infer<typeof IndexerThumbnailRebuildJob>;
+
 /** Shape of `GET /api/v1/system/indexer`'s `stats` field, mirrored from the indexer's `GET /stats`. */
 export const IndexerStats = z.object({
   roots: z.array(IndexerRootStats),
   thumbnails: z.number().int(),
   queueDepth: z.number().int(),
   errorsSample: z.array(IndexerErrorSample),
+  thumbnailRebuild: IndexerThumbnailRebuildJob.optional(),
 });
 
 export type IndexerStats = z.infer<typeof IndexerStats>;
@@ -128,27 +147,59 @@ export const IndexerSettingsUpdateRequest = z.object({
 
 export type IndexerSettingsUpdateRequest = z.infer<typeof IndexerSettingsUpdateRequest>;
 
-/** Body for `POST /api/v1/system/indexer/reindex`. `path` omitted marks the whole root. */
+/**
+ * Body for `POST /api/v1/system/indexer/reindex`. `path` omitted marks the
+ * whole root. `thumbnails: true` also starts a thumbnail-rebuild pass (see
+ * `IndexerThumbnailsRebuildRequest`) over the same scope after marking rows
+ * pending; unlike the reindex itself, this is best-effort and not reported
+ * back (it is silently skipped if a rebuild is already running).
+ */
 export const IndexerReindexRequest = z.object({
   root: z.string().min(1),
   path: z.string().min(1).optional(),
+  thumbnails: z.boolean().optional(),
 });
 
 export type IndexerReindexRequest = z.infer<typeof IndexerReindexRequest>;
 
-/** Response for `POST /api/v1/system/indexer/reindex` and `.../thumbnails/rebuild`. */
+/** Response for `POST /api/v1/system/indexer/reindex` and `POST /api/v1/system/search/reembed`. */
 export const IndexerActionResponse = z.object({
   marked: z.number().int(),
 });
 
 export type IndexerActionResponse = z.infer<typeof IndexerActionResponse>;
 
-/** Body for `POST /api/v1/system/indexer/thumbnails/rebuild`. Omitted `root` rebuilds every root. */
+/**
+ * Body for `POST /api/v1/system/indexer/thumbnails/rebuild` (and the legacy
+ * `POST /api/v1/system/thumbnails/rebuild`, which always omits all three).
+ * `root` omitted rebuilds every configured root; `path` omitted rebuilds the
+ * whole root (a single file or directory subtree otherwise). `force: true`
+ * deletes and rewrites thumbnails that already exist; without it, only
+ * thumbnails missing on disk are generated. This is thumbnail-only: unlike
+ * `IndexerReindexRequest`, text extraction, chunking, and embeddings are
+ * never touched.
+ */
 export const IndexerThumbnailsRebuildRequest = z.object({
   root: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  force: z.boolean().optional(),
 });
 
 export type IndexerThumbnailsRebuildRequest = z.infer<typeof IndexerThumbnailsRebuildRequest>;
+
+/**
+ * Response for `POST /api/v1/system/indexer/thumbnails/rebuild` and the
+ * legacy `POST /api/v1/system/thumbnails/rebuild`. The pass runs in the
+ * background, so this reports whether it started and the candidate count
+ * computed up front (not a final count); progress while it runs is visible
+ * at `GET /api/v1/system/indexer` under `stats.thumbnailRebuild`.
+ */
+export const IndexerThumbnailsRebuildResponse = z.object({
+  started: z.boolean(),
+  total: z.number().int(),
+});
+
+export type IndexerThumbnailsRebuildResponse = z.infer<typeof IndexerThumbnailsRebuildResponse>;
 
 // ---------------------------------------------------------------------------
 // Search and embeddings

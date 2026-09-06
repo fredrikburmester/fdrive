@@ -12,7 +12,16 @@ export const DEFAULT_SIDECAR_TIMEOUT_MS = 3000;
  */
 export type SidecarResult<T> =
   | { readonly ok: true; readonly data: T }
-  | { readonly ok: false; readonly reason: "unreachable" | "invalid"; readonly detail: string };
+  | {
+      readonly ok: false;
+      readonly reason: "unreachable" | "invalid";
+      readonly detail: string;
+      /** The sidecar's HTTP status, when the failure was a non-2xx response
+       * rather than a network error or an unparsable/invalid body. Lets a
+       * caller distinguish a specific status (e.g. 409) from "unreachable"
+       * in general. */
+      readonly status?: number;
+    };
 
 export interface SidecarRequestDeps {
   readonly fetch: typeof globalThis.fetch;
@@ -74,7 +83,12 @@ export async function callSidecar<T>(
     }
 
     if (!response.ok) {
-      return { ok: false, reason: "unreachable", detail: `status ${response.status}` };
+      return {
+        ok: false,
+        reason: "unreachable",
+        detail: `status ${response.status}`,
+        status: response.status,
+      };
     }
 
     let data: unknown;

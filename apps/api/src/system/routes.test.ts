@@ -1,6 +1,7 @@
 import {
   IndexerActionResponse,
   IndexerSettingsResponse,
+  IndexerThumbnailsRebuildResponse,
   OcrRunResponse,
   OcrSettingsResponse,
   SystemIndexerResponse,
@@ -370,11 +371,11 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
     expect(res.status).toBe(502);
   });
 
-  it("returns marked on success with no body", async () => {
+  it("returns started and total on success with no body", async () => {
     const indexerClient = fakeIndexerClient({
-      thumbnailsRebuild: async (root) => {
-        expect(root).toBeUndefined();
-        return { ok: true, data: { marked: 40 } };
+      thumbnailsRebuild: async (options) => {
+        expect(options).toEqual({});
+        return { ok: true, data: { started: true, total: 40 } };
       },
     });
     const { app } = buildApp({ deps: { indexerClient } });
@@ -383,10 +384,47 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
       method: "POST",
       headers: { "x-requested-with": "fdrive" },
     });
-    const body = IndexerActionResponse.parse(await res.json());
+    const body = IndexerThumbnailsRebuildResponse.parse(await res.json());
 
-    expect(res.status).toBe(200);
-    expect(body).toEqual({ marked: 40 });
+    expect(res.status).toBe(202);
+    expect(body).toEqual({ started: true, total: 40 });
+  });
+
+  it("forwards root, path, and force", async () => {
+    const indexerClient = fakeIndexerClient({
+      thumbnailsRebuild: async (options) => {
+        expect(options).toEqual({ root: "sftpgo", path: "folder", force: true });
+        return { ok: true, data: { started: true, total: 2 } };
+      },
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/indexer/thumbnails/rebuild", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ root: "sftpgo", path: "folder", force: true }),
+    });
+
+    expect(res.status).toBe(202);
+  });
+
+  it("409s (conflict) when a rebuild is already running", async () => {
+    const indexerClient = fakeIndexerClient({
+      thumbnailsRebuild: async () => ({
+        ok: false,
+        reason: "unreachable",
+        detail: "status 409",
+        status: 409,
+      }),
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/indexer/thumbnails/rebuild", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(409);
   });
 });
 
@@ -721,11 +759,11 @@ describe("POST /system/thumbnails/rebuild", () => {
     expect(res.status).toBe(502);
   });
 
-  it("returns marked on success, rebuilding every root", async () => {
+  it("returns started and total on success, rebuilding every root", async () => {
     const indexerClient = fakeIndexerClient({
-      thumbnailsRebuild: async (root) => {
-        expect(root).toBeUndefined();
-        return { ok: true, data: { marked: 99 } };
+      thumbnailsRebuild: async (options) => {
+        expect(options).toBeUndefined();
+        return { ok: true, data: { started: true, total: 99 } };
       },
     });
     const { app } = buildApp({ deps: { indexerClient } });
@@ -734,9 +772,28 @@ describe("POST /system/thumbnails/rebuild", () => {
       method: "POST",
       headers: { "x-requested-with": "fdrive" },
     });
-    const body = IndexerActionResponse.parse(await res.json());
+    const body = IndexerThumbnailsRebuildResponse.parse(await res.json());
 
-    expect(res.status).toBe(200);
-    expect(body).toEqual({ marked: 99 });
+    expect(res.status).toBe(202);
+    expect(body).toEqual({ started: true, total: 99 });
+  });
+
+  it("409s (conflict) when a rebuild is already running", async () => {
+    const indexerClient = fakeIndexerClient({
+      thumbnailsRebuild: async () => ({
+        ok: false,
+        reason: "unreachable",
+        detail: "status 409",
+        status: 409,
+      }),
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/thumbnails/rebuild", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(409);
   });
 });

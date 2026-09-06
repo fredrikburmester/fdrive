@@ -192,6 +192,157 @@ describe("IndexerPage", () => {
     expect(screen.getByText("Loading…")).toBeTruthy();
   });
 
+  it("shows a progress line under the Thumbnails stat card while a rebuild is running", async () => {
+    useSystemIndexerMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        stats: {
+          ...CONFIGURED_FIXTURE.stats,
+          roots: CONFIGURED_FIXTURE.stats?.roots ?? [],
+          thumbnails: 6,
+          queueDepth: 0,
+          errorsSample: [],
+          thumbnailRebuild: {
+            running: true,
+            processed: 12,
+            total: 40,
+            startedAt: "2026-09-06T18:22:00Z",
+            finishedAt: null,
+            errors: 0,
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<IndexerPage />);
+
+    expect(await screen.findByText("Rebuilding… 12 of 40")).toBeTruthy();
+  });
+
+  it("does not show a progress line when no rebuild is running", async () => {
+    mockConfigured();
+    render(<IndexerPage />);
+
+    await screen.findAllByText("Thumbnails");
+    expect(screen.queryByText(/Rebuilding…/)).toBeNull();
+  });
+
+  describe("Rebuild thumbnails dialog", () => {
+    it("opens with honest, thumbnail-only text and a root select defaulted to all roots", async () => {
+      mockConfigured();
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
+
+      expect(await screen.findByRole("heading", { name: "Rebuild thumbnails" })).toBeTruthy();
+      expect(
+        screen.getByText(/Regenerates preview images for photos, PDFs, and videos/),
+      ).toBeTruthy();
+      expect(screen.getByText(/Text and search data are not touched/)).toBeTruthy();
+      expect(screen.getByLabelText("Path (optional)")).toBeTruthy();
+      expect(screen.getByRole("switch", { name: "Regenerate existing thumbnails" })).toBeTruthy();
+    });
+
+    it("submits an empty body (all roots, whole root, no force) by default", async () => {
+      const mutate = vi.fn();
+      mockConfigured();
+      useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
+      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+
+      expect(mutate).toHaveBeenCalledWith({}, expect.anything());
+    });
+
+    it("includes force: true once the switch is toggled on", async () => {
+      const mutate = vi.fn();
+      mockConfigured();
+      useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
+      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
+      const forceSwitch = screen.getByRole("switch", { name: "Regenerate existing thumbnails" });
+      expect(forceSwitch.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(forceSwitch);
+      expect(forceSwitch.getAttribute("aria-checked")).toBe("true");
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+
+      expect(mutate).toHaveBeenCalledWith({ force: true }, expect.anything());
+    });
+
+    it("includes a trimmed path when one is entered", async () => {
+      const mutate = vi.fn();
+      mockConfigured();
+      useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
+      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
+      fireEvent.change(screen.getByLabelText("Path (optional)"), {
+        target: { value: "  alice/docs  " },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+
+      expect(mutate).toHaveBeenCalledWith({ path: "alice/docs" }, expect.anything());
+    });
+
+    it("shows a toast with the candidate total on success and closes the dialog", async () => {
+      mockConfigured();
+      useRebuildIndexerThumbnailsMock.mockReturnValue({
+        mutate: (
+          _req: unknown,
+          opts: { onSuccess: (result: { started: boolean; total: number }) => void },
+        ) => opts.onSuccess({ started: true, total: 7 }),
+        isPending: false,
+      });
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
+      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+
+      expect(screen.queryByRole("heading", { name: "Rebuild thumbnails" })).toBeNull();
+    });
+  });
+
+  describe("Reindex dialog", () => {
+    it("describes re-extraction and re-embedding and offers an also-regenerate-thumbnails checkbox", async () => {
+      mockConfigured();
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
+
+      expect(await screen.findByRole("heading", { name: "Reindex" })).toBeTruthy();
+      expect(screen.getByText(/Re-extracts text and re-embeds/)).toBeTruthy();
+      const checkbox = screen.getByRole("checkbox", { name: "Also regenerate thumbnails" });
+      expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("toggles the also-regenerate-thumbnails checkbox", async () => {
+      mockConfigured();
+      render(<IndexerPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
+      await screen.findByRole("heading", { name: "Reindex" });
+      const checkbox = screen.getByRole("checkbox", { name: "Also regenerate thumbnails" });
+
+      fireEvent.click(checkbox);
+
+      expect(checkbox.getAttribute("aria-checked")).toBe("true");
+    });
+  });
+
   it("shows the error state, distinct from Loading, when the query fails", () => {
     const refetch = vi.fn();
     useSystemIndexerMock.mockReturnValue({

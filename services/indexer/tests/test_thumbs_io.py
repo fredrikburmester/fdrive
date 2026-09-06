@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -110,6 +111,49 @@ def test_generate_video_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         str(video), ".mp4", "videosha", video.stat().st_size, str(tmp_path / "thumbs"), max_bytes=10_000_000
     )
     assert {r[0] for r in results} == {256, 1024}
+
+
+def test_generate_force_deletes_and_rewrites_existing(tmp_path: Path) -> None:
+    from PIL import Image
+
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (200, 100), color="blue").save(src)
+    thumbs_dir = tmp_path / "thumbs"
+
+    first = thumbs_io.generate(str(src), ".jpg", "sha1", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000)
+    assert len(first) == 2
+    dest_paths = [thumbs_dir / rel for _, rel, _, _ in first]
+
+    removed: list[str] = []
+
+    def tracking_remove(path: str) -> None:
+        removed.append(path)
+        os.remove(path)
+
+    second = thumbs_io.generate(
+        str(src), ".jpg", "sha1", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000, force=True, remove=tracking_remove
+    )
+    assert len(removed) == 2
+    assert {r[0] for r in second} == {256, 1024}
+    assert all(p.exists() for p in dest_paths)
+
+
+def test_generate_without_force_leaves_existing_untouched(tmp_path: Path) -> None:
+    from PIL import Image
+
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (200, 100), color="blue").save(src)
+    thumbs_dir = tmp_path / "thumbs"
+
+    thumbs_io.generate(str(src), ".jpg", "sha1", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000)
+
+    def failing_remove(path: str) -> None:
+        raise AssertionError("remove should not be called without force")
+
+    results = thumbs_io.generate(
+        str(src), ".jpg", "sha1", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000, remove=failing_remove
+    )
+    assert len(results) == 2
 
 
 def test_generate_video_frame_failure_is_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
