@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDb, createRepos, migrate } from "@fdrive/db";
+import { parseHomeTemplate } from "@fdrive/core";
+import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
 import { createSftpgoClient } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import type { AppHono } from "./app.js";
@@ -17,7 +18,11 @@ import { createEventBus } from "./events/bus.js";
 import { registerEventRoutes } from "./events/routes.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import { createEmbedClient } from "./search/embeddings.js";
+import { registerSearchRoutes } from "./search/routes.js";
+import { createSearchService } from "./search/service.js";
 import { createSftpgoStorageProvider } from "./storage/sftpgo-provider.js";
+import { registerThumbRoutes } from "./thumbs/routes.js";
 
 export interface ComposeAppDeps {
   /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
@@ -77,6 +82,25 @@ export async function composeApp(
       }),
   });
 
+  // Search and thumbnails: available only once at least one index root is
+  // configured (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
+  // `{ unavailable: true }` rather than erroring when it is not.
+  const indexQueries = createIndexQueries(db);
+  const homeTemplate = parseHomeTemplate(config.fdriveHomeTemplate);
+  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
+  const embedClient =
+    config.fdriveEmbedUrl === undefined
+      ? null
+      : createEmbedClient({ baseUrl: config.fdriveEmbedUrl });
+  const searchService = createSearchService({
+    indexQueries,
+    embedClient,
+    homeTemplate,
+    indexRootNames,
+    thumbsEnabled: config.fdriveThumbsDir !== undefined,
+    clock,
+  });
+
   const version = readVersion();
   const startedAt = clock();
 
@@ -97,6 +121,13 @@ export async function composeApp(
         jobMaxBytes: config.fdriveJobMaxBytes,
       });
       registerEventRoutes(groups, { bus, clock });
+      registerSearchRoutes(groups, { searchService });
+      registerThumbRoutes(groups, {
+        indexQueries,
+        homeTemplate,
+        indexRootNames,
+        thumbsDir: config.fdriveThumbsDir,
+      });
     },
   });
 

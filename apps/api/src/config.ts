@@ -9,6 +9,21 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 export type NodeEnv = (typeof NODE_ENVS)[number];
 export type CookieSecureMode = (typeof COOKIE_SECURE_MODES)[number];
 
+/**
+ * One configured index root: `name` must match the root name segment of
+ * `FDRIVE_HOME_TEMPLATE` (`core`'s `parseHomeTemplate`/`scopesFor`),
+ * `sftpgoPath` is how the path looks inside SFTPGo (its `home_dir` or a
+ * mapped virtual folder's target), and `indexerPath` is where the same
+ * directory is bind-mounted in the indexer container. fdrive's API only
+ * ever needs `name`; the other two fields exist so operators can see the
+ * whole mapping in one place and the indexer can read the same env var.
+ */
+export interface IndexRootConfig {
+  readonly name: string;
+  readonly sftpgoPath: string;
+  readonly indexerPath: string;
+}
+
 export interface AppConfig {
   readonly port: number;
   readonly host: string;
@@ -26,6 +41,12 @@ export interface AppConfig {
   readonly fdriveTmpDir: string;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
+  /** Configured index roots (search, thumbnails). `null` when search is unavailable. */
+  readonly fdriveIndexRoots: readonly IndexRootConfig[] | null;
+  /** Base URL of the TEI embeddings service. `undefined` disables semantic search. */
+  readonly fdriveEmbedUrl: string | undefined;
+  /** Directory the indexer writes thumbnails into. `undefined` disables thumbnails. */
+  readonly fdriveThumbsDir: string | undefined;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -63,6 +84,48 @@ export function isBase64Of32Bytes(value: string): boolean {
  */
 export function withDefault(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+/**
+ * Returns `value` when it is a non-empty string, otherwise `undefined`. Used
+ * for genuinely optional environment variables, so an empty string in the
+ * environment behaves the same as the variable being unset.
+ */
+export function undefinedWhenEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+const indexRootConfigSchema = z.object({
+  name: z.string().min(1),
+  sftpgoPath: z.string().min(1),
+  indexerPath: z.string().min(1),
+});
+
+/**
+ * Parses `FDRIVE_INDEX_ROOTS`'s JSON array of `{ name, sftpgoPath,
+ * indexerPath }`. Exported so its shape can be unit tested directly, in
+ * addition to through `loadConfig`. Returns `null` for an absent value
+ * (search stays unavailable); throws a plain `Error` describing the problem
+ * for a present but invalid value, which `loadConfig` turns into one of its
+ * aggregated issues.
+ */
+export function parseIndexRoots(value: string | undefined): IndexRootConfig[] | null {
+  if (value === undefined) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("must be valid JSON");
+  }
+
+  const result = z.array(indexRootConfigSchema).min(1).safeParse(parsed);
+  if (!result.success) {
+    throw new Error("must be a non-empty array of { name, sftpgoPath, indexerPath }");
+  }
+  return result.data;
 }
 
 const envSchema = z.object({
@@ -127,6 +190,34 @@ const envSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1)),
   ),
+  FDRIVE_INDEX_ROOTS: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .transform((value, ctx) => {
+        try {
+          return parseIndexRoots(value);
+        } catch (error) {
+          ctx.addIssue({
+            code: "custom",
+            message: error instanceof Error ? error.message : "invalid FDRIVE_INDEX_ROOTS",
+          });
+          return z.NEVER;
+        }
+      }),
+  ),
+  FDRIVE_EMBED_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
+  FDRIVE_THUMBS_DIR: z.preprocess(undefinedWhenEmpty, z.string().min(1).optional()),
 });
 
 /**
@@ -162,5 +253,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
+    fdriveIndexRoots: parsed.FDRIVE_INDEX_ROOTS,
+    fdriveEmbedUrl: parsed.FDRIVE_EMBED_URL,
+    fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,
   };
 }

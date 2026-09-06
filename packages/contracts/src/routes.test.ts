@@ -29,6 +29,17 @@ describe("ROUTES", () => {
     });
   });
 
+  it("defines search routes under /api/v1/search", () => {
+    expect(ROUTES.search).toEqual({
+      query: "/api/v1/search",
+      status: "/api/v1/search/status",
+    });
+  });
+
+  it("defines the thumb route", () => {
+    expect(ROUTES.thumb).toBe("/api/v1/thumb");
+  });
+
   it("defines events and about routes", () => {
     expect(ROUTES.events).toBe("/api/v1/events");
     expect(ROUTES.about).toBe("/api/v1/about");

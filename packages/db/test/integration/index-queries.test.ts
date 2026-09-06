@@ -1,0 +1,585 @@
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { sql } from "drizzle-orm";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  createDb,
+  createIndexQueries,
+  type Db,
+  type IndexQueries,
+  migrate,
+  schema,
+} from "../../src/index.js";
+
+let container: StartedPostgreSqlContainer;
+let db: Db;
+let close: () => Promise<void>;
+let queries: IndexQueries;
+
+beforeAll(async () => {
+  container = await new PostgreSqlContainer("pgvector/pgvector:pg17")
+    .withDatabase("fdrive_test")
+    .withUsername("fdrive")
+    .withPassword("fdrive")
+    .start();
+
+  const created = createDb(container.getConnectionUri());
+  db = created.db;
+  close = created.close;
+  await migrate(db);
+  queries = createIndexQueries(db);
+}, 180_000);
+
+afterAll(async () => {
+  await close();
+  await container.stop();
+}, 180_000);
+
+beforeEach(async () => {
+  await db.execute(sql`truncate table idx.roots, app.thumbnails restart identity cascade`);
+});
+
+/** 384-dim vector that ramps linearly, shifted by `offset`; two close offsets cosine-distance near 0. */
+function rampVector(offset: number): number[] {
+  return Array.from({ length: 384 }, (_, i) => (i + offset) / 384);
+}
+
+/** A vector pointing the opposite direction of `rampVector`, for a clearly distant embedding. */
+function reverseRampVector(offset: number): number[] {
+  return Array.from({ length: 384 }, (_, i) => (383 - i + offset) / 384);
+}
+
+async function insertRoot(name: string): Promise<number> {
+  const [row] = await db.insert(schema.roots).values({ name }).returning();
+  if (row === undefined) {
+    throw new Error("expected root to be inserted");
+  }
+  return row.id;
+}
+
+interface InsertFileOptions {
+  readonly size?: number;
+  readonly mtimeNs?: bigint;
+  readonly sha256?: string | null;
+  readonly textStatus?: string;
+  readonly deletedAt?: Date | null;
+}
+
+async function insertFile(rootId: number, path: string, opts: InsertFileOptions = {}) {
+  const name = path.split("/").at(-1) ?? path;
+  const dotIndex = name.lastIndexOf(".");
+  const ext = dotIndex > 0 ? name.slice(dotIndex) : "";
+  const [row] = await db
+    .insert(schema.files)
+    .values({
+      rootId,
+      path,
+      name,
+      ext,
+      size: opts.size ?? 100,
+      mtimeNs: opts.mtimeNs ?? 1_700_000_000_000_000_000n,
+      sha256: opts.sha256 ?? null,
+      textStatus: opts.textStatus ?? "done",
+      deletedAt: opts.deletedAt ?? null,
+    })
+    .returning();
+  if (row === undefined) {
+    throw new Error("expected file to be inserted");
+  }
+  return row;
+}
+
+async function insertChunk(fileId: number, idx: number, text: string, embedding?: number[]) {
+  await db.insert(schema.chunks).values({
+    fileId,
+    idx,
+    text,
+    ...(embedding !== undefined ? { embedding } : {}),
+  });
+}
+
+describe("index-queries", () => {
+  describe("semantic", () => {
+    it("orders chunks by cosine distance, closest first", async () => {
+      const rootId = await insertRoot("primary");
+      const close = await insertFile(rootId, "alice/docs/readme.md");
+      const far = await insertFile(rootId, "alice/docs/other.md");
+      await insertChunk(close.id, 0, "close text", rampVector(0));
+      await insertChunk(far.id, 0, "far text", reverseRampVector(0));
+
+      const results = await queries.semantic([{ rootId, fsPrefix: "/" }], rampVector(0.001), 10);
+
+      expect(results.map((r) => r.fileId)).toEqual([close.id, far.id]);
+      expect(results[0]?.snippet).toBe("close text");
+    });
+
+    it("excludes chunks with no embedding", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/docs/readme.md");
+      await insertChunk(file.id, 0, "no embedding here");
+
+      const results = await queries.semantic([{ rootId, fsPrefix: "/" }], rampVector(0), 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("excludes deleted files", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/docs/readme.md", { deletedAt: new Date() });
+      await insertChunk(file.id, 0, "gone", rampVector(0));
+
+      const results = await queries.semantic([{ rootId, fsPrefix: "/" }], rampVector(0), 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const inScope = await insertFile(rootId, "alice/docs/readme.md");
+      const outOfScope = await insertFile(rootId, "bob/docs/readme.md");
+      await insertChunk(inScope.id, 0, "alice's text", rampVector(0));
+      await insertChunk(outOfScope.id, 0, "bob's text", rampVector(0));
+
+      const results = await queries.semantic([{ rootId, fsPrefix: "/alice" }], rampVector(0), 10);
+
+      expect(results.map((r) => r.fileId)).toEqual([inScope.id]);
+    });
+
+    it("never returns rows from a root outside the scope prefixes", async () => {
+      const scoped = await insertRoot("scoped-root");
+      const other = await insertRoot("other-root");
+      const inScope = await insertFile(scoped, "alice/readme.md");
+      const outOfScope = await insertFile(other, "alice/readme.md");
+      await insertChunk(inScope.id, 0, "in", rampVector(0));
+      await insertChunk(outOfScope.id, 0, "out", rampVector(0));
+
+      const results = await queries.semantic(
+        [{ rootId: scoped, fsPrefix: "/" }],
+        rampVector(0),
+        10,
+      );
+
+      expect(results.map((r) => r.fileId)).toEqual([inScope.id]);
+    });
+
+    it("respects the limit", async () => {
+      const rootId = await insertRoot("primary");
+      const first = await insertFile(rootId, "a.md");
+      const second = await insertFile(rootId, "b.md");
+      await insertChunk(first.id, 0, "a", rampVector(0));
+      await insertChunk(second.id, 0, "b", rampVector(1));
+
+      const results = await queries.semantic([{ rootId, fsPrefix: "/" }], rampVector(0), 1);
+
+      expect(results).toHaveLength(1);
+    });
+  });
+
+  describe("fulltext", () => {
+    it("finds a chunk matching the tsquery", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/docs/report.md");
+      await insertChunk(file.id, 0, "the quarterly report contains numbers");
+
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.fileId).toBe(file.id);
+      expect(results[0]?.snippet).toContain("quarterly");
+    });
+
+    it("returns an empty array for an empty tsquery", async () => {
+      const rootId = await insertRoot("primary");
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "", 10);
+      expect(results).toEqual([]);
+    });
+
+    it("does not match unrelated text", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/docs/report.md");
+      await insertChunk(file.id, 0, "nothing to do with the search term");
+
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("excludes deleted files", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/docs/report.md", { deletedAt: new Date() });
+      await insertChunk(file.id, 0, "quarterly numbers");
+
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const inScope = await insertFile(rootId, "alice/report.md");
+      const outOfScope = await insertFile(rootId, "bob/report.md");
+      await insertChunk(inScope.id, 0, "quarterly numbers for alice");
+      await insertChunk(outOfScope.id, 0, "quarterly numbers for bob");
+
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/alice" }], "quarterly:*", 10);
+
+      expect(results.map((r) => r.fileId)).toEqual([inScope.id]);
+    });
+
+    it("orders by rank, best match first", async () => {
+      const rootId = await insertRoot("primary");
+      const strong = await insertFile(rootId, "strong.md");
+      const weak = await insertFile(rootId, "weak.md");
+      await insertChunk(strong.id, 0, "quarterly quarterly quarterly report");
+      await insertChunk(weak.id, 0, "a passing mention of quarterly");
+
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10);
+
+      expect(results[0]?.fileId).toBe(strong.id);
+    });
+  });
+
+  describe("filename", () => {
+    it("finds a file whose path contains a query word", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/docs/report.pdf");
+
+      const results = await queries.filename([{ rootId, fsPrefix: "/" }], ["report"], "report", 10);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.fileId).toBe(file.id);
+      expect(results[0]?.hits).toBe(1);
+    });
+
+    it("returns an empty array when there are no words", async () => {
+      const rootId = await insertRoot("primary");
+      const results = await queries.filename([{ rootId, fsPrefix: "/" }], [], "x", 10);
+      expect(results).toEqual([]);
+    });
+
+    it("scores more matching words with more hits", async () => {
+      const rootId = await insertRoot("primary");
+      const both = await insertFile(rootId, "alice/annual/report.pdf");
+      const one = await insertFile(rootId, "alice/report.pdf");
+      await insertFile(rootId, "alice/other.pdf");
+
+      const results = await queries.filename(
+        [{ rootId, fsPrefix: "/" }],
+        ["annual", "report"],
+        "annual report",
+        10,
+      );
+
+      const byId = new Map(results.map((r) => [r.fileId, r.hits]));
+      expect(byId.get(both.id)).toBe(2);
+      expect(byId.get(one.id)).toBe(1);
+    });
+
+    it("finds a file by trigram similarity even without a substring hit", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/receit.pdf");
+
+      const results = await queries.filename(
+        [{ rootId, fsPrefix: "/" }],
+        ["receipt"],
+        "receipt",
+        10,
+      );
+
+      expect(results.map((r) => r.fileId)).toContain(file.id);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const inScope = await insertFile(rootId, "alice/report.pdf");
+      await insertFile(rootId, "bob/report.pdf");
+
+      const results = await queries.filename(
+        [{ rootId, fsPrefix: "/alice" }],
+        ["report"],
+        "report",
+        10,
+      );
+
+      expect(results.map((r) => r.fileId)).toEqual([inScope.id]);
+    });
+
+    it("excludes deleted files", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/report.pdf", { deletedAt: new Date() });
+
+      const results = await queries.filename([{ rootId, fsPrefix: "/" }], ["report"], "report", 10);
+
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("filesByIds", () => {
+    it("loads files by id and skips missing ids", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/a.txt");
+
+      const results = await queries.filesByIds([file.id, 999_999]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.id).toBe(file.id);
+    });
+
+    it("returns an empty array for an empty id list", async () => {
+      expect(await queries.filesByIds([])).toEqual([]);
+    });
+  });
+
+  describe("fileByPath", () => {
+    it("finds the file at exactly the given path in the given root", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/a.txt");
+
+      const found = await queries.fileByPath(rootId, "alice/a.txt");
+
+      expect(found?.id).toBe(file.id);
+    });
+
+    it("returns null for a path that does not exist", async () => {
+      const rootId = await insertRoot("primary");
+      expect(await queries.fileByPath(rootId, "nope.txt")).toBeNull();
+    });
+
+    it("returns null for a deleted file", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/a.txt", { deletedAt: new Date() });
+      expect(await queries.fileByPath(rootId, "alice/a.txt")).toBeNull();
+    });
+
+    it("does not match the same path in a different root", async () => {
+      const rootId = await insertRoot("primary");
+      const otherRoot = await insertRoot("other");
+      await insertFile(otherRoot, "alice/a.txt");
+      expect(await queries.fileByPath(rootId, "alice/a.txt")).toBeNull();
+    });
+  });
+
+  describe("rootIdsByName", () => {
+    it("maps every root's name to its id", async () => {
+      const first = await insertRoot("sftpgo");
+      const second = await insertRoot("photos");
+
+      const map = await queries.rootIdsByName();
+
+      expect(map).toEqual({ sftpgo: first, photos: second });
+    });
+
+    it("returns an empty object when there are no roots", async () => {
+      expect(await queries.rootIdsByName()).toEqual({});
+    });
+  });
+
+  describe("stats", () => {
+    it("aggregates files and chunks within scope", async () => {
+      const rootId = await insertRoot("primary");
+      const done = await insertFile(rootId, "alice/a.txt", { textStatus: "done", size: 10 });
+      const pending = await insertFile(rootId, "alice/b.txt", { textStatus: "pending", size: 5 });
+      await insertChunk(done.id, 0, "text", rampVector(0));
+      await insertChunk(pending.id, 0, "text");
+
+      const stats = await queries.stats([{ rootId, fsPrefix: "/" }]);
+
+      expect(stats.filesTracked).toBe(2);
+      expect(stats.chunks).toBe(2);
+      expect(stats.chunksEmbedded).toBe(1);
+      const byStatus = new Map(stats.byTextStatus.map((s) => [s.status, s]));
+      expect(byStatus.get("done")).toEqual({ status: "done", files: 1, bytes: 10 });
+      expect(byStatus.get("pending")).toEqual({ status: "pending", files: 1, bytes: 5 });
+    });
+
+    it("excludes rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/a.txt");
+      await insertFile(rootId, "bob/b.txt");
+
+      const stats = await queries.stats([{ rootId, fsPrefix: "/alice" }]);
+
+      expect(stats.filesTracked).toBe(1);
+    });
+
+    it("reports zero for an empty scope", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/a.txt");
+
+      const stats = await queries.stats([]);
+
+      expect(stats.filesTracked).toBe(0);
+      expect(stats.chunks).toBe(0);
+      expect(stats.chunksEmbedded).toBe(0);
+      expect(stats.byTextStatus).toEqual([]);
+    });
+  });
+
+  describe("duplicates", () => {
+    it("groups files sharing a sha256 and size", async () => {
+      const rootId = await insertRoot("primary");
+      const sha = "a".repeat(64);
+      const first = await insertFile(rootId, "alice/a.txt", { sha256: sha, size: 1000 });
+      const second = await insertFile(rootId, "alice/copy/a.txt", { sha256: sha, size: 1000 });
+      await insertFile(rootId, "alice/unique.txt", { sha256: "b".repeat(64), size: 1000 });
+
+      const groups = await queries.duplicates([{ rootId, fsPrefix: "/" }], 0, 10);
+
+      expect(groups).toHaveLength(1);
+      expect(groups[0]?.sha256).toBe(sha);
+      expect(groups[0]?.count).toBe(2);
+      expect(groups[0]?.files.map((f) => f.path).sort()).toEqual([first.path, second.path].sort());
+    });
+
+    it("orders groups by wasted bytes descending", async () => {
+      const rootId = await insertRoot("primary");
+      const smallSha = "c".repeat(64);
+      const largeSha = "d".repeat(64);
+      await insertFile(rootId, "small-1.txt", { sha256: smallSha, size: 10 });
+      await insertFile(rootId, "small-2.txt", { sha256: smallSha, size: 10 });
+      await insertFile(rootId, "large-1.txt", { sha256: largeSha, size: 10_000 });
+      await insertFile(rootId, "large-2.txt", { sha256: largeSha, size: 10_000 });
+
+      const groups = await queries.duplicates([{ rootId, fsPrefix: "/" }], 0, 10);
+
+      expect(groups.map((g) => g.sha256)).toEqual([largeSha, smallSha]);
+    });
+
+    it("ignores files below minSize", async () => {
+      const rootId = await insertRoot("primary");
+      const sha = "e".repeat(64);
+      await insertFile(rootId, "a.txt", { sha256: sha, size: 5 });
+      await insertFile(rootId, "b.txt", { sha256: sha, size: 5 });
+
+      const groups = await queries.duplicates([{ rootId, fsPrefix: "/" }], 1000, 10);
+
+      expect(groups).toEqual([]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const sha = "f".repeat(64);
+      await insertFile(rootId, "alice/a.txt", { sha256: sha, size: 100 });
+      await insertFile(rootId, "bob/a.txt", { sha256: sha, size: 100 });
+
+      const groups = await queries.duplicates([{ rootId, fsPrefix: "/alice" }], 0, 10);
+
+      expect(groups).toEqual([]);
+    });
+  });
+
+  describe("similar", () => {
+    it("ranks a file close to the target's average embedding above a distant one", async () => {
+      const rootId = await insertRoot("primary");
+      const target = await insertFile(rootId, "alice/target.md");
+      const near = await insertFile(rootId, "alice/near.md");
+      const far = await insertFile(rootId, "alice/far.md");
+      await insertChunk(target.id, 0, "target chunk one", rampVector(0));
+      await insertChunk(target.id, 1, "target chunk two", rampVector(0.2));
+      await insertChunk(near.id, 0, "near", rampVector(0.1));
+      await insertChunk(far.id, 0, "far", reverseRampVector(0));
+
+      const results = await queries.similar(target.id, [{ rootId, fsPrefix: "/" }], 10);
+
+      expect(results.map((r) => r.fileId)).toEqual([near.id, far.id]);
+    });
+
+    it("excludes the target file itself", async () => {
+      const rootId = await insertRoot("primary");
+      const target = await insertFile(rootId, "alice/target.md");
+      await insertChunk(target.id, 0, "chunk", rampVector(0));
+
+      const results = await queries.similar(target.id, [{ rootId, fsPrefix: "/" }], 10);
+
+      expect(results.map((r) => r.fileId)).not.toContain(target.id);
+    });
+
+    it("returns an empty array when the target file has no embedded chunks", async () => {
+      const rootId = await insertRoot("primary");
+      const target = await insertFile(rootId, "alice/target.md");
+      await insertChunk(target.id, 0, "no embedding");
+
+      const results = await queries.similar(target.id, [{ rootId, fsPrefix: "/" }], 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const target = await insertFile(rootId, "alice/target.md");
+      const inScope = await insertFile(rootId, "alice/near.md");
+      const outOfScope = await insertFile(rootId, "bob/near.md");
+      await insertChunk(target.id, 0, "target", rampVector(0));
+      await insertChunk(inScope.id, 0, "in", rampVector(0.1));
+      await insertChunk(outOfScope.id, 0, "out", rampVector(0.1));
+
+      const results = await queries.similar(target.id, [{ rootId, fsPrefix: "/alice" }], 10);
+
+      expect(results.map((r) => r.fileId)).toEqual([inScope.id]);
+    });
+  });
+
+  describe("recentFiles", () => {
+    it("orders files by modification time, most recent first", async () => {
+      const rootId = await insertRoot("primary");
+      const older = await insertFile(rootId, "alice/old.txt", { mtimeNs: 1n });
+      const newer = await insertFile(rootId, "alice/new.txt", { mtimeNs: 2n });
+
+      const results = await queries.recentFiles([{ rootId, fsPrefix: "/" }], 10);
+
+      expect(results.map((r) => r.id)).toEqual([newer.id, older.id]);
+    });
+
+    it("respects the limit", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "a.txt", { mtimeNs: 1n });
+      await insertFile(rootId, "b.txt", { mtimeNs: 2n });
+
+      const results = await queries.recentFiles([{ rootId, fsPrefix: "/" }], 1);
+
+      expect(results).toHaveLength(1);
+    });
+
+    it("excludes deleted files", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/gone.txt", { deletedAt: new Date() });
+
+      const results = await queries.recentFiles([{ rootId, fsPrefix: "/" }], 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const inScope = await insertFile(rootId, "alice/a.txt");
+      await insertFile(rootId, "bob/b.txt");
+
+      const results = await queries.recentFiles([{ rootId, fsPrefix: "/alice" }], 10);
+
+      expect(results.map((r) => r.id)).toEqual([inScope.id]);
+    });
+  });
+
+  describe("thumbnail", () => {
+    it("finds a generated thumbnail by content key and size", async () => {
+      await db
+        .insert(schema.thumbnails)
+        .values({ contentKey: "sha-abc", size: 256, storagePath: "ab/sha-abc.256.webp" });
+
+      const found = await queries.thumbnail("sha-abc", 256);
+
+      expect(found).toEqual({ storagePath: "ab/sha-abc.256.webp" });
+    });
+
+    it("returns null when no thumbnail has been generated for that size", async () => {
+      await db
+        .insert(schema.thumbnails)
+        .values({ contentKey: "sha-abc", size: 256, storagePath: "ab/sha-abc.256.webp" });
+
+      expect(await queries.thumbnail("sha-abc", 1024)).toBeNull();
+    });
+
+    it("returns null for an unknown content key", async () => {
+      expect(await queries.thumbnail("unknown", 256)).toBeNull();
+    });
+  });
+});

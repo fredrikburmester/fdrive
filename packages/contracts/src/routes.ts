@@ -44,6 +44,14 @@ export const ROUTES = {
     /** GET: the caller's jobs -> `JobsResponse`. */
     jobs: "/api/v1/fs/jobs",
   },
+  search: {
+    /** GET: hybrid search (semantic + full-text + filename) -> `SearchResponse`. 400 for an empty `q`. */
+    query: "/api/v1/search",
+    /** GET: whether search is configured, and whether semantic search is up -> `SearchStatusResponse`. */
+    status: "/api/v1/search/status",
+  },
+  /** GET: stream a cached WebP thumbnail for a file. 404 when none exists. */
+  thumb: "/api/v1/thumb",
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
   /** GET: version and SFTPGo attribution -> `AboutResponse`. */

@@ -5,6 +5,8 @@ import {
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
+  parseIndexRoots,
+  undefinedWhenEmpty,
   withDefault,
 } from "./config";
 
@@ -27,6 +29,59 @@ describe("withDefault", () => {
 
   it("returns the value when it is a non-empty string", () => {
     expect(withDefault("value", "fallback")).toBe("value");
+  });
+});
+
+describe("undefinedWhenEmpty", () => {
+  it("returns undefined for undefined", () => {
+    expect(undefinedWhenEmpty(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for an empty string", () => {
+    expect(undefinedWhenEmpty("")).toBeUndefined();
+  });
+
+  it("returns the value when it is a non-empty string", () => {
+    expect(undefinedWhenEmpty("value")).toBe("value");
+  });
+});
+
+describe("parseIndexRoots", () => {
+  it("returns null for undefined", () => {
+    expect(parseIndexRoots(undefined)).toBeNull();
+  });
+
+  it("parses a valid single-root JSON array", () => {
+    const raw = JSON.stringify([
+      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+    ]);
+    expect(parseIndexRoots(raw)).toEqual([
+      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+    ]);
+  });
+
+  it("parses multiple roots", () => {
+    const raw = JSON.stringify([
+      { name: "sftpgo", sftpgoPath: "/a", indexerPath: "/roots/a" },
+      { name: "photos", sftpgoPath: "/b", indexerPath: "/roots/b" },
+    ]);
+    expect(parseIndexRoots(raw)).toHaveLength(2);
+  });
+
+  it("throws for invalid JSON", () => {
+    expect(() => parseIndexRoots("not json")).toThrow(/valid JSON/);
+  });
+
+  it("throws for an empty array", () => {
+    expect(() => parseIndexRoots("[]")).toThrow();
+  });
+
+  it("throws when a root is missing a required field", () => {
+    expect(() => parseIndexRoots(JSON.stringify([{ name: "sftpgo" }]))).toThrow();
+  });
+
+  it("throws when the value is not an array", () => {
+    expect(() => parseIndexRoots(JSON.stringify({ name: "sftpgo" }))).toThrow();
   });
 });
 
@@ -81,6 +136,9 @@ describe("loadConfig", () => {
       fdriveAutoMigrate: true,
       fdriveTmpDir: tmpdir(),
       fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
+      fdriveIndexRoots: null,
+      fdriveEmbedUrl: undefined,
+      fdriveThumbsDir: undefined,
     });
   });
 
@@ -104,6 +162,11 @@ describe("loadConfig", () => {
       FDRIVE_AUTO_MIGRATE: "false",
       FDRIVE_TMP_DIR: "/var/tmp/fdrive",
       FDRIVE_JOB_MAX_BYTES: "1000",
+      FDRIVE_INDEX_ROOTS: JSON.stringify([
+        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+      ]),
+      FDRIVE_EMBED_URL: "http://embed:8081",
+      FDRIVE_THUMBS_DIR: "/data/thumbs",
     });
 
     expect(config).toEqual({
@@ -121,7 +184,31 @@ describe("loadConfig", () => {
       fdriveAutoMigrate: false,
       fdriveTmpDir: "/var/tmp/fdrive",
       fdriveJobMaxBytes: 1000,
+      fdriveIndexRoots: [
+        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+      ],
+      fdriveEmbedUrl: "http://embed:8081",
+      fdriveThumbsDir: "/data/thumbs",
     });
+  });
+
+  it("defaults FDRIVE_INDEX_ROOTS, FDRIVE_EMBED_URL, and FDRIVE_THUMBS_DIR to unset", () => {
+    const config = loadConfig(REQUIRED_ENV);
+    expect(config.fdriveIndexRoots).toBeNull();
+    expect(config.fdriveEmbedUrl).toBeUndefined();
+    expect(config.fdriveThumbsDir).toBeUndefined();
+  });
+
+  it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEX_ROOTS: "not json" })).toThrow(
+      /FDRIVE_INDEX_ROOTS/,
+    );
+  });
+
+  it("rejects a non-http FDRIVE_EMBED_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_EMBED_URL: "not a url" })).toThrow(
+      /FDRIVE_EMBED_URL/,
+    );
   });
 
   it("defaults FDRIVE_AUTO_MIGRATE to true and accepts an explicit false", () => {

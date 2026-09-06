@@ -13,6 +13,8 @@ import {
 } from "./fs.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
+import { SearchResponse, SearchStatusResponse } from "./search.ts";
+import type { ThumbSize } from "./thumbs.ts";
 
 export type { IdentitySummary };
 
@@ -61,6 +63,15 @@ export interface ApiClientUploadOptions {
 
 export type UploadBody = Blob | ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer>;
 
+/** Optional filters and paging for `ApiClient.search`, mirroring `SearchQuery` minus `q`. */
+export interface ApiClientSearchOptions {
+  limit?: number;
+  ext?: string;
+  folder?: string;
+  after?: string;
+  before?: string;
+}
+
 export interface ApiClient {
   login(req: LoginRequest): Promise<MeResponse>;
   logout(): Promise<OkResponse>;
@@ -82,6 +93,9 @@ export interface ApiClient {
   job(id: string): Promise<JobStatus>;
   cancelJob(id: string): Promise<JobStatus>;
   about(): Promise<AboutResponse>;
+  search(query: string, opts?: ApiClientSearchOptions): Promise<SearchResponse>;
+  searchStatus(): Promise<SearchStatusResponse>;
+  thumbUrl(path: string, size: ThumbSize): string;
 }
 
 interface ClientContext {
@@ -402,6 +416,33 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     about(): Promise<AboutResponse> {
       return requestJson(ctx, { method: "GET", path: ROUTES.about }, AboutResponse);
+    },
+
+    search(query: string, opts?: ApiClientSearchOptions): Promise<SearchResponse> {
+      return requestJson(
+        ctx,
+        {
+          method: "GET",
+          path: ROUTES.search.query,
+          query: {
+            q: query,
+            limit: opts?.limit === undefined ? undefined : String(opts.limit),
+            ext: opts?.ext,
+            folder: opts?.folder,
+            after: opts?.after,
+            before: opts?.before,
+          },
+        },
+        SearchResponse,
+      );
+    },
+
+    searchStatus(): Promise<SearchStatusResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.search.status }, SearchStatusResponse);
+    },
+
+    thumbUrl(path: string, size: ThumbSize): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.thumb, { path, size: String(size) });
     },
   };
 }
