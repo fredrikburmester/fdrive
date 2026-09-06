@@ -92,8 +92,8 @@ export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) 
     : { head: crumbs, hidden: [] as BreadcrumbEntry[], tail: [] as BreadcrumbEntry[] };
 
   return (
-    <Breadcrumb>
-      <BreadcrumbList className="flex-nowrap">
+    <Breadcrumb className="min-w-0">
+      <BreadcrumbList className="min-w-0 flex-nowrap">
         {visible.head.map((crumb, index) => (
           <CrumbRow
             key={crumb.path}
@@ -179,7 +179,7 @@ function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
 
   return (
     <>
-      <BreadcrumbItem>
+      <BreadcrumbItem className="min-w-0">
         {isLast ? (
           <BreadcrumbPage
             data-drop-target={isDropTarget}

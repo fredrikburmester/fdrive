@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
+import { uniqueName } from "./support/unique.js";
 
 /** The `data-path` values of every currently-rendered listing row, in DOM order. */
 async function visibleRowPaths(page: Page): Promise<string[]> {
@@ -8,6 +9,22 @@ async function visibleRowPaths(page: Page): Promise<string[]> {
     elements.map((el) => el.getAttribute("data-path")),
   );
   return paths.filter((path): path is string => path !== null);
+}
+
+async function createFolder(page: Page, name: string): Promise<void> {
+  await page.getByRole("button", { name: "New folder" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Folder name").fill(name);
+  await dialog.getByRole("button", { name: "Create" }).click();
+  await expect(dialog).toBeHidden();
+}
+
+async function deleteEntry(page: Page, name: string): Promise<void> {
+  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  const confirmDialog = page.getByRole("alertdialog");
+  await confirmDialog.getByRole("button", { name: "Delete" }).click();
+  await expect(confirmDialog).toBeHidden();
 }
 
 test("root listing shows docs and photo.jpg", async ({ page }) => {
@@ -78,4 +95,25 @@ test("sorting by size flips the order of docs' contents", async ({ page }) => {
 
   const bySize = await visibleRowPaths(page);
   expect(bySize.indexOf("/docs/report.pdf")).toBeLessThan(bySize.indexOf("/docs/readme.md"));
+});
+
+test("a very long folder name never widens the page past the viewport", async ({ page }) => {
+  // 120 characters, no spaces, so it cannot wrap: exactly the shape that
+  // exposed the missing `min-w-0` in the shell's flex chain, which let a
+  // single unbreakable name push `<main>` wider than the viewport.
+  const name = uniqueName("very-long-folder-name-for-overflow-test").padEnd(120, "x");
+  await page.goto("/files");
+
+  await createFolder(page, name);
+  await listing(page).getByText(name, { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${name}$`));
+
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+
+  await page.getByRole("link", { name: "Home" }).click();
+  await deleteEntry(page, name);
 });

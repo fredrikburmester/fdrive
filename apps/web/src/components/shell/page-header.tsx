@@ -28,10 +28,10 @@ export interface PageHeaderProps {
  */
 export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
   return (
-    <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md">
+    <header className="sticky top-0 z-10 flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md">
       <SidebarTrigger />
       <Separator orientation="vertical" className="h-4" />
-      <div className="flex min-w-0 flex-1 items-center gap-2">{breadcrumbs}</div>
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{breadcrumbs}</div>
       <div className="flex shrink-0 items-center gap-2">
         <SearchButton />
         {actions}

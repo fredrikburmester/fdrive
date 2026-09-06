@@ -60,7 +60,12 @@ export default async function ShellLayout({ children }: { children: ReactNode })
       <ShellRuntime>
         <SidebarProvider>
           <AppSidebar />
-          <SidebarInset>{children}</SidebarInset>
+          {/* min-w-0 lets this flex item shrink below its content's natural
+              width (long breadcrumb or file names otherwise force it, and
+              the whole page, wider than the viewport); overflow-hidden
+              backstops that by clipping anything that still does not fit
+              instead of pushing the layout wider. */}
+          <SidebarInset className="min-w-0 overflow-hidden">{children}</SidebarInset>
         </SidebarProvider>
       </ShellRuntime>
     </MeHydration>
