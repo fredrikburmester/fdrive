@@ -13,6 +13,7 @@ export { describeApiError } from "@/lib/api/errors";
 export { queryKeys } from "@/lib/api/keys";
 export { pathToHref, segmentsToPath, viewHref } from "@/lib/files/path-url";
 export { detectPlatform } from "@/lib/files/platform";
+export { useTouchRecent } from "@/lib/metadata/queries";
 export { TEXT_LIMIT_BYTES } from "@/lib/preview/kind";
 export { loadText } from "@/lib/preview/text-loader";
 export type { ApiClient };

@@ -1,9 +1,10 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import type { FsEntry, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
@@ -11,6 +12,7 @@ import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
 import { buildGridLayout } from "@/lib/files/marquee";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
+import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
@@ -53,6 +55,31 @@ export interface FileGridProps {
   onChangeSelection: (paths: string[]) => void;
   /** Clears the selection, for a plain click on empty listing space. */
   onClearSelection: () => void;
+  /** Every tag known to the account, for each tile's tag dots and the
+   * "Tags" context menu submenu. Defaults to none. */
+  tags?: readonly Tag[];
+  /** Adds or removes `tagId` on every entry in the group a tile's context
+   * menu action would apply to (see `contextEntries`). Defaults to a no-op. */
+  onToggleTag?: (paths: readonly string[], tagId: string, checked: boolean) => void;
+  /** Opens the full tag editor for the group of entries a tile's context
+   * menu action would apply to. Defaults to a no-op. */
+  onOpenTagsEditor?: (entries: readonly FsEntry[]) => void;
+  /** Favorites (or unfavorites) every entry in the group a tile's context
+   * menu action would apply to. Defaults to a no-op. */
+  onToggleFavorite?: (paths: readonly string[], next: boolean) => void;
+}
+
+const EMPTY_TAGS: readonly Tag[] = [];
+const NO_OP_TOGGLE_TAG = () => {};
+const NO_OP_OPEN_TAGS_EDITOR = () => {};
+const NO_OP_TOGGLE_FAVORITE = () => {};
+
+function entryFavorite(entry: FsEntry): boolean {
+  return entry.meta?.favorite === true;
+}
+
+function groupFavorite(entries: readonly FsEntry[]): boolean {
+  return entries.length > 0 && entries.every(entryFavorite);
 }
 
 function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
@@ -72,6 +99,10 @@ export function FileGrid({
   onToggleSelectAll,
   onChangeSelection,
   onClearSelection,
+  tags = EMPTY_TAGS,
+  onToggleTag = NO_OP_TOGGLE_TAG,
+  onOpenTagsEditor = NO_OP_OPEN_TAGS_EDITOR,
+  onToggleFavorite = NO_OP_TOGGLE_FAVORITE,
 }: FileGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   // Seeded from the last container width this grid measured, persisted
@@ -229,6 +260,8 @@ export function FileGrid({
                     {rowEntries.map((entry) => {
                       const isSelected = selected.has(entry.path);
                       const isFocused = focusedPath === entry.path;
+                      const group = contextEntries(entry, entries, selected);
+                      const groupPaths = group.map((candidate) => candidate.path);
 
                       return (
                         <FileContextMenu
@@ -236,9 +269,18 @@ export function FileGrid({
                           entry={entry}
                           onAction={onContextAction}
                           selectionCount={contextSelectionCount(entry.path, selected)}
-                          includesFolder={contextEntries(entry, entries, selected).some(
-                            (candidate) => candidate.kind === "dir",
-                          )}
+                          includesFolder={group.some((candidate) => candidate.kind === "dir")}
+                          tags={tags}
+                          tagCheckState={(tagId) =>
+                            computeTagCheckState(
+                              group.map((candidate) => ({ tagIds: candidate.meta?.tagIds ?? [] })),
+                              tagId,
+                            )
+                          }
+                          onToggleTag={(tagId, checked) => onToggleTag(groupPaths, tagId, checked)}
+                          onOpenTagsEditor={() => onOpenTagsEditor(group)}
+                          favorite={groupFavorite(group)}
+                          onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
                         >
                           {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
                           {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
@@ -271,6 +313,7 @@ export function FileGrid({
                             <span className="line-clamp-2 w-full break-words text-xs">
                               {entry.name}
                             </span>
+                            <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
                           </div>
                         </FileContextMenu>
                       );

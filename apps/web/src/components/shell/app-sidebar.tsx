@@ -17,8 +17,11 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
+import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
+import { RecentsSection } from "@/components/shell/recents-section";
+import { TagsSection } from "@/components/shell/tags-section";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -107,6 +110,9 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        <FavoritesSection />
+        <RecentsSection />
+        <TagsSection />
         {me?.isAdmin ? (
           <SidebarGroup>
             <SidebarGroupLabel>System</SidebarGroupLabel>

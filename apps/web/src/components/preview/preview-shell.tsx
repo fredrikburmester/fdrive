@@ -15,7 +15,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Inspector } from "@/components/inspector/inspector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { editHref } from "@/lib/editor/route";
-import { apiClient, pathToHref, queryKeys, viewHref } from "@/lib/preview/deps";
+import { apiClient, pathToHref, queryKeys, useTouchRecent, viewHref } from "@/lib/preview/deps";
 import { previewKindFor } from "@/lib/preview/kind";
 import { siblingNavigation } from "@/lib/preview/siblings";
 import { skeletonKindFor } from "@/lib/preview/skeleton";
@@ -159,6 +159,13 @@ function PreviewShellContent({ path }: PreviewShellProps) {
   const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
   const parent = parentPath(path);
+
+  const touchRecent = useTouchRecent();
+  const touchRecentRef = useRef(touchRecent.mutate);
+  touchRecentRef.current = touchRecent.mutate;
+  useEffect(() => {
+    touchRecentRef.current(path);
+  }, [path]);
 
   const entryQuery = useQuery({
     queryKey: queryKeys.fs.stat(path),

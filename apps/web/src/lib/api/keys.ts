@@ -26,4 +26,14 @@ export const queryKeys = {
   account: {
     tokens: () => ["account", "tokens"] as const,
   },
+  tags: {
+    list: () => ["tags", "list"] as const,
+    files: (id: string) => ["tags", "files", id] as const,
+  },
+  favorites: {
+    list: () => ["favorites", "list"] as const,
+  },
+  recents: {
+    list: () => ["recents", "list"] as const,
+  },
 } as const;

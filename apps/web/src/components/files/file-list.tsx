@@ -1,10 +1,11 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import type { FsEntry, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useRef, useState } from "react";
+import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
@@ -12,6 +13,7 @@ import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { buildListLayout } from "@/lib/files/marquee";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { formatBytes, formatDate } from "@/lib/format";
+import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
@@ -63,6 +65,42 @@ export interface FileListProps {
   treeExpanded?: ReadonlySet<string>;
   /** Called when a folder row's disclosure chevron is toggled, in tree view. */
   onToggleTreeExpand?: (entry: FsEntry) => void;
+  /** Every tag known to the account, for each row's tag dots and the "Tags"
+   * context menu submenu. Defaults to none. */
+  tags?: readonly Tag[];
+  /** Adds or removes `tagId` on every entry in the group a row's context
+   * menu action would apply to (see `contextEntries`). Defaults to a no-op. */
+  onToggleTag?: (paths: readonly string[], tagId: string, checked: boolean) => void;
+  /** Opens the full tag editor for the group of entries a row's context
+   * menu action would apply to. Defaults to a no-op. */
+  onOpenTagsEditor?: (entries: readonly FsEntry[]) => void;
+  /** Favorites (or unfavorites) every entry in the group a row's context
+   * menu action would apply to. Defaults to a no-op. */
+  onToggleFavorite?: (paths: readonly string[], next: boolean) => void;
+  /** Hides "Move to..." and "Copy to..." in every row's context menu, for a
+   * read-only "virtual listing". Defaults to `false`. */
+  hideMoveCopy?: boolean;
+  /** Shows "Reveal in folder" in every row's context menu, for a "virtual
+   * listing" whose rows are not already inside their own folder. Defaults
+   * to `false`. */
+  showReveal?: boolean;
+  /** Hides "Compress..." and "Extract..." in every row's context menu, for
+   * a "virtual listing" that does not run the archive jobs. Defaults to
+   * `false`. */
+  hideArchive?: boolean;
+}
+
+const EMPTY_TAGS: readonly Tag[] = [];
+const NO_OP_TOGGLE_TAG = () => {};
+const NO_OP_OPEN_TAGS_EDITOR = () => {};
+const NO_OP_TOGGLE_FAVORITE = () => {};
+
+function entryFavorite(entry: FsEntry): boolean {
+  return entry.meta?.favorite === true;
+}
+
+function groupFavorite(entries: readonly FsEntry[]): boolean {
+  return entries.length > 0 && entries.every(entryFavorite);
 }
 
 function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
@@ -85,6 +123,13 @@ export function FileList({
   treeDepths,
   treeExpanded,
   onToggleTreeExpand,
+  tags = EMPTY_TAGS,
+  onToggleTag = NO_OP_TOGGLE_TAG,
+  onOpenTagsEditor = NO_OP_OPEN_TAGS_EDITOR,
+  onToggleFavorite = NO_OP_TOGGLE_FAVORITE,
+  hideMoveCopy = false,
+  showReveal = false,
+  hideArchive = false,
 }: FileListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -200,6 +245,8 @@ export function FileList({
           const isTreeRow = treeDepths !== undefined;
           const depth = treeDepths?.get(entry.path) ?? 0;
           const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
+          const group = contextEntries(entry, entries, selected);
+          const groupPaths = group.map((candidate) => candidate.path);
 
           return (
             <FileContextMenu
@@ -207,9 +254,21 @@ export function FileList({
               entry={entry}
               onAction={onContextAction}
               selectionCount={contextSelectionCount(entry.path, selected)}
-              includesFolder={contextEntries(entry, entries, selected).some(
-                (candidate) => candidate.kind === "dir",
-              )}
+              includesFolder={group.some((candidate) => candidate.kind === "dir")}
+              hideMoveCopy={hideMoveCopy}
+              showReveal={showReveal}
+              hideArchive={hideArchive}
+              tags={tags}
+              tagCheckState={(tagId) =>
+                computeTagCheckState(
+                  group.map((candidate) => ({ tagIds: candidate.meta?.tagIds ?? [] })),
+                  tagId,
+                )
+              }
+              onToggleTag={(tagId, checked) => onToggleTag(groupPaths, tagId, checked)}
+              onOpenTagsEditor={() => onOpenTagsEditor(group)}
+              favorite={groupFavorite(group)}
+              onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
             >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
               {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
@@ -279,6 +338,7 @@ export function FileList({
                   />
                   <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />
                   <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
                   <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
                     {entry.kind === "dir" ? "--" : formatBytes(entry.size)}
                   </span>
