@@ -5,6 +5,8 @@ import {
   ArrowDownWideNarrowIcon,
   ArrowUpNarrowWideIcon,
   ChevronDownIcon,
+  CopyIcon,
+  FileArchiveIcon,
   FileCodeIcon,
   FilePlusIcon,
   FileTextIcon,
@@ -149,6 +151,10 @@ export interface FilesToolbarActionsProps {
   /** Number of currently selected rows; shows an "N selected" pill when > 0. */
   selectedCount: number;
   onClearSelection: () => void;
+  /** Duplicates the single selected entry. Only enabled for a one-entry selection. */
+  onDuplicateSelection: () => void;
+  /** Opens the compress dialog for the current selection (any size). */
+  onCompressSelection: () => void;
 }
 
 /** View toggle, sort menu, new folder, upload menu, and the inspector toggle. */
@@ -165,12 +171,45 @@ export function FilesToolbarActions({
   onToggleDetails,
   selectedCount,
   onClearSelection,
+  onDuplicateSelection,
+  onCompressSelection,
 }: FilesToolbarActionsProps) {
   return (
     <div className="flex items-center gap-1.5">
       {selectedCount > 0 && (
         <div className="flex items-center gap-1 rounded-md bg-muted py-1 pr-1 pl-2 text-muted-foreground text-xs">
           <span className="tabular-nums">{selectedCount} selected</span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={selectedCount !== 1}
+                  aria-label="Duplicate"
+                  onClick={onDuplicateSelection}
+                />
+              }
+            >
+              <CopyIcon />
+            </TooltipTrigger>
+            <TooltipContent>Duplicate</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Compress"
+                  onClick={onCompressSelection}
+                />
+              }
+            >
+              <FileArchiveIcon />
+            </TooltipTrigger>
+            <TooltipContent>Compress...</TooltipContent>
+          </Tooltip>
           <Button
             variant="ghost"
             size="icon-xs"

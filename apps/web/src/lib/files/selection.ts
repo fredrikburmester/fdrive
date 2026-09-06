@@ -202,3 +202,13 @@ export function selectionReducer(
       return toggleAll(state, action.visiblePaths);
   }
 }
+
+/**
+ * How many entries a context-menu or toolbar action on `path` would apply
+ * to: the whole selection's size when `path` is part of a multi-entry
+ * selection, else just 1 (right-clicking or acting on an unselected row
+ * only ever targets that one row, matching Finder).
+ */
+export function contextSelectionCount(path: string, selected: ReadonlySet<string>): number {
+  return selected.has(path) ? Math.max(selected.size, 1) : 1;
+}

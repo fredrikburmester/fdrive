@@ -23,6 +23,7 @@ const renameMock = vi.fn();
 const moveMock = vi.fn();
 const copyMock = vi.fn();
 const removeMock = vi.fn();
+const duplicateMock = vi.fn();
 const toastErrorMock = vi.fn();
 
 vi.mock("./deps", () => ({
@@ -33,6 +34,7 @@ vi.mock("./deps", () => ({
     move: (...args: unknown[]) => moveMock(...args),
     copy: (...args: unknown[]) => copyMock(...args),
     remove: (...args: unknown[]) => removeMock(...args),
+    duplicate: (...args: unknown[]) => duplicateMock(...args),
   },
   queryKeys: {
     fs: {
@@ -91,6 +93,12 @@ describe("affectedListKeys", () => {
   it("handles missing targets for rename/move", () => {
     expect(affectedListKeys({ op: "rename", paths: ["/a/old"] })).toEqual([["fs", "list", "/a"]]);
   });
+
+  it("invalidates the new entry's parent for duplicate", () => {
+    expect(affectedListKeys({ op: "duplicate", paths: ["/a/report copy.pdf"] })).toEqual([
+      ["fs", "list", "/a"],
+    ]);
+  });
 });
 
 describe("describeFsError", () => {
@@ -121,6 +129,7 @@ beforeEach(() => {
   moveMock.mockReset();
   copyMock.mockReset();
   removeMock.mockReset();
+  duplicateMock.mockReset();
   toastErrorMock.mockReset();
 });
 
@@ -256,6 +265,42 @@ describe("useCopy", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(copyMock).toHaveBeenCalledWith("/a/x", "/b/x");
     expect(invalidateSpy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["fs", "list", "/b"] });
+  });
+});
+
+describe("useDuplicate", () => {
+  it("calls apiClient.duplicate and invalidates the new entry's parent", async () => {
+    const { useDuplicate } = await import("./queries");
+    duplicateMock.mockResolvedValue({
+      name: "report copy.pdf",
+      path: "/a/report copy.pdf",
+      kind: "file",
+      size: 0,
+      modifiedAt: new Date().toISOString(),
+      ext: ".pdf",
+      mime: null,
+    });
+    const { wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useDuplicate(), { wrapper });
+    result.current.mutate("/a/report.pdf");
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(duplicateMock).toHaveBeenCalledWith("/a/report.pdf");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] });
+  });
+
+  it("shows a toast on failure", async () => {
+    const { useDuplicate } = await import("./queries");
+    duplicateMock.mockRejectedValue(new ApiClientError("not_found", "no such file", 404));
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(() => useDuplicate(), { wrapper });
+    result.current.mutate("/a/report.pdf");
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(toastErrorMock).toHaveBeenCalledWith("no such file");
   });
 });
 

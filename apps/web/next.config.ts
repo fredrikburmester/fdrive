@@ -6,6 +6,17 @@ const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
   typedRoutes: true,
+  // Next's own gzip compression wraps every outgoing response, including
+  // ones proxied through `rewrites()` below, with no awareness that some of
+  // them (the `/api/v1/events` SSE stream) are meant to flush every chunk
+  // immediately: it buffers small writes waiting for a bigger gzip block,
+  // so a real browser (which always sends `Accept-Encoding: gzip`, unlike
+  // curl) never sees an event until the connection closes. Disabling
+  // compression here fixes that; the API's own responses are small JSON
+  // payloads and file streams that do not need it either. Deployed behind
+  // Caddy (see PLAN.md §3), Caddy's own compression would have the same
+  // problem for this route and needs the same exclusion.
+  compress: false,
   async rewrites() {
     return [
       {

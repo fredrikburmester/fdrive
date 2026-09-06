@@ -3,6 +3,7 @@ import {
   arrow,
   clear,
   click,
+  contextSelectionCount,
   EMPTY_SELECTION,
   reconcile,
   type SelectionState,
@@ -262,5 +263,25 @@ describe("selectionReducer", () => {
     expect(first.selected).toEqual(new Set(order));
     const second = selectionReducer(first, { type: "toggleAll", visiblePaths: order }, order);
     expect(second).toEqual(EMPTY_SELECTION);
+  });
+});
+
+describe("contextSelectionCount", () => {
+  it("returns the selection's size when the path is part of a multi-selection", () => {
+    const selected = new Set(["/a", "/b", "/c"]);
+    expect(contextSelectionCount("/b", selected)).toBe(3);
+  });
+
+  it("returns 1 for a single-entry selection", () => {
+    expect(contextSelectionCount("/a", new Set(["/a"]))).toBe(1);
+  });
+
+  it("returns 1 for a path that is not selected, regardless of the selection's size", () => {
+    const selected = new Set(["/a", "/b", "/c"]);
+    expect(contextSelectionCount("/z", selected)).toBe(1);
+  });
+
+  it("returns 1 for an empty selection", () => {
+    expect(contextSelectionCount("/a", new Set())).toBe(1);
   });
 });

@@ -23,7 +23,19 @@ import { buildBreadcrumbs } from "@/lib/files/path-url";
 import { useListing } from "@/lib/files/queries";
 import { FileIcon } from "./file-icon";
 
-export type DestinationPickerMode = "move" | "copy";
+export type DestinationPickerMode = "move" | "copy" | "compressDestination" | "extractTo";
+
+interface DestinationPickerLabels {
+  readonly title: string;
+  readonly confirmLabel: string;
+}
+
+const LABELS: Record<DestinationPickerMode, DestinationPickerLabels> = {
+  move: { title: "Move to...", confirmLabel: "Move here" },
+  copy: { title: "Copy to...", confirmLabel: "Copy here" },
+  compressDestination: { title: "Choose destination", confirmLabel: "Choose" },
+  extractTo: { title: "Extract to...", confirmLabel: "Extract here" },
+};
 
 export interface DestinationPickerProps {
   open: boolean;
@@ -51,6 +63,7 @@ export function DestinationPicker({
   const { data, isLoading } = useListing(path);
   const folders = (data?.entries ?? []).filter((entry) => entry.kind === "dir");
   const crumbs = buildBreadcrumbs(path);
+  const labels = LABELS[mode];
 
   function handleOpenChange(next: boolean) {
     if (next) {
@@ -63,7 +76,7 @@ export function DestinationPicker({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{mode === "move" ? "Move to..." : "Copy to..."}</DialogTitle>
+          <DialogTitle>{labels.title}</DialogTitle>
           <DialogDescription>Choose a destination folder.</DialogDescription>
         </DialogHeader>
 
@@ -106,7 +119,7 @@ export function DestinationPicker({
             Cancel
           </Button>
           <Button type="button" disabled={pending} onClick={() => onConfirm(path)}>
-            {mode === "move" ? "Move here" : "Copy here"}
+            {labels.confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
