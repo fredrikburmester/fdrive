@@ -15,7 +15,8 @@
       "!**/coverage",
       "!**/.turbo",
       "!**/*.gen.ts",
-      "!**/pnpm-lock.yaml"
+      "!**/pnpm-lock.yaml",
+      "!**/.claude/worktrees"
     ]
   },
   "formatter": {
