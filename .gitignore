@@ -15,3 +15,5 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .mypy_cache
+apps/web/AGENTS.md
+apps/web/CLAUDE.md
