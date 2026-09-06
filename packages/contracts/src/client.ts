@@ -160,7 +160,13 @@ async function rawRequest(ctx: ClientContext, opts: RequestOptions): Promise<Res
   }
 
   try {
-    return await ctx.fetchImpl(url, init);
+    // Never call this as `ctx.fetchImpl(...)`: that member-expression call
+    // syntax binds `this` to `ctx`, and native `fetch` throws
+    // `TypeError: Illegal invocation` in browsers when invoked with a
+    // `this` other than `window` (or undefined). Extracting the function
+    // reference first makes this a plain call, so `this` is `undefined`.
+    const fetchImpl = ctx.fetchImpl;
+    return await fetchImpl(url, init);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "network request failed";
     throw new ApiClientError("upstream_unavailable", message, 0);

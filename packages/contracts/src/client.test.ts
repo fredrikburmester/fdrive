@@ -447,3 +447,41 @@ describe("createApiClient: error mapping", () => {
     });
   });
 });
+
+/**
+ * Regression coverage for a real browser bug: native `fetch` throws
+ * `TypeError: Illegal invocation` when called with a `this` other than
+ * `window` (or undefined). These stubs mimic that check so a regression
+ * where the client calls `ctx.fetchImpl(...)` as a method (binding `this`
+ * to the context object) fails loudly in Node too.
+ */
+function createIllegalInvocationFetch(): (
+  this: unknown,
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: Parameters<typeof globalThis.fetch>[1],
+) => Promise<Response> {
+  return function stubFetch(this: unknown) {
+    if (this !== undefined && this !== globalThis) {
+      throw new TypeError("Illegal invocation");
+    }
+    return Promise.resolve(jsonResponse(200, VALID_ME));
+  };
+}
+
+describe("createApiClient: fetch `this`-binding regression", () => {
+  it("calls an options.fetch stub without binding `this` to the client context", async () => {
+    const client = createApiClient({ fetch: createIllegalInvocationFetch() });
+
+    await expect(client.me()).resolves.toEqual(VALID_ME);
+  });
+
+  it("calls the default globalThis.fetch without binding `this` to the client context", async () => {
+    vi.stubGlobal("fetch", createIllegalInvocationFetch());
+    try {
+      const client = createApiClient({});
+      await expect(client.me()).resolves.toEqual(VALID_ME);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
