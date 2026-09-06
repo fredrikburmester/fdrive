@@ -10,7 +10,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "NODE_OPTIONS=--conditions=development playwright test",
+    "test:e2e:ui": "NODE_OPTIONS=--conditions=development playwright test --ui"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@fdrive/config": "workspace:*",
+    "@fdrive/testkit": "workspace:*",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@testing-library/react": "^16.3.3",
