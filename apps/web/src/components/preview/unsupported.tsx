@@ -34,7 +34,7 @@ export function Unsupported({ name, size, kind, reason, downloadUrl }: Unsupport
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-4">
           <p className="text-sm text-muted-foreground">{message}</p>
-          <Button render={<a href={downloadUrl} download={name} />}>
+          <Button nativeButton={false} render={<a href={downloadUrl} download={name} />}>
             <Download data-icon="inline-start" />
             Download
           </Button>

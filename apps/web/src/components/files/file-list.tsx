@@ -109,7 +109,7 @@ export function FileList({
                 onDrop={(event) => handleDrop(event, entry)}
                 onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                 onDoubleClick={() => onEntryDoubleClick(entry)}
-                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm data-selected:bg-primary/10 hover:bg-muted/60 data-focused:ring-1 data-focused:ring-inset data-focused:ring-ring"
+                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
                 style={{ height: virtualRow.size, transform: `translateY(${virtualRow.start}px)` }}
                 data-focused={isFocused}
               >

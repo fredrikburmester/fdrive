@@ -135,14 +135,14 @@ export function UploadPanel() {
 
   if (collapsed) {
     return (
-      <button
-        type="button"
+      <Button
+        variant="outline"
         onClick={() => setCollapsed(false)}
-        className="fixed right-4 bottom-4 z-50 flex items-center gap-2 rounded-full border border-border bg-popover px-4 py-2 text-sm text-popover-foreground shadow-sm ring-1 ring-foreground/10 transition-colors hover:bg-muted"
+        className="fixed right-4 bottom-4 z-50 h-auto rounded-full bg-popover px-4 py-2 text-popover-foreground shadow-sm ring-1 ring-foreground/10"
       >
-        <UploadCloud className="size-4" />
+        <UploadCloud />
         {summary.done} uploaded{summary.failed > 0 ? `, ${summary.failed} failed` : ""}
-      </button>
+      </Button>
     );
   }
 

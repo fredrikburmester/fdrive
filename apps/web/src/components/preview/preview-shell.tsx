@@ -81,6 +81,9 @@ function TopBarAction({
       // biome-ignore lint/a11y/useAnchorContent: Base UI's render-prop merge injects TooltipTrigger's icon/sr-only children into this anchor
       <a href={href} target={target} rel={rel} download={download} />
     ) : undefined;
+  // Base UI's Button expects a real <button> unless told otherwise: only
+  // set `nativeButton={false}` when it renders as a link or anchor instead.
+  const isNativeButton = renderAs === undefined;
 
   return (
     <Tooltip>
@@ -91,6 +94,7 @@ function TopBarAction({
             size="icon-sm"
             disabled={disabled}
             onClick={onClick}
+            nativeButton={isNativeButton}
             render={renderAs}
           />
         }
@@ -226,7 +230,9 @@ function PreviewShellContent({ path }: PreviewShellProps) {
                   <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
                     <X className="size-8 text-destructive" />
                     <CardTitle>Could not load this file</CardTitle>
-                    <Button render={<Link href={toRoute(backHref)} />}>Back to folder</Button>
+                    <Button nativeButton={false} render={<Link href={toRoute(backHref)} />}>
+                      Back to folder
+                    </Button>
                   </CardContent>
                 </Card>
               </div>
