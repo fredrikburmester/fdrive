@@ -1,0 +1,98 @@
+// @vitest-environment jsdom
+import type { SystemSearchResponse } from "@fdrive/contracts";
+import { cleanup, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const useSystemSearchMock = vi.fn();
+const useReembedMock = vi.fn();
+
+vi.mock("@/lib/api/system-queries", () => ({
+  useSystemSearch: () => useSystemSearchMock(),
+  useReembed: () => useReembedMock(),
+}));
+
+// See `indexer-page.test.tsx` for why `SystemPage` is stubbed rather than
+// rendered for real: its shell chrome needs a `SidebarProvider` and a
+// `QueryClient` this test has no reason to set up.
+vi.mock("./system-page", () => ({
+  SystemPage: (props: {
+    title: string;
+    description: string;
+    actions?: ReactNode;
+    children: ReactNode;
+  }) => (
+    <div>
+      <h1>{props.title}</h1>
+      <p>{props.description}</p>
+      <div data-testid="actions">{props.actions}</div>
+      <div>{props.children}</div>
+    </div>
+  ),
+}));
+
+const { SearchPage } = await import("./search-page");
+
+const CONFIGURED_FIXTURE: SystemSearchResponse = {
+  configured: true,
+  semantic: {
+    configured: true,
+    healthy: true,
+    model: "intfloat/multilingual-e5-small",
+    maxInputLength: 512,
+  },
+  roots: ["sftpgo"],
+  index: { files: 16, withText: 10, chunks: 10, embedded: 10 },
+};
+
+function mockConfigured() {
+  useSystemSearchMock.mockReturnValue({
+    data: CONFIGURED_FIXTURE,
+    isLoading: false,
+    dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+  });
+  useReembedMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+}
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("SearchPage", () => {
+  it("renders the semantic status and model", async () => {
+    mockConfigured();
+    render(<SearchPage />);
+
+    expect(await screen.findByText("Reachable")).toBeTruthy();
+    expect(screen.getByText("intfloat/multilingual-e5-small")).toBeTruthy();
+    expect(screen.getByText("max input 512 tokens")).toBeTruthy();
+  });
+
+  it("renders the index totals as stat cards", async () => {
+    mockConfigured();
+    render(<SearchPage />);
+
+    await screen.findByText("Files");
+    expect(screen.getByText("16")).toBeTruthy();
+    expect(screen.getByText("With text")).toBeTruthy();
+    expect(screen.getAllByText("10").length).toBeGreaterThan(0);
+  });
+
+  it("renders the configured roots", async () => {
+    mockConfigured();
+    render(<SearchPage />);
+
+    expect(await screen.findByText("Roots")).toBeTruthy();
+    expect(screen.getByText("sftpgo")).toBeTruthy();
+  });
+
+  it("shows Loading while the query has not resolved yet", () => {
+    useSystemSearchMock.mockReturnValue({ data: undefined, isLoading: true, dataUpdatedAt: 0 });
+    useReembedMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<SearchPage />);
+
+    expect(screen.getByText("Loading…")).toBeTruthy();
+  });
+});

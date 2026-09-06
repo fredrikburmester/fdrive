@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SEED_FILES } from "@fdrive/testkit";
 import { Client } from "pg";
 import { startEnvironment } from "./support/environment.js";
+import { startFakeIndexer } from "./support/fake-indexer.js";
 import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
 import { resolvePort } from "./support/ports.js";
 import { registry } from "./support/registry.js";
@@ -134,15 +135,17 @@ async function resolveRunEnvironment(): Promise<{
 /**
  * Playwright's global setup: resolves this run's ports and state directory
  * (see `resolveRunEnvironment` above) so concurrent suites never collide;
- * boots Postgres, SFTPGo, the API (with `FDRIVE_INDEX_ROOTS` set so search
- * is available), and the web app once for the whole run (see
- * `support/environment.ts`); seeds the search index for `search.spec.ts`;
- * and stashes the environment handle for `global-teardown.ts`. Never used
- * to seed *file* data through the UI or SFTPGo directly; each spec creates
- * the folders and files it needs under unique names, so tests stay
- * independent of each other. The search index rows are the one exception,
- * since they must exist before any spec runs and are keyed to the fixed,
- * shared testkit seed data rather than anything a spec creates itself.
+ * starts the fake indexer sidecar `system.spec.ts` exercises; boots
+ * Postgres, SFTPGo, the API (with `FDRIVE_INDEX_ROOTS` set so search is
+ * available and `FDRIVE_INDEXER_URL` pointed at the fake indexer), and the
+ * web app once for the whole run (see `support/environment.ts`); seeds the
+ * search index for `search.spec.ts`; and stashes the environment handle for
+ * `global-teardown.ts`. Never used to seed *file* data through the UI or
+ * SFTPGo directly; each spec creates the folders and files it needs under
+ * unique names, so tests stay independent of each other. The search index
+ * rows are the one exception, since they must exist before any spec runs and
+ * are keyed to the fixed, shared testkit seed data rather than anything a
+ * spec creates itself.
  */
 export default async function globalSetup(): Promise<void> {
   await resolveRunEnvironment();
@@ -151,8 +154,11 @@ export default async function globalSetup(): Promise<void> {
     { name: INDEX_ROOT_NAME, sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
   ]);
 
+  const fakeIndexer = await startFakeIndexer();
+
   const environment = await startEnvironment({
-    extraApiEnv: { FDRIVE_INDEX_ROOTS: indexRoots },
+    extraApiEnv: { FDRIVE_INDEX_ROOTS: indexRoots, FDRIVE_INDEXER_URL: fakeIndexer.baseUrl },
+    extraStopFns: [() => fakeIndexer.stop()],
   });
   registry.current = environment;
 

@@ -45,7 +45,7 @@ test("alice (admin) sees System > Connection with a reachable host and can chang
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
-test("alice (admin) sees the Indexer, Search, OCR, and Thumbnails pages as not configured in the e2e stack", async ({
+test("alice (admin) sees the Search embedding server and OCR as not configured in the e2e stack", async ({
   page,
 }) => {
   await page.goto("/files");
@@ -54,13 +54,10 @@ test("alice (admin) sees the Indexer, Search, OCR, and Thumbnails pages as not c
     await expect(page.getByRole("link", { name: label })).toBeVisible();
   }
 
-  // No indexer, OCR, embedding, or thumbnails sidecar runs in the e2e
-  // stack, so every page's own "not configured" state should render
-  // rather than an error.
-  await page.getByRole("link", { name: "Indexer" }).click();
-  await expect(page).toHaveURL(/\/system\/indexer$/);
-  await expect(page.getByText("Not configured")).toBeVisible();
-
+  // No embedding server or OCR sidecar runs in the e2e stack (unlike the
+  // indexer, which `global-setup.ts` fakes; see the "configured and
+  // reachable" tests below), so their own "not configured" state should
+  // render rather than an error.
   await page.getByRole("link", { name: "Search" }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
   await expect(page.getByText("Not configured")).toBeVisible();
@@ -68,10 +65,73 @@ test("alice (admin) sees the Indexer, Search, OCR, and Thumbnails pages as not c
   await page.getByRole("link", { name: "OCR" }).click();
   await expect(page).toHaveURL(/\/system\/ocr$/);
   await expect(page.getByText("Not configured")).toBeVisible();
+});
 
-  await page.getByRole("link", { name: "Thumbnails" }).click();
-  await expect(page).toHaveURL(/\/system\/thumbnails$/);
-  await expect(page.getByText("Not configured")).toBeVisible();
+test("alice (admin) sees the Indexer page render the fake indexer's root, counts, last scan, and errors sample", async ({
+  page,
+}) => {
+  await page.goto("/system/indexer");
+
+  await expect(page.getByText("Reachable")).toBeVisible();
+
+  // Counts by status: one row per (root, status) pair from the fake's
+  // `GET /stats`, including the "indexed" row this bug's symptom curl showed.
+  const indexedRow = page.getByRole("row", { name: /sftpgo/ }).filter({ hasText: "indexed" });
+  await expect(indexedRow).toBeVisible();
+  await expect(indexedRow.getByText("10", { exact: true })).toBeVisible();
+
+  // Last scan.
+  await expect(page.getByText("Last scan")).toBeVisible();
+  await expect(page.getByText(/16 seen/)).toBeVisible();
+  await expect(page.getByText(/0 changed/)).toBeVisible();
+  await expect(page.getByText(/0 deleted/)).toBeVisible();
+
+  // Errors sample.
+  await expect(page.getByText("Recent errors")).toBeVisible();
+  await expect(page.getByText("alice/docs/report.pdf", { exact: true })).toBeVisible();
+  await expect(page.getByText(/FileDataError/)).toBeVisible();
+});
+
+test("alice (admin) can reindex the sftpgo root and sees a toast reporting how many files were marked", async ({
+  page,
+}) => {
+  await page.goto("/system/indexer");
+
+  await page.getByRole("button", { name: "Reindex…" }).click();
+  const dialog = page.getByRole("dialog").filter({ hasText: "Reindex" });
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByLabel("Root").click();
+  await page.getByRole("option", { name: "sftpgo" }).click();
+
+  await dialog.getByRole("button", { name: "Reindex", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.locator("[data-sonner-toast]").filter({ hasText: "Marked 3 files for reindex." }),
+  ).toBeVisible();
+});
+
+test("alice (admin) sees the Thumbnails page's count and can rebuild via the fake indexer", async ({
+  page,
+}) => {
+  await page.goto("/system/thumbnails");
+
+  await expect(page.getByText("Reachable")).toBeVisible();
+
+  // The "Thumbnails" stat card: scoped to a card so this does not also match
+  // the page's own "Thumbnails" heading.
+  const thumbnailsCard = page.locator('[data-slot="card"]').filter({ hasText: "Thumbnails" });
+  await expect(thumbnailsCard).toBeVisible();
+
+  await page.getByRole("button", { name: "Rebuild…" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.locator("[data-sonner-toast]").filter({ hasText: "Marked 6 thumbnails to rebuild." }),
+  ).toBeVisible();
 });
 
 test("alice (admin) can save the indexer's settings even while the indexer sidecar is unreachable", async ({

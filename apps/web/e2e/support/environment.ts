@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startPostgres, startSftpgo } from "@fdrive/testkit";
@@ -38,9 +39,19 @@ export interface StartEnvironmentOptions {
   /**
    * Extra environment variables merged into the spawned API process's env,
    * on top of the fixed set below (e.g. `FDRIVE_INDEX_ROOTS` for the search
-   * e2e suite). Empty by default so existing callers are unaffected.
+   * e2e suite, `FDRIVE_INDEXER_URL` for the fake indexer `system.spec.ts`
+   * uses). Empty by default so existing callers are unaffected.
    */
   readonly extraApiEnv?: Record<string, string>;
+  /**
+   * Extra teardown steps run alongside Postgres, SFTPGo, and the API/web
+   * processes, in the same best-effort, keep-going-on-error fashion (see
+   * `stopAll` below). Used by `global-setup.ts` to stop the fake indexer
+   * server it starts to back `extraApiEnv.FDRIVE_INDEXER_URL`, so that
+   * server's lifecycle rides along with the rest of this environment's
+   * `stop()` rather than needing its own teardown wiring.
+   */
+  readonly extraStopFns?: ReadonlyArray<() => Promise<void>>;
 }
 
 interface EnvironmentState {
@@ -141,7 +152,7 @@ function killProcess(child: ChildProcess): Promise<void> {
 export async function startEnvironment(
   options: StartEnvironmentOptions = {},
 ): Promise<RunningEnvironment> {
-  const stopFns: Array<() => Promise<void>> = [];
+  const stopFns: Array<() => Promise<void>> = [...(options.extraStopFns ?? [])];
 
   async function stopAll(): Promise<void> {
     for (const fn of stopFns.reverse()) {
@@ -186,6 +197,13 @@ export async function startEnvironment(
           // so the System sidebar section and its admin-only routes have
           // someone to exercise them without a `/setup` run in every spec.
           FDRIVE_ADMIN_USERS: "alice",
+          // Makes `System > Thumbnails` render as configured (see
+          // `system.spec.ts`): no spec relies on real thumbnail files
+          // existing under it, so the OS temp directory is enough. Never
+          // written to; the indexer that would populate it is the fake one
+          // started in `global-setup.ts`, which serves fixed JSON and never
+          // touches disk.
+          FDRIVE_THUMBS_DIR: tmpdir(),
           ...options.extraApiEnv,
         },
         stdio: ["ignore", "pipe", "pipe"],
