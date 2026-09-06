@@ -1,0 +1,568 @@
+"use client";
+
+import type { FsEntry } from "@fdrive/contracts";
+import { baseName, joinPath, parentPath } from "@fdrive/core";
+import type { Route } from "next";
+import { useRouter } from "next/navigation";
+import {
+  type ChangeEvent,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { apiClient, INTERNAL_DND_TYPE, PageHeader } from "@/lib/files/deps";
+import {
+  type AnchorDownloader,
+  createAnchorDownloader,
+  type DocumentLike,
+  type DownloadDeps,
+  downloadMany,
+  downloadSingle,
+} from "@/lib/files/download";
+import { keyToAction } from "@/lib/files/keyboard";
+import { pathToHref, viewHref } from "@/lib/files/path-url";
+import { detectPlatform } from "@/lib/files/platform";
+import {
+  describeFsError,
+  useCopy,
+  useDelete,
+  useListing,
+  useMkdir,
+  useMove,
+  useRename,
+} from "@/lib/files/queries";
+import {
+  EMPTY_SELECTION,
+  type SelectionAction,
+  type SelectionState,
+  selectionReducer,
+} from "@/lib/files/selection";
+import {
+  DEFAULT_SORT_SPEC,
+  readSortSpec,
+  type SortSpec,
+  sortListing,
+  writeSortSpec,
+} from "@/lib/files/sorting";
+import {
+  EMPTY_TYPE_AHEAD_BUFFER,
+  nextTypeAheadBuffer,
+  type TypeAheadBuffer,
+  typeAheadMatch,
+} from "@/lib/files/type-ahead";
+import {
+  DEFAULT_VIEW_MODE,
+  readViewMode,
+  type ViewMode,
+  writeViewMode,
+} from "@/lib/files/view-mode";
+import { DeleteDialog } from "./delete-dialog";
+import { DestinationPicker, type DestinationPickerMode } from "./destination-picker";
+import { EmptyState } from "./empty-state";
+import { ErrorState } from "./error-state";
+import type { RowContextAction } from "./file-context-menu";
+import { FileGrid } from "./file-grid";
+import { type ClickModifierKeys, FileList } from "./file-list";
+import { ListingSkeleton } from "./listing-skeleton";
+import { NewFolderDialog } from "./new-folder-dialog";
+import { RenameDialog } from "./rename-dialog";
+import { FilesBreadcrumb, FilesToolbarActions } from "./toolbar";
+
+export interface FileBrowserProps {
+  path: string;
+  onOpen?: (entry: FsEntry) => void;
+  onRequestUpload?: (files?: FileList) => void;
+  onSelectionChange?: (entries: FsEntry[]) => void;
+}
+
+function deleteItemKind(entry: FsEntry): "file" | "dir" {
+  return entry.kind === "dir" ? "dir" : "file";
+}
+
+/**
+ * Asserts a dynamically built path is a valid Next.js route. Next's typed
+ * routes can only verify string literals at compile time; paths built at
+ * runtime (from `pathToHref`/`viewHref`) need this explicit (safe, since
+ * they are always same-origin app paths) cast.
+ */
+function toRoute(href: string): Route {
+  return href as Route;
+}
+
+/**
+ * Adapts the real, global `document` to `download.ts`'s minimal
+ * `DocumentLike`. The cast is confined to this one boundary: `download.ts`
+ * only ever calls the methods its narrow interface declares (create one
+ * anchor, append it, click it, remove it), so this is safe even though a
+ * real `Node` is structurally much larger than `AnchorLike`.
+ */
+function adaptDocument(doc: Document): DocumentLike {
+  return {
+    createElement: (tag) => doc.createElement(tag),
+    body: {
+      appendChild: (node) => {
+        doc.body.appendChild(node as unknown as Node);
+      },
+      removeChild: (node) => {
+        doc.body.removeChild(node as unknown as Node);
+      },
+    },
+  };
+}
+
+/** Builds a fresh `DownloadDeps` bound to the current `document`. Only ever
+ * called from an event handler, never at render time, so it never runs
+ * during server-side rendering. */
+function buildDownloadDeps(anchor: AnchorDownloader): DownloadDeps {
+  return {
+    downloadUrl: (downloadPath, opts) => apiClient.downloadUrl(downloadPath, opts),
+    zip: (paths, name) => apiClient.zip(paths, name),
+    anchor,
+    createObjectUrl: (blob) => URL.createObjectURL(blob),
+    revokeObjectUrl: (url) => URL.revokeObjectURL(url),
+  };
+}
+
+type DirectoryInputElement = HTMLInputElement & { webkitdirectory: boolean };
+
+/**
+ * Owns the listing query, selection, sort, view mode, keyboard handling,
+ * context menus, dialogs, and the internal/external drop target for a
+ * single folder.
+ */
+export function FileBrowser({
+  path,
+  onOpen,
+  onRequestUpload,
+  onSelectionChange,
+}: FileBrowserProps) {
+  const router = useRouter();
+  const { data, isLoading, isError, error, refetch } = useListing(path);
+  const entries = useMemo(() => data?.entries ?? [], [data]);
+
+  const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
+  const [viewMode, setViewModeState] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  useEffect(() => {
+    setSortSpecState(readSortSpec(window.localStorage));
+    setViewModeState(readViewMode(window.localStorage));
+  }, []);
+
+  function setSortSpec(spec: SortSpec) {
+    setSortSpecState(spec);
+    writeSortSpec(window.localStorage, spec);
+  }
+  function setViewMode(mode: ViewMode) {
+    setViewModeState(mode);
+    writeViewMode(window.localStorage, mode);
+  }
+
+  const sortedEntries = useMemo(() => sortListing(entries, sortSpec), [entries, sortSpec]);
+  const orderedPaths = useMemo(() => sortedEntries.map((entry) => entry.path), [sortedEntries]);
+
+  const [selection, dispatchSelection] = useReducer(
+    (state: SelectionState, action: SelectionAction) =>
+      selectionReducer(state, action, orderedPaths),
+    EMPTY_SELECTION,
+  );
+
+  useEffect(() => {
+    dispatchSelection({ type: "reconcile", paths: orderedPaths });
+  }, [orderedPaths]);
+
+  const selectedEntries = useMemo(
+    () => sortedEntries.filter((entry) => selection.selected.has(entry.path)),
+    [sortedEntries, selection.selected],
+  );
+
+  useEffect(() => {
+    onSelectionChange?.(selectedEntries);
+  }, [selectedEntries, onSelectionChange]);
+
+  const mkdir = useMkdir();
+  const rename = useRename();
+  const move = useMove();
+  const copy = useCopy();
+  const remove = useDelete();
+
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
+  const [destinationPicker, setDestinationPicker] = useState<{
+    mode: DestinationPickerMode;
+    paths: string[];
+  } | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<DirectoryInputElement | null>(null);
+  const typeAheadRef = useRef<TypeAheadBuffer>(EMPTY_TYPE_AHEAD_BUFFER);
+  const anchorRef = useRef<AnchorDownloader | null>(null);
+
+  function getAnchorDownloader(): AnchorDownloader {
+    if (anchorRef.current === null) {
+      anchorRef.current = createAnchorDownloader(adaptDocument(document));
+    }
+    return anchorRef.current;
+  }
+
+  function pathsForAction(entry: FsEntry): string[] {
+    if (selection.selected.has(entry.path) && selection.selected.size > 1) {
+      return [...selection.selected];
+    }
+    return [entry.path];
+  }
+
+  function entriesForAction(entry: FsEntry): FsEntry[] {
+    if (selection.selected.has(entry.path) && selection.selected.size > 1) {
+      return selectedEntries;
+    }
+    return [entry];
+  }
+
+  function handleOpen(entry: FsEntry) {
+    if (onOpen) {
+      onOpen(entry);
+      return;
+    }
+    router.push(toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path)));
+  }
+
+  function handleEntryClick(entry: FsEntry, modifiers: ClickModifierKeys) {
+    dispatchSelection({ type: "click", path: entry.path, modifiers });
+  }
+
+  function handleInternalMove(paths: string[], targetFolderPath: string) {
+    for (const source of paths) {
+      if (parentPath(source) === targetFolderPath || source === targetFolderPath) {
+        continue;
+      }
+      move.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
+    }
+  }
+
+  function handleContextAction(action: RowContextAction, entry: FsEntry) {
+    switch (action) {
+      case "open":
+        handleOpen(entry);
+        break;
+      case "download": {
+        const paths = pathsForAction(entry);
+        const deps = buildDownloadDeps(getAnchorDownloader());
+        if (paths.length === 1 && paths[0] !== undefined) {
+          downloadSingle(paths[0], deps);
+        } else {
+          downloadMany(paths, deps).catch(() => toast.error("Could not download the selection."));
+        }
+        break;
+      }
+      case "rename":
+        setRenameTarget(entry);
+        break;
+      case "moveTo":
+        setDestinationPicker({ mode: "move", paths: pathsForAction(entry) });
+        break;
+      case "copyTo":
+        setDestinationPicker({ mode: "copy", paths: pathsForAction(entry) });
+        break;
+      case "delete":
+        setDeleteTargets(entriesForAction(entry));
+        break;
+    }
+  }
+
+  function handleCreateFolder(name: string) {
+    mkdir.mutate(joinPath(path, name), {
+      onSuccess: (entry) => {
+        setNewFolderOpen(false);
+        dispatchSelection({ type: "set", paths: [entry.path] });
+      },
+    });
+  }
+
+  function handleRenameSubmit(newName: string) {
+    if (renameTarget === null) {
+      return;
+    }
+    rename.mutate({ path: renameTarget.path, newName }, { onSuccess: () => setRenameTarget(null) });
+  }
+
+  function handleDeleteConfirm() {
+    remove.mutate(
+      deleteTargets.map((entry) => ({ path: entry.path, kind: deleteItemKind(entry) })),
+      { onSuccess: () => setDeleteTargets([]) },
+    );
+  }
+
+  function handleDestinationConfirm(destinationDir: string) {
+    if (destinationPicker === null) {
+      return;
+    }
+    const mutation = destinationPicker.mode === "move" ? move : copy;
+    for (const source of destinationPicker.paths) {
+      mutation.mutate({ path: source, target: joinPath(destinationDir, baseName(source)) });
+    }
+    setDestinationPicker(null);
+  }
+
+  function handleUploadFiles() {
+    fileInputRef.current?.click();
+  }
+  function handleUploadFolder() {
+    folderInputRef.current?.click();
+  }
+  function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    onRequestUpload?.(event.target.files ?? undefined);
+    event.target.value = "";
+  }
+
+  function handleContainerDragOver(event: DragEvent<HTMLDivElement>) {
+    const types = event.dataTransfer.types;
+    if (!types.includes(INTERNAL_DND_TYPE) && types.includes("Files")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function handleContainerDrop(event: DragEvent<HTMLDivElement>) {
+    if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
+      return;
+    }
+    if (event.dataTransfer.files.length > 0) {
+      event.preventDefault();
+      onRequestUpload?.(event.dataTransfer.files);
+    }
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
+      return;
+    }
+
+    if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const buffer = nextTypeAheadBuffer(typeAheadRef.current, event.key, Date.now());
+      typeAheadRef.current = buffer;
+      const currentIndex = selection.focus === null ? -1 : orderedPaths.indexOf(selection.focus);
+      const matchIndex = typeAheadMatch(
+        sortedEntries.map((entry) => entry.name),
+        buffer.query,
+        currentIndex + 1,
+      );
+      if (matchIndex !== null) {
+        const matchedPath = orderedPaths[matchIndex];
+        if (matchedPath !== undefined) {
+          dispatchSelection({ type: "click", path: matchedPath });
+        }
+      }
+      return;
+    }
+
+    const platform = detectPlatform(typeof navigator === "undefined" ? undefined : navigator);
+    const action = keyToAction(event, platform);
+    if (action === null) {
+      return;
+    }
+    event.preventDefault();
+
+    switch (action.type) {
+      case "move":
+        dispatchSelection({
+          type: "arrow",
+          direction: action.direction,
+          modifiers: { shift: action.extend },
+        });
+        break;
+      case "open": {
+        const entry = sortedEntries.find((candidate) => candidate.path === selection.focus);
+        if (entry !== undefined) {
+          handleOpen(entry);
+        }
+        break;
+      }
+      case "quickLook": {
+        const entry = sortedEntries.find((candidate) => candidate.path === selection.focus);
+        if (entry !== undefined) {
+          router.push(toRoute(viewHref(entry.path)));
+        }
+        break;
+      }
+      case "delete":
+        if (selectedEntries.length > 0) {
+          setDeleteTargets(selectedEntries);
+        }
+        break;
+      case "selectAll":
+        dispatchSelection({ type: "selectAll" });
+        break;
+      case "clear":
+        dispatchSelection({ type: "clear" });
+        break;
+      case "rename": {
+        const entry = sortedEntries.find((candidate) => candidate.path === selection.focus);
+        if (entry !== undefined) {
+          setRenameTarget(entry);
+        }
+        break;
+      }
+      case "download": {
+        if (selectedEntries.length === 0) {
+          break;
+        }
+        const deps = buildDownloadDeps(getAnchorDownloader());
+        const first = selectedEntries[0];
+        if (selectedEntries.length === 1 && first !== undefined) {
+          downloadSingle(first.path, deps);
+        } else {
+          downloadMany(
+            selectedEntries.map((entry) => entry.path),
+            deps,
+          ).catch(() => toast.error("Could not download the selection."));
+        }
+        break;
+      }
+      case "newFolder":
+        setNewFolderOpen(true);
+        break;
+      case "goToParent":
+        router.push(toRoute(pathToHref(parentPath(path))));
+        break;
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        breadcrumb={<FilesBreadcrumb path={path} />}
+        actions={
+          <FilesToolbarActions
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            sortSpec={sortSpec}
+            onSortSpecChange={setSortSpec}
+            onNewFolder={() => setNewFolderOpen(true)}
+            onUploadFiles={handleUploadFiles}
+            onUploadFolder={handleUploadFolder}
+            detailsOpen={detailsOpen}
+            onToggleDetails={() => setDetailsOpen((open) => !open)}
+          />
+        }
+      />
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+      <input
+        ref={(element) => {
+          if (element !== null) {
+            (element as DirectoryInputElement).webkitdirectory = true;
+          }
+          folderInputRef.current = element as DirectoryInputElement | null;
+        }}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
+      {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the keyboard and drop host for the whole listing, like Finder's content view; the interactive rows inside handle their own semantics */}
+      <div
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: this hosts roving keyboard navigation across the virtualized rows, like Finder's content view
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        onDragOver={handleContainerDragOver}
+        onDrop={handleContainerDrop}
+        className="min-h-0 flex-1 outline-none"
+      >
+        {isLoading ? (
+          <ListingSkeleton />
+        ) : isError ? (
+          <ErrorState
+            message={describeFsError(error, "Something went wrong.")}
+            onRetry={() => refetch()}
+          />
+        ) : sortedEntries.length === 0 ? (
+          <EmptyState
+            action={
+              <Button variant="outline" size="sm" onClick={handleUploadFiles}>
+                Upload
+              </Button>
+            }
+          />
+        ) : viewMode === "list" ? (
+          <FileList
+            entries={sortedEntries}
+            selected={selection.selected}
+            focusedPath={selection.focus}
+            onEntryClick={handleEntryClick}
+            onEntryDoubleClick={handleOpen}
+            onContextAction={handleContextAction}
+            getDragPaths={pathsForAction}
+            onInternalDrop={handleInternalMove}
+          />
+        ) : (
+          <FileGrid
+            entries={sortedEntries}
+            selected={selection.selected}
+            focusedPath={selection.focus}
+            onEntryClick={handleEntryClick}
+            onEntryDoubleClick={handleOpen}
+            onContextAction={handleContextAction}
+            getDragPaths={pathsForAction}
+            onInternalDrop={handleInternalMove}
+          />
+        )}
+      </div>
+
+      <NewFolderDialog
+        open={newFolderOpen}
+        onOpenChange={setNewFolderOpen}
+        onCreate={handleCreateFolder}
+        pending={mkdir.isPending}
+      />
+      <RenameDialog
+        entry={renameTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRenameTarget(null);
+          }
+        }}
+        onRename={handleRenameSubmit}
+        pending={rename.isPending}
+      />
+      <DeleteDialog
+        entries={deleteTargets}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTargets([]);
+          }
+        }}
+        onConfirm={handleDeleteConfirm}
+        pending={remove.isPending}
+      />
+      {destinationPicker !== null && (
+        <DestinationPicker
+          open
+          mode={destinationPicker.mode}
+          initialPath={path}
+          onOpenChange={(open) => {
+            if (!open) {
+              setDestinationPicker(null);
+            }
+          }}
+          onConfirm={handleDestinationConfirm}
+          pending={destinationPicker.mode === "move" ? move.isPending : copy.isPending}
+        />
+      )}
+    </>
+  );
+}

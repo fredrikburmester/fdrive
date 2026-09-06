@@ -1,20 +1,29 @@
-import { PageHeader } from "@/components/shell/page-header";
+import { baseName, isRoot } from "@fdrive/core";
+import type { Metadata } from "next";
+import { FileBrowser } from "@/components/files/file-browser";
+import { segmentsToPath } from "@/lib/files/path-url";
+
+interface FilesPageProps {
+  params: Promise<{ path?: string[] }>;
+}
+
+/** Sets the tab title to the current folder's name, or "My files" at the root. */
+export async function generateMetadata({ params }: FilesPageProps): Promise<Metadata> {
+  const { path: segments } = await params;
+  const path = segmentsToPath(segments);
+  const title = isRoot(path) ? "My files" : baseName(path);
+  return { title: `${title} · fdrive` };
+}
 
 /**
- * Placeholder for the file browser. Owned by the browser chunk, which
- * replaces this file with the real list/grid view, breadcrumbs, and
- * actions. Kept minimal on purpose: a header and an empty state only.
+ * The file browser route: `/files` for the root, `/files/<segments>` for
+ * any subfolder. Decodes the catch-all segments into a virtual path and
+ * hands off to the client-side `FileBrowser`, which owns the listing,
+ * toolbar, selection, and dialogs.
  */
-export default function FilesPage() {
-  return (
-    <>
-      <PageHeader breadcrumbs={<span className="text-sm font-medium">Files</span>} />
-      <div className="flex flex-1 flex-col items-center justify-center gap-1 p-6 text-center">
-        <p className="text-sm font-medium">Files</p>
-        <p className="text-sm text-muted-foreground">
-          The file browser isn't built yet. This is a placeholder page.
-        </p>
-      </div>
-    </>
-  );
+export default async function FilesPage({ params }: FilesPageProps) {
+  const { path: segments } = await params;
+  const path = segmentsToPath(segments);
+
+  return <FileBrowser path={path} />;
 }
