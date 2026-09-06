@@ -1,0 +1,35 @@
+# Opt-in file adding ONLYOFFICE Document Server as a WOPI host. Never
+# referenced by compose.yaml directly. Start the stack with both files:
+#
+#   docker compose -f compose.yaml -f compose.office.yaml --profile office up -d
+#
+# Generate the RSA key pair used for WOPI proof-key verification once, before
+# first start (the stock image ships the same key pair on every install, so
+# we must supply our own):
+#
+#   mkdir -p "${FDRIVE_DATA_DIR:-./data}/onlyoffice/keys"
+#   openssl genrsa -out "${FDRIVE_DATA_DIR:-./data}/onlyoffice/keys/wopi_private.pem" 2048
+#   openssl rsa -in "${FDRIVE_DATA_DIR:-./data}/onlyoffice/keys/wopi_private.pem" \
+#     -pubout -out "${FDRIVE_DATA_DIR:-./data}/onlyoffice/keys/wopi_public.pem"
+
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:9.4.0.1
+    profiles: [office]
+    environment:
+      WOPI_ENABLED: "true"
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "true"
+      WOPI_PRIVATE_KEY: /run/secrets/wopi_private.pem
+      WOPI_PUBLIC_KEY: /run/secrets/wopi_public.pem
+    volumes:
+      - ${FDRIVE_DATA_DIR:-./data}/onlyoffice/keys/wopi_private.pem:/run/secrets/wopi_private.pem:ro
+      - ${FDRIVE_DATA_DIR:-./data}/onlyoffice/keys/wopi_public.pem:/run/secrets/wopi_public.pem:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost/hosting/discovery"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped

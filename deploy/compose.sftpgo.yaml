@@ -1,0 +1,23 @@
+# Opt-in file for people starting without an existing SFTPGo instance. Never
+# referenced by compose.yaml directly. Start the stack with both files:
+#
+#   docker compose -f compose.yaml -f compose.sftpgo.yaml up -d
+#
+# and point SFTPGO_URL in your .env at http://sftpgo:8080.
+
+services:
+  sftpgo:
+    image: drakkan/sftpgo:v2.7.5
+    ports:
+      - "2022:2022"
+      - "8090:8080"
+    environment:
+      SFTPGO_DEFAULT_ADMIN_USERNAME: ${SFTPGO_ADMIN_USERNAME:-admin}
+      SFTPGO_DEFAULT_ADMIN_PASSWORD: ${SFTPGO_ADMIN_PASSWORD}
+      # The image's stock config ships with create_default_admin: false, so
+      # the two env vars above are otherwise silently ignored on first boot.
+      SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"
+    volumes:
+      - ${FDRIVE_DATA_DIR:-./data}/sftpgo/data:/srv/sftpgo/data
+      - ${FDRIVE_DATA_DIR:-./data}/sftpgo/config:/var/lib/sftpgo
+    restart: unless-stopped
