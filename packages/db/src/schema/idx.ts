@@ -118,3 +118,37 @@ export const events = idxSchema.table(
 export const schemaVersion = idxSchema.table("schema_version", {
   version: integer("version").primaryKey(),
 });
+
+export const ocrLog = idxSchema.table(
+  "ocr_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id),
+    path: text("path").notNull(),
+    size: bigint("size", { mode: "number" }).notNull(),
+    mtimeNs: bigint("mtime_ns", { mode: "bigint" }).notNull(),
+    status: text("status").notNull(),
+    detail: text("detail"),
+    at: timestamp("at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    unique("ocr_log_root_id_path_size_mtime_ns_unique").on(
+      table.rootId,
+      table.path,
+      table.size,
+      table.mtimeNs,
+    ),
+  ],
+);
+
+export const ocrRuns = idxSchema.table("ocr_runs", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  seen: integer("seen").notNull().default(0),
+  ocred: integer("ocred").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+});

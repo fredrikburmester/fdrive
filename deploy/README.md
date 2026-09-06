@@ -24,12 +24,19 @@ This directory holds the Docker Compose files for running fdrive. Copy
 
 ## The `index` profile
 
-`compose.yaml` also defines `indexer`, `tika`, and `embed` behind an `index`
-Compose profile: search, thumbnails, and content extraction only run when you
-opt in with `--profile index` (see below). `FDRIVE_INDEX_SFTPGO_DIR` in
-`.env` must point at the same host directory SFTPGo itself serves, bind-mounted
-read-only into the indexer at `/roots/sftpgo`. See `docs/INDEXER.md` for what
-gets indexed, the internal HTTP API, and how to add more roots.
+`compose.yaml` also defines `indexer`, `tika`, `embed`, and `ocr` behind an
+`index` Compose profile: search, thumbnails, content extraction, and the
+nightly OCR pass only run when you opt in with `--profile index` (see below).
+`FDRIVE_INDEX_SFTPGO_DIR` in `.env` must point at the same host directory
+SFTPGo itself serves. It is bind-mounted read-only into the indexer at
+`/roots/sftpgo` and read-write into `ocr` at the same path, since OCR rewrites
+files in place (see docs/OCR.md for the safety guarantees around that). `ocr`
+keeps its own state (kept originals, the done-log lives in Postgres) under
+`${FDRIVE_DATA_DIR}/ocr`. See `docs/INDEXER.md` for what gets indexed, the
+indexer's internal HTTP API, and how to add more roots; see `docs/OCR.md` for
+the OCR service's settings and endpoints. The api's `FDRIVE_OCR_URL` points at
+`ocr` so the web app's System page can show OCR status; it is only reachable
+when the `index` profile is up.
 
 ## The external SFTPGo assumption
 

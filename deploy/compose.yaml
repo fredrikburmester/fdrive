@@ -38,6 +38,9 @@ services:
       FDRIVE_COOKIE_SECURE: ${FDRIVE_COOKIE_SECURE:-auto}
       FDRIVE_PUBLIC_URL: ${FDRIVE_PUBLIC_URL:-}
       PORT: "3001"
+      # Reachable only when the `index` profile is up; the api treats a
+      # connection failure as "OCR status unknown" rather than an error.
+      FDRIVE_OCR_URL: http://ocr:8011
     depends_on:
       db:
         condition: service_healthy
@@ -79,6 +82,29 @@ services:
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR}:/roots/sftpgo:ro
       - ${FDRIVE_DATA_DIR:-./data}/thumbs:/thumbs
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Nightly OCR pass over the same roots the indexer reads, filling in text
+  # layers for scanned PDFs (see docs/OCR.md). Needs read-write access to the
+  # roots (the indexer only needs read-only) and its own state directory for
+  # kept originals; the API's System page talks to it over `FDRIVE_OCR_URL`.
+  ocr:
+    build:
+      context: ../services/ocr
+      dockerfile: Dockerfile
+    profiles: [index]
+    environment:
+      DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
+      INDEX_ROOTS: sftpgo=/roots/sftpgo
+      OCR_PORT: "8011"
+      STATE_DIR: /state
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${FDRIVE_INDEX_SFTPGO_DIR}:/roots/sftpgo
+      - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
     depends_on:
       db:
         condition: service_healthy

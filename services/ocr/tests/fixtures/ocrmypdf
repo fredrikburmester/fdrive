@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""A fake `ocrmypdf` for the I/O tests. Placed first on PATH, it never touches
+real OCR: it looks at the *input* file's contents to decide what a real
+`ocrmypdf` would have done, so tests drive behaviour by writing fixture PDF
+bytes rather than mocking subprocess calls.
+
+Recognised input markers (the first line of the input file, as plain bytes):
+  "OK"        -> writes output, exits 0 (as if OCR succeeded)
+  "HASTEXT"   -> exits 6 (already has text, filesai's/ocrmypdf's own signal)
+  "TAGGED"    -> exits 1, stderr mentions TaggedPDFError
+  "SIGNED"    -> exits 1, stderr mentions DigitalSignatureError
+  "ENCRYPTED" -> exits 1, stderr mentions EncryptedPdfError
+  "FAIL"      -> exits 1, generic failure message
+  "HANG"      -> sleeps far longer than any test timeout, to exercise the
+                 per-file timeout path
+  anything else -> exits 1, unrecognised marker
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    # ocrmypdf's positional args are (input, output), always last two.
+    src, dst = args[-2], args[-1]
+    with open(src, "rb") as fh:
+        marker = fh.readline().strip().decode(errors="replace")
+
+    if marker == "OK":
+        with open(dst, "wb") as out:
+            out.write(b"OK-OCRED-OUTPUT\n")
+        return 0
+    if marker == "HASTEXT":
+        return 6
+    if marker == "TAGGED":
+        sys.stderr.write("ocrmypdf.exceptions.TaggedPDFError: this PDF is marked as a Tagged PDF\n")
+        return 1
+    if marker == "SIGNED":
+        sys.stderr.write("ocrmypdf.exceptions.DigitalSignatureError: this PDF has a digital signature\n")
+        return 1
+    if marker == "ENCRYPTED":
+        sys.stderr.write("ocrmypdf.exceptions.EncryptedPdfError: this PDF is encrypted\n")
+        return 1
+    if marker == "HANG":
+        time.sleep(3600)
+        return 0
+    sys.stderr.write(f"unrecognised fake ocrmypdf input marker: {marker!r}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
