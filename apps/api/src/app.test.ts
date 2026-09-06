@@ -2,7 +2,7 @@ import { AboutResponse, HealthResponse } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
-import { createApp } from "./app";
+import { createApp, sftpgoHostLabel } from "./app";
 import { loadConfig } from "./config";
 import { ApiHttpError } from "./errors";
 
@@ -115,6 +115,22 @@ describe("createApp health route", () => {
   });
 });
 
+describe("sftpgoHostLabel", () => {
+  it("returns host and port for a URL with a non-default port", () => {
+    expect(sftpgoHostLabel("http://127.0.0.1:58080")).toBe("127.0.0.1:58080");
+  });
+
+  it("drops the scheme, path, and credentials", () => {
+    expect(sftpgoHostLabel("https://admin:secret@sftpgo.internal:9443/base")).toBe(
+      "sftpgo.internal:9443",
+    );
+  });
+
+  it("omits the port when it is the default for the scheme", () => {
+    expect(sftpgoHostLabel("https://sftpgo.example.com")).toBe("sftpgo.example.com");
+  });
+});
+
 describe("createApp about route", () => {
   it("returns the version and SFTPGo attribution", async () => {
     const { app } = buildApp();
@@ -127,7 +143,19 @@ describe("createApp about route", () => {
     expect(body).toEqual({
       version: "1.2.3",
       builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
+      provider: { type: "sftpgo", label: "localhost:8080" },
     });
+  });
+
+  it("derives the provider label from the SFTPGo URL's host, dropping scheme and path", async () => {
+    const { app } = buildApp({
+      config: loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "https://sftpgo.internal:9443/base" }),
+    });
+
+    const res = await app.request("/api/v1/about");
+    const body = await res.json();
+
+    expect(body).toMatchObject({ provider: { type: "sftpgo", label: "sftpgo.internal:9443" } });
   });
 });
 

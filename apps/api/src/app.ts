@@ -47,6 +47,16 @@ const REQUEST_ID_HEADER = "X-Request-Id";
 const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
 
 /**
+ * Extracts the host (hostname and, when non-default for the scheme, port)
+ * from a configured SFTPGo URL, for display on the public `/about` route.
+ * Never returns anything beyond the host: no scheme, no path, no
+ * credentials, even if `sftpgoUrl` contains them.
+ */
+export function sftpgoHostLabel(sftpgoUrl: string): string {
+  return new URL(sftpgoUrl).host;
+}
+
+/**
  * Builds the fdrive API Hono application: request id handling, structured
  * request logging, security headers, a CSRF guard over every `/api/v1`
  * route, the public and authed `/api/v1` route groups, and the
@@ -96,6 +106,7 @@ export function createApp(deps: AppDeps): AppHono {
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
       builtOn: { name: "SFTPGo", sourceUrl: SFTPGO_SOURCE_URL },
+      provider: { type: "sftpgo", label: sftpgoHostLabel(deps.config.sftpgoUrl) },
     });
     return c.json(body);
   });
