@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { isCoreError } from "./errors.js";
-import { isSafeSegment, isWithin, joinPath, normalizePath } from "./paths.js";
+import { isCoreError } from "./errors.ts";
+import { isSafeSegment, isWithin, joinPath, normalizePath } from "./paths.ts";
 import {
   DEFAULT_HOME_TEMPLATE,
   filterInScope,
@@ -11,7 +11,7 @@ import {
   scopesFor,
   toFsPath,
   toVirtualPath,
-} from "./scope.js";
+} from "./scope.ts";
 
 describe("parseHomeTemplate", () => {
   it("parses the default template", () => {

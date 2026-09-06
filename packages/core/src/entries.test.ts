@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type FileEntry, makeEntry, sortEntries } from "./entries.js";
+import { type FileEntry, makeEntry, sortEntries } from "./entries.ts";
 
 describe("makeEntry", () => {
   it("fills path by joining parentPath and name", () => {

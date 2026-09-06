@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type ProgressEventLike, uploadWithProgress, type XhrLike } from "./xhr.js";
+import { type ProgressEventLike, uploadWithProgress, type XhrLike } from "./xhr.ts";
 
 class FakeXhr implements XhrLike {
   status = 0;

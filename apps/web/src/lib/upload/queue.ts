@@ -1,4 +1,4 @@
-import { TERMINAL_STATUSES, type UploadItem, withoutError } from "./types.js";
+import { TERMINAL_STATUSES, type UploadItem, withoutError } from "./types.ts";
 
 /**
  * Normalized queue state: items keyed by id, plus an `order` array that

@@ -5,8 +5,8 @@ import {
   summarize,
   type UploadQueueState,
   uploadReducer,
-} from "./queue.js";
-import type { UploadItem, UploadStatus } from "./types.js";
+} from "./queue.ts";
+import type { UploadItem, UploadStatus } from "./types.ts";
 
 function makeItem(id: string, overrides: Partial<UploadItem> = {}): UploadItem {
   return {

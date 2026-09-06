@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isInlinePreviewable, mimeFromExtension } from "./mime.js";
+import { isInlinePreviewable, mimeFromExtension } from "./mime.ts";
 
 describe("mimeFromExtension", () => {
   it("resolves common web, image, audio, video, document, archive, code, and Office types", () => {

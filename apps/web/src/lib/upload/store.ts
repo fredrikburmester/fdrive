@@ -7,16 +7,16 @@ import {
 } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { createDefaultOnUploaded } from "./deps.js";
+import { createDefaultOnUploaded } from "./deps.ts";
 import {
   initialUploadQueueState,
   nextToStart,
   type UploadAction,
   type UploadQueueState,
   uploadReducer,
-} from "./queue.js";
-import type { UploadItem } from "./types.js";
-import { uploadWithProgress, type XhrLike } from "./xhr.js";
+} from "./queue.ts";
+import type { UploadItem } from "./types.ts";
+import { uploadWithProgress, type XhrLike } from "./xhr.ts";
 
 /** Dependencies the upload store's side effects run against. Every field has a usable default. */
 export interface UploadStoreDeps {

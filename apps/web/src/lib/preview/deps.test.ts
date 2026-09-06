@@ -13,7 +13,7 @@ describe("deps", () => {
 
   it("re-exports the path/url helpers", () => {
     expect(segmentsToPath(["a"])).toBe("/a");
-    expect(pathToHref("/a")).toBe("/browse/a");
+    expect(pathToHref("/a")).toBe("/files/a");
     expect(viewHref("/a")).toBe("/view/a");
   });
 });

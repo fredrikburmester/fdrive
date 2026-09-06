@@ -1,32 +1,37 @@
 /**
- * Single seam between the upload queue and the rest of the app's shell.
- * Everything the upload queue needs from `src/lib/api/client.ts` and
- * `src/lib/api/keys.ts` (built by another chunk in parallel) is imported
- * here, from the local `_stubs/`, and re-exported. Once those modules
- * exist, the integration chunk repoints the two imports below at them and
- * deletes `_stubs/`; nothing else in `src/lib/upload` or
- * `src/components/upload` needs to change.
+ * Single seam between the upload queue and the rest of the app's shell:
+ * the shell's `apiClient` (`src/lib/api/client.ts`) and `queryKeys`
+ * (`src/lib/api/keys.ts`), re-exported here so nothing else in
+ * `src/lib/upload` or `src/components/upload` needs to import them
+ * directly.
  */
 import type { ApiClient } from "@fdrive/contracts";
-import { apiClient } from "./_stubs/api-client.js";
-import { type QueryKeys, queryKeys } from "./_stubs/keys.js";
+import { apiClient } from "@/lib/api/client";
+import { queryKeys } from "@/lib/api/keys";
 
-export type { QueryKeys };
+export type QueryKeys = typeof queryKeys;
 export { apiClient, queryKeys };
+
+/** The narrow slice of `QueryKeys` `createDefaultOnUploaded` needs. */
+export interface UploadQueryKeys {
+  readonly fs: {
+    readonly list: (path: string) => readonly unknown[];
+  };
+}
 
 /**
  * Builds the default `onUploaded` callback for the ready-made upload store
  * singleton (`useUploadStore`, see `store.ts`): it asks the API to
  * re-fetch the affected directory listing so the cache is not left stale
  * even before the shell wires up real query-cache invalidation. The shell
- * is expected to call `useUploadStore.getState().setOnUploaded(...)` with a
- * callback that instead calls `queryClient.invalidateQueries({ queryKey:
- * queryKeys.fs.list(parentPath) })`; this is only a reasonable default
- * until it does.
+ * replaces this with `useUploadStore.getState().setOnUploaded(...)`, which
+ * instead calls `queryClient.invalidateQueries({ queryKey:
+ * queryKeys.fs.list(parentPath) })`; this default only runs before that
+ * happens (or if it never does).
  */
 export function createDefaultOnUploaded(
   client: Pick<ApiClient, "list"> = apiClient,
-  keys: QueryKeys = queryKeys,
+  keys: UploadQueryKeys = queryKeys,
 ): (parentPath: string) => void {
   return (parentPath: string) => {
     // Referenced so the query key shape stays exercised even though this

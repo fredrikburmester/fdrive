@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatDate } from "./format.js";
+import { formatBytes, formatDate } from "./format.ts";
 
 describe("formatBytes", () => {
   it("returns '0 B' for zero", () => {

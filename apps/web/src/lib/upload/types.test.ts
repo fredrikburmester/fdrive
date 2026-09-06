@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TERMINAL_STATUSES, type UploadItem, withoutError } from "./types.js";
+import { TERMINAL_STATUSES, type UploadItem, withoutError } from "./types.ts";
 
 function makeItem(overrides: Partial<UploadItem> = {}): UploadItem {
   return {

@@ -1,8 +1,11 @@
 "use client";
 
 import { parentPath } from "@fdrive/core";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Info, X } from "lucide-react";
+import type { Route } from "next";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Inspector } from "@/components/inspector/inspector";
@@ -26,11 +29,24 @@ function capitalize(word: string): string {
   return word.length === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+/**
+ * Asserts a dynamically built path is a valid Next.js route. Next's typed
+ * routes can only verify string literals at compile time; paths built at
+ * runtime (from `pathToHref`/`viewHref`) need this explicit (safe, since
+ * they are always same-origin app paths) cast.
+ */
+function toRoute(href: string): Route {
+  return href as Route;
+}
+
 interface TopBarActionProps {
   readonly label: string;
   readonly shortcut?: string | undefined;
   readonly disabled?: boolean;
   readonly active?: boolean;
+  /** An in-app route, navigated via `next/link`. */
+  readonly route?: string | undefined;
+  /** An external resource URL (download, open in new tab), rendered as a plain anchor. */
   readonly href?: string | undefined;
   readonly target?: string | undefined;
   readonly rel?: string | undefined;
@@ -39,12 +55,18 @@ interface TopBarActionProps {
   readonly children: ReactNode;
 }
 
-/** One icon button in the top bar, wrapped in a tooltip. Renders as a link when `href` is given, a button otherwise. */
+/**
+ * One icon button in the top bar, wrapped in a tooltip. Renders as a
+ * `next/link` when `route` is given (in-app navigation), a plain anchor
+ * when `href` is given (an external resource: download, open in new tab),
+ * or a plain button otherwise.
+ */
 function TopBarAction({
   label,
   shortcut,
   disabled = false,
   active = false,
+  route,
   href,
   target,
   rel,
@@ -52,6 +74,14 @@ function TopBarAction({
   onClick,
   children,
 }: TopBarActionProps) {
+  const renderAs =
+    route !== undefined ? (
+      <Link href={toRoute(route)} />
+    ) : href !== undefined ? (
+      // biome-ignore lint/a11y/useAnchorContent: Base UI's render-prop merge injects TooltipTrigger's icon/sr-only children into this anchor
+      <a href={href} target={target} rel={rel} download={download} />
+    ) : undefined;
+
   return (
     <Tooltip>
       <TooltipTrigger
@@ -61,12 +91,7 @@ function TopBarAction({
             size="icon-sm"
             disabled={disabled}
             onClick={onClick}
-            render={
-              href !== undefined ? (
-                // biome-ignore lint/a11y/useAnchorContent: Base UI's render-prop merge injects TooltipTrigger's icon/sr-only children into this anchor
-                <a href={href} target={target} rel={rel} download={download} />
-              ) : undefined
-            }
+            render={renderAs}
           />
         }
       >
@@ -81,6 +106,7 @@ function TopBarAction({
 }
 
 function PreviewShellContent({ path }: PreviewShellProps) {
+  const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
   const parent = parentPath(path);
 
@@ -102,21 +128,21 @@ function PreviewShellContent({ path }: PreviewShellProps) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        window.location.assign(backHref);
+        router.push(toRoute(backHref));
         return;
       }
       if (event.key === "ArrowLeft" && siblings.prev !== null) {
-        window.location.assign(viewHref(siblings.prev));
+        router.push(toRoute(viewHref(siblings.prev)));
         return;
       }
       if (event.key === "ArrowRight" && siblings.next !== null) {
-        window.location.assign(viewHref(siblings.next));
+        router.push(toRoute(viewHref(siblings.next)));
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [backHref, siblings.prev, siblings.next]);
+  }, [router, backHref, siblings.prev, siblings.next]);
 
   const entry = entryQuery.data;
   const downloadUrl = apiClient.downloadUrl(path);
@@ -126,7 +152,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
     <TooltipProvider>
       <div className="flex h-full min-h-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background/80 px-3 backdrop-blur-sm supports-backdrop-filter:bg-background/60">
-          <TopBarAction label="Back to folder" href={backHref}>
+          <TopBarAction label="Back to folder" route={backHref}>
             <ChevronLeft />
             <span className="sr-only">Back</span>
           </TopBarAction>
@@ -144,7 +170,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
               label="Previous"
               shortcut="←"
               disabled={prevHref === undefined}
-              href={prevHref}
+              route={prevHref}
             >
               <ChevronLeft />
               <span className="sr-only">Previous</span>
@@ -158,7 +184,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
               label="Next"
               shortcut="→"
               disabled={nextHref === undefined}
-              href={nextHref}
+              route={nextHref}
             >
               <ChevronRight />
               <span className="sr-only">Next</span>
@@ -200,7 +226,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
                   <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
                     <X className="size-8 text-destructive" />
                     <CardTitle>Could not load this file</CardTitle>
-                    <Button render={<a href={backHref} />}>Back to folder</Button>
+                    <Button render={<Link href={toRoute(backHref)} />}>Back to folder</Button>
                   </CardContent>
                 </Card>
               </div>
@@ -219,26 +245,13 @@ function PreviewShellContent({ path }: PreviewShellProps) {
   );
 }
 
-let sharedQueryClient: QueryClient | undefined;
-
-function getQueryClient(): QueryClient {
-  sharedQueryClient ??= new QueryClient();
-  return sharedQueryClient;
-}
-
 /**
  * The preview route's client shell: top bar (back, name, kind badge,
  * prev/next, download, open in new tab, info toggle), the matching viewer,
- * and the inspector. Owns its own `QueryClient` so this chunk is
- * self-contained; the integration chunk may hoist one to the app root
- * instead, which is safe to nest under.
+ * and the inspector. Renders under the app's shared `QueryClient`
+ * (provided by `src/app/providers.tsx`), so its queries share the same
+ * cache as the file browser's.
  */
 export function PreviewShell({ path }: PreviewShellProps) {
-  const [queryClient] = useState(getQueryClient);
-
-  return (
-    <QueryClientProvider client={queryClient}>
-      <PreviewShellContent path={path} />
-    </QueryClientProvider>
-  );
+  return <PreviewShellContent path={path} />;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateSpeed, formatEta, formatSpeed, type ThroughputSample } from "./format.js";
+import { estimateSpeed, formatEta, formatSpeed, type ThroughputSample } from "./format.ts";
 
 describe("estimateSpeed", () => {
   it("returns 0 with fewer than two samples", () => {

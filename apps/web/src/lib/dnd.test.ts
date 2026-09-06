@@ -5,7 +5,7 @@ import {
   isExternalFileDrag,
   readDraggedPaths,
   writeDraggedPaths,
-} from "./dnd.js";
+} from "./dnd.ts";
 
 class FakeDataTransfer implements DndDataTransferLike {
   private data: Record<string, string> = {};

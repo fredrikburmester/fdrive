@@ -1,5 +1,5 @@
-import { CoreError } from "./errors.js";
-import { isSafeSegment, isWithin, joinPath, normalizePath } from "./paths.js";
+import { CoreError } from "./errors.ts";
+import { isSafeSegment, isWithin, joinPath, normalizePath } from "./paths.ts";
 
 /**
  * A mapping between a slice of one storage root's filesystem tree and a

@@ -1,4 +1,4 @@
-import type { FileEntry } from "../entries.js";
+import type { FileEntry } from "../entries.ts";
 
 /**
  * Provider-neutral storage port. `apps/api` implements this over the

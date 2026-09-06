@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { isCoreError } from "./errors.js";
+import { isCoreError } from "./errors.ts";
 import {
   baseName,
   changeBaseName,
@@ -13,7 +13,7 @@ import {
   parentPath,
   relativeTo,
   splitSegments,
-} from "./paths.js";
+} from "./paths.ts";
 
 describe("normalizePath", () => {
   it("treats '' and '/' both as the root", () => {

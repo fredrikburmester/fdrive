@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { planUploads } from "./plan.js";
-import type { DroppedFile } from "./traverse.js";
+import { planUploads } from "./plan.ts";
+import type { DroppedFile } from "./traverse.ts";
 
 function idGen(): () => string {
   let n = 0;

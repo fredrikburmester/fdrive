@@ -10,7 +10,7 @@ import {
   nextBackoffMs,
   parseSseMessage,
   useFsEvents,
-} from "./sse.js";
+} from "./sse.ts";
 
 function fsEvent(overrides: Partial<FsEvent> = {}): FsEvent {
   return {

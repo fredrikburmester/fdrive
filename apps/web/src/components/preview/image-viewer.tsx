@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 
 export interface ImageViewerProps {
   readonly src: string;
@@ -35,8 +36,8 @@ export function ImageViewer({ src, alt }: ImageViewerProps) {
       className="flex h-full w-full items-center justify-center overflow-auto"
       style={CHECKERBOARD_STYLE}
     >
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         onClick={() => setZoomed((prev) => !prev)}
         aria-pressed={zoomed}
         aria-label={zoomed ? "Zoom out" : "Zoom in"}
@@ -48,7 +49,7 @@ export function ImageViewer({ src, alt }: ImageViewerProps) {
           alt={alt}
           className={zoomed ? "max-w-none" : "max-h-full max-w-full object-contain"}
         />
-      </button>
+      </Button>
     </div>
   );
 }
