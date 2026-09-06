@@ -14,6 +14,8 @@
   "dependencies": {
     "@fdrive/contracts": "workspace:*",
     "@fdrive/core": "workspace:*",
+    "@fdrive/db": "workspace:*",
+    "@fdrive/sftpgo": "workspace:*",
     "@hono/node-server": "^1.19.5",
     "hono": "^4.9.10",
     "pino": "^10.0.0",

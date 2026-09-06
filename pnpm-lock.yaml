@@ -35,6 +35,12 @@ importers:
       '@fdrive/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@fdrive/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@fdrive/sftpgo':
+        specifier: workspace:*
+        version: link:../../packages/sftpgo
       '@hono/node-server':
         specifier: ^1.19.5
         version: 1.19.17(hono@4.13.7)

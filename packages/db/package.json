@@ -18,6 +18,11 @@
       "types": "./src/schema/idx.ts",
       "development": "./src/schema/idx.ts",
       "default": "./dist/schema/idx.js"
+    },
+    "./testing": {
+      "types": "./src/testing/memory-repos.ts",
+      "development": "./src/testing/memory-repos.ts",
+      "default": "./dist/testing/memory-repos.js"
     }
   },
   "bin": {
