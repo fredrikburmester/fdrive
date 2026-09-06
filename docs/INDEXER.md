@@ -133,7 +133,14 @@ Environment (see `deploy/.env.example`):
 In `deploy/compose.dev.yaml`, the same `--profile index` mounts the dev
 environment's seeded SFTPGo data (the `fdrive-dev-sftpgo-data` named volume,
 read-only) so the indexer sees exactly what the `dev` user's SFTPGo account
-sees.
+sees. Two things differ from the production-shaped compose file because the
+api there runs on the host with `tsx watch` instead of in the compose
+network: `embed` publishes its port on the host (58081 by default, override
+with `FDRIVE_DEV_EMBED_PORT`) so `FDRIVE_EMBED_URL` in `apps/api/.env.dev`
+can reach it directly, and `THUMBS_DIR` is bind-mounted to a host directory
+(`deploy/dev/.data/thumbs` by default, override with
+`FDRIVE_DEV_THUMBS_DIR`) rather than a named volume, so the host api process
+can read the generated WebP files at the path `FDRIVE_THUMBS_DIR` names.
 
 The `embed` service's image (`ghcr.io/huggingface/text-embeddings-inference`)
 ships `amd64` only; on an Apple Silicon Mac, `platform: linux/amd64` in the

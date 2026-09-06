@@ -74,7 +74,9 @@ services:
   # Index profile: indexer, tika, embed. Opt in with `--profile index` so a
   # plain `docker compose -f compose.dev.yaml up -d` stays fast. Mounts the same
   # named volume sftpgo writes its seed files into (read-only), so the indexer
-  # sees exactly what the dev SFTPGo user sees.
+  # sees exactly what the dev SFTPGo user sees. Thumbnails are bind-mounted to
+  # a host directory (not a named volume) so the api dev server on the host
+  # can read the generated WebP files directly.
   indexer:
     build:
       context: ../services/indexer
@@ -92,7 +94,7 @@ services:
       - "${FDRIVE_DEV_INDEXER_HTTP_PORT:-58010}:8010"
     volumes:
       - fdrive-dev-sftpgo-data:/roots/sftpgo:ro
-      - fdrive-dev-thumbs:/thumbs
+      - ${FDRIVE_DEV_THUMBS_DIR:-./dev/.data/thumbs}:/thumbs
     depends_on:
       db:
         condition: service_healthy
@@ -103,11 +105,16 @@ services:
     image: apache/tika:3.2.1.0
     profiles: [index]
 
+  # Published on the host so the api dev server (running with `tsx watch` on
+  # the host, not in this compose stack) can reach it directly for semantic
+  # search, matching FDRIVE_EMBED_URL in apps/api/.env.dev.
   embed:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
     platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
     profiles: [index]
     command: ["--model-id", "intfloat/multilingual-e5-small"]
+    ports:
+      - "${FDRIVE_DEV_EMBED_PORT:-58081}:80"
     volumes:
       - fdrive-dev-embed-models:/data
     mem_limit: 4g
@@ -115,5 +122,4 @@ services:
 volumes:
   fdrive-dev-pgdata:
   fdrive-dev-sftpgo-data:
-  fdrive-dev-thumbs:
   fdrive-dev-embed-models:
