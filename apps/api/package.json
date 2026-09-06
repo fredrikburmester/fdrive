@@ -40,7 +40,7 @@
   "devDependencies": {
     "@fdrive/config": "workspace:*",
     "@fdrive/testkit": "workspace:*",
-    "@types/node": "^22.20.1",
+    "@types/node": "^24",
     "@types/tar-stream": "^2.2.3",
     "@types/yauzl": "^3.4.0",
     "@types/yazl": "^3.3.1",

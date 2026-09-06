@@ -8,7 +8,7 @@ SFTPGo client, so the storage layer stays swappable and the user-facing surface 
 end.
 
 See [PLAN.md](./PLAN.md) for the full architecture, domain model, phased delivery plan, and the
-decisions behind them. Prerequisites for local development are Node 22, pnpm, and Docker (used for
+decisions behind them. Prerequisites for local development are Node 24, pnpm, and Docker (used for
 the SFTPGo, Postgres, and embedding containers that the integration tests and compose stack need).
 
 ## Scripts
