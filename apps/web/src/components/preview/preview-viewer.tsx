@@ -1,0 +1,52 @@
+import type { FsEntry } from "@fdrive/contracts";
+import { previewKindFor, previewUnavailableReason } from "@/lib/preview/kind";
+import { AudioViewer } from "./audio-viewer";
+import { CodeViewer } from "./code-viewer";
+import { ImageViewer } from "./image-viewer";
+import { MarkdownViewer } from "./markdown-viewer";
+import { PdfViewer } from "./pdf-viewer";
+import { TextViewer } from "./text-viewer";
+import { Unsupported } from "./unsupported";
+import { VideoViewer } from "./video-viewer";
+
+export interface PreviewViewerProps {
+  readonly entry: FsEntry;
+  /** Inline (non-attachment) URL, used by every viewer that renders content. */
+  readonly inlineUrl: string;
+  /** Attachment URL, used only by the unsupported fallback's download button. */
+  readonly downloadUrl: string;
+}
+
+/** Picks the right viewer for `entry`'s preview kind. */
+export function PreviewViewer({ entry, inlineUrl, downloadUrl }: PreviewViewerProps) {
+  const kind = previewKindFor(entry);
+
+  switch (kind) {
+    case "image":
+      return <ImageViewer src={inlineUrl} alt={entry.name} />;
+    case "video":
+      return <VideoViewer src={inlineUrl} />;
+    case "audio":
+      return <AudioViewer src={inlineUrl} />;
+    case "pdf":
+      return <PdfViewer src={inlineUrl} title={entry.name} />;
+    case "markdown":
+      return <MarkdownViewer url={inlineUrl} />;
+    case "code":
+      return <CodeViewer url={inlineUrl} ext={entry.ext} />;
+    case "text":
+      return <TextViewer url={inlineUrl} />;
+    case "office":
+    case "archive":
+    case "none":
+      return (
+        <Unsupported
+          name={entry.name}
+          size={entry.size}
+          kind={kind}
+          reason={previewUnavailableReason(entry)}
+          downloadUrl={downloadUrl}
+        />
+      );
+  }
+}
