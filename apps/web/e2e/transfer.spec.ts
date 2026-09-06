@@ -36,7 +36,8 @@ test.describe("uploads and downloads", () => {
     // workers uploading/downloading at the same time never collide.
     const sandbox = uniqueName("transfer");
     await page.goto("/files");
-    await page.getByRole("button", { name: "New folder" }).click();
+    await page.getByRole("button", { name: "New" }).click();
+    await page.getByRole("menuitem", { name: "New folder" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Folder name").fill(sandbox);
     await dialog.getByRole("button", { name: "Create" }).click();
@@ -132,7 +133,8 @@ test.describe("uploads and downloads", () => {
     page,
   }) => {
     const folderName = uniqueName("subfolder");
-    await page.getByRole("button", { name: "New folder" }).click();
+    await page.getByRole("button", { name: "New" }).click();
+    await page.getByRole("menuitem", { name: "New folder" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Folder name").fill(folderName);
     await dialog.getByRole("button", { name: "Create" }).click();
