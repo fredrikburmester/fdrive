@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import pytest
+
+from fdrive_ocr.config import Config, parse_roots
+
+
+def test_parse_roots_multiple() -> None:
+    assert parse_roots("sftpgo=/roots/sftpgo,photos=/roots/photos") == {
+        "sftpgo": "/roots/sftpgo",
+        "photos": "/roots/photos",
+    }
+
+
+def test_parse_roots_empty_string() -> None:
+    assert parse_roots("") == {}
+
+
+def test_parse_roots_skips_malformed_pairs() -> None:
+    assert parse_roots("sftpgo=/roots/sftpgo,,broken,=novalue,noeq=") == {"sftpgo": "/roots/sftpgo"}
+
+
+def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("INDEX_ROOTS", raising=False)
+    monkeypatch.delenv("OCR_RUN_ON_START", raising=False)
+    cfg = Config()
+    assert cfg.roots == {}
+    assert cfg.ocr_port == 8011
+    assert cfg.state_dir == "/state"
+    assert cfg.run_on_start is True
+    assert cfg.timeout_seconds == 900
+    assert cfg.jobs == 2
+    assert cfg.default_hour == 3
+    assert cfg.default_langs == "swe+eng"
+    assert cfg.default_exclude_globs == ("Programs/**", "Photos/**", "Videos/**")
+    assert cfg.default_max_mb == 200
+    assert cfg.default_keep_originals is True
+
+
+def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/roots/sftpgo")
+    monkeypatch.setenv("OCR_PORT", "9000")
+    monkeypatch.setenv("OCR_RUN_ON_START", "false")
+    monkeypatch.setenv("OCR_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("OCR_JOBS", "4")
+    monkeypatch.setenv("OCR_HOUR", "5")
+    monkeypatch.setenv("OCR_LANGS", "eng")
+    monkeypatch.setenv("OCR_EXCLUDE_GLOBS", "A/**,B/**")
+    monkeypatch.setenv("OCR_MAX_MB", "50")
+    monkeypatch.setenv("OCR_KEEP_ORIGINALS", "false")
+    cfg = Config()
+    assert cfg.roots == {"sftpgo": "/roots/sftpgo"}
+    assert cfg.ocr_port == 9000
+    assert cfg.run_on_start is False
+    assert cfg.timeout_seconds == 60
+    assert cfg.jobs == 4
+    assert cfg.default_hour == 5
+    assert cfg.default_langs == "eng"
+    assert cfg.default_exclude_globs == ("A/**", "B/**")
+    assert cfg.default_max_mb == 50
+    assert cfg.default_keep_originals is False
+
+
+def test_config_default_settings_matches_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCR_HOUR", "7")
+    cfg = Config()
+    settings = cfg.default_settings()
+    assert settings.hour == 7
+    assert settings.langs == cfg.default_langs
+    assert settings.exclude_globs == cfg.default_exclude_globs
+    assert settings.max_mb == cfg.default_max_mb
+    assert settings.keep_originals == cfg.default_keep_originals

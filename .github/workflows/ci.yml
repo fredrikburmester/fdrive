@@ -98,6 +98,37 @@ jobs:
         working-directory: services/indexer
         run: pytest -q --cov=fdrive_indexer --cov-report=term-missing --cov-fail-under=95
 
+  ocr:
+    name: OCR (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ocr dependencies
+        working-directory: services/ocr
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        working-directory: services/ocr
+        run: ruff check src tests scripts
+
+      - name: Typecheck
+        working-directory: services/ocr
+        run: mypy src scripts
+
+      - name: Test with coverage
+        working-directory: services/ocr
+        # No real ocrmypdf here: tests/conftest.py puts tests/fixtures (a fake
+        # ocrmypdf) first on PATH, and Postgres comes from testcontainers,
+        # which works out of the box on GitHub's ubuntu-latest runners.
+        run: pytest -q --cov=fdrive_ocr --cov-report=term-missing --cov-fail-under=95
+
   e2e:
     name: End-to-end tests
     needs: check
