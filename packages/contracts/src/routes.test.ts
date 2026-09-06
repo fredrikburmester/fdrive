@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes";
+import {
+  accountTokenRoute,
+  IDENTITY_HEADER,
+  jobCancelRoute,
+  jobRoute,
+  MODIFIED_AT_HEADER,
+  ROUTES,
+} from "./routes";
 
 describe("ROUTES", () => {
   it("defines every auth route under /api/v1/auth", () => {
@@ -76,6 +83,10 @@ describe("ROUTES", () => {
       thumbnailsRebuild: "/api/v1/system/thumbnails/rebuild",
     });
   });
+
+  it("defines the account tokens route", () => {
+    expect(ROUTES.account).toEqual({ tokens: "/api/v1/account/tokens" });
+  });
 });
 
 describe("jobRoute", () => {
@@ -91,6 +102,16 @@ describe("jobRoute", () => {
 describe("jobCancelRoute", () => {
   it("builds the cancel path for a job", () => {
     expect(jobCancelRoute("job-1")).toBe("/api/v1/fs/jobs/job-1/cancel");
+  });
+});
+
+describe("accountTokenRoute", () => {
+  it("builds the path for a single token", () => {
+    expect(accountTokenRoute("token-1")).toBe("/api/v1/account/tokens/token-1");
+  });
+
+  it("url-encodes the id", () => {
+    expect(accountTokenRoute("a/b")).toBe("/api/v1/account/tokens/a%2Fb");
   });
 });
 

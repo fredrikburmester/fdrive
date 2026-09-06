@@ -23,4 +23,7 @@ export const queryKeys = {
     ocr: () => ["system", "ocr"] as const,
     thumbnails: () => ["system", "thumbnails"] as const,
   },
+  account: {
+    tokens: () => ["account", "tokens"] as const,
+  },
 } as const;

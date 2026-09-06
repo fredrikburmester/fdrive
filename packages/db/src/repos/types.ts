@@ -117,6 +117,39 @@ export interface SettingsRepo {
   all(): Promise<Record<string, unknown>>;
 }
 
+/**
+ * A long-lived per-account (optionally per-identity) token for MCP and
+ * Raycast, shown once at creation and stored only as a sha256 hash.
+ */
+export interface ApiToken {
+  readonly id: string;
+  readonly accountId: string;
+  /** The identity the token is scoped to. `null` after that identity is unlinked; such a token can no longer authenticate. */
+  readonly identityId: string | null;
+  readonly name: string;
+  readonly tokenHash: string;
+  readonly createdAt: Date;
+  readonly lastUsedAt: Date | null;
+  readonly expiresAt: Date | null;
+}
+
+export interface ApiTokenRepo {
+  create(input: {
+    accountId: string;
+    identityId: string | null;
+    name: string;
+    tokenHash: string;
+    expiresAt: Date | null;
+  }): Promise<ApiToken>;
+  /** Looks up a token by its sha256 hash. `null` when no token has that hash, expired or not. */
+  findByHash(hash: string): Promise<ApiToken | null>;
+  listByAccount(accountId: string): Promise<ApiToken[]>;
+  /** Sets `lastUsedAt`. A no-op when the token does not exist. */
+  touch(id: string, at: Date): Promise<void>;
+  /** Deletes the token, scoped to `accountId` so one account can never revoke another's token. */
+  delete(id: string, accountId: string): Promise<void>;
+}
+
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
   readonly providers: ProviderRepo;
@@ -125,4 +158,5 @@ export interface Repos {
   readonly credentials: CredentialRepo;
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
+  readonly apiTokens: ApiTokenRepo;
 }

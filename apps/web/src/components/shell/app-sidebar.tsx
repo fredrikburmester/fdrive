@@ -11,6 +11,7 @@ import {
   Search,
   Settings2,
   Sun,
+  UserRound,
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
@@ -72,6 +73,7 @@ const SYSTEM_INDEXER_ROUTE = "/system/indexer" as Route;
 const SYSTEM_SEARCH_ROUTE = "/system/search" as Route;
 const SYSTEM_OCR_ROUTE = "/system/ocr" as Route;
 const SYSTEM_THUMBNAILS_ROUTE = "/system/thumbnails" as Route;
+const ACCOUNT_ROUTE = "/account" as Route;
 
 const SYSTEM_NAV_ITEMS = [
   { href: SYSTEM_CONNECTION_ROUTE, label: "Connection", Icon: Settings2 },
@@ -169,6 +171,13 @@ export function AppSidebar() {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem render={<Link href={ACCOUNT_ROUTE} />}>
+                <UserRound />
+                Account
+              </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>

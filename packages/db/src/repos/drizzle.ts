@@ -1,9 +1,19 @@
 import { and, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { accounts, credentials, identities, providers, sessions, settings } from "../schema/app.js";
+import {
+  accounts,
+  apiTokens,
+  credentials,
+  identities,
+  providers,
+  sessions,
+  settings,
+} from "../schema/app.js";
 import type {
   Account,
   AccountRepo,
+  ApiToken,
+  ApiTokenRepo,
   Credential,
   CredentialRepo,
   Identity,
@@ -228,6 +238,56 @@ function createSessionRepo(db: Db): SessionRepo {
   };
 }
 
+function toApiToken(row: typeof apiTokens.$inferSelect): ApiToken {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    identityId: row.identityId,
+    name: row.name,
+    tokenHash: row.tokenHash,
+    createdAt: row.createdAt,
+    lastUsedAt: row.lastUsedAt,
+    expiresAt: row.expiresAt,
+  };
+}
+
+function createApiTokenRepo(db: Db): ApiTokenRepo {
+  return {
+    async create(input) {
+      const [row] = await db
+        .insert(apiTokens)
+        .values({
+          accountId: input.accountId,
+          identityId: input.identityId,
+          name: input.name,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+        })
+        .returning();
+      if (!row) {
+        throw new Error("apiTokens.create: insert returned no row");
+      }
+      return toApiToken(row);
+    },
+    async findByHash(hash) {
+      const [row] = await db.select().from(apiTokens).where(eq(apiTokens.tokenHash, hash));
+      return row ? toApiToken(row) : null;
+    },
+    async listByAccount(accountId) {
+      const rows = await db.select().from(apiTokens).where(eq(apiTokens.accountId, accountId));
+      return rows.map(toApiToken);
+    },
+    async touch(id, at) {
+      await db.update(apiTokens).set({ lastUsedAt: at }).where(eq(apiTokens.id, id));
+    },
+    async delete(id, accountId) {
+      await db
+        .delete(apiTokens)
+        .where(and(eq(apiTokens.id, id), eq(apiTokens.accountId, accountId)));
+    },
+  };
+}
+
 function createSettingsRepo(db: Db): SettingsRepo {
   return {
     async get<T>(key: string) {
@@ -263,5 +323,6 @@ export function createRepos(db: Db): Repos {
     credentials: createCredentialRepo(db),
     sessions: createSessionRepo(db),
     settings: createSettingsRepo(db),
+    apiTokens: createApiTokenRepo(db),
   };
 }

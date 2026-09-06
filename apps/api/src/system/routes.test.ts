@@ -36,12 +36,16 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     filename: notImplemented,
     filesByIds: notImplemented,
     fileByPath: notImplemented,
+    listFiles: notImplemented,
+    filesBySha256: notImplemented,
     rootIdsByName: async () => ({}),
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     duplicates: notImplemented,
     similar: notImplemented,
     recentFiles: notImplemented,
     thumbnail: notImplemented,
+    recordMove: notImplemented,
+    recentMoves: notImplemented,
     ...overrides,
   };
 }

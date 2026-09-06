@@ -559,6 +559,200 @@ describe("index-queries", () => {
     });
   });
 
+  describe("listFiles", () => {
+    it("filters by name substring", async () => {
+      const rootId = await insertRoot("primary");
+      const match = await insertFile(rootId, "alice/report.pdf");
+      await insertFile(rootId, "alice/other.pdf");
+
+      const { total, files } = await queries.listFiles(
+        [{ rootId, fsPrefix: "/" }],
+        { nameContains: "report" },
+        "path",
+        10,
+      );
+
+      expect(total).toBe(1);
+      expect(files.map((f) => f.id)).toEqual([match.id]);
+    });
+
+    it("filters by extension", async () => {
+      const rootId = await insertRoot("primary");
+      const pdf = await insertFile(rootId, "a.pdf");
+      await insertFile(rootId, "b.txt");
+
+      const { files } = await queries.listFiles(
+        [{ rootId, fsPrefix: "/" }],
+        { ext: ".pdf" },
+        "path",
+        10,
+      );
+
+      expect(files.map((f) => f.id)).toEqual([pdf.id]);
+    });
+
+    it("filters by modified date range", async () => {
+      const rootId = await insertRoot("primary");
+      const old = await insertFile(rootId, "old.txt", { mtimeNs: 100n });
+      const mid = await insertFile(rootId, "mid.txt", { mtimeNs: 200n });
+      await insertFile(rootId, "new.txt", { mtimeNs: 300n });
+
+      const { files } = await queries.listFiles(
+        [{ rootId, fsPrefix: "/" }],
+        { modifiedAfterNs: 100n, modifiedBeforeNs: 200n },
+        "path",
+        10,
+      );
+
+      expect(files.map((f) => f.id).sort()).toEqual([old.id, mid.id].sort());
+    });
+
+    it("filters by minimum size", async () => {
+      const rootId = await insertRoot("primary");
+      const big = await insertFile(rootId, "big.bin", { size: 10_000 });
+      await insertFile(rootId, "small.bin", { size: 10 });
+
+      const { files } = await queries.listFiles(
+        [{ rootId, fsPrefix: "/" }],
+        { minSize: 1000 },
+        "path",
+        10,
+      );
+
+      expect(files.map((f) => f.id)).toEqual([big.id]);
+    });
+
+    it("orders by modified_desc, modified_asc, size_desc, and path", async () => {
+      const rootId = await insertRoot("primary");
+      const a = await insertFile(rootId, "a.txt", { mtimeNs: 1n, size: 10 });
+      const b = await insertFile(rootId, "b.txt", { mtimeNs: 2n, size: 20 });
+
+      const modifiedDesc = await queries.listFiles(
+        [{ rootId, fsPrefix: "/" }],
+        {},
+        "modified_desc",
+        10,
+      );
+      expect(modifiedDesc.files.map((f) => f.id)).toEqual([b.id, a.id]);
+
+      const modifiedAsc = await queries.listFiles(
+        [{ rootId, fsPrefix: "/" }],
+        {},
+        "modified_asc",
+        10,
+      );
+      expect(modifiedAsc.files.map((f) => f.id)).toEqual([a.id, b.id]);
+
+      const sizeDesc = await queries.listFiles([{ rootId, fsPrefix: "/" }], {}, "size_desc", 10);
+      expect(sizeDesc.files.map((f) => f.id)).toEqual([b.id, a.id]);
+
+      const path = await queries.listFiles([{ rootId, fsPrefix: "/" }], {}, "path", 10);
+      expect(path.files.map((f) => f.id)).toEqual([a.id, b.id]);
+    });
+
+    it("reports the total match count independent of the limit", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "a.txt");
+      await insertFile(rootId, "b.txt");
+
+      const { total, files } = await queries.listFiles([{ rootId, fsPrefix: "/" }], {}, "path", 1);
+
+      expect(total).toBe(2);
+      expect(files).toHaveLength(1);
+    });
+
+    it("excludes deleted files and rows outside the scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const inScope = await insertFile(rootId, "alice/a.txt");
+      await insertFile(rootId, "bob/b.txt");
+      await insertFile(rootId, "alice/gone.txt", { deletedAt: new Date() });
+
+      const { total, files } = await queries.listFiles(
+        [{ rootId, fsPrefix: "/alice" }],
+        {},
+        "path",
+        10,
+      );
+
+      expect(total).toBe(1);
+      expect(files.map((f) => f.id)).toEqual([inScope.id]);
+    });
+  });
+
+  describe("filesBySha256", () => {
+    it("finds every other file with the same hash", async () => {
+      const rootId = await insertRoot("primary");
+      const sha = "a".repeat(64);
+      const target = await insertFile(rootId, "a.txt", { sha256: sha });
+      const copy = await insertFile(rootId, "copy/a.txt", { sha256: sha });
+      await insertFile(rootId, "other.txt", { sha256: "b".repeat(64) });
+
+      const results = await queries.filesBySha256([{ rootId, fsPrefix: "/" }], sha, target.id);
+
+      expect(results.map((f) => f.id)).toEqual([copy.id]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const sha = "c".repeat(64);
+      const target = await insertFile(rootId, "alice/a.txt", { sha256: sha });
+      await insertFile(rootId, "bob/a.txt", { sha256: sha });
+
+      const results = await queries.filesBySha256([{ rootId, fsPrefix: "/alice" }], sha, target.id);
+
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("recordMove and recentMoves", () => {
+    it("records a move and reads it back for the matching actor and root", async () => {
+      const rootId = await insertRoot("primary");
+      await queries.recordMove({ rootId, src: "a.txt", dst: "b.txt", actor: "mcp" });
+
+      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 10);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ rootId, src: "a.txt", dst: "b.txt", actor: "mcp" });
+    });
+
+    it("excludes moves from a different actor", async () => {
+      const rootId = await insertRoot("primary");
+      await queries.recordMove({ rootId, src: "a.txt", dst: "b.txt", actor: "user" });
+
+      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("excludes moves from a root outside the scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const other = await insertRoot("other");
+      await queries.recordMove({ rootId: other, src: "a.txt", dst: "b.txt", actor: "mcp" });
+
+      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("returns an empty array for an empty scope", async () => {
+      const rootId = await insertRoot("primary");
+      await queries.recordMove({ rootId, src: "a.txt", dst: "b.txt", actor: "mcp" });
+
+      expect(await queries.recentMoves([], "mcp", 10)).toEqual([]);
+    });
+
+    it("orders moves newest first and respects the limit", async () => {
+      const rootId = await insertRoot("primary");
+      await queries.recordMove({ rootId, src: "1.txt", dst: "1b.txt", actor: "mcp" });
+      await queries.recordMove({ rootId, src: "2.txt", dst: "2b.txt", actor: "mcp" });
+
+      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 1);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.src).toBe("2.txt");
+    });
+  });
+
   describe("thumbnail", () => {
     it("finds a generated thumbnail by content key and size", async () => {
       await db

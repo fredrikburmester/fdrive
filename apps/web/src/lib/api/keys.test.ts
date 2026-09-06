@@ -13,4 +13,8 @@ describe("queryKeys", () => {
   it("fs.stat(path) builds a key scoped to the path", () => {
     expect(queryKeys.fs.stat("/docs/file.txt")).toEqual(["fs", "stat", "/docs/file.txt"]);
   });
+
+  it("account.tokens() builds a stable key", () => {
+    expect(queryKeys.account.tokens()).toEqual(["account", "tokens"]);
+  });
 });

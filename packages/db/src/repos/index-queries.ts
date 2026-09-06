@@ -1,7 +1,7 @@
 import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { thumbnails } from "../schema/app.js";
-import { chunks, files, roots } from "../schema/idx.js";
+import { chunks, files, moves, roots } from "../schema/idx.js";
 import { formatVectorLiteral } from "../vector.js";
 
 /**
@@ -107,6 +107,30 @@ export interface IndexStats {
   readonly chunksEmbedded: number;
 }
 
+/**
+ * Metadata-only filters for `listFiles`, matching the MCP `find_files` tool
+ * and the `folder_overview` aggregation.
+ */
+export interface FileFilter {
+  readonly nameContains?: string;
+  readonly ext?: string;
+  readonly modifiedAfterNs?: bigint;
+  readonly modifiedBeforeNs?: bigint;
+  readonly minSize?: number;
+}
+
+/** Sort order for `listFiles`. */
+export type FileOrder = "modified_desc" | "modified_asc" | "size_desc" | "path";
+
+/** One move recorded in `idx.moves`, as read back by `recentMoves`. */
+export interface MoveRecord {
+  readonly at: Date;
+  readonly rootId: number;
+  readonly src: string | null;
+  readonly dst: string | null;
+  readonly actor: string | null;
+}
+
 /** One location a duplicate's bytes live at. */
 export interface DuplicateLocation {
   readonly rootId: number;
@@ -158,6 +182,23 @@ export interface IndexQueries {
   filesByIds(ids: readonly number[]): Promise<IndexedFile[]>;
   /** The (non-deleted) file at exactly `path` in `rootId`, `null` when absent. */
   fileByPath(rootId: number, path: string): Promise<IndexedFile | null>;
+  /**
+   * Metadata-only listing over a scope: optional name/ext/date/size filters,
+   * one of four sort orders, and the total match count (before `limit`).
+   * Backs both the MCP `find_files` tool and `folder_overview`'s aggregation.
+   */
+  listFiles(
+    scopePrefixes: readonly ScopePrefix[],
+    filter: FileFilter,
+    order: FileOrder,
+    limit: number,
+  ): Promise<{ total: number; files: IndexedFile[] }>;
+  /** Every other (non-deleted) file in scope with the same sha256, excluding `excludeId`. */
+  filesBySha256(
+    scopePrefixes: readonly ScopePrefix[],
+    sha256: string,
+    excludeId: number,
+  ): Promise<IndexedFile[]>;
   /** Every configured root's database id, keyed by name. */
   rootIdsByName(): Promise<Record<string, number>>;
   /** Aggregate file and chunk counts over a scope. */
@@ -178,6 +219,14 @@ export interface IndexQueries {
   recentFiles(scopePrefixes: readonly ScopePrefix[], limit: number): Promise<IndexedFile[]>;
   /** The cached thumbnail file for `(contentKey, size)`, `null` when not generated yet. */
   thumbnail(contentKey: string, size: number): Promise<{ storagePath: string } | null>;
+  /** Appends a row to `idx.moves`, the audit log the MCP `move_path` tool writes to and `recentMoves` reads back. */
+  recordMove(input: { rootId: number; src: string; dst: string; actor: string }): Promise<void>;
+  /** The most recent `idx.moves` rows for `actor`, restricted to roots present in `scopePrefixes`. */
+  recentMoves(
+    scopePrefixes: readonly ScopePrefix[],
+    actor: string,
+    limit: number,
+  ): Promise<MoveRecord[]>;
 }
 
 /**
@@ -313,6 +362,57 @@ export function createIndexQueries(db: Db): IndexQueries {
       return row ? toIndexedFile(row) : null;
     },
 
+    async listFiles(scopePrefixes, filter, order, limit) {
+      const conditions = [scopeCondition(scopePrefixes), isNull(files.deletedAt)];
+      if (filter.nameContains !== undefined) {
+        const pattern = `%${escapeLikePattern(filter.nameContains)}%`;
+        conditions.push(sql`${files.name} ILIKE ${pattern} ESCAPE '\\'`);
+      }
+      if (filter.ext !== undefined) {
+        conditions.push(eq(files.ext, filter.ext));
+      }
+      if (filter.modifiedAfterNs !== undefined) {
+        conditions.push(sql`${files.mtimeNs} >= ${filter.modifiedAfterNs}`);
+      }
+      if (filter.modifiedBeforeNs !== undefined) {
+        conditions.push(sql`${files.mtimeNs} <= ${filter.modifiedBeforeNs}`);
+      }
+      if (filter.minSize !== undefined) {
+        conditions.push(sql`${files.size} >= ${filter.minSize}`);
+      }
+      const where = and(...conditions);
+
+      const orderExpr =
+        order === "modified_desc"
+          ? desc(files.mtimeNs)
+          : order === "modified_asc"
+            ? files.mtimeNs
+            : order === "size_desc"
+              ? desc(files.size)
+              : files.path;
+
+      const [totalRow] = await db.select({ value: count() }).from(files).where(where);
+      const rows = await db.select().from(files).where(where).orderBy(orderExpr).limit(limit);
+
+      return { total: Number(totalRow?.value ?? 0), files: rows.map(toIndexedFile) };
+    },
+
+    async filesBySha256(scopePrefixes, sha256, excludeId) {
+      const rows = await db
+        .select()
+        .from(files)
+        .where(
+          and(
+            scopeCondition(scopePrefixes),
+            isNull(files.deletedAt),
+            eq(files.sha256, sha256),
+            ne(files.id, excludeId),
+          ),
+        )
+        .orderBy(files.path);
+      return rows.map(toIndexedFile);
+    },
+
     async rootIdsByName() {
       const rows = await db.select().from(roots);
       const map: Record<string, number> = {};
@@ -437,6 +537,35 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(thumbnails)
         .where(and(eq(thumbnails.contentKey, contentKey), eq(thumbnails.size, size)));
       return row ?? null;
+    },
+
+    async recordMove(input) {
+      await db.insert(moves).values({
+        rootId: input.rootId,
+        src: input.src,
+        dst: input.dst,
+        actor: input.actor,
+      });
+    },
+
+    async recentMoves(scopePrefixes, actor, limit) {
+      const rootIds = Array.from(new Set(scopePrefixes.map((prefix) => prefix.rootId)));
+      if (rootIds.length === 0) {
+        return [];
+      }
+      const rows = await db
+        .select()
+        .from(moves)
+        .where(and(inArray(moves.rootId, rootIds), eq(moves.actor, actor)))
+        .orderBy(desc(moves.id))
+        .limit(limit);
+      return rows.map((row) => ({
+        at: row.at ?? new Date(0),
+        rootId: row.rootId,
+        src: row.src,
+        dst: row.dst,
+        actor: row.actor,
+      }));
     },
   };
 }

@@ -478,6 +478,162 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
     });
 
+    describe("apiTokens", () => {
+      async function seedIdentity() {
+        const provider = await repos.providers.ensure({
+          type: "sftpgo",
+          baseUrl: "http://sftpgo:8080",
+        });
+        const account = await repos.accounts.create({ displayName: "Heidi" });
+        const identity = await repos.identities.create({
+          accountId: account.id,
+          providerId: provider.id,
+          externalUsername: "heidi",
+        });
+        return { account, identity };
+      }
+
+      it("creates a token scoped to an identity", async () => {
+        const { account, identity } = await seedIdentity();
+
+        const token = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Claude",
+          tokenHash: "hash-1",
+          expiresAt: null,
+        });
+
+        expect(token.accountId).toBe(account.id);
+        expect(token.identityId).toBe(identity.id);
+        expect(token.name).toBe("Claude");
+        expect(token.tokenHash).toBe("hash-1");
+        expect(token.lastUsedAt).toBeNull();
+        expect(token.expiresAt).toBeNull();
+        expect(token.id).toEqual(expect.any(String));
+      });
+
+      it("creates a token with no identity and an expiry", async () => {
+        const { account } = await seedIdentity();
+        const expiresAt = new Date("2026-06-01T00:00:00.000Z");
+
+        const token = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: null,
+          name: "Raycast",
+          tokenHash: "hash-2",
+          expiresAt,
+        });
+
+        expect(token.identityId).toBeNull();
+        expect(token.expiresAt).toEqual(expiresAt);
+      });
+
+      it("finds a token by its hash", async () => {
+        const { account, identity } = await seedIdentity();
+        const created = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Claude",
+          tokenHash: "hash-3",
+          expiresAt: null,
+        });
+
+        const found = await repos.apiTokens.findByHash("hash-3");
+
+        expect(found).toEqual(created);
+      });
+
+      it("returns null for an unknown hash", async () => {
+        expect(await repos.apiTokens.findByHash("no-such-hash")).toBeNull();
+      });
+
+      it("lists every token for an account, empty for an account with none", async () => {
+        const { account, identity } = await seedIdentity();
+        await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Claude",
+          tokenHash: "hash-4",
+          expiresAt: null,
+        });
+        await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Raycast",
+          tokenHash: "hash-5",
+          expiresAt: null,
+        });
+        const other = await repos.accounts.create({ displayName: "Ivan" });
+
+        const listed = await repos.apiTokens.listByAccount(account.id);
+
+        expect(listed.map((t) => t.name).sort()).toEqual(["Claude", "Raycast"]);
+        expect(await repos.apiTokens.listByAccount(other.id)).toEqual([]);
+      });
+
+      it("touches lastUsedAt", async () => {
+        const { account, identity } = await seedIdentity();
+        const created = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Claude",
+          tokenHash: "hash-6",
+          expiresAt: null,
+        });
+        const at = new Date("2026-01-01T00:00:00.000Z");
+
+        await repos.apiTokens.touch(created.id, at);
+
+        const found = await repos.apiTokens.findByHash("hash-6");
+        expect(found?.lastUsedAt).toEqual(at);
+      });
+
+      it("touch on an unknown id is a no-op", async () => {
+        await expect(
+          repos.apiTokens.touch("00000000-0000-0000-0000-000000000000", new Date()),
+        ).resolves.toBeUndefined();
+      });
+
+      it("deletes a token scoped to the owning account", async () => {
+        const { account, identity } = await seedIdentity();
+        const created = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Claude",
+          tokenHash: "hash-7",
+          expiresAt: null,
+        });
+
+        await repos.apiTokens.delete(created.id, account.id);
+
+        expect(await repos.apiTokens.findByHash("hash-7")).toBeNull();
+      });
+
+      it("does not delete a token belonging to a different account", async () => {
+        const { account, identity } = await seedIdentity();
+        const created = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Claude",
+          tokenHash: "hash-8",
+          expiresAt: null,
+        });
+        const other = await repos.accounts.create({ displayName: "Judy" });
+
+        await repos.apiTokens.delete(created.id, other.id);
+
+        expect(await repos.apiTokens.findByHash("hash-8")).not.toBeNull();
+      });
+
+      it("delete on an unknown id is a no-op", async () => {
+        const { account } = await seedIdentity();
+        await expect(
+          repos.apiTokens.delete("00000000-0000-0000-0000-000000000000", account.id),
+        ).resolves.toBeUndefined();
+      });
+    });
+
     describe("settings", () => {
       it("returns null for a key that was never set", async () => {
         expect(await repos.settings.get("connection.sftpgo")).toBeNull();

@@ -144,6 +144,7 @@ describe("loadConfig", () => {
       fdriveSetupToken: undefined,
       fdriveIndexerUrl: undefined,
       fdriveOcrUrl: undefined,
+      fdriveMcpWrites: false,
     });
   });
 
@@ -187,6 +188,7 @@ describe("loadConfig", () => {
       FDRIVE_SETUP_TOKEN: "fixed-token",
       FDRIVE_INDEXER_URL: "http://indexer:8010",
       FDRIVE_OCR_URL: "http://ocr:8020",
+      FDRIVE_MCP_WRITES: "true",
     });
 
     expect(config).toEqual({
@@ -213,6 +215,7 @@ describe("loadConfig", () => {
       fdriveSetupToken: "fixed-token",
       fdriveIndexerUrl: "http://indexer:8010",
       fdriveOcrUrl: "http://ocr:8020",
+      fdriveMcpWrites: true,
     });
   });
 
@@ -223,10 +226,11 @@ describe("loadConfig", () => {
     expect(config.fdriveThumbsDir).toBeUndefined();
   });
 
-  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset", () => {
+  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset, and FDRIVE_MCP_WRITES to false", () => {
     const config = loadConfig(REQUIRED_ENV);
     expect(config.fdriveIndexerUrl).toBeUndefined();
     expect(config.fdriveOcrUrl).toBeUndefined();
+    expect(config.fdriveMcpWrites).toBe(false);
   });
 
   it("rejects a non-http FDRIVE_INDEXER_URL", () => {
@@ -245,6 +249,14 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "" }).fdriveIndexerUrl,
     ).toBeUndefined();
+  });
+
+  it("parses FDRIVE_MCP_WRITES=true and rejects an invalid value", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "true" }).fdriveMcpWrites).toBe(true);
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "false" }).fdriveMcpWrites).toBe(false);
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "yes" })).toThrow(
+      /FDRIVE_MCP_WRITES/,
+    );
   });
 
   it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {

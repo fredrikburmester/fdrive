@@ -20,6 +20,8 @@ import { createEventBus } from "./events/bus.js";
 import { registerEventRoutes } from "./events/routes.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import { createIndexerExtractClient } from "./mcp/indexer-client.js";
+import { registerMcpRoutes } from "./mcp/routes.js";
 import { createEmbedClient } from "./search/embeddings.js";
 import { registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
@@ -32,6 +34,9 @@ import { createOcrClient } from "./system/ocr-client.js";
 import { registerSystemRoutes } from "./system/routes.js";
 import { createThumbnailsRepo } from "./system/thumbnails-repo.js";
 import { registerThumbRoutes } from "./thumbs/routes.js";
+import { createResolveTokenPrincipal } from "./tokens/principal.js";
+import { registerTokenRoutes } from "./tokens/routes.js";
+import { createTokenService } from "./tokens/service.js";
 
 export interface ComposeAppDeps {
   /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
@@ -130,6 +135,30 @@ export async function composeApp(
       : createOcrClient({ baseUrl: config.fdriveOcrUrl, fetch: fetchImpl });
   const thumbnailsRepo = createThumbnailsRepo(db);
 
+  const tokenService = createTokenService({
+    apiTokens: repos.apiTokens,
+    identities: repos.identities,
+    clock,
+  });
+  const resolveTokenPrincipal = createResolveTokenPrincipal({
+    apiTokens: repos.apiTokens,
+    identities: repos.identities,
+    clock,
+    storageFactory: (identityId) =>
+      createSftpgoStorageProvider({
+        client: sftpgo,
+        withToken: (fn) => tokenSource.withToken(identityId, fn),
+      }),
+  });
+  // The MCP `read_file_text` tool talks to the indexer's `POST /extract`
+  // endpoint, a different shape from the System pages' `IndexerClient`
+  // (`/health`, `/stats`, ...), so it gets its own client. Both point at the
+  // same `FDRIVE_INDEXER_URL` and share `fetchImpl`.
+  const indexerExtractClient =
+    config.fdriveIndexerUrl === undefined
+      ? null
+      : createIndexerExtractClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
+
   const setupToken = config.fdriveSetupToken ?? generateSetupToken();
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
@@ -196,6 +225,24 @@ export async function composeApp(
         indexRootNames: Array.from(indexRootNames),
         fetch: fetchImpl,
       });
+      registerTokenRoutes(groups, { service: tokenService });
+    },
+  });
+
+  // Mounted directly on the top-level app, outside `/api/v1`: the MCP
+  // endpoint is bearer- (or path-token-) authenticated, not session/CSRF
+  // guarded, and `resolveMcpPrincipal` never touches the session cookie.
+  registerMcpRoutes(app, {
+    resolveToken: resolveTokenPrincipal,
+    toolDeps: {
+      indexQueries,
+      homeTemplate,
+      indexRootNames,
+      searchService,
+      fdrivePublicUrl: config.fdrivePublicUrl,
+      indexerClient: indexerExtractClient,
+      writesEnabled: config.fdriveMcpWrites,
+      clock,
     },
   });
 

@@ -13,7 +13,14 @@ import {
   OkResponse,
 } from "./fs.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
-import { IDENTITY_HEADER, jobCancelRoute, jobRoute, MODIFIED_AT_HEADER, ROUTES } from "./routes.ts";
+import {
+  accountTokenRoute,
+  IDENTITY_HEADER,
+  jobCancelRoute,
+  jobRoute,
+  MODIFIED_AT_HEADER,
+  ROUTES,
+} from "./routes.ts";
 import { SearchResponse, SearchStatusResponse } from "./search.ts";
 import {
   ConnectionTestResponse,
@@ -37,6 +44,7 @@ import {
   SystemThumbnailsResponse,
 } from "./system.ts";
 import type { ThumbSize } from "./thumbs.ts";
+import { ApiTokensResponse, type CreateApiTokenRequest, CreateApiTokenResponse } from "./tokens.ts";
 
 export type { IdentitySummary };
 
@@ -139,6 +147,9 @@ export interface ApiClient {
   systemRunOcr(): Promise<OcrRunResponse>;
   systemThumbnails(): Promise<SystemThumbnailsResponse>;
   systemRebuildThumbnails(): Promise<IndexerActionResponse>;
+  listApiTokens(): Promise<ApiTokensResponse>;
+  createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResponse>;
+  revokeApiToken(id: string): Promise<OkResponse>;
 }
 
 interface ClientContext {
@@ -628,6 +639,22 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         { method: "POST", path: ROUTES.system.thumbnailsRebuild },
         IndexerActionResponse,
       );
+    },
+
+    listApiTokens(): Promise<ApiTokensResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.account.tokens }, ApiTokensResponse);
+    },
+
+    createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.account.tokens, jsonBody: req },
+        CreateApiTokenResponse,
+      );
+    },
+
+    revokeApiToken(id: string): Promise<OkResponse> {
+      return requestJson(ctx, { method: "DELETE", path: accountTokenRoute(id) }, OkResponse);
     },
   };
 }
