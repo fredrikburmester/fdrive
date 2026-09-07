@@ -253,3 +253,15 @@ available and followed the project instructions.
   size, Restore returned it to Files and the Trash page showed its empty state. Root gates
   after trash-api: lint 957 files, typecheck 13, coverage 8/8 (API 1395, web 1247),
   integration 4/4 (API 15 incl. trash-sftp).
+- Merged: `hardening-1` (896eee1: loopback-bound SFTPGo admin and proxy ports, `.env*` out
+  of build contexts, trusted-proxy-hop client IP, `X-Forwarded-Proto https` for Secure
+  cookies, bounded login limiter, MCP token redaction and no-store, public `/wopi` removed)
+  and `conflict-guard` (1e92300: move/copy/rename/restore refuse an occupied target; fake
+  matches real SFTPGo overwrite, `cp -r` nesting and self-move semantics, 7 contract cases,
+  real-container test). Both verified: gates green (API 1438, sftpgo 383/57 real, core 292,
+  integration 4/4), Playwright 81/81 after scoping the trash spec's toast locator, live pane
+  refused a rename onto an existing name with a toast and left both files intact.
+- Manual item: flip `FDRIVE_COOKIE_SECURE=auto` to `true` in `deploy/.env.example` (the
+  session's env-file rule blocks in-place edits; the new variables were appended).
+- Next: `hardening-2` (HARDENING-REVIEW items 6, 9, 10 and the lower-priority list), then
+  P5-SCOPE-CONSUMERS wiring, then search performance.
