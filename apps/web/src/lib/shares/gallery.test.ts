@@ -3,6 +3,7 @@ import {
   GALLERY_PAGE_SIZE,
   galleryVisibleCount,
   hasMoreGalleryItems,
+  neighborIndexes,
   stepLightboxIndex,
 } from "./gallery";
 
@@ -33,5 +34,21 @@ describe("stepLightboxIndex", () => {
     expect(stepLightboxIndex(1, 3, -1)).toBe(0);
     expect(stepLightboxIndex(0, 0, 1)).toBe(0);
     expect(stepLightboxIndex(5, 1, 1)).toBe(0);
+  });
+});
+
+describe("neighborIndexes", () => {
+  it("is empty for an empty or single-image gallery", () => {
+    expect(neighborIndexes(0, 0)).toEqual([]);
+    expect(neighborIndexes(0, 1)).toEqual([]);
+  });
+  it("collapses to one neighbour when both directions wrap to the same index", () => {
+    expect(neighborIndexes(0, 2)).toEqual([1]);
+    expect(neighborIndexes(1, 2)).toEqual([0]);
+  });
+  it("returns the previous and next indexes for three or more images", () => {
+    expect(neighborIndexes(0, 3)).toEqual([2, 1]);
+    expect(neighborIndexes(1, 3)).toEqual([0, 2]);
+    expect(neighborIndexes(2, 5)).toEqual([1, 3]);
   });
 });

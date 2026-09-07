@@ -20,3 +20,16 @@ export function stepLightboxIndex(current: number, total: number, delta: number)
   if (total <= 0) return 0;
   return (((current + delta) % total) + total) % total;
 }
+
+/**
+ * The lightbox indexes worth preloading around `current`: its previous and next neighbours,
+ * wrapping like `stepLightboxIndex`. Empty for a single-image (or empty) gallery, where there is
+ * nothing to preload; a single-entry pair (both neighbours equal, a two-image gallery) is
+ * deduplicated so the current image is never preloaded twice.
+ */
+export function neighborIndexes(current: number, total: number): readonly number[] {
+  if (total <= 1) return [];
+  const previous = stepLightboxIndex(current, total, -1);
+  const next = stepLightboxIndex(current, total, 1);
+  return previous === next ? [previous] : [previous, next];
+}

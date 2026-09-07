@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { shareAccessLabel, shareItemLabel, shareUnavailable, shareUsage } from "./status";
+import {
+  publicShareUsage,
+  shareAccessLabel,
+  shareItemLabel,
+  shareUnavailable,
+  shareUsage,
+} from "./status";
 
 it("reports explicit and locally elapsed share limits", () => {
   const valid = { expiresAt: null, maxDownloads: 0, usedDownloads: 0, unavailableReason: null };
@@ -20,4 +26,11 @@ it("reports explicit and locally elapsed share limits", () => {
   expect(shareItemLabel(["/"])).toBe("Everything");
   expect(shareItemLabel([])).toBe("Everything");
   expect(shareItemLabel(["/a.txt", "/b.txt"])).toBe("2 items");
+  expect(publicShareUsage({ scope: "read", maxDownloads: 0, usedDownloads: 5 })).toBeNull();
+  expect(publicShareUsage({ scope: "read", maxDownloads: 3, usedDownloads: 1 })).toBe(
+    "1 of 3 downloads",
+  );
+  expect(publicShareUsage({ scope: "write", maxDownloads: 2, usedDownloads: 2 })).toBe(
+    "2 of 2 uploads",
+  );
 });

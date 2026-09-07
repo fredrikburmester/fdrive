@@ -320,7 +320,8 @@ export function ShareDialog({
                     onChange={(event) => setFields({ ...fields, maxDownloads: event.target.value })}
                   />
                   <FieldDescription>
-                    Blank or zero means unlimited. Previews also count.
+                    Blank or zero means unlimited. Full-size previews and downloads count; gallery
+                    thumbnails do not.
                   </FieldDescription>
                 </Field>
               </div>
