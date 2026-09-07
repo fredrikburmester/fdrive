@@ -66,6 +66,15 @@ export interface AppConfig {
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
   /**
+   * Cap on the compressed bytes `GET /fs/archive-entries` reads while
+   * streaming a tar-family archive's entries. Unused for zip, whose two
+   * Range reads are already bounded by its own metadata sizes. Optional
+   * (unlike `fdriveJobMaxBytes`) so a hand-built `AppConfig` value outside
+   * `loadConfig` (as some tests construct) does not have to name it;
+   * `loadConfig` itself always sets it. See `DEFAULT_ARCHIVE_PEEK_MAX_BYTES`.
+   */
+  readonly fdriveArchivePeekMaxBytes?: number | undefined;
+  /**
    * Cap on a JSON request body's bytes for `fs/routes.ts`'s `parseBody`
    * (mkdir, move, copy, rename, delete, zip). See `DEFAULT_JSON_MAX_BYTES`.
    */
@@ -109,6 +118,9 @@ export interface AppConfig {
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
 export const DEFAULT_JOB_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+
+/** Default cap on the bytes `GET /fs/archive-entries` reads for a tar-family archive: 512 MiB. */
+export const DEFAULT_ARCHIVE_PEEK_MAX_BYTES = 512 * 1024 * 1024;
 
 /** Default cap on a JSON request body's bytes: 1 MiB. */
 export const DEFAULT_JSON_MAX_BYTES = 1024 * 1024;
@@ -341,6 +353,14 @@ const envSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1)),
   ),
+  FDRIVE_ARCHIVE_PEEK_MAX_BYTES: z.preprocess(
+    (value) => withDefault(value, String(DEFAULT_ARCHIVE_PEEK_MAX_BYTES)),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1)),
+  ),
   FDRIVE_SHARE_UPLOAD_MAX_BYTES: z.preprocess(
     (value) => withDefault(value, String(DEFAULT_SHARE_UPLOAD_MAX_BYTES)),
     z
@@ -474,6 +494,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
+    fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,
     fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,
     fdriveShareUploadMaxBytes: parsed.FDRIVE_SHARE_UPLOAD_MAX_BYTES,
     fdriveIndexRoots: parsed.FDRIVE_INDEX_ROOTS,

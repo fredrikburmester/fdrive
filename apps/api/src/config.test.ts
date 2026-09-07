@@ -1,6 +1,7 @@
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
   DEFAULT_JOB_MAX_BYTES,
   DEFAULT_JSON_MAX_BYTES,
   DEFAULT_SHARE_UPLOAD_MAX_BYTES,
@@ -147,6 +148,7 @@ describe("loadConfig", () => {
       fdriveAutoMigrate: true,
       fdriveTmpDir: tmpdir(),
       fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
+      fdriveArchivePeekMaxBytes: DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
       fdriveJsonMaxBytes: DEFAULT_JSON_MAX_BYTES,
       fdriveShareUploadMaxBytes: DEFAULT_SHARE_UPLOAD_MAX_BYTES,
       fdriveIndexRoots: null,
@@ -194,6 +196,7 @@ describe("loadConfig", () => {
       FDRIVE_AUTO_MIGRATE: "false",
       FDRIVE_TMP_DIR: "/var/tmp/fdrive",
       FDRIVE_JOB_MAX_BYTES: "1000",
+      FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "1500",
       FDRIVE_JSON_MAX_BYTES: "2000",
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: "3000",
       FDRIVE_INDEX_ROOTS: JSON.stringify([
@@ -232,6 +235,7 @@ describe("loadConfig", () => {
       fdriveAutoMigrate: false,
       fdriveTmpDir: "/var/tmp/fdrive",
       fdriveJobMaxBytes: 1000,
+      fdriveArchivePeekMaxBytes: 1500,
       fdriveJsonMaxBytes: 2000,
       fdriveShareUploadMaxBytes: 3000,
       fdriveIndexRoots: [
@@ -443,6 +447,29 @@ describe("loadConfig", () => {
   it("rejects a zero FDRIVE_JOB_MAX_BYTES", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JOB_MAX_BYTES: "0" })).toThrow(
       /FDRIVE_JOB_MAX_BYTES/,
+    );
+  });
+
+  it("defaults FDRIVE_ARCHIVE_PEEK_MAX_BYTES to 512 MiB", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveArchivePeekMaxBytes).toBe(DEFAULT_ARCHIVE_PEEK_MAX_BYTES);
+  });
+
+  it("accepts a custom FDRIVE_ARCHIVE_PEEK_MAX_BYTES", () => {
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "2048" })
+        .fdriveArchivePeekMaxBytes,
+    ).toBe(2048);
+  });
+
+  it("rejects a non-integer FDRIVE_ARCHIVE_PEEK_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "lots" })).toThrow(
+      /FDRIVE_ARCHIVE_PEEK_MAX_BYTES/,
+    );
+  });
+
+  it("rejects a zero FDRIVE_ARCHIVE_PEEK_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "0" })).toThrow(
+      /FDRIVE_ARCHIVE_PEEK_MAX_BYTES/,
     );
   });
 
