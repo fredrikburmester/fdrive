@@ -19,6 +19,7 @@ from typing import Any
 
 from .batching import chunked
 from .embedder import Embedder, ImageDecodeError
+from .features import pooled_features
 
 
 def load_embedder(model_id: str, device: str, threads: int | None, batch_size: int) -> Embedder:  # pragma: no cover
@@ -68,7 +69,7 @@ class SiglipEmbedder:  # pragma: no cover
                     raise ImageDecodeError(str(e)) from e
             inputs = self._processor(images=pictures, return_tensors="pt").to(self._device)
             with torch.inference_mode():
-                features = self._model.get_image_features(**inputs)
+                features = pooled_features(self._model.get_image_features(**inputs))
             out.extend(features.to("cpu").tolist())
         return out
 
@@ -79,6 +80,6 @@ class SiglipEmbedder:  # pragma: no cover
         for batch in chunked(texts, self._batch_size):
             inputs = self._processor(text=batch, return_tensors="pt", padding="max_length", truncation=True).to(self._device)
             with torch.inference_mode():
-                features = self._model.get_text_features(**inputs)
+                features = pooled_features(self._model.get_text_features(**inputs))
             out.extend(features.to("cpu").tolist())
         return out
