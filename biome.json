@@ -17,7 +17,8 @@
       "!**/*.gen.ts",
       "!**/pnpm-lock.yaml",
       "!**/.claude/worktrees",
-      "!**/.worktrees",
+      "!.worktrees",
+      "!**/.venv",
       "!**/playwright-report",
       "!**/test-results",
       "!**/tools/perf/results"
