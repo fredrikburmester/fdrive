@@ -11,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 
 import psycopg
 
+from . import db
 from .indexer import RootContext, log
 from .thumb_rebuild import ThumbnailRebuildJob
 
@@ -175,6 +176,32 @@ def clear_thumbnails(contexts: Sequence[RootContext], job: ThumbnailRebuildJob) 
         except FileNotFoundError:
             fd = None
         clear_cache(ctx.conn(), fd, job)
+
+
+def clear_image_embeddings(contexts: Sequence[RootContext], job: ThumbnailRebuildJob) -> None:
+    """Deletes every row of `app.image_embeddings`, in keyset-paginated
+    batches like `clear_cache`. Content-addressed and root-independent (like
+    the table itself), so any one context's connection does the work; a
+    caller with no configured roots is a no-op."""
+    if not contexts:
+        return
+    conn = contexts[0].conn()
+    after = ""
+    upper = db.image_embeddings_max_content_key(conn) or after
+    while True:
+        keys = db.image_embeddings_page(conn, after, upper, BATCH_SIZE)
+        if not keys:
+            break
+        job.discover(len(keys))
+        for key in keys:
+            after = key
+            try:
+                db.delete_image_embedding(conn, key)
+            except Exception as exc:
+                log(f"image embedding clear failed for {key}: {exc}")
+                job.advance(False)
+            else:
+                job.advance(True)
 
 
 def start_clear(job: ThumbnailRebuildJob, operation: Callable[[], None]) -> bool:

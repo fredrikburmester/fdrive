@@ -42,3 +42,18 @@ def test_config_default_settings_matches_env(monkeypatch) -> None:
     settings = cfg.default_settings()
     assert settings.workers == 3
     assert settings.scan_interval_seconds == cfg.scan_interval
+
+
+def test_config_image_embed_defaults_to_unconfigured(monkeypatch) -> None:
+    monkeypatch.delenv("IMAGE_EMBED_URL", raising=False)
+    cfg = Config()
+    assert cfg.image_embed_url == ""
+    assert cfg.image_embed_batch_size == 8
+
+
+def test_config_image_embed_reads_env(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_EMBED_URL", "http://image-embed:8012/")
+    monkeypatch.setenv("IMAGE_EMBED_BATCH_SIZE", "4")
+    cfg = Config()
+    assert cfg.image_embed_url == "http://image-embed:8012"
+    assert cfg.image_embed_batch_size == 4
