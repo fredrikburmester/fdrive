@@ -64,6 +64,7 @@ function DirectoryListing({
   id,
   path,
   presentation,
+  downloadLimited,
   listing,
   client,
   onPreview,
@@ -71,6 +72,8 @@ function DirectoryListing({
   id: string;
   path: string;
   presentation: PublicShare["presentation"];
+  /** Whether the share has a download limit; previews are never rendered for a limited link. */
+  downloadLimited: boolean;
   listing: ReturnType<typeof useShareEntries>;
   client: PublicShareClient;
   onPreview: (name: string, path: string, size: number) => void;
@@ -82,7 +85,9 @@ function DirectoryListing({
         Loading shared files…
       </p>
     );
-  const resolved = resolveEntriesPresentation(presentation, listing.data.items);
+  const resolved = resolveEntriesPresentation(presentation, listing.data.items, {
+    downloadLimited,
+  });
   if (resolved === "download") return <ZipDownloadCard id={id} client={client} />;
   if (resolved === "gallery")
     return (
@@ -144,7 +149,9 @@ function SharedContents({
     );
   if (!enabled)
     return <p className="text-sm text-muted-foreground">Enter the share password to continue.</p>;
-  const singleFilePresentation = resolveSingleFilePresentation(share.presentation, share.fileName);
+  const singleFilePresentation = resolveSingleFilePresentation(share.presentation, share.fileName, {
+    downloadLimited: share.maxDownloads > 0,
+  });
   return (
     <div className="space-y-5">
       {share.layout === "directory" ? (
@@ -176,6 +183,7 @@ function SharedContents({
             id={id}
             path={path}
             presentation={share.presentation}
+            downloadLimited={share.maxDownloads > 0}
             listing={listing}
             client={client}
             onPreview={previewFile}
