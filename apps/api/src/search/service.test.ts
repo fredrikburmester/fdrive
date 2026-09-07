@@ -472,6 +472,79 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.folders[0]).toMatchObject({ kind: "dir", size: 0, ext: "", mime: null });
   });
 
+  it("suppresses the Folders section entirely when a type filter is active, even though matching parent folders exist", async () => {
+    const files = Array.from({ length: 3 }, (_, i) =>
+      makeFile({ id: i + 1, path: `alice/folder${i}/report.pdf`, name: "report.pdf", ext: ".pdf" }),
+    );
+    const filenameHits: FilenameHit[] = files.map((f) => ({
+      fileId: f.id,
+      hits: 1,
+      similarity: 0.5,
+    }));
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => filenameHits,
+      filesByIds: async () => files,
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(
+      baseInput({
+        query: "report",
+        limit: 100,
+        filters: { exts: [".pdf"], folder: null, after: null, before: null },
+      }),
+    );
+
+    expect(result.sections.folders).toEqual([]);
+    // The type filter is files-only: it does not suppress the Files
+    // section, only the Folders derivation.
+    expect(result.sections.files.length).toBeGreaterThan(0);
+  });
+
+  it("never calls the authorizer for a folder while a type filter is active", async () => {
+    const file = makeFile({ id: 80, path: "alice/private/x.pdf", name: "x.pdf", ext: ".pdf" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 80, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+    const calls: ReadAuthorizeTarget[] = [];
+    const authorizer = fakeAuthorizer({ calls });
+
+    await service.search(
+      baseInput({
+        authorizer,
+        filters: { exts: [".pdf"], folder: null, after: null, before: null },
+      }),
+    );
+
+    expect(calls.some((call) => call.kind === "dir")).toBe(false);
+  });
+
+  it("marks the response partial when a folder's live-read check reports unavailable", async () => {
+    const file = makeFile({ id: 65, path: "alice/flaky/report.pdf", ext: ".pdf" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 65, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+    const authorizer = fakeAuthorizer({ unavailable: new Set(["dir:/flaky"]) });
+
+    const result = await service.search(baseInput({ authorizer }));
+
+    expect(result.sections.folders).toEqual([]);
+    expect(result.partial).toBe(true);
+  });
+
   it("drops a folder the authorizer denies list access to", async () => {
     const file = makeFile({ id: 63, path: "alice/private/x.txt" });
     const indexQueries = fakeIndexQueries({
