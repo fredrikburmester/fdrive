@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
+import { listing } from "./support/regions.js";
+import { uniqueName } from "./support/unique.js";
 
 const SEARCH_INPUT_PLACEHOLDER = "Search files and content...";
 
@@ -106,6 +108,98 @@ test("reloading after a reveal shows nothing selected", async ({ page }) => {
   await page.reload();
 
   await expect(page.getByText("1 selected")).toBeHidden();
+});
+
+test("a type filter other than Any type hides the Folders section, even though the unfiltered query shows one", async ({
+  page,
+}) => {
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+
+  // Unfiltered, "readme" matches readme.md by both filename and content, so
+  // its containing folder ("/docs") is derived into the Folders section
+  // (see the "Enter opens the preview" test's note on section ordering).
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+  await expect(dialog.getByText("Folders")).toBeVisible();
+
+  // readme.md is a ".md" file, which the "Documents" chip includes, so the
+  // Files section still lists it; only Folders disappears, since a type
+  // filter is a files-only filter (see `service.ts`'s `deriveFolders` call
+  // site).
+  await dialog.getByRole("button", { name: "Documents", exact: true }).click();
+
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+  await expect(dialog.getByText("Folders")).toBeHidden();
+});
+
+test("a long folder name and file path in a result row never spill past the search dialog's edge", async ({
+  page,
+}) => {
+  // The Files/Content sections only ever surface index-backed rows (a
+  // seeded fixture, fixed at global setup), which have no long paths; the
+  // Recent section is populated from `localStorage` alone and needs no
+  // index, so a folder created here (giving it a real, long virtual path)
+  // combined with a directly-seeded Recent entry exercises the same
+  // `HitRow`/`RecentRow` truncation styles this spec's earlier tests do not
+  // reach, without touching any shared fixture file.
+  const folderName = uniqueName(
+    "(TNG032) Fourier and Laplace Transforms - Course Reference Materials for Engineering Students",
+  );
+  await page.goto("/files");
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
+  const folderDialog = page.getByRole("dialog");
+  await folderDialog.getByLabel("Folder name").fill(folderName);
+  await folderDialog.getByRole("button", { name: "Create" }).click();
+  await expect(folderDialog).toBeHidden();
+
+  const meResponse = await page.request.get("/api/v1/auth/me");
+  expect(meResponse.ok()).toBe(true);
+  const me = (await meResponse.json()) as { account: { id: string }; activeIdentityId: string };
+  const storageKey = `fdrive.recent:${JSON.stringify([me.account.id, me.activeIdentityId])}`;
+  const recentItem = {
+    path: `/${folderName}/Course Notes.md`,
+    name: "Course Notes.md",
+    openedAt: new Date().toISOString(),
+  };
+  await page.evaluate(({ key, item }) => window.localStorage.setItem(key, JSON.stringify([item])), {
+    key: storageKey,
+    item: recentItem,
+  });
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  const row = dialog.getByRole("option").filter({ hasText: "Course Notes.md" });
+  await expect(row).toBeVisible();
+  const pathText = row.getByText(recentItem.path);
+  await expect(pathText).toBeVisible();
+
+  const dialogBox = await dialog.boundingBox();
+  const pathBox = await pathText.boundingBox();
+  if (dialogBox === null || pathBox === null) {
+    throw new Error("expected bounding boxes for both the dialog and the path text");
+  }
+  // With truncation applied, the path's own rendered box never extends
+  // past the dialog's right edge; without it (the pre-fix `shrink-0` span)
+  // the path's box grows to its full, untruncated content width and pokes
+  // out from under the reveal button.
+  expect(pathBox.x + pathBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
+  // Belt and braces: the element clips its own overflowing content rather
+  // than merely happening to fit.
+  const overflow = await pathText.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow).toBeGreaterThan(0);
+
+  await page.keyboard.press("Escape");
+  await listing(page).getByText(folderName, { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  const confirmDialog = page.getByRole("alertdialog");
+  await confirmDialog.getByRole("button", { name: "Delete" }).click();
+  await expect(confirmDialog).toBeHidden();
 });
 
 test.describe("scoping", () => {
