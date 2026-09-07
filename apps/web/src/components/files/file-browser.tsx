@@ -111,6 +111,7 @@ import { tagCheckState as computeTagCheckState, toggleTagId } from "@/lib/metada
 import { isOfficePreviewCandidate, officeModesFor, opensInOffice } from "@/lib/office/capabilities";
 import type { OfficeDocumentKind } from "@/lib/office/new-document";
 import { officeHref } from "@/lib/office/route";
+import { useTrashStatus } from "@/lib/trash/queries";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
 import { DeleteDialog } from "./delete-dialog";
@@ -207,6 +208,8 @@ export function FileBrowser({
   const queryClient = useQueryClient();
   const { data, isLoading, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
+  const { data: trashStatus } = useTrashStatus();
+  const trashAvailable = trashStatus?.available === true;
 
   const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
   const [viewMode, setViewModeState] = useState<ViewMode>(DEFAULT_VIEW_MODE);
@@ -907,6 +910,7 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
+                trashAvailable={trashAvailable}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -926,6 +930,7 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
+                trashAvailable={trashAvailable}
               />
             ) : (
               <FileList
@@ -948,6 +953,7 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
+                trashAvailable={trashAvailable}
               />
             )}
           </div>
@@ -1006,6 +1012,7 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
+        trash={trashStatus ?? null}
       />
       {destinationPicker !== null && (
         <DestinationPicker

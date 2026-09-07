@@ -29,4 +29,5 @@ export {
   selectionReducer,
 } from "@/lib/files/selection";
 export { readJson, type StorageLike, writeJson } from "@/lib/files/storage";
+export { useTrashStatus } from "@/lib/trash/queries";
 export type { ApiClient };

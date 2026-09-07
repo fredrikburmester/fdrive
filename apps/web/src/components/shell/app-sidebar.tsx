@@ -12,6 +12,7 @@ import {
   Search,
   Settings2,
   Sun,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import type { Route } from "next";
@@ -53,6 +54,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
+import { useTrashStatus } from "@/lib/trash/queries";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light", Icon: Sun },
@@ -75,6 +77,12 @@ export function isSystemRoute(pathname: string | null): boolean {
   return pathname === "/system" || (pathname?.startsWith("/system/") ?? false);
 }
 
+/** True when `pathname` is the Trash location. */
+export function isTrashRoute(pathname: string | null): boolean {
+  return pathname === "/trash";
+}
+
+const TRASH_ROUTE = "/trash" as Route;
 const SYSTEM_CONNECTION_ROUTE = "/system/connection" as Route;
 const SYSTEM_INDEXER_ROUTE = "/system/indexer" as Route;
 const SYSTEM_SEARCH_ROUTE = "/system/search" as Route;
@@ -96,6 +104,7 @@ export function AppSidebar() {
   const logout = useLogout();
   const identityActions = useIdentityActions();
   const pathname = usePathname();
+  const { data: trashStatus } = useTrashStatus();
 
   const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
 
@@ -121,6 +130,17 @@ export function AppSidebar() {
                   <span>Shares</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {trashStatus?.available === true && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={isTrashRoute(pathname)}
+                    render={<Link href={TRASH_ROUTE} />}
+                  >
+                    <Trash2 />
+                    <span>Trash</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
