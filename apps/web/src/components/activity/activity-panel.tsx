@@ -336,7 +336,8 @@ export function ActivityPanel() {
 
   return (
     <Card data-slot="activity-panel" className="fixed right-4 bottom-4 z-50 w-80 gap-3 shadow-lg">
-      <CardHeader className="flex-row items-center justify-between gap-2">
+      {/* The card header is a grid by default; `flex` keeps the title and actions on one row. */}
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle>{title}</CardTitle>
         <div className="flex shrink-0 items-center gap-1">
           {finished && (

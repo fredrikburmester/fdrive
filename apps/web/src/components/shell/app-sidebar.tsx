@@ -125,8 +125,8 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
         <FavoritesSection />
-        <RecentsSection />
         <TagsSection />
+        <RecentsSection />
         {/* Shares and Trash sit at the bottom of the navigation, above System. */}
         <SidebarGroup>
           <SidebarGroupContent>
