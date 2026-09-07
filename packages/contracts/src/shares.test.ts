@@ -72,15 +72,17 @@ describe("share contracts", () => {
         const request = new Request(`http://test${input}`, init);
         seen.push(request);
         const path = new URL(request.url).pathname;
-        const body = path.endsWith("entries")
-          ? { items: [] }
-          : path.includes("credentials") || path.endsWith("upload") || request.method === "DELETE"
-            ? { ok: true }
-            : path.includes("public")
-              ? pub
-              : path.endsWith("shares") && request.method === "GET"
-                ? { items: [managed] }
-                : managed;
+        const body = path.endsWith("archive-entries")
+          ? { format: "zip", entries: [], truncated: false }
+          : path.endsWith("entries")
+            ? { items: [] }
+            : path.includes("credentials") || path.endsWith("upload") || request.method === "DELETE"
+              ? { ok: true }
+              : path.includes("public")
+                ? pub
+                : path.endsWith("shares") && request.method === "GET"
+                  ? { items: [managed] }
+                  : managed;
         return Response.json(body);
       },
     });
@@ -95,11 +97,13 @@ describe("share contracts", () => {
     await client.clearSharePassword(id);
     await client.shareEntries(id);
     await client.shareEntries(id, "/child");
+    await client.shareArchiveEntries(id);
+    await client.shareArchiveEntries(id, "/child.zip");
     await client.shareUpload(id, "/a", new Uint8Array([1]));
     expect(client.shareDownloadUrl(id)).toContain("path=%2F");
     expect(client.shareDownloadUrl(id, "/b")).toContain("path=%2Fb");
     expect(client.shareArchiveUrl(id)).toContain("/archive");
-    expect(seen).toHaveLength(11);
+    expect(seen).toHaveLength(13);
     expect(
       seen
         .filter((r) => r.method !== "GET")

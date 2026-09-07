@@ -1,4 +1,5 @@
 import {
+  ArchiveEntriesResponse,
   CreateShareRequest,
   ROUTES,
   ShareCredentialsRequest,
@@ -18,9 +19,15 @@ import { getCookie, setCookie } from "hono/cookie";
 import type { z } from "zod";
 import { accountContext } from "../accounts/routes.ts";
 import type { AppHono, AuthedHono } from "../app.ts";
+import {
+  peekArchive,
+  UnreadableArchiveError,
+  UnsupportedPeekFormatError,
+} from "../archive/peek.ts";
 import { withoutApiV1Prefix } from "../auth/routes.ts";
 import { cookieSecureFor } from "../auth/sessions.ts";
 import type { AppConfig } from "../config.ts";
+import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.ts";
 import { ApiHttpError } from "../errors.ts";
 import { extractClientIp } from "../net.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
@@ -37,6 +44,7 @@ import {
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
 import { createSharePasswordCache } from "./password-cache.ts";
+import { createSharePeekPort } from "./peek-adapter.ts";
 import { type SharesService, shareCall } from "./service.ts";
 
 export async function publicBody<T>(
@@ -339,6 +347,72 @@ export function registerSharesRoutes(
           modifiedAt: entry.modifiedAt.toISOString(),
         })),
       });
+    }),
+  );
+  groups.public.get(`${pub}/archive-entries`, (c) =>
+    shareCall(async () => {
+      const path = publicPath(c);
+      const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
+      // A limited link never peeks: every Range read the port issues is a
+      // real SFTPGo download that would consume the link's own budget, the
+      // same reasoning as the gallery refusing a limited link. An
+      // archive-of-many share (`paths.length !== 1`) has no single archive
+      // file to peek either. Both answer the same plain 403, never
+      // distinguishing why, matching every other share-authorization
+      // failure on this route group.
+      if (share.maxTokens > 0 || share.paths.length !== 1) {
+        throw new ApiHttpError("forbidden", "This share cannot be peeked");
+      }
+      // Not wrapped in `publicCall`: unlike a single `api.list`/`download`
+      // call, `peekArchive` issues several Range reads through the adapter,
+      // so a wrong-password `SftpgoError` is recognized inline below
+      // instead of losing its type through `publicCall`'s own `shareCall`
+      // fallback for anything else, which would answer `upstream_unavailable`
+      // even for a peek-specific error such as an unsupported extension.
+      const isSingleFile = path === "/";
+      // `peekArchive` detects the archive format from its path's extension.
+      // A single-file share's request path is always `/` (it names the
+      // share, not the file), so the actual name with its extension comes
+      // from the share's own shared path instead, matching `/download`'s
+      // `path === "/"` convention for which SFTPGo call to make.
+      const extensionPath = isSingleFile ? (share.paths[0] ?? path) : path;
+      let result: Awaited<ReturnType<typeof peekArchive>>;
+      try {
+        result = await peekArchive({
+          storage: createSharePeekPort({ api, isSingleFile }),
+          path: extensionPath,
+          maxBytes: deps.config.fdriveArchivePeekMaxBytes ?? DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
+          signal: c.req.raw.signal,
+        });
+      } catch (error) {
+        if (
+          error instanceof UnsupportedPeekFormatError ||
+          error instanceof UnreadableArchiveError
+        ) {
+          throw new ApiHttpError("bad_request", error.message);
+        }
+        if (
+          error instanceof SftpgoError &&
+          share.hasPassword &&
+          (error.kind === "unauthorized" || error.kind === "forbidden")
+        ) {
+          throw new ApiHttpError("unauthorized", "Share password required or incorrect", {
+            reason: "password",
+          });
+        }
+        throw error;
+      }
+      const responseBody: ArchiveEntriesResponse = ArchiveEntriesResponse.parse({
+        format: result.format,
+        entries: result.entries.map((entry) => ({
+          path: entry.path,
+          kind: entry.kind,
+          size: entry.size,
+          modifiedAt: entry.modifiedAt?.toISOString() ?? null,
+        })),
+        truncated: result.truncated,
+      });
+      return c.json(responseBody);
     }),
   );
   // No `createReadAuthorizer` live probe on this route, unlike the authed
