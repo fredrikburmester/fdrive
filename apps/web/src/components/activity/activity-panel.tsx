@@ -20,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { activityTitle } from "@/lib/activity/summary";
 import { apiClient } from "@/lib/api/client";
 import { pathToHref } from "@/lib/files/path-url";
@@ -213,7 +214,17 @@ export function ActivityPanel() {
   const seedJob = useJobsStore((s) => s.seed);
   const removeJob = useJobsStore((s) => s.remove);
 
+  const isMobile = useIsMobile();
+  // On a phone the expanded card would cover the file list, so it starts as the pill
+  // and only expands when tapped; desktop keeps the expanded card.
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileInitialised, setMobileInitialised] = useState(false);
+  useEffect(() => {
+    if (isMobile && !mobileInitialised) {
+      setCollapsed(true);
+      setMobileInitialised(true);
+    }
+  }, [isMobile, mobileInitialised]);
 
   const uploadSummary = summarize(uploadState);
   const uploadItems: UploadItem[] = [];
@@ -335,7 +346,10 @@ export function ActivityPanel() {
   const finished = activeCount === 0;
 
   return (
-    <Card data-slot="activity-panel" className="fixed right-4 bottom-4 z-50 w-80 gap-3 shadow-lg">
+    <Card
+      data-slot="activity-panel"
+      className="fixed right-4 bottom-4 z-50 w-80 gap-3 shadow-lg max-md:inset-x-3 max-md:right-3 max-md:w-auto max-md:max-h-[50vh] max-md:overflow-y-auto"
+    >
       {/* The card header is a grid by default; `flex` keeps the title and actions on one row. */}
       <CardHeader className="flex flex-row items-center justify-between gap-2">
         <CardTitle>{title}</CardTitle>
