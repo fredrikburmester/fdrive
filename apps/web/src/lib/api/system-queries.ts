@@ -243,3 +243,34 @@ export function useClearThumbnails() {
       ]),
   });
 }
+
+/** Image-embedding sidecar status and embedded count for `System > Image search`. Polls every 5s while mounted. */
+export function useSystemImageSearch() {
+  return useQuery({
+    queryKey: queryKeys.system.imageSearch(),
+    queryFn: () => apiClient.systemImageSearch(),
+    refetchInterval: SYSTEM_REFETCH_INTERVAL_MS,
+  });
+}
+
+/** Starts a background image-embedding rebuild, optionally replacing rows from another model. */
+export function useRebuildImageSearch() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: MAINTENANCE_KEY,
+    mutationFn: (req?: IndexerThumbnailsRebuildRequest) => apiClient.systemImageSearchRebuild(req),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.system.imageSearch() }),
+  });
+}
+
+/** Clears every stored image embedding. */
+export function useClearImageSearch() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: MAINTENANCE_KEY,
+    mutationFn: () => apiClient.systemImageSearchClear(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.system.imageSearch() }),
+  });
+}
