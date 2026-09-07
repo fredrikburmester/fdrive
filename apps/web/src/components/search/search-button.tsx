@@ -22,7 +22,7 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
  * opens the panel, which already shows "Search is not available" once a
  * query against an unavailable index comes back empty; a tooltip on hover
  * additionally explains the state up front on pointer devices. Below `md`
- * the button grows to a 44x44 tap target.
+ * the button keeps its regular size on every viewport.
  */
 export function SearchButton() {
   const { open, setOpen } = useSearchShortcut();
@@ -31,13 +31,7 @@ export function SearchButton() {
   const indexUnavailable = status?.available === false && (me?.identities.length ?? 0) < 2;
 
   const button = (
-    <Button
-      variant="outline"
-      size="sm"
-      aria-label="Search"
-      className="max-md:size-11 max-md:justify-center max-md:px-0"
-      onClick={() => setOpen(true)}
-    >
+    <Button variant="outline" size="sm" aria-label="Search" onClick={() => setOpen(true)}>
       <SearchIcon />
       <span className="hidden min-[900px]:inline">Search</span>
       <KbdGroup className="hidden min-[900px]:inline-flex">
