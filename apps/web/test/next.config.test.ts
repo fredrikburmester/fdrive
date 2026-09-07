@@ -50,6 +50,13 @@ describe("buildContentSecurityPolicy", () => {
     expect(csp).toContain("script-src 'self' 'unsafe-inline'");
   });
 
+  it("allows eval only for the development server", () => {
+    const dev = buildContentSecurityPolicy({ officePublicUrl: undefined, development: true });
+    expect(dev).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
+    const prod = buildContentSecurityPolicy({ officePublicUrl: undefined, development: false });
+    expect(prod).not.toContain("unsafe-eval");
+  });
+
   it("keeps style-src permissive with 'unsafe-inline'", () => {
     const csp = buildContentSecurityPolicy({ officePublicUrl: undefined });
     expect(csp).toContain("style-src 'self' 'unsafe-inline'");

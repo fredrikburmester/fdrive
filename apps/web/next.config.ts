@@ -38,6 +38,13 @@ export interface ContentSecurityPolicyOptions {
    * `--build-arg FDRIVE_OFFICE_PUBLIC_URL=...` does.
    */
   readonly officePublicUrl: string | undefined;
+  /**
+   * True under `next dev`. React's development build uses `eval` for its
+   * debugging features (reconstructing call stacks), so `script-src` gets
+   * `'unsafe-eval'` only then; production builds never use `eval` and never
+   * get it.
+   */
+  readonly development?: boolean;
 }
 
 /**
@@ -74,7 +81,12 @@ export function buildContentSecurityPolicy(options: ContentSecurityPolicyOptions
     ["connect-src", "'self'"],
     ["font-src", "'self' data:"],
     ["style-src", "'self' 'unsafe-inline'"],
-    ["script-src", "'self' 'unsafe-inline'"],
+    [
+      "script-src",
+      options.development === true
+        ? "'self' 'unsafe-inline' 'unsafe-eval'"
+        : "'self' 'unsafe-inline'",
+    ],
     ["frame-src", frameSrc],
     ["worker-src", "'self' blob:"],
   ];
@@ -134,6 +146,7 @@ const nextConfig: NextConfig = {
   async headers() {
     const csp = buildContentSecurityPolicy({
       officePublicUrl: process.env.FDRIVE_OFFICE_PUBLIC_URL,
+      development: process.env.NODE_ENV === "development",
     });
     return [
       {
