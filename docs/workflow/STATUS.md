@@ -381,3 +381,18 @@ available and followed the project instructions.
   `index` profile on 58012 with a `/models` weight-cache volume, and pre-wires `IMAGE_EMBED_URL`
   into the indexer. The whole `siglip.py` backend is `# pragma: no cover` by design, so a real
   image build and model load is the primary's verification and is running.
+- Verified the image-embed sidecar against real weights (the whole SigLIP backend is
+  `# pragma: no cover`, so this is the only proof it works). `/health` reports
+  `dim: 1024`, confirming the migration's hard-coded `vector(1024)`. The first live request
+  500ed: transformers 5.16 returns `BaseModelOutputWithPooling` from `get_image_features` /
+  `get_text_features`, not a tensor, so `.to("cpu")` blew up — no fake could have caught this.
+  Fixed in f987c33 by moving the version-dependent unwrapping into a pure, tested
+  `features.py` (`pooled_features`) instead of leaving it inside the uncovered backend; 66
+  tests, still 100%. After the fix: image and text vectors are both 1024-d with norm exactly
+  1.0, and each colour query picks its own colour (blue 0.143 vs 0.075/0.087, red 0.142, green
+  0.153). Note how low the absolute scores are even for a correct match — confirmation that
+  ranking must be top-k with a relative margin, never an absolute cosine threshold, as the
+  build spec already requires. Also fixed the root `biome.json` (7575cbe): `**/.worktrees`
+  matched a worktree's own path segment, so `pnpm lint` inside any worker checkout reported
+  every path ignored; the pattern is now anchored, and `**/.venv` is ignored so a Python
+  service's local venv never reaches the formatter.
