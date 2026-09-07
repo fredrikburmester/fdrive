@@ -440,3 +440,10 @@ available and followed the project instructions.
   required contract fields broke the web typecheck); spec copied into the worktree and a rework
   pass launched: separate `GET /search/images`, ratio margin, `system/image-search` routes,
   `SearchResponse` unchanged. Always commit or copy a spec before `git worktree add`.
+- Merged: `share-peek-web` (e1eae17). Presentational archive table extracted to
+  `components/preview/archive-entries-view.tsx` and shared by the authed preview and the new
+  `PublicArchivePeek`; `lib/shares/peek.ts` holds the pure visibility rule (zip/tar/tar.gz/tar.zst,
+  hidden on a limited link); Playwright shares spec peeks a hand-built zip fixture (6/6 in the
+  worker checkout). Gates on main: lint, web typecheck, web coverage 1367 tests. Pane: a temporary
+  directory share showed Peek only on the two zip rows, opening budget.zip listed budget.csv with
+  no entry links; share deleted afterwards. Still running: `image-search-api` rework.
