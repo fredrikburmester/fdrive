@@ -4,16 +4,25 @@ import { Download } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { downloadFrameError } from "@/lib/shares/download";
 
-/** Successful attachments stream natively; only the API's JSON errors enter React. */
+/**
+ * Successful attachments stream natively; only the API's JSON errors enter React. `icon`
+ * renders the same ghost icon button with a tooltip that `TopBarAction` in
+ * `preview-shell.tsx` uses, for the directory header's ZIP control and the lightbox's per-image
+ * download; the default labelled button stays for the standalone `ZipDownloadCard` and other
+ * plain download actions.
+ */
 export function NativeShareDownload({
   href,
   label = "Download",
+  icon = false,
   onError,
 }: {
   href: string;
   label?: string;
+  icon?: boolean;
   onError?: (message: string) => void;
 }) {
   const name = useId();
@@ -40,20 +49,42 @@ export function NativeShareDownload({
       setError("Could not download this file. Try opening the link again.");
     }
   }
+  function armed() {
+    setError(null);
+    expected.current = new URL(href, window.location.origin).href;
+  }
   return (
     <div className="space-y-2">
-      <Button
-        nativeButton={false}
-        role="link"
-        render={<a href={href} target={name} />}
-        onClick={() => {
-          setError(null);
-          expected.current = new URL(href, window.location.origin).href;
-        }}
-      >
-        <Download />
-        {label}
-      </Button>
+      {icon ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                nativeButton={false}
+                role="link"
+                render={<a href={href} target={name} />}
+                onClick={armed}
+              />
+            }
+          >
+            <Download />
+            <span className="sr-only">{label}</span>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <Button
+          nativeButton={false}
+          role="link"
+          render={<a href={href} target={name} />}
+          onClick={armed}
+        >
+          <Download />
+          {label}
+        </Button>
+      )}
       <iframe
         ref={frame}
         name={name}

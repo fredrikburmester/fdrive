@@ -361,25 +361,40 @@ test("an image-only folder shows a gallery with lightbox navigation and per-imag
   for (const viewport of [DESKTOP_VIEWPORT, MOBILE_VIEWPORT]) {
     const context = await browser.newContext({ viewport });
     const visitor = await context.newPage();
+    const thumbRequests: string[] = [];
+    visitor.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/thumb")) thumbRequests.push(url.pathname);
+    });
     try {
       await visitor.goto(galleryUrl);
       const tiles = visitor.locator("button img");
       await expect(tiles).toHaveCount(3);
+      await expect.poll(() => thumbRequests.length).toBeGreaterThanOrEqual(3);
       await tiles.first().click();
+      // A full-page lightbox, not a modal: it fills the viewport and carries no Base UI
+      // Dialog backdrop, unlike the Create/Edit share dialogs used above.
       const lightbox = visitor.getByRole("dialog");
       await expect(lightbox).toBeVisible();
-      const firstTitle = await lightbox.locator('[data-slot="dialog-title"]').textContent();
+      await expect(lightbox).toHaveCSS("position", "fixed");
+      const box = await lightbox.boundingBox();
+      const viewportSize = visitor.viewportSize();
+      expect(box?.width).toBe(viewportSize?.width);
+      expect(box?.height).toBe(viewportSize?.height);
+      const header = lightbox.locator("header");
+      const firstText = await header.textContent();
       await visitor.keyboard.press("ArrowRight");
-      await expect(lightbox.locator('[data-slot="dialog-title"]')).not.toHaveText(firstTitle ?? "");
+      await expect(header).not.toHaveText(firstText ?? "");
       const image = await downloaded(visitor, () =>
         lightbox.getByRole("link", { name: "Download", exact: true }).click(),
       );
       expect(image.length).toBeGreaterThan(0);
       await visitor.keyboard.press("Escape");
       await expect(lightbox).toBeHidden();
-      await downloaded(visitor, () =>
-        visitor.getByRole("link", { name: "Download ZIP", exact: true }).click(),
-      );
+      const zipButton = visitor.getByRole("link", { name: "Download ZIP", exact: true });
+      await expect(zipButton.locator("svg")).toBeVisible();
+      await expect(zipButton.locator(".sr-only")).toHaveText("Download ZIP");
+      await downloaded(visitor, () => zipButton.click());
 
       await visitor.goto(documentUrl);
       await expect(visitor.getByRole("link", { name: "Download", exact: true })).toBeVisible();
