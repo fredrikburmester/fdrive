@@ -1,4 +1,4 @@
-import { toNetworkError, toSftpgoError } from "./errors.js";
+import { SftpgoError, toNetworkError, toSftpgoError } from "./errors.js";
 
 /** Removes a single trailing slash from a base URL, if present. */
 export function stripTrailingSlash(baseUrl: string): string {
@@ -53,19 +53,62 @@ export function combineSignals(
 }
 
 /**
+ * Builds a SftpgoError for an HTTP 3xx response. `safeFetch` always sends
+ * `redirect: "manual"`, so a redirect response reaches here directly
+ * instead of being followed transparently by fetch. SFTPGo's own API has no
+ * legitimate reason to redirect: automatically following one could send a
+ * request carrying the caller's bearer token or Basic auth header to
+ * whatever origin the response's `Location` names, which is a credential
+ * leak if that response is attacker-influenced (a misconfigured proxy in
+ * front of SFTPGo, or a compromised one). Treated the same as any other
+ * server-side failure: kind "server".
+ */
+export async function toRedirectError(response: Response): Promise<SftpgoError> {
+  let detail: string | null = null;
+  try {
+    const text = await response.text();
+    detail = text.length > 0 ? truncateDetail(text) : null;
+  } catch {
+    detail = null;
+  }
+  return new SftpgoError(
+    `SFTPGo request redirected with status ${response.status}`,
+    "server",
+    response.status,
+    detail,
+  );
+}
+
+const MAX_REDIRECT_DETAIL_LENGTH = 500;
+
+function truncateDetail(text: string): string {
+  return text.length > MAX_REDIRECT_DETAIL_LENGTH
+    ? text.slice(0, MAX_REDIRECT_DETAIL_LENGTH)
+    : text;
+}
+
+/**
  * Performs a fetch call, converting a rejected promise into a SftpgoError of
- * kind "network" rather than letting the underlying error escape.
+ * kind "network" rather than letting the underlying error escape. Always
+ * requests `redirect: "manual"` (see `toRedirectError`) unless the caller's
+ * `init` explicitly overrides it, and throws a "server"-kind SftpgoError for
+ * any 3xx response instead of returning it to the caller.
  */
 export async function safeFetch(
   fetchImpl: typeof globalThis.fetch,
   url: string,
   init: RequestInit,
 ): Promise<Response> {
+  let response: Response;
   try {
-    return await fetchImpl(url, init);
+    response = await fetchImpl(url, { ...init, redirect: init.redirect ?? "manual" });
   } catch (cause) {
     throw toNetworkError(cause);
   }
+  if (response.status >= 300 && response.status < 400) {
+    throw await toRedirectError(response);
+  }
+  return response;
 }
 
 /**

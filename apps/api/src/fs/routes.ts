@@ -36,6 +36,7 @@ import type { Context } from "hono";
 import type { z } from "zod";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
+import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
@@ -71,6 +72,14 @@ export interface FsRoutesDeps {
    * is available through `metadata.onTrashed` instead of `onDeleted`.
    */
   readonly trashPath?: string;
+  /**
+   * Cap on a JSON request body's bytes, passed to `parseBody` for every
+   * route this function registers (zip, mkdir, move, copy, rename,
+   * delete). Defaults to `DEFAULT_JSON_MAX_BYTES` when omitted; wire
+   * `config.fdriveJsonMaxBytes` here to make `FDRIVE_JSON_MAX_BYTES`
+   * effective for these routes.
+   */
+  readonly jsonMaxBytes?: number;
 }
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
@@ -83,11 +92,47 @@ function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | unde
   return result.data;
 }
 
-/** Parses `c`'s JSON body against `schema`, throwing `bad_request` on invalid JSON or a schema mismatch. */
-export async function parseBody<T>(schema: z.ZodType<T>, c: FsContext): Promise<T> {
+/**
+ * Parses `c`'s JSON body against `schema`, throwing `bad_request` on invalid
+ * JSON or a schema mismatch. Reads the body as a stream and throws
+ * `payload_too_large` as soon as more than `maxBytes` have arrived, rather
+ * than buffering an unbounded body first (the same approach as
+ * `shares/routes.ts`'s `publicBody`). `maxBytes` defaults to
+ * `DEFAULT_JSON_MAX_BYTES` (see `config.ts`'s `FDRIVE_JSON_MAX_BYTES`);
+ * `registerFsRoutes` passes `deps.jsonMaxBytes` for the routes it registers,
+ * so an operator-configured cap applies there even though other callers of
+ * this function (trash, accounts, metadata, office, archive routes) do not
+ * currently thread a config value through and keep the default.
+ */
+export async function parseBody<T>(
+  schema: z.ZodType<T>,
+  c: FsContext,
+  maxBytes: number = DEFAULT_JSON_MAX_BYTES,
+): Promise<T> {
+  const reader = c.req.raw.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (reader !== undefined) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel();
+          throw new ApiHttpError("payload_too_large", "Request body is too large");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
   let json: unknown;
   try {
-    json = await c.req.json();
+    json = JSON.parse(Buffer.concat(chunks, size).toString("utf-8"));
   } catch {
     throw new ApiHttpError("bad_request", "invalid JSON body");
   }
@@ -371,6 +416,7 @@ export function registerFsRoutes(
   deps: FsRoutesDeps,
 ): void {
   const { authed } = groups;
+  const jsonMaxBytes = deps.jsonMaxBytes ?? DEFAULT_JSON_MAX_BYTES;
 
   authed.get(routePath(ROUTES.fs.list), async (c) => {
     const principal = c.get("principal");
@@ -409,7 +455,7 @@ export function registerFsRoutes(
 
   authed.post(routePath(ROUTES.fs.zip), async (c) => {
     const principal = c.get("principal");
-    const body = await parseBody(ZipRequest, c);
+    const body = await parseBody(ZipRequest, c, jsonMaxBytes);
     const paths = body.paths.map((p) => normalizeOrThrow(p));
     const stream = await runStorageCall(() => principal.storage.zip(paths));
     // `ZipRequest.paths` has `.min(1)`, so `paths[0]` always exists here.
@@ -462,7 +508,7 @@ export function registerFsRoutes(
 
   authed.post(routePath(ROUTES.fs.mkdir), async (c) => {
     const principal = c.get("principal");
-    const body = await parseBody(MkdirRequest, c);
+    const body = await parseBody(MkdirRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     await runStorageCall(() => principal.storage.mkdir(path));
     const entry = await statEntry(principal.storage, path);
@@ -473,7 +519,7 @@ export function registerFsRoutes(
 
   authed.post(routePath(ROUTES.fs.move), async (c) => {
     const principal = c.get("principal");
-    const body = await parseBody(MoveRequest, c);
+    const body = await parseBody(MoveRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
     // A target equal to the source is a no-op: skip both the conflict check (the source is not
@@ -495,7 +541,7 @@ export function registerFsRoutes(
 
   authed.post(routePath(ROUTES.fs.copy), async (c) => {
     const principal = c.get("principal");
-    const body = await parseBody(CopyRequest, c);
+    const body = await parseBody(CopyRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
     // See the move handler above: a target equal to the source skips the conflict check and the
@@ -513,7 +559,7 @@ export function registerFsRoutes(
 
   authed.post(routePath(ROUTES.fs.rename), async (c) => {
     const principal = c.get("principal");
-    const body = await parseBody(RenameRequest, c);
+    const body = await parseBody(RenameRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = changeBaseName(path, body.newName);
     // See the move handler above: renaming to the same name skips the conflict check and the
@@ -533,7 +579,7 @@ export function registerFsRoutes(
 
   authed.post(routePath(ROUTES.fs.delete), async (c) => {
     const principal = c.get("principal");
-    const body = await parseBody(DeleteRequest, c);
+    const body = await parseBody(DeleteRequest, c, jsonMaxBytes);
     const removed: string[] = [];
     for (const item of body.items) {
       const path = normalizeOrThrow(item.path);

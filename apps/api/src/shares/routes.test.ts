@@ -1,6 +1,12 @@
 import { ManagedShare, PublicShare, ShareEntriesResponse, SharesResponse } from "@fdrive/contracts";
-import { expect, it, vi } from "vitest";
-import { cookieFrom } from "../accounts/test-fixtures/index.ts";
+import { createMemoryShareRepo } from "@fdrive/db";
+import { describe, expect, it, vi } from "vitest";
+import { accountsHarness, cookieFrom } from "../accounts/test-fixtures/index.ts";
+import { createApp } from "../app.ts";
+import { createShareCredentialCodec } from "./credentials.ts";
+import { createShareLimiter } from "./limiter.ts";
+import { capByteStream, contentLengthExceeds, registerSharesRoutes } from "./routes.ts";
+import { createSharesService } from "./service.ts";
 import { sharesHarness } from "./test-fixtures/index.ts";
 
 const base = "/api/v1/shares";
@@ -217,4 +223,257 @@ it("compensates persistence failure, sanitizes compensation failure and reconcil
   expect((await h.request(`${base}/${gone.id}`, { cookie, method: "DELETE" })).status).toBe(200);
   vi.spyOn(h.repos.providers, "get").mockResolvedValue(null);
   expect((await h.request(base, { cookie })).status).toBe(502);
+});
+
+describe("contentLengthExceeds", () => {
+  it("is false when the header is absent", () => {
+    expect(contentLengthExceeds(undefined, 100)).toBe(false);
+  });
+
+  it("is false when the header is at or under the limit", () => {
+    expect(contentLengthExceeds("100", 100)).toBe(false);
+    expect(contentLengthExceeds("50", 100)).toBe(false);
+  });
+
+  it("is true when the header exceeds the limit", () => {
+    expect(contentLengthExceeds("101", 100)).toBe(true);
+  });
+
+  it("is false for a non-numeric header, deferring to the streaming cap", () => {
+    expect(contentLengthExceeds("not-a-number", 100)).toBe(false);
+  });
+});
+
+describe("capByteStream", () => {
+  function streamFrom(chunks: readonly string[]): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+    let index = 0;
+    return new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks[index];
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        index += 1;
+        controller.enqueue(encoder.encode(chunk));
+      },
+    });
+  }
+
+  async function drain(
+    stream: ReadableStream<Uint8Array>,
+  ): Promise<{ chunks: Uint8Array[]; error: unknown }> {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      return { chunks, error: undefined };
+    } catch (error) {
+      return { chunks, error };
+    }
+  }
+
+  it("passes every chunk through unchanged when the total stays under the cap", async () => {
+    const cap = capByteStream(streamFrom(["ab", "cd"]), 10);
+    const { chunks, error } = await drain(cap.stream);
+    expect(error).toBeUndefined();
+    expect(Buffer.concat(chunks).toString("utf-8")).toBe("abcd");
+    expect(cap.exceeded()).toBe(false);
+  });
+
+  it("errors the wrapped stream and reports exceeded once the total passes the cap", async () => {
+    const cap = capByteStream(streamFrom(["abcde", "fghij", "k"]), 8);
+    const { error } = await drain(cap.stream);
+    expect(error).toBeInstanceOf(Error);
+    expect(cap.exceeded()).toBe(true);
+  });
+
+  it("reports not exceeded while nothing has been read yet", () => {
+    const cap = capByteStream(streamFrom(["ab"]), 1);
+    expect(cap.exceeded()).toBe(false);
+  });
+
+  it("cancels the source reader when the wrapped stream is cancelled from outside", async () => {
+    const cancel = vi.fn();
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("x"));
+      },
+      cancel,
+    });
+    const cap = capByteStream(source, 100);
+    await cap.stream.cancel("consumer gave up");
+    expect(cancel).toHaveBeenCalledWith("consumer gave up");
+  });
+});
+
+/** Builds a shares app whose `fdriveShareUploadMaxBytes` is `maxBytes`, to exercise the upload ceiling in `registerSharesRoutes`. */
+function sharesHarnessWithUploadLimit(maxBytes: number) {
+  const h = accountsHarness();
+  const shares = createMemoryShareRepo();
+  const deps = { ...h.deps, shares, logger: h.logger, clientFor: (_baseUrl: string) => h.client };
+  const service = createSharesService(deps);
+  const codec = createShareCredentialCodec(h.master, h.clock);
+  const limiter = createShareLimiter(h.clock);
+  const config = { ...h.config, fdriveShareUploadMaxBytes: maxBytes };
+  const app = createApp({
+    config,
+    logger: h.logger,
+    clock: h.clock,
+    version: "test",
+    startedAt: h.clock(),
+    principalResolver: h.auth.principalResolver,
+    registerRoutes: (groups) => {
+      h.auth.registerRoutes(groups);
+      registerSharesRoutes(groups, { service, codec, limiter, config });
+    },
+  });
+  async function request(
+    path: string,
+    options: {
+      method?: string;
+      cookie?: string;
+      body?: unknown;
+      raw?: string | ReadableStream<Uint8Array>;
+      headers?: Record<string, string>;
+    } = {},
+  ) {
+    const init: RequestInit & { duplex?: "half" } = {
+      method: options.method ?? "GET",
+      headers: {
+        "x-requested-with": "fdrive",
+        ...(options.cookie ? { cookie: options.cookie } : {}),
+        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+        ...options.headers,
+      },
+      ...(options.body === undefined
+        ? options.raw === undefined
+          ? {}
+          : { body: options.raw }
+        : { body: JSON.stringify(options.body) }),
+    };
+    if (options.raw instanceof ReadableStream) {
+      init.duplex = "half";
+    }
+    return app.request(path, init);
+  }
+  async function login(username = "alice") {
+    const res = await request("/api/v1/auth/login", {
+      method: "POST",
+      body: { username, password: `${username}-pass` },
+    });
+    return cookieFrom(res);
+  }
+  async function create(cookie: string, patch: Record<string, unknown> = {}) {
+    const response = await request("/api/v1/shares", {
+      method: "POST",
+      cookie,
+      body: { name: "Document", paths: ["/a.docx"], scope: "read", ...patch },
+    });
+    if (response.status !== 201) throw new Error(await response.text());
+    return response.json() as Promise<{ id: string; hasPassword: boolean }>;
+  }
+  return { ...h, shares, deps, service, codec, limiter, app, request, login, create };
+}
+
+function streamOfZeros(chunkCount: number, chunkSize: number): ReadableStream<Uint8Array> {
+  let sent = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= chunkCount) {
+        controller.close();
+        return;
+      }
+      sent += 1;
+      controller.enqueue(new Uint8Array(chunkSize));
+    },
+  });
+}
+
+describe("PUT /public/shares/:id/upload byte ceiling", () => {
+  it("rejects an upload whose declared Content-Length exceeds the configured ceiling", async () => {
+    const h = sharesHarnessWithUploadLimit(10);
+    const cookie = await h.login();
+    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+    await h.client.user(auth.accessToken).mkdir("/folder");
+    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+
+    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
+      method: "PUT",
+      raw: "short body",
+      headers: { "content-length": "1000" },
+    });
+
+    expect(response.status).toBe(413);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { kind: "payload_too_large" } });
+  });
+
+  it("rejects an upload whose actual streamed bytes exceed the ceiling with no Content-Length header", async () => {
+    const h = sharesHarnessWithUploadLimit(10);
+    const cookie = await h.login();
+    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+    await h.client.user(auth.accessToken).mkdir("/folder");
+    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+
+    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
+      method: "PUT",
+      raw: streamOfZeros(5, 5),
+    });
+
+    expect(response.status).toBe(413);
+  });
+
+  it("allows an upload at or under the configured ceiling", async () => {
+    const h = sharesHarnessWithUploadLimit(1024);
+    const cookie = await h.login();
+    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+    const user = h.client.user(auth.accessToken);
+    await user.mkdir("/folder");
+    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+
+    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
+      method: "PUT",
+      raw: "small",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await new Response((await user.download("/folder/new.txt")).body).text()).toBe("small");
+  });
+
+  it("uploads an empty body (no request body at all) without wrapping it in a byte cap", async () => {
+    const h = sharesHarnessWithUploadLimit(1024);
+    const cookie = await h.login();
+    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+    const user = h.client.user(auth.accessToken);
+    await user.mkdir("/folder");
+    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+
+    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/empty.txt`, {
+      method: "PUT",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await new Response((await user.download("/folder/empty.txt")).body).text()).toBe("");
+  });
+
+  it("does not relabel an unrelated upload failure under the cap as payload_too_large", async () => {
+    const h = sharesHarnessWithUploadLimit(1024);
+    const cookie = await h.login();
+    // No mkdir("/folder"): the shared directory never existed upstream, so the
+    // upload fails for a reason unrelated to the byte cap.
+    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+
+    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
+      method: "PUT",
+      raw: "small",
+    });
+
+    expect(response.status).not.toBe(413);
+  });
 });

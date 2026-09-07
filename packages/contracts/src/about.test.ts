@@ -18,6 +18,11 @@ describe("AboutResponse", () => {
     expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 
+  it("parses a payload where setup is complete but the caller is anonymous (null label)", () => {
+    const payload = { ...valid, provider: { type: "sftpgo" as const, label: null } };
+    expect(AboutResponse.parse(payload)).toEqual(payload);
+  });
+
   it("rejects a builtOn.name other than SFTPGo", () => {
     const payload = { ...valid, builtOn: { ...valid.builtOn, name: "Other" } };
     expect(AboutResponse.safeParse(payload).success).toBe(false);

@@ -61,6 +61,72 @@ export async function publicBody<T>(
   if (!result.success) throw new ApiHttpError("bad_request", "Invalid share request");
   return result.data;
 }
+/**
+ * True when `contentLengthHeader` parses as a number greater than
+ * `maxBytes`. A missing or non-numeric header returns false: the ceiling is
+ * still enforced as bytes actually arrive (see `capByteStream`), so a
+ * caller cannot bypass it by omitting or lying about `Content-Length`, only
+ * skip this cheap early rejection.
+ */
+export function contentLengthExceeds(
+  contentLengthHeader: string | undefined,
+  maxBytes: number,
+): boolean {
+  if (contentLengthHeader === undefined) {
+    return false;
+  }
+  const value = Number(contentLengthHeader);
+  return Number.isFinite(value) && value > maxBytes;
+}
+
+/** A byte-counted wrapper around a `ReadableStream`, see `capByteStream`. */
+export interface CappedByteStream {
+  readonly stream: ReadableStream<Uint8Array>;
+  /** True once the wrapped stream has read more than `maxBytes` total. */
+  exceeded(): boolean;
+}
+
+/**
+ * Wraps `source` so reading stops (the wrapped stream closes) once more
+ * than `maxBytes` total have been read, and `exceeded()` starts reporting
+ * true. Enforced while streaming rather than by buffering the whole body
+ * first, since a share upload can legitimately be gigabytes: this bounds
+ * how much an attacker who omits or lies about `Content-Length` can push
+ * through before the upload is cut off, without ever holding the full body
+ * in memory. Errors the wrapped stream (rather than just closing it) once
+ * the cap is hit, so a downstream consumer sees a failed upload instead of
+ * quietly accepting a truncated one as if it were complete.
+ */
+export function capByteStream(
+  source: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): CappedByteStream {
+  const reader = source.getReader();
+  let size = 0;
+  let exceeded = false;
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      size += value.byteLength;
+      if (size > maxBytes) {
+        exceeded = true;
+        await reader.cancel();
+        controller.error(new Error("upload exceeds the configured byte ceiling"));
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return { stream, exceeded: () => exceeded };
+}
+
 export function publicPath(c: Context, upload = false): string {
   const query = new URL(c.req.url).searchParams;
   if (query.getAll("path").length > 1) throw new ApiHttpError("bad_request", "Invalid shared path");
@@ -265,15 +331,26 @@ export function registerSharesRoutes(
   groups.public.put(`${pub}/upload`, (c) =>
     shareCall(async () => {
       const path = publicPath(c, true);
+      const maxBytes = deps.config.fdriveShareUploadMaxBytes;
+      if (contentLengthExceeds(c.req.header("content-length"), maxBytes))
+        throw new ApiHttpError("payload_too_large", "Share upload is too large");
       const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "write");
       if (share.paths.length !== 1) throw new ApiHttpError("bad_request", "Invalid upload share");
-      await publicCall(
-        () =>
-          api.upload(path.slice(1), c.req.raw.body ?? new Uint8Array(), {
-            signal: c.req.raw.signal,
-          }),
-        share.hasPassword,
-      );
+      const cap = c.req.raw.body === null ? null : capByteStream(c.req.raw.body, maxBytes);
+      try {
+        await publicCall(
+          () =>
+            api.upload(path.slice(1), cap?.stream ?? new Uint8Array(), {
+              signal: c.req.raw.signal,
+            }),
+          share.hasPassword,
+        );
+      } catch (error) {
+        if (cap?.exceeded() === true) {
+          throw new ApiHttpError("payload_too_large", "Share upload is too large");
+        }
+        throw error;
+      }
       return c.json({ ok: true });
     }),
   );

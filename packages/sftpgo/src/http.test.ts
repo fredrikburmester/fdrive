@@ -10,6 +10,7 @@ import {
   parseIntOrNull,
   safeFetch,
   stripTrailingSlash,
+  toRedirectError,
 } from "./http.js";
 
 describe("stripTrailingSlash", () => {
@@ -88,6 +89,56 @@ describe("safeFetch", () => {
       kind: "network",
     });
   });
+
+  it("requests redirect: manual by default", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok"));
+    await safeFetch(fetchImpl, "http://host/", { method: "GET" });
+    expect(fetchImpl).toHaveBeenCalledWith("http://host/", {
+      method: "GET",
+      redirect: "manual",
+    });
+  });
+
+  it("honours an explicit redirect option instead of overriding it", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok"));
+    await safeFetch(fetchImpl, "http://host/", { redirect: "follow" });
+    expect(fetchImpl).toHaveBeenCalledWith("http://host/", { redirect: "follow" });
+  });
+
+  it("throws a server-kind SftpgoError for a 3xx response instead of returning it", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response("moved", { status: 302, headers: { Location: "http://evil/" } }),
+    );
+    await expect(safeFetch(fetchImpl, "http://host/", {})).rejects.toMatchObject({
+      kind: "server",
+      status: 302,
+      detail: "moved",
+    });
+  });
+});
+
+describe("toRedirectError", () => {
+  it("reads the response body as detail", async () => {
+    const error = await toRedirectError(new Response("moved permanently", { status: 301 }));
+    expect(error).toMatchObject({ kind: "server", status: 301, detail: "moved permanently" });
+  });
+
+  it("truncates a very long body", async () => {
+    const error = await toRedirectError(new Response("x".repeat(600), { status: 302 }));
+    expect(error.detail).toHaveLength(500);
+  });
+
+  it("uses a null detail for an empty body", async () => {
+    const error = await toRedirectError(new Response("", { status: 302 }));
+    expect(error.detail).toBeNull();
+  });
+
+  it("falls back to a null detail when reading the body throws", async () => {
+    const response = new Response("moved", { status: 302 });
+    vi.spyOn(response, "text").mockRejectedValue(new Error("stream error"));
+    const error = await toRedirectError(response);
+    expect(error.detail).toBeNull();
+  });
 });
 
 describe("fetchChecked", () => {
@@ -115,6 +166,14 @@ describe("fetchChecked", () => {
     await expect(fetchChecked(fetchImpl, "http://host/", {}, [201])).rejects.toBeInstanceOf(
       SftpgoError,
     );
+  });
+
+  it("throws a server-kind SftpgoError for a 3xx response, even when okStatuses is given", async () => {
+    const fetchImpl = vi.fn(async () => new Response("", { status: 307 }));
+    await expect(fetchChecked(fetchImpl, "http://host/", {}, [307])).rejects.toMatchObject({
+      kind: "server",
+      status: 307,
+    });
   });
 });
 
