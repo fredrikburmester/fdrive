@@ -31,6 +31,7 @@ import {
 import { createIdentityClientResolver } from "./auth/provider-client.ts";
 import { createIdentityStorageFactory } from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
+import { type Subsystem, startupSummaryLines } from "./config-keys.js";
 import { createConnectionStore } from "./connection/store.js";
 import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
@@ -66,6 +67,7 @@ import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
+import { fetchEmbedStatus } from "./system/embed-status.js";
 import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
 import { registerSystemRoutes } from "./system/routes.js";
@@ -104,6 +106,13 @@ export async function composeApp(
   clock: () => Date = () => new Date(),
   deps: ComposeAppDeps = {},
 ): Promise<ComposedApp> {
+  // A misconfigured fdrive must say what is missing, by variable name, at
+  // startup: see docs/workflow/P7-CONFIG-LOUDNESS.md. One line per
+  // subsystem, logged before anything else touches the network.
+  for (const line of startupSummaryLines(config)) {
+    logger.info(line);
+  }
+
   const master = parseMasterKey(config.fdriveMasterKey);
 
   const { db, pool } = createDb(config.databaseUrl);
@@ -275,16 +284,19 @@ export async function composeApp(
     const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: connection.baseUrl });
     return provider.id;
   };
+  // Shared with `subsystemReachability` below (the `/health` route's office
+  // liveness probe), so office discovery is only ever cached once.
+  const officeDiscovery =
+    officeSettings === null
+      ? null
+      : createDiscoveryCache({ serverUrl: officeSettings.serverUrl, fetch: fetchImpl });
   const officeService = createOfficeService({
     canEdit:
       deps.officeCanEdit ??
       (async (actor, path) =>
         allowsOfficeEdit(config.fdriveOfficeEditRules ?? [], actor.identity, path)),
     config: officeSettings,
-    discovery:
-      officeSettings === null
-        ? null
-        : createDiscoveryCache({ serverUrl: officeSettings.serverUrl, fetch: fetchImpl }),
+    discovery: officeDiscovery,
     tokens: createOfficeTokenCodec(master),
     repos,
     files: officeFiles,
@@ -382,12 +394,41 @@ export async function composeApp(
   const version = readVersion();
   const startedAt = clock();
 
+  // GET /api/v1/health's `subsystems` field: reuses each sidecar's existing
+  // liveness probe (the same ones the System pages already poll), so a
+  // subsystem that is configured but unreachable is visible from this
+  // public, unauthenticated endpoint too, not only from an admin session.
+  const subsystemReachability = async (
+    forConfig: AppConfig,
+  ): Promise<Partial<Record<Subsystem, boolean>>> => {
+    const [indexResult, searchStatus, ocrResult, officeReachable] = await Promise.all([
+      indexerClient === null ? Promise.resolve(null) : indexerClient.health(),
+      forConfig.fdriveEmbedUrl === undefined
+        ? Promise.resolve(null)
+        : fetchEmbedStatus({ baseUrl: forConfig.fdriveEmbedUrl, fetch: fetchImpl }),
+      ocrClient === null ? Promise.resolve(null) : ocrClient.health(),
+      officeDiscovery === null
+        ? Promise.resolve(null)
+        : officeDiscovery.get().then(
+            () => true,
+            () => false,
+          ),
+    ]);
+    return {
+      ...(indexResult === null ? {} : { index: indexResult.ok }),
+      ...(searchStatus === null ? {} : { search: searchStatus.healthy }),
+      ...(ocrResult === null ? {} : { ocr: ocrResult.ok }),
+      ...(officeReachable === null ? {} : { office: officeReachable }),
+    };
+  };
+
   const app = createApp({
     config,
     logger,
     clock,
     version,
     startedAt,
+    subsystemReachability,
     principalResolver: auth.principalResolver,
     connectionStatus: async () => {
       const connection = await connectionStore.current();

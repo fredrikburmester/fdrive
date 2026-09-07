@@ -60,6 +60,8 @@ class ServerState:
     now: Callable[[], datetime]
     schema_ready: Callable[[], bool]
     log: Callable[[str], None]
+    # Env-only (OCR_INCLUDE_GLOBS), not part of app.settings; see rules.is_excluded.
+    include_globs: tuple[str, ...] = ()
 
 
 async def health(request: Request) -> JSONResponse:
@@ -103,7 +105,16 @@ async def trigger_run(request: Request) -> JSONResponse:
         try:
             raw = db.read_settings(conn)
             settings = resolve_settings(raw, state.default_settings)
-            run_pass(conn, state.targets, settings, state.state_dir, state.timeout_seconds, state.jobs, state.log)
+            run_pass(
+                conn,
+                state.targets,
+                settings,
+                state.state_dir,
+                state.timeout_seconds,
+                state.jobs,
+                state.log,
+                state.include_globs,
+            )
         except Exception as e:  # noqa: BLE001
             state.log(f"OCR pass crashed: {type(e).__name__}: {e}")
         finally:

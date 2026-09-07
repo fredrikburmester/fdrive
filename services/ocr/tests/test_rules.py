@@ -26,6 +26,31 @@ def test_is_excluded_empty_globs() -> None:
     assert is_excluded("sftpgo", "docs/a.pdf", []) is False
 
 
+def test_is_excluded_none_include_globs_behaves_like_no_restriction() -> None:
+    assert is_excluded("sftpgo", "docs/a.pdf", [], None) is False
+
+
+def test_include_globs_restricts_to_matching_paths() -> None:
+    assert is_excluded("sftpgo", "fredrik/report.pdf", [], ["sftpgo/fredrik/**"]) is False
+    assert is_excluded("sftpgo", "alice/report.pdf", [], ["sftpgo/fredrik/**"]) is True
+
+
+def test_include_globs_still_applies_exclude_globs_on_top() -> None:
+    # Included by OCR_INCLUDE_GLOBS, but still excluded by an explicit exclude glob.
+    assert (
+        is_excluded("sftpgo", "fredrik/Photos/a.pdf", ["sftpgo/*/Photos/**"], ["sftpgo/fredrik/**"])
+        is True
+    )
+    assert (
+        is_excluded("sftpgo", "fredrik/docs/a.pdf", ["sftpgo/*/Photos/**"], ["sftpgo/fredrik/**"])
+        is False
+    )
+
+
+def test_empty_include_globs_list_behaves_like_no_restriction() -> None:
+    assert is_excluded("sftpgo", "docs/a.pdf", [], []) is False
+
+
 def test_is_too_big_over_cap() -> None:
     assert is_too_big(300 * 1024 * 1024, 200) is True
 

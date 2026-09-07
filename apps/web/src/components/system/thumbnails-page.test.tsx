@@ -106,6 +106,45 @@ describe("ThumbnailsPage", () => {
     expect(screen.getByText("2.5 MB")).toBeTruthy();
   });
 
+  it("never shows 'Thumbnail cache is available.' next to a Not configured badge: FDRIVE_THUMBS_DIR set but the indexer itself is not configured", async () => {
+    useSystemThumbnailsMock.mockReturnValue({
+      data: CONFIGURED_FIXTURE,
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useSystemIndexerMock.mockReturnValue({
+      data: { configured: false, reachable: false },
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<ThumbnailsPage />);
+
+    expect(
+      await screen.findByText("Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."),
+    ).toBeTruthy();
+    expect(screen.getByText("Not configured", { exact: true })).toBeTruthy();
+    expect(screen.queryByText("Thumbnail cache is available.")).toBeNull();
+  });
+
+  it("shows the unreachable description, not 'available', when the indexer is configured but unreachable", async () => {
+    mockConfigured();
+    useSystemIndexerMock.mockReturnValue({
+      data: { configured: true, reachable: false },
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<ThumbnailsPage />);
+
+    expect(await screen.findByText("Unreachable")).toBeTruthy();
+    expect(screen.getByText("The indexer that generates thumbnails is unreachable.")).toBeTruthy();
+    expect(screen.queryByText("Thumbnail cache is available.")).toBeNull();
+  });
+
   it("shows Loading while the query has not resolved yet", () => {
     useSystemThumbnailsMock.mockReturnValue({
       data: undefined,

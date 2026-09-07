@@ -165,15 +165,19 @@ def process_file(
     jobs: int,
     done: set[tuple[str, int, int]],
     log: Callable[[str], None],
+    include_globs: tuple[str, ...] = (),
 ) -> tuple[str, bool]:
-    """Processes one candidate PDF end to end. Returns `(status, rewrote)`."""
+    """Processes one candidate PDF end to end. Returns `(status, rewrote)`.
+    `include_globs` is `Config.include_globs` (env `OCR_INCLUDE_GLOBS`), not
+    part of `settings`: it is a deployment-fixed restriction, not something an
+    admin edits at runtime through app.settings."""
     rel_path = os.path.relpath(abs_path, target.abs_path)
     st = os.stat(abs_path)
     size, mtime_ns = st.st_size, st.st_mtime_ns
 
     if (rel_path, size, mtime_ns) in done:
         return "skipped_done", False
-    if is_excluded(target.name, rel_path, list(settings.exclude_globs)):
+    if is_excluded(target.name, rel_path, list(settings.exclude_globs), list(include_globs)):
         db.record_ocr_log(conn, target.root_id, rel_path, size, mtime_ns, "excluded", None)
         return "excluded", False
     if is_too_big(size, settings.max_mb):
@@ -210,6 +214,7 @@ def run_pass(
     timeout_seconds: int,
     jobs: int,
     log: Callable[[str], None],
+    include_globs: tuple[str, ...] = (),
 ) -> RunTotals:
     totals = RunTotals()
     run_id = db.start_run(conn)
@@ -219,7 +224,7 @@ def run_pass(
             done = db.done_keys(conn, target.root_id)
             for abs_path in iter_candidate_pdfs(target.abs_path):
                 status, rewrite = process_file(
-                    conn, target, abs_path, settings, state_dir, timeout_seconds, jobs, done, log
+                    conn, target, abs_path, settings, state_dir, timeout_seconds, jobs, done, log, include_globs
                 )
                 totals.add(status, rewrite)
     finally:

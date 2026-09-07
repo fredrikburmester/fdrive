@@ -14,6 +14,14 @@ def _bool(name: str, default: bool) -> bool:
     return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
+DEFAULT_EXCLUDE_GLOBS: tuple[str, ...] = ("Programs/**", "Photos/**", "Videos/**")
+
+
+def parse_glob_list(raw: str) -> tuple[str, ...]:
+    """Comma-separated globs, trimmed, empty entries dropped."""
+    return tuple(g.strip() for g in raw.split(",") if g.strip())
+
+
 def parse_roots(raw: str) -> dict[str, str]:
     """`"sftpgo=/roots/sftpgo,photos=/roots/photos"` -> `{"sftpgo": "/roots/sftpgo", ...}`.
     Same format as the indexer's `INDEX_ROOTS`."""
@@ -42,9 +50,20 @@ class Config:
         self.schema_wait_seconds = int(os.environ.get("SCHEMA_WAIT_SECONDS", "300"))
         self.default_hour = int(os.environ.get("OCR_HOUR", "3"))
         self.default_langs = os.environ.get("OCR_LANGS", "swe+eng")
-        self.default_exclude_globs = tuple(
-            g.strip() for g in os.environ.get("OCR_EXCLUDE_GLOBS", "Programs/**,Photos/**,Videos/**").split(",") if g.strip()
-        )
+        # Empty and absent are treated the same (fall back to the built-in
+        # default), not just absent: a compose passthrough of
+        # `${OCR_EXCLUDE_GLOBS:-}` always sets the container's env var, just
+        # to an empty string when the operator's .env leaves it unset, and
+        # `os.environ.get`'s own default only applies when the key is
+        # missing entirely.
+        self.default_exclude_globs = parse_glob_list(os.environ.get("OCR_EXCLUDE_GLOBS", "")) or DEFAULT_EXCLUDE_GLOBS
+        # Env-only (not part of the app.settings-backed Settings an admin can
+        # edit at runtime): lets a single-user instance restrict OCR to one
+        # home, e.g. "fredrik/**", without changing the exclude template. See
+        # docs/workflow/P7-CONFIG-LOUDNESS.md and rules.is_excluded. Empty
+        # (the default) means no restriction, so no empty/absent distinction
+        # is needed here the way OCR_EXCLUDE_GLOBS above needs one.
+        self.include_globs = parse_glob_list(os.environ.get("OCR_INCLUDE_GLOBS", ""))
         self.default_max_mb = int(os.environ.get("OCR_MAX_MB", "200"))
         self.default_keep_originals = _bool("OCR_KEEP_ORIGINALS", True)
 
