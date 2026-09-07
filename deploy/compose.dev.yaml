@@ -87,6 +87,11 @@ services:
       INDEX_ROOTS: sftpgo=/roots/sftpgo
       TIKA_URL: http://tika:9998
       EMBED_URL: http://embed:80
+      # Optional, like OCR: set so a local dev stack exercises the image
+      # embedding pass once services/indexer reads it (image-embed-db
+      # chunk); unset means the feature reports not_configured, same as
+      # every other optional sidecar.
+      IMAGE_EMBED_URL: http://image-embed:8012
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       SCAN_INTERVAL_SECONDS: "30"
@@ -153,8 +158,35 @@ services:
       sftpgo:
         condition: service_healthy
 
+  # SigLIP 2 image/text embedding sidecar for image search (see
+  # docs/workflow/P7-IMAGE-SEARCH-BUILD.md), same `index` profile as the
+  # indexer. Published on the host, like `embed` above, so the api dev
+  # server (running with `tsx watch` on the host) can reach it directly once
+  # FDRIVE_IMAGE_EMBED_URL is wired up. The named volume at /models caches
+  # the downloaded model weights across restarts, matching the indexer's
+  # HF_HOME convention. No database dependency: this service is stateless.
+  image-embed:
+    build:
+      context: ../services/image-embed
+      dockerfile: Dockerfile
+    profiles: [index]
+    environment:
+      IMAGE_EMBED_PORT: "8012"
+    ports:
+      - "${FDRIVE_DEV_IMAGE_EMBED_PORT:-58012}:8012"
+    volumes:
+      - fdrive-dev-image-embed-models:/models
+    mem_limit: 6g
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8012/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
 volumes:
   fdrive-dev-pgdata:
   fdrive-dev-sftpgo-data:
   fdrive-dev-embed-models:
   fdrive-dev-ocr-state:
+  fdrive-dev-image-embed-models:
