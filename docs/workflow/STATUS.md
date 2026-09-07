@@ -331,3 +331,13 @@ available and followed the project instructions.
   done from the spec: "Unreachable at <host>" (would expose sidecar addresses through the
   system contracts; left as a possible follow-up). Gates: lint 1012 files, typecheck 13,
   coverage 8/8, integration 4/4, Playwright 94/94. Idle: no worktrees, no workers.
+- 2026-09-07 evening: second UX pass recorded in `docs/workflow/P7-UX-2.md` (shared gallery
+  thumbnails, full-page lightbox, share copy, ZIP icon button, lightbox preloading; drag-to-
+  select removed from the file list and grid) plus `docs/workflow/P7-IMAGE-SEARCH.md`, the
+  written investigation of CLIP/SigLIP image search over the existing thumbnails. Running:
+  `share-thumbs` (`.worktrees/share-thumbs`: public `GET /public/shares/:id/thumb` served from
+  the index cache, never counted as a download, password verified through a cached share
+  listing) and `files-selection` (`.worktrees/files-selection`: marquee deleted, background
+  click-to-clear kept as a pure predicate). Queued: `share-gallery-ui` and `share-peek-api`
+  after `share-thumbs`, then `share-peek-web`. Shift-click on rows is explicitly not a bug
+  (user confirmed); the checkbox keeps its per-row toggle semantics.
