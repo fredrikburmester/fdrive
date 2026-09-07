@@ -31,6 +31,12 @@ export interface McpToolDeps {
   readonly indexerClient: IndexerExtractClient | null;
   readonly writesEnabled: boolean;
   readonly clock: () => Date;
+  /**
+   * The storage provider's recycle folder virtual path, when configured.
+   * Threaded into every `resolveScopeContext` call so `virtualPathFor`
+   * excludes trashed files from every tool's results.
+   */
+  readonly trashPath: string | null;
 }
 
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
@@ -49,6 +55,7 @@ async function requireScopeContext(deps: McpToolDeps, principal: Principal): Pro
     deps.homeTemplate,
     deps.indexRootNames,
     principal.username,
+    deps.trashPath,
   );
   if (ctx === null) {
     throw new McpToolError("the index is not available for this identity");
@@ -629,6 +636,7 @@ export async function runMovePath(deps: McpToolDeps, principal: Principal, args:
     deps.homeTemplate,
     deps.indexRootNames,
     principal.username,
+    deps.trashPath,
   );
   if (ctx !== null) {
     await recordMoveIfInScope(deps, ctx, args);
@@ -689,6 +697,7 @@ export async function runRecentMoves(
     deps.homeTemplate,
     deps.indexRootNames,
     principal.username,
+    deps.trashPath,
   );
   if (ctx === null) {
     return { moves: [] };

@@ -1,5 +1,5 @@
 import type { HomeTemplate, Scope } from "@fdrive/core";
-import { toFsPath, toVirtualPath } from "@fdrive/core";
+import { isUnderPath, toFsPath, toVirtualPath } from "@fdrive/core";
 import type { IndexQueries, ScopePrefix } from "@fdrive/db";
 import { usableScopesFor } from "../search/scopes.js";
 
@@ -12,6 +12,14 @@ export interface ScopeContext {
   readonly scopePrefixes: readonly ScopePrefix[];
   readonly rootNameById: ReadonlyMap<number, string>;
   readonly rootIdByName: ReadonlyMap<string, number>;
+  /**
+   * The storage provider's recycle folder virtual path, when configured.
+   * `virtualPathFor` treats a path at or under this prefix as unmapped, so
+   * trashed files never appear in MCP tool results (`find_files`,
+   * `find_duplicates`, `similar_files`, `folder_overview`, `recent_moves`,
+   * ...).
+   */
+  readonly trashPath: string | null;
 }
 
 /**
@@ -24,6 +32,7 @@ export async function resolveScopeContext(
   homeTemplate: HomeTemplate,
   indexRootNames: ReadonlySet<string>,
   username: string,
+  trashPath: string | null,
 ): Promise<ScopeContext | null> {
   const scopes = usableScopesFor(homeTemplate, indexRootNames, username);
   if (scopes.length === 0) {
@@ -48,16 +57,29 @@ export async function resolveScopeContext(
     return null;
   }
 
-  return { scopes, scopePrefixes, rootNameById, rootIdByName };
+  return { scopes, scopePrefixes, rootNameById, rootIdByName, trashPath };
 }
 
-/** Maps `(rootId, fsPath)` back to the caller's virtual path, `null` when out of scope. */
+/**
+ * Maps `(rootId, fsPath)` back to the caller's virtual path, `null` when
+ * out of scope or (per `ctx.trashPath`) inside the trash.
+ */
 export function virtualPathFor(ctx: ScopeContext, rootId: number, fsPath: string): string | null {
   const rootName = ctx.rootNameById.get(rootId);
   if (rootName === undefined) {
     return null;
   }
-  return toVirtualPath(ctx.scopes, rootName, fsPath);
+  const virtualPath = toVirtualPath(ctx.scopes, rootName, fsPath);
+  if (virtualPath === null) {
+    return null;
+  }
+  if (
+    ctx.trashPath !== null &&
+    (virtualPath === ctx.trashPath || isUnderPath(ctx.trashPath, virtualPath))
+  ) {
+    return null;
+  }
+  return virtualPath;
 }
 
 /**

@@ -5,6 +5,7 @@ import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
+import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
@@ -161,7 +162,10 @@ function makeDownloadResult(
   };
 }
 
-async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harness> {
+async function buildHarnessWithStorage(
+  storage: StorageProvider,
+  opts: { metadata?: MetadataService; trashPath?: string } = {},
+): Promise<Harness> {
   const principal: Principal = {
     accountId: ACCOUNT_ID,
     identityId: ALICE_IDENTITY_ID,
@@ -191,6 +195,8 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
+        ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
+        ...(opts.trashPath === undefined ? {} : { trashPath: opts.trashPath }),
       }),
   });
 
@@ -255,6 +261,42 @@ describe("GET /fs/list", () => {
     const body = await readJson<ErrorJson>(res);
     expect(body.error.kind).toBe("bad_request");
     expect(Array.isArray(body.error.details?.issues)).toBe(true);
+  });
+
+  it("omits the trash folder itself when a trashPath is configured", async () => {
+    const storage = makeStubStorage({
+      list: async () => [
+        {
+          name: "hello.txt",
+          path: "/hello.txt",
+          kind: "file",
+          size: 1,
+          modifiedAt: new Date(0),
+          ext: ".txt",
+        },
+        { name: ".trash", path: "/.trash", kind: "dir", size: 0, modifiedAt: new Date(0), ext: "" },
+      ],
+    });
+    const { app } = await buildHarnessWithStorage(storage, { trashPath: "/.trash" });
+
+    const res = await app.request("/api/v1/fs/list?path=/");
+    expect(res.status).toBe(200);
+    const body = await readJson<ListJson>(res);
+    expect(body.entries.map((e) => e.name)).toEqual(["hello.txt"]);
+  });
+
+  it("keeps every entry, including the configured trash path, when no trashPath is configured", async () => {
+    const storage = makeStubStorage({
+      list: async () => [
+        { name: ".trash", path: "/.trash", kind: "dir", size: 0, modifiedAt: new Date(0), ext: "" },
+      ],
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request("/api/v1/fs/list?path=/");
+    expect(res.status).toBe(200);
+    const body = await readJson<ListJson>(res);
+    expect(body.entries.map((e) => e.name)).toEqual([".trash"]);
   });
 
   it("maps a 404 from the provider to not_found", async () => {
@@ -822,6 +864,41 @@ describe("POST /fs/delete", () => {
     );
 
     expect(res.status).toBe(400);
+  });
+
+  it("calls metadata.onTrashed instead of onDeleted when the storage has a trash, but still publishes delete", async () => {
+    const server = createFakeSftpgoServer(SEED);
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const withToken = await withTokenFor(client, "alice", "secret");
+    const baseStorage = createSftpgoStorageProvider({ client, withToken });
+    const storage = withRecycleFolderTrash(baseStorage, "/.trash");
+    const metadata = createMetadataService(createMemoryRepos());
+    const onTrashedSpy = vi.spyOn(metadata, "onTrashed");
+    const onDeletedSpy = vi.spyOn(metadata, "onDeleted");
+
+    const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+
+    const res = await app.request(
+      "/api/v1/fs/delete",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items: [{ path: "/hello.txt", kind: "file" }] }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(onTrashedSpy).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/hello.txt", false);
+    expect(onDeletedSpy).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      {
+        type: "fs",
+        op: "delete",
+        identityId: ALICE_IDENTITY_ID,
+        paths: ["/hello.txt"],
+        at: CLOCK_ISO,
+      },
+    ]);
   });
 });
 

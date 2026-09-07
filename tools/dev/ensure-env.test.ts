@@ -47,12 +47,13 @@ describe("buildDevSearchEnv", () => {
     expect(additions.FDRIVE_OCR_URL).toBe("http://127.0.0.1:58011");
     expect(additions.FDRIVE_ADMIN_USERS).toBe("dev");
     expect(additions.FDRIVE_THUMBS_DIR).toBe(join("/repo", "deploy", "dev", ".data", "thumbs"));
+    expect(additions.FDRIVE_SFTPGO_TRASH_PATH).toBe("/.trash");
     expect(JSON.parse(additions.FDRIVE_INDEX_ROOTS ?? "")).toEqual([
       { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
     ]);
   });
 
-  it("returns exactly the six documented keys", () => {
+  it("returns exactly the seven documented keys", () => {
     expect(Object.keys(buildDevSearchEnv("/repo")).sort()).toEqual(
       [
         "FDRIVE_ADMIN_USERS",
@@ -61,6 +62,7 @@ describe("buildDevSearchEnv", () => {
         "FDRIVE_INDEX_ROOTS",
         "FDRIVE_OCR_URL",
         "FDRIVE_THUMBS_DIR",
+        "FDRIVE_SFTPGO_TRASH_PATH",
       ].sort(),
     );
   });
