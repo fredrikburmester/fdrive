@@ -50,6 +50,8 @@ export const ROUTES = {
     extract: "/api/v1/fs/extract",
     /** GET: the caller's jobs -> `JobsResponse`. */
     jobs: "/api/v1/fs/jobs",
+    /** GET: an archive's entries, without extracting it -> `ArchiveEntriesResponse`. */
+    archiveEntries: "/api/v1/fs/archive-entries",
     /** PUT: replace the full set of tags on a path -> `OkResponse`. */
     tags: "/api/v1/fs/tags",
   },
