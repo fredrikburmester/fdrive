@@ -29,6 +29,8 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+    volumes:
+      - fdrive-thumbs:/thumbs:ro
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     # The official image's caddy binary carries a `cap_net_bind_service`
@@ -55,6 +57,9 @@ services:
       args:
         API_INTERNAL_URL: http://api:3001
     environment:
+      # Cached thumbnails written by the indexer (index profile). Read-only here;
+      # without this the API's /thumb route disables itself and grids show icons.
+      FDRIVE_THUMBS_DIR: /thumbs
       API_INTERNAL_URL: http://api:3001
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
