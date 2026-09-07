@@ -76,7 +76,8 @@ def _clean_tables(postgres_dsn: str) -> Iterator[None]:
         with conn.cursor() as cur:
             cur.execute(
                 'TRUNCATE "idx"."events", "idx"."moves", "idx"."scans", "idx"."chunks", '
-                '"idx"."files", "idx"."roots", "app"."thumbnails", "app"."settings" '
+                '"idx"."files", "idx"."roots", "app"."thumbnails", "app"."settings", '
+                '"app"."image_embeddings" '
                 "RESTART IDENTITY CASCADE"
             )
     finally:

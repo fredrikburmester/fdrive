@@ -318,6 +318,60 @@ def thumbnails_count(conn: psycopg.Connection) -> int:
         return int(row[0]) if row else 0
 
 
+def image_embedding_model(conn: psycopg.Connection, content_key: str) -> str | None:
+    """The model that wrote `content_key`'s `app.image_embeddings` row, or
+    `None` when it has none yet. Used by both the live indexer pass and the
+    rebuild pass to decide whether a (re)embed is needed."""
+    with conn.cursor() as cur:
+        cur.execute('SELECT model FROM "app"."image_embeddings" WHERE content_key = %s', (content_key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def upsert_image_embedding(conn: psycopg.Connection, content_key: str, model: str, embedding: Any) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO "app"."image_embeddings" (content_key, model, embedding, created_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (content_key) DO UPDATE SET
+              model = EXCLUDED.model, embedding = EXCLUDED.embedding, created_at = now()
+            """,
+            (content_key, model, embedding),
+        )
+
+
+def image_embeddings_count(conn: psycopg.Connection) -> int:
+    with conn.cursor() as cur:
+        cur.execute('SELECT count(*) FROM "app"."image_embeddings"')
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def image_embeddings_max_content_key(conn: psycopg.Connection) -> str | None:
+    """The largest `content_key`, used as the fixed upper bound of the clear
+    pass's keyset pagination so rows added mid-pass are never visited."""
+    with conn.cursor() as cur:
+        cur.execute('SELECT max(content_key) FROM "app"."image_embeddings"')
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def image_embeddings_page(conn: psycopg.Connection, after: str, upper: str, limit: int) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT content_key FROM "app"."image_embeddings" WHERE content_key > %s AND content_key <= %s '
+            "ORDER BY content_key LIMIT %s",
+            (after, upper, limit),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def delete_image_embedding(conn: psycopg.Connection, content_key: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute('DELETE FROM "app"."image_embeddings" WHERE content_key = %s', (content_key,))
+
+
 def media_files(conn: psycopg.Connection, root_id: int) -> list[tuple[str, str, str, int]]:
     """`(path, ext, sha256, size)` for every live file in a root, for the
     rebuild-thumbnails pass to filter down to thumbnailable extensions and scope."""

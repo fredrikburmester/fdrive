@@ -21,9 +21,10 @@ from starlette.routing import Route
 
 from . import db
 from .chunking import is_textual
-from .clear_jobs import clear_index, clear_thumbnails, start_clear
+from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
 from .directory_listing import directory_query, list_directory
 from .extract import embed_health
+from .image_embed_rebuild import start_image_embed_rebuild
 from .indexer import RootContext
 from .paths import ext_of, reindex_scope
 from .stats import shape_health, shape_stats
@@ -40,10 +41,14 @@ class ServerState:
     thumbnail_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     index_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     thumbnail_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+    image_embed_rebuild_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+    image_embed_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
 
     def __post_init__(self) -> None:
         self.index_clear_job.admission = self.thumbnail_job.admission
         self.thumbnail_clear_job.admission = self.thumbnail_job.admission
+        self.image_embed_rebuild_job.admission = self.thumbnail_job.admission
+        self.image_embed_clear_job.admission = self.thumbnail_job.admission
 
 
 def _safe_abs_path(ctx: RootContext, rel_path: str) -> str | None:
@@ -96,9 +101,18 @@ async def stats(request: Request) -> JSONResponse:
         errors.extend(db.errors_sample(conn, ctx.root_id))
         manifest = db.get_manifest(conn, ctx.root_id)
         queue_depth += sum(1 for row in manifest.values() if row[2] == "pending")
-    body = shape_stats(per_root, db.thumbnails_count(conn), queue_depth, errors, state.thumbnail_job.snapshot())
+    body = shape_stats(
+        per_root,
+        db.thumbnails_count(conn),
+        queue_depth,
+        errors,
+        state.thumbnail_job.snapshot(),
+        db.image_embeddings_count(conn),
+        state.image_embed_rebuild_job.snapshot(),
+    )
     body["index_clear"] = state.index_clear_job.snapshot()
     body["thumbnail_clear"] = state.thumbnail_clear_job.snapshot()
+    body["image_embedding_clear"] = state.image_embed_clear_job.snapshot()
     return JSONResponse(body)
 
 
@@ -175,6 +189,13 @@ async def thumbnails_rebuild(request: Request) -> JSONResponse:
     return JSONResponse({"started": True, "total": total}, status_code=202)
 
 
+_CLEAR_ROUTES = {
+    "/index/clear": "index",
+    "/thumbnails/clear": "thumbnails",
+    "/image-embeddings/clear": "image_embeddings",
+}
+
+
 async def clear(request: Request) -> JSONResponse:
     state: ServerState = request.app.state.server_state
     try:
@@ -183,8 +204,8 @@ async def clear(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON"}, status_code=400)
     if not isinstance(payload, dict):
         return JSONResponse({"error": "body must be an object"}, status_code=400)
-    thumbnails = request.url.path == "/thumbnails/clear"
-    allowed = set() if thumbnails else {"root", "path"}
+    kind = _CLEAR_ROUTES[request.url.path]
+    allowed = {"root", "path"} if kind == "index" else set()
     if set(payload) - allowed:
         return JSONResponse({"error": "unknown fields"}, status_code=400)
     for field_name in allowed:
@@ -202,17 +223,50 @@ async def clear(request: Request) -> JSONResponse:
     scope = os.path.normpath(path.lstrip("/")) if path is not None else None
     if scope == ".":
         scope = None
-    job = state.thumbnail_clear_job if thumbnails else state.index_clear_job
+    job = {
+        "index": state.index_clear_job,
+        "thumbnails": state.thumbnail_clear_job,
+        "image_embeddings": state.image_embed_clear_job,
+    }[kind]
+
+    def operation() -> None:
+        if kind == "thumbnails":
+            clear_thumbnails(contexts, job)
+        elif kind == "image_embeddings":
+            clear_image_embeddings(contexts, job)
+        else:
+            clear_index(contexts, scope, job)
+
     try:
-        started = start_clear(
-            job,
-            lambda: clear_thumbnails(contexts, job) if thumbnails else clear_index(contexts, scope, job),
-        )
+        started = start_clear(job, operation)
     except Exception:
         return JSONResponse({"error": "could not start clear job"}, status_code=500)
     if not started:
         return JSONResponse({"error": "a clear or thumbnail rebuild is already running"}, status_code=409)
     return JSONResponse({"started": True}, status_code=202)
+
+
+async def image_embeddings_rebuild(request: Request) -> JSONResponse:
+    """Backfills (or, with `force`, replaces stale-model rows for) image
+    embeddings. Runs in a background thread sharing the thumbnail-rebuild
+    admission lock; `GET /stats` reports its progress under
+    `image_embedding_rebuild` while it runs. Mirrors `/thumbnails/rebuild`'s
+    request shape and validation."""
+    state: ServerState = request.app.state.server_state
+    payload = await request.json() if await request.body() else {}
+    root_name = payload.get("root")
+    path = payload.get("path")
+    force = payload.get("force") is True
+    if root_name is not None and not isinstance(root_name, str):
+        return JSONResponse({"error": "root must be a string"}, status_code=400)
+    if path is not None and not isinstance(path, str):
+        return JSONResponse({"error": "path must be a string"}, status_code=400)
+    names = [root_name] if isinstance(root_name, str) else list(state.contexts)
+    contexts = [state.contexts[name] for name in names if name in state.contexts]
+    total = start_image_embed_rebuild(state.image_embed_rebuild_job, contexts, path, force)
+    if total is None:
+        return JSONResponse({"error": "an image-embedding rebuild is already running"}, status_code=409)
+    return JSONResponse({"started": True, "total": total}, status_code=202)
 
 
 def create_app(state: ServerState) -> Starlette:
@@ -226,6 +280,8 @@ def create_app(state: ServerState) -> Starlette:
             Route("/index/clear", clear, methods=["POST"]),
             Route("/thumbnails/clear", clear, methods=["POST"]),
             Route("/thumbnails/rebuild", thumbnails_rebuild, methods=["POST"]),
+            Route("/image-embeddings/clear", clear, methods=["POST"]),
+            Route("/image-embeddings/rebuild", image_embeddings_rebuild, methods=["POST"]),
         ]
     )
     app.state.server_state = state

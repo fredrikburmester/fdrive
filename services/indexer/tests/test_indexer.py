@@ -13,7 +13,9 @@ import pytest
 
 from fdrive_indexer import db, indexer
 from fdrive_indexer.config import Config
+from fdrive_indexer.image_embed import ImageEmbedHealth
 from fdrive_indexer.settings import Settings
+from fdrive_indexer.thumbs import storage_path as thumb_storage_path
 
 
 class _StubExtractor:
@@ -31,11 +33,20 @@ class _StubExtractor:
         return None, "none"
 
 
-def _make_config(monkeypatch: pytest.MonkeyPatch, database_url: str, embed_url: str = "http://embed.invalid") -> Config:
+def _make_config(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    embed_url: str = "http://embed.invalid",
+    image_embed_url: str = "",
+) -> Config:
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/unused")
     monkeypatch.setenv("EMBED_URL", embed_url)
     monkeypatch.setenv("INDEX_WORKERS", "2")
+    if image_embed_url:
+        monkeypatch.setenv("IMAGE_EMBED_URL", image_embed_url)
+    else:
+        monkeypatch.delenv("IMAGE_EMBED_URL", raising=False)
     return Config()
 
 
@@ -263,6 +274,178 @@ def test_process_file_thumbnail_failure_does_not_break_indexing(
     p.write_text("hello")
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
     changed = indexer.process_file(ctx, str(p), "a.txt", os.stat(p))
+    assert changed is True
+
+
+# -- embed_thumbnail (the live per-file image-embedding pass) ------------------------------
+
+
+_HEALTHY = ImageEmbedHealth(status="ok", model="model-a", dim=1024, device="cpu")
+
+
+def test_embed_thumbnail_noop_when_not_configured(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    assert ctx.cfg.image_embed_url == ""
+
+    def boom(*a: object, **k: object) -> object:
+        raise AssertionError("must not call the sidecar when unconfigured")
+
+    monkeypatch.setattr(indexer, "image_embed_health", boom)
+    indexer.embed_thumbnail(ctx, "sha-a")
+    assert db.image_embeddings_count(ctx.conn()) == 0
+
+
+def test_embed_thumbnail_skips_when_dimension_guard_fails(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: None)
+
+    def boom(*a: object, **k: object) -> object:
+        raise AssertionError("must not embed when the sidecar guard fails")
+
+    monkeypatch.setattr(indexer, "embed_images", boom)
+    indexer.embed_thumbnail(ctx, "sha-a")
+    assert db.image_embeddings_count(ctx.conn()) == 0
+
+
+def test_embed_thumbnail_missing_file_is_noop(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
+    indexer.embed_thumbnail(ctx, "sha-missing-thumb")
+    assert db.image_embeddings_count(ctx.conn()) == 0
+
+
+def _write_thumbnail(cfg: Config, sha256: str) -> None:
+    rel = thumb_storage_path(sha256, 256)
+    dest = Path(cfg.thumbs_dir) / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(b"fake webp bytes")
+
+
+def test_embed_thumbnail_embeds_and_upserts(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    _write_thumbnail(cfg, "sha-a")
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
+
+    calls: list[list[bytes]] = []
+
+    def fake_embed_images(images: list[bytes], url: str, batch: int) -> tuple[list[list[float]], str]:
+        calls.append(images)
+        return [[0.1] * 1024], "model-a"
+
+    monkeypatch.setattr(indexer, "embed_images", fake_embed_images)
+    indexer.embed_thumbnail(ctx, "sha-a")
+    assert db.image_embedding_model(ctx.conn(), "sha-a") == "model-a"
+    assert len(calls) == 1
+    assert calls[0] == [b"fake webp bytes"]
+
+
+def test_embed_thumbnail_no_embeddings_returned_is_noop(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    _write_thumbnail(cfg, "sha-a")
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
+    monkeypatch.setattr(indexer, "embed_images", lambda images, url, batch: ([], "model-a"))
+    indexer.embed_thumbnail(ctx, "sha-a")
+    assert db.image_embedding_model(ctx.conn(), "sha-a") is None
+
+
+def test_embed_thumbnail_skips_when_current_model_already_present(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    _write_thumbnail(cfg, "sha-a")
+    db.upsert_image_embedding(ctx.conn(), "sha-a", "model-a", [0.5] * 1024)
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
+
+    def boom(*a: object, **k: object) -> object:
+        raise AssertionError("must not re-embed a file already on the configured model")
+
+    monkeypatch.setattr(indexer, "embed_images", boom)
+    indexer.embed_thumbnail(ctx, "sha-a")
+
+
+def test_embed_thumbnail_reembeds_stale_model(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    _write_thumbnail(cfg, "sha-a")
+    db.upsert_image_embedding(ctx.conn(), "sha-a", "model-old", [0.5] * 1024)
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
+    monkeypatch.setattr(indexer, "embed_images", lambda images, url, batch: ([[0.1] * 1024], "model-a"))
+    indexer.embed_thumbnail(ctx, "sha-a")
+    assert db.image_embedding_model(ctx.conn(), "sha-a") == "model-a"
+
+
+def test_process_file_embeds_image_thumbnail(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
+    monkeypatch.setattr(indexer, "embed_images", lambda images, url, batch: ([[0.1] * 1024], "model-a"))
+
+    p = tmp_path / "a.png"
+    p.write_bytes(b"not-a-real-png")
+    sha = indexer.sha256_of(str(p))
+    _write_thumbnail(cfg, sha)
+
+    indexer.process_file(ctx, str(p), "a.png", os.stat(p))
+    assert db.image_embedding_model(ctx.conn(), sha) == "model-a"
+
+
+def test_process_file_non_image_never_calls_image_embed_health(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
+
+    def boom(*a: object, **k: object) -> object:
+        raise AssertionError("must not check image-embed health for a non-image file")
+
+    monkeypatch.setattr(indexer, "image_embed_health", boom)
+    p = tmp_path / "a.txt"
+    p.write_text("hello")
+    indexer.process_file(ctx, str(p), "a.txt", os.stat(p))
+
+
+def test_process_file_image_embed_failure_does_not_break_indexing(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+
+    def boom(ctx: indexer.RootContext, sha256: str) -> None:
+        raise RuntimeError("image embed exploded")
+
+    monkeypatch.setattr(indexer, "embed_thumbnail", boom)
+    p = tmp_path / "a.png"
+    p.write_bytes(b"not-a-real-png")
+    changed = indexer.process_file(ctx, str(p), "a.png", os.stat(p))
     assert changed is True
 
 

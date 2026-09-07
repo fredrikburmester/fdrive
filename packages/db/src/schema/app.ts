@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { vector } from "../vector.js";
 
 /**
  * bytea maps to a Node Buffer on both read and write, matching what the
@@ -181,6 +182,22 @@ export const thumbnails = appSchema.table(
   },
   (table) => [primaryKey({ columns: [table.contentKey, table.size] })],
 );
+
+/**
+ * One SigLIP embedding of a 256 px thumbnail, keyed by the same
+ * `content_key` (sha256) `thumbnails` uses so two copies of one photo are
+ * embedded once. `model` records which sidecar model produced the vector;
+ * search filters to a single model and the rebuild pass replaces rows a
+ * different model wrote. The HNSW index (`image_embeddings_hnsw_idx`) is
+ * created by raw SQL in the migration, not declared here, matching
+ * `idx.chunks.embedding`'s index.
+ */
+export const imageEmbeddings = appSchema.table("image_embeddings", {
+  contentKey: text("content_key").primaryKey(),
+  model: text("model").notNull(),
+  embedding: vector("embedding", { dimensions: 1024 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const wopiLocks = appSchema.table("wopi_locks", {
   fileId: text("file_id").primaryKey(),
