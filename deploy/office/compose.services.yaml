@@ -1,4 +1,14 @@
 # Shared opt-in services. Compose resolves these bind paths relative to this file.
+#
+# Anchors do not span separate compose files, so this file defines its own
+# copy of the json-file log rotation compose.yaml also uses (see that
+# file's x-logging), rather than trying to share the anchor across files.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   onlyoffice:
     image: onlyoffice/documentserver:9.4.0.1@sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212
@@ -24,6 +34,8 @@ services:
       retries: 30
       start_period: 30s
     restart: unless-stopped
+    pids_limit: 512
+    logging: *default-logging
 
   collabora-keys:
     build:
@@ -34,11 +46,15 @@ services:
       - office_collabora_keys:/keys
     network_mode: none
     restart: "no"
+    pids_limit: 512
+    logging: *default-logging
 
   collabora:
     image: collabora/code:26.04.3.2.1@sha256:379b8f1fc955dd6d01ba24adf61d1b177048ddaae179ae8c1e6a6342daccb282
     # Keep default isolation and syscall filtering. No SYS_ADMIN or privileged mode.
     cap_add: [MKNOD]
+    pids_limit: 512
+    logging: *default-logging
     command:
       - --o:ssl.enable=false
       - --o:ssl.termination=true

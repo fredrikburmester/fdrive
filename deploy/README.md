@@ -1,7 +1,20 @@
 # Deploying fdrive
 
-This directory holds the Docker Compose files for running fdrive. Copy
-`.env.example` to `.env` and fill in real values before starting anything.
+This directory holds the Docker Compose files for running fdrive.
+
+```sh
+cp .env.example .env && chmod 600 .env
+```
+
+`.env` holds real secrets (database password, master key, JWT secrets), so it
+is created `0600` (owner read-write only) from the start rather than
+inheriting the umask's usual `0644`. Edit every `change-me` placeholder in it
+before starting anything; this preflight one-liner refuses to start while any
+remain (run it from this directory, right before `docker compose up`):
+
+```sh
+! grep -q 'change-me' .env || { echo "error: .env still has a change-me placeholder value" >&2; exit 1; }
+```
 
 ## Files
 
@@ -49,6 +62,20 @@ indexer's internal HTTP API, and how to add more roots; see `docs/OCR.md` for
 the OCR service's settings and endpoints. The api's `FDRIVE_OCR_URL` points at
 `ocr` so the web app's System page can show OCR status; it is only reachable
 when the `index` profile is up.
+
+The `indexer` service (`services/indexer/Dockerfile`) runs as a non-root user,
+uid/gid `1001`. Its thumbnail cache (`/thumbs`, read from the `api` service's
+`FDRIVE_THUMBS_DIR`) is a named volume, `fdrive-thumbs`, rather than a host
+bind mount: Docker always creates a bind-mounted host directory owned by
+root, which uid 1001 could not then write into, and this cache is never
+operator-facing (only `api` and `indexer` ever touch it). A one-shot
+`thumbs-init` service chowns the named volume to `1001:1001` once, before
+`indexer` starts, the same pattern `compose.dev.yaml`'s `sftpgo-seed` uses for
+SFTPGo's own data volume; `indexer`'s `depends_on` waits for it to complete.
+If you ever need the thumbnail cache on the host instead (for example to
+inspect it directly), replace the `fdrive-thumbs` named volume with a bind
+mount and either pre-create that directory owned by uid 1001, or add an
+equivalent `chown`-only init step ahead of it.
 
 ## The external SFTPGo assumption
 
@@ -137,3 +164,80 @@ default `compose.yaml` stays minimal and never assumes you want fdrive to
 also run SFTPGo or ONLYOFFICE for you. Add either one with `-f` only when
 you actually want it; combine them freely with the core stack and with each
 other.
+
+## Container hardening
+
+Every service in `compose.yaml` and `office/compose.services.yaml` runs with
+`security_opt: no-new-privileges:true`, `cap_drop: [ALL]`, a `pids_limit` of
+`512`, and json-file log rotation (`max-size: 10m`, `max-file: 3`, via the
+shared `x-logging` anchor). Capabilities are added back only where a service
+demonstrably fails to start without them:
+
+- `proxy` (Caddy): `NET_BIND_SERVICE`, since its binary carries a file
+  capability requiring it to bind `:80` even as root; `cap_drop: [ALL]`
+  strips that from the container's bounding set otherwise, and Caddy refuses
+  to `exec` at all ("operation not permitted"), not just to bind the port.
+- `db` (Postgres): `CHOWN`, `FOWNER`, `DAC_OVERRIDE`, `SETUID`, `SETGID`, for
+  the upstream entrypoint script's one-time permission fixup and privilege
+  drop from root to the `postgres` user on first start.
+- `embed` (the embeddings server) also binds a low port (`:80`) as root but,
+  verified empirically, does not need `NET_BIND_SERVICE` added back to do
+  so.
+
+`web`'s `Content-Security-Policy` header (`apps/web/next.config.ts`) only
+allows the office editor iframe to load when the image was built with
+`--build-arg FDRIVE_OFFICE_PUBLIC_URL=...` (matching the `api` service's own
+`FDRIVE_OFFICE_PUBLIC_URL`, see `compose.office.yaml`/
+`compose.office.collabora.yaml`): like `API_INTERNAL_URL`, this is read once
+at `next build` time, not from the running container's environment, so
+setting it only in `web`'s `environment:` block has no effect. Neither office
+overlay currently passes this `build.args` value to the `web` service; add it
+there before relying on office editing with this CSP in place, or the
+editor's iframe will be blocked by `frame-src`.
+
+`web` and `proxy` additionally run `read_only: true` with a `tmpfs` for
+`/tmp` (and, for `proxy`, `/config/caddy` and `/data/caddy`, which Caddy would
+otherwise try to write its autosave config and TLS state into; this
+deployment uses neither, see "TLS and network placement" above). `web`
+carries a `HEALTHCHECK` (`apps/web/Dockerfile`, hitting `/login` with
+Node's own `fetch`, since the Alpine base has neither `curl` nor `wget`);
+`proxy`'s `depends_on` waits for both `api` and `web` to report healthy
+before starting, so it never proxies to a backend that is not actually
+serving yet.
+
+Validate all of this without starting anything:
+
+```sh
+docker compose -f compose.yaml config -q
+```
+
+Bring up just the core stack and confirm every container reports healthy:
+
+```sh
+docker compose -f compose.yaml up -d proxy web api db
+docker compose -f compose.yaml ps
+```
+
+## Pinned image digests
+
+Every base and third-party image below is pinned by tag and `@sha256:`
+digest, so a rebuild never silently picks up a new release. Re-resolve and
+bump the digest deliberately (`docker buildx imagetools inspect
+<image>:<tag>`) when you want to move to a newer version.
+
+| Image | Tag | Digest | Used by |
+| --- | --- | --- | --- |
+| `caddy` | `2` | `sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d` | `compose.yaml` (`proxy`) |
+| `pgvector/pgvector` | `pg17` | `sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f` | `compose.yaml` (`db`) |
+| `apache/tika` | `3.2.1.0` | `sha256:df12b41af58c9833e60bdc231ffc4b59f5b7a83bfe2d63e3dc7aab7da923abba` | `compose.yaml` (`tika`) |
+| `ghcr.io/huggingface/text-embeddings-inference` | `cpu-1.9.2` | `sha256:16230cd8f679ae5f8a51d585033628b1c0d45cd70c2bc9b0d208170d71218fdb` | `compose.yaml` (`embed`) |
+| `node` | `24-alpine` | `sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf` | `apps/web/Dockerfile` |
+| `python` | `3.12-slim` | `sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea` | `services/indexer/Dockerfile` |
+| `jbarlow83/ocrmypdf` | `v17.11.0` | `sha256:c6bcc39ae87cccdbf243d62dba39032a3aacd8a1463365170db3604139aba977` | `services/ocr/Dockerfile` |
+| `onlyoffice/documentserver` | `9.4.0.1` | `sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212` | `office/compose.services.yaml` (`onlyoffice`) |
+| `collabora/code` | `26.04.3.2.1` | `sha256:379b8f1fc955dd6d01ba24adf61d1b177048ddaae179ae8c1e6a6342daccb282` | `office/compose.services.yaml` (`collabora`) |
+
+`node:24-alpine` also backs `apps/api/Dockerfile`'s build and runtime
+stages; that Dockerfile is outside this chunk's scope (see the hardening
+review), so its own `FROM` lines were not repinned here and should get the
+same digest above in a follow-up.

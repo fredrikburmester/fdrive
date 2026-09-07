@@ -7,6 +7,8 @@ on:
 concurrency:
   group: performance-${{ github.ref }}
   cancel-in-progress: true
+permissions:
+  contents: read
 jobs:
   budgets:
     runs-on: ubuntu-24.04

@@ -2,6 +2,8 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_JOB_MAX_BYTES,
+  DEFAULT_JSON_MAX_BYTES,
+  DEFAULT_SHARE_UPLOAD_MAX_BYTES,
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
@@ -145,6 +147,8 @@ describe("loadConfig", () => {
       fdriveAutoMigrate: true,
       fdriveTmpDir: tmpdir(),
       fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
+      fdriveJsonMaxBytes: DEFAULT_JSON_MAX_BYTES,
+      fdriveShareUploadMaxBytes: DEFAULT_SHARE_UPLOAD_MAX_BYTES,
       fdriveIndexRoots: null,
       fdriveEmbedUrl: undefined,
       fdriveThumbsDir: undefined,
@@ -190,6 +194,8 @@ describe("loadConfig", () => {
       FDRIVE_AUTO_MIGRATE: "false",
       FDRIVE_TMP_DIR: "/var/tmp/fdrive",
       FDRIVE_JOB_MAX_BYTES: "1000",
+      FDRIVE_JSON_MAX_BYTES: "2000",
+      FDRIVE_SHARE_UPLOAD_MAX_BYTES: "3000",
       FDRIVE_INDEX_ROOTS: JSON.stringify([
         { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
       ]),
@@ -226,6 +232,8 @@ describe("loadConfig", () => {
       fdriveAutoMigrate: false,
       fdriveTmpDir: "/var/tmp/fdrive",
       fdriveJobMaxBytes: 1000,
+      fdriveJsonMaxBytes: 2000,
+      fdriveShareUploadMaxBytes: 3000,
       fdriveIndexRoots: [
         { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
       ],
@@ -435,6 +443,51 @@ describe("loadConfig", () => {
   it("rejects a zero FDRIVE_JOB_MAX_BYTES", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JOB_MAX_BYTES: "0" })).toThrow(
       /FDRIVE_JOB_MAX_BYTES/,
+    );
+  });
+
+  it("defaults FDRIVE_JSON_MAX_BYTES to 1 MiB", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveJsonMaxBytes).toBe(DEFAULT_JSON_MAX_BYTES);
+  });
+
+  it("accepts a custom FDRIVE_JSON_MAX_BYTES", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_JSON_MAX_BYTES: "4096" }).fdriveJsonMaxBytes).toBe(
+      4096,
+    );
+  });
+
+  it("rejects a non-integer FDRIVE_JSON_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JSON_MAX_BYTES: "lots" })).toThrow(
+      /FDRIVE_JSON_MAX_BYTES/,
+    );
+  });
+
+  it("rejects a zero FDRIVE_JSON_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_JSON_MAX_BYTES: "0" })).toThrow(
+      /FDRIVE_JSON_MAX_BYTES/,
+    );
+  });
+
+  it("defaults FDRIVE_SHARE_UPLOAD_MAX_BYTES to 10 GiB", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveShareUploadMaxBytes).toBe(DEFAULT_SHARE_UPLOAD_MAX_BYTES);
+  });
+
+  it("accepts a custom FDRIVE_SHARE_UPLOAD_MAX_BYTES", () => {
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_SHARE_UPLOAD_MAX_BYTES: "5000" })
+        .fdriveShareUploadMaxBytes,
+    ).toBe(5000);
+  });
+
+  it("rejects a non-integer FDRIVE_SHARE_UPLOAD_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SHARE_UPLOAD_MAX_BYTES: "lots" })).toThrow(
+      /FDRIVE_SHARE_UPLOAD_MAX_BYTES/,
+    );
+  });
+
+  it("rejects a zero FDRIVE_SHARE_UPLOAD_MAX_BYTES", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SHARE_UPLOAD_MAX_BYTES: "0" })).toThrow(
+      /FDRIVE_SHARE_UPLOAD_MAX_BYTES/,
     );
   });
 

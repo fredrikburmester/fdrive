@@ -1,17 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildApiEnvDev,
   buildDevSearchEnv,
   buildWebEnvLocal,
+  ENV_FILE_MODE,
   ensureEnvFile,
   generateMasterKey,
   planApiEnvDev,
   quoteEnvValue,
   upsertEnv,
+  writeEnvFile,
 } from "./ensure-env.js";
 
 describe("generateMasterKey", () => {
@@ -185,5 +187,48 @@ describe("ensureEnvFile", () => {
   it("returns false and does not call the writer when the file already exists", () => {
     const wrote = ensureEnvFile({ path: "/anywhere/.env", contents: "A=1\n" }, () => true);
     expect(wrote).toBe(false);
+  });
+
+  it("creates the file with owner-only permissions (0600)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ensure-env-file-mode-test-"));
+    try {
+      const path = join(dir, ".env.local");
+      ensureEnvFile({ path, contents: "A=1\n" });
+      const mode = statSync(path).mode & 0o777;
+      expect(mode).toBe(ENV_FILE_MODE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("writeEnvFile", () => {
+  it("writes with mode 0600 and follows up with an explicit chmodSync to the same mode", () => {
+    const writeFileSyncSpy = vi.fn();
+    const chmodSyncSpy = vi.fn();
+    writeEnvFile("/some/.env", "A=1\n", {
+      writeFileSync: writeFileSyncSpy,
+      chmodSync: chmodSyncSpy,
+    });
+    expect(writeFileSyncSpy).toHaveBeenCalledWith("/some/.env", "A=1\n", {
+      encoding: "utf-8",
+      mode: ENV_FILE_MODE,
+    });
+    expect(chmodSyncSpy).toHaveBeenCalledWith("/some/.env", ENV_FILE_MODE);
+  });
+
+  it("against the real filesystem, leaves an existing, loosely-permissioned file at 0600", () => {
+    const dir = mkdtempSync(join(tmpdir(), "write-env-file-test-"));
+    try {
+      const path = join(dir, ".env");
+      writeFileSync(path, "A=1\n", { mode: 0o644 });
+      expect(statSync(path).mode & 0o777).toBe(0o644);
+
+      writeEnvFile(path, "A=1\nB=2\n");
+
+      expect(statSync(path).mode & 0o777).toBe(ENV_FILE_MODE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

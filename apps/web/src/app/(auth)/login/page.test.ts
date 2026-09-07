@@ -18,6 +18,21 @@ describe("resolveLoginSubtitle", () => {
     expect(subtitle).toBe("Sign in with your SFTPGo account on 127.0.0.1:58080");
   });
 
+  it("falls back to a generic subtitle when the provider's label is null (anonymous caller)", async () => {
+    const client = {
+      about: vi.fn().mockResolvedValue({
+        version: "1.0.0",
+        builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
+        provider: { type: "sftpgo", label: null },
+        setupRequired: false,
+      }),
+    } as unknown as ApiClient;
+
+    const subtitle = await resolveLoginSubtitle(async () => client);
+
+    expect(subtitle).toBe("Sign in with your SFTPGo account");
+  });
+
   it("falls back to a generic subtitle when the provider is null", async () => {
     const client = {
       about: vi.fn().mockResolvedValue({

@@ -164,7 +164,7 @@ function makeDownloadResult(
 
 async function buildHarnessWithStorage(
   storage: StorageProvider,
-  opts: { metadata?: MetadataService; trashPath?: string } = {},
+  opts: { metadata?: MetadataService; trashPath?: string; jsonMaxBytes?: number } = {},
 ): Promise<Harness> {
   const principal: Principal = {
     accountId: ACCOUNT_ID,
@@ -197,6 +197,7 @@ async function buildHarnessWithStorage(
         jobMaxBytes: 1_000_000_000,
         ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
         ...(opts.trashPath === undefined ? {} : { trashPath: opts.trashPath }),
+        ...(opts.jsonMaxBytes === undefined ? {} : { jsonMaxBytes: opts.jsonMaxBytes }),
       }),
   });
 
@@ -1068,6 +1069,58 @@ describe("shared body/query parsing", () => {
     );
 
     expect(res.status).toBe(400);
+  });
+
+  it("returns payload_too_large when the body exceeds the configured jsonMaxBytes cap", async () => {
+    const storage = makeStubStorage({});
+    const { app } = await buildHarnessWithStorage(storage, { jsonMaxBytes: 10 });
+
+    const res = await app.request(
+      "/api/v1/fs/mkdir",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/a-directory-name-longer-than-ten-bytes" }),
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: { kind: "payload_too_large" } });
+  });
+
+  it("accepts a body at or under the configured jsonMaxBytes cap", async () => {
+    const storage = makeStubStorage({
+      mkdir: async () => undefined,
+      statFile: async () => ({ size: 0, modifiedAt: new Date(CLOCK_ISO), contentType: null }),
+    });
+    const { app } = await buildHarnessWithStorage(storage, { jsonMaxBytes: 4096 });
+
+    const res = await app.request(
+      "/api/v1/fs/mkdir",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/newdir" }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
+  });
+
+  it("defaults to DEFAULT_JSON_MAX_BYTES when jsonMaxBytes is not configured", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/mkdir",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/newdir" }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
   });
 });
 
