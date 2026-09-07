@@ -1,0 +1,1 @@
+/Users/fredrikburmester/Documents/GitHub/fdrive-web/apps/web/next.config.ts
