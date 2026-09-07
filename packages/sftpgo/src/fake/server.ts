@@ -268,6 +268,107 @@ function handleMkdir(state: FakeState, user: FakeUserRecord, url: URL): Response
   return emptyResponse(201);
 }
 
+// --- trash (recycle-folder) relocation ------------------------------------
+
+/** True when `path` is `trashPath` itself or nested below it: deletes there stay permanent. */
+function isUnderTrashPrefix(trashPath: string, path: string): boolean {
+  const normalizedTrash = normalizePath(trashPath);
+  const normalizedPath = normalizePath(path);
+  return normalizedPath === normalizedTrash || normalizedPath.startsWith(`${normalizedTrash}/`);
+}
+
+/**
+ * The recycle-folder target for a deleted virtual path: `<trashPath>/<original
+ * dir>/<original name>/<ns>`, mirroring the real Event Manager rename
+ * action's `{{.VirtualDirPath}}/{{.ObjectName}}/{{.Timestamp}}` template.
+ */
+function trashTargetPath(trashPath: string, virtualPath: string, ns: string): string {
+  const normalized = normalizePath(virtualPath);
+  return normalized === "/" ? `${trashPath}/${ns}` : `${trashPath}${normalized}/${ns}`;
+}
+
+/**
+ * Moves the file at `innerPath` (whose full virtual path is `virtualPath`)
+ * into the trash. Returns true when the relocation happened; false when the
+ * target would land in a different volume than the source (a virtual-folder
+ * mount boundary the real rename action does not cross either), leaving the
+ * caller to fall back to a permanent delete.
+ */
+function tryMoveToTrash(
+  state: FakeState,
+  user: FakeUserRecord,
+  volume: Volume,
+  innerPath: string,
+  virtualPath: string,
+  trashPath: string,
+): boolean {
+  const ns = state.nextTrashTimestamp();
+  const targetVirtual = trashTargetPath(trashPath, virtualPath, ns);
+  const { volume: targetVolume, innerPath: targetInner } = state.resolveVolume(
+    user.username,
+    targetVirtual,
+  );
+  if (targetVolume !== volume) {
+    return false;
+  }
+  return volume.move(innerPath, targetInner) === "ok";
+}
+
+interface TrashCandidate {
+  readonly inner: string;
+  readonly relative: string;
+}
+
+/** Recursively collects every file under `innerPath`, with its path relative to it. */
+function collectFileRelativePaths(
+  volume: Volume,
+  innerPath: string,
+  relative: string,
+  out: TrashCandidate[],
+): void {
+  const node = volume.get(innerPath);
+  if (!node) {
+    return;
+  }
+  if (node.kind === "file") {
+    out.push({ inner: innerPath, relative });
+    return;
+  }
+  const children = volume.listChildren(innerPath) ?? [];
+  for (const child of children) {
+    const childInner = innerPath === "/" ? `/${child.name}` : `${innerPath}/${child.name}`;
+    const childRelative = relative === "" ? child.name : `${relative}/${child.name}`;
+    collectFileRelativePaths(volume, childInner, childRelative, out);
+  }
+}
+
+function toVirtualPath(basePath: string, relative: string): string {
+  return basePath === "/" ? `/${relative}` : `${basePath}/${relative}`;
+}
+
+/** Moves every file under a directory being deleted into the trash, one relocation per file. */
+function relocateDirToTrash(
+  state: FakeState,
+  user: FakeUserRecord,
+  volume: Volume,
+  innerPath: string,
+  virtualPath: string,
+  trashPath: string,
+): void {
+  const candidates: TrashCandidate[] = [];
+  collectFileRelativePaths(volume, innerPath, "", candidates);
+  for (const candidate of candidates) {
+    tryMoveToTrash(
+      state,
+      user,
+      volume,
+      candidate.inner,
+      toVirtualPath(virtualPath, candidate.relative),
+      trashPath,
+    );
+  }
+}
+
 function handleDeleteDir(state: FakeState, user: FakeUserRecord, url: URL): Response {
   const path = url.searchParams.get("path");
   if (path === null || !isValidPath(path)) {
@@ -277,6 +378,9 @@ function handleDeleteDir(state: FakeState, user: FakeUserRecord, url: URL): Resp
     return permissionDenied();
   }
   const { volume, innerPath } = state.resolveVolume(user.username, path);
+  if (state.trash && !isUnderTrashPrefix(state.trash.path, path)) {
+    relocateDirToTrash(state, user, volume, innerPath, path, state.trash.path);
+  }
   const result = volume.deleteDir(innerPath);
   if (result === "not_found") {
     return errorResponse(404, "not found");
@@ -388,6 +492,11 @@ function handleDeleteFile(state: FakeState, user: FakeUserRecord, url: URL): Res
     return permissionDenied();
   }
   const { volume, innerPath } = state.resolveVolume(user.username, path);
+  if (state.trash && !isUnderTrashPrefix(state.trash.path, path)) {
+    if (tryMoveToTrash(state, user, volume, innerPath, path, state.trash.path)) {
+      return emptyResponse(200);
+    }
+  }
   const result = volume.deleteFile(innerPath);
   if (result === "not_found") {
     return errorResponse(404, "not found");

@@ -85,6 +85,18 @@ export const ROUTES = {
   thumb: "/api/v1/thumb",
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
+  trash: {
+    /** GET: whether the active identity's storage exposes a trash -> `TrashStatusResponse`. */
+    status: "/api/v1/trash/status",
+    /** GET: the trash's entries -> `TrashListResponse`. 404 when no trash is configured. */
+    list: "/api/v1/trash",
+    /** POST: restore one or more entries -> `TrashRestoreResponse`. */
+    restore: "/api/v1/trash/restore",
+    /** POST: permanently delete one or more entries -> `OkResponse`. */
+    purge: "/api/v1/trash/purge",
+    /** POST: permanently delete every entry -> `OkResponse`. */
+    empty: "/api/v1/trash/empty",
+  },
   /** GET: version and SFTPGo attribution -> `AboutResponse`. */
   about: "/api/v1/about",
   setup: {

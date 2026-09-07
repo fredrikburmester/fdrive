@@ -43,11 +43,14 @@ export class FakeState {
   readonly shares = new Map<string, FakeShareRecord>();
   readonly tokenTtlMs: number;
   readonly now: () => Date;
+  readonly trash: { readonly path: string } | null;
   private nextId = 1;
+  private lastTrashNs = 0;
 
   constructor(seed: FakeSeed) {
     this.tokenTtlMs = seed.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
     this.now = seed.now ?? (() => new Date());
+    this.trash = seed.trash ?? null;
 
     for (const folder of seed.folders ?? []) {
       this.folders.set(folder.name, new Volume());
@@ -87,6 +90,19 @@ export class FakeState {
 
   generateToken(): string {
     return `${randomUUID()}${randomUUID()}`.replace(/-/g, "");
+  }
+
+  /**
+   * Nanoseconds since the epoch, derived from `now()`, monotonically
+   * increasing even when `now()` returns the same millisecond twice in a
+   * row (as it does for every file relocated by a single directory
+   * delete). Mirrors `{{.Timestamp}}` in the real SFTPGo Event Manager.
+   */
+  nextTrashTimestamp(): string {
+    const candidate = this.now().getTime() * 1_000_000;
+    const value = candidate > this.lastTrashNs ? candidate : this.lastTrashNs + 1;
+    this.lastTrashNs = value;
+    return String(value);
   }
 
   /**

@@ -1,5 +1,42 @@
 import type { FileEntry } from "../entries.ts";
 
+/** One deleted item still recoverable from a provider's recycle folder. */
+export interface TrashEntry {
+  /** The leaf's path relative to the trash root, without a leading slash. */
+  readonly id: string;
+  /** The deleted item's original path (its leaf's parent, trash-relative, with a leading slash). */
+  readonly originalPath: string;
+  readonly name: string;
+  readonly size: number;
+  readonly deletedAt: Date;
+}
+
+/** The result of a bounded trash listing. */
+export interface TrashListing {
+  readonly entries: TrashEntry[];
+  /** True when the listing stopped early because it hit its entry or directory-visit bound. */
+  readonly truncated: boolean;
+}
+
+/**
+ * Optional capability a `StorageProvider` may expose: a recoverable recycle
+ * folder for deletes the provider itself performed (never fdrive moving
+ * files into a trash folder on its own).
+ */
+export interface TrashProvider {
+  list(options?: { limit?: number; signal?: AbortSignal }): Promise<TrashListing>;
+  /**
+   * Moves the leaf identified by `id` back to `target` (default: its
+   * `originalPath`). Parent directories are created as needed. Throws
+   * `StorageError("conflict")` when something already exists at the target.
+   */
+  restore(id: string, options?: { target?: string }): Promise<FileEntry>;
+  /** Permanently deletes the leaves identified by `ids`. Missing ids are ignored. */
+  purge(ids: readonly string[]): Promise<void>;
+  /** Permanently removes everything under the trash folder (never the folder itself). */
+  empty(): Promise<void>;
+}
+
 /**
  * Provider-neutral storage port. `apps/api` implements this over the
  * SFTPGo HTTP client; a future Drive or S3 backend implements the same
@@ -54,4 +91,7 @@ export interface StorageProvider {
   setModifiedAt(path: string, modifiedAt: Date): Promise<void>;
 
   zip(paths: readonly string[]): Promise<ReadableStream<Uint8Array>>;
+
+  /** Present only when this provider exposes a recoverable recycle folder. */
+  readonly trash?: TrashProvider;
 }
