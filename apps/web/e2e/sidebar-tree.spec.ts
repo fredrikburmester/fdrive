@@ -29,7 +29,7 @@ test("the sidebar tree shows seeded folders, navigates on click, and highlights 
   // crumb (`BreadcrumbPage`) also has `role="link"` (shadcn's convention for
   // marking it non-navigable via `aria-disabled`), so an unscoped query for
   // "docs" resolves to two elements once the browser navigates there.
-  const docsLink = sidebar(page).getByRole("link", { name: "docs" });
+  const docsLink = sidebar(page).getByRole("link", { name: "docs", exact: true });
   await expect(docsLink).toBeVisible();
   await expect(docsLink).not.toHaveAttribute("data-active", "");
 
@@ -70,7 +70,7 @@ test("a folder with only files shows no chevron once its listing is known", asyn
   const docsRow = sidebar(page).locator('[data-path="/docs"]');
   await expect(docsRow).toBeVisible();
   await expect(docsRow.getByRole("button")).toHaveCount(0);
-  await expect(docsRow.getByRole("link", { name: "docs" })).toBeVisible();
+  await expect(docsRow.getByRole("link", { name: "docs", exact: true })).toBeVisible();
 });
 
 test("a folder with subfolders shows a chevron and expands without a skeleton flash", async ({
