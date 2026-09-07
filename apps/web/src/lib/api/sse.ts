@@ -5,6 +5,7 @@ import { parentPath } from "@fdrive/core";
 import { type QueryClient, type QueryKey, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { accountTransition } from "../account/transition";
+import { archiveKeysToInvalidate } from "../archive/invalidation";
 import { useJobsStore } from "../jobs/store";
 import { metadataKeysToInvalidate } from "../metadata/invalidation";
 import { trashKeysToInvalidate } from "../trash/invalidation";
@@ -59,6 +60,7 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
     ...[...parents].map((parent) => queryKeys.fs.list(parent)),
     ...metadataKeysToInvalidate(event),
     ...trashKeysToInvalidate(event),
+    ...archiveKeysToInvalidate(event),
   ];
 }
 

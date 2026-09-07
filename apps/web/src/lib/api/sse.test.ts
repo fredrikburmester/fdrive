@@ -61,6 +61,7 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(fsEvent({ paths: ["/a/b.txt"] }))).toEqual([
       ["fs", "list", "/a"],
       ["trash", "list"],
+      ["fs", "archiveEntries", "/a/b.txt"],
     ]);
   });
 
@@ -70,6 +71,8 @@ describe("keysToInvalidate", () => {
       ["fs", "list", "/a"],
       ["fs", "list", "/c"],
       ["trash", "list"],
+      ["fs", "archiveEntries", "/a/b.txt"],
+      ["fs", "archiveEntries", "/c/d.txt"],
     ]);
   });
 
@@ -82,6 +85,8 @@ describe("keysToInvalidate", () => {
       ["recents", "list"],
       ["tags", "files"],
       ["trash", "list"],
+      ["fs", "archiveEntries", "/a/b.txt"],
+      ["fs", "archiveEntries", "/c/d.txt"],
     ]);
 
     const deleteEvent = fsEvent({ op: "delete", paths: ["/a/b.txt"] });
@@ -91,6 +96,7 @@ describe("keysToInvalidate", () => {
       ["recents", "list"],
       ["tags", "files"],
       ["trash", "list"],
+      ["fs", "archiveEntries", "/a/b.txt"],
     ]);
   });
 
@@ -99,6 +105,8 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(event)).toEqual([
       ["fs", "list", "/a"],
       ["trash", "list"],
+      ["fs", "archiveEntries", "/a/b.txt"],
+      ["fs", "archiveEntries", "/a/c.txt"],
     ]);
   });
 
@@ -361,4 +369,18 @@ describe("useFsEvents", () => {
     vi.advanceTimersByTime(30_000);
     expect(FakeEventSource.instances).toHaveLength(1);
   });
+});
+
+it("invalidates cached archive listings for every path an fs event names", async () => {
+  const { keysToInvalidate } = await import("./sse");
+  const keys = keysToInvalidate({
+    type: "fs",
+    op: "move",
+    identityId: "id",
+    paths: ["/a.zip"],
+    targetPaths: ["/b.zip"],
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  expect(keys).toContainEqual(["fs", "archiveEntries", "/a.zip"]);
+  expect(keys).toContainEqual(["fs", "archiveEntries", "/b.zip"]);
 });
