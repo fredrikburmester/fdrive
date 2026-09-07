@@ -61,7 +61,7 @@ export function buildWebEnvLocal(): string {
  * `FDRIVE_*` variable name (see `apps/api/src/config.ts`). Matches
  * `deploy/compose.dev.yaml`'s `embed`, `indexer`, and `ocr` published ports
  * and bind-mounted thumbnails directory: 127.0.0.1:58081, 127.0.0.1:58010,
- * 127.0.0.1:58011, and `deploy/dev/.data/thumbs` under `repoRoot`
+ * 127.0.0.1:58011, the image-embed sidecar at 127.0.0.1:58012, and `deploy/dev/.data/thumbs` under `repoRoot`
  * respectively. `dev` is granted admin in the dev environment so the System
  * pages are reachable without extra setup. `FDRIVE_SFTPGO_TRASH_PATH`
  * matches the recycle-folder rule `tools/dev/generate-seed.ts` seeds into
@@ -76,6 +76,7 @@ export function buildDevSearchEnv(repoRoot: string): Record<string, string> {
     FDRIVE_THUMBS_DIR: join(repoRoot, "deploy", "dev", ".data", "thumbs"),
     FDRIVE_INDEXER_URL: "http://127.0.0.1:58010",
     FDRIVE_OCR_URL: "http://127.0.0.1:58011",
+    FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:58012",
     FDRIVE_ADMIN_USERS: "dev",
     FDRIVE_SFTPGO_TRASH_PATH: "/.trash",
   };
