@@ -42,6 +42,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     filesBySha256: notImplemented,
     rootIdsByName: async () => ({}),
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
+    statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     duplicates: notImplemented,
     similar: notImplemented,
     recentFiles: notImplemented,

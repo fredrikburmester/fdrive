@@ -1,4 +1,3 @@
-import { parseHomeTemplate } from "@fdrive/core";
 import type { IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
@@ -52,6 +51,7 @@ function stubIndexQueries(): IndexQueries {
     filesBySha256: async () => fail("filesBySha256"),
     rootIdsByName: async () => ({ sftpgo: 1 }),
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
+    statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     duplicates: async () => [],
     similar: async () => fail("similar"),
     recentFiles: async () => fail("recentFiles"),
@@ -151,8 +151,6 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
 
   const toolDeps: McpToolDeps = {
     indexQueries: stubIndexQueries(),
-    homeTemplate: parseHomeTemplate("sftpgo:/{username}"),
-    indexRootNames: new Set(["sftpgo"]),
     searchService: stubSearchService(),
     scopeResolver: {
       verifiedIndexScopes: async () => ({
