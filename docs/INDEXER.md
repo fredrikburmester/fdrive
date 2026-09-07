@@ -123,10 +123,33 @@ a published port in the non-dev compose file.
 | `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
 | `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is the candidate count computed up front), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
 
+## Image embeddings
+
+`services/image-embed` is a separate, optional sidecar (same `index` profile)
+that turns images and search queries into SigLIP 2 vectors for image search.
+See `docs/workflow/P7-IMAGE-SEARCH.md` for why it exists as its own service
+rather than reusing the text `embed` container (CLIP-style image towers are
+not part of that deployment), and `docs/workflow/P7-IMAGE-SEARCH-BUILD.md`
+for its fixed HTTP contract and the orchestrator's decisions (model choice,
+1024-dimensional vectors, content-keyed by sha256, L2-normalized output).
+
+The sidecar itself has no database access and does no indexing: it only
+embeds bytes or text it is handed and normalizes the result. The indexer
+reads it, when `IMAGE_EMBED_URL` is configured, the same way it reads the
+text `embed` and `tika` services: after a thumbnail is written for a file,
+POST the 256 px WebP to `POST /embed/image` and upsert the returned vector
+under the file's sha256 in `app.image_embeddings`. As with OCR and text
+embedding, an unconfigured `IMAGE_EMBED_URL` simply turns the feature off;
+nothing errors and nothing blocks indexing.
+
+`services/image-embed`'s own `README.md` documents its HTTP contract
+(`/health`, `/embed/image`, `/embed/text`), config, and testing approach in
+full; it is not repeated here.
+
 ## Compose
 
-Add `--profile index` to bring up `indexer`, `tika`, and `embed` alongside the
-core stack:
+Add `--profile index` to bring up `indexer`, `tika`, `embed`, and
+`image-embed` alongside the core stack:
 
 ```sh
 docker compose -f compose.yaml --profile index up -d
@@ -152,6 +175,12 @@ can reach it directly, and `THUMBS_DIR` is bind-mounted to a host directory
 (`deploy/dev/.data/thumbs` by default, override with
 `FDRIVE_DEV_THUMBS_DIR`) rather than a named volume, so the host api process
 can read the generated WebP files at the path `FDRIVE_THUMBS_DIR` names.
+`image-embed` follows the same host-published pattern (58012 by default,
+override with `FDRIVE_DEV_IMAGE_EMBED_PORT`) for a future
+`FDRIVE_IMAGE_EMBED_URL` in `apps/api/.env.dev`; the dev `indexer` service
+already points `IMAGE_EMBED_URL` at it (`http://image-embed:8012`) so the
+image embedding pass works as soon as `services/indexer` reads that
+variable.
 
 The `embed` service's image (`ghcr.io/huggingface/text-embeddings-inference`)
 ships `amd64` only; on an Apple Silicon Mac, `platform: linux/amd64` in the
