@@ -158,3 +158,65 @@ it("hides the Enter-opens footer and keyboard hints on mobile, keeping the revea
   expect(screen.getByRole("button", { name: "Reveal in folder" })).toBeDefined();
   expect(screen.getByRole("button", { name: "Close" })).toBeDefined();
 });
+
+const longPath =
+  "/Documents/University/Books/Course Books/(TNG032)Fourier and Laplace Transforms. Best of luck to future students who read this file";
+const longSnippet =
+  "A very long highlighted snippet of matched content that should wrap onto at most two lines and never spill past the dialog edge, no matter how long the underlying text actually is.";
+
+it("truncates a hit row's name and path to one line each, clamps a long snippet to two lines, and keeps the reveal button from shrinking", async () => {
+  stubMatchMedia(false);
+  const longHit: SearchHit = {
+    name: "very-long-file-name-that-would-otherwise-overflow-the-search-row.pdf",
+    path: longPath,
+    kind: "file",
+    ext: ".pdf",
+    mime: "application/pdf",
+    size: 1,
+    modifiedAt: "2026-01-01T00:00:00Z",
+    score: 1,
+    snippets: [{ text: longSnippet, ranges: [] }],
+    hasThumbnail: false,
+  };
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "fourier",
+    sections: { folders: [], files: [longHit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+    target: { value: "fourier" },
+  });
+  await waitFor(() => expect(screen.getByText(longHit.name)).toBeDefined());
+
+  expect(screen.getByText(longHit.name).className).toContain("truncate");
+  expect(screen.getByText(longPath).className).toContain("truncate");
+  expect(screen.getByText(longSnippet).closest("p")?.className).toContain("line-clamp-2");
+  expect(screen.getByRole("button", { name: "Reveal in folder" }).className).toContain("shrink-0");
+});
+
+it("never renders the Folders heading when the response's folders section is empty", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+    target: { value: "same" },
+  });
+  await waitFor(() => expect(screen.getByText("same.txt")).toBeDefined());
+
+  expect(screen.queryByText("Folders")).toBeNull();
+});

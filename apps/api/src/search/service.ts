@@ -88,6 +88,68 @@ function emptyResponse(
   };
 }
 
+interface DeriveFoldersInput {
+  readonly filenameRows: readonly FilenameHit[];
+  readonly fileById: ReadonlyMap<number, IndexedFile>;
+  /** Resolves an indexed file to its caller-visible virtual path, `null` when it is out of scope. */
+  readonly virtualPathFor: (file: IndexedFile) => string | null;
+  readonly authorizer: ReadAuthorizer;
+  /** Called once per candidate folder whose live-read check itself failed (not merely "denied"). */
+  readonly onAuthUnavailable: () => void;
+}
+
+/**
+ * Derives the Folders section: the most recently modified parent directory
+ * of each filename-matched file, live-read checked and capped at
+ * `MAX_FOLDERS`. Never called while a type filter (`SearchFilters.exts`) is
+ * active, since a type filter is a files-only filter and the candidate
+ * folders below are not themselves filtered by extension (see the `search`
+ * handler's call site).
+ */
+async function deriveFolders(input: DeriveFoldersInput): Promise<FsEntry[]> {
+  const folderCandidates = new Map<string, Date>();
+  for (const row of input.filenameRows) {
+    const file = input.fileById.get(row.fileId);
+    if (file === undefined) {
+      continue;
+    }
+    const virtualPath = input.virtualPathFor(file);
+    if (virtualPath === null) {
+      continue;
+    }
+    const folder = parentPath(virtualPath);
+    const modifiedAt = dateFromMtimeNs(file.mtimeNs);
+    const existing = folderCandidates.get(folder);
+    if (existing === undefined || modifiedAt.getTime() > existing.getTime()) {
+      folderCandidates.set(folder, modifiedAt);
+    }
+  }
+
+  const resolvedFolders = await Promise.all(
+    Array.from(folderCandidates.entries()).map(
+      async ([path, modifiedAt]): Promise<FsEntry | null> => {
+        const authResult = await input.authorizer.authorize({ path, kind: "dir" });
+        if (!authResult.allowed) {
+          if (authResult.reason === "unavailable") {
+            input.onAuthUnavailable();
+          }
+          return null;
+        }
+        return {
+          name: baseName(path),
+          path,
+          kind: "dir",
+          size: 0,
+          modifiedAt: modifiedAt.toISOString(),
+          ext: "",
+          mime: null,
+        };
+      },
+    ),
+  );
+  return resolvedFolders.filter((entry): entry is FsEntry => entry !== null).slice(0, MAX_FOLDERS);
+}
+
 /**
  * Builds the fdrive hybrid search service: the same ranking as filesai's
  * `mcp_server.search` (semantic top 60, full-text prefix `tsquery` top 60,
@@ -254,49 +316,25 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       const files = accessibleHits.slice(0, input.limit);
       const content = files.filter((hit) => hit.snippets.length > 0).slice(0, MAX_CONTENT_HITS);
 
-      const folderCandidates = new Map<string, Date>();
-      for (const row of filenameRows) {
-        const file = fileById.get(row.fileId);
-        if (file === undefined) {
-          continue;
-        }
-        const virtualPath = virtualPathFor(file);
-        if (virtualPath === null) {
-          continue;
-        }
-        const folder = parentPath(virtualPath);
-        const modifiedAt = dateFromMtimeNs(file.mtimeNs);
-        const existing = folderCandidates.get(folder);
-        if (existing === undefined || modifiedAt.getTime() > existing.getTime()) {
-          folderCandidates.set(folder, modifiedAt);
-        }
-      }
-
-      const resolvedFolders = await Promise.all(
-        Array.from(folderCandidates.entries()).map(
-          async ([path, modifiedAt]): Promise<FsEntry | null> => {
-            const authResult = await input.authorizer.authorize({ path, kind: "dir" });
-            if (!authResult.allowed) {
-              if (authResult.reason === "unavailable") {
+      // A type filter (any `ext` other than "any type") is a files-only
+      // filter; the Folders section is derived from matched files' parent
+      // directories, which are not themselves filtered by extension, so it
+      // is suppressed outright whenever a type filter is active rather than
+      // shown with filter-inconsistent contents. This holds for every
+      // caller, including the MCP server, since it lives in the service
+      // rather than any one client.
+      const folders: FsEntry[] =
+        input.filters.exts === null
+          ? await deriveFolders({
+              filenameRows,
+              fileById,
+              virtualPathFor,
+              authorizer: input.authorizer,
+              onAuthUnavailable: () => {
                 authUnavailable = true;
-              }
-              return null;
-            }
-            return {
-              name: baseName(path),
-              path,
-              kind: "dir",
-              size: 0,
-              modifiedAt: modifiedAt.toISOString(),
-              ext: "",
-              mime: null,
-            };
-          },
-        ),
-      );
-      const folders = resolvedFolders
-        .filter((entry): entry is FsEntry => entry !== null)
-        .slice(0, MAX_FOLDERS);
+              },
+            })
+          : [];
 
       return {
         query: input.query,

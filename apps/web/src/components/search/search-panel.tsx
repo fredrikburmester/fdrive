@@ -103,7 +103,7 @@ function SnippetText({ snippet }: { snippet: SearchSnippet }) {
     [snippet.text, snippet.ranges],
   );
   return (
-    <p className="truncate text-xs text-muted-foreground">
+    <p className="line-clamp-2 text-xs text-muted-foreground">
       {segments.map((segment, index) =>
         segment.highlighted ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable derived render of static props
@@ -136,10 +136,8 @@ function HitRow({
         <HitThumbnail hit={hit} />
       )}
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-sm">{hit.name}</span>
-          <span className="shrink-0 truncate text-xs text-muted-foreground">{hit.path}</span>
-        </div>
+        <p className="truncate text-sm">{hit.name}</p>
+        <p className="truncate text-xs text-muted-foreground">{hit.path}</p>
         {label ? <p className="truncate text-xs text-muted-foreground">{label}</p> : null}
         {hit.snippets[0] !== undefined ? <SnippetText snippet={hit.snippets[0]} /> : null}
       </div>
@@ -200,7 +198,7 @@ function FolderRow({ folder, label }: { folder: FsEntry; label: string | undefin
         <FolderIcon className="size-4 text-muted-foreground" />
       </div>
       <div className="min-w-0 flex-1">
-        <span className="truncate text-sm">{folder.name || "Home"}</span>
+        <p className="truncate text-sm">{folder.name || "Home"}</p>
         {label ? <p className="truncate text-xs text-muted-foreground">{label}</p> : null}
       </div>
     </div>
@@ -214,8 +212,8 @@ function RecentRow({ item }: { item: RecentItem }) {
         <FileIcon kind="file" ext="" mime={null} />
       </div>
       <div className="min-w-0 flex-1">
-        <span className="truncate text-sm">{item.name}</span>
-        <span className="ml-2 truncate text-xs text-muted-foreground">{item.path}</span>
+        <p className="truncate text-sm">{item.name}</p>
+        <p className="truncate text-xs text-muted-foreground">{item.path}</p>
       </div>
     </div>
   );
