@@ -32,6 +32,14 @@ function renderButton(me: MeResponse) {
 }
 
 beforeEach(() => {
+  // `SearchPanel` (rendered by `SearchButton`) calls `useIsMobile`, which
+  // reads `window.matchMedia`; jsdom does not implement it.
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
   vi.stubGlobal(
     "ResizeObserver",
     class {

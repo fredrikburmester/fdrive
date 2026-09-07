@@ -5,7 +5,15 @@ import { baseName } from "@fdrive/core";
 import { FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useShellMe } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +30,7 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { identityLabel, navigateAccountItem } from "@/lib/account/identities";
 import { useIdentityActions } from "@/lib/account/use-identities";
 import { describeApiError } from "@/lib/api/errors";
@@ -48,6 +57,7 @@ import {
 } from "@/lib/search/filters";
 import { splitSnippetSegments } from "@/lib/search/highlight";
 import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
+import { searchPanelLayout } from "@/lib/search/panel-layout";
 import { useSearchResults } from "@/lib/search/queries";
 import { pushRecent, type RecentItem, readRecent } from "@/lib/search/recent";
 import { revealHref } from "@/lib/search/reveal";
@@ -138,22 +148,36 @@ function HitRow({
 }
 
 /**
- * The trailing "reveal in folder" action for a Files/Content result row:
- * visible on hover or keyboard focus (see `command.tsx`'s
- * `group/command-item`), hidden otherwise so rows stay uncluttered. Stops
- * the click from bubbling to the `CommandItem`'s own `onSelect`, so
- * revealing never also opens the file.
+ * The trailing "reveal in folder" action for a Files/Content result row. On
+ * desktop it stays visible on hover or keyboard focus only (see
+ * `command.tsx`'s `group/command-item`), hidden otherwise so rows stay
+ * uncluttered. On mobile there is no hover, so it stays permanently visible
+ * at a comfortable 44px touch target instead. Stops the click from
+ * bubbling to the `CommandItem`'s own `onSelect`, so revealing never also
+ * opens the file.
  */
-function RevealButton({ path, onReveal }: { path: string; onReveal: (path: string) => void }) {
+function RevealButton({
+  path,
+  onReveal,
+  mobile,
+}: {
+  path: string;
+  onReveal: (path: string) => void;
+  mobile: boolean;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Button
             variant="ghost"
-            size="icon"
+            size={mobile ? "icon-lg" : "icon"}
             aria-label="Reveal in folder"
-            className="ml-auto shrink-0 opacity-0 focus-visible:opacity-100 group-hover/command-item:opacity-100 group-focus-within/command-item:opacity-100"
+            className={
+              mobile
+                ? "ml-auto size-11 shrink-0"
+                : "ml-auto shrink-0 opacity-0 focus-visible:opacity-100 group-hover/command-item:opacity-100 group-focus-within/command-item:opacity-100"
+            }
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -216,6 +240,9 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [allLogins, setAllLogins] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const currentFolder = pathFromFilesPathname(pathname) ?? "/";
+  const isMobile = useIsMobile();
+  const mobileLayout = searchPanelLayout(isMobile) === "mobile";
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const [inputValue, setInputValue] = useState("");
   const [committedQuery, setCommittedQuery] = useState("");
@@ -380,9 +407,17 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       title="Search"
       description="Search files by name or content"
       className="sm:max-w-xl"
+      mobile={mobileLayout}
+      initialFocus={mobileLayout ? (inputRef as RefObject<HTMLElement | null>) : undefined}
     >
-      <Command shouldFilter={false} value={selectedValue} onValueChange={setSelectedValue}>
+      <Command
+        shouldFilter={false}
+        value={selectedValue}
+        onValueChange={setSelectedValue}
+        className={mobileLayout ? "rounded-none!" : undefined}
+      >
         <CommandInput
+          ref={inputRef}
           value={inputValue}
           onValueChange={handleInputChange}
           onKeyDownCapture={handleInputKeyDownCapture}
@@ -402,7 +437,13 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             <ToggleGroupItem value="all">All linked logins</ToggleGroupItem>
           </ToggleGroup>
         ) : null}
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5">
+        <div
+          className={
+            mobileLayout
+              ? "flex flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-border px-2 py-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              : "flex flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5"
+          }
+        >
           <ToggleGroup
             value={[chips.type]}
             onValueChange={(values) =>
@@ -412,6 +453,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               }))
             }
             size="sm"
+            className={mobileLayout ? "shrink-0" : undefined}
           >
             {SEARCH_TYPE_FILTERS.map((type) => (
               <ToggleGroupItem key={type} value={type} aria-label={SEARCH_TYPE_LABELS[type]}>
@@ -426,6 +468,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             onPressedChange={(pressed) =>
               setChips((current) => ({ ...current, folderOnly: pressed }))
             }
+            className={mobileLayout ? "shrink-0" : undefined}
           >
             This folder only
           </Toggle>
@@ -447,7 +490,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             Semantic search unavailable, showing keyword matches.
           </p>
         ) : null}
-        <CommandList>
+        <CommandList className={mobileLayout ? "max-h-none min-h-0 flex-1" : undefined}>
           {showRecent ? (
             allLogins || recent.length === 0 ? (
               <CommandEmpty>Type to search files and content.</CommandEmpty>
@@ -499,6 +542,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                         <RevealButton
                           path={hit.path}
                           onReveal={(path) => revealItem(path, hit.identityId)}
+                          mobile={mobileLayout}
                         />
                       </CommandItem>
                     ))}
@@ -518,6 +562,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                       <RevealButton
                         path={hit.path}
                         onReveal={(path) => revealItem(path, hit.identityId)}
+                        mobile={mobileLayout}
                       />
                     </CommandItem>
                   ))}
@@ -526,49 +571,51 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             </>
           )}
         </CommandList>
-        <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
-          <div className="flex items-center gap-1.5">
-            <span>Enter opens:</span>
-            <ToggleGroup
-              value={[enterAction]}
-              onValueChange={(values) => {
-                const next = values[0];
-                if (next === "file" || next === "folder") {
-                  handleEnterActionChange(next);
-                }
-              }}
-              size="sm"
-            >
-              <ToggleGroupItem value="file">File</ToggleGroupItem>
-              <ToggleGroupItem value="folder">Enclosing folder</ToggleGroupItem>
-            </ToggleGroup>
+        {mobileLayout ? null : (
+          <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1.5">
+              <span>Enter opens:</span>
+              <ToggleGroup
+                value={[enterAction]}
+                onValueChange={(values) => {
+                  const next = values[0];
+                  if (next === "file" || next === "folder") {
+                    handleEnterActionChange(next);
+                  }
+                }}
+                size="sm"
+              >
+                <ToggleGroupItem value="file">File</ToggleGroupItem>
+                <ToggleGroupItem value="folder">Enclosing folder</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            {enterAction === "folder" ? (
+              <div className="flex items-center gap-3">
+                <KbdGroup>
+                  <Kbd>Enter</Kbd>
+                  <span>reveal</span>
+                </KbdGroup>
+                <KbdGroup>
+                  <Kbd>⌘</Kbd>
+                  <Kbd>Enter</Kbd>
+                  <span>open</span>
+                </KbdGroup>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <KbdGroup>
+                  <Kbd>Enter</Kbd>
+                  <span>open</span>
+                </KbdGroup>
+                <KbdGroup>
+                  <Kbd>⌘</Kbd>
+                  <Kbd>Enter</Kbd>
+                  <span>reveal</span>
+                </KbdGroup>
+              </div>
+            )}
           </div>
-          {enterAction === "folder" ? (
-            <div className="flex items-center gap-3">
-              <KbdGroup>
-                <Kbd>Enter</Kbd>
-                <span>reveal</span>
-              </KbdGroup>
-              <KbdGroup>
-                <Kbd>⌘</Kbd>
-                <Kbd>Enter</Kbd>
-                <span>open</span>
-              </KbdGroup>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <KbdGroup>
-                <Kbd>Enter</Kbd>
-                <span>open</span>
-              </KbdGroup>
-              <KbdGroup>
-                <Kbd>⌘</Kbd>
-                <Kbd>Enter</Kbd>
-                <span>reveal</span>
-              </KbdGroup>
-            </div>
-          )}
-        </div>
+        )}
       </Command>
     </CommandDialog>
   );
