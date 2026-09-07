@@ -67,4 +67,55 @@ describe("buildSftpgoDump", () => {
     expect(first).toEqual(second);
     expect(first).not.toBe(second);
   });
+
+  it("omits event_actions and event_rules when no trash option is given", () => {
+    const dump = buildSftpgoDump(SEED_USERS, SEED_FOLDERS, { dataDir: "/srv/sftpgo/data" });
+
+    expect(dump.event_actions).toBeUndefined();
+    expect(dump.event_rules).toBeUndefined();
+  });
+
+  it("adds the recycle-folder event action and rule when a trash path is given", () => {
+    const dump = buildSftpgoDump(SEED_USERS, SEED_FOLDERS, {
+      dataDir: "/srv/sftpgo/data",
+      trash: { path: "/.trash" },
+    });
+
+    expect(dump.event_actions).toEqual([
+      {
+        name: "fdrive-move-to-trash",
+        type: 9,
+        options: {
+          fs_config: {
+            type: 1,
+            renames: [
+              {
+                key: "/{{.VirtualPath}}",
+                value: "/.trash/{{.VirtualDirPath}}/{{.ObjectName}}/{{.Timestamp}}",
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(dump.event_rules).toEqual([
+      {
+        name: "fdrive-trash",
+        status: 1,
+        trigger: 1,
+        conditions: {
+          fs_events: ["pre-delete"],
+          options: { fs_paths: [{ pattern: "/.trash/**", inverse_match: true }] },
+        },
+        actions: [
+          {
+            name: "fdrive-move-to-trash",
+            order: 1,
+            relation_options: { execute_sync: true, stop_on_failure: true },
+          },
+        ],
+      },
+    ]);
+  });
 });

@@ -9,8 +9,14 @@ export { SEED_FILES, SEED_FOLDERS, SEED_USERS } from "./seed-data.js";
 export type {
   BuildSftpgoDumpOptions,
   SftpgoDump,
+  SftpgoDumpEventAction,
+  SftpgoDumpEventRule,
   SftpgoDumpFolder,
   SftpgoDumpUser,
   SftpgoDumpVirtualFolder,
 } from "./sftpgo-dump.js";
-export { buildSftpgoDump } from "./sftpgo-dump.js";
+export {
+  buildSftpgoDump,
+  TRASH_EVENT_ACTION_NAME,
+  TRASH_EVENT_RULE_NAME,
+} from "./sftpgo-dump.js";

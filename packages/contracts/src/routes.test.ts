@@ -70,6 +70,16 @@ describe("ROUTES", () => {
     expect(ROUTES.about).toBe("/api/v1/about");
   });
 
+  it("defines every trash route", () => {
+    expect(ROUTES.trash).toEqual({
+      status: "/api/v1/trash/status",
+      list: "/api/v1/trash",
+      restore: "/api/v1/trash/restore",
+      purge: "/api/v1/trash/purge",
+      empty: "/api/v1/trash/empty",
+    });
+  });
+
   it("defines every setup route under /api/v1/setup", () => {
     expect(ROUTES.setup).toEqual({
       status: "/api/v1/setup/status",

@@ -9,3 +9,5 @@ export type * from "./ports/ids.ts";
 export type * from "./ports/storage.ts";
 export * from "./scope.ts";
 export * from "./search/index.ts";
+export * from "./trash/recycle-folder.ts";
+export * from "./trash/recycle-folder-trash.ts";

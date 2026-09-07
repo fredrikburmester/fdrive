@@ -153,3 +153,12 @@ export {
   CreateApiTokenRequest,
   CreateApiTokenResponse,
 } from "./tokens.ts";
+export {
+  isValidPath,
+  TrashEntry,
+  TrashListResponse,
+  TrashPurgeRequest,
+  TrashRestoreRequest,
+  TrashRestoreResponse,
+  TrashStatusResponse,
+} from "./trash.ts";

@@ -12,4 +12,11 @@ export interface FakeSeed {
   readonly files?: Record<string, Record<string, string>>;
   readonly tokenTtlMs?: number;
   readonly now?: () => Date;
+  /**
+   * When given, `deleteFile`/`deleteDir` outside this path relocate every
+   * deleted file to `<path>/<original dir>/<original name>/<ns timestamp>`
+   * instead of removing it, matching the real SFTPGo Event Manager
+   * recycle-folder recipe. Deletes under this path stay permanent.
+   */
+  readonly trash?: { readonly path: string };
 }

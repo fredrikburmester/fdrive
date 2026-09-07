@@ -36,6 +36,52 @@ async function listDir(baseUrl: string, token: string, path: string): Promise<Di
   return (await response.json()) as DirEntry[];
 }
 
+interface TrashDirEntry {
+  readonly name: string;
+  readonly type: number;
+}
+
+async function listTrashDir(
+  baseUrl: string,
+  token: string,
+  path: string,
+): Promise<TrashDirEntry[]> {
+  const response = await fetch(`${baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(path)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(response.status).toBe(200);
+  return (await response.json()) as TrashDirEntry[];
+}
+
+async function uploadFile(
+  baseUrl: string,
+  token: string,
+  path: string,
+  content: string,
+): Promise<void> {
+  const response = await fetch(
+    `${baseUrl}/api/v2/user/files/upload?path=${encodeURIComponent(path)}`,
+    { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: content },
+  );
+  expect(response.status).toBe(201);
+}
+
+async function deleteFile(baseUrl: string, token: string, path: string): Promise<number> {
+  const response = await fetch(`${baseUrl}/api/v2/user/files?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.status;
+}
+
+async function deleteDirRecursive(baseUrl: string, token: string, path: string): Promise<number> {
+  const response = await fetch(`${baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.status;
+}
+
 async function assertTcpReachable(host: string, port: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const socket = net.createConnection({ host, port }, () => {
@@ -114,5 +160,84 @@ describe("testkit containers", () => {
 
     const sharedEntries = await listDir(sftpgo.baseUrl, token, "/shared");
     expect(sharedEntries.map((entry) => entry.name)).toContain("team.txt");
+  });
+});
+
+describe("testkit containers: trash", () => {
+  const TRASH_PATH = "/.trash";
+  let trashSftpgo: SftpgoContainer;
+
+  beforeAll(async () => {
+    trashSftpgo = await startSftpgo({ trash: { path: TRASH_PATH } });
+  }, 180_000);
+
+  afterAll(async () => {
+    await trashSftpgo?.stop();
+  }, 180_000);
+
+  it("deleting a file moves it under <trashPath>/<dir>/<name>/<timestamp>", async () => {
+    const alice = seedUser("alice");
+    const token = await tokenFor(trashSftpgo.baseUrl, alice.username, alice.password);
+
+    await uploadFile(trashSftpgo.baseUrl, token, "/trash-top.txt", "top level file");
+    expect(await deleteFile(trashSftpgo.baseUrl, token, "/trash-top.txt")).toBe(200);
+
+    const rootEntries = await listDir(trashSftpgo.baseUrl, token, "/");
+    expect(rootEntries.map((entry) => entry.name)).not.toContain("trash-top.txt");
+
+    const leaves = await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}/trash-top.txt`);
+    expect(leaves).toHaveLength(1);
+    expect(leaves[0]?.name).toMatch(/^[0-9]{1,20}$/);
+  });
+
+  it("deleting a directory moves every nested file individually, including names with a space, Unicode, and a literal %20", async () => {
+    const alice = seedUser("alice");
+    const token = await tokenFor(trashSftpgo.baseUrl, alice.username, alice.password);
+    const dir = "/trash-dir-delete";
+
+    await fetch(`${trashSftpgo.baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(dir)}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await fetch(
+      `${trashSftpgo.baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(`${dir}/inner`)}`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+    );
+    await uploadFile(trashSftpgo.baseUrl, token, `${dir}/sp ace.txt`, "space");
+    await uploadFile(trashSftpgo.baseUrl, token, `${dir}/inner/Å unicode.txt`, "unicode");
+    await uploadFile(trashSftpgo.baseUrl, token, `${dir}/literal%20.txt`, "literal");
+
+    expect(await deleteDirRecursive(trashSftpgo.baseUrl, token, dir)).toBe(200);
+
+    const rootEntries = await listDir(trashSftpgo.baseUrl, token, "/");
+    expect(rootEntries.map((entry) => entry.name)).not.toContain("trash-dir-delete");
+
+    expect(
+      await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}${dir}/sp ace.txt`),
+    ).toHaveLength(1);
+    expect(
+      await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}${dir}/inner/Å unicode.txt`),
+    ).toHaveLength(1);
+    expect(
+      await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}${dir}/literal%20.txt`),
+    ).toHaveLength(1);
+  });
+
+  it("deleting a file already under the trash path is permanent", async () => {
+    const alice = seedUser("alice");
+    const token = await tokenFor(trashSftpgo.baseUrl, alice.username, alice.password);
+
+    await uploadFile(trashSftpgo.baseUrl, token, "/trash-permanent.txt", "gone for good");
+    expect(await deleteFile(trashSftpgo.baseUrl, token, "/trash-permanent.txt")).toBe(200);
+
+    const trashDir = `${TRASH_PATH}/trash-permanent.txt`;
+    const leaves = await listTrashDir(trashSftpgo.baseUrl, token, trashDir);
+    expect(leaves).toHaveLength(1);
+    const leafName = leaves[0]?.name;
+    expect(leafName).toBeDefined();
+
+    expect(await deleteFile(trashSftpgo.baseUrl, token, `${trashDir}/${leafName}`)).toBe(200);
+
+    expect(await listTrashDir(trashSftpgo.baseUrl, token, trashDir)).toEqual([]);
   });
 });
