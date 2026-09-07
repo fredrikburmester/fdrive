@@ -60,6 +60,7 @@ describe("ROUTES", () => {
     expect(ROUTES.search).toEqual({
       query: "/api/v1/search",
       status: "/api/v1/search/status",
+      images: "/api/v1/search/images",
     });
   });
 
@@ -107,6 +108,9 @@ describe("ROUTES", () => {
       indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
       search: "/api/v1/system/search",
       searchReembed: "/api/v1/system/search/reembed",
+      imageSearch: "/api/v1/system/image-search",
+      imageSearchRebuild: "/api/v1/system/image-search/rebuild",
+      imageSearchClear: "/api/v1/system/image-search/clear",
       ocr: "/api/v1/system/ocr",
       ocrSettings: "/api/v1/system/ocr/settings",
       ocrRun: "/api/v1/system/ocr/run",

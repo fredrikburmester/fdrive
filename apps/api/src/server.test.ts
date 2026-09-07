@@ -37,6 +37,7 @@ function buildConfig(): AppConfig {
     fdriveShareUploadMaxBytes: 1_000_000_000,
     fdriveIndexRoots: null,
     fdriveEmbedUrl: undefined,
+    fdriveImageEmbedUrl: undefined,
     fdriveThumbsDir: undefined,
     fdriveAdminUsers: [],
     fdriveSetupToken: undefined,

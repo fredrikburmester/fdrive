@@ -58,6 +58,8 @@ import { createReadAuthorizer } from "./scoping/read-authorizer.ts";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { registerScopeRoutes } from "./scoping/routes.ts";
 import { createEmbedClient } from "./search/embeddings.js";
+import { createImageEmbedClient } from "./search/image-embed-client.js";
+import { createImageSearchService } from "./search/image-service.js";
 import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
@@ -209,10 +211,28 @@ export async function composeApp(
     config.fdriveEmbedUrl === undefined
       ? null
       : createEmbedClient({ baseUrl: config.fdriveEmbedUrl });
+  const imageEmbedClient =
+    config.fdriveImageEmbedUrl === undefined
+      ? null
+      : createImageEmbedClient({ baseUrl: config.fdriveImageEmbedUrl, fetch: fetchImpl });
   const searchService = createSearchService({
     indexQueries,
     embedClient,
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
+    trashPath: config.fdriveSftpgoTrashPath,
+    clock,
+  });
+  // The sidecar's own health (model id + dim) is cached for 15s so it is not
+  // re-fetched on every keystroke; a failed or stale-dim probe just makes
+  // image search report `unavailable: true` rather than erroring.
+  const resolveImageEmbedHealth = createCachedProbe(
+    () => (imageEmbedClient === null ? Promise.resolve(null) : imageEmbedClient.health()),
+    { ttlMs: HEALTH_PROBE_TTL_MS, clock: () => clock().getTime() },
+  );
+  const imageSearchService = createImageSearchService({
+    indexQueries,
+    imageEmbedClient,
+    resolveHealth: resolveImageEmbedHealth,
     trashPath: config.fdriveSftpgoTrashPath,
     clock,
   });
@@ -408,22 +428,30 @@ export async function composeApp(
   const probeSubsystems = async (
     forConfig: AppConfig,
   ): Promise<Partial<Record<Subsystem, boolean>>> => {
-    const [indexResult, searchStatus, ocrResult, officeReachable] = await Promise.all([
-      indexerClient === null ? Promise.resolve(null) : indexerClient.health(),
-      forConfig.fdriveEmbedUrl === undefined
-        ? Promise.resolve(null)
-        : fetchEmbedStatus({ baseUrl: forConfig.fdriveEmbedUrl, fetch: fetchImpl }),
-      ocrClient === null ? Promise.resolve(null) : ocrClient.health(),
-      officeDiscovery === null
-        ? Promise.resolve(null)
-        : officeDiscovery.get().then(
-            () => true,
-            () => false,
-          ),
-    ]);
+    const [indexResult, searchStatus, imageSearchResult, ocrResult, officeReachable] =
+      await Promise.all([
+        indexerClient === null ? Promise.resolve(null) : indexerClient.health(),
+        forConfig.fdriveEmbedUrl === undefined
+          ? Promise.resolve(null)
+          : fetchEmbedStatus({ baseUrl: forConfig.fdriveEmbedUrl, fetch: fetchImpl }),
+        imageEmbedClient === null ? Promise.resolve(null) : imageEmbedClient.health(),
+        ocrClient === null ? Promise.resolve(null) : ocrClient.health(),
+        officeDiscovery === null
+          ? Promise.resolve(null)
+          : officeDiscovery.get().then(
+              () => true,
+              () => false,
+            ),
+      ]);
     return {
       ...(indexResult === null ? {} : { index: indexResult.ok }),
       ...(searchStatus === null ? {} : { search: searchStatus.healthy }),
+      // A sidecar that answered but is still loading its model is treated as
+      // unreachable here: it cannot yet serve an embedding, so it is not
+      // usefully "up" from the health endpoint's point of view.
+      ...(imageSearchResult === null
+        ? {}
+        : { imageSearch: imageSearchResult.ok && imageSearchResult.data.status === "ok" }),
       ...(ocrResult === null ? {} : { ocr: ocrResult.ok }),
       ...(officeReachable === null ? {} : { office: officeReachable }),
     };
@@ -513,9 +541,11 @@ export async function composeApp(
       registerEventRoutes(groups, { bus, clock });
       registerSearchRoutes(groups, {
         searchService,
+        imageSearchService,
         resolver: scopeResolver,
         identities: repos.identities,
         semanticEnabled: embedClient !== null,
+        imageSearchEnabled: imageEmbedClient !== null,
       });
       registerThumbRoutes(groups, {
         indexQueries,
@@ -530,6 +560,7 @@ export async function composeApp(
         indexerClient,
         ocrClient,
         embedUrl: config.fdriveEmbedUrl,
+        imageEmbedClient,
         thumbsDir: config.fdriveThumbsDir,
         indexRootNames: Array.from(indexRootNames),
         fetch: fetchImpl,
