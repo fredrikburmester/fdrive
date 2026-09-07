@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStorage } from "../../test/fixtures/memory-storage.ts";
-import { isStorageError } from "../errors.ts";
+import { isStorageError, StorageError } from "../errors.ts";
 import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
 
 const TRASH_PATH = "/.trash";
@@ -261,7 +261,7 @@ describe("createRecycleFolderTrash: restore", () => {
     await expect(trash.restore("not-a-leaf")).rejects.toMatchObject({ kind: "bad_request" });
   });
 
-  it("propagates a conflict from the underlying move when the target already exists", async () => {
+  it("throws conflict, without moving or deleting anything, when a file already exists at the target", async () => {
     const storage = createMemoryStorage({
       [`${TRASH_PATH}/docs/a.txt/1000000`]: "trashed",
       "/docs/a.txt": "already here",
@@ -271,6 +271,48 @@ describe("createRecycleFolderTrash: restore", () => {
     await expect(trash.restore("docs/a.txt/1000000")).rejects.toSatisfy(
       (error: unknown) => isStorageError(error) && error.kind === "conflict",
     );
+    expect(storage.dump()).toEqual({
+      [`${TRASH_PATH}/docs/a.txt/1000000`]: "trashed",
+      "/docs/a.txt": "already here",
+    });
+  });
+
+  it("throws conflict, without moving anything, when a directory already exists at the target", async () => {
+    const storage = createMemoryStorage({ [`${TRASH_PATH}/docs/a.txt/1000000`]: "trashed" });
+    await storage.mkdir("/docs/a.txt", { parents: true });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    await expect(trash.restore("docs/a.txt/1000000")).rejects.toSatisfy(
+      (error: unknown) => isStorageError(error) && error.kind === "conflict",
+    );
+    expect(storage.dirs()).toContain("/docs/a.txt");
+    expect(storage.dump()).toEqual({ [`${TRASH_PATH}/docs/a.txt/1000000`]: "trashed" });
+  });
+
+  it("rethrows a storage error from the target check that is neither not_found nor bad_request", async () => {
+    const storage = createMemoryStorage({ [`${TRASH_PATH}/docs/a.txt/1000000`]: "trashed" });
+    const originalStatFile = storage.statFile.bind(storage);
+    storage.statFile = async (path: string) => {
+      if (path === "/docs/a.txt") {
+        throw new StorageError("forbidden", "no access");
+      }
+      return originalStatFile(path);
+    };
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    await expect(trash.restore("docs/a.txt/1000000")).rejects.toMatchObject({
+      kind: "forbidden",
+    });
+  });
+
+  it("proceeds to restore when the target check itself throws not_found", async () => {
+    const storage = createMemoryStorage({ [`${TRASH_PATH}/docs/a.txt/1000000`]: "hello a" });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    const restored = await trash.restore("docs/a.txt/1000000");
+
+    expect(restored.path).toBe("/docs/a.txt");
+    expect(storage.dump()).toEqual({ "/docs/a.txt": "hello a" });
   });
 });
 
