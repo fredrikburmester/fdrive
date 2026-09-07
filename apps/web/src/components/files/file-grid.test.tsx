@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GRID_WIDTH_STORAGE_KEY } from "@/lib/files/grid-layout";
 import { FileGrid } from "./file-grid";
@@ -29,7 +29,7 @@ const ENTRIES: FsEntry[] = Array.from({ length: 8 }, (_, index) => makeEntry(`fi
 
 const noop = () => {};
 
-function renderGrid() {
+function renderGrid(overrides: Partial<React.ComponentProps<typeof FileGrid>> = {}) {
   return render(
     <FileGrid
       entries={ENTRIES}
@@ -43,6 +43,7 @@ function renderGrid() {
       onToggleSelectAll={noop}
       onChangeSelection={noop}
       onClearSelection={noop}
+      {...overrides}
     />,
   );
 }
@@ -98,5 +99,74 @@ describe("FileGrid", () => {
     const { container } = renderGrid();
 
     expect(container.querySelector('[data-slot="listing-skeleton-grid"]')).not.toBeNull();
+  });
+
+  it("selects nothing when a pointer drags across several tiles", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const onChangeSelection = vi.fn();
+    const onClearSelection = vi.fn();
+
+    const { container } = renderGrid({ onChangeSelection, onClearSelection });
+
+    const tiles = container.querySelectorAll("[data-path]");
+    expect(tiles.length).toBeGreaterThan(1);
+    const first = tiles[0];
+    const last = tiles[tiles.length - 1];
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (first === undefined || last === undefined) {
+      return;
+    }
+
+    fireEvent.pointerDown(first, { clientX: 0, clientY: 0, button: 0 });
+    fireEvent.pointerMove(last, { clientX: 200, clientY: 200 });
+    fireEvent.pointerUp(last, { clientX: 200, clientY: 200 });
+
+    expect(onChangeSelection).not.toHaveBeenCalled();
+    expect(onClearSelection).not.toHaveBeenCalled();
+    for (const tile of tiles) {
+      expect(tile.getAttribute("data-selected")).toBe("false");
+    }
+  });
+
+  it("clears the selection on a plain click on empty listing space", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const onClearSelection = vi.fn();
+
+    const { container } = renderGrid({ onClearSelection });
+
+    // The scroll container that wraps the virtualized tiles: clicking it
+    // directly, not any tile, is a click on empty listing space.
+    const scrollContainer = container.querySelector(".overflow-auto");
+    expect(scrollContainer).not.toBeNull();
+    if (scrollContainer === null) {
+      return;
+    }
+
+    fireEvent.click(scrollContainer);
+
+    expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear the selection for a shift-click on a tile, so it still extends the range", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const onClearSelection = vi.fn();
+    const onEntryClick = vi.fn();
+
+    const { container } = renderGrid({ onClearSelection, onEntryClick });
+
+    const tile = container.querySelector('[data-path="/file-2.txt"]');
+    expect(tile).not.toBeNull();
+    if (tile === null) {
+      return;
+    }
+
+    fireEvent.click(tile, { shiftKey: true });
+
+    expect(onClearSelection).not.toHaveBeenCalled();
+    expect(onEntryClick).toHaveBeenCalledTimes(1);
+    const [entry, modifiers] = onEntryClick.mock.calls[0] as [FsEntry, { shift: boolean }];
+    expect(entry.path).toBe("/file-2.txt");
+    expect(modifiers.shift).toBe(true);
   });
 });
