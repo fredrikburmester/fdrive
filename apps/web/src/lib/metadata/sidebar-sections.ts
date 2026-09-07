@@ -30,3 +30,22 @@ export function writeSidebarSectionOpen(
 ): void {
   writeJson(storage, `${STORAGE_KEY_PREFIX}${section}`, open);
 }
+
+/**
+ * The three states a sidebar metadata section can be in: still loading (its
+ * query has not resolved yet, so the section renders nothing rather than a
+ * premature empty message), loaded with nothing to show (a muted one-line
+ * placeholder), or loaded with items.
+ */
+export type SidebarSectionState = "loading" | "empty" | "content";
+
+/** Classifies a section's query result for rendering: Favorites, Recents,
+ * and Tags all always render once loaded (unlike the old behaviour of
+ * disappearing entirely while empty), showing a muted placeholder line
+ * instead of nothing. */
+export function sidebarSectionState(items: readonly unknown[] | undefined): SidebarSectionState {
+  if (items === undefined) {
+    return "loading";
+  }
+  return items.length === 0 ? "empty" : "content";
+}

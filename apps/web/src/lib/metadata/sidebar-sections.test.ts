@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_SECTION_OPEN,
   readSidebarSectionOpen,
+  sidebarSectionState,
   writeSidebarSectionOpen,
 } from "./sidebar-sections";
 
@@ -42,5 +43,19 @@ describe("writeSidebarSectionOpen", () => {
     const storage = fakeStorage();
     writeSidebarSectionOpen(storage, "recents", false);
     expect(readSidebarSectionOpen(storage, "recents")).toBe(false);
+  });
+});
+
+describe("sidebarSectionState", () => {
+  it("is loading while the query has not resolved", () => {
+    expect(sidebarSectionState(undefined)).toBe("loading");
+  });
+
+  it("is empty for a resolved, empty list", () => {
+    expect(sidebarSectionState([])).toBe("empty");
+  });
+
+  it("is content for a resolved, non-empty list", () => {
+    expect(sidebarSectionState([{ id: "1" }])).toBe("content");
   });
 });

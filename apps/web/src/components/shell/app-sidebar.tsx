@@ -121,6 +121,16 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <FolderTree />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <FavoritesSection />
+        <RecentsSection />
+        <TagsSection />
+        {/* Shares and Trash sit at the bottom of the navigation, above System. */}
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   isActive={pathname === "/shares"}
@@ -144,9 +154,6 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        <FavoritesSection />
-        <RecentsSection />
-        <TagsSection />
         {me?.isAdmin ? (
           <SidebarGroup>
             <SidebarGroupLabel>System</SidebarGroupLabel>
