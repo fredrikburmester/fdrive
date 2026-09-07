@@ -447,3 +447,8 @@ available and followed the project instructions.
   worker checkout). Gates on main: lint, web typecheck, web coverage 1367 tests. Pane: a temporary
   directory share showed Peek only on the two zip rows, opening budget.zip listed budget.csv with
   no entry links; share deleted afterwards. Still running: `image-search-api` rework.
+- 2026-09-07 afternoon, user feedback recorded in `docs/workflow/P7-UX-3.md`: the activity panel
+  list never scrolls on desktop (ScrollArea root max-h does not bound the Base UI viewport), the
+  logged-in grid never requests thumbnails, and folder size is possible from the index only.
+  Running: `grid-thumbs` (`.worktrees/grid-thumbs`), `folder-size` (`.worktrees/folder-size`),
+  `image-search-api` rework. Three worker slots in use; `image-search-web` queued.
