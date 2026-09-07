@@ -430,6 +430,96 @@ describe("index-queries", () => {
     });
   });
 
+  describe("subtreeSize", () => {
+    it("sums live bytes and files at exactly the given prefix and nested under it", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
+      await insertFile(rootId, "alice/photos/nested/b.jpg", { size: 50 });
+      await insertFile(rootId, "alice/other.txt", { size: 10 });
+
+      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "alice/photos");
+
+      expect(result).toEqual({ bytes: 150, files: 2 });
+    });
+
+    it("matches the whole root for an empty relative prefix", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/a.txt", { size: 10 });
+      await insertFile(rootId, "bob/b.txt", { size: 20 });
+
+      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "");
+
+      expect(result).toEqual({ bytes: 30, files: 2 });
+    });
+
+    it("never matches a sibling path sharing the prefix as a substring", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
+      await insertFile(rootId, "alice/photos-backup/b.jpg", { size: 999 });
+
+      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "alice/photos");
+
+      expect(result).toEqual({ bytes: 100, files: 1 });
+    });
+
+    it("excludes soft-deleted rows", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
+      await insertFile(rootId, "alice/photos/b.jpg", { size: 50, deletedAt: new Date() });
+
+      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "alice/photos");
+
+      expect(result).toEqual({ bytes: 100, files: 1 });
+    });
+
+    it("intersects with scopePrefixes: a narrower scope never leaks bytes from outside it", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
+      await insertFile(rootId, "alice/photos/secret.jpg", { size: 500 });
+
+      const result = await queries.subtreeSize(
+        [{ rootId, fsPrefix: "/alice/photos/a.jpg" }],
+        rootId,
+        "alice/photos",
+      );
+
+      expect(result).toEqual({ bytes: 100, files: 1 });
+    });
+
+    it("reports zero for an empty scope", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
+
+      const result = await queries.subtreeSize([], rootId, "alice/photos");
+
+      expect(result).toEqual({ bytes: 0, files: 0 });
+    });
+
+    it("reports zero for a rootId with no matching rows", async () => {
+      const rootId = await insertRoot("primary");
+      const otherRootId = await insertRoot("secondary");
+      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
+
+      const result = await queries.subtreeSize(
+        [{ rootId: otherRootId, fsPrefix: "/" }],
+        otherRootId,
+        "alice/photos",
+      );
+
+      expect(result).toEqual({ bytes: 0, files: 0 });
+    });
+
+    it("handles a byte sum within Number.MAX_SAFE_INTEGER without precision loss", async () => {
+      const rootId = await insertRoot("primary");
+      const bigSize = Number.MAX_SAFE_INTEGER - 1;
+      await insertFile(rootId, "alice/photos/a.jpg", { size: bigSize });
+
+      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "alice/photos");
+
+      expect(result).toEqual({ bytes: bigSize, files: 1 });
+    });
+  });
+
   describe("statsForFileIds", () => {
     it("counts chunks only for the given file ids, ignoring other files in scope", async () => {
       const rootId = await insertRoot("primary");

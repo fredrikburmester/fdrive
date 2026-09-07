@@ -20,6 +20,25 @@ import { createJobRunner } from "../jobs/runner.js";
 import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerFsRoutes } from "./routes.js";
 
+/**
+ * A minimal `folderSize` deps stub: this file exercises archive routes, not
+ * `GET /fs/folder-size` itself, so verified scopes are reported unavailable
+ * and every fake always answers `{ indexed: false }` without touching the
+ * index.
+ */
+function fakeFolderSizeDeps() {
+  return {
+    indexQueries: {
+      rootIdsByName: async () => ({}),
+      subtreeSize: async () => ({ bytes: 0, files: 0 }),
+    },
+    resolver: {
+      verifiedIndexScopes: async () => ({ available: false as const, reason: "no_roots" as const }),
+    },
+    identities: { get: async () => null },
+  };
+}
+
 /** Drains a yazl `ZipFile`'s output stream into one `Buffer`. */
 async function buildZipBuffer(build: (zipfile: ZipFile) => void): Promise<Buffer> {
   const zipfile = new ZipFile();
@@ -152,7 +171,14 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
     clock,
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
-      registerFsRoutes(groups, { bus, clock, jobRunner, tmpDir, jobMaxBytes: 10 * 1024 * 1024 });
+      registerFsRoutes(groups, {
+        bus,
+        clock,
+        jobRunner,
+        tmpDir,
+        jobMaxBytes: 10 * 1024 * 1024,
+        folderSize: fakeFolderSizeDeps(),
+      });
       registerEventRoutes(groups, { bus, clock });
     },
   });
@@ -204,6 +230,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     tmpDir,
     jobMaxBytes: 10 * 1024 * 1024,
     archivePeekMaxBytes,
+    folderSize: fakeFolderSizeDeps(),
   };
   const app = createApp({
     config,
@@ -251,7 +278,14 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     clock,
     principalResolver: async () => principal,
     registerRoutes: (groups) =>
-      registerFsRoutes(groups, { bus, clock, jobRunner, tmpDir, jobMaxBytes: 10 * 1024 * 1024 }),
+      registerFsRoutes(groups, {
+        bus,
+        clock,
+        jobRunner,
+        tmpDir,
+        jobMaxBytes: 10 * 1024 * 1024,
+        folderSize: fakeFolderSizeDeps(),
+      }),
   });
 
   return { app, bus, fsEvents, tmpDir };
@@ -586,6 +620,7 @@ describe("POST /fs/compress and the resulting job", () => {
           jobRunner,
           tmpDir,
           jobMaxBytes: 1000,
+          folderSize: fakeFolderSizeDeps(),
         }),
     });
 

@@ -8,13 +8,34 @@ export interface DescribeRow {
   readonly value: string;
 }
 
+/**
+ * The folder size query's state, as seen from `describeEntry`: a subset of
+ * TanStack Query's `UseQueryResult<FolderSizeResponse>` shape, so callers
+ * pass the hook's result directly without either side depending on the
+ * other's types.
+ */
+export interface FolderSizeQueryState {
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly data?: { readonly bytes: number; readonly files: number; readonly indexed: boolean };
+}
+
 export interface DescribeEntryOptions {
   readonly now: Date;
   readonly locale?: string;
+  /**
+   * The folder size query's current state, for a directory entry only.
+   * Ignored for a file. Ordinarily rendered as a "Files" row alongside the
+   * usual "Size" row; a not-indexed or still-loading result replaces
+   * "Size"'s value instead of showing a byte count.
+   */
+  readonly folderSize?: FolderSizeQueryState;
 }
 
 export interface DescribeEntryResult {
   readonly rows: DescribeRow[];
+  /** A one-line muted note about the folder size row, when indexed data is showing. */
+  readonly note: string | null;
 }
 
 const KIND_LABELS: Readonly<Record<string, string>> = {
@@ -79,10 +100,38 @@ export function relativeTimeFrom(date: Date, now: Date, locale?: string): string
   return "just now";
 }
 
+const localeOpts = (locale: string | undefined) => (locale === undefined ? {} : { locale });
+
+/**
+ * Builds the "Size" and "Files" rows plus the note text for a directory
+ * entry, from `folderSize`'s query state: "Calculating" while the request
+ * is in flight, "Not indexed" when it failed or came back `indexed: false`,
+ * or a real byte count and file count once it resolves.
+ */
+function folderSizeRows(
+  folderSize: FolderSizeQueryState,
+  locale: string | undefined,
+): { size: string; files: string; note: string | null } {
+  if (folderSize.isPending) {
+    return { size: "Calculating", files: "Calculating", note: null };
+  }
+  if (folderSize.isError || folderSize.data === undefined || !folderSize.data.indexed) {
+    return { size: "Not indexed", files: "Not indexed", note: null };
+  }
+  return {
+    size: formatBytes(folderSize.data.bytes, localeOpts(locale)),
+    files: folderSize.data.files.toLocaleString(locale),
+    note: "From the index",
+  };
+}
+
 /**
  * Builds the inspector's description rows for a single entry: Kind, Size,
  * Modified (an absolute timestamp plus a relative one), Location (the
- * parent path), and Extension.
+ * parent path), and Extension. For a directory whose `opts.folderSize` is
+ * given, "Size" reflects that query's state instead of `entry.size` (which
+ * storage providers never populate for a directory) and a "Files" row is
+ * inserted right after it.
  */
 export function describeEntry(entry: FsEntry, opts: DescribeEntryOptions): DescribeEntryResult {
   const modifiedDate = new Date(entry.modifiedAt);
@@ -92,16 +141,28 @@ export function describeEntry(entry: FsEntry, opts: DescribeEntryOptions): Descr
   });
   const relative = relativeTimeFrom(modifiedDate, opts.now, opts.locale);
 
+  let sizeValue = formatBytes(entry.size, localeOpts(opts.locale));
+  let note: string | null = null;
+  const extraRows: DescribeRow[] = [];
+
+  if (entry.kind === "dir" && opts.folderSize !== undefined) {
+    const folder = folderSizeRows(opts.folderSize, opts.locale);
+    sizeValue = folder.size;
+    note = folder.note;
+    extraRows.push({ label: "Files", value: folder.files });
+  }
+
+  const sizeRow: DescribeRow = { label: "Size", value: sizeValue };
+
   return {
     rows: [
       { label: "Kind", value: kindLabel(entry) },
-      {
-        label: "Size",
-        value: formatBytes(entry.size, opts.locale === undefined ? {} : { locale: opts.locale }),
-      },
+      sizeRow,
+      ...extraRows,
       { label: "Modified", value: `${absolute} (${relative})` },
       { label: "Location", value: parentPath(entry.path) },
       { label: "Extension", value: entry.ext.length > 0 ? entry.ext : "—" },
     ],
+    note,
   };
 }

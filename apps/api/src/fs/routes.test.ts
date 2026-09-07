@@ -20,6 +20,26 @@ function buildJobRunner(): JobRunner {
   });
 }
 
+/**
+ * A minimal `folderSize` deps stub for tests in this file that exercise
+ * other `fs` routes, not `GET /fs/folder-size` itself (see
+ * `folder-size.test.ts` for that route's own coverage): reports the
+ * caller's verified index scopes as unavailable, so the route always
+ * answers `{ indexed: false }` without ever touching the fakes below.
+ */
+function fakeFolderSizeDeps() {
+  return {
+    indexQueries: {
+      rootIdsByName: async () => ({}),
+      subtreeSize: async () => ({ bytes: 0, files: 0 }),
+    },
+    resolver: {
+      verifiedIndexScopes: async () => ({ available: false as const, reason: "no_roots" as const }),
+    },
+    identities: { get: async () => null },
+  };
+}
+
 const FULL_PERMS = ["*"];
 
 const REQUIRED_ENV = {
@@ -114,6 +134,7 @@ async function buildHarness(
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
+        folderSize: fakeFolderSizeDeps(),
         ...(metadata === undefined ? {} : { metadata }),
       }),
   });
@@ -195,6 +216,7 @@ async function buildHarnessWithStorage(
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
+        folderSize: fakeFolderSizeDeps(),
         ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
         ...(opts.trashPath === undefined ? {} : { trashPath: opts.trashPath }),
         ...(opts.jsonMaxBytes === undefined ? {} : { jsonMaxBytes: opts.jsonMaxBytes }),

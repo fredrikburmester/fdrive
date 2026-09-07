@@ -527,6 +527,14 @@ export async function composeApp(
         ...(config.fdriveSftpgoTrashPath === null
           ? {}
           : { trashPath: config.fdriveSftpgoTrashPath }),
+        folderSize: {
+          indexQueries,
+          resolver: scopeResolver,
+          identities: repos.identities,
+          ...(config.fdriveSftpgoTrashPath === null
+            ? {}
+            : { trashPath: config.fdriveSftpgoTrashPath }),
+        },
       };
       registerFsRoutes(groups, fsRoutesDeps);
       registerTrashRoutes(groups, {
