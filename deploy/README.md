@@ -95,6 +95,12 @@ for anyone who runs the `fdrive-web` image without a proxy in front of it.
 `compose.yaml` also defines `indexer`, `tika`, `embed`, and `ocr` behind an
 `index` Compose profile: search, thumbnails, content extraction, and the
 nightly OCR pass only run when you opt in with `--profile index` (see below).
+Without that profile, `compose.yaml` still points the api at the sidecars
+(`FDRIVE_INDEXER_URL`, `FDRIVE_EMBED_URL`, `FDRIVE_OCR_URL` and a default
+`FDRIVE_INDEX_ROOTS`), so the startup summary, `/api/v1/health` and the
+System pages report index, search, thumbnails and OCR as "unreachable"
+rather than "not configured". That is expected until you add the profile;
+it is the same state a stopped sidecar produces.
 `FDRIVE_INDEX_SFTPGO_DIR` in `.env` must point at the same host directory
 SFTPGo itself serves. It is bind-mounted read-only into the indexer at
 `/roots/sftpgo` and read-write into `ocr` at the same path, since OCR rewrites

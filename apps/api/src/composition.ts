@@ -67,6 +67,7 @@ import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
+import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
 import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
@@ -89,6 +90,9 @@ export interface ComposedApp {
   readonly app: AppHono;
   close(): Promise<void>;
 }
+
+/** How long one `/health` sidecar reachability fan-out is reused; see `createCachedProbe`. */
+const HEALTH_PROBE_TTL_MS = 15_000;
 
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
@@ -398,7 +402,10 @@ export async function composeApp(
   // liveness probe (the same ones the System pages already poll), so a
   // subsystem that is configured but unreachable is visible from this
   // public, unauthenticated endpoint too, not only from an admin session.
-  const subsystemReachability = async (
+  // The fan-out is cached for HEALTH_PROBE_TTL_MS and shared between
+  // concurrent requests, so anonymous health polling cannot be turned into
+  // load at the sidecars.
+  const probeSubsystems = async (
     forConfig: AppConfig,
   ): Promise<Partial<Record<Subsystem, boolean>>> => {
     const [indexResult, searchStatus, ocrResult, officeReachable] = await Promise.all([
@@ -421,6 +428,11 @@ export async function composeApp(
       ...(officeReachable === null ? {} : { office: officeReachable }),
     };
   };
+  const cachedProbe = createCachedProbe(() => probeSubsystems(config), {
+    ttlMs: HEALTH_PROBE_TTL_MS,
+    clock: () => clock().getTime(),
+  });
+  const subsystemReachability = () => cachedProbe();
 
   const app = createApp({
     config,
