@@ -107,6 +107,21 @@ export interface IndexStats {
   readonly chunksEmbedded: number;
 }
 
+/** Chunk counts for exactly a caller-supplied set of file ids, see `IndexQueries.statsForFileIds`. */
+export interface FileIdStats {
+  readonly chunks: number;
+  readonly chunksEmbedded: number;
+}
+
+/**
+ * Hard upper bound on how many file ids `statsForFileIds` will ever embed
+ * as SQL parameters in one query, defensively enforced inside the query
+ * itself (not just by callers): a caller that authorized more than this
+ * many files individually must call this more than once rather than grow
+ * the parameter list unboundedly.
+ */
+export const MAX_STATS_FILE_ID_PARAMS = 2000;
+
 /**
  * Metadata-only filters for `listFiles`, matching the MCP `find_files` tool
  * and the `folder_overview` aggregation.
@@ -213,6 +228,14 @@ export interface IndexQueries {
   rootIdsByName(): Promise<Record<string, number>>;
   /** Aggregate file and chunk counts over a scope. */
   stats(scopePrefixes: readonly ScopePrefix[]): Promise<IndexStats>;
+  /**
+   * Chunk counts restricted to exactly `fileIds` (capped defensively at
+   * `MAX_STATS_FILE_ID_PARAMS`), never a broader scope predicate. For a
+   * caller (the MCP `index_stats` tool) that must report counts derived
+   * only from files it individually authorized a live read for, rather than
+   * every row `stats` would otherwise count regardless of authorization.
+   */
+  statsForFileIds(fileIds: readonly number[]): Promise<FileIdStats>;
   /** Groups of byte-identical files at least `minSize` bytes, largest waste first. */
   duplicates(
     scopePrefixes: readonly ScopePrefix[],
@@ -483,6 +506,21 @@ export function createIndexQueries(db: Db): IndexQueries {
         chunks: Number(chunkRow?.chunks ?? 0),
         chunksEmbedded: Number(chunkRow?.embedded ?? 0),
       };
+    },
+
+    async statsForFileIds(fileIds) {
+      const capped = fileIds.slice(0, MAX_STATS_FILE_ID_PARAMS);
+      if (capped.length === 0) {
+        return { chunks: 0, chunksEmbedded: 0 };
+      }
+      const [row] = await db
+        .select({
+          chunks: count(),
+          embedded: sql<number>`count(${chunks.embedding})`,
+        })
+        .from(chunks)
+        .where(inArray(chunks.fileId, capped as number[]));
+      return { chunks: Number(row?.chunks ?? 0), chunksEmbedded: Number(row?.embedded ?? 0) };
     },
 
     async duplicates(scopePrefixes, minSize, limit) {

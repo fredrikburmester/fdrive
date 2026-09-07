@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseHomeTemplate, parseSearchFilters } from "@fdrive/core";
+import { parseSearchFilters } from "@fdrive/core";
 import {
   createDb,
   createIdentityLinksRepo,
@@ -479,8 +479,6 @@ export async function composeApp(
     resolveToken: resolveTokenPrincipal,
     toolDeps: {
       indexQueries,
-      homeTemplate: parseHomeTemplate(config.fdriveHomeTemplate),
-      indexRootNames,
       searchService,
       scopeResolver,
       identities: repos.identities,
