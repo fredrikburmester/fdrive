@@ -78,6 +78,23 @@ describe("deploy/preflight.sh", () => {
     expect(result.output).toContain("unknown key 'FDRIVE_TRUSTD_PROXY_HOPS'");
   });
 
+  it("names keys that compose.yaml fixes itself instead of calling them typos", () => {
+    const result = runPreflight(
+      [
+        "POSTGRES_PASSWORD=secret",
+        "FDRIVE_MASTER_KEY=abc",
+        'FDRIVE_INDEX_ROOTS=[{"name":"sftpgo"}]',
+        "FDRIVE_INDEXER_URL=http://indexer:8010",
+        "",
+      ].join("\n"),
+    );
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("'FDRIVE_INDEX_ROOTS' in");
+    expect(result.output).toContain("is set by compose.yaml and has no effect here; remove it");
+    expect(result.output).toContain("'FDRIVE_INDEXER_URL' in");
+    expect(result.output).not.toContain("typo?");
+  });
+
   it("accepts every documented FDRIVE_* key without flagging a typo", () => {
     const result = runPreflight(
       [

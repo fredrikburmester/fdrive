@@ -78,7 +78,17 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
   done
   if [[ "$known" -eq 0 ]]; then
-    echo "error: unknown key '$key' in $env_file (typo?)" >&2
+    case "$key" in
+      FDRIVE_INDEX_ROOTS|FDRIVE_INDEXER_URL|FDRIVE_EMBED_URL|FDRIVE_OCR_URL|FDRIVE_THUMBS_DIR)
+        # compose.yaml fixes these to the stack's own sidecar addresses and
+        # the mounted root; a value in .env would be silently ignored, so it
+        # is an error rather than a warning.
+        echo "error: '$key' in $env_file is set by compose.yaml and has no effect here; remove it (set FDRIVE_INDEX_SFTPGO_PATH to change the indexed root's SFTPGo-side path)" >&2
+        ;;
+      *)
+        echo "error: unknown key '$key' in $env_file (typo?)" >&2
+        ;;
+    esac
     fail=1
   fi
 done < "$env_file"
