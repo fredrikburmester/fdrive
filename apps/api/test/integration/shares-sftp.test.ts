@@ -111,6 +111,7 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
     const alice = await login("alice");
     const bob = await login("bob");
     const share = await create(alice, { password: "initial-secret" });
+    expect(share.presentation).toBe("auto");
     const path = `${base}/${share.id}`;
     expect((await call(path, { cookie: bob })).status).toBe(404);
     expect((await call(path)).status).toBe(401);
@@ -124,6 +125,7 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
     ).toBe(true);
     expect(PublicShare.parse(await (await call(pub(share.id))).json())).toMatchObject({
       layout: "single-file",
+      presentation: "auto",
       fileName: "doc.txt",
       hasPassword: true,
     });
@@ -146,9 +148,17 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
         .filter((r) => r.path.includes("/user/"))
         .every((r) => r.path.includes("/user/shares/")),
     ).toBe(true);
-    res = await call(path, { cookie: alice, method: "PATCH", body: { name: "Renamed" } });
+    res = await call(path, {
+      cookie: alice,
+      method: "PATCH",
+      body: { name: "Renamed", presentation: "gallery" },
+    });
     expect(res.status).toBe(200);
-    expect(ManagedShare.parse(await res.json()).hasPassword).toBe(true);
+    const renamed = ManagedShare.parse(await res.json());
+    expect(renamed.hasPassword).toBe(true);
+    expect(renamed.presentation).toBe("gallery");
+    res = await call(path, { cookie: alice, method: "PATCH", body: { name: "Renamed again" } });
+    expect(ManagedShare.parse(await res.json()).presentation).toBe("gallery");
     res = await call(`${pub(share.id)}/download`, { cookie });
     expect(res.status).toBe(200);
     await res.arrayBuffer();

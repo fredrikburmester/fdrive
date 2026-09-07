@@ -47,6 +47,7 @@ export function managedShare(row: ShareRecord, share: SftpgoShare): ManagedShare
     usedDownloads: share.usedTokens,
     createdAt: share.createdAt.toISOString(),
     updatedAt: share.updatedAt.toISOString(),
+    presentation: row.presentation,
   };
 }
 export function shareInput(input: CreateShareRequest): SftpgoShareInput {
@@ -100,7 +101,11 @@ export function createSharesService(deps: SharesDeps) {
       return fn(client.user(token));
     });
   }
-  async function mirror(identityId: string, share: SftpgoShare) {
+  async function mirror(
+    identityId: string,
+    share: SftpgoShare,
+    presentation: ManagedShare["presentation"],
+  ) {
     return deps.shares.upsert({
       identityId,
       sftpgoShareId: share.id,
@@ -110,6 +115,7 @@ export function createSharesService(deps: SharesDeps) {
       hasPassword: share.hasPassword,
       expiresAt: share.expiresAt,
       views: share.usedTokens,
+      presentation,
       at: deps.clock(),
     });
   }
@@ -169,7 +175,7 @@ export function createSharesService(deps: SharesDeps) {
       for (const row of rows) {
         try {
           const share = await getUpstream(row, input.principal.accountId);
-          items.push(managedShare(await mirror(row.identityId, share), share));
+          items.push(managedShare(await mirror(row.identityId, share, row.presentation), share));
         } catch (error) {
           if (!(error instanceof SftpgoError) || error.kind !== "not_found") throw error;
         }
@@ -179,7 +185,7 @@ export function createSharesService(deps: SharesDeps) {
     async get(input: AccountRequestContext, id: string) {
       const row = await managed(input, id);
       const share = await getUpstream(row, input.principal.accountId);
-      return managedShare(await mirror(row.identityId, share), share);
+      return managedShare(await mirror(row.identityId, share, row.presentation), share);
     },
     async create(input: AccountRequestContext, body: CreateShareRequest) {
       await liveAccountSession(deps, input);
@@ -190,7 +196,7 @@ export function createSharesService(deps: SharesDeps) {
           try {
             const share = await api.shares.get(id);
             await layout({ identityId: input.principal.identityId }, share);
-            const row = await mirror(input.principal.identityId, share);
+            const row = await mirror(input.principal.identityId, share, body.presentation);
             return managedShare(row, share);
           } catch (error) {
             try {
@@ -214,18 +220,20 @@ export function createSharesService(deps: SharesDeps) {
         scope: current.scope,
         expiresAt: current.expiresAt?.toISOString() ?? null,
         maxDownloads: current.maxTokens,
+        presentation: row.presentation,
       };
+      const merged = CreateShareRequest.parse({ ...base, ...patch });
       await withOwner(
         row.identityId,
         (api) =>
           api.shares.update(row.sftpgoShareId, {
-            ...shareInput(CreateShareRequest.parse({ ...base, ...patch })),
+            ...shareInput(merged),
             allowFrom: current.allowFrom,
           }),
         input.principal.accountId,
       );
       const share = await getUpstream(row, input.principal.accountId);
-      return managedShare(await mirror(row.identityId, share), share);
+      return managedShare(await mirror(row.identityId, share, merged.presentation), share);
     },
     async remove(input: AccountRequestContext, id: string) {
       const row = await managed(input, id);
@@ -248,6 +256,7 @@ export function createSharesService(deps: SharesDeps) {
         description: share.description,
         scope: share.scope,
         layout: kind,
+        presentation: row.presentation,
         fileName: kind === "single-file" ? (share.paths[0]?.split("/").at(-1) ?? null) : null,
         hasPassword: share.hasPassword,
         credentialPresent,

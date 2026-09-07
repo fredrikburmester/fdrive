@@ -3,6 +3,7 @@ import {
   cloneShareRecord,
   compareShareRecords,
   createMemoryShareRepo,
+  parseSharePresentation,
   parseShareScope,
   type ShareUpsertInput,
   shareListLimit,
@@ -25,6 +26,7 @@ const input: ShareUpsertInput = {
   hasPassword: false,
   expiresAt: null,
   views: 0,
+  presentation: "auto",
   at,
 };
 
@@ -41,12 +43,15 @@ describe("share validation", () => {
         views: 2147483647,
         hasPassword: true,
         expiresAt: later,
+        presentation: "gallery",
       }),
     ).not.toThrow();
     for (const path of ["/", "/a", "/a/b", "/%2e%2e/%2f", `/${"x".repeat(4095)}`])
       expect(() => validateSharePath(path)).not.toThrow();
     expect(parseShareScope("read")).toBe("read");
     expect(parseShareScope("write")).toBe("write");
+    for (const presentation of ["auto", "list", "gallery", "download"] as const)
+      expect(parseSharePresentation(presentation)).toBe(presentation);
     expect(shareListLimit()).toBe(200);
     expect(shareListLimit({})).toBe(200);
     expect(shareListLimit({ limit: 1 })).toBe(1);
@@ -70,6 +75,11 @@ describe("share validation", () => {
     for (const name of ["", "x".repeat(256), "bad\0", "bad\n", 1])
       expect(() => validateShareUpsert({ ...input, name } as ShareUpsertInput)).toThrow(TypeError);
     expect(() => parseShareScope("readwrite")).toThrow(TypeError);
+    for (const presentation of ["", "Auto", "slideshow", "list "])
+      expect(() => parseSharePresentation(presentation)).toThrow(TypeError);
+    expect(() =>
+      validateShareUpsert({ ...input, presentation: "slideshow" } as unknown as ShareUpsertInput),
+    ).toThrow(TypeError);
   });
   it("rejects noncanonical paths and excessive lists", () => {
     for (const path of [

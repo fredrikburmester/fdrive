@@ -2,6 +2,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { shares } from "../schema/app.js";
 import {
+  parseSharePresentation,
   parseShareScope,
   type ShareRecord,
   type ShareRepo,
@@ -13,7 +14,11 @@ import {
 } from "./shares-state.js";
 
 function toShareRecord(row: typeof shares.$inferSelect): ShareRecord {
-  return { ...row, scope: parseShareScope(row.scope) };
+  return {
+    ...row,
+    scope: parseShareScope(row.scope),
+    presentation: parseSharePresentation(row.presentation),
+  };
 }
 export function createShareRepo(db: Db): ShareRepo {
   return {

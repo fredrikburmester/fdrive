@@ -22,6 +22,7 @@ const metadata: PublicShare = {
   description: "",
   scope: "read",
   layout: "single-file",
+  presentation: "auto",
   fileName: "document.docx",
   hasPassword: true,
   credentialPresent: false,
@@ -125,4 +126,35 @@ it("write-only and archive pages never list owner contents", async () => {
   await screen.findByRole("link", { name: "Download ZIP" });
   expect(calls.entries).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+});
+it("a folder of only images renders a gallery whose lightbox navigates and downloads the current image", async () => {
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    layout: "directory",
+    fileName: null,
+  });
+  calls.entries.mockResolvedValue({
+    items: [
+      { name: "a.png", kind: "file", size: 1, modifiedAt: "2026-01-01T00:00:00Z" },
+      { name: "b.jpg", kind: "file", size: 1, modifiedAt: "2026-01-01T00:00:00Z" },
+    ],
+  });
+  setup();
+  await screen.findByRole("img", { name: "a.png" });
+  expect(screen.getByRole("img", { name: "a.png" }).getAttribute("loading")).toBe("lazy");
+  expect(screen.queryByRole("table")).toBeNull();
+  fireEvent.click(screen.getByRole("img", { name: "a.png" }));
+  await screen.findByRole("dialog");
+  expect(screen.getAllByRole("link", { name: "Download" })).toHaveLength(1);
+  fireEvent.keyDown(window, { key: "ArrowRight" });
+  await screen.findByText("2 of 2 · b.jpg");
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+it("a single image file resolves to a one-image gallery without a download list", async () => {
+  calls.metadata.mockResolvedValue({ ...metadata, hasPassword: false, fileName: "photo.png" });
+  setup();
+  await screen.findByRole("img", { name: "photo.png" });
+  expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
 });

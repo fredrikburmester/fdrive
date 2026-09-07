@@ -70,6 +70,7 @@ export { createShareRepo } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
   ShareListOptions,
+  SharePresentation,
   ShareRecord,
   ShareRepo,
   ShareScope,
@@ -77,6 +78,7 @@ export type {
 } from "./repos/shares-state.js";
 export {
   createMemoryShareRepo,
+  parseSharePresentation,
   parseShareScope,
   shareListLimit,
   validateShareId,

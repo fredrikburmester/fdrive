@@ -200,6 +200,8 @@ export const shares = appSchema.table(
     scope: text("scope").notNull(),
     paths: text("paths").array().notNull(),
     hasPassword: boolean("has_password").notNull().default(false),
+    /** Operator-chosen public page rendering: "auto" | "list" | "gallery" | "download". */
+    presentation: text("presentation").notNull().default("auto"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     views: integer("views").notNull().default(0),
