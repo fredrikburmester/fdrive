@@ -372,7 +372,9 @@ export async function composeApp(
   });
 
   if ((await connectionStore.current()) === null) {
-    logger.info(`setup token: ${setupToken}`);
+    // One-time credential: the guard invalidates it after setup, and setup cannot be
+    // re-run, but the line still lands in log storage. Operators rotate logs afterwards.
+    logger.warn(`setup token (one-time, rotate logs after setup): ${setupToken}`);
     logger.info(`open ${config.fdrivePublicUrl ?? ""}/setup to finish setup`);
   }
 
@@ -428,6 +430,7 @@ export async function composeApp(
         jobRunner,
         tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
+        jsonMaxBytes: config.fdriveJsonMaxBytes,
         metadata: fsMetadata,
         ...(config.fdriveSftpgoTrashPath === null
           ? {}

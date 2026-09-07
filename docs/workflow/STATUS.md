@@ -294,3 +294,9 @@ available and followed the project instructions.
   `ux-shares` (`.worktrees/ux-shares`: share `presentation` model with gallery/list/
   download public views, lightbox, ZIP, friendly share dialog and page copy). `scope-mcp`
   still running. Three worker slots in use.
+- Merged: `scope-mcp` (b368dad). Every MCP index tool uses the token identity's verified
+  scopes, round trip plus live read per candidate, 2000-candidate cap with `partial`, and
+  an authorized-id chunk-stats query. Primary follow-ups done in `composition.ts`:
+  `jsonMaxBytes` wired into fs routes, setup token logged at warn with a rotate-logs note.
+  `apps/api` integration files now run sequentially (`fileParallelism: false`) after the
+  rotating container-stopped flakes under parallel Docker load.
