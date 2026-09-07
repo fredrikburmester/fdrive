@@ -41,7 +41,7 @@ import {
   usePublicShare,
   useShareEntries,
 } from "@/lib/shares/public-queries";
-import { shareUnavailable, shareUsage } from "@/lib/shares/status";
+import { publicShareUsage, shareUnavailable } from "@/lib/shares/status";
 import { createShareUploadQueue } from "@/lib/shares/uploads";
 import { NativeShareDownload } from "./native-download";
 import { PublicGallery } from "./public-gallery";
@@ -96,6 +96,7 @@ function DirectoryListing({
           name: entry.name,
           path: appendShareName(path, entry.name),
         }))}
+        thumbUrl={(entryPath) => client.shareThumbUrl(id, entryPath, 256)}
         downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
       />
     );
@@ -177,7 +178,7 @@ function SharedContents({
                 ))}
               </BreadcrumbList>
             </Breadcrumb>
-            <NativeShareDownload href={client.shareArchiveUrl(id)} label="Download ZIP" />
+            <NativeShareDownload href={client.shareArchiveUrl(id)} label="Download ZIP" icon />
           </div>
           <DirectoryListing
             id={id}
@@ -194,6 +195,7 @@ function SharedContents({
       ) : singleFilePresentation === "gallery" ? (
         <PublicGallery
           images={[{ name: share.fileName ?? "Shared file", path: "/" }]}
+          thumbUrl={(entryPath) => client.shareThumbUrl(id, entryPath, 256)}
           downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
         />
       ) : (
@@ -405,7 +407,9 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
                 <Badge variant="secondary">
                   {metadata.data.scope === "write" ? "Can upload" : "Shared files"}
                 </Badge>
-                <span>{shareUsage(metadata.data)}</span>
+                {publicShareUsage(metadata.data) !== null && (
+                  <span>{publicShareUsage(metadata.data)}</span>
+                )}
                 {metadata.data.expiresAt && (
                   <span>Expires {new Date(metadata.data.expiresAt).toLocaleString()}</span>
                 )}
@@ -451,11 +455,6 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
                 pending={pending}
                 uploads={uploads}
               />
-              {metadata.data.scope === "read" && (
-                <p className="text-xs text-muted-foreground">
-                  Previews and download requests count toward this link’s download limit.
-                </p>
-              )}
             </CardContent>
           </Card>
         )}

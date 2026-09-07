@@ -26,6 +26,19 @@ export function shareUsage(
     : `${share.usedDownloads} ${noun} · No limit`;
 }
 
+/**
+ * The public share page's own usage line: unlike `shareUsage` (the owner's Shares table, which
+ * always shows a count), a link with no limit shows nothing at all rather than an unbounded
+ * counter a visitor cannot act on.
+ */
+export function publicShareUsage(
+  share: Pick<PublicShare, "scope" | "maxDownloads" | "usedDownloads">,
+): string | null {
+  if (share.maxDownloads === 0) return null;
+  const noun = share.scope === "write" ? "uploads" : "downloads";
+  return `${share.usedDownloads} of ${share.maxDownloads} ${noun}`;
+}
+
 /** Friendly Access label for a share's scope, avoiding the internal "read"/"write" vocabulary. */
 export function shareAccessLabel(scope: "read" | "write"): string {
   return scope === "read" ? "Can view" : "Can upload";
