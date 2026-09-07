@@ -7,10 +7,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
+import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
-import { buildGridLayout } from "@/lib/files/marquee";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,6 @@ import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 import type { ClickModifierKeys } from "./file-list";
 import { ListingSkeleton } from "./listing-skeleton";
-import { useMarqueeSelection } from "./use-marquee-selection";
 
 /** A grid tile's fixed footprint, in pixels: used to compute how many
  * columns fit and, in `ListingSkeleton`, to size its placeholder tiles. */
@@ -52,7 +51,11 @@ export interface FileGridProps {
   onInternalDrop: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
   /** Toggles between selecting every visible tile and none, from the header checkbox. */
   onToggleSelectAll: () => void;
-  /** Replaces the current selection outright, for a marquee drag. */
+  /**
+   * Replaces the current selection outright. Not called by `FileGrid`
+   * itself (there is no more drag-to-select), but part of the shared
+   * listing prop contract other callers (see `FileList`) still rely on.
+   */
   onChangeSelection: (paths: string[]) => void;
   /** Clears the selection, for a plain click on empty listing space. */
   onClearSelection: () => void;
@@ -102,7 +105,6 @@ export function FileGrid({
   getDragPaths,
   onInternalDrop,
   onToggleSelectAll,
-  onChangeSelection,
   onClearSelection,
   tags = EMPTY_TAGS,
   onToggleTag = NO_OP_TOGGLE_TAG,
@@ -162,24 +164,30 @@ export function FileGrid({
     overscan: 4,
   });
 
-  const marquee = useMarqueeSelection({
-    containerRef: parentRef,
-    getSelected: () => [...selected],
-    onChangeSelection,
-    onClearSelection,
-    getLayout: () =>
-      buildGridLayout(
-        entries.map((entry) => entry.path),
-        virtualizer.getVirtualItems().map((item) => ({
-          index: item.index,
-          start: item.start,
-          size: item.size,
-        })),
-        columns,
-        TILE_WIDTH,
-        TILE_HEIGHT,
-      ),
-  });
+  const onClearSelectionRef = useRef(onClearSelection);
+  onClearSelectionRef.current = onClearSelection;
+
+  useEffect(() => {
+    const container = parentRef.current;
+    if (container === null) {
+      return;
+    }
+    // A native listener, not a JSX `onClick` prop: a portaled overlay (a
+    // context menu, a dialog) is a React-tree descendant of this grid even
+    // though it renders outside the container in the real DOM, and React's
+    // synthetic events still bubble through the React tree across that
+    // portal boundary. A JSX `onClick` here would misfire and clear the
+    // selection for a click on that unrelated, portaled content; a native
+    // listener only ever fires for events whose real DOM target is
+    // actually inside the container.
+    function handleClick(event: MouseEvent) {
+      if (isBackgroundClick(event.target as Element | null)) {
+        onClearSelectionRef.current();
+      }
+    }
+    container.addEventListener("click", handleClick);
+    return () => container.removeEventListener("click", handleClick);
+  }, []);
 
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
@@ -247,103 +255,88 @@ export function FileGrid({
         {!hasMeasured ? (
           <ListingSkeleton variant="grid" />
         ) : (
-          <>
-            <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-              {virtualizer.getVirtualItems().map((virtualRow) => {
-                const start = virtualRow.index * columns;
-                const rowEntries = entries.slice(start, start + columns);
+          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const start = virtualRow.index * columns;
+              const rowEntries = entries.slice(start, start + columns);
 
-                return (
-                  <div
-                    key={virtualRow.key}
-                    className="absolute inset-x-0 grid gap-1"
-                    style={{
-                      height: virtualRow.size,
-                      transform: `translateY(${virtualRow.start}px)`,
-                      gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-                    }}
-                  >
-                    {rowEntries.map((entry) => {
-                      const isSelected = selected.has(entry.path);
-                      const isFocused = focusedPath === entry.path;
-                      const group = contextEntries(entry, entries, selected);
-                      const groupPaths = group.map((candidate) => candidate.path);
+              return (
+                <div
+                  key={virtualRow.key}
+                  className="absolute inset-x-0 grid gap-1"
+                  style={{
+                    height: virtualRow.size,
+                    transform: `translateY(${virtualRow.start}px)`,
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {rowEntries.map((entry) => {
+                    const isSelected = selected.has(entry.path);
+                    const isFocused = focusedPath === entry.path;
+                    const group = contextEntries(entry, entries, selected);
+                    const groupPaths = group.map((candidate) => candidate.path);
 
-                      return (
-                        <FileContextMenu
-                          officeStatus={officeStatus}
-                          key={entry.path}
-                          entry={entry}
-                          onAction={onContextAction}
-                          selectionCount={contextSelectionCount(entry.path, selected)}
-                          includesFolder={group.some((candidate) => candidate.kind === "dir")}
-                          tags={tags}
-                          tagCheckState={(tagId) =>
-                            computeTagCheckState(
-                              group.map((candidate) => ({ tagIds: candidate.meta?.tagIds ?? [] })),
-                              tagId,
-                            )
-                          }
-                          onToggleTag={(tagId, checked) => onToggleTag(groupPaths, tagId, checked)}
-                          onOpenTagsEditor={() => onOpenTagsEditor(group)}
-                          favorite={groupFavorite(group)}
-                          onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-                          trashAvailable={trashAvailable}
+                    return (
+                      <FileContextMenu
+                        officeStatus={officeStatus}
+                        key={entry.path}
+                        entry={entry}
+                        onAction={onContextAction}
+                        selectionCount={contextSelectionCount(entry.path, selected)}
+                        includesFolder={group.some((candidate) => candidate.kind === "dir")}
+                        tags={tags}
+                        tagCheckState={(tagId) =>
+                          computeTagCheckState(
+                            group.map((candidate) => ({ tagIds: candidate.meta?.tagIds ?? [] })),
+                            tagId,
+                          )
+                        }
+                        onToggleTag={(tagId, checked) => onToggleTag(groupPaths, tagId, checked)}
+                        onOpenTagsEditor={() => onOpenTagsEditor(group)}
+                        favorite={groupFavorite(group)}
+                        onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
+                        trashAvailable={trashAvailable}
+                      >
+                        {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
+                        {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
+                        <div
+                          data-path={entry.path}
+                          data-selected={isSelected}
+                          data-focused={isFocused}
+                          data-drop-target={dropTarget === entry.path}
+                          draggable
+                          onDragStart={(event) => handleDragStart(event, entry)}
+                          onDragEnd={handleDragEnd}
+                          onDragOver={(event) => handleDragOver(event, entry)}
+                          onDragLeave={() => handleDragLeave(entry)}
+                          onDrop={(event) => handleDrop(event, entry)}
+                          onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
+                          onDoubleClick={() => onEntryDoubleClick(entry)}
+                          className={cn(
+                            "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
+                            "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
+                            "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
+                            "data-[selected=true]:bg-primary/10",
+                          )}
                         >
-                          {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
-                          {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
-                          <div
-                            data-path={entry.path}
-                            data-selected={isSelected}
-                            data-focused={isFocused}
-                            data-drop-target={dropTarget === entry.path}
-                            draggable
-                            onDragStart={(event) => handleDragStart(event, entry)}
-                            onDragEnd={handleDragEnd}
-                            onDragOver={(event) => handleDragOver(event, entry)}
-                            onDragLeave={() => handleDragLeave(entry)}
-                            onDrop={(event) => handleDrop(event, entry)}
-                            onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
-                            onDoubleClick={() => onEntryDoubleClick(entry)}
-                            className={cn(
-                              "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
-                              "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
-                              "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
-                              "data-[selected=true]:bg-primary/10",
-                            )}
-                          >
-                            <FileIcon
-                              kind={entry.kind}
-                              ext={entry.ext}
-                              mime={entry.mime}
-                              className="size-8"
-                            />
-                            <span className="line-clamp-2 w-full break-words text-xs">
-                              {entry.name}
-                            </span>
-                            <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
-                          </div>
-                        </FileContextMenu>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-            {marquee.rect !== null && (
-              <div
-                aria-hidden
-                data-slot="marquee-rect"
-                className="pointer-events-none absolute rounded-sm border border-foreground/25 bg-foreground/10"
-                style={{
-                  left: marquee.rect.left,
-                  top: marquee.rect.top,
-                  width: marquee.rect.width,
-                  height: marquee.rect.height,
-                }}
-              />
-            )}
-          </>
+                          <FileIcon
+                            kind={entry.kind}
+                            ext={entry.ext}
+                            mime={entry.mime}
+                            className="size-8"
+                          />
+                          <span className="line-clamp-2 w-full break-words text-xs">
+                            {entry.name}
+                          </span>
+                          <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
+                        </div>
+                      </FileContextMenu>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>
