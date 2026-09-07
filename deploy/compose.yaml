@@ -9,7 +9,11 @@ services:
   proxy:
     image: caddy:2
     ports:
-      - "${FDRIVE_HTTP_PORT:-8090}:80"
+      # Loopback-bound by default: an operator's own edge (with TLS) is
+      # expected to sit in front and forward to this port. Set
+      # FDRIVE_HTTP_BIND=0.0.0.0 only when that edge runs on another host
+      # and must reach this port over the network.
+      - "${FDRIVE_HTTP_BIND:-127.0.0.1}:${FDRIVE_HTTP_PORT:-8090}:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:

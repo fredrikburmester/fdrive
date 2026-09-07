@@ -27,6 +27,7 @@ function buildConfig(): AppConfig {
     fdriveHomeTemplate: "sftpgo:/{username}",
     fdriveSessionTtlDays: 30,
     fdriveCookieSecure: "auto",
+    fdriveTrustedProxyHops: 1,
     fdrivePublicUrl: undefined,
     nodeEnv: "test",
     fdriveAutoMigrate: true,
