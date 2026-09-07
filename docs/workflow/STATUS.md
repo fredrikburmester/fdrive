@@ -396,3 +396,28 @@ available and followed the project instructions.
   matched a worktree's own path segment, so `pnpm lint` inside any worker checkout reported
   every path ignored; the pattern is now anchored, and `**/.venv` is ignored so a Python
   service's local venv never reaches the formatter.
+- Merged: `share-gallery-ui` (31b5264) and `image-embed-db` (0e82be9). Gallery tiles now request
+  `/thumb?size=256`; the lightbox is a full-page overlay reusing `ImageViewer` and the
+  `preview-shell` top-bar shape; the limit sentence, the "0 downloads · No limit" line and the big
+  blue ZIP button are gone (`publicShareUsage` returns null without a limit, ZIP is a ghost icon
+  button). Primary follow-up (f8fef94), from reading the preload against the real stack: every
+  public share response was `no-store`, so preloading a neighbour's full-size image could never be
+  reused and only spent another download. Share thumbnails now answer `private, max-age=60` (they
+  are derived, content-addressed and uncounted; full downloads stay `no-store`, with a regression
+  test), the preload fetches the 1024px thumbnail instead, and the lightbox shows that immediately
+  and swaps to the full image once it decodes. Verified in the pane: 12 tiles cost 0 downloads
+  (the same gallery cost 12 before), only images actually opened count, arrows preload the
+  neighbours' 1024 thumbs. Playwright `shares.spec.ts` 5/5 against the real stack.
+  `image-embed-db` adds `app.image_embeddings (content_key, model, vector(1024))` with an HNSW
+  cosine index, `searchImages`/`imageEmbeddingStats` in `index-queries.ts`, the indexer's
+  per-file embedding pass with a dimension/status guard, and rebuild/clear jobs. Primary
+  follow-up: the `apps/api` `IndexQueries` fakes needed the two new methods (out of that chunk's
+  scope, so its own gates passed while the repo did not typecheck). Gates: lint 1018, typecheck 13,
+  coverage 8/8 (api 1679, web 1341, db 194), db integration 230.
+- Image search verified end to end on the dev stack: rebuild embedded 10 candidates in ~12 s
+  (1 error, a thumbnail row whose file I had deleted by hand — logged and skipped, which is the
+  intended behaviour), 9 rows at `vector_dims = 1024` under `google/siglip2-large-patch16-256`.
+  Nearest-neighbour queries through the sidecar's text tower: "a blue ocean" → ocean.png (0.091),
+  "a green forest" → forest.png (0.068), "a warm orange sunset" → sunset.png (0.110), and in
+  Swedish "en rosa cirkel" → rose.png (0.149). The multilingual model choice pays off. Still
+  queued: `image-search-api`, `image-search-web`, `share-peek-api`, `share-peek-web`.
