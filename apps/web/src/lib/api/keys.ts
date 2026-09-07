@@ -22,6 +22,7 @@ export const queryKeys = {
     search: () => ["system", "search"] as const,
     ocr: () => ["system", "ocr"] as const,
     thumbnails: () => ["system", "thumbnails"] as const,
+    imageSearch: () => ["system", "image-search"] as const,
   },
   account: {
     tokens: () => ["account", "tokens"] as const,
