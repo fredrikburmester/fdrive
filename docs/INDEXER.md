@@ -46,6 +46,16 @@ written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 the same thumbnail twice. Thumbnail failures are logged and never fail the
 file's own indexing.
 
+The api serves this same cache twice: `GET /api/v1/thumb` for the logged-in
+file browser, and `GET /api/v1/public/shares/:id/thumb` for a public share's
+gallery tiles. Both read straight from `FDRIVE_THUMBS_DIR`; neither ever goes
+through SFTPGo's own file download, so loading a gallery of thumbnails never
+consumes a share's download limit the way opening or downloading a full-size
+image does. The public route also verifies a password-protected share's
+password itself (one upstream share-root listing per password, cached for 60
+seconds) before it will serve a thumbnail, since SFTPGo only checks a share's
+password when it is actually asked to serve file bytes.
+
 `POST /thumbnails/rebuild` (`thumb_rebuild.py`) is a separate, thumbnail-only
 pass for when the WebP files themselves need regenerating, for example after
 changing thumbnail sizes or quality, without paying the cost of a full
