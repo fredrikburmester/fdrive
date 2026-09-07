@@ -186,3 +186,13 @@ export function shareRoute(id: string): string {
 export function publicShareRoute(id: string): string {
   return `${ROUTES.publicShares}/${encodeURIComponent(id)}`;
 }
+
+/**
+ * GET: an identity's scope mapping and index-availability status ->
+ * `IdentityScopeResponse`. PUT (admin + CSRF, owned identity): replace the
+ * identity's scope override -> `IdentityScopeResponse`; `{ scopes: [] }`
+ * resets it to the template-derived home scope.
+ */
+export function identityScopeRoute(id: string): string {
+  return `${ROUTES.account.identities}/${encodeURIComponent(id)}/scope`;
+}
