@@ -665,6 +665,9 @@ flows pass real storage integration, browser acceptance and required quality gat
 11. Office thumbnails are icons in v1.
 12. Public share pages are fdrive's own, and all share traffic is proxied through fdrive because
     SFTPGo may not be internet-facing.
+13. Same index and OCR policy for every SFTPGo home (2026-09-07): the indexer and OCR see the
+    whole SFTPGo root; per-user isolation comes from scope verification, not from narrowing
+    what is indexed. The indexer runs as SFTPGo's uid so mode-700 folders stay indexable.
 
 ## 15. Resolved questions (2026-09-06)
 
