@@ -1,5 +1,8 @@
 # The indexer
 
+> [!TIP]
+> **Looking to configure or use search in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the Python indexing service.
+
 `services/indexer` is a Python service that walks and watches one or more disk
 roots, keeps `idx.files` / `idx.chunks` current, and generates thumbnails. It is
 the direct port of filesai's `indexer.py` / `watcher.py` / `extract.py`, extended
@@ -94,7 +97,7 @@ backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ root?,
 path?, force? }`, batched against the sidecar at `IMAGE_EMBED_BATCH_SIZE`
 requests per call. Without `force`, only images with no row at all are
 filled in; a row from a different model is left alone. With `force`, a
-stale-model row is also re-embedded and overwritten — the deliberate "replace
+stale-model row is also re-embedded and overwritten, the deliberate "replace
 the old model's rows" pass. A row already matching the configured model is
 never redundantly recomputed either way. Progress is visible at `GET /stats`
 under `image_embedding_rebuild`, and it shares the thumbnail-rebuild
@@ -160,8 +163,8 @@ a published port in the non-dev compose file.
 
 | Endpoint | Method | Body | Returns |
 | --- | --- | --- | --- |
-| `/health` | GET | — | `{ ok, roots, watcher, embed_ok, schema_version }` |
-| `/stats` | GET | — | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, started_at, finished_at, errors }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
+| `/health` | GET | None | `{ ok, roots, watcher, embed_ok, schema_version }` |
+| `/stats` | GET | None | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, started_at, finished_at, errors }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract` | POST | `{ root, path, offset?, max_chars? }` | Live text extraction for one file (not persisted), sliced by `offset`/`max_chars`. Used for the web app's live text preview. |
 | `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
 | `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is the candidate count computed up front), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
@@ -202,7 +205,7 @@ docker compose -f compose.yaml --profile index up -d
 
 Environment (see `deploy/.env.example`):
 
-- `FDRIVE_INDEX_SFTPGO_DIR` — host directory bind-mounted read-only into the
+- `FDRIVE_INDEX_SFTPGO_DIR`: host directory bind-mounted read-only into the
   indexer at `/roots/sftpgo`. This must be the same directory SFTPGo itself
   serves for that root, so indexed paths line up with what users browse.
 - Additional roots: copy the `indexer` service's volume line
