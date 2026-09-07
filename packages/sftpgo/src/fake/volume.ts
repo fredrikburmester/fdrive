@@ -17,6 +17,17 @@ export interface VolumeEntry {
   readonly node: VolumeNode;
 }
 
+/** Joins a directory path and a single child name into a full path. */
+function joinChildPath(dir: string, child: string): string {
+  return dir === "/" ? `/${child}` : `${dir}/${child}`;
+}
+
+/** The final path segment of a normalized path. The basename of "/" is "". */
+function basenameOf(path: string): string {
+  const normalized = normalizePath(path);
+  return normalized === "/" ? "" : normalized.slice(normalized.lastIndexOf("/") + 1);
+}
+
 /**
  * A minimal in-memory filesystem keyed by normalized absolute virtual path.
  * The root directory "/" always exists. Directories are explicit entries
@@ -182,61 +193,192 @@ export class Volume {
   }
 
   /**
-   * Moves a file or directory (and, for a directory, everything under it)
-   * to a new path. Returns "not_found" when the source is missing,
-   * "conflict" when something already exists at the target.
+   * The outcome of a move or copy. "unsupported" and "failure" mirror the
+   * real drakkan/sftpgo:v2.7.5 container's file-actions API, verified
+   * against the container directly: moving a file onto an existing
+   * directory, or a directory onto an existing directory, answers 400
+   * "operation unsupported"; moving a directory onto an existing file
+   * answers 500. "conflict" covers every other already-occupied target
+   * (file onto file overwrites and directory onto directory nests and
+   * merges instead, see move()/copy(); a copy of a file onto a directory
+   * or a directory onto a file was never exercised against the real
+   * container, so the fake keeps the conservative 409 it always returned
+   * there).
    */
-  move(path: string, target: string): "ok" | "not_found" | "conflict" {
-    return this.relocate(path, target, false);
-  }
-
-  /** Copies a file or directory the same way move() relocates one. */
-  copy(path: string, target: string): "ok" | "not_found" | "conflict" {
-    return this.relocate(path, target, true);
-  }
-
   private relocate(
     path: string,
     target: string,
     keepSource: boolean,
-  ): "ok" | "not_found" | "conflict" {
+  ): "ok" | "not_found" | "conflict" | "unsupported" | "failure" {
     const from = normalizePath(path);
     const to = normalizePath(target);
     const node = this.get(from);
     if (node === undefined) {
       return "not_found";
     }
-    if (this.has(to)) {
-      return "conflict";
+
+    const existing = this.get(to);
+    if (existing !== undefined) {
+      return this.relocateOntoExisting(from, to, node, existing, keepSource);
     }
+
     this.ensureDir(dirnameOf(to));
-
-    if (node.kind === "file") {
-      this.nodes.set(to, { kind: "file", content: node.content, mtimeMs: node.mtimeMs });
-    } else {
-      this.nodes.set(to, { kind: "dir" });
-      const prefix = from === "/" ? "/" : `${from}/`;
-      for (const [candidate, candidateNode] of [...this.nodes]) {
-        if (candidate.startsWith(prefix)) {
-          const suffix = candidate.slice(prefix.length);
-          const destination = to === "/" ? `/${suffix}` : `${to}/${suffix}`;
-          this.nodes.set(
-            destination,
-            candidateNode.kind === "file"
-              ? { kind: "file", content: candidateNode.content, mtimeMs: candidateNode.mtimeMs }
-              : { kind: "dir" },
-          );
-        }
-      }
-    }
-
+    this.copyTree(from, to, node);
     if (!keepSource) {
-      if (node.kind === "file") {
-        this.nodes.delete(from);
-      } else {
-        this.deleteDir(from);
-      }
+      this.removeSource(from, node);
     }
     return "ok";
+  }
+
+  /**
+   * Handles a move or copy whose target already exists. Only the six
+   * combinations verified against the real container are given their exact
+   * status; every other combination (a copy of a file onto a directory, or
+   * a directory onto a file) keeps the fake's original "conflict" answer.
+   */
+  private relocateOntoExisting(
+    from: string,
+    to: string,
+    node: VolumeNode,
+    existing: VolumeNode,
+    keepSource: boolean,
+  ): "ok" | "conflict" | "unsupported" | "failure" {
+    if (node.kind === "file") {
+      if (existing.kind === "file") {
+        if (!keepSource && from === to) {
+          // Moving (or renaming) a file onto itself: verified against the real container, this
+          // is rejected with 400, not treated as a no-op success or as data loss. Leaves the
+          // file untouched.
+          return "unsupported";
+        }
+        // move file -> existing file, or copy file -> existing file: overwrite the target.
+        this.nodes.set(to, { kind: "file", content: node.content, mtimeMs: node.mtimeMs });
+        if (!keepSource) {
+          this.nodes.delete(from);
+        }
+        return "ok";
+      }
+      // move file -> existing dir is unsupported on the real container; copy file -> existing
+      // dir was never verified there, so the fake keeps its original conflict answer.
+      return keepSource ? "conflict" : "unsupported";
+    }
+
+    if (existing.kind === "file") {
+      // move dir -> existing file fails on the real container; copy dir -> existing file was
+      // never verified there, so the fake keeps its original conflict answer.
+      return keepSource ? "conflict" : "failure";
+    }
+
+    if (keepSource) {
+      return this.copyDirIntoExistingDir(from, to, node);
+    }
+    // move dir -> existing dir is unsupported on the real container.
+    return "unsupported";
+  }
+
+  /**
+   * Copies directory `from` into the already-existing directory `to`, the
+   * way the real container's file-actions copy actually behaves (verified
+   * against the container directly, since "merges" alone does not pin down
+   * where): like Unix `cp -r`, the source is nested one level down, at
+   * `to/<basename of from>`. When nothing is there yet, that nested
+   * directory is created as a full copy of `from`. When a directory is
+   * already there (for example, from an earlier copy), `from` is merged
+   * into it: the nested directory keeps its own entries and `from`'s
+   * entries overwrite same-named files. A file already at the nested
+   * destination was never exercised against the real container, so the
+   * fake keeps the conservative 409 it always returned there.
+   */
+  private copyDirIntoExistingDir(from: string, to: string, node: VolumeNode): "ok" | "conflict" {
+    // basenameOf(from) is "" only when from is "/" itself, which has no name of its own to nest
+    // under; normalizePath then collapses the resulting trailing slash back to `to`, so copying
+    // the root merges its entries straight into the target instead of nesting them one level down.
+    const nestedTo = normalizePath(joinChildPath(to, basenameOf(from)));
+    const nestedExisting = this.get(nestedTo);
+    if (nestedExisting === undefined) {
+      this.copyTree(from, nestedTo, node);
+      return "ok";
+    }
+    if (nestedExisting.kind === "dir") {
+      this.mergeDirInto(from, nestedTo);
+      return "ok";
+    }
+    return "conflict";
+  }
+
+  /** Copies `node` (a file, or a directory and everything under it) from `from` to `to`. */
+  private copyTree(from: string, to: string, node: VolumeNode): void {
+    if (node.kind === "file") {
+      this.nodes.set(to, { kind: "file", content: node.content, mtimeMs: node.mtimeMs });
+      return;
+    }
+    this.nodes.set(to, { kind: "dir" });
+    const prefix = from === "/" ? "/" : `${from}/`;
+    for (const [candidate, candidateNode] of [...this.nodes]) {
+      if (candidate.startsWith(prefix)) {
+        const suffix = candidate.slice(prefix.length);
+        const destination = to === "/" ? `/${suffix}` : `${to}/${suffix}`;
+        this.nodes.set(
+          destination,
+          candidateNode.kind === "file"
+            ? { kind: "file", content: candidateNode.content, mtimeMs: candidateNode.mtimeMs }
+            : { kind: "dir" },
+        );
+      }
+    }
+  }
+
+  /**
+   * Merges the directory at `from` into the already-existing directory at
+   * `to`: every descendant directory of `from` is created at the matching
+   * path under `to` unless something is already a directory there, and
+   * every descendant file overwrites whatever (if anything) is at the
+   * matching path under `to`. `to` itself, and anything under `to` with no
+   * counterpart under `from`, is left untouched.
+   */
+  private mergeDirInto(from: string, to: string): void {
+    const prefix = from === "/" ? "/" : `${from}/`;
+    for (const [candidate, candidateNode] of [...this.nodes]) {
+      if (!candidate.startsWith(prefix)) {
+        continue;
+      }
+      const suffix = candidate.slice(prefix.length);
+      const destination = to === "/" ? `/${suffix}` : `${to}/${suffix}`;
+      if (candidateNode.kind === "file") {
+        this.nodes.set(destination, {
+          kind: "file",
+          content: candidateNode.content,
+          mtimeMs: candidateNode.mtimeMs,
+        });
+        continue;
+      }
+      const destinationNode = this.get(destination);
+      if (destinationNode === undefined || destinationNode.kind !== "dir") {
+        this.nodes.set(destination, { kind: "dir" });
+      }
+    }
+  }
+
+  private removeSource(from: string, node: VolumeNode): void {
+    if (node.kind === "file") {
+      this.nodes.delete(from);
+    } else {
+      this.deleteDir(from);
+    }
+  }
+
+  /**
+   * Moves a file or directory (and, for a directory, everything under it)
+   * to a new path. Returns "not_found" when the source is missing. When
+   * the target already exists, see relocate()'s doc comment for the exact
+   * outcome per source/target kind.
+   */
+  move(path: string, target: string): "ok" | "not_found" | "conflict" | "unsupported" | "failure" {
+    return this.relocate(path, target, false);
+  }
+
+  /** Copies a file or directory the same way move() relocates one, but keeps the source. */
+  copy(path: string, target: string): "ok" | "not_found" | "conflict" | "unsupported" | "failure" {
+    return this.relocate(path, target, true);
   }
 }

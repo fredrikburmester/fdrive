@@ -13,7 +13,6 @@ import {
   type FileEntry,
   isStorageError,
   parseTrashLeaf,
-  type StorageProvider,
   type TrashEntry,
   type TrashProvider,
   trashLeafPath,
@@ -77,47 +76,21 @@ function requireTrash(
   return { trash, trashPath: deps.trashPath };
 }
 
-interface ValidatedTrashId {
-  readonly id: string;
-  /** The id's parsed original path: the default restore target when the request gives none. */
-  readonly originalPath: string;
-}
-
-/** Throws `bad_request` for an id that does not parse as a well-formed trash leaf under `trashPath`. */
-function validateTrashId(trashPath: string, id: string): ValidatedTrashId {
+/**
+ * Throws `bad_request` for an id that does not parse as a well-formed trash
+ * leaf under `trashPath`, otherwise returns it unchanged. The restore
+ * target itself (the id's parsed original path, when the request gives no
+ * explicit target) is resolved by `TrashProvider.restore` itself, along
+ * with the conflict check for an already-occupied target (see
+ * `@fdrive/core`'s `packages/core/src/trash/recycle-folder-trash.ts`).
+ */
+function validateTrashId(trashPath: string, id: string): string {
   const leafPath = trashLeafPath(trashPath, id);
   const parsed = parseTrashLeaf(trashPath, leafPath);
   if (parsed === null) {
     throw new ApiHttpError("bad_request", `invalid trash id: ${id}`, { id });
   }
-  return { id, originalPath: parsed.originalPath };
-}
-
-/**
- * Throws `conflict` (with `details.failedId`) when `target` already exists.
- * Real SFTPGo's rename endpoint silently overwrites an existing file
- * instead of erroring (unlike `TrashProvider.restore`'s documented
- * contract), so restoring would otherwise destroy whatever already lives
- * at the target without warning; this check runs first so restore never
- * does that. A `bad_request` from `statFile` (this codebase's convention
- * for "this path is a directory", see `fs/routes.ts`'s `statEntry`) is left
- * for `restoreOne`'s own move/mkdir calls to report, since that failure
- * mode is unrelated to an existing file at the target.
- */
-async function checkRestoreTargetFree(
-  storage: StorageProvider,
-  target: string,
-  id: string,
-): Promise<void> {
-  try {
-    await storage.statFile(target);
-  } catch (error) {
-    if (isStorageError(error)) {
-      return;
-    }
-    throw error;
-  }
-  throw new ApiHttpError("conflict", `something already exists at ${target}`, { failedId: id });
+  return id;
 }
 
 function serializeTrashEntry(entry: TrashEntry): TrashEntryContract {
@@ -192,9 +165,7 @@ export function registerTrashRoutes(
     const restored: FsEntry[] = [];
     const trashPaths: string[] = [];
     const targetPaths: string[] = [];
-    for (const { id, originalPath } of validated) {
-      const resolvedTarget = target ?? originalPath;
-      await checkRestoreTargetFree(principal.storage, resolvedTarget, id);
+    for (const id of validated) {
       const entry = await restoreOne(trash, id, target);
       const trashVirtualPath = trashLeafPath(trashPath, id);
       if (deps.metadata !== undefined) {
@@ -214,7 +185,7 @@ export function registerTrashRoutes(
     const principal = c.get("principal");
     const { trash, trashPath } = requireTrash(c, deps);
     const body = await parseBody(TrashPurgeRequest, c);
-    const ids = body.ids.map((id) => validateTrashId(trashPath, id).id);
+    const ids = body.ids.map((id) => validateTrashId(trashPath, id));
 
     await runStorageCall(() => trash.purge(ids));
 

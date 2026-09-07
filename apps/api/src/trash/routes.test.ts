@@ -291,7 +291,7 @@ describe("POST /trash/restore", () => {
     expect(body.restored[0]?.path).toBe("/restored/moved.txt");
   });
 
-  it("returns 409 with details.failedId when the restore target already exists", async () => {
+  it("returns 409 with details.failedId when the restore target already exists, via the real core-provided trash against the fake (not a mocked provider)", async () => {
     const { app, storage } = await buildHarness();
     await storage.deleteFile("/hello.txt");
     await storage.upload("/hello.txt", new TextEncoder().encode("new content"));
@@ -311,6 +311,15 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(409);
     const body = await readJson<ErrorJson>(res);
     expect(body.error.details?.failedId).toBe(id);
+    // The conflict came from `@fdrive/core`'s `createRecycleFolderTrash.restore`, not any
+    // pre-restore check of the route's own (the route has none): confirm the target file that
+    // was already there is untouched and the trashed leaf is still present.
+    const downloaded = await storage.download("/hello.txt");
+    expect(await new Response(downloaded.body).text()).toBe("new content");
+    const stillTrashed = TrashListResponse.parse(
+      await readJson(await app.request(ROUTES.trash.list)),
+    );
+    expect(stillTrashed.entries.map((entry) => entry.id)).toContain(id);
   });
 
   it("returns bad_request for an id that does not parse as a trash leaf", async () => {
@@ -328,69 +337,13 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(400);
   });
 
-  it("propagates a non-StorageError from the pre-restore statFile check as an internal error", async () => {
-    const boom = new Error("statFile boom");
-    const storage: StorageProvider = {
-      list: () => Promise.reject(new Error("not implemented")),
-      statFile: () => Promise.reject(boom),
-      download: () => Promise.reject(new Error("not implemented")),
-      upload: () => Promise.reject(new Error("not implemented")),
-      mkdir: () => Promise.reject(new Error("not implemented")),
-      move: () => Promise.reject(new Error("not implemented")),
-      copy: () => Promise.reject(new Error("not implemented")),
-      deleteFile: () => Promise.reject(new Error("not implemented")),
-      deleteDir: () => Promise.reject(new Error("not implemented")),
-      setModifiedAt: () => Promise.reject(new Error("not implemented")),
-      zip: () => Promise.reject(new Error("not implemented")),
-      trash: {
-        list: () => Promise.reject(new Error("not implemented")),
-        restore: () => Promise.reject(new Error("should not be reached")),
-        purge: () => Promise.reject(new Error("not implemented")),
-        empty: () => Promise.reject(new Error("not implemented")),
-      },
-    };
-    const principal: Principal = {
-      accountId: ACCOUNT_ID,
-      identityId: ALICE_IDENTITY_ID,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const clock = () => new Date(CLOCK_ISO);
-    const deps: TrashRoutesDeps = {
-      bus: createEventBus(),
-      clock,
-      trashPath: TRASH_PATH,
-      retentionHours: null,
-    };
-    const app = createApp({
-      config: loadConfig(REQUIRED_ENV),
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(CLOCK_ISO),
-      clock,
-      principalResolver: async () => principal,
-      registerRoutes: (groups) => registerTrashRoutes(groups, deps),
-    });
-
-    const res = await app.request(
-      ROUTES.trash.restore,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["hello.txt/168176641123456789"] }),
-      }),
-    );
-
-    expect(res.status).toBe(500);
-  });
-
   it("propagates a non-StorageError from trash.restore as an internal error", async () => {
     const boom = new Error("boom");
     const storage: StorageProvider = {
       list: () => Promise.reject(new Error("not implemented")),
-      // Reports "nothing at the target yet" so the route's own pre-restore
-      // conflict check does not short-circuit before reaching trash.restore.
+      // The route has no pre-restore check of its own (that lives in
+      // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
+      // against the fake below); statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
       upload: () => Promise.reject(new Error("not implemented")),
@@ -447,8 +400,9 @@ describe("POST /trash/restore", () => {
   it("attaches failedId even when the underlying StorageError carries no details", async () => {
     const storage: StorageProvider = {
       list: () => Promise.reject(new Error("not implemented")),
-      // Reports "nothing at the target yet" so the route's own pre-restore
-      // conflict check does not short-circuit before reaching trash.restore.
+      // The route has no pre-restore check of its own (that lives in
+      // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
+      // against the fake below); statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
       upload: () => Promise.reject(new Error("not implemented")),

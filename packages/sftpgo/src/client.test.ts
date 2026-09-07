@@ -512,12 +512,14 @@ describe("createSftpgoClient - move and copy", () => {
     });
   });
 
-  it("returns conflict when the move target already exists", async () => {
+  it("overwrites the target and removes the source when moving a file onto an existing file", async () => {
     const { client } = setup({ ...seed, files: { alice: { "/a.txt": "1", "/b.txt": "2" } } });
     const token = await loginAsAlice(client);
-    await expect(client.user(token).move("/a.txt", "/b.txt")).rejects.toMatchObject({
-      kind: "conflict",
+    await client.user(token).move("/a.txt", "/b.txt");
+    await expect(client.user(token).statFile("/a.txt")).rejects.toMatchObject({
+      kind: "not_found",
     });
+    expect((await client.user(token).statFile("/b.txt")).size).toBe(1);
   });
 });
 
