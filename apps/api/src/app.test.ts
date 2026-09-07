@@ -2,7 +2,7 @@ import { AboutResponse, HealthResponse } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
-import { createApp, isSetupExempt, sftpgoHostLabel } from "./app";
+import { createApp, isSetupExempt, redactMcpTokenPath, sftpgoHostLabel } from "./app";
 import { loadConfig } from "./config";
 import { ApiHttpError } from "./errors";
 
@@ -110,6 +110,38 @@ describe("createApp health route", () => {
         ms: expect.any(Number),
         requestId: expect.any(String),
       }),
+      "request completed",
+    );
+  });
+});
+
+describe("redactMcpTokenPath", () => {
+  it("redacts the token segment of an /mcp/t/:token path", () => {
+    expect(redactMcpTokenPath("/mcp/t/super-secret-token")).toBe("/mcp/t/[redacted]");
+  });
+
+  it("redacts a sub-path under the token, keeping only the prefix", () => {
+    expect(redactMcpTokenPath("/mcp/t/super-secret-token/extra")).toBe("/mcp/t/[redacted]");
+  });
+
+  it("leaves a path that is exactly the prefix with no token unchanged as redacted", () => {
+    expect(redactMcpTokenPath("/mcp/t/")).toBe("/mcp/t/[redacted]");
+  });
+
+  it("leaves other paths unchanged", () => {
+    expect(redactMcpTokenPath("/mcp")).toBe("/mcp");
+    expect(redactMcpTokenPath("/api/v1/health")).toBe("/api/v1/health");
+  });
+});
+
+describe("createApp request logging redacts the MCP token path", () => {
+  it("logs /mcp/t/[redacted] instead of the raw token for an /mcp/t/:token request", async () => {
+    const { app, logger } = buildApp();
+
+    await app.request("/mcp/t/super-secret-token", { method: "DELETE" });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/mcp/t/[redacted]" }),
       "request completed",
     );
   });

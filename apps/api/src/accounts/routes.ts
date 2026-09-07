@@ -51,7 +51,10 @@ export function registerAccountsRoutes(
     const input = accountContext(c);
     const body = await parseBody(LinkIdentityRequest, c);
     const result = await accountRepositoryCall(() =>
-      deps.service.link(input, { ...body, ip: extractClientIp(c) }),
+      deps.service.link(input, {
+        ...body,
+        ip: extractClientIp(c, deps.config.fdriveTrustedProxyHops),
+      }),
     );
     rotationCookie(c, result);
     return c.json(result.me);

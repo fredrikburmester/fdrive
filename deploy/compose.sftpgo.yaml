@@ -9,8 +9,15 @@ services:
   sftpgo:
     image: drakkan/sftpgo:v2.7.5
     ports:
+      # SFTP clients (2022) can stay published to whatever host interface the
+      # operator wants: it needs its own authentication, same as any SFTP
+      # server. The admin/HTTP API (8080) must never be internet-reachable:
+      # it is loopback-bound here and fdrive itself reaches SFTPGo over the
+      # compose network (SFTPGO_URL=http://sftpgo:8080), not this published
+      # port. The previous default, 8090, collided with FDRIVE_HTTP_PORT
+      # (the main proxy's published port), so the default here is 8091.
       - "2022:2022"
-      - "8090:8080"
+      - "127.0.0.1:${SFTPGO_ADMIN_PORT:-8091}:8080"
     environment:
       SFTPGO_DEFAULT_ADMIN_USERNAME: ${SFTPGO_ADMIN_USERNAME:-admin}
       SFTPGO_DEFAULT_ADMIN_PASSWORD: ${SFTPGO_ADMIN_PASSWORD}

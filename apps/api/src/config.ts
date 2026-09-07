@@ -49,6 +49,15 @@ export interface AppConfig {
   readonly fdriveHomeTemplate: string;
   readonly fdriveSessionTtlDays: number;
   readonly fdriveCookieSecure: CookieSecureMode;
+  /**
+   * How many reverse-proxy hops in front of fdrive are trusted to append an
+   * honest entry to `x-forwarded-for` (normally `1` for a single Caddy).
+   * `extractClientIp` (`net.ts`) reads the entry that many hops from the
+   * right of the header and falls back to the raw socket peer when the
+   * header has fewer entries than this, so a spoofed leading hop is never
+   * trusted as the client's IP.
+   */
+  readonly fdriveTrustedProxyHops: number;
   readonly fdrivePublicUrl: string | undefined;
   readonly nodeEnv: NodeEnv;
   readonly fdriveAutoMigrate: boolean;
@@ -274,6 +283,14 @@ const envSchema = z.object({
     (value) => withDefault(value, "auto"),
     z.enum(COOKIE_SECURE_MODES),
   ),
+  FDRIVE_TRUSTED_PROXY_HOPS: z.preprocess(
+    (value) => withDefault(value, "1"),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a non-negative integer")
+      .transform(Number)
+      .pipe(z.number().int().min(0)),
+  ),
   FDRIVE_PUBLIC_URL: z.preprocess(
     (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
     z
@@ -417,6 +434,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveHomeTemplate: parsed.FDRIVE_HOME_TEMPLATE,
     fdriveSessionTtlDays: parsed.FDRIVE_SESSION_TTL_DAYS,
     fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,
+    fdriveTrustedProxyHops: parsed.FDRIVE_TRUSTED_PROXY_HOPS,
     fdrivePublicUrl: parsed.FDRIVE_PUBLIC_URL,
     nodeEnv: parsed.NODE_ENV,
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
