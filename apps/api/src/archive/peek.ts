@@ -49,8 +49,18 @@ export class UnreadableArchiveError extends Error {
   }
 }
 
+/**
+ * The two `StorageProvider` methods `peekArchive` actually calls. A public
+ * share has no `statFile` and only a subset of a full provider's surface,
+ * so accepting this narrower, structural port (rather than the whole
+ * `StorageProvider`) lets a share-backed adapter satisfy `peekArchive`
+ * without pretending to implement everything else. Any `StorageProvider`
+ * already satisfies this port.
+ */
+export type PeekStoragePort = Pick<StorageProvider, "statFile" | "download">;
+
 export interface PeekArchiveOptions {
-  readonly storage: StorageProvider;
+  readonly storage: PeekStoragePort;
   readonly path: string;
   /** Cap on bytes read for the tar family's streaming scan. Unused for
    * zip, whose two Range reads are already bounded by its own metadata. */
@@ -87,7 +97,7 @@ function withSignal(
  * points at. Never downloads the whole archive.
  */
 async function peekZipArchive(
-  storage: StorageProvider,
+  storage: PeekStoragePort,
   path: string,
   signal: AbortSignal | undefined,
 ): Promise<PeekArchiveResult> {
@@ -146,7 +156,7 @@ async function peekZipArchive(
  * `gz` down a different path), so `tarCompressionFor` always resolves.
  */
 async function peekTarArchive(
-  storage: StorageProvider,
+  storage: PeekStoragePort,
   path: string,
   kind: "tar" | "tar.gz" | "tar.zst",
   maxBytes: number,
