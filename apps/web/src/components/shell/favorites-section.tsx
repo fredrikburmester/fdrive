@@ -22,7 +22,11 @@ import {
 } from "@/components/ui/sidebar";
 import { FileIcon, pathToHref, viewHref } from "@/lib/metadata/deps";
 import { useFavorites, useToggleFavorite } from "@/lib/metadata/queries";
-import { readSidebarSectionOpen, writeSidebarSectionOpen } from "@/lib/metadata/sidebar-sections";
+import {
+  readSidebarSectionOpen,
+  sidebarSectionState,
+  writeSidebarSectionOpen,
+} from "@/lib/metadata/sidebar-sections";
 import { cn } from "@/lib/utils";
 
 function toRoute(href: string): Route {
@@ -31,11 +35,13 @@ function toRoute(href: string): Route {
 
 /** The sidebar's "Favorites" section: every favorite as a link, a folder
  * navigating there, a file opening its preview. Collapsed state persists in
- * localStorage. Renders nothing while there are no favorites. */
+ * localStorage. Always renders once loaded, even with nothing starred yet,
+ * showing a muted placeholder line instead of disappearing. */
 export function FavoritesSection() {
   const { data: items } = useFavorites();
   const toggleFavorite = useToggleFavorite();
   const [open, setOpen] = useState(true);
+  const state = sidebarSectionState(items);
 
   useEffect(() => {
     setOpen(readSidebarSectionOpen(window.localStorage, "favorites"));
@@ -46,7 +52,7 @@ export function FavoritesSection() {
     writeSidebarSectionOpen(window.localStorage, "favorites", next);
   }
 
-  if (items === undefined || items.length === 0) {
+  if (state === "loading") {
     return null;
   }
 
@@ -62,43 +68,49 @@ export function FavoritesSection() {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => {
-                const ext = extensionOf(item.path);
-                return (
-                  <SidebarMenuItem key={item.path}>
-                    <ContextMenu>
-                      <ContextMenuTrigger
-                        render={
-                          <SidebarMenuButton
-                            render={
-                              <Link
-                                href={toRoute(
-                                  item.kind === "dir" ? pathToHref(item.path) : viewHref(item.path),
-                                )}
-                              />
-                            }
-                          />
-                        }
-                      >
-                        <FileIcon kind={item.kind} ext={ext} mime={mimeFromExtension(ext)} />
-                        <span className="truncate">{baseName(item.path)}</span>
-                      </ContextMenuTrigger>
-                      <ContextMenuContent>
-                        <ContextMenuItem
-                          onClick={() =>
-                            toggleFavorite.mutate({ path: item.path, favorite: false })
+            {state === "empty" ? (
+              <p className="px-2 py-1 text-muted-foreground text-xs">Star a file to see it here</p>
+            ) : (
+              <SidebarMenu>
+                {(items ?? []).map((item) => {
+                  const ext = extensionOf(item.path);
+                  return (
+                    <SidebarMenuItem key={item.path}>
+                      <ContextMenu>
+                        <ContextMenuTrigger
+                          render={
+                            <SidebarMenuButton
+                              render={
+                                <Link
+                                  href={toRoute(
+                                    item.kind === "dir"
+                                      ? pathToHref(item.path)
+                                      : viewHref(item.path),
+                                  )}
+                                />
+                              }
+                            />
                           }
                         >
-                          <XIcon />
-                          Remove
-                        </ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
+                          <FileIcon kind={item.kind} ext={ext} mime={mimeFromExtension(ext)} />
+                          <span className="truncate">{baseName(item.path)}</span>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent>
+                          <ContextMenuItem
+                            onClick={() =>
+                              toggleFavorite.mutate({ path: item.path, favorite: false })
+                            }
+                          >
+                            <XIcon />
+                            Remove
+                          </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            )}
           </SidebarGroupContent>
         </CollapsibleContent>
       </Collapsible>

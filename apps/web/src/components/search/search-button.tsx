@@ -13,20 +13,29 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
  * The top-right search entry point: a button showing the ⌘K shortcut (label
  * hidden below 900px, icon always visible), a global Cmd/Ctrl+K listener
  * that opens the panel from anywhere in the shell, and the panel itself.
- * Disabled with a tooltip when the search index is not configured.
+ *
+ * Always enabled, even when the search index is not configured: an earlier
+ * version disabled the button in that case, which (via the `disabled`
+ * variant's `pointer-events-none`) made it fully unclickable rather than
+ * informative, and worse on touch, where a disabled element never gets a
+ * hover to reveal the explanatory tooltip at all. Now the button always
+ * opens the panel, which already shows "Search is not available" once a
+ * query against an unavailable index comes back empty; a tooltip on hover
+ * additionally explains the state up front on pointer devices. Below `md`
+ * the button grows to a 44x44 tap target.
  */
 export function SearchButton() {
   const { open, setOpen } = useSearchShortcut();
   const { data: status } = useSearchStatus();
   const { data: me } = useMe();
-  const disabled = status?.available === false && (me?.identities.length ?? 0) < 2;
+  const indexUnavailable = status?.available === false && (me?.identities.length ?? 0) < 2;
 
   const button = (
     <Button
       variant="outline"
       size="sm"
-      disabled={disabled}
       aria-label="Search"
+      className="max-md:size-11 max-md:justify-center max-md:px-0"
       onClick={() => setOpen(true)}
     >
       <SearchIcon />
@@ -39,7 +48,7 @@ export function SearchButton() {
 
   return (
     <>
-      {disabled ? (
+      {indexUnavailable ? (
         <Tooltip>
           <TooltipTrigger render={button} />
           <TooltipContent>Search index not configured</TooltipContent>
