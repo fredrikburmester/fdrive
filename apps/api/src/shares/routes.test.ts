@@ -25,12 +25,24 @@ it("manages only selected session identity shares, preserves password, reconcile
   const get = ManagedShare.parse(await (await h.request(path, { cookie })).json());
   expect(get.publicPath).toBe(`/s/${share.id}`);
   expect(get).not.toHaveProperty("sftpgoShareId");
+  expect(get.presentation).toBe("auto");
   expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toHaveLength(
     1,
   );
-  let response = await h.request(path, { cookie, method: "PATCH", body: { name: "Renamed" } });
+  let response = await h.request(path, {
+    cookie,
+    method: "PATCH",
+    body: { name: "Renamed", presentation: "gallery" },
+  });
   expect(response.status).toBe(200);
-  expect(ManagedShare.parse(await response.json()).hasPassword).toBe(true);
+  const renamed = ManagedShare.parse(await response.json());
+  expect(renamed.hasPassword).toBe(true);
+  expect(renamed.presentation).toBe("gallery");
+  response = await h.request(path, { cookie, method: "PATCH", body: { name: "Renamed again" } });
+  expect(ManagedShare.parse(await response.json()).presentation).toBe("gallery");
+  expect(
+    SharesResponse.parse(await (await h.request(base, { cookie })).json()).items[0]?.presentation,
+  ).toBe("gallery");
   response = await h.request(path, { cookie, method: "PATCH", body: { password: "" } });
   expect(ManagedShare.parse(await response.json()).hasPassword).toBe(false);
   response = await h.request(path, { cookie, method: "PATCH", body: { password: "new" } });
@@ -59,6 +71,7 @@ it("public password cookie is unverified, encrypted, scoped; actual bytes enforc
   expect(metadata.status).toBe(200);
   expect(PublicShare.parse(await metadata.json())).toMatchObject({
     layout: "single-file",
+    presentation: "auto",
     fileName: "a.docx",
     hasPassword: true,
     credentialPresent: false,

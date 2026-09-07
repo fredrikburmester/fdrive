@@ -27,8 +27,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { publicShareClient } from "@/lib/shares/client";
+import { type PublicShareClient, publicShareClient } from "@/lib/shares/client";
 import { appendShareName, publicShareHref, shareBreadcrumbs } from "@/lib/shares/paths";
+import {
+  galleryEntries,
+  resolveEntriesPresentation,
+  resolveSingleFilePresentation,
+} from "@/lib/shares/presentation";
 import { publicPreviewKind } from "@/lib/shares/preview";
 import {
   publicShareKey,
@@ -39,8 +44,58 @@ import {
 import { shareUnavailable, shareUsage } from "@/lib/shares/status";
 import { createShareUploadQueue } from "@/lib/shares/uploads";
 import { NativeShareDownload } from "./native-download";
+import { PublicGallery } from "./public-gallery";
 import { PublicPreview } from "./public-preview";
 import { PublicUpload } from "./public-upload";
+
+/** Reused whenever the resolved presentation is a single prominent download action. */
+function ZipDownloadCard({ id, client }: { id: string; client: PublicShareClient }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        The shared files are available together as a ZIP archive.
+      </p>
+      <NativeShareDownload href={client.shareArchiveUrl(id)} label="Download ZIP" />
+    </div>
+  );
+}
+
+function DirectoryListing({
+  id,
+  path,
+  presentation,
+  listing,
+  client,
+  onPreview,
+}: {
+  id: string;
+  path: string;
+  presentation: PublicShare["presentation"];
+  listing: ReturnType<typeof useShareEntries>;
+  client: PublicShareClient;
+  onPreview: (name: string, path: string, size: number) => void;
+}) {
+  if (listing.isError) return <FieldError>{listing.error.message}</FieldError>;
+  if (listing.isPending)
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading shared files…
+      </p>
+    );
+  const resolved = resolveEntriesPresentation(presentation, listing.data.items);
+  if (resolved === "download") return <ZipDownloadCard id={id} client={client} />;
+  if (resolved === "gallery")
+    return (
+      <PublicGallery
+        images={galleryEntries(listing.data.items).map((entry) => ({
+          name: entry.name,
+          path: appendShareName(path, entry.name),
+        }))}
+        downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
+      />
+    );
+  return <SharedEntries id={id} path={path} entries={listing.data.items} onPreview={onPreview} />;
+}
 
 interface SelectedPreview {
   name: string;
@@ -89,6 +144,7 @@ function SharedContents({
     );
   if (!enabled)
     return <p className="text-sm text-muted-foreground">Enter the share password to continue.</p>;
+  const singleFilePresentation = resolveSingleFilePresentation(share.presentation, share.fileName);
   return (
     <div className="space-y-5">
       {share.layout === "directory" ? (
@@ -116,28 +172,22 @@ function SharedContents({
             </Breadcrumb>
             <NativeShareDownload href={client.shareArchiveUrl(id)} label="Download ZIP" />
           </div>
-          {listing.isError ? (
-            <FieldError>{listing.error.message}</FieldError>
-          ) : listing.isPending ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              Loading shared files…
-            </p>
-          ) : (
-            <SharedEntries
-              id={id}
-              path={path}
-              entries={listing.data.items}
-              onPreview={previewFile}
-            />
-          )}
+          <DirectoryListing
+            id={id}
+            path={path}
+            presentation={share.presentation}
+            listing={listing}
+            client={client}
+            onPreview={previewFile}
+          />
         </>
       ) : share.layout === "archive" ? (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            The shared files are available together as a ZIP archive.
-          </p>
-          <NativeShareDownload href={client.shareArchiveUrl(id)} label="Download ZIP" />
-        </div>
+        <ZipDownloadCard id={id} client={client} />
+      ) : singleFilePresentation === "gallery" ? (
+        <PublicGallery
+          images={[{ name: share.fileName ?? "Shared file", path: "/" }]}
+          downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
+        />
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
@@ -345,7 +395,7 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
               </div>
               <div className="flex flex-wrap items-center gap-3 pt-2 text-xs text-muted-foreground">
                 <Badge variant="secondary">
-                  {metadata.data.scope === "write" ? "Upload only" : "Shared files"}
+                  {metadata.data.scope === "write" ? "Can upload" : "Shared files"}
                 </Badge>
                 <span>{shareUsage(metadata.data)}</span>
                 {metadata.data.expiresAt && (

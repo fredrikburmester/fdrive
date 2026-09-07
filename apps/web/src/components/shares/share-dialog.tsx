@@ -1,7 +1,7 @@
 "use client";
 
 import { CreateShareRequest, type FsEntry, type ManagedShare } from "@fdrive/contracts";
-import { Copy } from "lucide-react";
+import { Copy, Eye, EyeOff, Wand2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +15,12 @@ import {
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -26,10 +32,12 @@ import {
   canUploadShare,
   initialShareFields,
   type PasswordAction,
+  passwordFromBytes,
   shareRequest,
 } from "@/lib/shares/forms";
 import { useShareManagement } from "@/lib/shares/management";
 import { publicShareHref } from "@/lib/shares/paths";
+import { PRESENTATION_DESCRIPTION, PRESENTATION_LABEL } from "@/lib/shares/presentation-label";
 
 /** Mounted only while open, so closing always discards transient password state. */
 export function ShareDialog({
@@ -45,7 +53,18 @@ export function ShareDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<ManagedShare | null>(null);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const management = useShareManagement();
+  function generatePassword() {
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    setFields((previous) => ({
+      ...previous,
+      password: passwordFromBytes(bytes),
+      passwordAction: "change",
+    }));
+    setPasswordVisible(true);
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
@@ -118,7 +137,7 @@ export function ShareDialog({
           <form onSubmit={(event) => void submit(event)} className="space-y-5">
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="share-name">Name</FieldLabel>
+                <FieldLabel htmlFor="share-name">Link name</FieldLabel>
                 <Input
                   id="share-name"
                   value={fields.name}
@@ -154,13 +173,13 @@ export function ShareDialog({
                 >
                   <SelectTrigger aria-label="Access">
                     <SelectValue>
-                      {fields.scope === "write" ? "Upload only" : "Read and download"}
+                      {fields.scope === "write" ? "Can upload" : "Can view"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="read">Read and download</SelectItem>
+                    <SelectItem value="read">Can view</SelectItem>
                     <SelectItem value="write" disabled={!canUploadShare(entries)}>
-                      Upload only
+                      Can upload
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -171,6 +190,34 @@ export function ShareDialog({
                       ? "The selected files are downloaded together as a ZIP archive."
                       : "People can browse, preview, and download shared content."}
                 </FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel>Show as</FieldLabel>
+                <Select
+                  value={fields.presentation}
+                  disabled={pending}
+                  onValueChange={(value) => {
+                    if (
+                      value === "auto" ||
+                      value === "list" ||
+                      value === "gallery" ||
+                      value === "download"
+                    )
+                      setFields({ ...fields, presentation: value });
+                  }}
+                >
+                  <SelectTrigger aria-label="Show as">
+                    <SelectValue>{PRESENTATION_LABEL[fields.presentation]}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(["auto", "list", "gallery", "download"] as const).map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {PRESENTATION_LABEL[value]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{PRESENTATION_DESCRIPTION[fields.presentation]}</FieldDescription>
               </Field>
               {share && (
                 <Field>
@@ -216,19 +263,34 @@ export function ShareDialog({
                   <FieldLabel htmlFor="share-password">
                     {share ? "New password" : "Password"}
                   </FieldLabel>
-                  <Input
-                    id="share-password"
-                    type="password"
-                    autoComplete="new-password"
-                    maxLength={1024}
-                    value={fields.password}
-                    disabled={pending}
-                    onChange={(event) => setFields({ ...fields, password: event.target.value })}
-                  />
+                  <InputGroup>
+                    <InputGroupInput
+                      id="share-password"
+                      type={passwordVisible ? "text" : "password"}
+                      autoComplete="new-password"
+                      maxLength={1024}
+                      value={fields.password}
+                      disabled={pending}
+                      onChange={(event) => setFields({ ...fields, password: event.target.value })}
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        aria-label={passwordVisible ? "Hide password" : "Show password"}
+                        disabled={pending}
+                        onClick={() => setPasswordVisible((visible) => !visible)}
+                      >
+                        {passwordVisible ? <EyeOff /> : <Eye />}
+                      </InputGroupButton>
+                      <InputGroupButton disabled={pending} onClick={generatePassword}>
+                        <Wand2 />
+                        Generate
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </InputGroup>
                   <FieldDescription>
                     {share
                       ? "A new password replaces the previous one."
-                      : "Optional. Leave blank for a link without a password."}
+                      : "Optional. Leave blank for a link without a password, or generate a random one."}
                   </FieldDescription>
                 </Field>
               )}

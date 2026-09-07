@@ -19,6 +19,14 @@ export const SHARE_FILES = {
   },
 };
 
+/** A minimal decodable 1x1 PNG, used to exercise the public gallery and lightbox. */
+export function shareImageFixture(): Buffer {
+  return Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+}
+
 /** One second of silent PCM, used to exercise native audio Range requests. */
 export function shareAudioFixture(): Buffer {
   const wave = Buffer.alloc(16044);
