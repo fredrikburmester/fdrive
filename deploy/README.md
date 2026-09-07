@@ -128,6 +128,9 @@ fails when the API does not answer its health check afterwards:
 FDRIVE_COMPOSE_FILES="compose.sftpgo-network.yaml" FDRIVE_PROFILES="index" ./deploy/update.sh
 ```
 
+Both selectors may also be set once in `deploy/.env` (the script reads only
+those two keys from it), so a host needs no wrapper: `./deploy/update.sh`.
+
 Migrations run on API start. When `SFTPGO_URL` and `FDRIVE_HOME_TEMPLATE` are
 set in `.env`, the API records the connection on first boot and there is no
 setup token or `/setup` wizard: sign in with a normal SFTPGo account. The home
