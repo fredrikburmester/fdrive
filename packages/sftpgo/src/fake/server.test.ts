@@ -135,6 +135,19 @@ describe("fake server - routing edge cases", () => {
     expect(invalidPath.status).toBe(400);
   });
 
+  it("returns conflict copying a file onto an existing directory, a combination never verified against the real container", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+      files: { alice: { "/a.txt": "x" } },
+    });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+    const token = (await client.login({ username: "alice", password: "secret" })).accessToken;
+    await client.user(token).mkdir("/existing-dir");
+    await expect(client.user(token).copy("/a.txt", "/existing-dir")).rejects.toMatchObject({
+      kind: "conflict",
+    });
+  });
+
   it("rejects move and copy across two different virtual folder mounts", async () => {
     const server = createFakeSftpgoServer({
       users: [

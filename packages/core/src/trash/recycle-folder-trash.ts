@@ -95,6 +95,44 @@ async function removeIfEmpty(storage: StorageProvider, dirPath: string): Promise
   }
 }
 
+/**
+ * Ensures nothing already exists at `target` before `restoreLeaf` moves a
+ * trash leaf there. The real drakkan/sftpgo:v2.7.5 container's move does
+ * not raise a conflict for an occupied target: moving onto an existing file
+ * silently overwrites it, and moving onto an existing directory fails with
+ * a different error entirely (see `packages/sftpgo`'s fake, fixed to match
+ * the verified container behaviour). `restore` must not silently destroy
+ * whatever is already at `target`, so it checks first with `statFile`
+ * instead of relying on `move` to report the conflict.
+ *
+ * `statFile` succeeding means a file is already there: conflict. A
+ * directory is reported as `StorageError("bad_request")`, by convention
+ * across every `StorageProvider` implementation (see
+ * `test/fixtures/memory-storage.ts`): also a conflict. `"not_found"` means
+ * the target is free. Any other error (a permissions failure, an upstream
+ * outage) is not this function's to interpret, so it propagates unchanged.
+ */
+async function requireTargetFree(
+  storage: StorageProvider,
+  id: string,
+  target: string,
+): Promise<void> {
+  try {
+    await storage.statFile(target);
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "not_found") {
+      return;
+    }
+    if (!isStorageError(error) || error.kind !== "bad_request") {
+      throw error;
+    }
+    // A directory sits at target; falls through to the conflict below.
+  }
+  throw new StorageError("conflict", `something already exists at ${target}`, {
+    details: { id, target },
+  });
+}
+
 async function restoreLeaf(
   storage: StorageProvider,
   trashRoot: string,
@@ -112,6 +150,8 @@ async function restoreLeaf(
       details: { id, target: resolvedTarget },
     });
   }
+
+  await requireTargetFree(storage, id, resolvedTarget);
 
   await storage.mkdir(parentPath(resolvedTarget), { parents: true });
   await storage.move(leafPath, resolvedTarget);

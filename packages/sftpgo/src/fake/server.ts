@@ -598,6 +598,12 @@ function handleRelocate(
   if (result === "conflict") {
     return errorResponse(409, "already exists");
   }
+  if (result === "unsupported") {
+    return errorResponse(400, "operation unsupported");
+  }
+  if (result === "failure") {
+    return errorResponse(500, "failure");
+  }
   return emptyResponse(200);
 }
 

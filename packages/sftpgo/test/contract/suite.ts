@@ -429,6 +429,165 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
           target.client.user(token).deleteFile("/contract/delete-file-missing/does-not-exist.txt"),
         ).rejects.toMatchObject({ kind: "not_found" });
       });
+
+      // The following six cases pin the real drakkan/sftpgo:v2.7.5 container's
+      // exact behaviour on an already-occupied move/copy target, verified
+      // directly against the container: it does not raise a conflict the way
+      // the fake used to for every occupied target.
+
+      it("moves a file onto an existing file: overwrites the target and removes the source", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/move-onto-file");
+        await user.upload("/contract/move-onto-file/source.txt", encode("source content"));
+        await user.upload("/contract/move-onto-file/target.txt", encode("old target content"));
+
+        await user.move(
+          "/contract/move-onto-file/source.txt",
+          "/contract/move-onto-file/target.txt",
+        );
+
+        const names = (await user.list("/contract/move-onto-file")).map((entry) => entry.name);
+        expect(names).not.toContain("source.txt");
+        expect(names).toContain("target.txt");
+        const result = await user.download("/contract/move-onto-file/target.txt");
+        expect(await collectStream(result.body)).toEqual(encode("source content"));
+      });
+
+      it("copies a file onto an existing file: overwrites the target and keeps the source", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/copy-onto-file");
+        await user.upload("/contract/copy-onto-file/source.txt", encode("source content"));
+        await user.upload("/contract/copy-onto-file/target.txt", encode("old target content"));
+
+        await user.copy(
+          "/contract/copy-onto-file/source.txt",
+          "/contract/copy-onto-file/target.txt",
+        );
+
+        const names = (await user.list("/contract/copy-onto-file")).map((entry) => entry.name);
+        expect(names).toContain("source.txt");
+        expect(names).toContain("target.txt");
+        const source = await user.download("/contract/copy-onto-file/source.txt");
+        expect(await collectStream(source.body)).toEqual(encode("source content"));
+        const result = await user.download("/contract/copy-onto-file/target.txt");
+        expect(await collectStream(result.body)).toEqual(encode("source content"));
+      });
+
+      it("copies a directory onto an existing directory: nests under <target>/<source name>, merging there, source entries overwrite same-named files", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/copy-onto-dir/source");
+        await user.upload("/contract/copy-onto-dir/source/shared.txt", encode("source version"));
+        await ensureDir(user, "/contract/copy-onto-dir/target");
+        await user.upload(
+          "/contract/copy-onto-dir/target/only-in-target.txt",
+          encode("from target"),
+        );
+        // Seed the nested slot the copy lands in as if an earlier copy had already put it there,
+        // so this exercises the merge (not just a fresh nested copy).
+        await ensureDir(user, "/contract/copy-onto-dir/target/source");
+        await user.upload(
+          "/contract/copy-onto-dir/target/source/shared.txt",
+          encode("old nested version"),
+        );
+        await user.upload(
+          "/contract/copy-onto-dir/target/source/only-in-nested-target.txt",
+          encode("kept"),
+        );
+
+        await user.copy("/contract/copy-onto-dir/source", "/contract/copy-onto-dir/target");
+
+        // The target's own top level is untouched: the copy nests under target/source instead of
+        // merging straight into target.
+        const topNames = (await user.list("/contract/copy-onto-dir/target")).map(
+          (entry) => entry.name,
+        );
+        expect(topNames).toContain("only-in-target.txt");
+        expect(topNames).toContain("source");
+
+        const nestedNames = (await user.list("/contract/copy-onto-dir/target/source")).map(
+          (entry) => entry.name,
+        );
+        expect(nestedNames).toContain("only-in-nested-target.txt");
+        const shared = await user.download("/contract/copy-onto-dir/target/source/shared.txt");
+        expect(await collectStream(shared.body)).toEqual(encode("source version"));
+      });
+
+      it("moving a file onto an existing directory throws bad_request", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/move-file-onto-dir");
+        await user.upload("/contract/move-file-onto-dir/source.txt", encode("source content"));
+        await ensureDir(user, "/contract/move-file-onto-dir/target-dir");
+
+        await expect(
+          user.move(
+            "/contract/move-file-onto-dir/source.txt",
+            "/contract/move-file-onto-dir/target-dir",
+          ),
+        ).rejects.toMatchObject({ kind: "bad_request" });
+        const names = (await user.list("/contract/move-file-onto-dir")).map((entry) => entry.name);
+        expect(names).toContain("source.txt");
+      });
+
+      it("moving a directory onto an existing directory throws bad_request", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/move-dir-onto-dir/source");
+        await ensureDir(user, "/contract/move-dir-onto-dir/target");
+
+        await expect(
+          user.move("/contract/move-dir-onto-dir/source", "/contract/move-dir-onto-dir/target"),
+        ).rejects.toMatchObject({ kind: "bad_request" });
+        const names = (await user.list("/contract/move-dir-onto-dir")).map((entry) => entry.name);
+        expect(names).toContain("source");
+        expect(names).toContain("target");
+      });
+
+      it("moving a directory onto an existing file throws server", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/move-dir-onto-file/source");
+        await user.upload("/contract/move-dir-onto-file/target.txt", encode("target content"));
+
+        await expect(
+          user.move(
+            "/contract/move-dir-onto-file/source",
+            "/contract/move-dir-onto-file/target.txt",
+          ),
+        ).rejects.toMatchObject({ kind: "server" });
+        const names = (await user.list("/contract/move-dir-onto-file")).map((entry) => entry.name);
+        expect(names).toContain("source");
+        const result = await user.download("/contract/move-dir-onto-file/target.txt");
+        expect(await collectStream(result.body)).toEqual(encode("target content"));
+      });
+
+      // A seventh case, beyond the six from the spec this suite was built from: discovered while
+      // building the API's own conflict guard (a rename to the same name has to be a safe no-op,
+      // which meant checking what moving a file onto itself actually does), then verified
+      // directly against the real container.
+      it("moving a file onto itself throws bad_request, leaving its content untouched", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/move-onto-self");
+        await user.upload("/contract/move-onto-self/a.txt", encode("original content"));
+
+        await expect(
+          user.move("/contract/move-onto-self/a.txt", "/contract/move-onto-self/a.txt"),
+        ).rejects.toMatchObject({ kind: "bad_request" });
+
+        const result = await user.download("/contract/move-onto-self/a.txt");
+        expect(await collectStream(result.body)).toEqual(encode("original content"));
+      });
     });
 
     describe("trash", () => {

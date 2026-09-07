@@ -130,6 +130,44 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Ensures nothing already exists at `target` before move, copy, or rename
+ * ask the storage provider to relocate something there. The real
+ * SFTPGo-backed provider's move and copy do not reliably report a conflict
+ * for an occupied target themselves: verified against the real
+ * drakkan/sftpgo:v2.7.5 container, moving or copying a file onto an
+ * existing file silently overwrites it instead of failing (see
+ * `packages/sftpgo`'s fake, fixed to match). A route that let that happen
+ * would silently destroy whatever used to be at `target`, so it checks
+ * first with `statFile` instead, mirroring the same check
+ * `@fdrive/core`'s trash restore relies on (see
+ * `packages/core/src/trash/recycle-folder-trash.ts`).
+ *
+ * `statFile` succeeding means a file is already there: conflict. A
+ * directory is reported as `StorageError("bad_request")` by every
+ * `StorageProvider` implementation: also a conflict. `"not_found"` means
+ * the target is free. Any other storage error is mapped through
+ * `toApiHttpError` like every other storage call; anything that is not a
+ * `StorageError` propagates unchanged.
+ */
+export async function requireTargetFree(storage: StorageProvider, target: string): Promise<void> {
+  try {
+    await storage.statFile(target);
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "not_found") {
+      return;
+    }
+    if (isStorageError(error) && error.kind === "bad_request") {
+      throw new ApiHttpError("conflict", `something already exists at ${target}`);
+    }
+    if (isStorageError(error)) {
+      throw toApiHttpError(error);
+    }
+    throw error;
+  }
+  throw new ApiHttpError("conflict", `something already exists at ${target}`);
+}
+
 export function serializeEntry(entry: FileEntry): FsEntry {
   return {
     name: entry.name,
@@ -438,7 +476,14 @@ export function registerFsRoutes(
     const body = await parseBody(MoveRequest, c);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    await runStorageCall(() => principal.storage.move(path, target));
+    // A target equal to the source is a no-op: skip both the conflict check (the source is not
+    // a conflict with itself) and the storage call. The real drakkan/sftpgo:v2.7.5 container
+    // rejects a move of a file onto itself with 400, verified against the container directly,
+    // so this cannot simply fall through to the same move() call as a different target.
+    if (target !== path) {
+      await requireTargetFree(principal.storage, target);
+      await runStorageCall(() => principal.storage.move(path, target));
+    }
     const entry = await statEntry(principal.storage, target);
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
@@ -453,7 +498,12 @@ export function registerFsRoutes(
     const body = await parseBody(CopyRequest, c);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    await runStorageCall(() => principal.storage.copy(path, target));
+    // See the move handler above: a target equal to the source skips the conflict check and the
+    // storage call itself, rather than asking the provider to copy something onto itself.
+    if (target !== path) {
+      await requireTargetFree(principal.storage, target);
+      await runStorageCall(() => principal.storage.copy(path, target));
+    }
     const entry = await statEntry(principal.storage, target);
     deps.metadata?.onCopied(principal.identityId, path, target);
     publishFsEvent(deps, principal, "copy", [path], [target]);
@@ -466,7 +516,12 @@ export function registerFsRoutes(
     const body = await parseBody(RenameRequest, c);
     const path = normalizeOrThrow(body.path);
     const target = changeBaseName(path, body.newName);
-    await runStorageCall(() => principal.storage.move(path, target));
+    // See the move handler above: renaming to the same name skips the conflict check and the
+    // storage call itself, rather than asking the provider to move something onto itself.
+    if (target !== path) {
+      await requireTargetFree(principal.storage, target);
+      await runStorageCall(() => principal.storage.move(path, target));
+    }
     const entry = await statEntry(principal.storage, target);
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
