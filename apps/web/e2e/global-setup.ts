@@ -1,12 +1,17 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { SEED_FILES } from "@fdrive/testkit";
 import { Client } from "pg";
 import { ACCOUNT_FILES } from "./support/account-fixture.js";
 import { startEnvironment } from "./support/environment.js";
 import { startFakeIndexer } from "./support/fake-indexer.js";
+
+const execFileAsync = promisify(execFile);
+
 import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
 import { resolvePort } from "./support/ports.js";
 import { registry } from "./support/registry.js";
@@ -150,6 +155,22 @@ async function resolveRunEnvironment(): Promise<{
  * are keyed to the fixed, shared testkit seed data rather than anything a
  * spec creates itself.
  */
+/** The disposable SFTPGo container, found by the host port testcontainers published. */
+async function findSftpgoContainer(baseUrl: string): Promise<string> {
+  const { stdout } = await execFileAsync("docker", [
+    "ps",
+    "--filter",
+    `publish=${new URL(baseUrl).port}`,
+    "--format",
+    "{{.ID}}",
+  ]);
+  const id = stdout.trim();
+  if (!/^[a-f0-9]{12,64}$/.test(id)) {
+    throw new Error("fdrive e2e: could not identify the SFTPGo container for the fake indexer");
+  }
+  return id;
+}
+
 export default async function globalSetup(): Promise<void> {
   await resolveRunEnvironment();
 
@@ -160,6 +181,12 @@ export default async function globalSetup(): Promise<void> {
   const fakeIndexer = await startFakeIndexer();
 
   const environment = await startEnvironment({
+    prepareSftpgo: async (baseUrl) => {
+      fakeIndexer.attachStorage({
+        containerId: await findSftpgoContainer(baseUrl),
+        dataDir: "/srv/sftpgo/data",
+      });
+    },
     extraApiEnv: { FDRIVE_INDEX_ROOTS: indexRoots, FDRIVE_INDEXER_URL: fakeIndexer.baseUrl },
     extraStopFns: [() => fakeIndexer.stop()],
   });
