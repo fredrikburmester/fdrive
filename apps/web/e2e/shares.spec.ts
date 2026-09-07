@@ -29,7 +29,7 @@ async function createLink(
   const first = names[0];
   if (!first) throw new Error("No shared files");
   await listing(page).getByText(first, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Share…", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Share", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create share link", exact: true });
   await dialog.getByLabel("Link name", { exact: true }).fill(label);
   if (write) {
@@ -346,7 +346,7 @@ test("an image-only folder shows a gallery with lightbox navigation and per-imag
   await page.goto("/files");
   await listing(page).getByText("images", { exact: true }).click();
   await listing(page).getByText("images", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Share…", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Share", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create share link", exact: true });
   await expect(dialog.getByRole("combobox", { name: "Access" })).toContainText("Can view");
   await expect(dialog.getByRole("combobox", { name: "Show as" })).toContainText("Automatic");
