@@ -1,335 +1,264 @@
-# Deploying fdrive
+# Setting up fdrive
 
-This directory holds the Docker Compose files for running fdrive.
+This guide puts fdrive in front of the SFTPGo you already run, with **everything
+turned on**: files, search, image search, thumbnails, OCR, trash, office editing
+and the MCP server, all in one Docker Compose stack.
 
-```sh
+Follow the steps in order. Every step is one thing. Need the details behind any
+of it? See [REFERENCE.md](REFERENCE.md).
+
+## What you need
+
+- A running SFTPGo, and access to its web admin.
+- A Linux server with Docker and Docker Compose. It must see the directory
+  SFTPGo stores its users' files in, so usually it is the same machine SFTPGo
+  runs on.
+- About 12 GB of RAM with everything on (the search models are the heavy part).
+- A domain name for fdrive, for example `drive.example.com`, and something that
+  does HTTPS in front of it: Caddy, Nginx Proxy Manager, Traefik, Cloudflare
+  Tunnel, anything. fdrive itself only speaks plain HTTP on `127.0.0.1:8090`.
+
+No SFTPGo yet? `compose.sftpgo.yaml` starts one for you; see
+[REFERENCE.md](REFERENCE.md). This guide assumes you have one.
+
+## Step 1: Get the code
+
+```bash
+git clone https://github.com/fredrikburmester/fdrive-web.git /opt/fdrive
+```
+
+```bash
+cd /opt/fdrive/deploy
+```
+
+Everything below happens inside `/opt/fdrive/deploy`.
+
+## Step 2: Create your settings file
+
+```bash
 cp .env.example .env && chmod 600 .env
 ```
 
-`.env` holds real secrets (database password, master key, JWT secrets), so it
-is created `0600` (owner read-write only) from the start rather than
-inheriting the umask's usual `0644`. Edit every `change-me` placeholder in it
-before starting anything; `./preflight.sh` (run automatically by
-`./update.sh`, right before `docker compose up`) refuses to start while any
-remain, along with two other common mistakes. See "Nothing is silent" below.
+Generate the two secrets:
 
-## Files
-
-- `compose.yaml` — the core stack: `proxy` (Caddy, single origin), `web`
-  (Next.js), `api` (Hono API), and `db` (Postgres with pgvector). This is
-  the file you normally run.
-- `Caddyfile` — routes `/api/*` and `/mcp*` to the API and everything else to
-  the web app, on one origin. WOPI callbacks never traverse this proxy: the
-  office server reaches the API directly at `http://api:3001/wopi` over the
-  compose network, so `/wopi/*` is never a public route.
-- `compose.sftpgo.yaml` — **opt-in**. Adds an SFTPGo service for people who
-  do not already run one. Never referenced by `compose.yaml` automatically;
-  you choose it explicitly with `-f`.
-- `compose.sftpgo-network.example.yaml` — an example override showing how
-  to attach the `api` service to an existing external Docker network that
-  your own SFTPGo instance lives on, instead of running SFTPGo yourself.
-- `compose.office.yaml` — **opt-in**. Adds ONLYOFFICE Document Server as a
-  WOPI host for editing office documents. Also never referenced
-  automatically.
-- `.env.example` — every environment variable used by the files above, with
-  placeholder values and comments on what generates a real one. Generated
-  by `tools/deploy/generate-env-example.ts` (`pnpm env:example`) from the
-  same table `apps/api/src/config-keys.ts` uses; do not hand-edit it, edit
-  that table and regenerate instead.
-- `preflight.sh` — checks `.env` for common mistakes before `docker compose
-  up`; see "Nothing is silent" below.
-- `update.sh` — pulls, rebuilds, runs `preflight.sh`, brings the stack up,
-  and checks the API's health afterwards; see "Running it" below.
-
-## Nothing is silent
-
-A misconfigured fdrive is meant to say so, by variable name, rather than
-start up quietly degraded:
-
-- **Startup summary.** On every boot the API logs one line per subsystem
-  (core, network, index, search, thumbnails, ocr, office, trash, shares):
-  `subsystem=search status=configured` or `subsystem=ocr status=not
-  configured missing=FDRIVE_OCR_URL`, naming exactly which variable to set.
-  `docker compose logs api` shows this right after the container starts.
-- **`GET /api/v1/health`.** Public and unauthenticated (so it never carries
-  secrets), its `subsystems` field reports the same per-subsystem
-  `"configured"` / `"not_configured"` / `"unreachable"` state, with a
-  `missing` array of variable names for anything not configured. A
-  monitoring check against this endpoint catches a sidecar that later goes
-  unreachable, not only a variable that was never set.
-- **The System pages** (`/system/indexer`, `/system/search`, `/system/ocr`,
-  `/system/thumbnails`) show one of exactly three states per subsystem: "Not
-  configured: set `FDRIVE_X`" (naming the variable), "Unreachable", or the
-  working view. A subsystem that only partly depends on another (the
-  Thumbnails page needs both `FDRIVE_THUMBS_DIR` and the indexer) never
-  shows a working-looking description next to a "Not configured" badge.
-- **`./preflight.sh`**, run automatically by `./update.sh` right before `up`
-  (or run directly from this directory). Reads only `deploy/.env` and fails
-  on: a leftover `change-me` placeholder; an unknown `FDRIVE_*` key (almost
-  always a typo, since every real one is documented in `.env.example`); or a
-  `FDRIVE_HOME_TEMPLATE` that does not match `<root>:<path with
-  {username}>`. On success it prints the `FDRIVE_INDEX_ROOTS` value and the
-  bind address that will actually be used, so what you are about to deploy
-  is visible before it happens, not only discoverable afterwards.
-
-**Env-configured installs have no `/setup`.** When `SFTPGO_URL` and
-`FDRIVE_HOME_TEMPLATE` are both set in `.env`, the API records that
-connection on first boot; there is no setup token and the `/setup` wizard
-route is never needed. Leave both unset to use `/setup` instead (sign in
-once as an SFTPGo admin to complete it in the browser). Setting only one of
-the two leaves fdrive waiting on `/setup` regardless, since either the host
-or the home-directory mapping would otherwise be missing.
-
-## How requests flow
-
-The browser only ever talks to `proxy` (Caddy) on one origin. Caddy routes
-`/api/*` and `/mcp*` straight to the `api` service; every other path goes to
-`web`, which only serves pages. This means the web app's own
-`/api/:path*` rewrite (see `apps/web/next.config.ts`) never runs in this
-deployment: Caddy intercepts those paths before they reach `web`. The
-`API_INTERNAL_URL` build arg on the `web` service exists only as a fallback
-for anyone who runs the `fdrive-web` image without a proxy in front of it.
-
-## The `index` profile
-
-`compose.yaml` also defines `indexer`, `tika`, `embed`, and `ocr` behind an
-`index` Compose profile: search, thumbnails, content extraction, and the
-nightly OCR pass only run when you opt in with `--profile index` (see below).
-Without that profile, `compose.yaml` still points the api at the sidecars
-(`FDRIVE_INDEXER_URL`, `FDRIVE_EMBED_URL`, `FDRIVE_OCR_URL` and a default
-`FDRIVE_INDEX_ROOTS`), so the startup summary, `/api/v1/health` and the
-System pages report index, search, thumbnails and OCR as "unreachable"
-rather than "not configured". That is expected until you add the profile;
-it is the same state a stopped sidecar produces.
-`FDRIVE_INDEX_SFTPGO_DIR` in `.env` must point at the same host directory
-SFTPGo itself serves. It is bind-mounted read-only into the indexer at
-`/roots/sftpgo` and read-write into `ocr` at the same path, since OCR rewrites
-files in place (see docs/OCR.md for the safety guarantees around that). `ocr`
-keeps its own state (kept originals, the done-log lives in Postgres) under
-`${FDRIVE_DATA_DIR}/ocr`. See `docs/INDEXER.md` for what gets indexed, the
-indexer's internal HTTP API, and how to add more roots; see `docs/OCR.md` for
-the OCR service's settings and endpoints. The api's `FDRIVE_OCR_URL` points at
-`ocr` so the web app's System page can show OCR status; it is only reachable
-when the `index` profile is up.
-
-The `indexer` service (`services/indexer/Dockerfile`) runs as a non-root user
-with the same uid/gid as SFTPGo, `1000` by default (`FDRIVE_INDEX_UID` in `.env`),
-so folders users keep at mode `700` stay readable to it. Its thumbnail cache (`/thumbs`, read from the `api` service's
-`FDRIVE_THUMBS_DIR`) is a named volume, `fdrive-thumbs`, rather than a host
-bind mount: Docker always creates a bind-mounted host directory owned by
-root, which that uid could not then write into, and this cache is never
-operator-facing (only `api` and `indexer` ever touch it). A one-shot
-`thumbs-init` service chowns the named volume to that uid once, before
-`indexer` starts, the same pattern `compose.dev.yaml`'s `sftpgo-seed` uses for
-SFTPGo's own data volume; `indexer`'s `depends_on` waits for it to complete.
-If you ever need the thumbnail cache on the host instead (for example to
-inspect it directly), replace the `fdrive-thumbs` named volume with a bind
-mount and either pre-create that directory owned by the indexer uid, or add an
-equivalent `chown`-only init step ahead of it.
-
-## The external SFTPGo assumption
-
-fdrive never manages SFTPGo's own database and treats it as an external
-service reachable at `SFTPGO_URL`. There are two ways to satisfy that:
-
-1. **You already run SFTPGo somewhere** (its own compose stack, another
-   host, etc). Point `SFTPGO_URL` at it. If it lives on a Docker network
-   that this stack cannot otherwise reach, copy
-   `compose.sftpgo-network.example.yaml` to `compose.sftpgo-network.yaml`,
-   adjust the network name, and include it with `-f`.
-2. **You have no SFTPGo yet.** Start the opt-in `compose.sftpgo.yaml` file
-   alongside the core stack (see below) and point `SFTPGO_URL` at the
-   service it adds.
-
-## Running it
-
-Core stack only, assuming an external SFTPGo:
-
-```sh
-docker compose -f compose.yaml up -d
+```bash
+openssl rand -base64 32
 ```
 
-Core stack plus a fresh SFTPGo:
+Run that twice. The first result is your `FDRIVE_MASTER_KEY`, the second your
+`POSTGRES_PASSWORD`.
 
-```sh
-docker compose -f compose.yaml -f compose.sftpgo.yaml up -d
+Open `.env` in an editor. It is long, but only the settings below matter. In
+`.env.example` most of them are switched off with a `#` in front of the name,
+like `#FDRIVE_PUBLIC_URL=`. Remove that `#` and fill in the value.
+
+```dotenv
+FDRIVE_MASTER_KEY=<first openssl result>
+POSTGRES_PASSWORD=<second openssl result>
+
+FDRIVE_PUBLIC_URL=https://drive.example.com
+FDRIVE_COOKIE_SECURE=true
+
+SFTPGO_URL=http://<sftpgo host>:8080
+FDRIVE_INDEX_SFTPGO_DIR=<directory on this server that holds the users' home folders>
+
+FDRIVE_ADMIN_USERS=<your SFTPGo username>
+
+FDRIVE_SFTPGO_TRASH_PATH=/.trash
+FDRIVE_SFTPGO_TRASH_RETENTION_HOURS=720
+
+ONLYOFFICE_JWT_SECRET=<run: openssl rand -hex 32>
+
+FDRIVE_COMPOSE_FILES="compose.office.yaml"
+FDRIVE_PROFILES="index office"
 ```
 
-Core stack plus ONLYOFFICE editing:
+About the two SFTPGo lines:
 
-```sh
-docker compose -f compose.yaml -f compose.office.yaml --profile office up -d
+- `SFTPGO_URL` is the address of SFTPGo's HTTP port as seen from a container on
+  this server. If SFTPGo runs on the host, `http://172.17.0.1:8080` (Docker's
+  host address) usually works. If SFTPGo runs in its own compose project, copy
+  `compose.sftpgo-network.example.yaml` to `compose.sftpgo-network.yaml`, put
+  that project's network name in it, add the file to `FDRIVE_COMPOSE_FILES`, and
+  use the SFTPGo container name, like `http://sftpgo:8080`.
+- `FDRIVE_INDEX_SFTPGO_DIR` is the folder that contains one subfolder per SFTPGo
+  user. If SFTPGo itself sees that folder at a different path than this server
+  does (it runs in a container, say), also set `FDRIVE_INDEX_SFTPGO_PATH` to the
+  path SFTPGo sees. The default is `/srv/sftpgo/data`.
+
+Do not leave any `change-me` in the file. The next step refuses to start if you do.
+
+## Step 3: Start everything
+
+```bash
+./update.sh
 ```
 
-Core stack plus indexing, search, and thumbnails:
+This pulls, builds, checks your `.env`, starts every container and waits for
+fdrive to report healthy. The first run takes a while: it builds the images and
+downloads the search models (a few GB). Later runs are fast.
 
-```sh
-docker compose -f compose.yaml --profile index up -d
+When it finishes you should see `preflight OK` and a JSON health line at the
+bottom. If it stops earlier, the message names the exact `.env` line to fix.
+
+## Step 4: Put HTTPS in front
+
+fdrive listens on `127.0.0.1:8090`. Make your HTTPS proxy forward
+`https://drive.example.com` to `http://127.0.0.1:8090`. The proxy must allow
+WebSockets and large uploads.
+
+With Caddy on the same server, the whole config is:
+
+```
+drive.example.com {
+	reverse_proxy 127.0.0.1:8090
+}
 ```
 
-Updating a running deployment is `git pull` plus the same `up -d --build`
-with **every** file and profile you normally pass; a forgotten `-f` silently
-detaches the services it defines and a forgotten `--profile` leaves those
-services on old images. `update.sh` in this directory does exactly that and
-fails when the API does not answer its health check afterwards:
+If your proxy runs in its own container (Nginx Proxy Manager is the usual case),
+it cannot reach the host's `127.0.0.1`. Set `FDRIVE_HTTP_BIND=0.0.0.0` in `.env`,
+point the proxy at the server's LAN address on port 8090, run `./update.sh`
+again, and firewall port 8090 from everything but the proxy.
 
-```sh
-FDRIVE_COMPOSE_FILES="compose.sftpgo-network.yaml" FDRIVE_PROFILES="index" ./deploy/update.sh
+Now open `https://drive.example.com` and sign in with your normal SFTPGo username
+and password. Your files are there.
+
+Upload something. It shows up in search a minute later, with a thumbnail if it is
+an image. If not, open **System** in the sidebar: each page says exactly what is
+missing.
+
+## Step 5: Turn on trash
+
+fdrive never keeps deleted files itself. Trash works by telling SFTPGo to move a
+file into a `/.trash` folder instead of deleting it, so it also catches deletes
+made over SFTP or WebDAV. You set this up once, in SFTPGo's web admin, and it
+applies to every user.
+
+In the SFTPGo admin, open **Event Manager**.
+
+1. Under **Actions**, add one:
+   - Name: `fdrive-move-to-trash`
+   - Type: **Filesystem**, sub-type **Rename**
+   - Rename from: `/{{.VirtualPath}}`
+   - Rename to: `/.trash/{{.VirtualDirPath}}/{{.ObjectName}}/{{.Timestamp}}`
+2. Under **Rules**, add one:
+   - Name: `fdrive-trash`
+   - Trigger: **Filesystem events**, event **pre-delete**
+   - Path filter: `/.trash/**` with **inverse match** ticked
+   - Actions: `fdrive-move-to-trash`, with **execute sync** and **stop on
+     failure** ticked
+
+Save both. Reload fdrive, delete a file, and it appears under **Trash** in the
+sidebar with Restore and Delete forever.
+
+**Automatic emptying.** fdrive says "removed after 720 hours" because of
+`FDRIVE_SFTPGO_TRASH_RETENTION_HOURS`, but SFTPGo has to do the actual removing.
+Add one more action and rule:
+
+1. Action `fdrive-trash-retention`, type **Data retention check**, folder
+   `/.trash`, retention `720` hours, **delete empty dirs** and **ignore user
+   permissions** ticked.
+2. Rule `fdrive-trash-retention`, trigger **Schedule**, once a day (for example
+   hour `3`, everything else `*`), action `fdrive-trash-retention`.
+
+Keep the retention hours and `FDRIVE_SFTPGO_TRASH_RETENTION_HOURS` the same.
+
+Two things to know: deleting a folder trashes each file inside it one by one,
+and overwriting a file (upload over an existing name) is not a delete, so the
+old version is not trashed.
+
+## Step 6: Office editing
+
+ONLYOFFICE is already running and documents open in the browser. Editing is off
+by default though: everything is view-only until you say who may edit what.
+
+First find the provider id. Sign in to fdrive, then run:
+
+```bash
+docker compose -f compose.yaml exec db psql -U fdrive -d fdrive -c "SELECT p.id AS provider_id, i.external_username FROM app.identities i JOIN app.providers p ON p.id = i.provider_id;"
 ```
 
-Both selectors may also be set once in `deploy/.env` (the script reads only
-those two keys from it), so a host needs no wrapper: `./deploy/update.sh`.
+Then add a rule to `.env`. This one lets `alice` edit everything in her home:
 
-Migrations run on API start. When `SFTPGO_URL` and `FDRIVE_HOME_TEMPLATE` are
-set in `.env`, the API records the connection on first boot and there is no
-setup token or `/setup` wizard: sign in with a normal SFTPGo account. The home
-template syntax is `<root>:<path with {username}>`, for example
-`sftpgo:/{username}`, which with `FDRIVE_INDEX_SFTPGO_DIR` set to the parent of
-the per-user homes maps every user to their own directory.
-
-Validate a compose file's syntax without starting anything:
-
-```sh
-docker compose -f compose.yaml --env-file .env.example config
+```dotenv
+FDRIVE_OFFICE_EDIT_RULES='[{"providerId":"<provider_id from above>","username":"alice","path":"/","recursive":true,"allow":true}]'
 ```
 
-## TLS and network placement
+Run `./update.sh`. Alice can now edit. Add one object per person. The full rule
+format, and how to use Collabora instead of ONLYOFFICE, is in
+[docs/OFFICE.md](../docs/OFFICE.md).
 
-None of the compose files terminate TLS themselves. An operator's own edge
-proxy (a load balancer, another Caddy, nginx, a cloud provider's HTTPS
-frontend) must sit in front of `proxy`'s published port and terminate TLS
-there before forwarding plain HTTP to `compose.yaml`'s `proxy` service. The
-default deployment must not be served over plain HTTP with no such edge in
-front: the session cookie only becomes `Secure` when the request looks like
-it arrived over HTTPS (see `FDRIVE_COOKIE_SECURE=auto` in `.env.example`),
-and every Caddyfile in this directory adds `header_up X-Forwarded-Proto
-https` on the `api` and `web` upstreams so that check passes once an edge is
-actually there. Set `FDRIVE_COOKIE_SECURE=false` only for plain-HTTP LAN
-testing with no edge and no real users, never for a deployment reachable
-from the internet.
+## Step 7: Connect an AI assistant (MCP)
 
-Consequences of that cookie rule worth knowing before you hand out URLs:
+Open **Account** in fdrive and create an API token. Give the token to your MCP
+client with the URL `https://drive.example.com/mcp` as a bearer token, or use
+`https://drive.example.com/mcp/t/<token>` for clients that cannot set headers.
+The assistant can then search and read exactly what that user can. Writes stay
+off unless you set `FDRIVE_MCP_WRITES=true`. Details in [docs/MCP.md](../docs/MCP.md).
 
-- A plain-HTTP address such as `http://<lan-ip>:8090` cannot sign in once
-  `FDRIVE_COOKIE_SECURE=true`: the browser refuses a `Secure` cookie over
-  HTTP. Treat the published port as the edge proxy's upstream only, and give
-  users the HTTPS hostname.
-- Caddy stamps `X-Forwarded-Proto: https` on everything it forwards, so any
-  client that reaches the published port directly is treated as if it came
-  through the edge. Bind it to loopback, a private interface, or a firewalled
-  address accordingly.
-- `FDRIVE_TRUSTED_PROXY_HOPS` counts the proxies that append to
-  `X-Forwarded-For`: the bundled Caddy is one, an edge proxy in front of it
-  makes two. Requests that skip the edge carry fewer hops and fall back to
-  the socket peer for rate limiting, so all of them share one limiter key.
+## What is now running
 
-Every port this stack publishes to the host is loopback-bound
-(`127.0.0.1:...`) by default, on the assumption that the edge proxy runs on
-the same host and reaches these services over `localhost`. When the edge
-proxy itself runs in a container on a bridge network (Nginx Proxy Manager
-is the common case), its `127.0.0.1` is its own loopback, not the host's:
-set `FDRIVE_HTTP_BIND` to the host address the proxy can reach, and keep
-that port firewalled from anything but the proxy if the host is exposed.
-Hosts whose root filesystem is ephemeral (Unraid keeps `/` on a RAM disk)
-need the clone, `.env`, the data directory and any deploy key on persistent
-storage, not under `/opt` or `/root`:
+| Feature | Where you see it | Turned on by |
+| --- | --- | --- |
+| Files, previews, shares, favorites, tags | Everywhere | Always on |
+| Full-text and semantic search | The search box | `index` profile |
+| Image search (describe a picture in words) | Search box, **Images** toggle | `index` profile |
+| Thumbnails and folder overviews | File list and Inspector | `index` profile |
+| OCR for scanned PDFs, nightly | System, OCR | `index` profile |
+| Trash with restore | Sidebar, **Trash** | Step 5 |
+| Office editing | Opening a document | `office` profile plus step 6 |
+| MCP server | `/mcp` | Step 7 |
 
-- `proxy` (`FDRIVE_HTTP_PORT`, default `8090`): set `FDRIVE_HTTP_BIND=0.0.0.0`
-  only when the edge proxy runs on a different host and must reach this port
-  over the network.
-- The opt-in SFTPGo overlay's admin/HTTP port (`SFTPGO_ADMIN_PORT`, default
-  `8091`): this is SFTPGo's own admin API and must never be internet-reachable
-  regardless of where the edge proxy runs. fdrive itself talks to SFTPGo over
-  the internal compose network (`SFTPGO_URL=http://sftpgo:8080`), not this
-  published port; only unbind it (or bind it more broadly) for a deliberate,
-  temporary admin-UI session, and re-bind it to loopback afterward. SFTPGo's
-  SFTP port (`2022`) stays published for actual SFTP clients, since it needs
-  its own authentication regardless of network placement.
+Everything under **System** in the sidebar (Connection, Indexer, Search, Image
+search, Thumbnails, OCR) shows one of three states per feature: working,
+"Unreachable", or "Not configured: set FDRIVE_X". `docker compose logs api` prints
+the same list at every start.
 
-The `api`, `db`, `onlyoffice`, and `collabora` services publish no host ports
-at all: everything reaches them over the compose network only.
+## Updating
 
-## The two opt-in files
-
-`compose.sftpgo.yaml` and `compose.office.yaml` both exist so that the
-default `compose.yaml` stays minimal and never assumes you want fdrive to
-also run SFTPGo or ONLYOFFICE for you. Add either one with `-f` only when
-you actually want it; combine them freely with the core stack and with each
-other.
-
-## Container hardening
-
-Every service in `compose.yaml` and `office/compose.services.yaml` runs with
-`security_opt: no-new-privileges:true`, `cap_drop: [ALL]`, a `pids_limit` of
-`512`, and json-file log rotation (`max-size: 10m`, `max-file: 3`, via the
-shared `x-logging` anchor). Capabilities are added back only where a service
-demonstrably fails to start without them:
-
-- `proxy` (Caddy): `NET_BIND_SERVICE`, since its binary carries a file
-  capability requiring it to bind `:80` even as root; `cap_drop: [ALL]`
-  strips that from the container's bounding set otherwise, and Caddy refuses
-  to `exec` at all ("operation not permitted"), not just to bind the port.
-- `db` (Postgres): `CHOWN`, `FOWNER`, `DAC_OVERRIDE`, `SETUID`, `SETGID`, for
-  the upstream entrypoint script's one-time permission fixup and privilege
-  drop from root to the `postgres` user on first start.
-- `embed` (the embeddings server) also binds a low port (`:80`) as root but,
-  verified empirically, does not need `NET_BIND_SERVICE` added back to do
-  so.
-
-`web`'s `Content-Security-Policy` header (`apps/web/next.config.ts`) only
-allows the office editor iframe to load when the image was built with
-`--build-arg FDRIVE_OFFICE_PUBLIC_URL=...` (matching the `api` service's own
-`FDRIVE_OFFICE_PUBLIC_URL`, see `compose.office.yaml`/
-`compose.office.collabora.yaml`): like `API_INTERNAL_URL`, this is read once
-at `next build` time, not from the running container's environment, so
-setting it only in `web`'s `environment:` block has no effect. Neither office
-overlay currently passes this `build.args` value to the `web` service; add it
-there before relying on office editing with this CSP in place, or the
-editor's iframe will be blocked by `frame-src`.
-
-`web` and `proxy` additionally run `read_only: true` with a `tmpfs` for
-`/tmp` (and, for `proxy`, `/config/caddy` and `/data/caddy`, which Caddy would
-otherwise try to write its autosave config and TLS state into; this
-deployment uses neither, see "TLS and network placement" above). `web`
-carries a `HEALTHCHECK` (`apps/web/Dockerfile`, hitting `/login` with
-Node's own `fetch`, since the Alpine base has neither `curl` nor `wget`);
-`proxy`'s `depends_on` waits for both `api` and `web` to report healthy
-before starting, so it never proxies to a backend that is not actually
-serving yet.
-
-Validate all of this without starting anything:
-
-```sh
-docker compose -f compose.yaml config -q
+```bash
+/opt/fdrive/deploy/update.sh
 ```
 
-Bring up just the core stack and confirm every container reports healthy:
+That is the whole update procedure. It reads `FDRIVE_COMPOSE_FILES` and
+`FDRIVE_PROFILES` from `.env`, so it always restarts the same set of services you
+set up. Database migrations run automatically.
 
-```sh
-docker compose -f compose.yaml up -d proxy web api db
-docker compose -f compose.yaml ps
-```
+## Optional tweaks
 
-## Pinned image digests
+All of these go in `.env`, followed by `./update.sh`.
 
-Every base and third-party image below is pinned by tag and `@sha256:`
-digest, so a rebuild never silently picks up a new release. Re-resolve and
-bump the digest deliberately (`docker buildx imagetools inspect
-<image>:<tag>`) when you want to move to a newer version.
+- `TZ=Europe/Stockholm`: the time zone for the nightly OCR pass.
+- `OCR_EXCLUDE_GLOBS=Photos/**,Videos/**`: folders OCR should skip.
+- `OCR_INCLUDE_GLOBS=alice/**`: only OCR these folders.
+- `FDRIVE_INDEX_UID=1000`: the uid SFTPGo writes files as, so the indexer can read
+  `700` folders. Change it if your SFTPGo runs as another user.
+- `FDRIVE_DATA_DIR=/mnt/big-disk/fdrive`: move Postgres, models and OCR state off
+  the default `./data`.
+- `FDRIVE_SESSION_TTL_DAYS=30`: how long a login lasts.
 
-| Image | Tag | Digest | Used by |
-| --- | --- | --- | --- |
-| `caddy` | `2` | `sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d` | `compose.yaml` (`proxy`) |
-| `pgvector/pgvector` | `pg17` | `sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f` | `compose.yaml` (`db`) |
-| `apache/tika` | `3.2.1.0` | `sha256:df12b41af58c9833e60bdc231ffc4b59f5b7a83bfe2d63e3dc7aab7da923abba` | `compose.yaml` (`tika`) |
-| `ghcr.io/huggingface/text-embeddings-inference` | `cpu-1.9.2` | `sha256:16230cd8f679ae5f8a51d585033628b1c0d45cd70c2bc9b0d208170d71218fdb` | `compose.yaml` (`embed`) |
-| `node` | `24-alpine` | `sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf` | `apps/web/Dockerfile` |
-| `python` | `3.12-slim` | `sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea` | `services/indexer/Dockerfile` |
-| `jbarlow83/ocrmypdf` | `v17.11.0` | `sha256:c6bcc39ae87cccdbf243d62dba39032a3aacd8a1463365170db3604139aba977` | `services/ocr/Dockerfile` |
-| `onlyoffice/documentserver` | `9.4.0.1` | `sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212` | `office/compose.services.yaml` (`onlyoffice`) |
-| `collabora/code` | `26.04.3.2.1` | `sha256:379b8f1fc955dd6d01ba24adf61d1b177048ddaae179ae8c1e6a6342daccb282` | `office/compose.services.yaml` (`collabora`) |
+## Something is wrong
 
-`node:24-alpine` also backs `apps/api/Dockerfile`'s build and runtime
-stages; that Dockerfile is outside this chunk's scope (see the hardening
-review), so its own `FROM` lines were not repinned here and should get the
-same digest above in a follow-up.
+- **`./update.sh` stops at preflight.** Read the line it printed. It is always a
+  leftover `change-me`, a typo in a `FDRIVE_*` name, or a bad `FDRIVE_HOME_TEMPLATE`.
+- **Cannot sign in over `http://<ip>:8090`.** Expected. The cookie is HTTPS-only.
+  Use the HTTPS domain from step 4.
+- **Sign-in fails with a connection error.** `SFTPGO_URL` is not reachable from
+  inside the `api` container. Check with
+  `docker compose -f compose.yaml exec api wget -qO- $SFTPGO_URL/healthz`.
+- **Search says Unreachable.** The `index` profile is not running or is still
+  downloading models. `docker compose -f compose.yaml --profile index ps` and
+  `docker compose -f compose.yaml logs embed`.
+- **Image search says Unreachable.** Same, but the `image-embed` container. It
+  needs a few minutes on first start.
+- **Search finds nothing, or thumbnails never appear.** `FDRIVE_INDEX_SFTPGO_DIR`
+  points at the wrong folder, or `FDRIVE_INDEX_SFTPGO_PATH` does not match what
+  SFTPGo sees. System, Indexer shows what it walked.
+- **Trash item missing from the sidebar.** `FDRIVE_SFTPGO_TRASH_PATH` is not set,
+  or the API was not restarted after setting it.
+- **Delete fails with an error.** The SFTPGo rule exists but the rename into
+  `/.trash` failed. Check the user has write permission on their home.
+- **Office opens but cannot edit.** Step 6. View-only is the default.
+- **The editor iframe is blank.** `FDRIVE_PUBLIC_URL` in `.env` does not match the
+  address in the browser. Fix it and run `./update.sh` (the web image bakes it in
+  at build time).

@@ -20,7 +20,8 @@ It is built for the person who already runs SFTPGo for the SFTP and WebDAV clien
 
 ## Documentation
 
-- [Deployment](deploy/README.md): the Docker Compose stack, TLS and network placement, the opt-in SFTPGo and office overlays, container hardening and pinned images.
+- [Setup guide](deploy/README.md): step by step from an empty server to everything turned on, including trash, search, image search, office editing and MCP.
+- [Deployment reference](deploy/REFERENCE.md): every compose file, TLS and network placement, container hardening and pinned images.
 - [Office editing](docs/OFFICE.md): ONLYOFFICE and Collabora setup, proof keys, edit policy.
 - [Search and indexing](docs/INDEXER.md): what gets indexed, settings, the indexer's internal API.
 - [OCR](docs/OCR.md): the nightly pass and its safety guarantees.
@@ -59,7 +60,7 @@ I run SFTPGo as the one place all my files live. The web front-ends I tried eith
 - Every index-backed result is checked against a live read through the user's own SFTPGo session before it is shown, so search can never reveal a file the user cannot open.
 - Office editing is deny-by-default; WOPI proof-key verification cannot be switched off.
 - Share traffic is proxied; the SFTPGo host is never exposed to a visitor.
-- Containers run with dropped capabilities, read-only filesystems where possible and digest-pinned images. See [Deployment](deploy/README.md).
+- Containers run with dropped capabilities, read-only filesystems where possible and digest-pinned images. See the [deployment reference](deploy/REFERENCE.md).
 
 Found a vulnerability? Please open a private security advisory on GitHub rather than a public issue.
 

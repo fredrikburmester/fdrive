@@ -17,7 +17,7 @@ services:
       # port. The previous default, 8090, collided with FDRIVE_HTTP_PORT
       # (the main proxy's published port), so the default here is 8091.
       - "2022:2022"
-      - "127.0.0.1:${SFTPGO_ADMIN_PORT:-8091}:8080"
+      - "${SFTPGO_ADMIN_BIND:-127.0.0.1}:${SFTPGO_ADMIN_PORT:-8091}:8080"
     environment:
       SFTPGO_DEFAULT_ADMIN_USERNAME: ${SFTPGO_ADMIN_USERNAME:-admin}
       SFTPGO_DEFAULT_ADMIN_PASSWORD: ${SFTPGO_ADMIN_PASSWORD}
