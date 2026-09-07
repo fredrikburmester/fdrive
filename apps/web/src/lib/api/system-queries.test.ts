@@ -24,6 +24,9 @@ const systemThumbnailsMock = vi.fn();
 const systemRebuildThumbnailsMock = vi.fn();
 const systemClearIndexMock = vi.fn();
 const systemClearThumbnailsMock = vi.fn();
+const systemImageSearchMock = vi.fn();
+const systemImageSearchRebuildMock = vi.fn();
+const systemImageSearchClearMock = vi.fn();
 
 vi.mock("./client.js", () => ({
   apiClient: {
@@ -47,6 +50,9 @@ vi.mock("./client.js", () => ({
     systemClearIndex: (...args: unknown[]) => systemClearIndexMock(...args),
     systemClearThumbnails: (...args: unknown[]) => systemClearThumbnailsMock(...args),
     systemRebuildThumbnails: (...args: unknown[]) => systemRebuildThumbnailsMock(...args),
+    systemImageSearch: (...args: unknown[]) => systemImageSearchMock(...args),
+    systemImageSearchRebuild: (...args: unknown[]) => systemImageSearchRebuildMock(...args),
+    systemImageSearchClear: (...args: unknown[]) => systemImageSearchClearMock(...args),
   },
 }));
 
@@ -99,6 +105,9 @@ beforeEach(() => {
   systemRebuildThumbnailsMock.mockReset();
   systemClearIndexMock.mockReset();
   systemClearThumbnailsMock.mockReset();
+  systemImageSearchMock.mockReset();
+  systemImageSearchRebuildMock.mockReset();
+  systemImageSearchClearMock.mockReset();
 });
 
 describe("useSetupStatus", () => {
@@ -539,6 +548,73 @@ describe("maintenance mutations", () => {
       expect(result.current).toBe(key !== undefined);
     },
   );
+
+  describe("useSystemImageSearch", () => {
+    it("fetches the image search status", async () => {
+      const response = {
+        configured: true,
+        healthy: true,
+        model: "siglip2-base",
+        dim: 1024,
+        embedded: 5,
+        embeddedModel: "siglip2-base",
+      };
+      systemImageSearchMock.mockResolvedValue(response);
+      const { useSystemImageSearch } = await import("./system-queries.js");
+      const { result } = renderHook(() => useSystemImageSearch(), {
+        wrapper: createWrapper(new QueryClient()),
+      });
+      await waitFor(() => expect(result.current.data).toEqual(response));
+    });
+  });
+
+  describe("useRebuildImageSearch", () => {
+    it("rebuilds image embeddings and invalidates the image search query", async () => {
+      systemImageSearchMock.mockResolvedValue({
+        configured: true,
+        healthy: true,
+        embedded: 0,
+        embeddedModel: null,
+      });
+      systemImageSearchRebuildMock.mockResolvedValue({ started: true, total: 3 });
+      const { useSystemImageSearch, useRebuildImageSearch } = await import("./system-queries.js");
+      const wrapper = createWrapper(new QueryClient());
+
+      const { result: query } = renderHook(() => useSystemImageSearch(), { wrapper });
+      await waitFor(() => expect(query.current.isSuccess).toBe(true));
+
+      const { result: mutation } = renderHook(() => useRebuildImageSearch(), { wrapper });
+      mutation.current.mutate({ force: true });
+
+      await waitFor(() => expect(mutation.current.data).toEqual({ started: true, total: 3 }));
+      expect(systemImageSearchRebuildMock).toHaveBeenCalledWith({ force: true });
+      expect(systemImageSearchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("useClearImageSearch", () => {
+    it("clears image embeddings and invalidates the image search query", async () => {
+      systemImageSearchMock.mockResolvedValue({
+        configured: true,
+        healthy: true,
+        embedded: 0,
+        embeddedModel: null,
+      });
+      systemImageSearchClearMock.mockResolvedValue({ started: true });
+      const { useSystemImageSearch, useClearImageSearch } = await import("./system-queries.js");
+      const wrapper = createWrapper(new QueryClient());
+
+      const { result: query } = renderHook(() => useSystemImageSearch(), { wrapper });
+      await waitFor(() => expect(query.current.isSuccess).toBe(true));
+
+      const { result: mutation } = renderHook(() => useClearImageSearch(), { wrapper });
+      mutation.current.mutate();
+
+      await waitFor(() => expect(mutation.current.isSuccess).toBe(true));
+      expect(systemImageSearchClearMock).toHaveBeenCalledWith();
+      expect(systemImageSearchMock).toHaveBeenCalledTimes(2);
+    });
+  });
 
   it("shares pending state across mounted maintenance consumers", async () => {
     let finish: ((value: { started: boolean }) => void) | undefined;
