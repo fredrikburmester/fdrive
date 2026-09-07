@@ -195,12 +195,13 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
 
 def embed_missing(ctx: RootContext, rel_path: str) -> None:
     """Fill in embeddings for a file whose text is already chunked (status 'partial')."""
-    conn = ctx.conn()
-    rows = db.chunks_missing_embeddings(conn, ctx.root_id, rel_path)
-    if rows:
-        vecs = embed_passages([t for _, t in rows], ctx.cfg.embed_url, ctx.cfg.embed_batch)
-        db.set_chunk_embeddings(conn, [(cid, v) for (cid, _), v in zip(rows, vecs, strict=True)])
-    db.mark_file_indexed(conn, ctx.root_id, rel_path)
+    with ctx.path_locks.get(rel_path):
+        conn = ctx.conn()
+        rows = db.chunks_missing_embeddings(conn, ctx.root_id, rel_path)
+        if rows:
+            vecs = embed_passages([t for _, t in rows], ctx.cfg.embed_url, ctx.cfg.embed_batch)
+            db.set_chunk_embeddings(conn, [(cid, v) for (cid, _), v in zip(rows, vecs, strict=True)])
+        db.mark_file_indexed(conn, ctx.root_id, rel_path)
 
 
 def safe_process(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result) -> str:

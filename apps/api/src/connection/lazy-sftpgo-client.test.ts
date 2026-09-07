@@ -39,6 +39,7 @@ function buildFakeUnderlyingClient(): SftpgoClient {
     shares,
   };
   const publicShareApi = {
+    downloadFile: vi.fn().mockResolvedValue({}),
     list: vi.fn().mockResolvedValue(["public-entry"]),
     download: vi.fn().mockResolvedValue({ status: 200 }),
     zip: vi.fn().mockResolvedValue("public-zip-stream"),
@@ -206,6 +207,8 @@ describe("createLazySftpgoClient", () => {
     await publicShare.download("/a", { range: { start: 0 } });
     expect(underlyingPublicShare.download).toHaveBeenCalledWith("/a", { range: { start: 0 } });
 
+    await publicShare.downloadFile({ rangeHeader: "bytes=-2" });
+    expect(underlyingPublicShare.downloadFile).toHaveBeenCalledWith({ rangeHeader: "bytes=-2" });
     await publicShare.zip();
     expect(underlyingPublicShare.zip).toHaveBeenCalled();
 

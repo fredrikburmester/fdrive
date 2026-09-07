@@ -1,0 +1,73 @@
+name: Real Office editors
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/office-e2e.yml"
+      - "apps/api/src/office/**"
+      - "apps/api/src/composition.ts"
+      - "apps/api/src/config*.ts"
+      - "apps/api/test/fixtures/office/**"
+      - "apps/web/office-e2e/**"
+      - "apps/web/playwright.office.config.ts"
+      - "apps/web/e2e/support/**"
+      - "apps/web/src/components/office/**"
+      - "apps/web/src/components/preview/**"
+      - "apps/web/src/lib/office/**"
+      - "apps/web/src/lib/api/office-queries.ts"
+      - "apps/web/src/app/**/office/**"
+      - "packages/contracts/src/office*"
+      - "packages/db/src/repos/office*"
+      - "packages/db/src/repos/wopi*"
+      - "deploy/*office*.yaml"
+      - "deploy/office/**"
+      - "package.json"
+      - "apps/web/package.json"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: office-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  editor:
+    name: ${{ matrix.product }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [onlyoffice, collabora]
+    env:
+      OFFICE_E2E_PRODUCT: ${{ matrix.product }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.11.0"
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install fixture system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3 openssh-client
+          docker compose version
+      - name: Install Playwright Chromium
+        run: pnpm --filter @fdrive/web exec playwright install --with-deps chromium
+      - name: Check Office fixture coverage
+        run: pnpm --filter @fdrive/web exec vitest run --coverage --config office-e2e/vitest.config.ts
+      - name: Run the real editor suite
+        run: pnpm test:e2e:office

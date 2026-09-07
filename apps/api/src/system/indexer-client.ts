@@ -6,6 +6,7 @@ import type {
   IndexerThumbnailRebuildJob,
   IndexerThumbnailsRebuildResponse,
 } from "@fdrive/contracts";
+import { IndexerClearResponse, IndexerDirectoryResponse } from "@fdrive/contracts";
 import { z } from "zod";
 import { callSidecar, type SidecarRequestDeps, type SidecarResult } from "./sidecar-client.js";
 
@@ -66,6 +67,8 @@ const IndexerStatsRaw = z.object({
   queue_depth: z.number().int(),
   errors_sample: z.array(IndexerErrorSampleRaw),
   thumbnail_rebuild: IndexerThumbnailRebuildRaw.optional(),
+  index_clear: IndexerThumbnailRebuildRaw.optional(),
+  thumbnail_clear: IndexerThumbnailRebuildRaw.optional(),
 });
 
 const IndexerCountRaw = z.object({ count: z.number().int() });
@@ -128,6 +131,12 @@ function toIndexerStats(raw: z.infer<typeof IndexerStatsRaw>): IndexerStats {
     thumbnails: raw.thumbnails,
     queueDepth: raw.queue_depth,
     errorsSample: raw.errors_sample.map(toIndexerErrorSample),
+    ...(raw.index_clear !== undefined
+      ? { indexClear: toIndexerThumbnailRebuildJob(raw.index_clear) }
+      : {}),
+    ...(raw.thumbnail_clear !== undefined
+      ? { thumbnailClear: toIndexerThumbnailRebuildJob(raw.thumbnail_clear) }
+      : {}),
     ...(raw.thumbnail_rebuild !== undefined
       ? { thumbnailRebuild: toIndexerThumbnailRebuildJob(raw.thumbnail_rebuild) }
       : {}),
@@ -156,6 +165,12 @@ export interface ThumbnailsRebuildOptions {
 
 /** A typed client for the indexer's internal HTTP API. See `docs/INDEXER.md`. */
 export interface IndexerClient {
+  directory(root: string, path: string): Promise<SidecarResult<IndexerDirectoryResponse>>;
+  clearIndex(options?: {
+    root?: string | undefined;
+    path?: string | undefined;
+  }): Promise<SidecarResult<IndexerClearResponse>>;
+  clearThumbnails(): Promise<SidecarResult<IndexerClearResponse>>;
   health(): Promise<SidecarResult<IndexerHealth>>;
   stats(): Promise<SidecarResult<IndexerStats>>;
   /** `thumbnails: true` also queues a best-effort thumbnail rebuild over the same scope. */
@@ -172,6 +187,30 @@ export interface IndexerClient {
 /** Builds an `IndexerClient` calling `deps.baseUrl` with `deps.fetch`. */
 export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
   return {
+    async directory(root, path) {
+      const query = new URLSearchParams({ root, path });
+      return callSidecar(deps.baseUrl, `/directory?${query}`, IndexerDirectoryResponse, {}, deps);
+    },
+    async clearIndex(options) {
+      return callSidecar(
+        deps.baseUrl,
+        "/index/clear",
+        IndexerClearResponse,
+        { method: "POST", jsonBody: options ?? {} },
+        deps,
+      );
+    },
+
+    async clearThumbnails() {
+      return callSidecar(
+        deps.baseUrl,
+        "/thumbnails/clear",
+        IndexerClearResponse,
+        { method: "POST", jsonBody: {} },
+        deps,
+      );
+    },
+
     async health() {
       const result = await callSidecar(deps.baseUrl, "/health", IndexerHealthRaw, {}, deps);
       return result.ok ? { ok: true, data: toIndexerHealth(result.data) } : result;

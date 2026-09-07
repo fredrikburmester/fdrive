@@ -1,112 +1,134 @@
-/**
- * CLI entry point: `pnpm perf` (or `pnpm perf:quick`). Starts the real
- * stack, runs the requested scenario(s), prints the results and budget
- * tables, writes a timestamped JSON snapshot under `tools/perf/results/`,
- * and exits non-zero only when `--strict` was passed and a budget failed
- * (budgets are informational until PLAN.md's phase 5).
- *
- * Flags: `--only <scenario>` runs a single scenario; `--quick` shortens
- * every timed scenario to 5 seconds; `--strict` makes a failed budget exit
- * non-zero.
- */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+/** Full runs gate by default. Diagnostic flags never claim full-gate success. */
+import { mkdir, writeFile } from "node:fs/promises";
+import { arch, cpus, platform, release, totalmem } from "node:os";
+import { join } from "node:path";
 import { parseArgs, SCENARIO_NAMES } from "./args.js";
-import {
-  allBudgetsPassed,
-  evaluateBudgets,
-  type ScenarioName,
-  type ScenarioResults,
-} from "./budgets.js";
+import { runBrowser } from "./browser.js";
+import { allBudgetsPassed, evaluateBudgets, type ScenarioResults } from "./budgets.js";
 import { formatBudgetsTable, formatResultsTable, resultsFileName } from "./format.js";
-import type { ScenarioResult } from "./results.js";
+import { finishCleanup } from "./lifecycle.js";
+import { toScenarioResult } from "./results.js";
 import {
-  runDownloadDirect,
-  runDownloadViaApi,
+  runDownloads,
   runList1kCold,
   runList1kWarm,
   runList10kWarm,
+  runSearch,
   runUploadSmallBurst,
 } from "./scenarios.js";
-import { type PerfStack, startPerfStack } from "./stack.js";
-
-/** Seconds every timed scenario is shortened to when `--quick` is passed. */
-const QUICK_SECONDS = 5;
-
-type ScenarioRunner = (
-  stack: PerfStack,
-  quickSeconds: number | undefined,
-) => Promise<ScenarioResult>;
-
-const SCENARIO_RUNNERS: Record<ScenarioName, ScenarioRunner> = {
-  list1kCold: (stack) => runList1kCold(stack),
-  list1k: (stack, quickSeconds) =>
-    runList1kWarm(stack, quickSeconds !== undefined ? { quickSeconds } : {}),
-  list10k: (stack, quickSeconds) =>
-    runList10kWarm(stack, quickSeconds !== undefined ? { quickSeconds } : {}),
-  downloadViaApi: (stack, quickSeconds) =>
-    runDownloadViaApi(stack, quickSeconds !== undefined ? { quickSeconds } : {}),
-  downloadDirect: (stack, quickSeconds) =>
-    runDownloadDirect(stack, quickSeconds !== undefined ? { quickSeconds } : {}),
-  uploadSmallBurst: (stack) => runUploadSmallBurst(stack),
-};
-
-/** Absolute path to `tools/perf/results`, where timestamped JSON snapshots land. */
+import { startPerfStack } from "./stack.js";
 export function resultsDir(): string {
-  const scriptDir = dirname(fileURLToPath(import.meta.url));
-  return join(scriptDir, "results");
+  return join(import.meta.dirname, "results");
 }
-
-async function main(): Promise<void> {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const order: ScenarioName[] = options.only !== undefined ? [options.only] : [...SCENARIO_NAMES];
-  const quickSeconds = options.quick ? QUICK_SECONDS : undefined;
-
-  console.log(`[perf] scenarios: ${order.join(", ")}${options.quick ? " (quick)" : ""}`);
-
-  const stack = await startPerfStack();
   const results: ScenarioResults = {};
-
+  const failures: Record<string, string> = {};
+  let browserVersion: string | undefined;
+  let layoutChecks: unknown;
+  const stack = await startPerfStack();
   try {
-    for (const name of order) {
-      console.log(`[perf] running scenario: ${name}`);
-      const runner = SCENARIO_RUNNERS[name];
-      results[name] = await runner(stack, quickSeconds);
+    const duration = options.quick ? { quickSeconds: 5 } : {};
+    for (const name of options.only
+      ? [options.only]
+      : SCENARIO_NAMES.filter((name) => name !== "list10k")) {
+      if (results[name]) continue;
+      console.log(`[perf] measuring ${name}`);
+      try {
+        switch (name) {
+          case "list1kCold":
+            results[name] = await runList1kCold(stack);
+            break;
+          case "list1k":
+            results[name] = await runList1kWarm(stack, duration);
+            break;
+          case "list10k":
+            results[name] = await runList10kWarm(stack, duration);
+            break;
+          case "search25k":
+            results[name] = await runSearch(stack, duration);
+            break;
+          case "uploadSmallBurst":
+            results[name] = await runUploadSmallBurst(stack);
+            break;
+          case "downloadDirect":
+          case "downloadViaApi":
+            Object.assign(results, await runDownloads(stack, duration));
+            break;
+          case "uiList":
+          case "uiGrid": {
+            const browser = await runBrowser(stack);
+            results.uiList = browser.uiList;
+            results.uiGrid = browser.uiGrid;
+            browserVersion = browser.browserVersion;
+            layoutChecks = browser.layoutChecks;
+            break;
+          }
+        }
+      } catch (error) {
+        failures[name] = error instanceof Error ? error.message : "Scenario failed";
+        results[name] = toScenarioResult(name, [], 0, 1);
+        console.error(`[perf] ${name} failed: ${failures[name]}`);
+      }
     }
   } finally {
-    await stack.stop();
+    await finishCleanup(() => stack.stop(), failures);
+    if (failures.cleanup) console.error(`[perf] cleanup failed: ${failures.cleanup}`);
   }
-
-  const allResults = Object.values(results) as ScenarioResult[];
-  console.log("\n## Results\n");
-  console.log(formatResultsTable(allResults));
-
-  const outcomes = evaluateBudgets(results);
-  console.log("\n## Budgets\n");
-  console.log(formatBudgetsTable(outcomes));
-
-  const dir = resultsDir();
-  mkdirSync(dir, { recursive: true });
-  const filePath = join(dir, resultsFileName(new Date()));
-  writeFileSync(
-    filePath,
-    `${JSON.stringify({ generatedAt: new Date().toISOString(), results, budgets: outcomes }, null, 2)}\n`,
-    "utf-8",
+  const budgets = evaluateBudgets(results);
+  const passed = options.strict && Object.keys(failures).length === 0 && allBudgetsPassed(budgets);
+  console.log(formatResultsTable(Object.values(results)));
+  console.log(formatBudgetsTable(budgets));
+  await mkdir(resultsDir(), { recursive: true });
+  const path = join(resultsDir(), resultsFileName(new Date()));
+  await writeFile(
+    path,
+    JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        mode: options.strict ? "strict" : "diagnostic",
+        fullGatePassed: passed,
+        environment: {
+          node: process.version,
+          platform: platform(),
+          arch: arch(),
+          release: release(),
+          cpus: cpus().length,
+          cpu: cpus()[0]?.model,
+          totalMemory: totalmem(),
+          browserVersion,
+          layoutChecks,
+          model: "intfloat/multilingual-e5-small",
+          teiImage: "ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+          teiPlatform: "linux/amd64",
+          embeddingDimensions: 384,
+          searchFiles: 25000,
+          contentTemplates: 32,
+          repeatedTemplateEmbeddings: true,
+          downloadBytes: 512 * 1024 * 1024,
+          storage: "disposable Docker volume, shared SFTPGo RW and indexer RO",
+        },
+        results,
+        budgets,
+        failures,
+      },
+      null,
+      2,
+    ),
   );
-  console.log(`\n[perf] wrote ${filePath}`);
-
-  if (options.strict && !allBudgetsPassed(outcomes)) {
-    console.error("\n[perf] one or more budgets failed and --strict was passed");
-    process.exit(1);
-  }
+  console.log(`[perf] wrote ${path}`);
+  if (options.strict && !passed) process.exitCode = 1;
+  else if (Object.keys(failures).length) process.exitCode = 1;
+  console.log(
+    passed
+      ? "[perf] FULL GATE PASSED"
+      : options.strict
+        ? "[perf] FULL GATE FAILED"
+        : "[perf] DIAGNOSTIC ONLY; not a full-gate result",
+  );
 }
-
-const isMainModule =
-  process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
-  main().catch((error: unknown) => {
-    console.error(error);
-    process.exit(1);
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href)
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : "Performance harness failed");
+    process.exitCode = 1;
   });
-}

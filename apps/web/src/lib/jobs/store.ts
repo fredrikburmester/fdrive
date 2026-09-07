@@ -5,6 +5,7 @@ import type { JobRequest } from "./types";
 
 export interface JobsStoreState {
   readonly state: JobsState;
+  reset(): void;
   /** Replaces the whole set with the result of `apiClient.jobs()`. */
   hydrate(jobs: readonly JobStatus[]): void;
   /** Adds or updates a job, optionally remembering the request that started it. */
@@ -27,27 +28,33 @@ export interface JobsStoreState {
  * SSE events afterwards (`upsert`, see `lib/api/sse.ts`). The Activity
  * panel reads it to render job rows alongside uploads.
  */
-export const useJobsStore = create<JobsStoreState>((set) => ({
-  state: initialJobsState,
+/** Old callbacks are invalid after reset, including in-flight poll completions. */
+export function createJobsStore() {
+  let generation = 0;
+  return create<JobsStoreState>((set) => {
+    function handlers(epoch: number): Omit<JobsStoreState, "state" | "reset"> {
+      function dispatch(action: Parameters<typeof jobsReducer>[1]) {
+        if (epoch === generation) set((s) => ({ state: jobsReducer(s.state, action) }));
+      }
+      return {
+        hydrate: (jobs) => dispatch({ type: "hydrate", jobs }),
+        upsert: (job, request) =>
+          dispatch(
+            request === undefined ? { type: "upsert", job } : { type: "upsert", job, request },
+          ),
+        seed: (job, request) => dispatch({ type: "seed", job, request }),
+        remove: (id) => dispatch({ type: "remove", id }),
+      };
+    }
+    return {
+      state: initialJobsState,
+      ...handlers(generation),
+      reset() {
+        generation += 1;
+        set({ state: initialJobsState, ...handlers(generation) });
+      },
+    };
+  });
+}
 
-  hydrate(jobs) {
-    set((s) => ({ state: jobsReducer(s.state, { type: "hydrate", jobs }) }));
-  },
-
-  upsert(job, request) {
-    set((s) => ({
-      state: jobsReducer(
-        s.state,
-        request === undefined ? { type: "upsert", job } : { type: "upsert", job, request },
-      ),
-    }));
-  },
-
-  seed(job, request) {
-    set((s) => ({ state: jobsReducer(s.state, { type: "seed", job, request }) }));
-  },
-
-  remove(id) {
-    set((s) => ({ state: jobsReducer(s.state, { type: "remove", id }) }));
-  },
-}));
+export const useJobsStore = createJobsStore();

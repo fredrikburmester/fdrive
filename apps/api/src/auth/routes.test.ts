@@ -11,6 +11,7 @@ import { createConnectionStore } from "../connection/store";
 import { parseMasterKey } from "./crypto";
 import { createAuthModule } from "./index";
 import { registerAuthRoutes } from "./routes";
+import { memoryIdentityOperations } from "./test-fixtures/index.ts";
 
 function notImplemented(): never {
   throw new Error("not implemented in this fake");
@@ -83,12 +84,14 @@ function buildTestApp(opts: {
     clock: opts.clockCtl.clock,
   });
   const authModule = createAuthModule({
+    identityLinks: memoryIdentityOperations(repos),
     repos,
-    sftpgo,
+    clientForBaseUrl: () => sftpgo,
+    clientForIdentity: async () => sftpgo,
     master: parseMasterKey(config.fdriveMasterKey),
     clock: opts.clockCtl.clock,
     config,
-    storageFactory: () => FAKE_STORAGE,
+    storageFactory: async () => FAKE_STORAGE,
     connectionStore,
   });
   const app = createApp({
@@ -165,12 +168,14 @@ describe("auth routes: POST /auth/login", () => {
       clock: clockCtl.clock,
     });
     const authModule = createAuthModule({
+      identityLinks: memoryIdentityOperations(repos),
       repos,
-      sftpgo,
+      clientForBaseUrl: () => sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: parseMasterKey(config.fdriveMasterKey),
       clock: clockCtl.clock,
       config,
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
       connectionStore,
     });
     const app = createApp({
@@ -714,5 +719,71 @@ describe("auth service: direct edge cases", () => {
     });
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe("native safe-request identity selection", () => {
+  it("selects an owned query identity for GET/HEAD without switching session", async () => {
+    const h = buildTestApp({ clockCtl: createClock(Date.now()) });
+    const response = await login(h.app, { username: "alice", password: "wonderland" });
+    const cookie = extractCookie(response);
+    const me = await readJson<MeResponse>(response);
+    const provider = await h.repos.providers.ensure({
+      type: "sftpgo",
+      baseUrl: "http://sftpgo.internal:8080",
+    });
+    const other = await h.repos.identities.create({
+      accountId: me.account.id,
+      providerId: provider.id,
+      externalUsername: "alice-other",
+    });
+    expect(
+      (
+        await h.app.request(`${ROUTES.auth.me}?identity=${other.id}&identity=${other.id}`, {
+          headers: { cookie },
+        })
+      ).status,
+    ).toBe(403);
+    for (const method of ["GET", "HEAD"]) {
+      const result = await h.app.request(`${ROUTES.auth.me}?identity=${other.id}`, {
+        method,
+        headers: { cookie },
+      });
+      expect(result.status).toBe(200);
+      if (method === "GET")
+        expect((await readJson<MeResponse>(result)).activeIdentityId).toBe(other.id);
+    }
+    expect(
+      (await readJson<MeResponse>(await h.app.request(ROUTES.auth.me, { headers: { cookie } })))
+        .activeIdentityId,
+    ).toBe(me.activeIdentityId);
+    expect(
+      (
+        await h.app.request(`${ROUTES.auth.me}?identity=${other.id}`, {
+          headers: { cookie, "x-identity-id": other.id },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await h.app.request(`${ROUTES.auth.me}?identity=${other.id}`, {
+          headers: { cookie, "x-identity-id": me.activeIdentityId },
+        })
+      ).status,
+    ).toBe(403);
+    for (const id of ["", "missing"]) {
+      expect(
+        (await h.app.request(`${ROUTES.auth.me}?identity=${id}`, { headers: { cookie } })).status,
+      ).toBe(403);
+    }
+    const foreignLogin = await login(h.app, { username: "bob", password: "builder" });
+    const foreign = await readJson<MeResponse>(foreignLogin);
+    expect(
+      (
+        await h.app.request(`${ROUTES.auth.me}?identity=${foreign.activeIdentityId}`, {
+          headers: { cookie },
+        })
+      ).status,
+    ).toBe(403);
   });
 });

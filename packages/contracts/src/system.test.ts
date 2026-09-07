@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   IndexerActionResponse,
+  IndexerClearJob,
+  IndexerClearRequest,
+  IndexerClearResponse,
   IndexerErrorSample,
   IndexerHealth,
   IndexerLastScan,
@@ -557,4 +560,91 @@ describe("SystemThumbnailsResponse", () => {
       SystemThumbnailsResponse.safeParse({ configured: true, count: -1, bytes: 0 }).success,
     ).toBe(false);
   });
+});
+
+describe("clear contracts", () => {
+  it.each([
+    {},
+    { root: "sftpgo" },
+    { root: "sftpgo", path: "/" },
+    { root: "sftpgo", path: "/a/b.pdf" },
+    { root: "sftpgo", path: "a_%/file.pdf" },
+  ])("accepts scope %j", (scope) => {
+    expect(IndexerClearRequest.parse(scope)).toEqual(scope);
+  });
+
+  it.each([
+    null,
+    [],
+    { root: "" },
+    { root: " " },
+    { root: 2 },
+    { path: "/a" },
+    { root: "r", path: "" },
+    { root: "r", path: "../a" },
+    { root: "r", path: "a/../b" },
+    { root: "r", path: "a\n/../b" },
+    { root: "r", path: "a\\..\\b" },
+    { root: "r", path: "a\0b" },
+    { root: "r", path: ".." },
+    { root: "r", path: "a\\b" },
+    { force: true },
+  ])("rejects unsafe scope %j", (scope) => {
+    expect(IndexerClearRequest.safeParse(scope).success).toBe(false);
+  });
+
+  it("parses clear admission and progress with Python timestamps", () => {
+    expect(IndexerClearResponse.parse({ started: true })).toEqual({ started: true });
+    expect(IndexerClearResponse.safeParse({ started: 1 }).success).toBe(false);
+    const progress = {
+      running: false,
+      processed: 3,
+      total: 4,
+      errors: 1,
+      startedAt: "2026-09-06T18:21:28+00:00",
+      finishedAt: null,
+    };
+    expect(IndexerClearJob.parse(progress)).toEqual(progress);
+    expect(
+      IndexerStats.parse({
+        roots: [],
+        thumbnails: 0,
+        queueDepth: 0,
+        errorsSample: [],
+        indexClear: progress,
+        thumbnailClear: progress,
+      }),
+    ).toMatchObject({ indexClear: progress, thumbnailClear: progress });
+  });
+});
+
+it("bounds internal directory metadata and rejects malformed or extra fields", async () => {
+  const { IndexerDirectoryResponse } = await import("./index.ts");
+  const entry = { name: "文 space%20", kind: "file" };
+  expect(IndexerDirectoryResponse.parse({ items: [entry], overflow: false })).toEqual({
+    items: [entry],
+    overflow: false,
+  });
+  expect(
+    IndexerDirectoryResponse.safeParse({
+      items: Array.from({ length: 10000 }, () => entry),
+      overflow: true,
+    }).success,
+  ).toBe(true);
+  for (const value of [
+    { items: Array.from({ length: 10001 }, () => entry), overflow: true },
+    { items: [], overflow: false, extra: true },
+    { items: [] },
+    ...["", "x".repeat(256), "/root", "a\0b"].map((name) => ({
+      items: [{ name, kind: "file" }],
+      overflow: false,
+    })),
+    { items: [{ name: "a", kind: "unknown" }], overflow: false },
+    { items: [{ ...entry, size: 1 }], overflow: false },
+  ])
+    expect(IndexerDirectoryResponse.safeParse(value).success).toBe(false);
+  for (const kind of ["file", "dir", "symlink", "other"])
+    expect(
+      IndexerDirectoryResponse.safeParse({ items: [{ name: "a", kind }], overflow: false }).success,
+    ).toBe(true);
 });

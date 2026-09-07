@@ -1,16 +1,20 @@
 import { IDENTITY_HEADER, type MeResponse } from "@fdrive/contracts";
-import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
-import { type SftpgoClient, SftpgoError } from "@fdrive/sftpgo";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
+import { z } from "zod";
+import { verifyAccountCredentials } from "../accounts/credentials.ts";
+import { accountRepositoryCall } from "../accounts/errors.ts";
+import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppConfig } from "../config.js";
 import type { ConnectionStore } from "../connection/store.js";
 import { ApiHttpError } from "../errors.js";
 import { KEY_ID, seal } from "./crypto.js";
 import type { LoginLimiter } from "./login-limiter.js";
 import type { Principal } from "./principal.js";
+import { type ClientForBaseUrl, requireCurrentConnection } from "./provider-client.ts";
 import { COOKIE_NAME, generateSessionId, hashSessionId } from "./sessions.js";
+import type { IdentityStorageFactory } from "./storage-factory.ts";
 import type { TokenSource } from "./token-source.js";
 
 /** How stale a session's `lastSeenAt` must be before `resolvePrincipal` slides its expiry. */
@@ -39,13 +43,14 @@ export interface AuthService {
 
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;
-  readonly sftpgo: SftpgoClient;
+  readonly identityLinks: AccountIdentityOperations;
+  readonly clientForBaseUrl: ClientForBaseUrl;
   readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly limiter: LoginLimiter;
   readonly tokenSource: TokenSource;
-  readonly storageFactory: (identityId: string) => StorageProvider;
+  readonly storageFactory: IdentityStorageFactory;
   /** Resolves the active SFTPGo connection: its base URL for `providers.ensure` and its label. */
   readonly connectionStore: ConnectionStore;
   /** SFTPGo usernames always treated as admins, in addition to `accounts.is_admin`. */
@@ -57,17 +62,6 @@ function providerLabelFor(baseUrl: string): string {
   return new URL(baseUrl).host;
 }
 
-/** Resolves the active connection, translating "no connection" into `ApiHttpError("setup_required")`. */
-async function requireConnection(
-  connectionStore: ConnectionStore,
-): Promise<{ baseUrl: string; homeTemplate: string }> {
-  const connection = await connectionStore.current();
-  if (connection === null) {
-    throw new ApiHttpError("setup_required", "no SFTPGo connection is configured yet");
-  }
-  return connection;
-}
-
 /** Builds the `AuthService`, the credential-mode login/session/identity flow for the API. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   async function me(accountId: string, activeIdentityId: string): Promise<MeResponse> {
@@ -76,114 +70,84 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       throw new ApiHttpError("internal", "account for active session no longer exists");
     }
     const identities = await deps.repos.identities.listByAccount(accountId);
-    const connection = await requireConnection(deps.connectionStore);
-    const providerLabel = providerLabelFor(connection.baseUrl);
     const activeIdentity = identities.find((identity) => identity.id === activeIdentityId);
+    if (activeIdentity === undefined)
+      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
+    const summaries = await Promise.all(
+      identities.map(async (identity) => {
+        const provider = await deps.repos.providers.get(identity.providerId);
+        if (provider === null)
+          throw new ApiHttpError("unauthorized", "storage provider no longer exists");
+        return {
+          id: identity.id,
+          username: identity.externalUsername,
+          providerType: "sftpgo" as const,
+          providerLabel: providerLabelFor(provider.baseUrl),
+        };
+      }),
+    );
     const isAdmin =
-      account.isAdmin ||
-      (activeIdentity !== undefined &&
-        deps.adminUsernames.includes(activeIdentity.externalUsername));
+      account.isAdmin || deps.adminUsernames.includes(activeIdentity.externalUsername);
 
+    if ((await deps.repos.identities.get(activeIdentityId))?.accountId !== accountId)
+      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
     return {
       account: { id: account.id, displayName: account.displayName },
-      identities: identities.map((identity) => ({
-        id: identity.id,
-        username: identity.externalUsername,
-        providerType: "sftpgo" as const,
-        providerLabel,
-      })),
+      identities: summaries,
       activeIdentityId,
       isAdmin,
     };
   }
 
   async function login(input: LoginInput): Promise<LoginResult> {
-    const connection = await requireConnection(deps.connectionStore);
-
-    const limiterKey = `${input.ip}|${input.username}`;
-    const limiterStatus = deps.limiter.check(limiterKey);
-    if (!limiterStatus.allowed) {
-      throw new ApiHttpError("rate_limited", "too many failed login attempts", {
-        retryAfterMs: limiterStatus.retryAfterMs ?? 0,
-      });
-    }
-
-    const loginParams: { username: string; password: string; otp?: string } = {
-      username: input.username,
-      password: input.password,
-      ...(input.otp !== undefined ? { otp: input.otp } : {}),
-    };
-    let token: { accessToken: string; expiresAt: Date };
-    try {
-      token = await deps.sftpgo.login(loginParams);
-    } catch (err) {
-      if (err instanceof SftpgoError) {
-        if (err.kind === "unauthorized") {
-          deps.limiter.recordFailure(limiterKey);
-          throw new ApiHttpError("unauthorized", "invalid username or password");
-        }
-        if (err.kind === "forbidden") {
-          throw new ApiHttpError("forbidden", err.detail ?? "forbidden");
-        }
-      }
-      throw new ApiHttpError("upstream_unavailable", "SFTPGo is unavailable");
-    }
-
-    deps.limiter.recordSuccess(limiterKey);
-
-    const provider = await deps.repos.providers.ensure({
-      type: "sftpgo",
-      baseUrl: connection.baseUrl,
-    });
-
-    let identity = await deps.repos.identities.findByProviderUsername(provider.id, input.username);
-    let accountId: string;
-    if (identity) {
-      accountId = identity.accountId;
-    } else {
-      const account = await deps.repos.accounts.create({ displayName: input.username });
-      accountId = account.id;
-      identity = await deps.repos.identities.create({
-        accountId,
-        providerId: provider.id,
-        externalUsername: input.username,
-      });
-    }
-
-    const passwordCiphertext = seal(
-      deps.master,
-      new TextEncoder().encode(JSON.stringify({ password: input.password })),
-      identity.id,
-    );
-    await deps.repos.credentials.put({
-      identityId: identity.id,
-      ciphertext: passwordCiphertext,
-      keyId: KEY_ID,
-    });
-
-    // Primes the token cache (in-process and sealed in the database) from
-    // the token this call to sftpgo.login already minted, so the first
-    // authenticated request after login reuses it instead of tokenSource.get
-    // minting a second, redundant token.
-    await deps.tokenSource.prime(identity.id, token);
-
-    await deps.repos.identities.touchLogin(identity.id, deps.clock());
-
+    const { provider, token } = await verifyAccountCredentials(deps, input);
     const rawSessionId = generateSessionId();
     const idHash = hashSessionId(rawSessionId);
-    const expiresAt = new Date(
-      deps.clock().getTime() + deps.config.fdriveSessionTtlDays * MS_PER_DAY,
+    const at = deps.clock();
+    await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
+    const result = await accountRepositoryCall(() =>
+      deps.identityLinks.loginVerified({
+        providerId: provider.id,
+        username: input.username,
+        at,
+        sealCredential: (identityId) => ({
+          ciphertext: seal(
+            deps.master,
+            new TextEncoder().encode(JSON.stringify({ password: input.password })),
+            identityId,
+          ),
+          keyId: KEY_ID,
+        }),
+        session: {
+          idHash,
+          expiresAt: new Date(at.getTime() + deps.config.fdriveSessionTtlDays * MS_PER_DAY),
+          userAgent: input.userAgent,
+          ip: input.ip,
+        },
+      }),
     );
-    await deps.repos.sessions.create({
-      idHash,
-      accountId,
-      activeIdentityId: identity.id,
-      expiresAt,
-      userAgent: input.userAgent,
-      ip: input.ip,
-    });
-
-    return { sessionId: rawSessionId, me: await me(accountId, identity.id) };
+    try {
+      await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
+      await deps.tokenSource.prime(result.identity.id, token);
+    } catch (error) {
+      await deps.repos.sessions.delete(idHash);
+      throw error;
+    }
+    const identity = await deps.repos.identities.get(result.identity.id);
+    const session = await deps.repos.sessions.getByIdHash(idHash, deps.clock());
+    if (
+      identity?.accountId !== result.session.accountId ||
+      session?.accountId !== result.session.accountId
+    ) {
+      await deps.repos.sessions.delete(idHash);
+      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
+    }
+    try {
+      return { sessionId: rawSessionId, me: await me(identity.accountId, identity.id) };
+    } catch (error) {
+      await deps.repos.sessions.delete(idHash);
+      throw error;
+    }
   }
 
   async function resolvePrincipal(c: Context): Promise<Principal | null> {
@@ -199,7 +163,16 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       return null;
     }
 
-    if (now.getTime() - session.lastSeenAt.getTime() > SLIDING_TOUCH_THRESHOLD_MS) {
+    const identityMutation =
+      c.req.method !== "GET" &&
+      c.req.method !== "HEAD" &&
+      (c.req.path === "/api/v1/account/active-identity" ||
+        c.req.path === "/api/v1/account/identities" ||
+        c.req.path.startsWith("/api/v1/account/identities/"));
+    if (
+      !identityMutation &&
+      now.getTime() - session.lastSeenAt.getTime() > SLIDING_TOUCH_THRESHOLD_MS
+    ) {
       await deps.repos.sessions.touch(idHash, {
         lastSeenAt: now,
         expiresAt: new Date(now.getTime() + deps.config.fdriveSessionTtlDays * MS_PER_DAY),
@@ -207,14 +180,28 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     }
 
     const identityHeader = c.req.header(IDENTITY_HEADER);
-    const targetIdentityId = identityHeader ?? session.activeIdentityId;
+    const queryIdentities =
+      c.req.method === "GET" || c.req.method === "HEAD" ? (c.req.queries("identity") ?? []) : [];
+    if (queryIdentities.length > 1)
+      throw new ApiHttpError("forbidden", "ambiguous identity selection");
+    const queryIdentity = queryIdentities[0];
+    if (
+      identityHeader !== undefined &&
+      queryIdentity !== undefined &&
+      identityHeader !== queryIdentity
+    )
+      throw new ApiHttpError("forbidden", "conflicting identity selection");
+    const selectedIdentity = identityHeader ?? queryIdentity;
+    if (selectedIdentity !== undefined && !z.uuid().safeParse(selectedIdentity).success)
+      throw new ApiHttpError("forbidden", "invalid identity selection");
+    const targetIdentityId = selectedIdentity ?? session.activeIdentityId;
     if (targetIdentityId === null) {
       return null;
     }
 
     const identity = await deps.repos.identities.get(targetIdentityId);
     if (!identity || identity.accountId !== session.accountId) {
-      if (identityHeader !== undefined) {
+      if (selectedIdentity !== undefined) {
         throw new ApiHttpError("forbidden", "identity does not belong to this account");
       }
       return null;
@@ -228,7 +215,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       accountId: session.accountId,
       identityId: identity.id,
       username: identity.externalUsername,
-      storage: deps.storageFactory(identity.id),
+      storage: await deps.storageFactory(identity.id),
       isAdmin,
     };
   }
@@ -237,5 +224,10 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     await deps.repos.sessions.delete(hashSessionId(sessionId));
   }
 
-  return { login, resolvePrincipal, me, logout };
+  return {
+    login: (input) => accountRepositoryCall(() => login(input)),
+    resolvePrincipal,
+    me,
+    logout,
+  };
 }

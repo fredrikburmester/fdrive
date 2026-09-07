@@ -10,9 +10,9 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "turbo run typecheck && pnpm typecheck:tools",
-    "typecheck:tools": "tsc -p tools/perf/tsconfig.json",
+    "typecheck:tools": "tsc -p tools/perf/tsconfig.json && tsc -p tools/office/tsconfig.json",
     "test": "vitest run",
-    "test:coverage": "turbo run test:coverage",
+    "test:coverage": "turbo run test:coverage && pnpm test:office:coverage && pnpm test:perf:coverage",
     "test:integration": "turbo run test:integration",
     "test:e2e": "pnpm --filter @fdrive/web test:e2e",
     "build": "turbo run build",
@@ -23,9 +23,14 @@
     "dev:seed": "tsx --conditions=development tools/dev/generate-seed.ts",
     "perf": "tsx --conditions=development tools/perf/run.ts",
     "perf:quick": "tsx --conditions=development tools/perf/run.ts --quick",
-    "test:tools": "vitest run --config tools/perf/vitest.config.ts",
+    "test:tools": "vitest run --config tools/perf/vitest.config.ts && pnpm test:office:tools",
     "test:indexer": "cd services/indexer && pytest -q --cov=fdrive_indexer --cov-report=term-missing --cov-fail-under=95",
-    "test:ocr": "cd services/ocr && pytest -q --cov=fdrive_ocr --cov-report=term-missing --cov-fail-under=95"
+    "test:ocr": "cd services/ocr && pytest -q --cov=fdrive_ocr --cov-report=term-missing --cov-fail-under=95",
+    "test:office:tools": "vitest run --config tools/office/vitest.config.ts",
+    "test:office:coverage": "vitest run --coverage --config tools/office/vitest.config.ts",
+    "test:e2e:office": "pnpm --filter @fdrive/web test:e2e:office",
+    "perf:strict": "tsx --conditions=development tools/perf/run.ts --strict",
+    "test:perf:coverage": "vitest run --coverage --config tools/perf/vitest.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
@@ -42,6 +47,7 @@
     "turbo": "^2.10.12",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "@fdrive/db": "workspace:*"
   }
 }

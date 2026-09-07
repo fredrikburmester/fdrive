@@ -242,7 +242,7 @@ describe("fake server - routing edge cases", () => {
     ).rejects.toMatchObject({ kind: "bad_request" });
   });
 
-  it("resolves a specific path within a multi-path share for download, and rejects a non-matching path", async () => {
+  it("rejects direct child downloads for multi-path shares", async () => {
     const server = createFakeSftpgoServer({
       users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
       files: { alice: { "/a.txt": "aaa", "/b.txt": "bbb" } },
@@ -254,12 +254,10 @@ describe("fake server - routing edge cases", () => {
       scope: "read",
       paths: ["/a.txt", "/b.txt"],
     });
-    const result = await client.publicShare(created.id).download("/b.txt");
-    expect(await new Response(result.body).text()).toBe("bbb");
-
-    await expect(client.publicShare(created.id).download("/c.txt")).rejects.toMatchObject({
-      kind: "not_found",
-    });
+    for (const path of ["/b.txt", "/c.txt"])
+      await expect(client.publicShare(created.id).download(path)).rejects.toMatchObject({
+        kind: "bad_request",
+      });
   });
 
   it("rejects uploading to a write share whose single path is a file, not a directory", async () => {
@@ -462,10 +460,10 @@ describe("fake server - routing edge cases", () => {
     });
 
     await expect(client.publicShare(created.id).download("/a.txt")).rejects.toMatchObject({
-      kind: "unauthorized",
+      kind: "forbidden",
     });
     await expect(client.publicShare(created.id).zip()).rejects.toMatchObject({
-      kind: "unauthorized",
+      kind: "forbidden",
     });
     await expect(
       client.publicShare(created.id).upload("x.txt", new Uint8Array([1])),
@@ -491,7 +489,7 @@ describe("fake server - routing edge cases", () => {
     });
   });
 
-  it("returns not_found from resolveSharePath when a single-path share has a malformed empty path entry", async () => {
+  it("returns bad_request when a single-path share has a malformed empty path entry", async () => {
     const server = createFakeSftpgoServer({
       users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
       files: { alice: { "/shared/a.txt": "hi" } },
@@ -504,12 +502,12 @@ describe("fake server - routing edge cases", () => {
     const share = server.state.shares.get(created.id);
     expect(share).toBeDefined();
     if (share) {
-      // Force the defensive branch in resolveSharePath: a well-formed share can never
+      // Force the defensive invalid-root branch: a well-formed share can never
       // actually have an undefined entry in a length-1 paths array.
       share.paths = [undefined as unknown as string];
     }
     await expect(client.publicShare(created.id).download("/a.txt")).rejects.toMatchObject({
-      kind: "not_found",
+      kind: "bad_request",
     });
   });
 

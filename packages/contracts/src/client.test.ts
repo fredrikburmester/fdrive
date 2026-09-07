@@ -1074,3 +1074,136 @@ describe("createApiClient: fetch `this`-binding regression", () => {
     }
   });
 });
+
+describe("createApiClient: clear jobs", () => {
+  it.each([undefined, { root: "sftpgo" }, { root: "sftpgo", path: "/a_%/file.pdf" }])(
+    "posts index clear scope %j",
+    async (scope) => {
+      const { fetchStub, calls } = createStubFetch([jsonResponse(202, { started: true })]);
+      const client = createApiClient({ fetch: fetchStub });
+      expect(await client.systemClearIndex(scope)).toEqual({ started: true });
+      expect(calls[0]?.url).toBe("/api/v1/system/indexer/clear");
+      expect(calls[0]?.init.method).toBe("POST");
+      expect(JSON.parse(String(calls[0]?.init.body))).toEqual(scope ?? {});
+    },
+  );
+
+  it("posts global thumbnail clear", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(202, { started: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+    expect(await client.systemClearThumbnails()).toEqual({ started: true });
+    expect(calls[0]?.url).toBe("/api/v1/system/thumbnails/clear");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
+  });
+
+  it.each(["systemClearIndex", "systemClearThumbnails"] as const)(
+    "preserves conflicts from %s",
+    async (method) => {
+      const { fetchStub } = createStubFetch([
+        jsonResponse(409, { kind: "conflict", message: "already running" }),
+      ]);
+      const client = createApiClient({ fetch: fetchStub });
+      await expect(client[method]()).rejects.toMatchObject({ status: 409 });
+    },
+  );
+});
+
+describe("office client", () => {
+  it("uses pinned routes, request payloads, CSRF and identity headers", async () => {
+    const status = {
+      available: true,
+      product: "onlyoffice",
+      extensions: { view: ["docx"], edit: ["docx"], convert: [] },
+    };
+    const opened = {
+      fileId: VALID_UUID,
+      identityId: VALID_UUID,
+      path: "/a.docx",
+      mode: "edit",
+      actionUrl: "https://office/edit",
+      editorOrigin: "https://office",
+      formFields: { access_token: "test" },
+      expiresAt: AT,
+    };
+    const created = { identityId: VALID_UUID, path: "/a.docx" };
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, status),
+      jsonResponse(200, opened),
+      jsonResponse(201, created),
+    ]);
+    const client = createApiClient({ fetch: fetchStub, identityId: VALID_UUID });
+    expect(await client.officeStatus()).toEqual(status);
+    expect(await client.officeOpen({ path: "/a.docx", mode: "edit" })).toEqual(opened);
+    expect(await client.officeCreateDocument({ parent: "/", name: "a.docx" })).toEqual(created);
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/v1/office",
+      "/api/v1/office/open",
+      "/api/v1/office/documents",
+    ]);
+    expect(calls[1]?.init.body).toBe(JSON.stringify({ path: "/a.docx", mode: "edit" }));
+    for (const call of calls.slice(1)) {
+      expect(headerValue(call.init, "x-requested-with")).toBe("fdrive");
+      expect(headerValue(call.init, "x-identity-id")).toBe(VALID_UUID);
+    }
+  });
+});
+
+it("includes scoped identity in native download links without losing inline/path", () => {
+  const client = createApiClient({ identityId: VALID_UUID });
+  const url = new URL(client.downloadUrl("/å.docx", { inline: true }), "https://app");
+  expect(url.searchParams.get("identity")).toBe(VALID_UUID);
+  expect(url.searchParams.get("path")).toBe("/å.docx");
+  expect(url.searchParams.get("inline")).toBe("1");
+});
+
+it("calls account identity and cross-identity view routes with typed responses", async () => {
+  const favorites = { items: [], unavailableIdentityIds: [] };
+  const search = {
+    query: "a",
+    sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 0,
+    unavailableIdentityIds: [],
+  };
+  const { fetchStub, calls } = createStubFetch([
+    jsonResponse(200, VALID_ME),
+    jsonResponse(200, VALID_ME),
+    jsonResponse(200, VALID_ME),
+    jsonResponse(200, favorites),
+    jsonResponse(200, search),
+    jsonResponse(200, search),
+  ]);
+  const client = createApiClient({ fetch: fetchStub });
+  expect(
+    await client.linkIdentity({ username: "alice", password: "secret", otp: "123456" }),
+  ).toEqual(VALID_ME);
+  expect(await client.unlinkIdentity(VALID_UUID)).toEqual(VALID_ME);
+  expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
+  expect(await client.accountFavorites()).toEqual(favorites);
+  expect(await client.accountSearch("a")).toEqual(search);
+  expect(
+    await client.accountSearch("a", {
+      limit: 5,
+      ext: "txt",
+      folder: "/docs",
+      after: "2026-01-01",
+      before: "2026-09-01",
+    }),
+  ).toEqual(search);
+  expect(calls.slice(0, 5).map((call) => call.url)).toEqual([
+    "/api/v1/account/identities",
+    `/api/v1/account/identities/${VALID_UUID}`,
+    "/api/v1/account/active-identity",
+    "/api/v1/account/favorites",
+    "/api/v1/account/search?q=a",
+  ]);
+  expect(calls[0]?.init.body).toBe(
+    JSON.stringify({ username: "alice", password: "secret", otp: "123456" }),
+  );
+  expect(calls[1]?.init.method).toBe("DELETE");
+  expect(calls[2]?.init.body).toBe(JSON.stringify({ identityId: VALID_UUID }));
+  expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
+  expect(calls[5]?.url).toContain("limit=5");
+});

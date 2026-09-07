@@ -1,3 +1,4 @@
+import { SystemIndexerResponse } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 
@@ -92,7 +93,7 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
   await expect(page.getByText(/FileDataError/)).toBeVisible();
 });
 
-test("alice (admin) can reindex the sftpgo root, optionally with thumbnails, and sees a toast reporting how many files were marked", async ({
+test("alice (admin) can reindex the sftpgo root and sees a toast reporting how many files were marked", async ({
   page,
 }) => {
   await page.goto("/system/indexer");
@@ -104,7 +105,7 @@ test("alice (admin) can reindex the sftpgo root, optionally with thumbnails, and
 
   await dialog.getByLabel("Root").click();
   await page.getByRole("option", { name: "sftpgo" }).click();
-  await dialog.getByRole("checkbox", { name: "Also regenerate thumbnails" }).click();
+  await expect(dialog.getByRole("checkbox")).toHaveCount(0);
 
   await dialog.getByRole("button", { name: "Reindex", exact: true }).click();
   await expect(dialog).toBeHidden();
@@ -113,12 +114,12 @@ test("alice (admin) can reindex the sftpgo root, optionally with thumbnails, and
   ).toBeVisible();
 });
 
-test("alice (admin) can rebuild thumbnails from the Indexer page with the honest, thumbnail-only dialog", async ({
+test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with the honest, thumbnail-only dialog", async ({
   page,
 }) => {
-  await page.goto("/system/indexer");
+  await page.goto("/system/thumbnails");
 
-  await page.getByRole("button", { name: "Rebuild thumbnails" }).click();
+  await page.getByRole("button", { name: "Rebuild…" }).click();
   const dialog = page.getByRole("dialog").filter({ hasText: "Rebuild thumbnails" });
   await expect(dialog).toBeVisible();
   await expect(
@@ -130,9 +131,20 @@ test("alice (admin) can rebuild thumbnails from the Indexer page with the honest
   // force to exercise every field this dialog now sends.
   await dialog.getByLabel("Root").click();
   await page.getByRole("option", { name: "sftpgo" }).click();
+  await dialog.getByLabel("Path (optional)").fill(" alice/docs ");
   await dialog.getByRole("switch", { name: "Regenerate existing thumbnails" }).click();
 
+  const request = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/v1/system/indexer/thumbnails/rebuild") &&
+      request.method() === "POST",
+  );
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
+  expect((await request).postDataJSON()).toEqual({
+    root: "sftpgo",
+    path: "alice/docs",
+    force: true,
+  });
   await expect(dialog).toBeHidden();
   await expect(
     page.locator("[data-sonner-toast]").filter({ hasText: "Rebuilding 6 thumbnails…" }),
@@ -144,6 +156,7 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
 }) => {
   await page.goto("/system/thumbnails");
 
+  await expect(page.getByText("Loading…")).toBeHidden({ timeout: 15_000 });
   await expect(page.getByText("Reachable")).toBeVisible();
 
   // The "Thumbnails" stat card: matched by its exact label so this hits neither
@@ -154,7 +167,7 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
   await expect(thumbnailsCard).toBeVisible();
 
   await page.getByRole("button", { name: "Rebuild…" }).click();
-  const dialog = page.getByRole("alertdialog");
+  const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
 
@@ -222,3 +235,81 @@ test.describe("bob (not admin)", () => {
     }
   });
 });
+
+for (const scope of ["index", "thumbnails"] as const) {
+  test(`${scope} clear requires confirmation, submits scope, polls completion, and reports busy`, async ({
+    page,
+  }) => {
+    const isIndex = scope === "index";
+    const endpoint = isIndex ? "/api/v1/system/indexer/clear" : "/api/v1/system/thumbnails/clear";
+    const trigger = isIndex ? "Clear index…" : "Clear cache…";
+    const action = isIndex ? "Clear index" : "Clear cache";
+    const progressKey = isIndex ? "indexClear" : "thumbnailClear";
+    let started = false;
+    let completed = false;
+    let rejectBusy = false;
+    const requests: unknown[] = [];
+    await page.route(`**${endpoint}`, async (route) => {
+      requests.push(route.request().postDataJSON());
+      if (rejectBusy) {
+        await route.fulfill({
+          status: 409,
+          json: { error: { kind: "conflict", message: "A maintenance job is already running." } },
+        });
+        return;
+      }
+      started = true;
+      await route.fulfill({ status: 202, json: { started: true } });
+    });
+    await page.route("**/api/v1/system/indexer", async (route) => {
+      const response = await route.fetch();
+      const json = SystemIndexerResponse.parse(await response.json());
+      if (started && json.stats !== undefined)
+        json.stats[progressKey] = {
+          running: !completed,
+          processed: completed ? 4 : 2,
+          total: 4,
+          startedAt: "2026-09-06T12:00:00Z",
+          finishedAt: completed ? "2026-09-06T12:01:00Z" : null,
+          errors: completed ? 1 : 0,
+        };
+      await route.fulfill({ response, json });
+    });
+    await page.goto(isIndex ? "/system/indexer" : "/system/thumbnails");
+    await page.getByRole("button", { name: trigger }).click();
+    let dialog = page.getByRole("dialog");
+    await expect(dialog.getByText(/Original files/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(requests).toHaveLength(0);
+    await page.getByRole("button", { name: trigger }).click();
+    dialog = page.getByRole("dialog");
+    if (isIndex) {
+      await expect(dialog.getByLabel("Path (optional)")).toBeDisabled();
+      await dialog.getByLabel("Root", { exact: true }).click();
+      await page.getByRole("option", { name: "sftpgo" }).click();
+      await dialog.getByLabel("Path (optional)").fill(" alice/docs ");
+    }
+    await dialog.getByRole("button", { name: action, exact: true }).click();
+    await expect(dialog).toBeHidden();
+    expect(requests).toEqual([isIndex ? { root: "sftpgo", path: "alice/docs" } : {}]);
+    await expect(page.getByText("Running · 2 of 4 processed · 0 errors")).toBeVisible();
+    await expect(page.getByRole("button", { name: trigger })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: isIndex ? "Reindex…" : "Rebuild…" }),
+    ).toBeDisabled();
+    completed = true;
+    await expect(page.getByText("Completed with errors · 4 of 4 processed · 1 errors")).toBeVisible(
+      { timeout: 10_000 },
+    );
+    await expect(page.getByRole("button", { name: trigger })).toBeEnabled();
+    rejectBusy = true;
+    await page.getByRole("button", { name: trigger }).click();
+    await dialog.getByRole("button", { name: action, exact: true }).click();
+    await expect(
+      page
+        .locator("[data-sonner-toast]")
+        .filter({ hasText: "A maintenance job is already running." }),
+    ).toBeVisible();
+    await expect(dialog).toBeVisible();
+  });
+}

@@ -13,6 +13,7 @@ import {
   settings,
   tags,
 } from "../schema/app.js";
+import { validateIdentityLinkId } from "./identity-links-types.js";
 import type {
   Account,
   AccountRepo,
@@ -116,6 +117,11 @@ function toSession(row: typeof sessions.$inferSelect): Session {
 
 function createProviderRepo(db: Db): ProviderRepo {
   return {
+    async get(id) {
+      validateIdentityLinkId(id);
+      const [row] = await db.select().from(providers).where(eq(providers.id, id));
+      return row ? toProvider(row) : null;
+    },
     async ensure(input) {
       const [row] = await db
         .insert(providers)

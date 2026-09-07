@@ -2,44 +2,92 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { describeApiError } from "@/lib/api/errors";
-import { useRebuildThumbnails, useSystemThumbnails } from "@/lib/api/system-queries";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import {
+  useClearThumbnails,
+  useRebuildIndexerThumbnails,
+  useSystemIndexer,
+  useSystemMaintenanceBusy,
+  useSystemThumbnails,
+} from "@/lib/api/system-queries";
 import { formatBytes } from "@/lib/format";
+import { describeMaintenanceError } from "@/lib/system/maintenance";
 import { sidecarStatus } from "@/lib/system/status";
+import { MaintenanceProgress } from "./maintenance-progress";
 import { StatCard } from "./stat-card";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 
-/** Admin page: `System > Thumbnails`. Cache size on disk and a rebuild action. */
+const ALL_ROOTS = "__all__";
+
+/** Admin controls for preview cache maintenance, independent of text indexing. */
 export function ThumbnailsPage() {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemThumbnails();
-  const rebuild = useRebuildThumbnails();
+  const indexer = useSystemIndexer();
+  const rebuild = useRebuildIndexerThumbnails();
+  const clear = useClearThumbnails();
+  const busy =
+    useSystemMaintenanceBusy(indexer.data?.stats) || rebuild.isPending || clear.isPending;
+  const unavailable = !data?.configured || !indexer.data?.reachable || !!error || !!indexer.error;
+  const rootNames =
+    indexer.data?.health?.roots ?? indexer.data?.stats?.roots.map((root) => root.root) ?? [];
   const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [root, setRoot] = useState(ALL_ROOTS);
+  const [path, setPath] = useState("");
+  const [force, setForce] = useState(false);
 
   function handleRebuildConfirm() {
-    rebuild.mutate(undefined, {
-      onSuccess: (result) => {
-        toast.success(
-          result.total > 0
-            ? `Rebuilding ${result.total} thumbnail${result.total === 1 ? "" : "s"}…`
-            : "No thumbnails need rebuilding.",
-        );
-        setRebuildOpen(false);
+    rebuild.mutate(
+      {
+        ...(root !== ALL_ROOTS ? { root } : {}),
+        ...(path.trim() ? { path: path.trim() } : {}),
+        ...(force ? { force: true } : {}),
       },
-      onError: (err) => toast.error(describeApiError(err)),
+      {
+        onSuccess: (result) => {
+          toast.success(
+            result.total > 0
+              ? `Rebuilding ${result.total} thumbnail${result.total === 1 ? "" : "s"}…`
+              : "No thumbnails need rebuilding.",
+          );
+          setRebuildOpen(false);
+          setRoot(ALL_ROOTS);
+          setPath("");
+          setForce(false);
+        },
+        onError: (err) => toast.error(describeMaintenanceError(err)),
+      },
+    );
+  }
+
+  function handleClearConfirm() {
+    clear.mutate(undefined, {
+      onSuccess: () => {
+        toast.success("Thumbnail cache clear started.");
+        setClearOpen(false);
+      },
+      onError: (err) => toast.error(describeMaintenanceError(err)),
     });
   }
 
@@ -49,13 +97,19 @@ export function ThumbnailsPage() {
       description="The indexer's on-disk thumbnail cache."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       actions={
-        <Button
-          type="button"
-          onClick={() => setRebuildOpen(true)}
-          disabled={data === undefined || !data.configured}
-        >
-          Rebuild…
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={unavailable || busy}
+            onClick={() => setClearOpen(true)}
+          >
+            Clear cache…
+          </Button>
+          <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
+            Rebuild…
+          </Button>
+        </>
       }
     >
       {isLoading ? (
@@ -69,45 +123,133 @@ export function ThumbnailsPage() {
               <CardTitle>Status</CardTitle>
               <CardDescription>
                 {data.configured
-                  ? "FDRIVE_THUMBS_DIR is configured."
-                  : "FDRIVE_THUMBS_DIR is not set; thumbnails are disabled."}
+                  ? "Thumbnail cache is available."
+                  : "Thumbnail cache is not configured."}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              <StatusBadge status={sidecarStatus(data.configured, data.configured)} />
+              <StatusBadge
+                status={sidecarStatus(
+                  indexer.data?.configured ?? false,
+                  indexer.data?.reachable ?? false,
+                )}
+              />
               <p className="text-sm text-muted-foreground">
-                Rebuild runs a background pass over every image, PDF, and video in the index and
-                writes any preview that is missing on disk. It never re-extracts text or embeddings.
-                Existing previews are kept; forcing a regenerate and clearing the cache are coming
-                in a later release.
+                Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
+                existing previews. Clear cache removes previews globally. Original files, text,
+                search data, and metadata stay unchanged. Normal indexing or on-demand generation
+                can create previews again.
               </p>
             </CardContent>
           </Card>
-
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-2">
+          {indexer.error ? (
+            <SystemErrorState error={indexer.error} onRetry={() => void indexer.refetch()} />
+          ) : null}
+          <div className="grid grid-cols-2 gap-3">
             <StatCard label="Thumbnails" value={data.count.toLocaleString()} />
             <StatCard label="Cache size" value={formatBytes(data.bytes)} />
           </div>
+          <MaintenanceProgress
+            title="Thumbnail rebuild"
+            job={indexer.data?.stats?.thumbnailRebuild}
+          />
+          <MaintenanceProgress
+            title="Thumbnail cache clear"
+            job={indexer.data?.stats?.thumbnailClear}
+          />
         </>
       )}
-
-      <AlertDialog open={rebuildOpen} onOpenChange={setRebuildOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Rebuild every thumbnail?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Runs a background pass that writes any preview missing on disk. Text extraction and
-              embeddings are not touched. This can take a while for a large index.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={rebuild.isPending} onClick={handleRebuildConfirm}>
+      <Dialog open={rebuildOpen} onOpenChange={setRebuildOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rebuild thumbnails</DialogTitle>
+            <DialogDescription>
+              Regenerates preview images for photos, PDFs, and videos. Text and search data are not
+              touched.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-2">
+            <Field>
+              <FieldLabel htmlFor="rebuild-root">Root</FieldLabel>
+              <Select
+                value={root}
+                onValueChange={(value) => {
+                  setRoot(value ?? ALL_ROOTS);
+                  setPath("");
+                }}
+              >
+                <SelectTrigger id="rebuild-root">
+                  <SelectValue>{root === ALL_ROOTS ? "All roots" : root}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_ROOTS}>All roots</SelectItem>
+                  {rootNames.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                Choose every root or limit the rebuild to one root.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rebuild-path">Path (optional)</FieldLabel>
+              <Input
+                id="rebuild-path"
+                value={path}
+                disabled={root === ALL_ROOTS}
+                onChange={(event) => setPath(event.target.value)}
+                placeholder="Whole root"
+              />
+              <FieldDescription>
+                Choose a root first, then enter a file or folder path relative to it.
+              </FieldDescription>
+            </Field>
+            <Field orientation="horizontal">
+              <FieldLabel htmlFor="rebuild-force">Regenerate existing thumbnails</FieldLabel>
+              <Switch id="rebuild-force" checked={force} onCheckedChange={setForce} />
+            </Field>
+            <FieldDescription>
+              Off fills missing previews; on replaces every preview in scope.
+            </FieldDescription>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRebuildOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={unavailable || busy} onClick={handleRebuildConfirm}>
               Rebuild
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={clearOpen} onOpenChange={setClearOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clear thumbnail cache?</DialogTitle>
+            <DialogDescription>
+              Removes cached previews for all roots, including unused preview files. Original files,
+              extracted text, embeddings, tags, favorites, and recents stay. Normal indexing or
+              on-demand generation can create previews again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setClearOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={unavailable || busy}
+              onClick={handleClearConfirm}
+            >
+              Clear cache
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SystemPage>
   );
 }

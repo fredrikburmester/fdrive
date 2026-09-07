@@ -29,6 +29,7 @@ class ThumbnailRebuildJob:
     exclusion check the `/thumbnails/rebuild` route uses to return 409."""
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    admission: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     running: bool = False
     processed: int = 0
     total: int = 0
@@ -39,9 +40,9 @@ class ThumbnailRebuildJob:
     def try_start(self, total: int) -> bool:
         """Claim the job for a new run. Returns False (and changes nothing) if a
         run is already in progress."""
+        if not self.admission.acquire(blocking=False):
+            return False
         with self._lock:
-            if self.running:
-                return False
             self.running = True
             self.processed = 0
             self.total = total
@@ -56,10 +57,20 @@ class ThumbnailRebuildJob:
             if not ok:
                 self.errors += 1
 
+    def discover(self, count: int) -> None:
+        with self._lock:
+            self.total += count
+
+    def fail(self) -> None:
+        with self._lock:
+            self.errors += 1
+
     def finish(self) -> None:
         with self._lock:
-            self.running = False
-            self.finished_at = datetime.now().astimezone()
+            if self.running:
+                self.running = False
+                self.finished_at = datetime.now().astimezone()
+                self.admission.release()
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -125,18 +136,30 @@ def start_rebuild(
     """Start a background thumbnail rebuild across `contexts`. Returns the total
     candidate count, or `None` when a rebuild is already running (the caller
     should answer with 409 in that case)."""
-    total = count_candidates(contexts, path)
-    if not job.try_start(total):
+    if not job.try_start(0):
         return None
+    try:
+        total = count_candidates(contexts, path)
+        job.discover(total)
+    except Exception:
+        job.fail()
+        job.finish()
+        raise
 
     def run() -> None:
         try:
             for ctx in contexts:
                 rebuild_thumbnails(ctx, path, force, on_file=job.advance)
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
+            job.fail()
             log(f"thumbnail rebuild job crashed: {type(e).__name__}: {e}")
         finally:
             job.finish()
 
-    threading.Thread(target=run, daemon=True, name="thumbnail-rebuild").start()
+    try:
+        threading.Thread(target=run, daemon=True, name="thumbnail-rebuild").start()
+    except Exception:
+        job.fail()
+        job.finish()
+        raise
     return total

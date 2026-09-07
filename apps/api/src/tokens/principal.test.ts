@@ -40,7 +40,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date(),
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     expect(await resolve("not-a-token")).toBeNull();
@@ -52,7 +52,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date(),
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     expect(await resolve(generateApiToken())).toBeNull();
@@ -73,7 +73,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date("2026-01-01T00:00:00.000Z"),
-      storageFactory: (identityId) => {
+      storageFactory: async (identityId) => {
         expect(identityId).toBe(identity.id);
         return FAKE_STORAGE;
       },
@@ -105,7 +105,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date("2026-06-01T00:00:00.000Z"),
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     expect(await resolve(token)).toBeNull();
@@ -127,7 +127,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => expiresAt,
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     expect(await resolve(token)).toBeNull();
@@ -148,7 +148,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date(),
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     expect(await resolve(token)).toBeNull();
@@ -171,7 +171,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date(),
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     expect(await resolve(token)).toBeNull();
@@ -193,7 +193,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => now,
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     await resolve(token);
@@ -224,7 +224,7 @@ describe("createResolveTokenPrincipal", () => {
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => now,
-      storageFactory: () => FAKE_STORAGE,
+      storageFactory: async () => FAKE_STORAGE,
     });
 
     await resolve(token);

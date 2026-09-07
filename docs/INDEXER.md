@@ -200,3 +200,33 @@ This builds the service's own Docker image and runs pytest inside it (a real
 Linux environment), using the host's Docker socket so `testcontainers` can
 start its own Postgres. CI runs the same suite natively on `ubuntu-latest`,
 where inotify is already available, in the `indexer` job.
+
+## Clearing derived data
+
+Internal `POST /index/clear` accepts an empty body or `{}` for every configured
+root, or `{ "root": "sftpgo", "path": "/documents" }` for one file or directory
+subtree. `path` requires `root`; `/` selects the entire root. Empty names,
+traversal, malformed bodies, and unknown roots are rejected. Directory matching
+uses a literal boundary, so `%` and `_` in names are never wildcards.
+
+The background pass deletes selected `idx.files` rows and their cascading chunks
+and embeddings. Original files, roots, scan/event/move history, tags, favorites,
+recents, and thumbnail cache remain. It uses bounded batches and shares each
+path's lock with extraction and embedding retries. It does not request a scan;
+scheduled scans and later watcher changes can repopulate the index.
+
+Internal `POST /thumbnails/clear` accepts only an empty body or `{}`. It clears
+the shared preview cache and manifest, including orphan previews in the generated
+SHA-256 layout. Directory descriptors and no-follow opens prevent symlink
+traversal. Failed removals retain their manifest rows for retry; missing files
+allow manifest cleanup. Originals and index/text/metadata rows remain. Normal
+indexing or on-demand preview generation can repopulate the cache.
+
+Both routes return `202 { "started": true }` without waiting for discovery or
+deletion to finish.
+Clear passes and explicit thumbnail rebuilds share admission; conflicting requests
+return 409. `/stats` exposes `index_clear` and `thumbnail_clear` records with
+`running`, `processed`, `total`, `started_at`, `finished_at`, and `errors`. Totals
+grow as batches are discovered. Top-level failures are counted, and admission is
+released even if thread startup fails. Each background thread gets its own
+thread-local database connection. These actions do not pause normal indexing.

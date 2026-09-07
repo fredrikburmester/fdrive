@@ -36,6 +36,8 @@ export interface ByteRange {
 }
 
 export interface DownloadOptions {
+  /** Validated single byte-range header, including suffix ranges. */
+  rangeHeader?: string;
   range?: ByteRange;
   ifRange?: string;
   signal?: AbortSignal;
@@ -78,6 +80,8 @@ export interface SftpgoShareInput {
 }
 
 export interface SftpgoShare {
+  /** Original upstream scope, allowing callers to reject unsupported read/write shares. */
+  rawScope?: number;
   id: string;
   name: string;
   description: string;
@@ -123,13 +127,14 @@ export interface SftpgoUserApi {
 }
 
 export interface SftpgoPublicShareApi {
+  downloadFile(options?: DownloadOptions): Promise<DownloadResult>;
   list(path?: string): Promise<SftpgoEntry[]>;
   download(path: string, options?: DownloadOptions): Promise<DownloadResult>;
-  zip(): Promise<ReadableStream<Uint8Array>>;
+  zip(options?: { signal?: AbortSignal }): Promise<ReadableStream<Uint8Array>>;
   upload(
     fileName: string,
     body: ReadableStream<Uint8Array> | Uint8Array,
-    options?: { modifiedAt?: Date; contentLength?: number },
+    options?: { modifiedAt?: Date; contentLength?: number; signal?: AbortSignal },
   ): Promise<void>;
 }
 

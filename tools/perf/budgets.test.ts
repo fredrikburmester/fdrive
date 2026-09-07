@@ -1,100 +1,128 @@
-import { describe, expect, it } from "vitest";
-import { allBudgetsPassed, evaluateBudgets, type ScenarioResults } from "./budgets.js";
-import type { ScenarioResult } from "./results.js";
+import { expect, it } from "vitest";
+import {
+  allBudgetsPassed,
+  evaluateBudgets,
+  REQUIRED_SCENARIOS,
+  type ScenarioResults,
+  validMeasurement,
+} from "./budgets.js";
+import { toScenarioResult } from "./results.js";
 
-function result(overrides: Partial<ScenarioResult> & { name: string }): ScenarioResult {
-  return {
-    p50Ms: 1,
-    p95Ms: 1,
-    p99Ms: 1,
-    requestsPerSecond: 1,
-    errors: 0,
-    ...overrides,
-  };
+function valid(): ScenarioResults {
+  const results: ScenarioResults = {};
+  for (const name of REQUIRED_SCENARIOS)
+    results[name] = toScenarioResult(
+      name,
+      Array.from({ length: 200 }, () => 10),
+      100,
+      0,
+      {
+        warmupCount: 20,
+        uniquePaths: 20,
+        verifiedCount: name === "uploadSmallBurst" ? 200 : 10000,
+        maxMounted: 100,
+        expectedBytes: 512 * 1024 * 1024,
+        completedBytes: Array.from({ length: 200 }, () => 512 * 1024 * 1024),
+        bytesPerSecond: 100,
+        wallTimeMs: 1000,
+      },
+    );
+  return results;
 }
-
-describe("evaluateBudgets", () => {
-  it("passes list1k when warm p95 is under 100 ms", () => {
-    const results: ScenarioResults = { list1k: result({ name: "list1k", p95Ms: 42 }) };
-    const outcomes = evaluateBudgets(results);
-    const list1k = outcomes.find((o) => o.scenario === "list1k");
-    expect(list1k?.status).toBe("pass");
-  });
-
-  it("fails list1k when warm p95 is at or over 100 ms", () => {
-    const results: ScenarioResults = { list1k: result({ name: "list1k", p95Ms: 100 }) };
-    const outcomes = evaluateBudgets(results);
-    const list1k = outcomes.find((o) => o.scenario === "list1k");
-    expect(list1k?.status).toBe("fail");
-  });
-
-  it("skips list1k when it was not run", () => {
-    const outcomes = evaluateBudgets({});
-    const list1k = outcomes.find((o) => o.scenario === "list1k");
-    expect(list1k?.status).toBe("skipped");
-  });
-
-  it("passes list1kCold under 400 ms and fails at or over", () => {
-    const under = evaluateBudgets({ list1kCold: result({ name: "list1kCold", p95Ms: 399 }) });
-    const over = evaluateBudgets({ list1kCold: result({ name: "list1kCold", p95Ms: 400 }) });
-    expect(under.find((o) => o.scenario === "list1kCold")?.status).toBe("pass");
-    expect(over.find((o) => o.scenario === "list1kCold")?.status).toBe("fail");
-  });
-
-  it("reports list10k as informational, never pass or fail", () => {
-    const outcomes = evaluateBudgets({
-      list10k: result({ name: "list10k", p95Ms: 5000 }),
-    });
-    const list10k = outcomes.find((o) => o.scenario === "list10k");
-    expect(list10k?.status).toBe("informational");
-  });
-
-  it("passes the download ratio budget at exactly 90%", () => {
-    const outcomes = evaluateBudgets({
-      downloadViaApi: result({ name: "downloadViaApi", bytesPerSecond: 90 }),
-      downloadDirect: result({ name: "downloadDirect", bytesPerSecond: 100 }),
-    });
-    const ratio = outcomes.find((o) => o.scenario === "downloadViaApi");
-    expect(ratio?.status).toBe("pass");
-  });
-
-  it("fails the download ratio budget below 90%", () => {
-    const outcomes = evaluateBudgets({
-      downloadViaApi: result({ name: "downloadViaApi", bytesPerSecond: 50 }),
-      downloadDirect: result({ name: "downloadDirect", bytesPerSecond: 100 }),
-    });
-    const ratio = outcomes.find((o) => o.scenario === "downloadViaApi");
-    expect(ratio?.status).toBe("fail");
-  });
-
-  it("skips the download ratio budget when only one side ran", () => {
-    const outcomes = evaluateBudgets({
-      downloadViaApi: result({ name: "downloadViaApi", bytesPerSecond: 50 }),
-    });
-    const ratio = outcomes.find((o) => o.scenario === "downloadViaApi");
-    expect(ratio?.status).toBe("skipped");
-  });
-
-  it("passes uploadSmallBurst under 30 seconds and fails at or over", () => {
-    const under = evaluateBudgets({
-      uploadSmallBurst: result({ name: "uploadSmallBurst", wallTimeMs: 29_999 }),
-    });
-    const over = evaluateBudgets({
-      uploadSmallBurst: result({ name: "uploadSmallBurst", wallTimeMs: 30_000 }),
-    });
-    expect(under.find((o) => o.scenario === "uploadSmallBurst")?.status).toBe("pass");
-    expect(over.find((o) => o.scenario === "uploadSmallBurst")?.status).toBe("fail");
-  });
+it("requires every complete finite error-free metric", () => {
+  expect(allBudgetsPassed(evaluateBudgets(valid()))).toBe(true);
+  expect(allBudgetsPassed([])).toBe(false);
+  expect(allBudgetsPassed(evaluateBudgets({}))).toBe(false);
+  for (const name of REQUIRED_SCENARIOS) {
+    const results = valid();
+    delete results[name];
+    expect(allBudgetsPassed(evaluateBudgets(results))).toBe(false);
+    for (const value of [NaN, Infinity, -1, 0]) {
+      const r = valid();
+      const old = r[name];
+      if (!old) throw Error();
+      r[name] = { ...old, p95Ms: value };
+      expect(allBudgetsPassed(evaluateBudgets(r))).toBe(false);
+    }
+    const old = valid()[name];
+    if (!old) throw Error();
+    for (const change of [{ errors: 1 }, { samplesMs: [] }, { samplesMs: [NaN] }])
+      expect(validMeasurement(name, { ...old, ...change })).toBe(false);
+  }
+});
+it("requires warmup, cold path uniqueness, verified uploads, bounded UI and full downloads", () => {
+  const r = valid();
+  for (const [name, change] of [
+    ["list1k", { warmupCount: 0 }],
+    ["search25k", { warmupCount: 0 }],
+    ["list1kCold", { uniquePaths: 1 }],
+    ["uploadSmallBurst", { verifiedCount: 199 }],
+    ["uiList", { maxMounted: 10000 }],
+    ["uiGrid", { verifiedCount: 1 }],
+    ["downloadViaApi", { completedBytes: [1] }],
+    ["downloadDirect", { bytesPerSecond: Infinity }],
+    ["downloadDirect", { expectedBytes: 1 }],
+  ] as const) {
+    const old = r[name];
+    if (!old) throw Error();
+    expect(validMeasurement(name, { ...old, ...change })).toBe(false);
+  }
+  for (const [name, p95Ms] of [
+    ["list1k", 100],
+    ["list1kCold", 400],
+    ["search25k", 300],
+    ["uiList", 500],
+    ["uiGrid", 500],
+  ] as const) {
+    const copy = valid();
+    const old = copy[name];
+    if (!old) throw Error();
+    copy[name] = { ...old, p95Ms };
+    expect(allBudgetsPassed(evaluateBudgets(copy))).toBe(false);
+  }
+  const upload = r.uploadSmallBurst;
+  if (!upload) throw Error();
+  r.uploadSmallBurst = { ...upload, wallTimeMs: Infinity };
+  expect(allBudgetsPassed(evaluateBudgets(r))).toBe(false);
+  const via = r.downloadViaApi;
+  if (!via) throw Error();
+  r.downloadViaApi = { ...via, bytesPerSecond: 89 };
+  expect(evaluateBudgets(r).find((x) => x.scenario === "downloadViaApi")?.status).toBe("fail");
 });
 
-describe("allBudgetsPassed", () => {
-  it("is true when every outcome is pass, informational, or skipped", () => {
-    const outcomes = evaluateBudgets({});
-    expect(allBudgetsPassed(outcomes)).toBe(true);
-  });
-
-  it("is false when any outcome failed", () => {
-    const outcomes = evaluateBudgets({ list1k: result({ name: "list1k", p95Ms: 500 }) });
-    expect(allBudgetsPassed(outcomes)).toBe(false);
-  });
+it("rejects missing/nonfinite counters and missing throughput baselines", () => {
+  const r = valid();
+  expect(validMeasurement("list10k", toScenarioResult("list10k", [10], 1, 0))).toBe(true);
+  for (const name of ["list1k", "search25k", "list1kCold", "uiList", "downloadDirect"] as const) {
+    const old = r[name];
+    if (!old) throw Error();
+    const copy = { ...old };
+    delete copy.warmupCount;
+    delete copy.uniquePaths;
+    delete copy.maxMounted;
+    expect(validMeasurement(name, copy)).toBe(false);
+  }
+  for (const name of ["list1k", "list1kCold", "uiGrid", "downloadDirect"] as const) {
+    const old = r[name];
+    if (!old) throw Error();
+    expect(
+      validMeasurement(name, {
+        ...old,
+        warmupCount: Infinity,
+        uniquePaths: Infinity,
+        maxMounted: Infinity,
+      }),
+    ).toBe(false);
+  }
+  const direct = r.downloadDirect;
+  if (!direct) throw Error();
+  const incomplete = { ...direct };
+  delete incomplete.completedBytes;
+  expect(validMeasurement("downloadDirect", incomplete)).toBe(false);
+  const upload = r.uploadSmallBurst;
+  if (!upload) throw Error();
+  const missingWall = { ...upload };
+  delete missingWall.wallTimeMs;
+  r.uploadSmallBurst = missingWall;
+  expect(allBudgetsPassed(evaluateBudgets(r))).toBe(false);
 });

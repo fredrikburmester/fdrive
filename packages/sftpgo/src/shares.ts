@@ -9,11 +9,11 @@ export interface RawSftpgoShare {
   readonly username: string;
   readonly created_at: number;
   readonly updated_at: number;
-  readonly last_use_at: number;
-  readonly expires_at: number;
+  readonly last_use_at?: number;
+  readonly expires_at?: number;
   readonly password?: string;
-  readonly max_tokens: number;
-  readonly used_tokens: number;
+  readonly max_tokens?: number;
+  readonly used_tokens?: number;
   readonly allow_from?: string[];
 }
 
@@ -35,6 +35,7 @@ export function msToDateOrNull(ms: number): Date | null {
 export function toShare(raw: RawSftpgoShare): SftpgoShare {
   return {
     id: raw.id,
+    rawScope: raw.scope,
     name: raw.name,
     description: raw.description ?? "",
     scope: scopeFromWire(raw.scope),
@@ -42,10 +43,10 @@ export function toShare(raw: RawSftpgoShare): SftpgoShare {
     username: raw.username,
     createdAt: new Date(raw.created_at),
     updatedAt: new Date(raw.updated_at),
-    lastUseAt: msToDateOrNull(raw.last_use_at),
-    expiresAt: msToDateOrNull(raw.expires_at),
-    maxTokens: raw.max_tokens,
-    usedTokens: raw.used_tokens,
+    lastUseAt: msToDateOrNull(raw.last_use_at ?? 0),
+    expiresAt: msToDateOrNull(raw.expires_at ?? 0),
+    maxTokens: raw.max_tokens ?? 0,
+    usedTokens: raw.used_tokens ?? 0,
     allowFrom: raw.allow_from ?? [],
     hasPassword: typeof raw.password === "string" && raw.password.length > 0,
   };

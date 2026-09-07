@@ -1,13 +1,14 @@
-import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
-import type { SftpgoClient } from "@fdrive/sftpgo";
+import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
 import type { ConnectionStore } from "../connection/store.js";
 import { createLoginLimiter, type LoginLimiter } from "./login-limiter.js";
 import type { PrincipalResolver } from "./principal.js";
+import type { ClientForBaseUrl, ClientForIdentity } from "./provider-client.ts";
 import { registerAuthRoutes } from "./routes.js";
 import { createAuthService } from "./service.js";
+import type { IdentityStorageFactory } from "./storage-factory.ts";
 import { createTokenSource, type TokenSource } from "./token-source.js";
 
 export { CryptoError, KEY_ID, open, parseMasterKey, seal } from "./crypto.js";
@@ -32,11 +33,13 @@ const LOGIN_BLOCK_MS = 60_000;
 
 export interface CreateAuthModuleDeps {
   readonly repos: Repos;
-  readonly sftpgo: SftpgoClient;
+  readonly identityLinks: AccountIdentityOperations;
+  readonly clientForBaseUrl: ClientForBaseUrl;
+  readonly clientForIdentity: ClientForIdentity;
   readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly config: AppConfig;
-  readonly storageFactory: (identityId: string) => StorageProvider;
+  readonly storageFactory: IdentityStorageFactory;
   readonly limiter?: LoginLimiter;
   /** Resolves the active SFTPGo connection for `providers.ensure` and the provider label. */
   readonly connectionStore: ConnectionStore;
@@ -81,14 +84,15 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
     deps.tokenSource ??
     createTokenSource({
       repos: deps.repos,
-      sftpgo: deps.sftpgo,
+      clientForIdentity: deps.clientForIdentity,
       master: deps.master,
       clock: deps.clock,
     });
 
   const service = createAuthService({
     repos: deps.repos,
-    sftpgo: deps.sftpgo,
+    identityLinks: deps.identityLinks,
+    clientForBaseUrl: deps.clientForBaseUrl,
     master: deps.master,
     clock: deps.clock,
     config: deps.config,

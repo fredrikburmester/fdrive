@@ -1,0 +1,26 @@
+# TLS terminates at the operator's edge proxy. Preserve the public origin.
+:80 {
+	request_body {
+		max_size 0
+	}
+	header -Server
+	handle_path /onlyoffice/* {
+		reverse_proxy onlyoffice:80 {
+			header_up X-Forwarded-Host {host}/onlyoffice
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+	handle /wopi/* {
+		reverse_proxy api:3001
+	}
+	handle /mcp* {
+		reverse_proxy api:3001
+	}
+	handle {
+		encode zstd gzip
+		reverse_proxy web:3000
+	}
+}

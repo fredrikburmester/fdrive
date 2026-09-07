@@ -2,6 +2,7 @@ import type { Repos } from "@fdrive/db";
 import { type SftpgoClient, SftpgoError } from "@fdrive/sftpgo";
 import { ApiHttpError } from "../errors.js";
 import { CryptoError, open, seal } from "./crypto.js";
+import type { ClientForIdentity } from "./provider-client.ts";
 
 /** Re-mints and caches SFTPGo JWTs for identities, unsealing stored passwords on demand. */
 export interface TokenSource {
@@ -27,7 +28,7 @@ export interface TokenSource {
 
 export interface CreateTokenSourceDeps {
   readonly repos: Repos;
-  readonly sftpgo: SftpgoClient;
+  readonly clientForIdentity: ClientForIdentity;
   readonly master: Uint8Array;
   readonly clock: () => Date;
 }
@@ -68,7 +69,7 @@ function openOrReauth(master: Uint8Array, blob: Uint8Array, aad: string): Uint8A
   }
 }
 
-/** Creates a `TokenSource` backed by `deps.repos` for storage and `deps.sftpgo` for minting. */
+/** Creates a `TokenSource` backed by `deps.repos` for storage and provider-bound clients for minting. */
 export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
   const cache = new Map<string, CachedToken>();
 
@@ -84,7 +85,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
     cache.set(identityId, { token: token.accessToken, expiresAt: token.expiresAt });
   }
 
-  async function mintAndStore(identityId: string): Promise<CachedToken> {
+  async function mintAndStore(identityId: string, client: SftpgoClient): Promise<CachedToken> {
     const identity = await deps.repos.identities.get(identityId);
     if (!identity) {
       throw new ApiHttpError("reauth_required", "identity not found; sign in again");
@@ -99,7 +100,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
 
     let minted: { accessToken: string; expiresAt: Date };
     try {
-      minted = await deps.sftpgo.login({
+      minted = await client.login({
         username: identity.externalUsername,
         password: parsed.password,
       });
@@ -118,6 +119,8 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
   }
 
   async function get(identityId: string): Promise<string> {
+    // Resolve before cache access, credential decryption, and every retry.
+    const client = await deps.clientForIdentity(identityId);
     const nowMs = deps.clock().getTime();
 
     const cached = cache.get(identityId);
@@ -139,7 +142,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
       return token;
     }
 
-    const minted = await mintAndStore(identityId);
+    const minted = await mintAndStore(identityId, client);
     return minted.token;
   }
 

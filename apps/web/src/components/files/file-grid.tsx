@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -41,6 +41,7 @@ const TILE_HEIGHT = GRID_TILE_HEIGHT;
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 export interface FileGridProps {
+  officeStatus?: OfficeStatusResponse | undefined;
   entries: readonly FsEntry[];
   selected: ReadonlySet<string>;
   focusedPath: string | null;
@@ -89,6 +90,7 @@ function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
 /** A virtualized grid of tiles, one row of tiles per virtualized "row". */
 export function FileGrid({
   entries,
+  officeStatus,
   selected,
   focusedPath,
   onEntryClick,
@@ -265,6 +267,7 @@ export function FileGrid({
 
                       return (
                         <FileContextMenu
+                          officeStatus={officeStatus}
                           key={entry.path}
                           entry={entry}
                           onAction={onContextAction}

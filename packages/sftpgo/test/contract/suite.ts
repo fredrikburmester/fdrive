@@ -533,6 +533,36 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
         expect(share.hasPassword).toBe(true);
       });
 
+      it("raw single-file shares support suffix ranges and directory listing does not consume quota", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        const { id } = await user.shares.create({
+          name: "raw-single",
+          scope: "read",
+          paths: ["/docs/readme.md"],
+        });
+        const full = await target.client.publicShare(id).downloadFile();
+        const text = await new Response(full.body).text();
+        const suffix = await target.client
+          .publicShare(id)
+          .downloadFile({ rangeHeader: "bytes=-3" });
+        expect(suffix.status).toBe(206);
+        expect(await new Response(suffix.body).text()).toBe(text.slice(-3));
+        await expect(target.client.publicShare(id).list()).rejects.toMatchObject({
+          kind: "bad_request",
+        });
+        const dir = await user.shares.create({
+          name: "list-quota",
+          scope: "read",
+          paths: ["/docs"],
+          maxTokens: 1,
+        });
+        await target.client.publicShare(dir.id).list();
+        await target.client.publicShare(dir.id).list();
+        expect((await user.shares.get(dir.id)).usedTokens).toBe(0);
+      });
+
       it("public share list through client.publicShare lists the seeded files", async () => {
         const alice = findUser(target.users, "alice");
         const token = await loginAs(target.client, alice);
@@ -607,7 +637,19 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
           scope: "write",
           paths: ["/contract/write-share-target"],
         });
-        await target.client.publicShare(id).upload("uploaded-via-share.txt", encode("via share"));
+        for (const name of [
+          "uploaded-via-share.txt",
+          "literal%20.txt",
+          "literal%2F.txt",
+          "文 space.txt",
+        ]) {
+          await target.client.publicShare(id).upload(name, encode(name));
+          expect(
+            await new Response(
+              (await user.download(`/contract/write-share-target/${name}`)).body,
+            ).text(),
+          ).toBe(name);
+        }
         const entries = await user.list("/contract/write-share-target");
         expect(entries.map((entry) => entry.name)).toContain("uploaded-via-share.txt");
       });

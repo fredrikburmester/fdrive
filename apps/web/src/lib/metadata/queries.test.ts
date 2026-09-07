@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { MutationCache, QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { accountTransition } from "@/lib/account/transition";
 
 function entry(path: string, overrides: Partial<FsEntry> = {}): FsEntry {
   return {
@@ -33,6 +34,16 @@ const statMock = vi.fn();
 const toastErrorMock = vi.fn();
 
 vi.mock("./deps", () => ({
+  snapshotTabApiClient: () => ({
+    createTag: (...args: unknown[]) => createTagMock(...args),
+    updateTag: (...args: unknown[]) => updateTagMock(...args),
+    deleteTag: (...args: unknown[]) => deleteTagMock(...args),
+    touchRecent: (...args: unknown[]) => touchRecentMock(...args),
+    setFileTags: (...args: unknown[]) => setFileTagsMock(...args),
+    addFavorite: (...args: unknown[]) => addFavoriteMock(...args),
+    removeFavorite: (...args: unknown[]) => removeFavoriteMock(...args),
+    stat: (...args: unknown[]) => statMock(...args),
+  }),
   apiClient: {
     listTags: (...args: unknown[]) => listTagsMock(...args),
     createTag: (...args: unknown[]) => createTagMock(...args),
@@ -59,6 +70,7 @@ vi.mock("./deps", () => ({
       list: () => ["recents", "list"] as const,
     },
     fs: {
+      stat: (path: string) => ["fs", "stat", path] as const,
       list: (path: string) => ["fs", "list", path] as const,
     },
   },
@@ -70,8 +82,9 @@ vi.mock("sonner", () => ({
   },
 }));
 
-function createWrapper() {
+function createWrapper(onMutate?: () => Promise<void>) {
   const queryClient = new QueryClient({
+    mutationCache: new MutationCache(onMutate ? { onMutate } : {}),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   function wrapper({ children }: { children: ReactNode }) {
@@ -441,5 +454,341 @@ describe("useResolvedEntries", () => {
     rerender({ paths: ["/a", "/b"] });
 
     await waitFor(() => expect(result.current.entries.map((r) => r.path)).toEqual(["/a", "/b"]));
+  });
+});
+
+it.each(["favorite", "tags"])(
+  "late %s failure cannot roll old optimistic cache into a new login",
+  async (kind) => {
+    const { useSetFileTags, useToggleFavorite } = await import("./queries");
+    let reject: ((cause: Error) => void) | undefined;
+    const deferred = () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      });
+    addFavoriteMock.mockImplementation(deferred);
+    setFileTagsMock.mockImplementation(deferred);
+    const { wrapper, queryClient } = createWrapper();
+    queryClient.setQueryData(["fs", "list", "/a"], {
+      path: "/a",
+      entries: [entry("/a/old", { meta: { tagIds: [], favorite: false } })],
+    });
+    const { result } = renderHook(
+      () => ({ favorite: useToggleFavorite(), tags: useSetFileTags() }),
+      { wrapper },
+    );
+    act(() => {
+      if (kind === "favorite") result.current.favorite.mutate({ path: "/a/old", favorite: true });
+      else result.current.tags.mutate([{ path: "/a/old", tagIds: ["t"] }]);
+    });
+    await waitFor(() => expect(reject).toBeDefined());
+    act(() => {
+      accountTransition.begin();
+      queryClient.clear();
+      accountTransition.finish(true);
+    });
+    const fresh = { path: "/a", entries: [entry("/a/new")] };
+    queryClient.setQueryData(["fs", "list", "/a"], fresh);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    await act(async () => {
+      reject?.(new Error("late failure"));
+    });
+    expect(queryClient.getQueryData(["fs", "list", "/a"])).toEqual(fresh);
+    expect(invalidate).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["favorite", "tags"])(
+  "does not resume %s optimistic work after cancellation overlaps a switch",
+  async (kind) => {
+    const { useSetFileTags, useToggleFavorite } = await import("./queries");
+    const { wrapper, queryClient } = createWrapper();
+    let release: (() => void) | undefined;
+    vi.spyOn(queryClient, "cancelQueries").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { result } = renderHook(
+      () => ({ favorite: useToggleFavorite(), tags: useSetFileTags() }),
+      { wrapper },
+    );
+    act(() => {
+      if (kind === "favorite") result.current.favorite.mutate({ path: "/a/old", favorite: true });
+      else result.current.tags.mutate([{ path: "/a/old", tagIds: ["t"] }]);
+    });
+    await waitFor(() => expect(release).toBeDefined());
+    act(() => {
+      accountTransition.begin();
+      queryClient.clear();
+      accountTransition.finish(true);
+    });
+    const fresh = { path: "/a", entries: [entry("/a/new")] };
+    queryClient.setQueryData(["fs", "list", "/a"], fresh);
+    await act(async () => {
+      release?.();
+    });
+    expect(addFavoriteMock).not.toHaveBeenCalled();
+    expect(setFileTagsMock).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData(["fs", "list", "/a"])).toEqual(fresh);
+  },
+);
+
+describe("identity-bound recent touches", () => {
+  it("rejects a queued recent touch after the displayed login changes", async () => {
+    const { useTouchRecent } = await import("./queries");
+    const gate = Promise.withResolvers<void>();
+    const entered = vi.fn(() => gate.promise);
+    const { wrapper, queryClient } = createWrapper(entered);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { result, rerender } = renderHook(() => useTouchRecent(), { wrapper });
+    act(() => result.current.mutate("/same.txt"));
+    await waitFor(() => expect(entered).toHaveBeenCalled());
+    accountTransition.begin();
+    accountTransition.finish(true);
+    rerender();
+    gate.resolve();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(touchRecentMock).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejects touches during a switch and ignores late successful touches", async () => {
+    const { useTouchRecent } = await import("./queries");
+    const { wrapper, queryClient } = createWrapper();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useTouchRecent(), { wrapper });
+    accountTransition.begin();
+    try {
+      await act(async () => {
+        await expect(result.current.mutateAsync("/same.txt")).rejects.toThrow(
+          "The active login changed.",
+        );
+      });
+      expect(touchRecentMock).not.toHaveBeenCalled();
+    } finally {
+      accountTransition.finish(false);
+    }
+    const response = Promise.withResolvers<void>();
+    touchRecentMock.mockReturnValue(response.promise);
+    act(() => result.current.mutate("/same.txt"));
+    await waitFor(() => expect(touchRecentMock).toHaveBeenCalled());
+    accountTransition.begin();
+    accountTransition.finish(true);
+    response.resolve();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("queued optimistic metadata", () => {
+  it("rejects queued same-path favorites and tags before writing the new cache", async () => {
+    const { useSetFileTags, useToggleFavorite } = await import("./queries");
+    const gate = Promise.withResolvers<void>();
+    const entered = vi.fn(() => gate.promise);
+    const { wrapper, queryClient } = createWrapper(entered);
+    const { result, rerender } = renderHook(
+      () => ({ tags: useSetFileTags(), favorite: useToggleFavorite() }),
+      { wrapper },
+    );
+    act(() => {
+      result.current.tags.mutate([{ path: "/same.txt", tagIds: ["tag"] }]);
+      result.current.favorite.mutate({ path: "/same.txt", favorite: true });
+    });
+    await waitFor(() => expect(entered).toHaveBeenCalledTimes(2));
+    accountTransition.begin();
+    accountTransition.finish(true);
+    const nextListing = {
+      path: "/",
+      entries: [entry("/same.txt", { meta: { tagIds: [], favorite: false } })],
+    };
+    queryClient.setQueryData(["fs", "list", "/"], nextListing);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    rerender();
+    gate.resolve();
+    await waitFor(() => {
+      expect(result.current.tags.isError).toBe(true);
+      expect(result.current.favorite.isError).toBe(true);
+    });
+    expect(setFileTagsMock).not.toHaveBeenCalled();
+    expect(addFavoriteMock).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData(["fs", "list", "/"])).toEqual(nextListing);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects queued tag management after switching accounts", async () => {
+    const { useTagMutations } = await import("./queries");
+    const gate = Promise.withResolvers<void>();
+    const entered = vi.fn(() => gate.promise);
+    const { wrapper, queryClient } = createWrapper(entered);
+    const { result, rerender } = renderHook(() => useTagMutations(), { wrapper });
+    act(() => {
+      result.current.createTag.mutate({ name: "old tag", color: "red" });
+      result.current.updateTag.mutate({ id: "tag", patch: { name: "renamed" } });
+      result.current.deleteTag.mutate("tag");
+    });
+    await waitFor(() => expect(entered).toHaveBeenCalledTimes(3));
+    accountTransition.begin();
+    accountTransition.finish(true);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    rerender();
+    gate.resolve();
+    await waitFor(() => {
+      expect(result.current.createTag.isError).toBe(true);
+      expect(result.current.updateTag.isError).toBe(true);
+      expect(result.current.deleteTag.isError).toBe(true);
+    });
+    expect(createTagMock).not.toHaveBeenCalled();
+    expect(updateTagMock).not.toHaveBeenCalled();
+    expect(deleteTagMock).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("preview stat metadata", () => {
+  it.each([true, false])(
+    "updates the preview's favorite immediately and rolls it back on failure: favorite=%s",
+    async (favorite) => {
+      const { useToggleFavorite } = await import("./queries");
+      const response = Promise.withResolvers<void>();
+      (favorite ? addFavoriteMock : removeFavoriteMock).mockReturnValue(response.promise);
+      const { wrapper, queryClient } = createWrapper();
+      const key = ["fs", "stat", "/preview.txt"];
+      const original = entry("/preview.txt", { meta: { favorite: !favorite, tagIds: ["kept"] } });
+      queryClient.setQueryData(key, original);
+      const { result } = renderHook(() => useToggleFavorite(), { wrapper });
+      act(() => result.current.mutate({ path: "/preview.txt", favorite }));
+      await waitFor(() =>
+        expect(queryClient.getQueryData<FsEntry>(key)?.meta).toEqual({
+          favorite,
+          tagIds: ["kept"],
+        }),
+      );
+      response.reject(new Error("denied"));
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(queryClient.getQueryData(key)).toEqual(original);
+    },
+  );
+
+  it("updates preview tags and restores every entry of a shared listing on failure", async () => {
+    const { useSetFileTags } = await import("./queries");
+    const response = Promise.withResolvers<void>();
+    setFileTagsMock.mockReturnValue(response.promise);
+    const { wrapper, queryClient } = createWrapper();
+    const files = [
+      entry("/a.txt", { meta: { favorite: true, tagIds: ["old"] } }),
+      entry("/b.txt", { meta: { favorite: false, tagIds: [] } }),
+    ];
+    const listing = { path: "/", entries: files };
+    queryClient.setQueryData(["fs", "list", "/"], listing);
+    for (const file of files) queryClient.setQueryData(["fs", "stat", file.path], file);
+    const { result } = renderHook(() => useSetFileTags(), { wrapper });
+    act(() => result.current.mutate(files.map((file) => ({ path: file.path, tagIds: ["new"] }))));
+    await waitFor(() =>
+      expect(queryClient.getQueryData<FsEntry>(["fs", "stat", "/a.txt"])?.meta).toEqual({
+        favorite: true,
+        tagIds: ["new"],
+      }),
+    );
+    expect(queryClient.getQueryData<FsEntry>(["fs", "stat", "/b.txt"])?.meta?.tagIds).toEqual([
+      "new",
+    ]);
+    response.reject(new Error("denied"));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(queryClient.getQueryData(["fs", "list", "/"])).toEqual(listing);
+    for (const file of files)
+      expect(queryClient.getQueryData(["fs", "stat", file.path])).toEqual(file);
+  });
+
+  it.each(["favorite", "tags"] as const)(
+    "does not overwrite the new identity stat with a late %s rollback",
+    async (kind) => {
+      const { useToggleFavorite, useSetFileTags } = await import("./queries");
+      const response = Promise.withResolvers<void>();
+      addFavoriteMock.mockReturnValue(response.promise);
+      setFileTagsMock.mockReturnValue(response.promise);
+      const { wrapper, queryClient } = createWrapper();
+      const key = ["fs", "stat", "/same.txt"];
+      queryClient.setQueryData(key, entry("/same.txt", { meta: { favorite: false, tagIds: [] } }));
+      const { result } = renderHook(
+        () => ({ favorite: useToggleFavorite(), tags: useSetFileTags() }),
+        { wrapper },
+      );
+      act(() => {
+        if (kind === "favorite")
+          result.current.favorite.mutate({ path: "/same.txt", favorite: true });
+        else result.current.tags.mutate([{ path: "/same.txt", tagIds: ["old"] }]);
+      });
+      await waitFor(() =>
+        expect(kind === "favorite" ? addFavoriteMock : setFileTagsMock).toHaveBeenCalled(),
+      );
+      accountTransition.begin();
+      accountTransition.finish(true);
+      const replacement = entry("/same.txt", {
+        name: "New login",
+        meta: { favorite: false, tagIds: ["new owner"] },
+      });
+      queryClient.setQueryData(key, replacement);
+      const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+      response.reject(new Error("old denial"));
+      await waitFor(() => expect(result.current[kind].isError).toBe(true));
+      expect(queryClient.getQueryData(key)).toEqual(replacement);
+      expect(invalidate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["favorite", "tags"] as const)(
+    "replaces a late initial stat request after %s changes",
+    async (kind) => {
+      const { useToggleFavorite, useSetFileTags } = await import("./queries");
+      const stale = Promise.withResolvers<FsEntry>();
+      const saved = entry("/preview.txt", { meta: { favorite: true, tagIds: ["new"] } });
+      const request = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValue(saved);
+      addFavoriteMock.mockResolvedValue({ ok: true });
+      setFileTagsMock.mockResolvedValue({ ok: true });
+      const { wrapper } = createWrapper();
+      const { result } = renderHook(
+        () => ({
+          stat: useQuery({ queryKey: ["fs", "stat", "/preview.txt"], queryFn: request }),
+          favorite: useToggleFavorite(),
+          tags: useSetFileTags(),
+        }),
+        { wrapper },
+      );
+      await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        if (kind === "favorite")
+          await result.current.favorite.mutateAsync({ path: "/preview.txt", favorite: true });
+        else await result.current.tags.mutateAsync([{ path: "/preview.txt", tagIds: ["new"] }]);
+      });
+      await waitFor(() => expect(result.current.stat.data).toEqual(saved));
+      expect(request).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        stale.resolve(entry("/preview.txt"));
+        await stale.promise;
+      });
+      expect(result.current.stat.data).toEqual(saved);
+    },
+  );
+
+  it("refreshes stat subscribers when a tag is renamed or removed", async () => {
+    const { useTagMutations } = await import("./queries");
+    updateTagMock.mockResolvedValue({ id: "tag" });
+    deleteTagMock.mockResolvedValue({ ok: true });
+    const { wrapper, queryClient } = createWrapper();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useTagMutations(), { wrapper });
+    await act(async () => {
+      await result.current.updateTag.mutateAsync({ id: "tag", patch: { name: "new" } });
+    });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["fs", "stat"] }));
+    invalidate.mockClear();
+    await act(async () => {
+      await result.current.deleteTag.mutateAsync("tag");
+    });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["fs", "stat"] }));
   });
 });

@@ -51,6 +51,7 @@ import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { SortSpec } from "@/lib/files/sorting";
 import type { ViewMode } from "@/lib/files/view-mode";
+import { OFFICE_DOCUMENT_LABELS, type OfficeDocumentKind } from "@/lib/office/new-document";
 import { cn } from "@/lib/utils";
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -218,6 +219,7 @@ function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
 }
 
 export interface FilesToolbarActionsProps {
+  onNewOfficeDocument?: ((kind: OfficeDocumentKind) => void) | undefined;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   sortSpec: SortSpec;
@@ -245,6 +247,7 @@ export function FilesToolbarActions({
   onSortSpecChange,
   onNewFolder,
   onNewFile,
+  onNewOfficeDocument,
   onUploadFiles,
   onUploadFolder,
   detailsOpen,
@@ -337,6 +340,17 @@ export function FilesToolbarActions({
             <FileCodeIcon />
             Markdown file
           </DropdownMenuItem>
+          {onNewOfficeDocument && (
+            <>
+              <DropdownMenuSeparator />
+              {(["document", "spreadsheet", "presentation"] as const).map((kind) => (
+                <DropdownMenuItem key={kind} onClick={() => onNewOfficeDocument(kind)}>
+                  <FileTextIcon />
+                  {OFFICE_DOCUMENT_LABELS[kind]}
+                </DropdownMenuItem>
+              ))}
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 

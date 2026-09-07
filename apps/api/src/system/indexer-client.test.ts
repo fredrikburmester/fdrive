@@ -240,3 +240,97 @@ describe("createIndexerClient: thumbnailsRebuild", () => {
     });
   });
 });
+
+describe("createIndexerClient: clear", () => {
+  it.each([undefined, {}, { root: "sftpgo" }, { root: "sftpgo", path: "/a.pdf" }])(
+    "posts index scope %j",
+    async (options) => {
+      const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));
+      const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+      expect(await client.clearIndex(options)).toEqual({ ok: true, data: { started: true } });
+      expect(fetchStub).toHaveBeenCalledWith(
+        "http://indexer:8010/index/clear",
+        expect.objectContaining({ method: "POST", body: JSON.stringify(options ?? {}) }),
+      );
+    },
+  );
+
+  it("posts an empty global thumbnail clear", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+    expect(await client.clearThumbnails()).toEqual({ ok: true, data: { started: true } });
+    expect(fetchStub).toHaveBeenCalledWith(
+      "http://indexer:8010/thumbnails/clear",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+  });
+
+  it.each([400, 404, 409, 500])("preserves upstream status %i", async (status) => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(status, {}));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+    expect(await client.clearIndex()).toMatchObject({ ok: false, status });
+    expect(await client.clearThumbnails()).toMatchObject({ ok: false, status });
+  });
+
+  it("maps both clear progress fields and preserves old stats", async () => {
+    const rawJob = {
+      running: true,
+      processed: 2,
+      total: 4,
+      started_at: "2026-09-06T18:21:28+00:00",
+      finished_at: null,
+      errors: 1,
+    };
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(200, { ...STATS_RAW, index_clear: rawJob, thumbnail_clear: rawJob }),
+      )
+      .mockResolvedValueOnce(jsonResponse(200, STATS_RAW));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+    const progress = {
+      running: true,
+      processed: 2,
+      total: 4,
+      startedAt: rawJob.started_at,
+      finishedAt: null,
+      errors: 1,
+    };
+    expect(await client.stats()).toMatchObject({
+      ok: true,
+      data: { indexClear: progress, thumbnailClear: progress },
+    });
+    const old = await client.stats();
+    expect(old.ok && old.data).not.toHaveProperty("indexClear");
+    expect(old.ok && old.data).not.toHaveProperty("thumbnailClear");
+  });
+});
+
+it("lists bounded directory metadata with exact query encoding and strict response validation", async () => {
+  const body = { items: [{ name: "文 space%20", kind: "file" }], overflow: false };
+  const fetchStub = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(200, body));
+  const client = createIndexerClient({ baseUrl: "http://indexer:8010/", fetch: fetchStub });
+  expect(await client.directory("my root", "/文 space%20/%2F")).toEqual({ ok: true, data: body });
+  const url = new URL(String(fetchStub.mock.calls[0]?.[0]));
+  expect(url.pathname).toBe("/directory");
+  expect([...url.searchParams]).toEqual([
+    ["root", "my root"],
+    ["path", "/文 space%20/%2F"],
+  ]);
+  for (const invalid of [
+    { items: [], overflow: false, secret: "bad" },
+    { items: [{ name: "/absolute", kind: "file" }], overflow: false },
+    { items: [], overflow: "no" },
+  ]) {
+    fetchStub.mockResolvedValueOnce(jsonResponse(200, invalid));
+    expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "invalid" });
+  }
+  fetchStub.mockResolvedValueOnce(jsonResponse(404, {}));
+  expect(await client.directory("r", "/")).toMatchObject({
+    ok: false,
+    reason: "unreachable",
+    status: 404,
+  });
+  fetchStub.mockRejectedValueOnce(new Error("offline"));
+  expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "unreachable" });
+});

@@ -7,6 +7,7 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useMemo, useReducer, useState } from "react";
 import { toast } from "sonner";
+import { ShareDialog } from "@/components/shares/share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -84,6 +85,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
       selectionReducer(state, action, orderedPaths),
     EMPTY_SELECTION,
   );
+  const [sharing, setSharing] = useState<FsEntry[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
 
@@ -107,6 +109,9 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
 
   function handleContextAction(action: RowContextAction, entry: FsEntry) {
     switch (action) {
+      case "share":
+        setSharing(contextEntries(entry, liveEntries, selection.selected));
+        break;
       case "open":
         handleOpen(entry);
         break;
@@ -239,6 +244,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
           </>
         )}
       </div>
+      {sharing !== null && <ShareDialog entries={sharing} onClose={() => setSharing(null)} />}
       <RenameDialog
         entry={renameTarget}
         onOpenChange={(open) => {

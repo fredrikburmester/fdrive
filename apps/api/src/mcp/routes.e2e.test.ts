@@ -139,7 +139,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     apiTokens: repos.apiTokens,
     identities: repos.identities,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
-    storageFactory: () => storage,
+    storageFactory: async () => storage,
   });
 
   const indexerFetch = (async (input: unknown) => {

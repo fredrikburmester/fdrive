@@ -1,5 +1,10 @@
 import type { z } from "zod";
 import { AboutResponse } from "./about.ts";
+import {
+  AccountFavoritesResponse,
+  AccountSearchResponse,
+  type LinkIdentityRequest,
+} from "./accounts.ts";
 import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./admin.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
@@ -26,12 +31,21 @@ import {
   type UpdateTagRequest,
 } from "./metadata.ts";
 import {
+  type OfficeCreateDocumentRequest,
+  OfficeCreateDocumentResponse,
+  type OfficeOpenRequest,
+  OfficeOpenResponse,
+  OfficeStatusResponse,
+} from "./office.ts";
+import {
   accountTokenRoute,
   IDENTITY_HEADER,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
+  publicShareRoute,
   ROUTES,
+  shareRoute,
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
@@ -43,7 +57,17 @@ import {
   SetupStatusResponse,
 } from "./setup.ts";
 import {
+  type CreateShareRequest,
+  ManagedShare,
+  PublicShare,
+  ShareEntriesResponse,
+  SharesResponse,
+  type UpdateShareRequest,
+} from "./shares.ts";
+import {
   IndexerActionResponse,
+  type IndexerClearRequest,
+  IndexerClearResponse,
   type IndexerReindexRequest,
   IndexerSettingsResponse,
   type IndexerSettingsUpdateRequest,
@@ -118,9 +142,34 @@ export interface ApiClientSearchOptions {
 }
 
 export interface ApiClient {
+  listShares(): Promise<SharesResponse>;
+  createShare(input: CreateShareRequest): Promise<ManagedShare>;
+  getShare(id: string): Promise<ManagedShare>;
+  updateShare(id: string, input: UpdateShareRequest): Promise<ManagedShare>;
+  deleteShare(id: string): Promise<OkResponse>;
+  publicShare(id: string): Promise<PublicShare>;
+  setSharePassword(id: string, password: string): Promise<OkResponse>;
+  clearSharePassword(id: string): Promise<OkResponse>;
+  shareEntries(id: string, path?: string): Promise<ShareEntriesResponse>;
+  shareDownloadUrl(id: string, path?: string): string;
+  shareArchiveUrl(id: string): string;
+  shareUpload(
+    id: string,
+    path: string,
+    body: UploadBody,
+    signal?: AbortSignal,
+  ): Promise<OkResponse>;
+  officeStatus(): Promise<OfficeStatusResponse>;
+  officeOpen(req: OfficeOpenRequest): Promise<OfficeOpenResponse>;
+  officeCreateDocument(req: OfficeCreateDocumentRequest): Promise<OfficeCreateDocumentResponse>;
   login(req: LoginRequest): Promise<MeResponse>;
   logout(): Promise<OkResponse>;
   me(): Promise<MeResponse>;
+  linkIdentity(input: LinkIdentityRequest): Promise<MeResponse>;
+  unlinkIdentity(id: string): Promise<MeResponse>;
+  switchIdentity(id: string): Promise<MeResponse>;
+  accountFavorites(): Promise<AccountFavoritesResponse>;
+  accountSearch(query: string, opts?: ApiClientSearchOptions): Promise<AccountSearchResponse>;
   list(path: string): Promise<ListResponse>;
   stat(path: string): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
@@ -147,6 +196,8 @@ export interface ApiClient {
   adminConnection(): Promise<AdminConnectionResponse>;
   adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse>;
   adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse>;
+  systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
+  systemClearThumbnails(): Promise<IndexerClearResponse>;
   systemIndexer(): Promise<SystemIndexerResponse>;
   systemUpdateIndexerSettings(
     settings: IndexerSettingsUpdateRequest,
@@ -343,6 +394,72 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   };
 
   return {
+    listShares() {
+      return requestJson(ctx, { method: "GET", path: ROUTES.shares }, SharesResponse);
+    },
+    createShare(input) {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.shares, jsonBody: input },
+        ManagedShare,
+      );
+    },
+    getShare(id) {
+      return requestJson(ctx, { method: "GET", path: shareRoute(id) }, ManagedShare);
+    },
+    updateShare(id, input) {
+      return requestJson(
+        ctx,
+        { method: "PATCH", path: shareRoute(id), jsonBody: input },
+        ManagedShare,
+      );
+    },
+    deleteShare(id) {
+      return requestJson(ctx, { method: "DELETE", path: shareRoute(id) }, OkResponse);
+    },
+    publicShare(id) {
+      return requestJson(ctx, { method: "GET", path: publicShareRoute(id) }, PublicShare);
+    },
+    setSharePassword(id, password) {
+      return requestJson(
+        ctx,
+        { method: "POST", path: `${publicShareRoute(id)}/credentials`, jsonBody: { password } },
+        OkResponse,
+      );
+    },
+    clearSharePassword(id) {
+      return requestJson(
+        ctx,
+        { method: "DELETE", path: `${publicShareRoute(id)}/credentials` },
+        OkResponse,
+      );
+    },
+    shareEntries(id, path = "/") {
+      return requestJson(
+        ctx,
+        { method: "GET", path: `${publicShareRoute(id)}/entries`, query: { path } },
+        ShareEntriesResponse,
+      );
+    },
+    shareDownloadUrl(id, path = "/") {
+      return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/download`, { path });
+    },
+    shareArchiveUrl(id) {
+      return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/archive`);
+    },
+    shareUpload(id, path, body, signal) {
+      return requestJson(
+        ctx,
+        {
+          method: "PUT",
+          path: `${publicShareRoute(id)}/upload`,
+          query: { path },
+          rawBody: body,
+          signal,
+        },
+        OkResponse,
+      );
+    },
     login(req: LoginRequest): Promise<MeResponse> {
       return requestJson(
         ctx,
@@ -353,6 +470,53 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     logout(): Promise<OkResponse> {
       return requestJson(ctx, { method: "POST", path: ROUTES.auth.logout }, OkResponse);
+    },
+
+    linkIdentity(input) {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.account.identities, jsonBody: input },
+        MeResponse,
+      );
+    },
+    unlinkIdentity(id) {
+      return requestJson(
+        ctx,
+        { method: "DELETE", path: `${ROUTES.account.identities}/${encodeURIComponent(id)}` },
+        MeResponse,
+      );
+    },
+    switchIdentity(id) {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.account.activeIdentity, jsonBody: { identityId: id } },
+        MeResponse,
+      );
+    },
+    accountFavorites() {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.account.favorites },
+        AccountFavoritesResponse,
+      );
+    },
+    accountSearch(query, opts) {
+      return requestJson(
+        ctx,
+        {
+          method: "GET",
+          path: ROUTES.account.search,
+          query: {
+            q: query,
+            limit: opts?.limit === undefined ? undefined : String(opts.limit),
+            ext: opts?.ext,
+            folder: opts?.folder,
+            after: opts?.after,
+            before: opts?.before,
+          },
+        },
+        AccountSearchResponse,
+      );
     },
 
     me(): Promise<MeResponse> {
@@ -427,6 +591,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return buildRequestUrl(ctx.baseUrl, ROUTES.fs.download, {
         path,
         inline: opts?.inline === true ? "1" : undefined,
+        identity: ctx.identityId,
       });
     },
 
@@ -601,6 +766,22 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       );
     },
 
+    systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.indexerClear, jsonBody: req ?? {} },
+        IndexerClearResponse,
+      );
+    },
+
+    systemClearThumbnails(): Promise<IndexerClearResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.thumbnailsClear, jsonBody: {} },
+        IndexerClearResponse,
+      );
+    },
+
     systemReindex(req: IndexerReindexRequest): Promise<IndexerActionResponse> {
       return requestJson(
         ctx,
@@ -667,6 +848,23 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       );
     },
 
+    officeStatus() {
+      return requestJson(ctx, { method: "GET", path: ROUTES.office.status }, OfficeStatusResponse);
+    },
+    officeOpen(req) {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.office.open, jsonBody: req },
+        OfficeOpenResponse,
+      );
+    },
+    officeCreateDocument(req) {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.office.documents, jsonBody: req },
+        OfficeCreateDocumentResponse,
+      );
+    },
     listApiTokens(): Promise<ApiTokensResponse> {
       return requestJson(ctx, { method: "GET", path: ROUTES.account.tokens }, ApiTokensResponse);
     },

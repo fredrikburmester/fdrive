@@ -17,6 +17,15 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("providers", () => {
+      it("looks up a provider by canonical UUID and rejects invalid IDs", async () => {
+        const provider = await repos.providers.ensure({
+          type: "sftpgo",
+          baseUrl: "http://provider",
+        });
+        expect(await repos.providers.get(provider.id)).toEqual(provider);
+        expect(await repos.providers.get("00000000-0000-0000-0000-000000000099")).toBeNull();
+        await expect(repos.providers.get("bad")).rejects.toThrow(TypeError);
+      });
       it("creates a provider on first ensure", async () => {
         const provider = await repos.providers.ensure({
           type: "sftpgo",

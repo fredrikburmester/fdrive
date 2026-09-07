@@ -1,0 +1,5 @@
+FROM collabora/code:26.04.3.2.1@sha256:379b8f1fc955dd6d01ba24adf61d1b177048ddaae179ae8c1e6a6342daccb282 AS collabora
+FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+COPY --from=collabora /etc/coolwsd/coolwsd.xml /template/coolwsd.xml
+COPY tools/office/keys.ts tools/office/init-container.ts /init/
+CMD ["node", "/init/init-container.ts"]

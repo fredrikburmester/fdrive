@@ -11,30 +11,14 @@ async function createFolder(page: Page, name: string): Promise<void> {
   await dialog.getByRole("button", { name: "Create" }).click();
   await expect(dialog).toBeHidden();
   const row = listing(page).getByText(name, { exact: true });
-  try {
-    await expect(row).toBeVisible({ timeout: 8_000 });
-  } catch {
-    await page.reload();
-    await expect(row).toBeVisible({ timeout: 15_000 });
-  }
+  await expect(row).toBeVisible({ timeout: 15_000 });
 }
 
-/**
- * Uploads `name` and waits for its row to appear. Occasionally the
- * listing's own post-upload cache invalidation races an already in-flight
- * fetch and gets swallowed (a pre-existing timing issue in the upload
- * pipeline, not specific to metadata); a single reload, which always forces
- * a fresh fetch, recovers from that without flaking the whole suite.
- */
+/** Uploads `name` and waits for the completion refresh to show its row. */
 async function uploadTextFile(page: Page, name: string, contents: string): Promise<void> {
   await uploadFiles(page, [{ name, mimeType: "text/plain", contents }]);
   const row = listing(page).getByText(name, { exact: true });
-  try {
-    await expect(row).toBeVisible({ timeout: 8_000 });
-  } catch {
-    await page.reload();
-    await expect(row).toBeVisible({ timeout: 15_000 });
-  }
+  await expect(row).toBeVisible({ timeout: 15_000 });
 }
 
 /** Opens `name`'s row context menu, hovers the "Tags" submenu, clicks

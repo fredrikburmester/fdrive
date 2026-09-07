@@ -235,13 +235,13 @@ describe("SftpgoPublicShareApi", () => {
     expect(capturedIfRange).toBe("etag");
   });
 
-  it("downloads a single-file share regardless of the requested path", async () => {
+  it("downloads a single-file share using the raw share endpoint", async () => {
     const { client } = setup(SEED);
     const token = await loginAsAlice(client);
     const created = await client
       .user(token)
       .shares.create({ name: "s1", scope: "read", paths: ["/solo.txt"] });
-    const result = await client.publicShare(created.id).download("/solo.txt");
+    const result = await client.publicShare(created.id).downloadFile();
     expect(await new Response(result.body).text()).toBe("one");
   });
 
@@ -301,7 +301,7 @@ describe("SftpgoPublicShareApi", () => {
     });
   });
 
-  it("returns not_found for an expired share", async () => {
+  it("returns bad_request for an expired share", async () => {
     const { client } = setup(SEED);
     const token = await loginAsAlice(client);
     const created = await client.user(token).shares.create({
@@ -311,7 +311,7 @@ describe("SftpgoPublicShareApi", () => {
       expiresAt: new Date(Date.now() - 1000),
     });
     await expect(client.publicShare(created.id).list()).rejects.toMatchObject({
-      kind: "not_found",
+      kind: "bad_request",
     });
   });
 
@@ -324,9 +324,9 @@ describe("SftpgoPublicShareApi", () => {
       paths: ["/shared"],
       maxTokens: 1,
     });
-    await client.publicShare(created.id).list();
+    await client.publicShare(created.id).download("/a.txt");
     await expect(client.publicShare(created.id).list()).rejects.toMatchObject({
-      kind: "rate_limited",
+      kind: "bad_request",
     });
   });
 });

@@ -1,5 +1,6 @@
 import {
   type IndexerActionResponse,
+  IndexerClearRequest,
   IndexerReindexRequest,
   type IndexerSettingsResponse,
   IndexerSettingsUpdateRequest,
@@ -16,6 +17,7 @@ import {
   type SystemThumbnailsResponse,
 } from "@fdrive/contracts";
 import type { IndexQueries, SettingsRepo } from "@fdrive/db";
+import { z } from "zod";
 import type { AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
@@ -81,6 +83,29 @@ function throwForThumbnailsRebuildFailure(result: {
     throw new ApiHttpError("conflict", "a thumbnail rebuild is already running");
   }
   throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
+}
+
+function throwForClearFailure(result: { reason: string; detail: string; status?: number }): never {
+  if (result.status === 400) {
+    throw new ApiHttpError("bad_request", "invalid clear request");
+  }
+  if (result.status === 404) {
+    throw new ApiHttpError("not_found", "unknown index root");
+  }
+  if (result.status === 409) {
+    throw new ApiHttpError("conflict", "a clear or thumbnail rebuild is already running");
+  }
+  throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
+}
+
+/** Empty bodies are allowed; malformed JSON must never become a global clear. */
+function parseClearBody(text: string): unknown {
+  if (text.length === 0) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiHttpError("bad_request", "invalid clear request JSON");
+  }
 }
 
 /**
@@ -189,6 +214,36 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       return c.json(body, 202);
     },
   );
+
+  authed.post(withoutApiV1Prefix(ROUTES.system.indexerClear), requireAdmin, async (c) => {
+    if (deps.indexerClient === null) {
+      throw new ApiHttpError("bad_request", "the indexer is not configured");
+    }
+    const parsed = IndexerClearRequest.safeParse(parseClearBody(await c.req.text()));
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid clear request", {
+        issues: parsed.error.issues,
+      });
+    }
+    const result = await deps.indexerClient.clearIndex(parsed.data);
+    if (!result.ok) throwForClearFailure(result);
+    return c.json(result.data, 202);
+  });
+
+  authed.post(withoutApiV1Prefix(ROUTES.system.thumbnailsClear), requireAdmin, async (c) => {
+    if (deps.indexerClient === null) {
+      throw new ApiHttpError("bad_request", "the indexer is not configured");
+    }
+    const parsed = z.strictObject({}).safeParse(parseClearBody(await c.req.text()));
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid clear request", {
+        issues: parsed.error.issues,
+      });
+    }
+    const result = await deps.indexerClient.clearThumbnails();
+    if (!result.ok) throwForClearFailure(result);
+    return c.json(result.data, 202);
+  });
 
   authed.get(withoutApiV1Prefix(ROUTES.system.search), requireAdmin, async (c) => {
     const configured = deps.indexRootNames.length > 0;

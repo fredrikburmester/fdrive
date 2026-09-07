@@ -48,6 +48,7 @@ describe("toShare", () => {
     });
     expect(share).toEqual({
       id: "s1",
+      rawScope: 2,
       name: "My share",
       description: "desc",
       scope: "write",
@@ -142,4 +143,17 @@ describe("shareInputToWire", () => {
     );
     expect(wire).toMatchObject({ description: "d", max_tokens: 3, allow_from: ["1.2.3.4"] });
   });
+});
+
+it("defaults omitted upstream zero values", () => {
+  const result = toShare({
+    id: "x",
+    name: "s",
+    scope: 1,
+    paths: ["/a"],
+    username: "a",
+    created_at: 1,
+    updated_at: 1,
+  });
+  expect(result).toMatchObject({ lastUseAt: null, expiresAt: null, maxTokens: 0, usedTokens: 0 });
 });

@@ -51,7 +51,12 @@ def _make_context(cfg: Config, root: str, abs_path: str) -> RootContext:
     root_id = db.upsert_root(conn, root)
     settings = cfg.default_settings()
     ctx = RootContext(
-        name=root, root_id=root_id, abs_path=abs_path, cfg=cfg, settings=settings, extractor=_StubExtractor()  # type: ignore[arg-type]
+        name=root,
+        root_id=root_id,
+        abs_path=abs_path,
+        cfg=cfg,
+        settings=settings,
+        extractor=_StubExtractor(),  # type: ignore[arg-type]
     )
     ctx.local.conn = conn
     return ctx
@@ -296,9 +301,7 @@ def test_start_rebuild_returns_none_when_already_running(
     assert result is None
 
 
-def test_start_rebuild_job_crash_still_releases_job(
-    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_start_rebuild_job_crash_still_releases_job(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
     ctx = _make_context(cfg, "sftpgo", str(tmp_path))

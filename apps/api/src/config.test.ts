@@ -123,6 +123,12 @@ describe("loadConfig", () => {
     const config = loadConfig(REQUIRED_ENV);
 
     expect(config).toEqual({
+      fdriveOfficeProduct: undefined,
+      fdriveOfficeUrl: undefined,
+      fdriveOfficePublicUrl: undefined,
+      fdriveWopiUrl: undefined,
+      fdriveOfficeMaxBytes: 104857600,
+      fdriveOfficeEditRules: [],
       port: 3001,
       host: "0.0.0.0",
       logLevel: "info",
@@ -192,6 +198,12 @@ describe("loadConfig", () => {
     });
 
     expect(config).toEqual({
+      fdriveOfficeProduct: undefined,
+      fdriveOfficeUrl: undefined,
+      fdriveOfficePublicUrl: undefined,
+      fdriveWopiUrl: undefined,
+      fdriveOfficeMaxBytes: 104857600,
+      fdriveOfficeEditRules: [],
       port: 8080,
       host: "127.0.0.1",
       logLevel: "debug",
@@ -389,5 +401,29 @@ describe("parseAdminUsers", () => {
 
   it("returns a single-element array for one username", () => {
     expect(parseAdminUsers("alice")).toEqual(["alice"]);
+  });
+});
+
+describe("Office operator edit policy", () => {
+  it("defaults to no grants and validates explicit rules at startup", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveOfficeEditRules).toEqual([]);
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: "" }).fdriveOfficeEditRules,
+    ).toEqual([]);
+    const rule = {
+      providerId: "12345678-1234-4234-8234-123456789abc",
+      username: "alice",
+      path: "/docs",
+      recursive: true,
+      allow: true,
+    };
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: JSON.stringify([rule]) })
+        .fdriveOfficeEditRules,
+    ).toEqual([rule]);
+    for (const value of ["bad", "{}", '[{"allow":true}]', " ".repeat(131073)])
+      expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: value })).toThrow(
+        "FDRIVE_OFFICE_EDIT_RULES",
+      );
   });
 });

@@ -2,18 +2,21 @@
 
 import type {
   AdminConnectionUpdateRequest,
+  IndexerClearRequest,
   IndexerReindexRequest,
   IndexerSettingsUpdateRequest,
+  IndexerStats,
   IndexerThumbnailsRebuildRequest,
   OcrSettingsUpdateRequest,
   SetupCompleteRequest,
 } from "@fdrive/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { queryKeys } from "./keys";
 
 /** How often the System pages re-poll their sidecar status while mounted. */
 const SYSTEM_REFETCH_INTERVAL_MS = 5000;
+const MAINTENANCE_KEY = ["system", "maintenance"];
 
 /** Whether setup is required and whether `SFTPGO_URL` is set by environment. Powers `/setup`. */
 export function useSetupStatus() {
@@ -109,16 +112,19 @@ export function useReindex() {
   });
 }
 
-/** Marks every (or one root's) thumbnail pending for regeneration on the indexer. */
+/** Starts a background preview rebuild for all roots or one selected scope. */
 export function useRebuildIndexerThumbnails() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    mutationKey: MAINTENANCE_KEY,
     mutationFn: (req?: IndexerThumbnailsRebuildRequest) =>
       apiClient.systemRebuildIndexerThumbnails(req),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
-    },
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() }),
+      ]),
   });
 }
 
@@ -196,5 +202,44 @@ export function useRebuildThumbnails() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
     },
+  });
+}
+
+/** Pending mutations stay shared when navigating between maintenance pages. */
+export function useSystemMaintenanceBusy(stats: IndexerStats | undefined) {
+  const pending = useIsMutating({ mutationKey: MAINTENANCE_KEY });
+  return (
+    pending > 0 ||
+    stats?.indexClear?.running === true ||
+    stats?.thumbnailClear?.running === true ||
+    stats?.thumbnailRebuild?.running === true
+  );
+}
+
+/** Clears scoped index data and refreshes counts even after a busy response. */
+export function useClearIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: MAINTENANCE_KEY,
+    mutationFn: (request: IndexerClearRequest) => apiClient.systemClearIndex(request),
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.system.search() }),
+      ]),
+  });
+}
+
+/** Clears the shared preview cache and refreshes progress and cache totals. */
+export function useClearThumbnails() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: MAINTENANCE_KEY,
+    mutationFn: () => apiClient.systemClearThumbnails(),
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() }),
+      ]),
   });
 }

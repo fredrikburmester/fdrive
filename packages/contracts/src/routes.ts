@@ -6,6 +6,13 @@
  * method or verb.
  */
 export const ROUTES = {
+  shares: "/api/v1/shares",
+  publicShares: "/api/v1/public/shares",
+  office: {
+    status: "/api/v1/office",
+    open: "/api/v1/office/open",
+    documents: "/api/v1/office/documents",
+  },
   auth: {
     /** POST: username + password (+ otp) -> `LoginResponse`. */
     login: "/api/v1/auth/login",
@@ -103,6 +110,7 @@ export const ROUTES = {
     indexerSettings: "/api/v1/system/indexer/settings",
     /** POST, admin only: mark files pending on the indexer -> `IndexerActionResponse`. */
     indexerReindex: "/api/v1/system/indexer/reindex",
+    indexerClear: "/api/v1/system/indexer/clear",
     /** POST, admin only: mark thumbnails pending on the indexer -> `IndexerActionResponse`. */
     indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
     /** GET, admin only: semantic search and index totals -> `SystemSearchResponse`. */
@@ -119,8 +127,13 @@ export const ROUTES = {
     thumbnails: "/api/v1/system/thumbnails",
     /** POST, admin only: rebuild every missing thumbnail -> `IndexerActionResponse`. */
     thumbnailsRebuild: "/api/v1/system/thumbnails/rebuild",
+    thumbnailsClear: "/api/v1/system/thumbnails/clear",
   },
   account: {
+    identities: "/api/v1/account/identities",
+    activeIdentity: "/api/v1/account/active-identity",
+    favorites: "/api/v1/account/favorites",
+    search: "/api/v1/account/search",
     /**
      * GET: the caller's API tokens (never their secrets) -> `ApiTokensResponse`.
      * POST: create a token, shown once -> `CreateApiTokenResponse`.
@@ -166,3 +179,10 @@ export const IDENTITY_HEADER = "x-identity-id";
 
 /** Upload request header carrying the file's mtime, in ms since epoch. */
 export const MODIFIED_AT_HEADER = "x-modified-at";
+
+export function shareRoute(id: string): string {
+  return `${ROUTES.shares}/${encodeURIComponent(id)}`;
+}
+export function publicShareRoute(id: string): string {
+  return `${ROUTES.publicShares}/${encodeURIComponent(id)}`;
+}

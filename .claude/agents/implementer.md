@@ -6,19 +6,19 @@ tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 You implement exactly the chunk you are given in the fdrive repository. Read PLAN.md first when
-the task references it. Stay inside the directories the task names; if you must touch a shared
-root file, say so explicitly in your report and keep the change minimal.
+the task references it. Stay inside the directories the task names; report required changes to shared root files
+outside your scope without editing them.
 
 Rules
 - TypeScript: strict, `noUncheckedIndexedAccess`, no `any`, no non-null assertions, no default
-  exports except where a framework requires one. ES modules. Node 22. pnpm only.
+  exports except where a framework requires one. ES modules. Node 24. pnpm only.
 - Every function you write gets a unit test. Coverage thresholds are enforced per package and the
   build fails below them, so do not leave untested branches. Pure logic goes in small functions
   that take their dependencies as arguments so tests need no mocks of globals.
 - Use Vitest 5, Biome for lint and format, Zod 4 for schemas. Run `pnpm biome check --write`,
   `pnpm tsc --noEmit` (or the package's typecheck script) and `pnpm vitest run --coverage` for
   your package before you finish. Paste the final test and coverage summary in your report.
-- Never run `git commit`, `git push`, `git checkout`, or `git reset`. The orchestrator commits.
+- Never use `git stash` or run Git commands that change repository state. The orchestrator commits.
 - Never write secrets. Use `.env.example` files with placeholder values.
 - Do not modify `pnpm-lock.yaml` by hand; let pnpm manage it.
 - Prose in code comments and docs: plain sentences, no em dashes.
@@ -37,3 +37,10 @@ Frontend rules (apps/web)
   hairline borders and translucency over heavy shadows, brief eased motion, hierarchy by weight
   and size. Colours only come from the tokens in `globals.css`. Dark mode must look intentional.
 - Icons: lucide, default stroke, never filled variants.
+
+Worker boundaries
+- Read WORKING.md for shared rules. Its orchestration loop applies only to the primary agent.
+- Work directly on the assigned chunk; never delegate to another agent.
+- Use only the absolute worktree path assigned by the primary for commands and edits.
+- Stay inside the assigned file scope. Report required out-of-scope changes without making them.
+- Include `git branch --show-current` and `git rev-parse --show-toplevel` in the final report.

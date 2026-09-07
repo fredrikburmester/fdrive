@@ -1,4 +1,5 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
+import { createMetadataService, type MetadataService } from "../metadata/service.js";
 import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerFsRoutes } from "./routes.js";
 
@@ -70,7 +72,12 @@ interface Harness {
   readonly events: BusEvent[];
 }
 
-async function buildHarness(seed: FakeSeed = SEED, username = "alice", password = "secret") {
+async function buildHarness(
+  seed: FakeSeed = SEED,
+  username = "alice",
+  password = "secret",
+  metadata?: MetadataService,
+) {
   const server = createFakeSftpgoServer(seed);
   const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
   const withToken = await withTokenFor(client, username, password);
@@ -106,6 +113,7 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
+        ...(metadata === undefined ? {} : { metadata }),
       }),
   });
 
@@ -278,6 +286,44 @@ describe("GET /fs/list", () => {
 });
 
 describe("GET /fs/stat", () => {
+  it("decorates an authorized stat with this identity's tags and favorites", async () => {
+    const repos = createMemoryRepos();
+    const metadata = createMetadataService(repos);
+    const account = await repos.accounts.create({ displayName: "Alice" });
+    const tag = await metadata.createTag(account.id, { name: "Work", color: null });
+    await metadata.setFileTags(ALICE_IDENTITY_ID, "/hello.txt", [tag.id]);
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
+    const { app } = await buildHarness(SEED, "alice", "secret", metadata);
+    const response = await app.request("/api/v1/fs/stat?path=/hello.txt");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      path: "/hello.txt",
+      meta: { tagIds: [tag.id], favorite: true },
+    });
+
+    const otherSeed: FakeSeed = {
+      users: [{ username: "bob", password: "secret2", permissions: { "/": FULL_PERMS } }],
+      files: { bob: { "/hello.txt": "Bob's own file" } },
+    };
+    const other = await buildHarness(otherSeed, "bob", "secret2", metadata);
+    const otherResponse = await other.app.request("/api/v1/fs/stat?path=/hello.txt");
+    expect(otherResponse.status).toBe(200);
+    expect(await otherResponse.json()).toMatchObject({
+      path: "/hello.txt",
+      size: 14,
+      meta: { tagIds: [], favorite: false },
+    });
+  });
+
+  it("never looks up metadata when storage denies stat", async () => {
+    const metadata = createMetadataService(createMemoryRepos());
+    const decorate = vi.spyOn(metadata, "decorate");
+    const { app } = await buildHarness(SEED, "bob", "secret2", metadata);
+    const response = await app.request("/api/v1/fs/stat?path=/hello.txt");
+    expect(response.status).toBe(403);
+    expect(decorate).not.toHaveBeenCalled();
+  });
+
   it("stats a file directly", async () => {
     const { app } = await buildHarness();
 

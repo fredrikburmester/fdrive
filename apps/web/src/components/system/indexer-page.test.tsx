@@ -7,13 +7,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const useSystemIndexerMock = vi.fn();
 const useUpdateIndexerSettingsMock = vi.fn();
 const useReindexMock = vi.fn();
-const useRebuildIndexerThumbnailsMock = vi.fn();
+const useClearIndexMock = vi.fn();
+const useSystemMaintenanceBusyMock = vi.fn(() => false);
+const successToast = vi.fn();
+const errorToast = vi.fn();
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => successToast(...args),
+    error: (...args: unknown[]) => errorToast(...args),
+  },
+}));
 
 vi.mock("@/lib/api/system-queries", () => ({
   useSystemIndexer: () => useSystemIndexerMock(),
   useUpdateIndexerSettings: () => useUpdateIndexerSettingsMock(),
   useReindex: () => useReindexMock(),
-  useRebuildIndexerThumbnails: () => useRebuildIndexerThumbnailsMock(),
+  useClearIndex: () => useClearIndexMock(),
+  useSystemMaintenanceBusy: () => useSystemMaintenanceBusyMock(),
 }));
 
 // `SystemPage` pulls in the whole shell chrome (sidebar trigger, global
@@ -105,12 +115,13 @@ function mockConfigured() {
   });
   useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
   useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-  useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+  useClearIndexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 }
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  useSystemMaintenanceBusyMock.mockReturnValue(false);
 });
 
 describe("IndexerPage", () => {
@@ -119,16 +130,14 @@ describe("IndexerPage", () => {
     render(<IndexerPage />);
 
     // Files: sum of countsByStatus (3 + 1 + 1 + 10 + 1); with text: indexed + partial.
-    // "Files" and "Thumbnails" each appear twice (a stat card label and,
-    // respectively, the counts-by-status table header and the page title),
-    // so these use getAllByText rather than the single-match getByText.
+    // The Files label appears in both the stat card and table header.
     expect((await screen.findAllByText("Files")).length).toBeGreaterThan(0);
     expect(screen.getByText("16")).toBeTruthy();
     expect(screen.getByText("With text")).toBeTruthy();
     expect(screen.getAllByText("10").length).toBeGreaterThan(0);
     expect(screen.getByText("Embedded")).toBeTruthy();
-    expect(screen.getAllByText("Thumbnails").length).toBeGreaterThan(0);
-    expect(screen.getByText("6")).toBeTruthy();
+    expect(screen.queryByText("Thumbnails")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rebuild thumbnails" })).toBeNull();
     expect(screen.getByText("Queue depth")).toBeTruthy();
   });
 
@@ -185,162 +194,106 @@ describe("IndexerPage", () => {
     });
     useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
     useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useClearIndexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 
     render(<IndexerPage />);
 
     expect(screen.getByText("Loading…")).toBeTruthy();
   });
 
-  it("shows a progress line under the Thumbnails stat card while a rebuild is running", async () => {
-    useSystemIndexerMock.mockReturnValue({
-      data: {
-        ...CONFIGURED_FIXTURE,
-        stats: {
-          ...CONFIGURED_FIXTURE.stats,
-          roots: CONFIGURED_FIXTURE.stats?.roots ?? [],
-          thumbnails: 6,
-          queueDepth: 0,
-          errorsSample: [],
-          thumbnailRebuild: {
-            running: true,
-            processed: 12,
-            total: 40,
-            startedAt: "2026-09-06T18:22:00Z",
-            finishedAt: null,
-            errors: 0,
-          },
-        },
-      },
-      isLoading: false,
-      error: null,
-      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
-      refetch: vi.fn(),
-    });
-    useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-    useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-
+  it("describes all settings and can reset and save an edited draft", async () => {
+    mockConfigured();
+    const mutate = vi.fn((_value: unknown, options: { onSuccess: () => void }) =>
+      options.onSuccess(),
+    );
+    useUpdateIndexerSettingsMock.mockReturnValue({ mutate, isPending: false });
     render(<IndexerPage />);
-
-    expect(await screen.findByText("Rebuilding… 12 of 40")).toBeTruthy();
+    const workers = await screen.findByLabelText("Workers");
+    expect(screen.getByText(/Time between scheduled scans/)).toBeTruthy();
+    expect(screen.getByText(/Number of files extracted concurrently/)).toBeTruthy();
+    fireEvent.change(workers, { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(workers).toHaveProperty("value", "4");
+    fireEvent.change(workers, { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ workers: 7 }), expect.anything());
+    expect(successToast).toHaveBeenCalledWith("Indexer settings saved.");
   });
 
-  it("does not show a progress line when no rebuild is running", async () => {
+  it("reindex contains no thumbnail toggle", async () => {
     mockConfigured();
     render(<IndexerPage />);
-
-    await screen.findAllByText("Thumbnails");
-    expect(screen.queryByText(/Rebuilding…/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
+    expect(await screen.findByRole("heading", { name: "Reindex" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("heading", { name: "Reindex" })).toBeNull();
   });
 
-  describe("Rebuild thumbnails dialog", () => {
-    it("opens with honest, thumbnail-only text and a root select defaulted to all roots", async () => {
-      mockConfigured();
+  it("keeps the root select controlled when choosing a reindex scope", async () => {
+    mockConfigured();
+    const mutate = vi.fn();
+    useReindexMock.mockReturnValue({ mutate, isPending: false });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
       render(<IndexerPage />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
-
-      expect(await screen.findByRole("heading", { name: "Rebuild thumbnails" })).toBeTruthy();
-      expect(
-        screen.getByText(/Regenerates preview images for photos, PDFs, and videos/),
-      ).toBeTruthy();
-      expect(screen.getByText(/Text and search data are not touched/)).toBeTruthy();
-      expect(screen.getByLabelText("Path (optional)")).toBeTruthy();
-      expect(screen.getByRole("switch", { name: "Regenerate existing thumbnails" })).toBeTruthy();
-    });
-
-    it("submits an empty body (all roots, whole root, no force) by default", async () => {
-      const mutate = vi.fn();
-      mockConfigured();
-      useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
-      render(<IndexerPage />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
-      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
-
-      expect(mutate).toHaveBeenCalledWith({}, expect.anything());
-    });
-
-    it("includes force: true once the switch is toggled on", async () => {
-      const mutate = vi.fn();
-      mockConfigured();
-      useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
-      render(<IndexerPage />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
-      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
-      const forceSwitch = screen.getByRole("switch", { name: "Regenerate existing thumbnails" });
-      expect(forceSwitch.getAttribute("aria-checked")).toBe("false");
-      fireEvent.click(forceSwitch);
-      expect(forceSwitch.getAttribute("aria-checked")).toBe("true");
-
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
-
-      expect(mutate).toHaveBeenCalledWith({ force: true }, expect.anything());
-    });
-
-    it("includes a trimmed path when one is entered", async () => {
-      const mutate = vi.fn();
-      mockConfigured();
-      useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
-      render(<IndexerPage />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
-      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
-      fireEvent.change(screen.getByLabelText("Path (optional)"), {
-        target: { value: "  alice/docs  " },
-      });
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
-
-      expect(mutate).toHaveBeenCalledWith({ path: "alice/docs" }, expect.anything());
-    });
-
-    it("shows a toast with the candidate total on success and closes the dialog", async () => {
-      mockConfigured();
-      useRebuildIndexerThumbnailsMock.mockReturnValue({
-        mutate: (
-          _req: unknown,
-          opts: { onSuccess: (result: { started: boolean; total: number }) => void },
-        ) => opts.onSuccess({ started: true, total: 7 }),
-        isPending: false,
-      });
-      render(<IndexerPage />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild thumbnails" }));
-      await screen.findByRole("heading", { name: "Rebuild thumbnails" });
-      fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
-
-      expect(screen.queryByRole("heading", { name: "Rebuild thumbnails" })).toBeNull();
-    });
+      fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
+      expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", true);
+      fireEvent.click(screen.getByLabelText("Root"));
+      fireEvent.click(await screen.findByRole("option", { name: "sftpgo" }));
+      expect(screen.getByLabelText("Root").textContent).toContain("sftpgo");
+      expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", false);
+      fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+      expect(mutate).toHaveBeenCalledWith({ root: "sftpgo" }, expect.anything());
+      expect(error.mock.calls.flat().join(" ")).not.toMatch(/uncontrolled/i);
+    } finally {
+      error.mockRestore();
+    }
   });
 
-  describe("Reindex dialog", () => {
-    it("describes re-extraction and re-embedding and offers an also-regenerate-thumbnails checkbox", async () => {
-      mockConfigured();
-      render(<IndexerPage />);
+  it("confirms clear scope, cancels without mutation, then submits all roots", async () => {
+    mockConfigured();
+    const mutate = vi.fn(
+      (_request: unknown, options: { onSuccess: (result: { started: boolean }) => void }) =>
+        options.onSuccess({ started: true }),
+    );
+    useClearIndexMock.mockReturnValue({ mutate, isPending: false });
+    render(<IndexerPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear index…" }));
+    await screen.findByRole("heading", { name: "Clear index data?" });
+    expect(screen.getByLabelText("Root").textContent).toContain("All roots");
+    expect(screen.getByLabelText("Root").textContent).not.toContain("__all__");
+    expect(screen.getByText(/Later scheduled scans or file changes/)).toBeTruthy();
+    expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear index…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
+    expect(mutate).toHaveBeenCalledWith({}, expect.anything());
+    expect(successToast).toHaveBeenCalledWith("Index clear started.");
+    expect(screen.queryByRole("heading", { name: "Clear index data?" })).toBeNull();
+  });
 
-      fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
-
-      expect(await screen.findByRole("heading", { name: "Reindex" })).toBeTruthy();
-      expect(screen.getByText(/Re-extracts text and re-embeds/)).toBeTruthy();
-      const checkbox = screen.getByRole("checkbox", { name: "Also regenerate thumbnails" });
-      expect(checkbox.getAttribute("aria-checked")).toBe("false");
+  it("keeps clear confirmation open and reports a rejected request", async () => {
+    mockConfigured();
+    useClearIndexMock.mockReturnValue({
+      mutate: (_request: unknown, options: { onError: (err: Error) => void }) =>
+        options.onError(new Error("A maintenance job is already running.")),
+      isPending: false,
     });
+    render(<IndexerPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear index…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
+    expect(errorToast).toHaveBeenCalledWith("A maintenance job is already running.");
+    expect(screen.getByRole("heading", { name: "Clear index data?" })).toBeTruthy();
+  });
 
-    it("toggles the also-regenerate-thumbnails checkbox", async () => {
-      mockConfigured();
-      render(<IndexerPage />);
-
-      fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
-      await screen.findByRole("heading", { name: "Reindex" });
-      const checkbox = screen.getByRole("checkbox", { name: "Also regenerate thumbnails" });
-
-      fireEvent.click(checkbox);
-
-      expect(checkbox.getAttribute("aria-checked")).toBe("true");
-    });
+  it("disables actions while maintenance is active", () => {
+    mockConfigured();
+    useSystemMaintenanceBusyMock.mockReturnValue(true);
+    render(<IndexerPage />);
+    expect(screen.getByRole("button", { name: "Clear index…" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Reindex…" })).toHaveProperty("disabled", true);
   });
 
   it("shows the error state, distinct from Loading, when the query fails", () => {
@@ -354,7 +307,7 @@ describe("IndexerPage", () => {
     });
     useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
     useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useClearIndexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 
     render(<IndexerPage />);
 

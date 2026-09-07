@@ -91,6 +91,7 @@ describe("ROUTES", () => {
       indexer: "/api/v1/system/indexer",
       indexerSettings: "/api/v1/system/indexer/settings",
       indexerReindex: "/api/v1/system/indexer/reindex",
+      indexerClear: "/api/v1/system/indexer/clear",
       indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
       search: "/api/v1/system/search",
       searchReembed: "/api/v1/system/search/reembed",
@@ -99,11 +100,18 @@ describe("ROUTES", () => {
       ocrRun: "/api/v1/system/ocr/run",
       thumbnails: "/api/v1/system/thumbnails",
       thumbnailsRebuild: "/api/v1/system/thumbnails/rebuild",
+      thumbnailsClear: "/api/v1/system/thumbnails/clear",
     });
   });
 
   it("defines the account tokens route", () => {
-    expect(ROUTES.account).toEqual({ tokens: "/api/v1/account/tokens" });
+    expect(ROUTES.account).toEqual({
+      tokens: "/api/v1/account/tokens",
+      identities: "/api/v1/account/identities",
+      activeIdentity: "/api/v1/account/active-identity",
+      favorites: "/api/v1/account/favorites",
+      search: "/api/v1/account/search",
+    });
   });
 });
 

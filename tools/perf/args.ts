@@ -4,6 +4,9 @@ export const SCENARIO_NAMES: readonly ScenarioName[] = [
   "list1kCold",
   "list1k",
   "list10k",
+  "uiList",
+  "uiGrid",
+  "search25k",
   "downloadViaApi",
   "downloadDirect",
   "uploadSmallBurst",
@@ -30,6 +33,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   let only: ScenarioName | undefined;
   let quick = false;
   let strict = false;
+  let diagnostic = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -47,6 +51,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       i += 1;
     } else if (arg === "--quick") {
       quick = true;
+    } else if (arg === "--diagnostic") {
+      diagnostic = true;
     } else if (arg === "--strict") {
       strict = true;
     } else {
@@ -54,5 +60,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     }
   }
 
-  return { only, quick, strict };
+  if (strict && (quick || only !== undefined || diagnostic))
+    throw new Error("--strict requires all full scenarios; no diagnostic flags");
+  return { only, quick, strict: strict || (!quick && only === undefined && !diagnostic) };
 }

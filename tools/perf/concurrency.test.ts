@@ -65,3 +65,29 @@ describe("mapWithConcurrency", () => {
     ).rejects.toThrow("boom");
   });
 });
+
+it("waits for active workers before reporting failure so cleanup cannot race writes", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let finished = false;
+  const run = mapWithConcurrency([1, 2], 2, async (n) => {
+    if (n === 1) throw Error("bad");
+    await gate;
+    finished = true;
+    return n;
+  });
+  let settled = false;
+  const result = run.catch((error) => {
+    settled = true;
+    return error;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  release?.();
+  await result;
+  expect(finished).toBe(true);
+  expect(settled).toBe(true);
+  expect(await mapWithConcurrency([undefined], 1, async (value) => value)).toHaveLength(1);
+});

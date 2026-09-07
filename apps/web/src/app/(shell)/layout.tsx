@@ -58,14 +58,13 @@ export default async function ShellLayout({ children }: { children: ReactNode })
   return (
     <MeHydration me={me}>
       <ShellRuntime>
-        <SidebarProvider>
+        <SidebarProvider className="h-svh min-h-0 overflow-hidden">
           <AppSidebar />
-          {/* min-w-0 lets this flex item shrink below its content's natural
-              width (long breadcrumb or file names otherwise force it, and
-              the whole page, wider than the viewport); overflow-hidden
-              backstops that by clipping anything that still does not fit
-              instead of pushing the layout wider. */}
-          <SidebarInset className="min-w-0 overflow-hidden">{children}</SidebarInset>
+          {/* Constrain the flex height so file virtualization measures the viewport.
+              The inset retains vertical scrolling for longer settings pages. */}
+          <SidebarInset className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
+            {children}
+          </SidebarInset>
         </SidebarProvider>
       </ShellRuntime>
     </MeHydration>

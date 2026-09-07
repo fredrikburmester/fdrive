@@ -1011,3 +1011,48 @@ describe("createPgNotificationClient", () => {
     expect(fake.queries).toEqual([`LISTEN ${DEFAULT_INDEXER_CHANNEL}`]);
   });
 });
+
+describe("global storage registry hook", () => {
+  it("awaits the hook once before identity fanout and catches failure", async () => {
+    const repos = createMemoryRepos();
+    const fake = createFakeNotificationClient();
+    const bus = createEventBus();
+    const { metadata } = fakeMetadataService();
+    const { logger, warnings } = makeLogger();
+    const order: string[] = [];
+    const identities = {
+      ...repos.identities,
+      listAll: async () => {
+        order.push("identities");
+        return [];
+      },
+    };
+    let shouldFail = false;
+    const listener = createIndexerListener({
+      createClient: () => fake.client,
+      identities,
+      indexQueries: fakeIndexQueries(),
+      fileTags: repos.fileTags,
+      favorites: repos.favorites,
+      metadata,
+      bus,
+      homeTemplate: HOME_TEMPLATE,
+      indexRootNames: ROOT_NAMES,
+      clock: () => new Date(AT),
+      logger,
+      onStorageEvent: async () => {
+        order.push("registry");
+        if (shouldFail) throw new Error("registry failed");
+      },
+    });
+    await listener.start();
+    fake.notify(JSON.stringify(makeEvent()));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(["registry", "identities"]);
+    shouldFail = true;
+    fake.notify(JSON.stringify(makeEvent()));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(warnings.at(-1)?.[1]).toBe("indexer-listener: event processing failed");
+    await listener.stop();
+  });
+});

@@ -79,6 +79,34 @@ export const IndexerThumbnailRebuildJob = z.object({
 
 export type IndexerThumbnailRebuildJob = z.infer<typeof IndexerThumbnailRebuildJob>;
 
+/** Progress shared by index and thumbnail clear passes. */
+export const IndexerClearJob = IndexerThumbnailRebuildJob;
+
+export type IndexerClearJob = z.infer<typeof IndexerClearJob>;
+
+/** Clear all roots, one root, or an exact file or directory subtree. */
+export const IndexerClearRequest = z
+  .strictObject({
+    root: z.string().min(1).regex(/\S/).optional(),
+    path: z
+      .string()
+      .min(1)
+      .regex(/\S/)
+      .refine((value) => !/(^|\/)\.\.(\/|$)|[\\\0]/.test(value), "invalid path")
+      .optional(),
+  })
+  .refine((value) => value.path === undefined || value.root !== undefined, {
+    message: "path requires root",
+    path: ["path"],
+  });
+
+export type IndexerClearRequest = z.infer<typeof IndexerClearRequest>;
+
+/** Admission response. Discovery and deletion run in the background. */
+export const IndexerClearResponse = z.object({ started: z.boolean() });
+
+export type IndexerClearResponse = z.infer<typeof IndexerClearResponse>;
+
 /** Shape of `GET /api/v1/system/indexer`'s `stats` field, mirrored from the indexer's `GET /stats`. */
 export const IndexerStats = z.object({
   roots: z.array(IndexerRootStats),
@@ -86,6 +114,8 @@ export const IndexerStats = z.object({
   queueDepth: z.number().int(),
   errorsSample: z.array(IndexerErrorSample),
   thumbnailRebuild: IndexerThumbnailRebuildJob.optional(),
+  indexClear: IndexerClearJob.optional(),
+  thumbnailClear: IndexerClearJob.optional(),
 });
 
 export type IndexerStats = z.infer<typeof IndexerStats>;
@@ -362,3 +392,21 @@ export const SystemThumbnailsResponse = z.object({
 });
 
 export type SystemThumbnailsResponse = z.infer<typeof SystemThumbnailsResponse>;
+
+/** Internal indexer directory metadata. Overflow makes scope verification inconclusive. */
+export const IndexerDirectoryResponse = z.strictObject({
+  items: z
+    .array(
+      z.strictObject({
+        name: z
+          .string()
+          .min(1)
+          .max(255)
+          .regex(/^[^/\0]+$/u),
+        kind: z.enum(["file", "dir", "symlink", "other"]),
+      }),
+    )
+    .max(10000),
+  overflow: z.boolean(),
+});
+export type IndexerDirectoryResponse = z.infer<typeof IndexerDirectoryResponse>;

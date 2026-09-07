@@ -1,6 +1,6 @@
-import type { StorageProvider } from "@fdrive/core";
 import type { ApiTokenRepo, IdentityRepo } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
+import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import { hashApiToken, looksLikeApiToken } from "./token-format.js";
 
 /** `lastUsedAt` is refreshed at most this often, so a busy client does not write on every call. */
@@ -10,7 +10,7 @@ export interface ResolveTokenPrincipalDeps {
   readonly apiTokens: ApiTokenRepo;
   readonly identities: IdentityRepo;
   readonly clock: () => Date;
-  readonly storageFactory: (identityId: string) => StorageProvider;
+  readonly storageFactory: IdentityStorageFactory;
 }
 
 /**
@@ -56,7 +56,7 @@ export function createResolveTokenPrincipal(
       accountId: token.accountId,
       identityId: identity.id,
       username: identity.externalUsername,
-      storage: deps.storageFactory(identity.id),
+      storage: await deps.storageFactory(identity.id),
       isAdmin: false,
     };
   };

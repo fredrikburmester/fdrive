@@ -5,12 +5,14 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const accountFavoritesMock = vi.fn();
 const listApiTokensMock = vi.fn();
 const createApiTokenMock = vi.fn();
 const revokeApiTokenMock = vi.fn();
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
+    accountFavorites: () => accountFavoritesMock(),
     listApiTokens: (...args: unknown[]) => listApiTokensMock(...args),
     createApiToken: (...args: unknown[]) => createApiTokenMock(...args),
     revokeApiToken: (...args: unknown[]) => revokeApiTokenMock(...args),
@@ -93,5 +95,22 @@ describe("useRevokeApiToken", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(revokeApiTokenMock).toHaveBeenCalledWith("token-1");
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["account", "tokens"] });
+  });
+});
+
+it("loads favorites only for a known account and keys the results by account", async () => {
+  accountFavoritesMock.mockResolvedValue({ items: [], unavailableIdentityIds: ["other"] });
+  const { useAccountFavorites } = await import("./queries");
+  const client = new QueryClient();
+  const { result, rerender } = renderHook(
+    ({ id }: { id: string | undefined }) => useAccountFavorites(id),
+    { initialProps: { id: undefined as string | undefined }, wrapper: createWrapper(client) },
+  );
+  expect(result.current.fetchStatus).toBe("idle");
+  rerender({ id: "account" });
+  await waitFor(() => expect(result.current.data?.unavailableIdentityIds).toEqual(["other"]));
+  expect(client.getQueryData(["account", "account", "favorites"])).toEqual({
+    items: [],
+    unavailableIdentityIds: ["other"],
   });
 });

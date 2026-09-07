@@ -1,5 +1,6 @@
 "use client";
 
+import type { AccountSearchResponse, SearchResponse } from "@fdrive/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./deps";
 import { chipsToQueryParams, type SearchChipState } from "./filters";
@@ -18,6 +19,11 @@ export function searchStatusQueryKey() {
 export interface UseSearchResultsOptions {
   /** Skips fetching while `false`, for a closed panel or an empty query. Defaults to `true`. */
   readonly enabled?: boolean;
+  readonly scope?: {
+    readonly accountId: string;
+    readonly identityId: string;
+    readonly all: boolean;
+  };
 }
 
 /**
@@ -34,10 +40,10 @@ export function useSearchResults(
   const params = chipsToQueryParams(chips, currentFolder);
   const trimmed = query.trim();
 
-  return useQuery({
-    queryKey: searchQueryKey(query, chips, currentFolder),
+  return useQuery<SearchResponse | AccountSearchResponse>({
+    queryKey: [...searchQueryKey(query, chips, currentFolder), options.scope ?? null],
     queryFn: () =>
-      apiClient.search(query, {
+      (options.scope?.all ? apiClient.accountSearch : apiClient.search)(query, {
         limit: 20,
         ...(params.ext !== undefined ? { ext: params.ext } : {}),
         ...(params.folder !== undefined ? { folder: params.folder } : {}),

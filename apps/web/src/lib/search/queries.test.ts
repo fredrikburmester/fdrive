@@ -6,11 +6,13 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SEARCH_CHIPS } from "./filters";
 
+const accountSearchMock = vi.fn();
 const searchMock = vi.fn();
 const searchStatusMock = vi.fn();
 
 vi.mock("./deps.js", () => ({
   apiClient: {
+    accountSearch: (...args: unknown[]) => accountSearchMock(...args),
     search: (...args: unknown[]) => searchMock(...args),
     searchStatus: (...args: unknown[]) => searchStatusMock(...args),
   },
@@ -131,4 +133,21 @@ describe("useSearchStatus", () => {
 
     await waitFor(() => expect(result.current.data).toEqual(status));
   });
+});
+
+it("uses account search only for all-logins scope and isolates its cache", async () => {
+  accountSearchMock.mockResolvedValue({ ...EMPTY_RESPONSE, unavailableIdentityIds: ["other"] });
+  const { useSearchResults } = await import("./queries");
+  const client = new QueryClient();
+  const scope = { accountId: "a", identityId: "i", all: true };
+  const { result } = renderHook(
+    () => useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", { scope }),
+    { wrapper: createWrapper(client) },
+  );
+  await waitFor(() =>
+    expect(result.current.data).toHaveProperty("unavailableIdentityIds", ["other"]),
+  );
+  expect(accountSearchMock).toHaveBeenCalledWith("readme", { limit: 20 });
+  expect(searchMock).not.toHaveBeenCalled();
+  expect(client.getQueryCache().getAll()[0]?.queryKey).toContainEqual(scope);
 });

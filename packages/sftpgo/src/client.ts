@@ -1,5 +1,5 @@
 import { type RawSftpgoEntry, toEntry } from "./entries.js";
-import { toSftpgoError } from "./errors.js";
+import { SftpgoError, toSftpgoError } from "./errors.js";
 import {
   basicAuthHeader,
   buildUrl,
@@ -60,10 +60,15 @@ async function readJson<T>(response: Response): Promise<T> {
 async function performDownload(
   ctx: ClientContext,
   url: string,
-  authorization: string,
+  authorization: string | null,
   options: DownloadOptions | undefined,
 ): Promise<DownloadResult> {
   const headers = authHeaders(ctx, authorization);
+  if (options?.rangeHeader !== undefined) {
+    if (!/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(options.rangeHeader))
+      throw new SftpgoError("Invalid range", "bad_request", null, null);
+    headers.set("Range", options.rangeHeader);
+  }
   if (options?.range) {
     headers.set("Range", formatRange(options.range));
   }
@@ -374,39 +379,28 @@ function createPublicShareApi(
 
     async download(path: string, options?: DownloadOptions): Promise<DownloadResult> {
       assertValidPath(path);
-      const url = buildUrl(ctx.baseUrl, `${basePath}/files`, { path });
-      const headers = authHeaders(ctx, authorization);
-      if (options?.range) {
-        headers.set("Range", formatRange(options.range));
-      }
-      if (options?.ifRange) {
-        headers.set("If-Range", options.ifRange);
-      }
-      const response = await safeFetch(ctx.fetchImpl, url, {
-        method: "GET",
-        headers,
-        signal: combineSignals(options?.signal, null),
-      });
-      const status = response.status;
-      if (status !== 200 && status !== 206) {
-        throw await toSftpgoError(response);
-      }
-      return {
-        status,
-        body: response.body ?? emptyByteStream(),
-        contentLength: parseIntOrNull(response.headers.get("content-length")),
-        contentRange: response.headers.get("content-range"),
-        contentType: response.headers.get("content-type"),
-        lastModified: parseDateOrNull(response.headers.get("last-modified")),
-      };
+      return performDownload(
+        ctx,
+        buildUrl(ctx.baseUrl, `${basePath}/files`, { path }),
+        authorization,
+        options,
+      );
+    },
+    async downloadFile(options?: DownloadOptions): Promise<DownloadResult> {
+      return performDownload(
+        ctx,
+        buildUrl(ctx.baseUrl, basePath, { compress: "false" }),
+        authorization,
+        options,
+      );
     },
 
-    async zip(): Promise<ReadableStream<Uint8Array>> {
+    async zip(options?: { signal?: AbortSignal }): Promise<ReadableStream<Uint8Array>> {
       const url = buildUrl(ctx.baseUrl, basePath, { compress: "true" });
       const response = await fetchChecked(ctx.fetchImpl, url, {
         method: "GET",
         headers: authHeaders(ctx, authorization),
-        signal: combineSignals(undefined, null),
+        signal: combineSignals(options?.signal, null),
       });
       return response.body ?? emptyByteStream();
     },
@@ -414,10 +408,21 @@ function createPublicShareApi(
     async upload(
       fileName: string,
       body: ReadableStream<Uint8Array> | Uint8Array,
-      options?: { modifiedAt?: Date; contentLength?: number },
+      options?: { modifiedAt?: Date; contentLength?: number; signal?: AbortSignal },
     ): Promise<void> {
-      const url = buildUrl(ctx.baseUrl, `${basePath}/${encodeURIComponent(fileName)}`);
-      await performUpload(ctx, url, authorization, body, options, combineSignals(undefined, null));
+      // SFTPGo unescapes the route parameter after Go has decoded the URL path.
+      const url = buildUrl(
+        ctx.baseUrl,
+        `${basePath}/${encodeURIComponent(encodeURIComponent(fileName))}`,
+      );
+      await performUpload(
+        ctx,
+        url,
+        authorization,
+        body,
+        options,
+        combineSignals(options?.signal, null),
+      );
     },
   };
 }

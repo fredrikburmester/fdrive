@@ -7,6 +7,7 @@ export interface Provider {
 }
 
 export interface ProviderRepo {
+  get(id: string): Promise<Provider | null>;
   /**
    * Finds the provider for (type, baseUrl), creating it when it does not
    * exist yet. Idempotent: repeated calls with the same input always

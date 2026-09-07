@@ -740,15 +740,19 @@ function loadActiveShare(
   id: string,
 ): FakeShareRecord | Response {
   const share = state.shares.get(id);
-  if (!share || isShareExpired(share, state.now().getTime())) {
+  if (!share) {
     return errorResponse(404, "not found");
   }
+  if (isShareExpired(share, state.now().getTime()) || isShareLimitReached(share))
+    return errorResponse(400, "share unavailable");
+  if (
+    (request.method === "GET" && share.scope === WRITE_SCOPE) ||
+    (request.method === "POST" && share.scope !== WRITE_SCOPE)
+  )
+    return permissionDenied();
   const passwordError = checkSharePassword(request, share);
   if (passwordError) {
     return passwordError;
-  }
-  if (isShareLimitReached(share)) {
-    return errorResponse(429, "usage limit reached");
   }
   return share;
 }
@@ -788,32 +792,10 @@ function handlePublicList(state: FakeState, request: Request, id: string, url: U
   if (children === null) {
     return errorResponse(404, "not found");
   }
-  touchShare(state, share);
   return jsonResponse(
     200,
     children.map((entry) => statusEntry(entry.name, entry.node)),
   );
-}
-
-function resolveSharePath(
-  state: FakeState,
-  share: FakeShareRecord,
-  requestedPath: string,
-): { volume: Volume; innerPath: string } | null {
-  if (share.paths.length === 1) {
-    const root = resolveShareRoot(state, share);
-    if (!root) {
-      return null;
-    }
-    if (!root.volume.isDir(root.innerPath)) {
-      return root;
-    }
-    const suffix = requestedPath === "/" ? "" : requestedPath;
-    const combined = root.innerPath === "/" ? suffix || "/" : `${root.innerPath}${suffix}`;
-    return { volume: root.volume, innerPath: combined === "" ? "/" : combined };
-  }
-  const match = share.paths.find((candidate) => candidate === requestedPath);
-  return match === undefined ? null : state.resolveVolume(share.username, match);
 }
 
 function handlePublicDownload(state: FakeState, request: Request, id: string, url: URL): Response {
@@ -826,17 +808,28 @@ function handlePublicDownload(state: FakeState, request: Request, id: string, ur
   if (path === null || !isValidPath(path)) {
     return errorResponse(400, "invalid path");
   }
-  const resolved = resolveSharePath(state, share, path);
-  if (!resolved) {
-    return errorResponse(404, "not found");
-  }
-  const node = resolved.volume.get(resolved.innerPath);
+  const root = resolveShareRoot(state, share);
+  if (!root?.volume.isDir(root.innerPath))
+    return errorResponse(400, "download requires a single directory share");
+  const suffix = path === "/" ? "" : path;
+  const innerPath = root.innerPath === "/" ? suffix || "/" : `${root.innerPath}${suffix}`;
+  const node = root.volume.get(innerPath);
   if (!node) {
     return errorResponse(404, "not found");
   }
   if (node.kind !== "file") {
     return errorResponse(400, "is a directory");
   }
+  touchShare(state, share);
+  return respondWithFile(node, request.headers.get("range"));
+}
+
+function handlePublicSingleFile(state: FakeState, request: Request, id: string): Response {
+  const share = loadActiveShare(state, request, id);
+  if (share instanceof Response) return share;
+  const root = resolveShareRoot(state, share);
+  const node = root?.volume.get(root.innerPath);
+  if (node?.kind !== "file") return handlePublicZip(state, request, id);
   touchShare(state, share);
   return respondWithFile(node, request.headers.get("range"));
 }
@@ -879,9 +872,6 @@ async function handlePublicUpload(
     return shareOrError;
   }
   const share = shareOrError;
-  if (share.scope !== WRITE_SCOPE) {
-    return permissionDenied();
-  }
   const root = resolveShareRoot(state, share);
   if (!root?.volume.isDir(root.innerPath)) {
     return errorResponse(400, "upload requires a single directory share");
@@ -920,6 +910,8 @@ async function routePublicShare(
 
   if (slashIndex === -1) {
     const id = decodeURIComponent(rest);
+    if (method === "GET" && url.searchParams.get("compress") === "false")
+      return handlePublicSingleFile(state, request, id);
     if (method === "GET" && url.searchParams.get("compress") === "true") {
       return handlePublicZip(state, request, id);
     }
@@ -935,7 +927,7 @@ async function routePublicShare(
     return handlePublicDownload(state, request, id, url);
   }
   if (method === "POST") {
-    return handlePublicUpload(state, request, id, decodeURIComponent(sub));
+    return handlePublicUpload(state, request, id, decodeURIComponent(decodeURIComponent(sub)));
   }
   return errorResponse(404, "not found");
 }

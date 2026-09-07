@@ -29,6 +29,13 @@
       "when": 1788721491080,
       "tag": "0003_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788730606860,
+      "tag": "0004_flashy_warlock",
+      "breakpoints": true
     }
   ]
 }

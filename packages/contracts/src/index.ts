@@ -1,5 +1,13 @@
 export { AboutResponse } from "./about.ts";
 export {
+  AccountFavoriteItem,
+  AccountFavoritesResponse,
+  AccountIdentityId,
+  AccountSearchResponse,
+  LinkIdentityRequest,
+  SwitchIdentityRequest,
+} from "./accounts.ts";
+export {
   AdminConnectionResponse,
   AdminConnectionTestRequest,
   AdminConnectionUpdateRequest,
@@ -62,6 +70,16 @@ export {
   TagsResponse,
   UpdateTagRequest,
 } from "./metadata.ts";
+export {
+  isOfficeFilename,
+  isOfficePath,
+  OfficeCreateDocumentRequest,
+  OfficeCreateDocumentResponse,
+  OfficeMode,
+  OfficeOpenRequest,
+  OfficeOpenResponse,
+  OfficeStatusResponse,
+} from "./office.ts";
 export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
@@ -89,8 +107,13 @@ export {
   SetupStatusResponse,
   SetupTestRequest,
 } from "./setup.ts";
+export * from "./shares.ts";
 export {
   IndexerActionResponse,
+  IndexerClearJob,
+  IndexerClearRequest,
+  IndexerClearResponse,
+  IndexerDirectoryResponse,
   IndexerErrorSample,
   IndexerHealth,
   IndexerLastScan,
