@@ -60,6 +60,8 @@ function stubIndexQueries(): IndexQueries {
     recentMoves: async () => [],
     deletedRowSha: async () => null,
     liveRowsBySha: async () => [],
+    searchImages: async () => [],
+    imageEmbeddingStats: async () => ({ total: 0, model: null }),
   };
 }
 

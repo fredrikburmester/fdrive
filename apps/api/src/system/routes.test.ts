@@ -51,6 +51,8 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     recentMoves: notImplemented,
     deletedRowSha: notImplemented,
     liveRowsBySha: notImplemented,
+    searchImages: notImplemented,
+    imageEmbeddingStats: notImplemented,
     ...overrides,
   };
 }
