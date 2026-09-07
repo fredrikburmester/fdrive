@@ -52,6 +52,8 @@ export const ROUTES = {
     jobs: "/api/v1/fs/jobs",
     /** GET: an archive's entries, without extracting it -> `ArchiveEntriesResponse`. */
     archiveEntries: "/api/v1/fs/archive-entries",
+    /** GET: a directory's total size, from the index only -> `FolderSizeResponse`. */
+    folderSize: "/api/v1/fs/folder-size",
     /** PUT: replace the full set of tags on a path -> `OkResponse`. */
     tags: "/api/v1/fs/tags",
   },

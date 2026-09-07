@@ -98,6 +98,16 @@ async function buildHarness(seed: FakeSeed = SEED) {
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
         metadata,
+        folderSize: {
+          indexQueries: {
+            rootIdsByName: async () => ({}),
+            subtreeSize: async () => ({ bytes: 0, files: 0 }),
+          },
+          resolver: {
+            verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
+          },
+          identities: { get: async () => null },
+        },
       });
       registerMetadataRoutes(groups, { metadata });
     },

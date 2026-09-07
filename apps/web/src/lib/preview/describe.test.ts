@@ -120,4 +120,88 @@ describe("describeEntry", () => {
     const size = result.rows.find((row) => row.label === "Size");
     expect(size?.value).toBe("2,0 KB");
   });
+
+  it("returns a null note for a plain file", () => {
+    const result = describeEntry(entry(), { now: NOW });
+    expect(result.note).toBeNull();
+  });
+
+  it("ignores folderSize for a file entry", () => {
+    const result = describeEntry(entry(), {
+      now: NOW,
+      folderSize: { isPending: false, isError: false, data: { bytes: 1, files: 1, indexed: true } },
+    });
+    expect(result.rows.map((row) => row.label)).not.toContain("Files");
+    expect(result.rows.find((row) => row.label === "Size")?.value).toBe("2.0 KB");
+  });
+
+  it("shows Calculating for a directory while the folder size query is pending", () => {
+    const dirEntry = entry({ kind: "dir", name: "photos", path: "/photos", ext: "", size: 0 });
+    const result = describeEntry(dirEntry, {
+      now: NOW,
+      folderSize: { isPending: true, isError: false },
+    });
+    expect(result.rows.find((row) => row.label === "Size")?.value).toBe("Calculating");
+    expect(result.rows.find((row) => row.label === "Files")?.value).toBe("Calculating");
+    expect(result.note).toBeNull();
+  });
+
+  it("shows Not indexed for a directory the folder size query errors on", () => {
+    const dirEntry = entry({ kind: "dir", name: "photos", path: "/photos", ext: "", size: 0 });
+    const result = describeEntry(dirEntry, {
+      now: NOW,
+      folderSize: { isPending: false, isError: true },
+    });
+    expect(result.rows.find((row) => row.label === "Size")?.value).toBe("Not indexed");
+    expect(result.rows.find((row) => row.label === "Files")?.value).toBe("Not indexed");
+  });
+
+  it("shows Not indexed for a directory outside the index", () => {
+    const dirEntry = entry({ kind: "dir", name: "photos", path: "/photos", ext: "", size: 0 });
+    const result = describeEntry(dirEntry, {
+      now: NOW,
+      folderSize: {
+        isPending: false,
+        isError: false,
+        data: { bytes: 0, files: 0, indexed: false },
+      },
+    });
+    expect(result.rows.find((row) => row.label === "Size")?.value).toBe("Not indexed");
+    expect(result.rows.find((row) => row.label === "Files")?.value).toBe("Not indexed");
+  });
+
+  it("shows the real byte and file counts for an indexed directory, with a note", () => {
+    const dirEntry = entry({ kind: "dir", name: "photos", path: "/photos", ext: "", size: 0 });
+    const result = describeEntry(dirEntry, {
+      now: NOW,
+      folderSize: {
+        isPending: false,
+        isError: false,
+        data: { bytes: 2048, files: 12, indexed: true },
+      },
+    });
+    expect(result.rows.find((row) => row.label === "Size")?.value).toBe("2.0 KB");
+    expect(result.rows.find((row) => row.label === "Files")?.value).toBe("12");
+    expect(result.note).toBe("From the index");
+  });
+
+  it("inserts the Files row right after Size for a directory", () => {
+    const dirEntry = entry({ kind: "dir", name: "photos", path: "/photos", ext: "", size: 0 });
+    const result = describeEntry(dirEntry, {
+      now: NOW,
+      folderSize: {
+        isPending: false,
+        isError: false,
+        data: { bytes: 2048, files: 12, indexed: true },
+      },
+    });
+    expect(result.rows.map((row) => row.label)).toEqual([
+      "Kind",
+      "Size",
+      "Files",
+      "Modified",
+      "Location",
+      "Extension",
+    ]);
+  });
 });

@@ -53,6 +53,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     liveRowsBySha: notImplemented,
     searchImages: notImplemented,
     imageEmbeddingStats: notImplemented,
+    subtreeSize: notImplemented,
     ...overrides,
   };
 }

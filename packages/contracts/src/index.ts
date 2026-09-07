@@ -35,6 +35,7 @@ export {
   EntryKind,
   EntryResponse,
   ExtractRequest,
+  FolderSizeResponse,
   FsEntry,
   FsEntryMeta,
   isValidEntryName,

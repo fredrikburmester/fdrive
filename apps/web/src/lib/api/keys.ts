@@ -10,6 +10,7 @@ export const queryKeys = {
   fs: {
     list: (path: string) => ["fs", "list", path] as const,
     stat: (path: string) => ["fs", "stat", path] as const,
+    folderSize: (path: string) => ["fs", "folder-size", path] as const,
   },
   setup: {
     status: () => ["setup", "status"] as const,

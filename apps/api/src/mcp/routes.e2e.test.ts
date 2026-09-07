@@ -62,6 +62,7 @@ function stubIndexQueries(): IndexQueries {
     liveRowsBySha: async () => [],
     searchImages: async () => [],
     imageEmbeddingStats: async () => ({ total: 0, model: null }),
+    subtreeSize: async () => fail("subtreeSize"),
   };
 }
 
