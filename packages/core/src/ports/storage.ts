@@ -27,8 +27,9 @@ export interface TrashProvider {
   list(options?: { limit?: number; signal?: AbortSignal }): Promise<TrashListing>;
   /**
    * Moves the leaf identified by `id` back to `target` (default: its
-   * `originalPath`). Parent directories are created as needed. Throws
-   * `StorageError("conflict")` when something already exists at the target.
+   * `originalPath`). Parent directories are created as needed. Checks the
+   * target first and throws `StorageError("conflict")` when anything already
+   * exists there, because providers such as SFTPGo overwrite on move.
    */
   restore(id: string, options?: { target?: string }): Promise<FileEntry>;
   /** Permanently deletes the leaves identified by `ids`. Missing ids are ignored. */
