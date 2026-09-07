@@ -132,6 +132,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
     rootIdsByName: overrides.rootIdsByName ?? (async () => ({ sftpgo: 1 })),
     stats: overrides.stats ?? (async () => fail("stats")),
+    statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     duplicates: overrides.duplicates ?? (async () => fail("duplicates")),
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),

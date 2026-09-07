@@ -1,4 +1,17 @@
+import { baseName, extensionOf } from "@fdrive/core";
+
 const NS_PER_MS = 1_000_000n;
+
+/**
+ * Best-effort guess at whether a move destination is a file or a folder,
+ * from its path alone (SFTPGo's move response and `idx.moves` rows carry no
+ * entry kind): extensionless is treated as a folder, matching how fdrive's
+ * own folder names are chosen in practice. Used to pick which live-read
+ * check (`kind: "file"` vs `"dir"`) authorizes a move's destination.
+ */
+export function moveDestinationKind(path: string): "file" | "dir" {
+  return extensionOf(baseName(path)) === "" ? "dir" : "file";
+}
 
 /** Converts an ISO-ish date string to nanoseconds since epoch (as the indexer stores mtimes), `undefined` for an absent or unparsable value. */
 export function nsFromIso(value: string | undefined): bigint | undefined {

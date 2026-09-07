@@ -1,11 +1,14 @@
-import type { HomeTemplate, Scope } from "@fdrive/core";
-import { isUnderPath, toFsPath, toVirtualPath } from "@fdrive/core";
+import type { Scope } from "@fdrive/core";
+import { isUnderPath, toFsPath } from "@fdrive/core";
 import type { IndexQueries, ScopePrefix } from "@fdrive/db";
-import { usableScopesFor } from "../search/scopes.js";
+import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 
 /**
  * Everything an MCP tool needs to translate between a principal's virtual
- * paths and the index's (rootId, fs path) rows, resolved once per tool call.
+ * paths and the index's (rootId, fs path) rows, resolved once per tool call
+ * from the caller's `ScopeResolver.verifiedIndexScopes(identity)` result.
+ * Never built from a username/template fallback; see
+ * `docs/workflow/P5-SCOPE-CONSUMERS.md`'s "MCP chunk" section.
  */
 export interface ScopeContext {
   readonly scopes: readonly Scope[];
@@ -23,18 +26,16 @@ export interface ScopeContext {
 }
 
 /**
- * Resolves the scope context for `username`, or `null` when index-backed
- * tools are unavailable for them (no configured index roots, an invalid
- * username, or none of their scopes land on a configured root).
+ * Resolves the scope context for `scopes` (an identity's already *verified*
+ * index scopes, from `ScopeResolver.verifiedIndexScopes`), or `null` when
+ * index-backed tools are unavailable: `scopes` is empty, or none of it lands
+ * on a root the index actually has a row for yet.
  */
 export async function resolveScopeContext(
-  indexQueries: IndexQueries,
-  homeTemplate: HomeTemplate,
-  indexRootNames: ReadonlySet<string>,
-  username: string,
+  indexQueries: Pick<IndexQueries, "rootIdsByName">,
+  scopes: readonly Scope[],
   trashPath: string | null,
 ): Promise<ScopeContext | null> {
-  const scopes = usableScopesFor(homeTemplate, indexRootNames, username);
   if (scopes.length === 0) {
     return null;
   }
@@ -61,15 +62,20 @@ export async function resolveScopeContext(
 }
 
 /**
- * Maps `(rootId, fsPath)` back to the caller's virtual path, `null` when
- * out of scope or (per `ctx.trashPath`) inside the trash.
+ * Maps `(rootId, fsPath)` back to the caller's virtual path, `null` when out
+ * of scope, when a more specific override shadows this exact location (see
+ * `roundTripVirtualPath`), or (per `ctx.trashPath`) inside the trash. Every
+ * index-derived candidate must be filtered through this before it can
+ * contribute to a tool's result; it is never sufficient on its own, though:
+ * callers still need a live read check (`ReadAuthorizer`) before returning
+ * any content, name, hash, or aggregate derived from the candidate.
  */
 export function virtualPathFor(ctx: ScopeContext, rootId: number, fsPath: string): string | null {
   const rootName = ctx.rootNameById.get(rootId);
   if (rootName === undefined) {
     return null;
   }
-  const virtualPath = toVirtualPath(ctx.scopes, rootName, fsPath);
+  const virtualPath = roundTripVirtualPath(ctx.scopes, rootName, fsPath);
   if (virtualPath === null) {
     return null;
   }
