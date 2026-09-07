@@ -52,5 +52,50 @@
       "name": "shared",
       "mapped_path": "/srv/sftpgo/data/_folders/shared"
     }
+  ],
+  "event_actions": [
+    {
+      "name": "fdrive-move-to-trash",
+      "type": 9,
+      "options": {
+        "fs_config": {
+          "type": 1,
+          "renames": [
+            {
+              "key": "/{{.VirtualPath}}",
+              "value": "/.trash/{{.VirtualDirPath}}/{{.ObjectName}}/{{.Timestamp}}"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "event_rules": [
+    {
+      "name": "fdrive-trash",
+      "status": 1,
+      "trigger": 1,
+      "conditions": {
+        "fs_events": ["pre-delete"],
+        "options": {
+          "fs_paths": [
+            {
+              "pattern": "/.trash/**",
+              "inverse_match": true
+            }
+          ]
+        }
+      },
+      "actions": [
+        {
+          "name": "fdrive-move-to-trash",
+          "order": 1,
+          "relation_options": {
+            "execute_sync": true,
+            "stop_on_failure": true
+          }
+        }
+      ]
+    }
   ]
 }

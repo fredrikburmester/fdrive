@@ -239,3 +239,17 @@ available and followed the project instructions.
   indexer gets `fsPrefix`. The read authorizer's target field is `path` (virtual), not
   `fsPath`. Overrides persist in the existing `SettingsRepo` under `identity_scope:<id>`.
   Still running: `trash-api` and `trash-web`. Next after both: P5-SCOPE-CONSUMERS wiring.
+- Merged: `trash-web` (1d4aa95) and `trash-api` (4855f9b). Trash is complete end to end
+  pending the browser check and the trash e2e run after `conflict-guard`.
+- Finding from trash-api: real SFTPGo overwrites on move/copy onto an existing file and
+  merges directory copies; the fake returned 409. Running: `conflict-guard` implementer
+  (`.worktrees/conflict-guard`: fake fidelity, contract cases, core restore stat guard,
+  fs move/copy/rename target guard, real-container test).
+- Hardening review recorded in `docs/workflow/HARDENING-REVIEW.md`. Running:
+  `hardening-1` implementer (`.worktrees/hardening-1`: items 1-5, 7, 8).
+- Live pane (dev/dev, dev SFTPGo recreated with the seeded rule, API restarted with
+  `FDRIVE_SFTPGO_TRASH_PATH=/.trash`): context menu says "Move to Trash", dialog copy
+  matches, `photo copy.zip` left Files, appeared on /trash with original folder Home and
+  size, Restore returned it to Files and the Trash page showed its empty state. Root gates
+  after trash-api: lint 957 files, typecheck 13, coverage 8/8 (API 1395, web 1247),
+  integration 4/4 (API 15 incl. trash-sftp).
