@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   accountTokenRoute,
   IDENTITY_HEADER,
+  identityScopeRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -164,6 +165,16 @@ describe("tagRoute", () => {
 describe("tagFilesRoute", () => {
   it("builds the files path for a single tag", () => {
     expect(tagFilesRoute("tag-1")).toBe("/api/v1/tags/tag-1/files");
+  });
+});
+
+describe("identityScopeRoute", () => {
+  it("builds the scope path for a single identity", () => {
+    expect(identityScopeRoute("identity-1")).toBe("/api/v1/account/identities/identity-1/scope");
+  });
+
+  it("url-encodes the id", () => {
+    expect(identityScopeRoute("a/b")).toBe("/api/v1/account/identities/a%2Fb/scope");
   });
 });
 

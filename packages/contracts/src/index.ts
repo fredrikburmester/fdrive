@@ -84,6 +84,7 @@ export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
   IDENTITY_HEADER,
+  identityScopeRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -91,6 +92,16 @@ export {
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
+export {
+  IdentityScopeReason,
+  IdentityScopeResponse,
+  isCanonicalScopePath,
+  MAX_SCOPE_MAPPINGS,
+  ScopeCanonicalPath,
+  ScopeMapping,
+  ScopeRootName,
+  SetIdentityScopeRequest,
+} from "./scopes.ts";
 export {
   SearchHighlightRange,
   SearchHit,
