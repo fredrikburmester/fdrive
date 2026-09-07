@@ -25,7 +25,7 @@ import { ListingSkeleton } from "./listing-skeleton";
 /** A grid tile's fixed footprint, in pixels: used to compute how many
  * columns fit and, in `ListingSkeleton`, to size its placeholder tiles. */
 export const GRID_TILE_WIDTH = 112;
-export const GRID_TILE_HEIGHT = 104;
+export const GRID_TILE_HEIGHT = 128;
 /** The gap between tiles, in pixels: matches the `gap-1` utility (0.25rem)
  * on each virtualized row, so the column math lines up with the CSS. */
 export const GRID_GAP = 4;
@@ -101,8 +101,14 @@ const GRID_THUMBNAIL_SIZE = 256;
 function GridTileIcon({ entry }: { entry: FsEntry }) {
   const [errored, setErrored] = useState(false);
 
+  // The slot is a fixed 56px square so tiles with an icon and tiles with a
+  // picture line up; the icon keeps its 32px size centred inside it.
   if (errored || !wantsGridThumbnail(entry)) {
-    return <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} className="size-8" />;
+    return (
+      <span className="flex size-14 shrink-0 items-center justify-center">
+        <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} className="size-8" />
+      </span>
+    );
   }
 
   return (
@@ -112,7 +118,7 @@ function GridTileIcon({ entry }: { entry: FsEntry }) {
       alt=""
       loading="lazy"
       decoding="async"
-      className="size-8 shrink-0 rounded-md object-cover ring-1 ring-border"
+      className="size-14 shrink-0 rounded-md object-cover ring-1 ring-border"
       onError={() => setErrored(true)}
     />
   );
