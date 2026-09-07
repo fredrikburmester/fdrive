@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/table";
 import { type PublicShareClient, publicShareClient } from "@/lib/shares/client";
 import { appendShareName, publicShareHref, shareBreadcrumbs } from "@/lib/shares/paths";
+import { canPeekArchive } from "@/lib/shares/peek";
 import {
   galleryEntries,
   resolveEntriesPresentation,
@@ -44,6 +45,7 @@ import {
 import { publicShareUsage, shareUnavailable } from "@/lib/shares/status";
 import { createShareUploadQueue } from "@/lib/shares/uploads";
 import { NativeShareDownload } from "./native-download";
+import { PublicArchivePeek } from "./public-archive-peek";
 import { PublicGallery } from "./public-gallery";
 import { PublicPreview } from "./public-preview";
 import { PublicUpload } from "./public-upload";
@@ -68,6 +70,7 @@ function DirectoryListing({
   listing,
   client,
   onPreview,
+  onPeek,
 }: {
   id: string;
   path: string;
@@ -77,6 +80,7 @@ function DirectoryListing({
   listing: ReturnType<typeof useShareEntries>;
   client: PublicShareClient;
   onPreview: (name: string, path: string, size: number) => void;
+  onPeek: (name: string, path: string, size: number) => void;
 }) {
   if (listing.isError) return <FieldError>{listing.error.message}</FieldError>;
   if (listing.isPending)
@@ -100,13 +104,31 @@ function DirectoryListing({
         downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
       />
     );
-  return <SharedEntries id={id} path={path} entries={listing.data.items} onPreview={onPreview} />;
+  return (
+    <SharedEntries
+      id={id}
+      path={path}
+      entries={listing.data.items}
+      downloadLimited={downloadLimited}
+      onPreview={onPreview}
+      onPeek={onPeek}
+    />
+  );
 }
 
 interface SelectedPreview {
   name: string;
   path: string;
   kind: Exclude<ReturnType<typeof publicPreviewKind>, "none">;
+  generation: number;
+  folder: string;
+}
+
+interface SelectedPeek {
+  name: string;
+  path: string;
+  /** Undefined for a single-file archive share, whose metadata carries no size. */
+  size: number | undefined;
   generation: number;
   folder: string;
 }
@@ -136,9 +158,13 @@ function SharedContents({
     enabled && share.scope === "read" && share.layout === "directory",
   );
   const [preview, setPreview] = useState<SelectedPreview | null>(null);
+  const [peek, setPeek] = useState<SelectedPeek | null>(null);
   function previewFile(name: string, filePath: string, size?: number) {
     const kind = publicPreviewKind(name, size);
     if (kind !== "none") setPreview({ name, path: filePath, kind, generation, folder: path });
+  }
+  function peekArchive(name: string, filePath: string, size?: number) {
+    setPeek({ name, path: filePath, size, generation, folder: path });
   }
   if (unavailable) return <FieldError>{unavailable}</FieldError>;
   if (share.scope === "write") return <PublicUpload queue={uploads} enabled={enabled} />;
@@ -188,6 +214,7 @@ function SharedContents({
             listing={listing}
             client={client}
             onPreview={previewFile}
+            onPeek={peekArchive}
           />
         </>
       ) : share.layout === "archive" ? (
@@ -210,6 +237,12 @@ function SharedContents({
                 Preview
               </Button>
             )}
+            {share.fileName &&
+              canPeekArchive(share.fileName, { downloadLimited: share.maxDownloads > 0 }) && (
+                <Button variant="outline" onClick={() => peekArchive(share.fileName ?? "", "/")}>
+                  Peek
+                </Button>
+              )}
             <NativeShareDownload href={client.shareDownloadUrl(id)} />
           </div>
         </div>
@@ -223,6 +256,17 @@ function SharedContents({
           onClose={() => setPreview(null)}
         />
       )}
+      {peek?.generation === generation && peek.folder === path && (
+        <PublicArchivePeek
+          key={`${generation}:${peek.path}`}
+          id={id}
+          path={peek.path}
+          name={peek.name}
+          size={peek.size}
+          generation={generation}
+          onClose={() => setPeek(null)}
+        />
+      )}
     </div>
   );
 }
@@ -231,12 +275,16 @@ function SharedEntries({
   id,
   path,
   entries,
+  downloadLimited,
   onPreview,
+  onPeek,
 }: {
   id: string;
   path: string;
   entries: ShareEntriesResponse["items"];
+  downloadLimited: boolean;
   onPreview: (name: string, path: string, size: number) => void;
+  onPeek: (name: string, path: string, size: number) => void;
 }) {
   const client = publicShareClient();
   if (entries.length === 0)
@@ -294,6 +342,15 @@ function SharedEntries({
                       onClick={() => onPreview(entry.name, entryPath, entry.size)}
                     >
                       Preview
+                    </Button>
+                  )}
+                  {entry.kind === "file" && canPeekArchive(entry.name, { downloadLimited }) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onPeek(entry.name, entryPath, entry.size)}
+                    >
+                      Peek
                     </Button>
                   )}
                   {entry.kind === "file" && (
