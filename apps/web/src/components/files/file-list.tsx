@@ -41,12 +41,6 @@ export interface FileListProps {
   onInternalDrop: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
   /** Toggles between selecting every visible row and none, from the header checkbox. */
   onToggleSelectAll: () => void;
-  /**
-   * Replaces the current selection outright. Not called by `FileList`
-   * itself (there is no more drag-to-select), but part of the shared
-   * listing prop contract other callers (see `FileGrid`) still rely on.
-   */
-  onChangeSelection: (paths: string[]) => void;
   /** Clears the selection, for a plain click on empty listing space. */
   onClearSelection: () => void;
   /**

@@ -211,7 +211,6 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   onToggleSelectAll={() =>
                     dispatchSelection({ type: "toggleAll", visiblePaths: orderedPaths })
                   }
-                  onChangeSelection={(picked) => dispatchSelection({ type: "set", paths: picked })}
                   onClearSelection={() => dispatchSelection({ type: "clear" })}
                   tags={tags}
                   onToggleTag={handleToggleTag}
