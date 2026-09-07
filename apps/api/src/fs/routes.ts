@@ -42,6 +42,7 @@ import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
+import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -80,6 +81,8 @@ export interface FsRoutesDeps {
    * effective for these routes.
    */
   readonly jsonMaxBytes?: number;
+  /** Wires `GET /fs/folder-size`; see `folder-size.ts`'s `registerFolderSizeRoutes`. */
+  readonly folderSize: FolderSizeRoutesDeps;
 }
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
@@ -614,4 +617,5 @@ export function registerFsRoutes(
   });
 
   registerArchiveRoutes(groups, deps);
+  registerFolderSizeRoutes(groups, deps.folderSize);
 }

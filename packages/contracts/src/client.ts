@@ -14,6 +14,7 @@ import {
   type DeleteRequest,
   EntryResponse,
   type ExtractRequest,
+  FolderSizeResponse,
   type FsEntry,
   ListResponse,
   OkResponse,
@@ -209,6 +210,8 @@ export interface ApiClient {
   extract(req: ExtractRequest): Promise<JobAccepted>;
   /** Lists an archive's entries without extracting it. */
   archiveEntries(path: string): Promise<ArchiveEntriesResponse>;
+  /** A directory's total size, computed from the index only. */
+  folderSize(path: string): Promise<FolderSizeResponse>;
   jobs(): Promise<JobStatus[]>;
   job(id: string): Promise<JobStatus>;
   cancelJob(id: string): Promise<JobStatus>;
@@ -715,6 +718,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "GET", path: ROUTES.fs.archiveEntries, query: { path } },
         ArchiveEntriesResponse,
+      );
+    },
+
+    folderSize(path: string): Promise<FolderSizeResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.fs.folderSize, query: { path } },
+        FolderSizeResponse,
       );
     },
 

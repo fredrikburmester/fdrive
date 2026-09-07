@@ -37,6 +37,7 @@ describe("ROUTES", () => {
       extract: "/api/v1/fs/extract",
       jobs: "/api/v1/fs/jobs",
       archiveEntries: "/api/v1/fs/archive-entries",
+      folderSize: "/api/v1/fs/folder-size",
       tags: "/api/v1/fs/tags",
     });
   });
