@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
-import { parseHomeTemplate } from "@fdrive/core";
+import { parseHomeTemplate, type StorageProvider, scopesFor } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
+import { createSftpgoClient } from "@fdrive/sftpgo";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type BusEvent, createEventBus } from "../../src/events/bus.js";
@@ -9,7 +10,10 @@ import {
   createPgNotificationClient,
 } from "../../src/events/indexer-listener.js";
 import { createMetadataService } from "../../src/metadata/service.js";
+import { createSftpgoStorageProvider } from "../../src/storage/sftpgo-provider.js";
 import { SftpIndexerStack } from "./helpers/sftp-indexer-stack.js";
+
+const SFTP_PASSWORD = "disposable-test-password";
 
 function byPath<T extends { path: string }>(items: T[]): T[] {
   return items.sort((a, b) => a.path.localeCompare(b.path));
@@ -94,6 +98,25 @@ describe("external SFTP directory rename through the real indexer", () => {
     const warnings: string[] = [];
     bus.subscribe({ identityId: identity.id }, (event) => received.push(event));
     bus.subscribe({ identityId: otherIdentity.id }, (event) => otherReceived.push(event));
+    const homeTemplate = parseHomeTemplate("sftpgo:/{username}");
+    // Live storage per identity, against the real SFTPGo container: the
+    // listener's live-read check before announcing a move destination must
+    // pass against the identity's actual storage, not a stub.
+    const sftpgoClient = createSftpgoClient({ baseUrl: stack.sftpgoUrl, fetch: globalThis.fetch });
+    const storageByIdentityId = new Map<string, StorageProvider>();
+    for (const [id, username] of [
+      [identity.id, "alice"],
+      [otherIdentity.id, "alice-other"],
+    ] as const) {
+      const token = await sftpgoClient.login({ username, password: SFTP_PASSWORD });
+      storageByIdentityId.set(
+        id,
+        createSftpgoStorageProvider({
+          client: sftpgoClient,
+          withToken: async (fn) => fn(token.accessToken),
+        }),
+      );
+    }
     const listener = createIndexerListener({
       createClient: () => createPgNotificationClient(stack.connectionString),
       identities: repos.identities,
@@ -102,7 +125,17 @@ describe("external SFTP directory rename through the real indexer", () => {
       favorites: repos.favorites,
       metadata,
       bus,
-      homeTemplate: parseHomeTemplate("sftpgo:/{username}"),
+      configuredMappingsFor: async (id) => ({
+        available: true,
+        providerId: id.providerId,
+        homeTemplateRaw: "sftpgo:/{username}",
+        scopes: scopesFor({ template: homeTemplate, username: id.externalUsername }),
+      }),
+      storageForIdentity: async (id) => {
+        const storage = storageByIdentityId.get(id);
+        if (storage === undefined) throw new Error(`no storage seeded for identity ${id}`);
+        return storage;
+      },
       indexRootNames: new Set(["sftpgo"]),
       clock: () => new Date(),
       logger: { warn: (_data, message) => warnings.push(message) },

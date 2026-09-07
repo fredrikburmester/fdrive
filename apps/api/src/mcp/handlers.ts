@@ -1,7 +1,9 @@
 import type { HomeTemplate, Scope } from "@fdrive/core";
 import { baseName, extensionOf, parseSearchFilters, toFsPath } from "@fdrive/core";
-import type { FileFilter, FileOrder, IndexedFile, IndexQueries } from "@fdrive/db";
+import type { FileFilter, FileOrder, IdentityRepo, IndexedFile, IndexQueries } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
+import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { ScopeResolver } from "../scoping/resolver.ts";
 import { toIndexRelativePath, usableScopesFor } from "../search/scopes.js";
 import type { SearchService } from "../search/service.js";
 import {
@@ -27,6 +29,15 @@ export interface McpToolDeps {
   readonly homeTemplate: HomeTemplate;
   readonly indexRootNames: ReadonlySet<string>;
   readonly searchService: SearchService;
+  /**
+   * Resolves each caller's *verified* index scopes for `runSearch`. Every
+   * other tool in this file still uses `homeTemplate`/`indexRootNames`
+   * above via `resolveScopeContext`; only `runSearch` (this chunk's narrow
+   * transfer point) has moved to the resolver. See
+   * `docs/workflow/P5-SCOPE-CONSUMERS.md`.
+   */
+  readonly scopeResolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly identities: Pick<IdentityRepo, "get">;
   readonly fdrivePublicUrl: string | undefined;
   readonly indexerClient: IndexerExtractClient | null;
   readonly writesEnabled: boolean;
@@ -116,8 +127,14 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     after: args.modified_after,
     before: args.modified_before,
   });
+  const identity = await deps.identities.get(principal.identityId);
+  const verified =
+    identity === null
+      ? { available: false as const }
+      : await deps.scopeResolver.verifiedIndexScopes(identity);
   const response = await deps.searchService.search({
-    username: principal.username,
+    scopes: verified.available ? verified.scopes : [],
+    authorizer: createReadAuthorizer({ storage: principal.storage }),
     query: args.query,
     filters,
     limit: Math.max(1, Math.min(args.limit ?? 10, 50)),

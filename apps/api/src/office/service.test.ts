@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { parseHomeTemplate, StorageError } from "@fdrive/core";
+import { parseHomeTemplate, StorageError, scopesFor } from "@fdrive/core";
 import { describe, expect, it, vi } from "vitest";
 import { officeHarness, proofKey } from "../../test/fixtures/office/harness.ts";
 import { createOfficeService, fileExists } from "./service.ts";
@@ -95,7 +95,10 @@ describe("office opening and creation", () => {
           identity: h.alice.identity,
           session: h.alice.session,
           storage: h.storage,
-          homeTemplate: parseHomeTemplate("sftpgo:/shared"),
+          scopes: scopesFor({
+            template: parseHomeTemplate("sftpgo:/shared"),
+            username: h.alice.identity.externalUsername,
+          }),
         },
         "/directory.docx",
       ),

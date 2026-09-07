@@ -52,6 +52,10 @@ import { createOfficeService } from "./office/service.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
+import { createSettingsScopeOverrideStore } from "./scoping/override-store.ts";
+import { createReadAuthorizer } from "./scoping/read-authorizer.ts";
+import { createScopeResolver } from "./scoping/resolver.ts";
+import { registerScopeRoutes } from "./scoping/routes.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
@@ -62,7 +66,7 @@ import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
-import { createIndexerClient } from "./system/indexer-client.js";
+import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
 import { registerSystemRoutes } from "./system/routes.js";
 import { createThumbnailsRepo } from "./system/thumbnails-repo.js";
@@ -149,12 +153,45 @@ export async function composeApp(
     storageFactory,
   });
 
-  // Search and thumbnails: available only once at least one index root is
-  // configured (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
-  // `{ unavailable: true }` rather than erroring when it is not.
+  // System pages (phase 2) and the scope engine both need the indexer's
+  // internal HTTP client; built once here so `scopeResolver` below can use
+  // it too. `null` when `FDRIVE_INDEXER_URL` is not configured, in which
+  // case the scope resolver treats every directory-verification probe as
+  // unreachable rather than failing to construct.
+  const indexerClient =
+    config.fdriveIndexerUrl === undefined
+      ? null
+      : createIndexerClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
+  const scopeIndexerDirectory: Pick<IndexerClient, "directory"> =
+    indexerClient ??
+    ({
+      directory: async () => ({
+        ok: false,
+        reason: "unreachable",
+        detail: "indexer not configured",
+      }),
+    } satisfies Pick<IndexerClient, "directory">);
+
+  // The single source of truth for what every identity may read: trusted
+  // configured mappings (home template + per-identity overrides, available
+  // even when the indexer is down) plus index-verified scopes (restricted
+  // further by a live SFTP-vs-indexer directory check). See
+  // `docs/workflow/P5-SCOPES.md`.
+  const scopeResolver = createScopeResolver({
+    providers: repos.providers,
+    overrides: createSettingsScopeOverrideStore(repos.settings),
+    connection: connectionStore,
+    indexRoots: config.fdriveIndexRoots,
+    indexer: scopeIndexerDirectory,
+    storageForIdentity: (identity) => storageFactory(identity.id),
+    clock,
+  });
+
+  // Search: available only once at least one index root is configured
+  // (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
+  // `{ unavailable: true }` rather than erroring when the caller's
+  // verified index scopes are unavailable for any reason.
   const indexQueries = createIndexQueries(db);
-  const homeTemplate = parseHomeTemplate(config.fdriveHomeTemplate);
-  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
   const embedClient =
     config.fdriveEmbedUrl === undefined
       ? null
@@ -162,8 +199,6 @@ export async function composeApp(
   const searchService = createSearchService({
     indexQueries,
     embedClient,
-    homeTemplate,
-    indexRootNames,
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
     trashPath: config.fdriveSftpgoTrashPath,
     clock,
@@ -175,6 +210,15 @@ export async function composeApp(
     tokens: tokenSource,
     fetch: fetchImpl,
   });
+  const identityStorageForAccount = async (identity: { id: string; providerId: string }) => {
+    try {
+      return await accountStorage(identity.id, identity.providerId);
+    } catch (error) {
+      if (error instanceof WopiError && error.status === 401)
+        throw new ApiHttpError("upstream_unavailable", "identity provider unavailable");
+      throw error;
+    }
+  };
   const accountDeps: AccountsDeps = {
     repos,
     links: identityLinks,
@@ -185,39 +229,16 @@ export async function composeApp(
     master,
     clock,
     connectionStore,
-    storageForIdentity: async (identity) => {
-      try {
-        return await accountStorage(identity.id, identity.providerId);
-      } catch (error) {
-        if (error instanceof WopiError && error.status === 401)
-          throw new ApiHttpError("upstream_unavailable", "identity provider unavailable");
-        throw error;
-      }
-    },
+    storageForIdentity: identityStorageForAccount,
     searchForIdentity: async (identity, query) => {
       const current = await repos.identities.get(identity.id);
       if (current?.accountId !== identity.accountId)
         throw new ApiHttpError("forbidden", "identity ownership changed");
-      const connection = await connectionStore.current();
-      if (connection === null)
-        throw new ApiHttpError("setup_required", "storage connection unavailable");
-      const provider = await repos.providers.ensure({
-        type: "sftpgo",
-        baseUrl: connection.baseUrl,
-      });
-      if (provider.id !== identity.providerId)
-        throw new ApiHttpError("forbidden", "identity provider unavailable");
-      const service = createSearchService({
-        indexQueries,
-        embedClient,
-        homeTemplate: parseHomeTemplate(connection.homeTemplate),
-        indexRootNames,
-        thumbsEnabled: config.fdriveThumbsDir !== undefined,
-        trashPath: config.fdriveSftpgoTrashPath,
-        clock,
-      });
-      return service.search({
-        username: identity.externalUsername,
+      const verified = await scopeResolver.verifiedIndexScopes(identity);
+      const storage = await identityStorageForAccount(identity);
+      return searchService.search({
+        scopes: verified.available ? verified.scopes : [],
+        authorizer: createReadAuthorizer({ storage }),
         query: query.q,
         filters: parseSearchFilters(query),
         limit: parseSearchLimit(query.limit),
@@ -237,15 +258,22 @@ export async function composeApp(
     metadataService,
     officeFiles,
     repos.identities,
-    connectionStore,
+    scopeResolver.configuredMappings,
     clock,
   );
   const officeSettings = officeConfig(config);
-  const officeLocation = async () => {
+  const officeLocation: OfficeDeps["location"] = async (identity) => {
+    const configured = await scopeResolver.configuredMappings(identity);
+    return configured.available
+      ? { providerId: configured.providerId, scopes: configured.scopes }
+      : null;
+  };
+  /** The provider id of the currently configured connection, independent of any identity; used only to route indexer registry events. */
+  const currentOfficeProviderId = async (): Promise<string | null> => {
     const connection = await connectionStore.current();
     if (connection === null) return null;
     const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: connection.baseUrl });
-    return { providerId: provider.id, homeTemplate: parseHomeTemplate(connection.homeTemplate) };
+    return provider.id;
   };
   const officeService = createOfficeService({
     canEdit:
@@ -278,6 +306,7 @@ export async function composeApp(
   // for once at least one index root is configured; it is otherwise left
   // unstarted so a deployment without an indexer never opens a spare
   // Postgres connection.
+  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
   const indexerListener =
     config.fdriveIndexRoots === null
       ? null
@@ -289,12 +318,12 @@ export async function composeApp(
           favorites: repos.favorites,
           metadata: metadataService,
           onStorageEvent: async (event) => {
-            const location = await officeLocation();
-            if (location !== null)
-              await applyOfficeStorageEvent(officeFiles, location.providerId, event);
+            const providerId = await currentOfficeProviderId();
+            if (providerId !== null) await applyOfficeStorageEvent(officeFiles, providerId, event);
           },
           bus,
-          homeTemplate,
+          configuredMappingsFor: scopeResolver.configuredMappings,
+          storageForIdentity: (identityId) => storageFactory(identityId),
           indexRootNames,
           clock,
           logger,
@@ -306,10 +335,6 @@ export async function composeApp(
   // System pages (phase 2): sidecar clients are `null` when their base URL
   // is not configured, so the routes degrade to "not configured" rather
   // than failing.
-  const indexerClient =
-    config.fdriveIndexerUrl === undefined
-      ? null
-      : createIndexerClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
   const ocrClient =
     config.fdriveOcrUrl === undefined
       ? null
@@ -389,6 +414,7 @@ export async function composeApp(
         config,
         clock,
       });
+      registerScopeRoutes(groups, { resolver: scopeResolver, identities: repos.identities });
       registerSetupRoutes(groups, {
         service: setupService,
         tokenGuard: setupTokenGuard,
@@ -417,11 +443,16 @@ export async function composeApp(
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });
       registerEventRoutes(groups, { bus, clock });
-      registerSearchRoutes(groups, { searchService });
+      registerSearchRoutes(groups, {
+        searchService,
+        resolver: scopeResolver,
+        identities: repos.identities,
+        semanticEnabled: embedClient !== null,
+      });
       registerThumbRoutes(groups, {
         indexQueries,
-        homeTemplate,
-        indexRootNames,
+        resolver: scopeResolver,
+        identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
       });
       registerSystemRoutes(groups, {
@@ -448,9 +479,11 @@ export async function composeApp(
     resolveToken: resolveTokenPrincipal,
     toolDeps: {
       indexQueries,
-      homeTemplate,
+      homeTemplate: parseHomeTemplate(config.fdriveHomeTemplate),
       indexRootNames,
       searchService,
+      scopeResolver,
+      identities: repos.identities,
       fdrivePublicUrl: config.fdrivePublicUrl,
       indexerClient: indexerExtractClient,
       writesEnabled: config.fdriveMcpWrites,

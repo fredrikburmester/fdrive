@@ -5,8 +5,11 @@ import {
   type SearchStatusResponse,
 } from "@fdrive/contracts";
 import { parseSearchFilters } from "@fdrive/core";
+import type { IdentityRepo } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
+import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { SearchService } from "./service.js";
 
 const API_PREFIX = "/api/v1";
@@ -18,6 +21,10 @@ function routePath(fullPath: string): string {
 
 export interface SearchRoutesDeps {
   readonly searchService: SearchService;
+  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes" | "status">;
+  readonly identities: Pick<IdentityRepo, "get">;
+  /** Whether `FDRIVE_EMBED_URL` is configured; `search/status` reports this directly. */
+  readonly semanticEnabled: boolean;
 }
 
 /** Default and maximum number of hits returned by `GET /api/v1/search`. */
@@ -45,9 +52,11 @@ export function parseSearchLimit(raw: string | undefined): number {
  * Registers `GET /search` (hybrid search, scoped to the caller's identity)
  * and `GET /search/status` on the authed group. `q` is required (400 for an
  * empty value, enforced by `SearchQuery`'s schema); every other filter is
- * optional. When the caller has no index-backed scope, `search` still
- * responds 200 with `unavailable: true` rather than an error, so the web UI
- * can disable the search entry point instead of showing a failure.
+ * optional. Both routes resolve the caller's *verified* index scopes fresh
+ * on every request (never cached client-side, never a caller-supplied
+ * override); when unavailable, `search` still responds 200 with
+ * `unavailable: true` rather than an error, so the web UI can disable the
+ * search entry point instead of showing a failure.
  */
 export function registerSearchRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -64,8 +73,16 @@ export function registerSearchRoutes(
     const filters = parseSearchFilters(result.data);
     const limit = parseSearchLimit(result.data.limit);
 
+    const identity = await deps.identities.get(principal.identityId);
+    const verified =
+      identity === null
+        ? { available: false as const }
+        : await deps.resolver.verifiedIndexScopes(identity);
+    const authorizer = createReadAuthorizer({ storage: principal.storage });
+
     const response = await deps.searchService.search({
-      username: principal.username,
+      scopes: verified.available ? verified.scopes : [],
+      authorizer,
       query: result.data.q,
       filters,
       limit,
@@ -75,8 +92,15 @@ export function registerSearchRoutes(
     return c.json(body);
   });
 
-  authed.get(routePath(ROUTES.search.status), (c) => {
-    const body: SearchStatusResponse = deps.searchService.status();
+  authed.get(routePath(ROUTES.search.status), async (c) => {
+    const principal = c.get("principal");
+    const identity = await deps.identities.get(principal.identityId);
+    const status =
+      identity === null ? null : await deps.resolver.status(identity, principal.isAdmin);
+    const body: SearchStatusResponse = {
+      available: status?.status === "available",
+      semantic: deps.semanticEnabled,
+    };
     return c.json(body);
   });
 }

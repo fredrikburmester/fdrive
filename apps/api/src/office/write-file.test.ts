@@ -39,7 +39,7 @@ it("resolves the current scoped row and checks its admission without loading cre
   expect(outer).not.toHaveBeenCalled();
   expect(credentials).not.toHaveBeenCalled();
 });
-it.each(["missing", "id", "provider", "root", "outside", "noncanonical"])(
+it.each(["missing", "id", "provider", "root", "outside"])(
   "rejects a %s scoped row",
   async (kind) => {
     const { h, opened } = await fixture();
@@ -52,13 +52,18 @@ it.each(["missing", "id", "provider", "root", "outside", "noncanonical"])(
             ...(kind === "provider" ? { providerId: "different-provider" } : {}),
             ...(kind === "root" ? { rootName: "different-root" } : {}),
             ...(kind === "outside" ? { path: "other/a.docx" } : {}),
-            ...(kind === "noncanonical" ? { path: "shared//a.docx" } : {}),
           };
     await expect(
       currentWriteFile(h.deps, { ...h.files, get: async () => fresh }, opened),
     ).rejects.toMatchObject({ status: 404 });
   },
 );
+it("accepts a noncanonically stored path that still round trips to the same file", async () => {
+  const { h, opened } = await fixture();
+  const fresh = { ...opened.file, path: "shared//a.docx" };
+  const result = await currentWriteFile(h.deps, { ...h.files, get: async () => fresh }, opened);
+  expect(result.path).toBe("/a.docx");
+});
 it("denies a newly moved source whose current path is outside the grant", async () => {
   const { h, opened } = await fixture();
   const files = {

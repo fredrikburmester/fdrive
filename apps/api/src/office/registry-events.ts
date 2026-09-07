@@ -1,8 +1,8 @@
-import { parseHomeTemplate, scopesFor, toFsPath } from "@fdrive/core";
-import type { IdentityRepo } from "@fdrive/db";
-import type { ConnectionStore } from "../connection/store.js";
+import { toFsPath } from "@fdrive/core";
+import type { Identity, IdentityRepo } from "@fdrive/db";
 import type { IndexerEventPayload } from "../events/indexer-listener.js";
 import type { MetadataService } from "../metadata/service.js";
+import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import type { OfficeFileRepo } from "./types.ts";
 
 export async function applyOfficeStorageEvent(
@@ -22,28 +22,30 @@ export async function applyOfficeStorageEvent(
   else if (event.kind === "deleted")
     await files.deletePrefix({ providerId, rootName: event.root, path: event.path, at });
 }
+/**
+ * Wraps `metadata` so a user-initiated move/delete (from the fs or trash
+ * routes) also updates the office file registry, using the same trusted
+ * `configuredMappings` an office actor's requests use (never a raw
+ * home-template computation with no override support, and never a
+ * database/config fetch beyond the one `configuredMappings` call itself).
+ */
 export function withOfficeMetadata(
   metadata: MetadataService,
   files: OfficeFileRepo,
-  identities: IdentityRepo,
-  connections: ConnectionStore,
+  identities: Pick<IdentityRepo, "get">,
+  configuredMappings: (identity: Identity) => Promise<ConfiguredMappingsResult>,
   clock: () => Date,
 ): MetadataService {
   async function location(identityId: string, path: string) {
     const identity = await identities.get(identityId);
-    const connection = await connections.current();
-    if (identity === null || connection === null) return null;
-    const mapped = toFsPath(
-      scopesFor({
-        template: parseHomeTemplate(connection.homeTemplate),
-        username: identity.externalUsername,
-      }),
-      path,
-    );
+    if (identity === null) return null;
+    const configured = await configuredMappings(identity);
+    if (!configured.available) return null;
+    const mapped = toFsPath(configured.scopes, path);
     return mapped === null
       ? null
       : {
-          providerId: identity.providerId,
+          providerId: configured.providerId,
           rootName: mapped.rootName,
           path: mapped.fsPath.slice(1),
         };

@@ -4,20 +4,21 @@ import {
   DEFAULT_FUSION_K,
   filenameScore,
   fuseRankings,
-  type HomeTemplate,
   highlightRanges,
   isUnderPath,
   matchesSearchFilters,
   mimeFromExtension,
   parentPath,
   queryWords,
+  type Scope,
   type SearchFilters,
   toPrefixTsQuery,
-  toVirtualPath,
 } from "@fdrive/core";
 import type { ContentHit, FilenameHit, IndexedFile, IndexQueries, ScopePrefix } from "@fdrive/db";
+import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
-import { dateFromMtimeNs, usableScopesFor } from "./scopes.js";
+import { dateFromMtimeNs } from "./scopes.js";
 
 /** How many rows each of the three underlying signals fans out to, matching filesai's `LIMIT 60`. */
 const CONTENT_FANOUT_LIMIT = 60;
@@ -32,9 +33,6 @@ export interface SearchServiceDeps {
   readonly indexQueries: IndexQueries;
   /** `null` when `FDRIVE_EMBED_URL` is not configured; semantic search never runs then. */
   readonly embedClient: EmbedClient | null;
-  readonly homeTemplate: HomeTemplate;
-  /** Names of every configured index root (`FDRIVE_INDEX_ROOTS`); empty disables search entirely. */
-  readonly indexRootNames: ReadonlySet<string>;
   /** Whether `FDRIVE_THUMBS_DIR` is configured; when false, every hit reports `hasThumbnail: false`. */
   readonly thumbsEnabled: boolean;
   /**
@@ -48,20 +46,27 @@ export interface SearchServiceDeps {
 }
 
 export interface SearchServiceInput {
-  readonly username: string;
+  /**
+   * The identity's verified index scopes, resolved once at the request
+   * boundary (`ScopeResolver.verifiedIndexScopes`). Empty means index-backed
+   * search is unavailable for this caller; this is never a caller-supplied
+   * value.
+   */
+  readonly scopes: readonly Scope[];
+  /**
+   * A request-local live-read authorizer bound to the caller's own storage
+   * (see `createReadAuthorizer`). Every candidate is checked against this
+   * before it can appear in hits, snippets, thumbnail flags, or derived
+   * folders.
+   */
+  readonly authorizer: ReadAuthorizer;
   readonly query: string;
   readonly filters: SearchFilters;
   readonly limit: number;
 }
 
-export interface SearchStatus {
-  readonly available: boolean;
-  readonly semantic: boolean;
-}
-
 export interface SearchService {
   search(input: SearchServiceInput): Promise<SearchResponse>;
-  status(): SearchStatus;
 }
 
 function elapsedMs(clock: () => Date, startedAt: Date): number {
@@ -71,13 +76,14 @@ function elapsedMs(clock: () => Date, startedAt: Date): number {
 function emptyResponse(
   query: string,
   tookMs: number,
-  opts: { degraded: boolean; unavailable: boolean },
+  opts: { degraded: boolean; unavailable: boolean; partial?: boolean },
 ): SearchResponse {
   return {
     query,
     sections: { folders: [], files: [], content: [] },
     degraded: opts.degraded,
     unavailable: opts.unavailable,
+    ...(opts.partial === true ? { partial: true } : {}),
     tookMs,
   };
 }
@@ -86,28 +92,18 @@ function emptyResponse(
  * Builds the fdrive hybrid search service: the same ranking as filesai's
  * `mcp_server.search` (semantic top 60, full-text prefix `tsquery` top 60,
  * filename word hits plus trigram similarity top 25, reciprocal rank fusion
- * k=60), scoped to the calling identity's index roots, with results mapped
- * back to virtual paths and grouped into folders/files/content sections.
+ * k=60), scoped to `input.scopes` (already verified by the caller), with
+ * every candidate round-tripped (`roundTripVirtualPath`) and live-read
+ * checked (`input.authorizer`) before it can contribute to hits, snippets,
+ * thumbnail flags, or derived folders.
  */
 export function createSearchService(deps: SearchServiceDeps): SearchService {
   return {
-    status(): SearchStatus {
-      return {
-        available: deps.indexRootNames.size > 0,
-        semantic: deps.embedClient !== null,
-      };
-    },
-
     async search(input: SearchServiceInput): Promise<SearchResponse> {
       const startedAt = deps.clock();
       const tookMs = () => elapsedMs(deps.clock, startedAt);
 
-      if (deps.indexRootNames.size === 0) {
-        return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
-      }
-
-      const usableScopes = usableScopesFor(deps.homeTemplate, deps.indexRootNames, input.username);
-      if (usableScopes.length === 0) {
+      if (input.scopes.length === 0) {
         return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
       }
 
@@ -118,7 +114,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       }
 
       const prefixes: ScopePrefix[] = [];
-      for (const scope of usableScopes) {
+      for (const scope of input.scopes) {
         const rootId = rootIds[scope.rootName];
         if (rootId !== undefined) {
           prefixes.push({ rootId, fsPrefix: scope.fsPrefix });
@@ -147,6 +143,14 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           : Promise.resolve<FilenameHit[]>([]),
       ]);
 
+      // The underlying queries are bounded (`LIMIT 60`/`LIMIT 25`); a row
+      // count at the cap means there may be more matches this response never
+      // saw, so the result is reported as partial rather than exhaustive.
+      const fanoutCut =
+        semanticRows.length >= CONTENT_FANOUT_LIMIT ||
+        fulltextRows.length >= CONTENT_FANOUT_LIMIT ||
+        filenameRows.length >= FILENAME_FANOUT_LIMIT;
+
       const textFused = fuseRankings<number>([
         semanticRows.map((row) => ({ id: row.fileId, snippet: row.snippet })),
         fulltextRows.map((row) => ({ id: row.fileId, snippet: row.snippet })),
@@ -165,7 +169,11 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       });
 
       if (scoreById.size === 0) {
-        return emptyResponse(input.query, tookMs(), { degraded, unavailable: false });
+        return emptyResponse(input.query, tookMs(), {
+          degraded,
+          unavailable: false,
+          partial: fanoutCut,
+        });
       }
 
       const ranked = Array.from(scoreById.entries()).sort((a, b) => b[1] - a[1]);
@@ -181,7 +189,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         if (rootName === undefined) {
           return null;
         }
-        const virtualPath = toVirtualPath(usableScopes, rootName, file.path);
+        const virtualPath = roundTripVirtualPath(input.scopes, rootName, file.path);
         if (virtualPath === null) {
           return null;
         }
@@ -194,9 +202,13 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         return virtualPath;
       }
 
-      const topRanked = ranked.slice(0, input.limit);
-      const hitCandidates = await Promise.all(
-        topRanked.map(async ([id, score]): Promise<SearchHit | null> => {
+      let authUnavailable = false;
+
+      // Every ranked candidate (bounded by the fanout above, not by
+      // `input.limit`) is round-tripped and live-read checked; the limit is
+      // applied only after inaccessible candidates are removed.
+      const resolvedHits = await Promise.all(
+        ranked.map(async ([id, score]): Promise<SearchHit | null> => {
           const file = fileById.get(id);
           if (file === undefined) {
             return null;
@@ -209,6 +221,13 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           if (
             !matchesSearchFilters({ path: virtualPath, ext: file.ext, modifiedAt }, input.filters)
           ) {
+            return null;
+          }
+          const authResult = await input.authorizer.authorize({ path: virtualPath, kind: "file" });
+          if (!authResult.allowed) {
+            if (authResult.reason === "unavailable") {
+              authUnavailable = true;
+            }
             return null;
           }
           const snippets = snippetsById.get(id) ?? [];
@@ -231,10 +250,11 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         }),
       );
 
-      const files = hitCandidates.filter((hit): hit is SearchHit => hit !== null);
+      const accessibleHits = resolvedHits.filter((hit): hit is SearchHit => hit !== null);
+      const files = accessibleHits.slice(0, input.limit);
       const content = files.filter((hit) => hit.snippets.length > 0).slice(0, MAX_CONTENT_HITS);
 
-      const folderModifiedAt = new Map<string, Date>();
+      const folderCandidates = new Map<string, Date>();
       for (const row of filenameRows) {
         const file = fileById.get(row.fileId);
         if (file === undefined) {
@@ -246,28 +266,44 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         }
         const folder = parentPath(virtualPath);
         const modifiedAt = dateFromMtimeNs(file.mtimeNs);
-        const existing = folderModifiedAt.get(folder);
+        const existing = folderCandidates.get(folder);
         if (existing === undefined || modifiedAt.getTime() > existing.getTime()) {
-          folderModifiedAt.set(folder, modifiedAt);
+          folderCandidates.set(folder, modifiedAt);
         }
       }
-      const folders: FsEntry[] = Array.from(folderModifiedAt.entries())
-        .slice(0, MAX_FOLDERS)
-        .map(([path, modifiedAt]) => ({
-          name: baseName(path),
-          path,
-          kind: "dir",
-          size: 0,
-          modifiedAt: modifiedAt.toISOString(),
-          ext: "",
-          mime: null,
-        }));
+
+      const resolvedFolders = await Promise.all(
+        Array.from(folderCandidates.entries()).map(
+          async ([path, modifiedAt]): Promise<FsEntry | null> => {
+            const authResult = await input.authorizer.authorize({ path, kind: "dir" });
+            if (!authResult.allowed) {
+              if (authResult.reason === "unavailable") {
+                authUnavailable = true;
+              }
+              return null;
+            }
+            return {
+              name: baseName(path),
+              path,
+              kind: "dir",
+              size: 0,
+              modifiedAt: modifiedAt.toISOString(),
+              ext: "",
+              mime: null,
+            };
+          },
+        ),
+      );
+      const folders = resolvedFolders
+        .filter((entry): entry is FsEntry => entry !== null)
+        .slice(0, MAX_FOLDERS);
 
       return {
         query: input.query,
         sections: { folders, files, content },
         degraded,
         unavailable: false,
+        ...((fanoutCut || authUnavailable) && { partial: true }),
         tookMs: tookMs(),
       };
     },
