@@ -341,3 +341,16 @@ available and followed the project instructions.
   click-to-clear kept as a pure predicate). Queued: `share-gallery-ui` and `share-peek-api`
   after `share-thumbs`, then `share-peek-web`. Shift-click on rows is explicitly not a bug
   (user confirmed); the checkbox keeps its per-row toggle semantics.
+- Merged: `files-selection` (998fcd4). Drag-to-select is gone from the list and grid;
+  `lib/files/marquee.ts` and `use-marquee-selection.ts` deleted, background click-to-clear
+  reimplemented as `lib/files/background-click.ts` behind a native container listener (a JSX
+  `onClick` would fire for Base UI's portalled context-menu items). Primary follow-up
+  (24b563b): the now-unused `onChangeSelection` prop removed from `FileList`/`FileGrid`,
+  `file-browser.tsx` and `virtual-listing.tsx`. Gates: lint 1012 files, web typecheck, web
+  coverage 1329 tests (functions 99.44, lines 99.95, branches 98.19). Verified in the pane:
+  drag selects nothing in list and grid, no marquee rect, a click on a row's own padding now
+  selects that row and a following shift-click extends the range from it (the old code cleared
+  the anchor there). Playwright `apps/web/e2e/drag-select.spec.ts` written but not yet run.
+  New scoping doc `docs/workflow/P7-FOLDER-VIEW.md` (per-folder view setting) and the
+  `share-peek-api` / `share-peek-web` chunks appended to `P7-UX-2.md` after the user asked for
+  zip peek on shared links.
