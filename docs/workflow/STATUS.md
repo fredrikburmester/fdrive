@@ -421,3 +421,9 @@ available and followed the project instructions.
   "a green forest" → forest.png (0.068), "a warm orange sunset" → sunset.png (0.110), and in
   Swedish "en rosa cirkel" → rose.png (0.149). The multilingual model choice pays off. Still
   queued: `image-search-api`, `image-search-web`, `share-peek-api`, `share-peek-web`.
+- 2026-09-07 later: main pushed to origin (22 commits, now `048024c`). Running in parallel:
+  `image-search-api` (`.worktrees/image-search-api`, spec `docs/workflow/P7-IMAGE-SEARCH-API.md`:
+  separate `GET /search/images`, sidecar text-embed client, `imageSearch` subsystem, System
+  image-search get/rebuild/clear routes, compose passthrough) and `share-peek-api`
+  (`.worktrees/share-peek-api`, spec in `P7-UX-2.md`). Expected trivial union merge in
+  `packages/contracts/src/{routes,client}.ts`. Queued after: `image-search-web`, `share-peek-web`.
