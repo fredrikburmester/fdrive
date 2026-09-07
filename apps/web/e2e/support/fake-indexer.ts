@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * The indexer's own internal HTTP API is snake_case, matching what Python's
@@ -88,9 +92,126 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+/**
+ * Where `GET /directory` reads from: the disposable SFTPGo container's data
+ * directory, listed through `docker exec` so the answer reflects the real
+ * filesystem including everything specs create during the run. Attached by
+ * `global-setup.ts` once the container exists (see `attachStorage`).
+ */
+export interface DirectorySource {
+  readonly containerId: string;
+  readonly dataDir: string;
+}
+
+const MAX_DIRECTORY_ENTRIES = 10000;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
+
+/** Mirrors the real endpoint's `directory_parts`: canonical root-relative path only. */
+function directoryParts(path: string): string[] | null {
+  if (
+    !path.startsWith("/") ||
+    path.length > 4096 ||
+    path.includes("\\") ||
+    CONTROL_CHARACTERS.test(path)
+  ) {
+    return null;
+  }
+  if (path === "/") {
+    return [];
+  }
+  const parts = path.slice(1).split("/");
+  return parts.some((part) => part === "" || part === "." || part === "..") ? null : parts;
+}
+
+const FIND_KINDS: Record<string, "file" | "dir" | "symlink"> = {
+  f: "file",
+  d: "dir",
+  l: "symlink",
+};
+
+async function listContainerDirectory(
+  source: DirectorySource,
+  parts: readonly string[],
+): Promise<{ status: number; body: unknown }> {
+  const directory = [source.dataDir, ...parts].join("/");
+  let stdout: string;
+  try {
+    const result = await execFileAsync(
+      "docker",
+      [
+        "exec",
+        source.containerId,
+        "find",
+        directory,
+        "-mindepth",
+        "1",
+        "-maxdepth",
+        "1",
+        "-printf",
+        "%y\t%f\n",
+      ],
+      { maxBuffer: 16 * 1024 * 1024 },
+    );
+    stdout = result.stdout;
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+    if (stderr.includes("No such file")) {
+      return { status: 404, body: { error: "directory unavailable" } };
+    }
+    if (stderr.includes("Not a directory")) {
+      return { status: 400, body: { error: "directory unavailable" } };
+    }
+    return { status: 503, body: { error: "directory unavailable" } };
+  }
+  const items = stdout
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const tab = line.indexOf("\t");
+      const kind = FIND_KINDS[line.slice(0, tab)] ?? "other";
+      return { name: line.slice(tab + 1), kind };
+    })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const overflow = items.length > MAX_DIRECTORY_ENTRIES;
+  return { status: 200, body: { items: items.slice(0, MAX_DIRECTORY_ENTRIES), overflow } };
+}
+
+async function handleDirectory(
+  url: string,
+  source: DirectorySource | null,
+): Promise<{ status: number; body: unknown }> {
+  const query = new URL(url, "http://fake").searchParams;
+  const entries = [...query.entries()];
+  if (entries.length !== 2 || !query.has("root") || !query.has("path")) {
+    return { status: 400, body: { error: "invalid directory query" } };
+  }
+  const root = query.get("root") ?? "";
+  const parts = directoryParts(query.get("path") ?? "");
+  if (parts === null || root.length === 0) {
+    return { status: 400, body: { error: "invalid directory query" } };
+  }
+  if (root !== "sftpgo") {
+    return { status: 404, body: { error: "unknown root" } };
+  }
+  if (source === null) {
+    return { status: 503, body: { error: "directory unavailable" } };
+  }
+  return listContainerDirectory(source, parts);
+}
+
+async function handleRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  source: () => DirectorySource | null,
+): Promise<void> {
   const method = req.method ?? "GET";
   const url = req.url ?? "/";
+
+  if (method === "GET" && url.startsWith("/directory?")) {
+    const answer = await handleDirectory(url, source());
+    sendJson(res, answer.status, answer.body);
+    return;
+  }
 
   if (method === "GET" && url === "/health") {
     sendJson(res, 200, HEALTH_BODY);
@@ -127,6 +248,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 export interface FakeIndexer {
   readonly baseUrl: string;
+  /** Points `GET /directory` at the SFTPGo container's real data directory. */
+  attachStorage(source: DirectorySource): void;
   stop(): Promise<void>;
 }
 
@@ -141,8 +264,9 @@ export interface FakeIndexer {
  */
 export function startFakeIndexer(): Promise<FakeIndexer> {
   return new Promise((resolveStart, rejectStart) => {
+    let source: DirectorySource | null = null;
     const server: Server = createServer((req, res) => {
-      handleRequest(req, res).catch((error: unknown) => {
+      handleRequest(req, res, () => source).catch((error: unknown) => {
         sendJson(res, 500, { error: { kind: "internal", message: String(error) } });
       });
     });
@@ -157,6 +281,9 @@ export function startFakeIndexer(): Promise<FakeIndexer> {
       }
       resolveStart({
         baseUrl: `http://127.0.0.1:${address.port}`,
+        attachStorage(next) {
+          source = next;
+        },
         stop: () =>
           new Promise<void>((resolveStop, rejectStop) => {
             server.close((closeError) => {

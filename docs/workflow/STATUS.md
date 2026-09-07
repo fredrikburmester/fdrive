@@ -274,3 +274,9 @@ available and followed the project instructions.
   Queued after it: the MCP consumers chunk. Primary-owned follow-ups: setup-token log line
   in composition.ts, `.env.example` lines from the hardening-2 report. Search performance
   is on hold.
+- Merged: `scope-consumers` (0743387). Root gates green (API 1474, integration 18 incl.
+  scopes-sftp). Playwright first failed 8 search specs because the e2e fake indexer had no
+  `/directory` endpoint, so verification denied index features; the fixture now lists the
+  real SFTPGo container's data directory through `docker exec` (attached from
+  `global-setup.ts`'s `prepareSftpgo`), search specs 8/8. Running: `hardening-2`,
+  `scope-mcp` (MCP consumers chunk). Repo pushed to github.com/fredrikburmester/fdrive-web.
