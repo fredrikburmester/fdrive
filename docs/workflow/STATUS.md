@@ -218,3 +218,18 @@ available and followed the project instructions.
   `git worktree remove --force` and `git branch -D codex/<name>`. Still no commits.
 - Next (not started, per the "finish ongoing work only" instruction): P5-SCOPE-ENGINE,
   P5-SCOPE-CONSUMERS, the provider-binding two-server integration test, Phase 6.
+
+## Trash chunk (started 2026-09-07 morning)
+
+- Decision: trash is a provider capability, never fdrive-owned deleted data. Spec
+  `docs/workflow/P6-TRASH.md`; SFTPGo pre-delete rename rule verified on the real 2.7.5
+  container (file lands at `<trash>/<dir>/<name>/<ns>`, delete returns 200, dir deletes are
+  per file, deletes under the trash are permanent, overwrites are not trashed).
+- Running: `trash-core` implementer in `.worktrees/trash-core` (branch `codex/trash-core`)
+  owning `packages/{core,contracts,testkit,sftpgo}`. Queued: `trash-api` (apps/api, config,
+  dev seed, deploy docs) and `trash-web` (apps/web) after it integrates.
+- Running in parallel: `scope-engine` implementer in `.worktrees/scope-engine` (branch
+  `codex/scope-engine`) owning new `apps/api/src/scoping/**` and contracts `scopes.ts`
+  plus narrow routes/index additions (P5-SCOPE-ENGINE.md). Expected trivial merge with
+  trash-core in `packages/contracts/src/{routes,index}.ts`. `P5-SCOPE-CONSUMERS` stays
+  queued until `trash-api` integrates because both edit search and composition.
