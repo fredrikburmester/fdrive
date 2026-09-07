@@ -308,3 +308,12 @@ available and followed the project instructions.
   1302), integration 4/4, Playwright 88/88 across full and per-spec runs after two label
   fixes in specs. A leftover `apps/web-e2e-shadow-*` workspace broke `pnpm install` once;
   removed. Repo pushed. Idle: no worktrees, no workers.
+- 2026-09-07 afternoon: merged `search-mobile` (dbc6fb9), `archive-peek` (53bf3eb, plus
+  the primary's fs-event invalidation of archive listings in 78b1b01 and a 32 MiB central
+  directory bound), the activity panel collapsed by default on mobile (a8310c4), and
+  `search-fixes` (fbe7744): the API returns no Folders section while a type filter is
+  active (also for MCP), and result rows truncate name, path and a two-line snippet.
+  Gates after the search-fixes merge: lint 1001 files, typecheck 13, coverage 8/8 (API
+  1622, web 1345). Spec for the running `config-loudness` worker:
+  `docs/workflow/P7-CONFIG-LOUDNESS.md` (`.worktrees/config-loudness`). One worker slot
+  in use.
