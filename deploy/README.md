@@ -118,6 +118,23 @@ Core stack plus indexing, search, and thumbnails:
 docker compose -f compose.yaml --profile index up -d
 ```
 
+Updating a running deployment is `git pull` plus the same `up -d --build`
+with **every** file and profile you normally pass; a forgotten `-f` silently
+detaches the services it defines and a forgotten `--profile` leaves those
+services on old images. `update.sh` in this directory does exactly that and
+fails when the API does not answer its health check afterwards:
+
+```sh
+FDRIVE_COMPOSE_FILES="compose.sftpgo-network.yaml" FDRIVE_PROFILES="index" ./deploy/update.sh
+```
+
+Migrations run on API start. When `SFTPGO_URL` and `FDRIVE_HOME_TEMPLATE` are
+set in `.env`, the API records the connection on first boot and there is no
+setup token or `/setup` wizard: sign in with a normal SFTPGo account. The home
+template syntax is `<root>:<path with {username}>`, for example
+`sftpgo:/{username}`, which with `FDRIVE_INDEX_SFTPGO_DIR` set to the parent of
+the per-user homes maps every user to their own directory.
+
 Validate a compose file's syntax without starting anything:
 
 ```sh
@@ -139,9 +156,31 @@ actually there. Set `FDRIVE_COOKIE_SECURE=false` only for plain-HTTP LAN
 testing with no edge and no real users, never for a deployment reachable
 from the internet.
 
+Consequences of that cookie rule worth knowing before you hand out URLs:
+
+- A plain-HTTP address such as `http://<lan-ip>:8090` cannot sign in once
+  `FDRIVE_COOKIE_SECURE=true`: the browser refuses a `Secure` cookie over
+  HTTP. Treat the published port as the edge proxy's upstream only, and give
+  users the HTTPS hostname.
+- Caddy stamps `X-Forwarded-Proto: https` on everything it forwards, so any
+  client that reaches the published port directly is treated as if it came
+  through the edge. Bind it to loopback, a private interface, or a firewalled
+  address accordingly.
+- `FDRIVE_TRUSTED_PROXY_HOPS` counts the proxies that append to
+  `X-Forwarded-For`: the bundled Caddy is one, an edge proxy in front of it
+  makes two. Requests that skip the edge carry fewer hops and fall back to
+  the socket peer for rate limiting, so all of them share one limiter key.
+
 Every port this stack publishes to the host is loopback-bound
 (`127.0.0.1:...`) by default, on the assumption that the edge proxy runs on
-the same host and reaches these services over `localhost`:
+the same host and reaches these services over `localhost`. When the edge
+proxy itself runs in a container on a bridge network (Nginx Proxy Manager
+is the common case), its `127.0.0.1` is its own loopback, not the host's:
+set `FDRIVE_HTTP_BIND` to the host address the proxy can reach, and keep
+that port firewalled from anything but the proxy if the host is exposed.
+Hosts whose root filesystem is ephemeral (Unraid keeps `/` on a RAM disk)
+need the clone, `.env`, the data directory and any deploy key on persistent
+storage, not under `/opt` or `/root`:
 
 - `proxy` (`FDRIVE_HTTP_PORT`, default `8090`): set `FDRIVE_HTTP_BIND=0.0.0.0`
   only when the edge proxy runs on a different host and must reach this port
