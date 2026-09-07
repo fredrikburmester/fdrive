@@ -671,6 +671,10 @@ flows pass real storage integration, browser acceptance and required quality gat
 14. No ellipsis on action labels (2026-09-07): menu items, buttons, tooltips and dialog titles
     read "Compress", "Restore to", "Manage tags"; the user reads "…" as truncation. Only
     progress text ("Saving…", "Loading…") keeps it.
+15. Authentication stays with the storage provider (2026-09-07): fdrive forwards SFTPGo's own
+    login, including its one-time code, and never builds its own credential, second factor or
+    session-extension scheme. Provider limits such as TOTP-for-HTTP re-login are documented,
+    not worked around.
 
 ## 15. Resolved questions (2026-09-06)
 
