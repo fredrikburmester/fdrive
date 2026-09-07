@@ -37,4 +37,8 @@ export const queryKeys = {
   recents: {
     list: () => ["recents", "list"] as const,
   },
+  trash: {
+    status: () => ["trash", "status"] as const,
+    list: () => ["trash", "list"] as const,
+  },
 } as const;

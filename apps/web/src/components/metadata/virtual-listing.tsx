@@ -28,6 +28,7 @@ import {
   useDelete,
   useDuplicate,
   useRename,
+  useTrashStatus,
   viewHref,
 } from "@/lib/metadata/deps";
 import {
@@ -72,6 +73,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const rename = useRename();
   const remove = useDelete();
   const duplicate = useDuplicate();
+  const { data: trashStatus } = useTrashStatus();
 
   const liveEntries = useMemo(
     () => resolved.flatMap((item) => (item.entry !== null ? [item.entry] : [])),
@@ -217,6 +219,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
+                  trashAvailable={trashStatus?.available === true}
                 />
               </div>
             )}
@@ -264,6 +267,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
+        trash={trashStatus ?? null}
       />
     </>
   );

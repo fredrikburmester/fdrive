@@ -89,6 +89,9 @@ export interface FileListProps {
    * a "virtual listing" that does not run the archive jobs. Defaults to
    * `false`. */
   hideArchive?: boolean;
+  /** Whether the active identity's storage provider exposes a trash, for
+   * every row's context menu (see `FileContextMenu`). Defaults to `false`. */
+  trashAvailable?: boolean;
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
@@ -132,6 +135,7 @@ export function FileList({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
+  trashAvailable = false,
 }: FileListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -272,6 +276,7 @@ export function FileList({
               onOpenTagsEditor={() => onOpenTagsEditor(group)}
               favorite={groupFavorite(group)}
               onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
+              trashAvailable={trashAvailable}
             >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
               {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}

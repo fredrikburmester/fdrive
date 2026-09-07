@@ -12,15 +12,7 @@ import {
   startSftpgo,
 } from "@fdrive/testkit";
 import { ACCOUNT_FILES, ACCOUNT_USERS } from "./account-fixture.js";
-import {
-  E2E_HOST,
-  getApiBaseUrl,
-  getApiPort,
-  getEnvStatePath,
-  getStateDirectory,
-  getWebBaseUrl,
-  getWebPort,
-} from "./paths.js";
+import { E2E_HOST, getApiPort, getEnvStatePath, getStateDirectory, getWebPort } from "./paths.js";
 import { SHARE_FILES, SHARE_USERS } from "./share-fixture.js";
 import { waitForHttpOk } from "./wait.js";
 
@@ -41,6 +33,12 @@ export interface RunningEnvironment {
   /** The seeded Postgres container's connection string, for tests that seed extra rows directly. */
   readonly databaseUrl: string;
   readonly sftpgoUrl: string;
+  /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
+   * `getWebBaseUrl()` for the default, shared environment, but reflect
+   * `options.apiPort`/`options.webPort` for a second, independent
+   * environment started on its own ports (see `trash.spec.ts`). */
+  readonly apiBaseUrl: string;
+  readonly webBaseUrl: string;
   stop(): Promise<void>;
 }
 
@@ -66,6 +64,26 @@ export interface StartEnvironmentOptions {
    * `stop()` rather than needing its own teardown wiring.
    */
   readonly extraStopFns?: ReadonlyArray<() => Promise<void>>;
+  /**
+   * Overrides the API/web ports this run binds, instead of the shared
+   * run's `getApiPort()`/`getWebPort()`. For a spec that needs a second,
+   * independently configured stack alongside the shared one started by
+   * `global-setup.ts` (see `trash.spec.ts`, which needs an API process with
+   * `FDRIVE_SFTPGO_TRASH_PATH` set, unlike every other spec's shared
+   * environment). Pass two ports from `support/ports.ts#getFreePort` so the
+   * second stack never collides with the shared run's own ports.
+   */
+  readonly apiPort?: number;
+  readonly webPort?: number;
+  /**
+   * Skips writing this run's pids to the shared `environment-state.json`
+   * (see `persistState` below), which `global-teardown.ts` falls back to
+   * reading only when its in-process environment handle is unavailable.
+   * A second, spec-owned environment (see `apiPort`/`webPort` above) stops
+   * itself directly and must never overwrite that shared file with its own
+   * pids. Defaults to `false` (persist), matching every existing caller.
+   */
+  readonly skipStatePersist?: boolean;
 }
 
 interface EnvironmentState {
@@ -178,10 +196,10 @@ export async function startEnvironment(
   }
 
   try {
-    const apiPort = getApiPort();
-    const webPort = getWebPort();
-    const apiBaseUrl = getApiBaseUrl();
-    const webBaseUrl = getWebBaseUrl();
+    const apiPort = options.apiPort ?? getApiPort();
+    const webPort = options.webPort ?? getWebPort();
+    const apiBaseUrl = `http://${E2E_HOST}:${apiPort}`;
+    const webBaseUrl = `http://${E2E_HOST}:${webPort}`;
 
     const postgres = await startPostgres();
     stopFns.push(() => postgres.stop());
@@ -335,14 +353,22 @@ export async function startEnvironment(
       );
     }
 
-    await persistState({
-      apiPid: apiChild.pid,
-      webPid: webChild.pid,
-      apiPort,
-      webPort,
-    });
+    if (options.skipStatePersist !== true) {
+      await persistState({
+        apiPid: apiChild.pid,
+        webPid: webChild.pid,
+        apiPort,
+        webPort,
+      });
+    }
 
-    return { databaseUrl: postgres.connectionString, sftpgoUrl: sftpgo.baseUrl, stop: stopAll };
+    return {
+      databaseUrl: postgres.connectionString,
+      sftpgoUrl: sftpgo.baseUrl,
+      apiBaseUrl,
+      webBaseUrl,
+      stop: stopAll,
+    };
   } catch (error) {
     await stopAll();
     throw error;
