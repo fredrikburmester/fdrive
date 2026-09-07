@@ -288,3 +288,9 @@ available and followed the project instructions.
   `FDRIVE_OFFICE_PUBLIC_URL` as a web build arg for the CSP frame-src, api Dockerfile Node
   image digest-pinned, `.env.example` limit lines appended. Still pending in
   `composition.ts` after `scope-mcp` merges: `jsonMaxBytes` wiring and the setup-token log.
+- 2026-09-07 12:00: user UX feedback recorded in `docs/workflow/P7-UX-1.md`. Running:
+  `ux-shell` (`.worktrees/ux-shell`: mobile toolbar overflow, mobile search button,
+  sidebar order Files/Shares/Trash, always-visible Tags/Favorites/Recents sections) and
+  `ux-shares` (`.worktrees/ux-shares`: share `presentation` model with gallery/list/
+  download public views, lightbox, ZIP, friendly share dialog and page copy). `scope-mcp`
+  still running. Three worker slots in use.
