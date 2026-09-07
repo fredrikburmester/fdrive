@@ -139,6 +139,7 @@ describe("loadConfig", () => {
       fdriveHomeTemplate: "sftpgo:/{username}",
       fdriveSessionTtlDays: 30,
       fdriveCookieSecure: "auto",
+      fdriveTrustedProxyHops: 1,
       fdrivePublicUrl: undefined,
       nodeEnv: "development",
       fdriveAutoMigrate: true,
@@ -183,6 +184,7 @@ describe("loadConfig", () => {
       FDRIVE_HOME_TEMPLATE: "sftpgo:/home/{username}",
       FDRIVE_SESSION_TTL_DAYS: "7",
       FDRIVE_COOKIE_SECURE: "true",
+      FDRIVE_TRUSTED_PROXY_HOPS: "2",
       FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
       NODE_ENV: "production",
       FDRIVE_AUTO_MIGRATE: "false",
@@ -218,6 +220,7 @@ describe("loadConfig", () => {
       fdriveHomeTemplate: "sftpgo:/home/{username}",
       fdriveSessionTtlDays: 7,
       fdriveCookieSecure: "true",
+      fdriveTrustedProxyHops: 2,
       fdrivePublicUrl: "https://fdrive.example.com",
       nodeEnv: "production",
       fdriveAutoMigrate: false,
@@ -355,6 +358,31 @@ describe("loadConfig", () => {
   it("rejects an invalid FDRIVE_COOKIE_SECURE value", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_COOKIE_SECURE: "maybe" })).toThrow(
       /FDRIVE_COOKIE_SECURE/,
+    );
+  });
+
+  it("defaults FDRIVE_TRUSTED_PROXY_HOPS to 1", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveTrustedProxyHops).toBe(1);
+  });
+
+  it("accepts a custom FDRIVE_TRUSTED_PROXY_HOPS, including 0", () => {
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_TRUSTED_PROXY_HOPS: "0" }).fdriveTrustedProxyHops,
+    ).toBe(0);
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_TRUSTED_PROXY_HOPS: "3" }).fdriveTrustedProxyHops,
+    ).toBe(3);
+  });
+
+  it("rejects a non-integer FDRIVE_TRUSTED_PROXY_HOPS", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_TRUSTED_PROXY_HOPS: "many" })).toThrow(
+      /FDRIVE_TRUSTED_PROXY_HOPS/,
+    );
+  });
+
+  it("rejects a negative FDRIVE_TRUSTED_PROXY_HOPS", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_TRUSTED_PROXY_HOPS: "-1" })).toThrow(
+      /FDRIVE_TRUSTED_PROXY_HOPS/,
     );
   });
 

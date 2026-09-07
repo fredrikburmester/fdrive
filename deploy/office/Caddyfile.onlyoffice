@@ -1,4 +1,11 @@
 # TLS terminates at the operator's edge proxy. Preserve the public origin.
+# The default deployment must never be served directly over plain HTTP with
+# no edge in front: without an accurate X-Forwarded-Proto the session cookie
+# can never become Secure (see FDRIVE_COOKIE_SECURE=auto in
+# deploy/.env.example and the "TLS and network placement" section of
+# deploy/README.md). WOPI callbacks never traverse this proxy: the office
+# server reaches the API directly at http://api:3001/wopi over the compose
+# network.
 :80 {
 	request_body {
 		max_size 0
@@ -11,16 +18,19 @@
 		}
 	}
 	handle /api/* {
-		reverse_proxy api:3001
-	}
-	handle /wopi/* {
-		reverse_proxy api:3001
+		reverse_proxy api:3001 {
+			header_up X-Forwarded-Proto https
+		}
 	}
 	handle /mcp* {
-		reverse_proxy api:3001
+		reverse_proxy api:3001 {
+			header_up X-Forwarded-Proto https
+		}
 	}
 	handle {
 		encode zstd gzip
-		reverse_proxy web:3000
+		reverse_proxy web:3000 {
+			header_up X-Forwarded-Proto https
+		}
 	}
 }

@@ -72,6 +72,19 @@ export function isSetupExempt(path: string): boolean {
   return SETUP_EXEMPT_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix));
 }
 
+/** Prefix of the claude.ai-style MCP connector URL: itself a bearer secret, see `mcp/routes.ts`. */
+const MCP_TOKEN_PATH_PREFIX = "/mcp/t/";
+
+/**
+ * Replaces the token segment of an `/mcp/t/:token` path with `[redacted]`
+ * for logging, leaving every other path unchanged. `/mcp/t/:token` is a
+ * bearer secret in URL form: logging it verbatim would leak the credential
+ * into log storage.
+ */
+export function redactMcpTokenPath(path: string): string {
+  return path.startsWith(MCP_TOKEN_PATH_PREFIX) ? `${MCP_TOKEN_PATH_PREFIX}[redacted]` : path;
+}
+
 /**
  * Extracts the host (hostname and, when non-default for the scheme, port)
  * from a configured SFTPGo URL, for display on the public `/about` route.
@@ -110,7 +123,7 @@ export function createApp(deps: AppDeps): AppHono {
     deps.logger.info(
       {
         method: c.req.method,
-        path: c.req.path,
+        path: redactMcpTokenPath(c.req.path),
         status: c.res.status,
         ms,
         requestId: c.get("requestId"),

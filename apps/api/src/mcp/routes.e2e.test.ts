@@ -401,6 +401,8 @@ describe("MCP server end to end", () => {
     });
 
     expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
   });
 
   it("returns 401 for an invalid bearer token", async () => {
@@ -415,6 +417,34 @@ describe("MCP server end to end", () => {
     });
 
     expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("sets Cache-Control: no-store and Referrer-Policy: no-referrer on a successful MCP response", async () => {
+    const res = await fetch(`http://127.0.0.1:${harness.port}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${harness.token}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "raw-fetch-client", version: "1.0.0" },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    await res.text();
   });
 });
 

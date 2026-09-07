@@ -1,3 +1,9 @@
+# TLS terminates at the operator's edge proxy, not here: this Caddy listens
+# on plain :80 behind it. The default deployment must never be served
+# directly over plain HTTP with no edge in front, since without an accurate
+# X-Forwarded-Proto the session cookie can never become Secure (see
+# FDRIVE_COOKIE_SECURE=auto in deploy/.env.example and the "TLS and network
+# placement" section of deploy/README.md).
 :80 {
 	# No request body limit: uploads can be large files.
 	request_body {
@@ -8,23 +14,27 @@
 		-Server
 	}
 
-	# File downloads (and WOPI/MCP payloads) must pass through untouched so
-	# Range and Content-Length survive: compression is scoped to the web
-	# handle below, never applied here.
+	# File downloads (and MCP payloads) must pass through untouched so Range
+	# and Content-Length survive: compression is scoped to the web handle
+	# below, never applied here. WOPI callbacks never traverse this proxy:
+	# the office server reaches the API directly at http://api:3001/wopi
+	# over the compose network.
 	handle /api/* {
-		reverse_proxy api:3001
-	}
-
-	handle /wopi/* {
-		reverse_proxy api:3001
+		reverse_proxy api:3001 {
+			header_up X-Forwarded-Proto https
+		}
 	}
 
 	handle /mcp* {
-		reverse_proxy api:3001
+		reverse_proxy api:3001 {
+			header_up X-Forwarded-Proto https
+		}
 	}
 
 	handle {
 		encode zstd gzip
-		reverse_proxy web:3000
+		reverse_proxy web:3000 {
+			header_up X-Forwarded-Proto https
+		}
 	}
 }

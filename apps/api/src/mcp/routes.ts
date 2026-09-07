@@ -23,7 +23,7 @@ export interface McpRoutesDeps extends McpAuthDeps {
 async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Response> {
   const principal = await resolveMcpPrincipal(c, deps);
   if (principal === null) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return withMcpResponseHeaders(Response.json({ error: "unauthorized" }, { status: 401 }));
   }
 
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
@@ -39,7 +39,26 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
   });
   await server.connect(transport);
 
-  return transport.handleRequest(c.req.raw);
+  const response = await transport.handleRequest(c.req.raw);
+  return withMcpResponseHeaders(response);
+}
+
+/**
+ * Adds `Cache-Control: no-store` (never cache a response that may embed
+ * tool output derived from the caller's files) and `Referrer-Policy:
+ * no-referrer` (never leak the `/mcp/t/:token` URL, itself a secret, to a
+ * downstream `Referer`) to an MCP response, without altering its body,
+ * status, or any header the transport already set.
+ */
+export function withMcpResponseHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  headers.set("Referrer-Policy", "no-referrer");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 /**
