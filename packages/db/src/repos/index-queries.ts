@@ -109,6 +109,12 @@ export interface FilenameHit {
   readonly similarity: number;
 }
 
+/** The total live bytes and file count under one directory, see `IndexQueries.subtreeSize`. */
+export interface SubtreeSize {
+  readonly bytes: number;
+  readonly files: number;
+}
+
 /** Aggregate counts over one scope, mirroring filesai's `index_stats`. */
 export interface IndexStats {
   readonly filesTracked: number;
@@ -257,6 +263,18 @@ export interface IndexQueries {
   rootIdsByName(): Promise<Record<string, number>>;
   /** Aggregate file and chunk counts over a scope. */
   stats(scopePrefixes: readonly ScopePrefix[]): Promise<IndexStats>;
+  /**
+   * The total live (non-deleted) bytes and file count under `rootId` at
+   * exactly `relativePrefix` or nested under it (`""` matches the whole
+   * root), intersected with `scopePrefixes` so a caller never sees bytes
+   * from outside their own verified scope. `relativePrefix` is root-relative
+   * (see `toScopeClauses`), not the leading-slash virtual style.
+   */
+  subtreeSize(
+    scopePrefixes: readonly ScopePrefix[],
+    rootId: number,
+    relativePrefix: string,
+  ): Promise<SubtreeSize>;
   /**
    * Chunk counts restricted to exactly `fileIds` (capped defensively at
    * `MAX_STATS_FILE_ID_PARAMS`), never a broader scope predicate. For a
@@ -550,6 +568,30 @@ export function createIndexQueries(db: Db): IndexQueries {
         chunks: Number(chunkRow?.chunks ?? 0),
         chunksEmbedded: Number(chunkRow?.embedded ?? 0),
       };
+    },
+
+    async subtreeSize(scopePrefixes, rootId, relativePrefix) {
+      const pathCondition =
+        relativePrefix === ""
+          ? sql`true`
+          : sql`(${files.path} = ${relativePrefix} OR ${files.path} LIKE ${`${escapeLikePattern(relativePrefix)}/%`} ESCAPE '\\')`;
+
+      const [row] = await db
+        .select({
+          bytes: sql<number>`coalesce(sum(${files.size}), 0)`,
+          files: count(),
+        })
+        .from(files)
+        .where(
+          and(
+            scopeCondition(scopePrefixes),
+            isNull(files.deletedAt),
+            eq(files.rootId, rootId),
+            pathCondition,
+          ),
+        );
+
+      return { bytes: Number(row?.bytes ?? 0), files: Number(row?.files ?? 0) };
     },
 
     async statsForFileIds(fileIds) {

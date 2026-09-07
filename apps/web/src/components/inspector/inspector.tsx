@@ -20,6 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { formatBytes } from "@/lib/format";
+import { useFolderSize } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
 import { describeEntry } from "@/lib/preview/describe";
 import { previewKindFor } from "@/lib/preview/kind";
@@ -70,7 +71,20 @@ function iconFor(entry: FsEntry) {
 }
 
 function SingleEntryBody({ entry }: { entry: FsEntry }) {
-  const { rows } = describeEntry(entry, { now: new Date() });
+  const isDir = entry.kind === "dir";
+  const folderSizeQuery = useFolderSize(entry.path, { enabled: isDir });
+  const { rows, note } = describeEntry(entry, {
+    now: new Date(),
+    ...(isDir
+      ? {
+          folderSize: {
+            isPending: folderSizeQuery.isPending,
+            isError: folderSizeQuery.isError,
+            ...(folderSizeQuery.data === undefined ? {} : { data: folderSizeQuery.data }),
+          },
+        }
+      : {}),
+  });
   const kind = previewKindFor(entry);
   const Icon = iconFor(entry);
 
@@ -98,6 +112,7 @@ function SingleEntryBody({ entry }: { entry: FsEntry }) {
           </div>
         ))}
       </dl>
+      {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
       <EntryMetadataSection entries={[entry]} />
     </div>
   );

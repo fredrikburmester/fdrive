@@ -11,6 +11,7 @@ import {
   EntryKind,
   EntryResponse,
   ExtractRequest,
+  FolderSizeResponse,
   FsEntry,
   isValidEntryName,
   ListResponse,
@@ -88,6 +89,34 @@ describe("PathQuery", () => {
 
   it("rejects a missing path", () => {
     expect(PathQuery.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("FolderSizeResponse", () => {
+  it("parses an indexed folder size", () => {
+    expect(
+      FolderSizeResponse.safeParse({ path: "/photos", bytes: 1024, files: 3, indexed: true })
+        .success,
+    ).toBe(true);
+  });
+
+  it("parses a not-indexed folder", () => {
+    expect(
+      FolderSizeResponse.safeParse({ path: "/photos", bytes: 0, files: 0, indexed: false }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a negative byte count", () => {
+    expect(
+      FolderSizeResponse.safeParse({ path: "/photos", bytes: -1, files: 0, indexed: false })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects a missing indexed flag", () => {
+    expect(FolderSizeResponse.safeParse({ path: "/photos", bytes: 0, files: 0 }).success).toBe(
+      false,
+    );
   });
 });
 

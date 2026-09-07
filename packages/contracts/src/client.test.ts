@@ -436,6 +436,19 @@ describe("createApiClient: archiveEntries", () => {
   });
 });
 
+describe("createApiClient: folderSize", () => {
+  it("gets fs/folder-size with a path query", async () => {
+    const payload = { path: "/photos", bytes: 1024, files: 3, indexed: true };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, payload)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.folderSize("/photos");
+
+    expect(result).toEqual(payload);
+    expect(calls[0]?.url).toBe("/api/v1/fs/folder-size?path=%2Fphotos");
+  });
+});
+
 describe("createApiClient: jobs", () => {
   it("gets fs/jobs and unwraps the jobs array", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { jobs: [VALID_JOB_STATUS] })]);
