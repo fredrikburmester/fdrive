@@ -61,7 +61,7 @@ export interface FileContextMenuProps {
    * How many entries this menu's actions would apply to: the whole
    * selection's size when `entry` is part of a multi-entry selection, else
    * 1. Defaults to 1 (acting on just this entry). Disables "Duplicate" and
-   * hides "Extract here"/"Extract to..." for a multi-entry selection, since
+   * hides "Extract here"/"Extract to" for a multi-entry selection, since
    * both only ever make sense for a single entry.
    */
   selectionCount?: number;
@@ -74,7 +74,7 @@ export interface FileContextMenuProps {
    */
   includesFolder?: boolean;
   /**
-   * Hides "Move to..." and "Copy to...", for a read-only "virtual listing"
+   * Hides "Move to" and "Copy to", for a read-only "virtual listing"
    * (favorites, recents, a tag's files) where the entries do not live in
    * one real folder, so moving or copying "into" the current view makes no
    * sense. Both items show by default.
@@ -85,7 +85,7 @@ export interface FileContextMenuProps {
    * recents, a tag's files). Hidden by default, since the plain file
    * browser is already showing the row's own folder. */
   showReveal?: boolean;
-  /** Hides "Compress..." and "Extract...", for a "virtual listing" that does
+  /** Hides "Compress" and "Extract", for a "virtual listing" that does
    * not run the archive jobs (favorites, recents, a tag's files). Both show
    * by default. */
   hideArchive?: boolean;
@@ -144,7 +144,7 @@ export function FileContextMenu({
       <ContextMenuContent>
         <ContextMenuItem onClick={() => onAction("share", entry)}>
           <Link2Icon />
-          Share…
+          Share
         </ContextMenuItem>
         <ContextMenuItem onClick={() => onAction("open", entry)}>
           <ExternalLinkIcon />
@@ -175,11 +175,11 @@ export function FileContextMenu({
           <>
             <ContextMenuItem onClick={() => onAction("moveTo", entry)}>
               <FolderInputIcon />
-              Move to...
+              Move to
             </ContextMenuItem>
             <ContextMenuItem onClick={() => onAction("copyTo", entry)}>
               <FilesIcon />
-              Copy to...
+              Copy to
             </ContextMenuItem>
           </>
         )}
@@ -215,7 +215,7 @@ export function FileContextMenu({
             <ContextMenuSeparator />
             <ContextMenuItem onClick={onOpenTagsEditor}>
               <PencilIcon />
-              Edit tags…
+              Edit tags
             </ContextMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>
@@ -228,7 +228,7 @@ export function FileContextMenu({
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onAction("compress", entry)}>
               <FileArchiveIcon />
-              Compress...
+              Compress
             </ContextMenuItem>
             {canExtract && (
               <>
@@ -238,7 +238,7 @@ export function FileContextMenu({
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => onAction("extractTo", entry)}>
                   <PackageOpenIcon />
-                  Extract to...
+                  Extract to
                 </ContextMenuItem>
               </>
             )}

@@ -130,9 +130,9 @@ test.describe("trash available", () => {
     await conflictRow.getByRole("checkbox", { name: `Select ${fileName}` }).check();
     await page.getByRole("button", { name: "Restore", exact: true }).click();
     await expect(page.getByText(new RegExp(`Could not restore "${fileName}"`))).toBeVisible();
-    // Scope to the toast: the toolbar has its own "Restore to…" button.
+    // Scope to the toast: the toolbar has its own "Restore to" button.
     await expect(
-      page.locator("[data-sonner-toast]").getByRole("button", { name: "Restore to…" }),
+      page.locator("[data-sonner-toast]").getByRole("button", { name: "Restore to" }),
     ).toBeVisible();
     // The conflicting restore never removed the trash entry.
     await expect(conflictRow).toBeVisible();

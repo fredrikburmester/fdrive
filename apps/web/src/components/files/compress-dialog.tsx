@@ -103,7 +103,7 @@ export function CompressDialog({
                 {state.destination}
               </span>
               <Button type="button" variant="ghost" size="sm" onClick={onChangeDestination}>
-                Change…
+                Change
               </Button>
             </div>
           </div>

@@ -22,12 +22,12 @@ async function uploadTextFile(page: Page, name: string, contents: string): Promi
 }
 
 /** Opens `name`'s row context menu, hovers the "Tags" submenu, clicks
- * "Edit tags…", creates a brand new tag `tagName` inline, and closes the
+ * "Edit tags", creates a brand new tag `tagName` inline, and closes the
  * dialog. Returns once the dialog is gone, with the tag now applied. */
 async function tagFileWithNewTag(page: Page, name: string, tagName: string): Promise<void> {
   await listing(page).getByText(name, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Tags", exact: true }).hover();
-  await page.getByRole("menuitem", { name: "Edit tags…" }).click();
+  await page.getByRole("menuitem", { name: "Edit tags" }).click();
 
   const dialog = page.getByRole("dialog").filter({ hasText: "Edit tags" });
   await expect(dialog).toBeVisible();

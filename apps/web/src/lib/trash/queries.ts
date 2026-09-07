@@ -82,7 +82,7 @@ function useTrashMutation<TVariables, TResult>(config: {
 }
 
 /** True for a 409 restore conflict: the caller shows its own actionable
- * toast (naming the file, offering "Restore to...") for that case instead
+ * toast (naming the file, offering "Restore to") for that case instead
  * of `useTrashMutation`'s generic one. */
 export function isRestoreConflict(error: unknown): boolean {
   return error instanceof ApiClientError && error.kind === "conflict";

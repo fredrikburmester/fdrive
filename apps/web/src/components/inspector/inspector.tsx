@@ -114,7 +114,9 @@ function MultiEntryBody({ entries }: { entries: readonly FsEntry[] }) {
         </Badge>
         <p className="text-sm text-muted-foreground">{formatBytes(summary.totalSize)} total</p>
       </div>
-      <EntryMetadataSection entries={entries} />
+      <div className="px-4 pb-4">
+        <EntryMetadataSection entries={entries} />
+      </div>
     </div>
   );
 }

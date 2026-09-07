@@ -92,7 +92,7 @@ function TagRow({ tag, onRename, onRecolor, onDelete }: TagRowProps) {
 }
 
 /**
- * "Manage tags…" from the sidebar's Tags section: a table of every tag with
+ * "Manage tags" from the sidebar's Tags section: a table of every tag with
  * inline rename and recolor, and delete with a confirmation naming how many
  * files currently carry that tag.
  */

@@ -148,7 +148,7 @@ export function OcrPage() {
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       actions={
         <Button type="button" onClick={() => setRunOpen(true)} disabled={data === undefined}>
-          Run now…
+          Run now
         </Button>
       }
     >

@@ -108,7 +108,7 @@ export function TrashPage() {
       return;
     }
     toast.error(restoreConflictMessage(entry.name), {
-      action: { label: "Restore to…", onClick: () => setRestoreTargetEntry(entry) },
+      action: { label: "Restore to", onClick: () => setRestoreTargetEntry(entry) },
     });
   }
 
@@ -217,7 +217,7 @@ export function TrashPage() {
               }
             }}
           >
-            Restore to…
+            Restore to
           </Button>
           <Button
             type="button"

@@ -223,7 +223,7 @@ describe("IndexerPage", () => {
   it("reindex contains no thumbnail toggle", async () => {
     mockConfigured();
     render(<IndexerPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
     expect(await screen.findByRole("heading", { name: "Reindex" })).toBeTruthy();
     expect(screen.queryByRole("checkbox")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -237,7 +237,7 @@ describe("IndexerPage", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       render(<IndexerPage />);
-      fireEvent.click(screen.getByRole("button", { name: "Reindex…" }));
+      fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
       expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", true);
       fireEvent.click(screen.getByLabelText("Root"));
       fireEvent.click(await screen.findByRole("option", { name: "sftpgo" }));
@@ -259,7 +259,7 @@ describe("IndexerPage", () => {
     );
     useClearIndexMock.mockReturnValue({ mutate, isPending: false });
     render(<IndexerPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear index…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
     await screen.findByRole("heading", { name: "Clear index data?" });
     expect(screen.getByLabelText("Root").textContent).toContain("All roots");
     expect(screen.getByLabelText("Root").textContent).not.toContain("__all__");
@@ -267,7 +267,7 @@ describe("IndexerPage", () => {
     expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mutate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Clear index…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
     expect(mutate).toHaveBeenCalledWith({}, expect.anything());
     expect(successToast).toHaveBeenCalledWith("Index clear started.");
@@ -282,7 +282,7 @@ describe("IndexerPage", () => {
       isPending: false,
     });
     render(<IndexerPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear index…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
     expect(errorToast).toHaveBeenCalledWith("A maintenance job is already running.");
     expect(screen.getByRole("heading", { name: "Clear index data?" })).toBeTruthy();
@@ -292,8 +292,8 @@ describe("IndexerPage", () => {
     mockConfigured();
     useSystemMaintenanceBusyMock.mockReturnValue(true);
     render(<IndexerPage />);
-    expect(screen.getByRole("button", { name: "Clear index…" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "Reindex…" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Clear index" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", true);
   });
 
   it("shows the error state, distinct from Loading, when the query fails", () => {

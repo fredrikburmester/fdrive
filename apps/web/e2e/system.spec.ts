@@ -98,7 +98,7 @@ test("alice (admin) can reindex the sftpgo root and sees a toast reporting how m
 }) => {
   await page.goto("/system/indexer");
 
-  await page.getByRole("button", { name: "Reindex…" }).click();
+  await page.getByRole("button", { name: "Reindex" }).click();
   const dialog = page.getByRole("dialog").filter({ hasText: "Reindex" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText(/Re-extracts text and re-embeds/)).toBeVisible();
@@ -119,7 +119,7 @@ test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with 
 }) => {
   await page.goto("/system/thumbnails");
 
-  await page.getByRole("button", { name: "Rebuild…" }).click();
+  await page.getByRole("button", { name: "Rebuild" }).click();
   const dialog = page.getByRole("dialog").filter({ hasText: "Rebuild thumbnails" });
   await expect(dialog).toBeVisible();
   await expect(
@@ -166,7 +166,7 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
     .filter({ has: page.getByText("Thumbnails", { exact: true }) });
   await expect(thumbnailsCard).toBeVisible();
 
-  await page.getByRole("button", { name: "Rebuild…" }).click();
+  await page.getByRole("button", { name: "Rebuild" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
@@ -242,7 +242,7 @@ for (const scope of ["index", "thumbnails"] as const) {
   }) => {
     const isIndex = scope === "index";
     const endpoint = isIndex ? "/api/v1/system/indexer/clear" : "/api/v1/system/thumbnails/clear";
-    const trigger = isIndex ? "Clear index…" : "Clear cache…";
+    const trigger = isIndex ? "Clear index" : "Clear cache";
     const action = isIndex ? "Clear index" : "Clear cache";
     const progressKey = isIndex ? "indexClear" : "thumbnailClear";
     let started = false;
@@ -276,12 +276,12 @@ for (const scope of ["index", "thumbnails"] as const) {
       await route.fulfill({ response, json });
     });
     await page.goto(isIndex ? "/system/indexer" : "/system/thumbnails");
-    await page.getByRole("button", { name: trigger }).click();
+    await page.getByRole("main").getByRole("button", { name: trigger, exact: true }).click();
     let dialog = page.getByRole("dialog");
     await expect(dialog.getByText(/Original files/)).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(requests).toHaveLength(0);
-    await page.getByRole("button", { name: trigger }).click();
+    await page.getByRole("main").getByRole("button", { name: trigger, exact: true }).click();
     dialog = page.getByRole("dialog");
     if (isIndex) {
       await expect(dialog.getByLabel("Path (optional)")).toBeDisabled();
@@ -293,17 +293,21 @@ for (const scope of ["index", "thumbnails"] as const) {
     await expect(dialog).toBeHidden();
     expect(requests).toEqual([isIndex ? { root: "sftpgo", path: "alice/docs" } : {}]);
     await expect(page.getByText("Running · 2 of 4 processed · 0 errors")).toBeVisible();
-    await expect(page.getByRole("button", { name: trigger })).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: isIndex ? "Reindex…" : "Rebuild…" }),
+      page.getByRole("main").getByRole("button", { name: trigger, exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: isIndex ? "Reindex" : "Rebuild" }),
     ).toBeDisabled();
     completed = true;
     await expect(page.getByText("Completed with errors · 4 of 4 processed · 1 errors")).toBeVisible(
       { timeout: 10_000 },
     );
-    await expect(page.getByRole("button", { name: trigger })).toBeEnabled();
+    await expect(
+      page.getByRole("main").getByRole("button", { name: trigger, exact: true }),
+    ).toBeEnabled();
     rejectBusy = true;
-    await page.getByRole("button", { name: trigger }).click();
+    await page.getByRole("main").getByRole("button", { name: trigger, exact: true }).click();
     await dialog.getByRole("button", { name: action, exact: true }).click();
     await expect(
       page

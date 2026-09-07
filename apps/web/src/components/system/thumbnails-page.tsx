@@ -104,10 +104,10 @@ export function ThumbnailsPage() {
             disabled={unavailable || busy}
             onClick={() => setClearOpen(true)}
           >
-            Clear cache…
+            Clear cache
           </Button>
           <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
-            Rebuild…
+            Rebuild
           </Button>
         </>
       }

@@ -58,7 +58,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     await expect(page.getByRole("menuitem", { name: "View" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Upload" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Duplicate" })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: "Compress..." })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Compress" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Show details" })).toBeVisible();
 
     // The "Upload" entry is itself a submenu; its two actions are reachable

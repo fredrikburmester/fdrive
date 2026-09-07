@@ -668,6 +668,9 @@ flows pass real storage integration, browser acceptance and required quality gat
 13. Same index and OCR policy for every SFTPGo home (2026-09-07): the indexer and OCR see the
     whole SFTPGo root; per-user isolation comes from scope verification, not from narrowing
     what is indexed. The indexer runs as SFTPGo's uid so mode-700 folders stay indexable.
+14. No ellipsis on action labels (2026-09-07): menu items, buttons, tooltips and dialog titles
+    read "Compress", "Restore to", "Manage tags"; the user reads "…" as truncation. Only
+    progress text ("Saving…", "Loading…") keeps it.
 
 ## 15. Resolved questions (2026-09-06)
 

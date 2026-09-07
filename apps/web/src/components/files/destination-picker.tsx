@@ -36,11 +36,11 @@ interface DestinationPickerLabels {
 }
 
 const LABELS: Record<DestinationPickerMode, DestinationPickerLabels> = {
-  move: { title: "Move to...", confirmLabel: "Move here" },
-  copy: { title: "Copy to...", confirmLabel: "Copy here" },
+  move: { title: "Move to", confirmLabel: "Move here" },
+  copy: { title: "Copy to", confirmLabel: "Copy here" },
   compressDestination: { title: "Choose destination", confirmLabel: "Choose" },
-  extractTo: { title: "Extract to...", confirmLabel: "Extract here" },
-  restoreTo: { title: "Restore to…", confirmLabel: "Restore here" },
+  extractTo: { title: "Extract to", confirmLabel: "Extract here" },
+  restoreTo: { title: "Restore to", confirmLabel: "Restore here" },
 };
 
 export interface DestinationPickerProps {

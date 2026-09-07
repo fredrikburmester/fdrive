@@ -28,7 +28,7 @@ function tagRoute(id: string): Route {
 }
 
 /** The sidebar's "Tags" section: every tag with its color dot, linking to
- * `/tags/<id>`, plus "Manage tags…" opening the `TagManagerDialog`. Always
+ * `/tags/<id>`, plus "Manage tags" opening the `TagManagerDialog`. Always
  * renders once loaded, even with no tags yet, so tags can be created
  * before anything is tagged; a muted placeholder line replaces the tag
  * list while it is empty. */
@@ -86,7 +86,7 @@ export function TagsSection() {
                     className="text-muted-foreground"
                   >
                     <SettingsIcon />
-                    <span>Manage tags…</span>
+                    <span>Manage tags</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>
