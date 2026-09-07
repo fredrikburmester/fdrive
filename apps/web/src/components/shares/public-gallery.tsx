@@ -1,5 +1,6 @@
 "use client";
 
+import type { ThumbSize } from "@fdrive/contracts";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -64,7 +65,7 @@ function GalleryTile({
   onOpen,
 }: {
   image: GalleryImage;
-  thumbUrl: (path: string) => string;
+  thumbUrl: (path: string, size: ThumbSize) => string;
   downloadUrl: (path: string) => string;
   onOpen: () => void;
 }) {
@@ -77,7 +78,7 @@ function GalleryTile({
     >
       {/* biome-ignore lint/performance/noImgElement: the public share page has no Next.js image loader for arbitrary API-served URLs */}
       <img
-        src={thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path)}
+        src={thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path, 256)}
         alt={image.name}
         loading="lazy"
         decoding="async"
@@ -99,6 +100,7 @@ function Lightbox({
   image,
   index,
   total,
+  thumbUrl,
   downloadUrl,
   onClose,
   onStep,
@@ -106,11 +108,31 @@ function Lightbox({
   image: GalleryImage;
   index: number;
   total: number;
+  thumbUrl: (path: string, size: ThumbSize) => string;
   downloadUrl: (path: string) => string;
   onClose: () => void;
   onStep: (delta: 1 | -1) => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  // Shows the (cached, preloaded) 1024px thumbnail the moment an arrow is
+  // pressed, and swaps to the full-size image once it has decoded, so
+  // stepping never shows an empty frame. Keyed by path so moving to another
+  // image starts from its thumbnail again rather than holding the previous
+  // full image. A share whose files are not indexed has no thumbnail: the
+  // `onError` there falls straight through to the full image.
+  const [fullLoaded, setFullLoaded] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
+  useEffect(() => {
+    setFullLoaded(false);
+    setThumbFailed(false);
+    const full = new Image();
+    full.src = downloadUrl(image.path);
+    if (full.complete) setFullLoaded(true);
+    else full.onload = () => setFullLoaded(true);
+    return () => {
+      full.onload = null;
+    };
+  }, [image.path, downloadUrl]);
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -167,7 +189,11 @@ function Lightbox({
         <NativeShareDownload href={downloadUrl(image.path)} icon />
       </header>
       <div className="min-h-0 flex-1">
-        <ImageViewer src={downloadUrl(image.path)} alt={image.name} />
+        <ImageViewer
+          src={fullLoaded || thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path, 1024)}
+          alt={image.name}
+          onError={() => setThumbFailed(true)}
+        />
       </div>
     </div>
   );
@@ -186,7 +212,7 @@ export function PublicGallery({
   downloadUrl,
 }: {
   images: readonly GalleryImage[];
-  thumbUrl: (path: string) => string;
+  thumbUrl: (path: string, size: ThumbSize) => string;
   downloadUrl: (path: string) => string;
 }) {
   const [shown, setShown] = useState(() => galleryVisibleCount(images.length, 0));
@@ -197,13 +223,18 @@ export function PublicGallery({
   }, [images]);
   const visible = images.slice(0, shown);
   const active = openIndex === null ? null : (visible[openIndex] ?? null);
+  // Preloads the neighbours' *thumbnails*, not their full-size images: a
+  // full download answers `no-store`, so a preloaded one could never be
+  // reused and would only spend another of the link's downloads. The 1024px
+  // thumbnail is cacheable, so it is on screen the instant the arrow is
+  // pressed while the full image loads behind it.
   useEffect(() => {
     if (openIndex === null) return;
     for (const neighbor of neighborIndexes(openIndex, visible.length)) {
       const neighborImage = visible[neighbor];
-      if (neighborImage) new Image().src = downloadUrl(neighborImage.path);
+      if (neighborImage) new Image().src = thumbUrl(neighborImage.path, 1024);
     }
-  }, [openIndex, visible, downloadUrl]);
+  }, [openIndex, visible, thumbUrl]);
   if (images.length === 0)
     return (
       <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -238,6 +269,7 @@ export function PublicGallery({
           image={active}
           index={openIndex}
           total={visible.length}
+          thumbUrl={thumbUrl}
           downloadUrl={downloadUrl}
           onClose={() => setOpenIndex(null)}
           onStep={(delta) =>

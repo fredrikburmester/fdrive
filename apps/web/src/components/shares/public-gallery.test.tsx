@@ -8,7 +8,8 @@ const images: GalleryImage[] = [
   { name: "b.jpg", path: "/b.jpg" },
   { name: "c.gif", path: "/c.gif" },
 ];
-const thumbUrl = (path: string) => `/thumb?path=${encodeURIComponent(path)}`;
+const thumbUrl = (path: string, size: 256 | 1024) =>
+  `/thumb?path=${encodeURIComponent(path)}&size=${size}`;
 const downloadUrl = (path: string) => `/download?path=${encodeURIComponent(path)}`;
 
 afterEach(() => {
@@ -20,12 +21,12 @@ it("falls back a single tile to the download URL when its thumbnail 404s, leavin
   render(<PublicGallery images={images} thumbUrl={thumbUrl} downloadUrl={downloadUrl} />);
   const tileA = screen.getByRole("img", { name: "a.png" });
   const tileB = screen.getByRole("img", { name: "b.jpg" });
-  expect(tileA.getAttribute("src")).toBe(thumbUrl("/a.png"));
+  expect(tileA.getAttribute("src")).toBe(thumbUrl("/a.png", 256));
   expect(tileA.getAttribute("loading")).toBe("lazy");
   expect(tileA.getAttribute("decoding")).toBe("async");
   fireEvent.error(tileA);
   expect(tileA.getAttribute("src")).toBe(downloadUrl("/a.png"));
-  expect(tileB.getAttribute("src")).toBe(thumbUrl("/b.jpg"));
+  expect(tileB.getAttribute("src")).toBe(thumbUrl("/b.jpg", 256));
 });
 
 it("opens a full-page overlay, not a Base UI modal, and locks body scroll while open", async () => {
@@ -74,7 +75,7 @@ it("hides the counter and prev/next controls for a single-image gallery", async 
   expect(screen.queryByText(/\/ 1/)).toBeNull();
 });
 
-it("preloads the neighbouring full-size images as the open index changes", async () => {
+it("preloads the neighbours' cacheable 1024px thumbnails, never their full-size images", async () => {
   const created: string[] = [];
   class FakeImage {
     set src(value: string) {
@@ -85,13 +86,17 @@ it("preloads the neighbouring full-size images as the open index changes", async
   render(<PublicGallery images={images} thumbUrl={thumbUrl} downloadUrl={downloadUrl} />);
   fireEvent.click(screen.getByRole("img", { name: "a.png" }));
   await screen.findByRole("dialog");
-  expect(created).toContain(downloadUrl("/c.gif"));
-  expect(created).toContain(downloadUrl("/b.jpg"));
+  expect(created).toContain(thumbUrl("/c.gif", 1024));
+  expect(created).toContain(thumbUrl("/b.jpg", 1024));
+  // A full download answers `no-store`, so preloading one could never be
+  // reused and would only spend another of the link's downloads. The open
+  // image's own full-size load is the single exception.
+  expect(created.filter((url) => url.startsWith("/download"))).toEqual([downloadUrl("/a.png")]);
   created.length = 0;
   fireEvent.keyDown(window, { key: "ArrowRight" });
   await screen.findByText("2 / 3");
-  expect(created).toContain(downloadUrl("/a.png"));
-  expect(created).toContain(downloadUrl("/c.gif"));
+  expect(created).toContain(thumbUrl("/a.png", 1024));
+  expect(created).toContain(thumbUrl("/c.gif", 1024));
   vi.unstubAllGlobals();
 });
 

@@ -96,7 +96,7 @@ function DirectoryListing({
           name: entry.name,
           path: appendShareName(path, entry.name),
         }))}
-        thumbUrl={(entryPath) => client.shareThumbUrl(id, entryPath, 256)}
+        thumbUrl={(entryPath, size) => client.shareThumbUrl(id, entryPath, size)}
         downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
       />
     );
@@ -195,7 +195,7 @@ function SharedContents({
       ) : singleFilePresentation === "gallery" ? (
         <PublicGallery
           images={[{ name: share.fileName ?? "Shared file", path: "/" }]}
-          thumbUrl={(entryPath) => client.shareThumbUrl(id, entryPath, 256)}
+          thumbUrl={(entryPath, size) => client.shareThumbUrl(id, entryPath, size)}
           downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
         />
       ) : (

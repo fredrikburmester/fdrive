@@ -673,15 +673,26 @@ describe("GET /public/shares/:id/thumb", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/webp");
     expect(res.headers.get("content-length")).toBe("42");
-    // The shares public-route middleware overwrites Cache-Control with its
-    // own blanket "no-store" after the handler returns (same as every other
-    // public share route), a strictly stronger guarantee than the tail's
-    // own "private, no-store".
-    expect(res.headers.get("cache-control")).toBe("no-store");
+    // The one public share response that is not "no-store": a gallery
+    // re-renders its tiles constantly and the lightbox preloads its
+    // neighbours, and neither is worth anything against a store that keeps
+    // nothing. Bounded to a minute, and "private" so no shared proxy cache
+    // ever holds it.
+    expect(res.headers.get("cache-control")).toBe("private, max-age=60");
     expect(res.headers.get("etag")).toBe('"abc123"');
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
     expect(await res.text()).toBe("webp-bytes");
     expect(fileByPath).toHaveBeenCalledWith(1, "alice/a.docx");
+  });
+
+  it("leaves every other public share response on the blanket no-store", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/download?path=%2F`);
+
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
   it("defaults path to the shared root when omitted", async () => {
