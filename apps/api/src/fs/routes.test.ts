@@ -11,7 +11,7 @@ import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
 import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
-import { registerFsRoutes } from "./routes.js";
+import { registerFsRoutes, requireTargetFree } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -722,6 +722,74 @@ describe("POST /fs/move", () => {
 
     expect(res.status).toBe(409);
   });
+
+  it("leaves the target's content unchanged when it already exists at the target", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/move",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", target: "/dir/nested.txt" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+
+    const download = await app.request("/api/v1/fs/download?path=/dir/nested.txt");
+    expect(await download.text()).toBe("nested contents");
+  });
+
+  it("returns 200 when the target is the same path as the source (a no-op)", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/move",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", target: "/hello.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ path: "/hello.txt" });
+  });
+
+  it("maps a target that is an existing directory to conflict", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/move",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", target: "/dir" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("requireTargetFree", () => {
+  it("maps a non-conflict StorageError from statFile through toApiHttpError", async () => {
+    const storage = makeStubStorage({
+      statFile: () => Promise.reject(new StorageError("forbidden", "no access")),
+    });
+
+    await expect(requireTargetFree(storage, "/blocked.txt")).rejects.toMatchObject({
+      kind: "forbidden",
+    });
+  });
+
+  it("propagates a non-StorageError from statFile unchanged", async () => {
+    const boom = new Error("boom");
+    const storage = makeStubStorage({ statFile: () => Promise.reject(boom) });
+
+    await expect(requireTargetFree(storage, "/target.txt")).rejects.toBe(boom);
+  });
 });
 
 describe("POST /fs/copy", () => {
@@ -751,6 +819,40 @@ describe("POST /fs/copy", () => {
       },
     ]);
   });
+
+  it("maps a conflicting target to conflict, without touching the target's content", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/copy",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", target: "/dir/nested.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    const download = await app.request("/api/v1/fs/download?path=/dir/nested.txt");
+    expect(await download.text()).toBe("nested contents");
+  });
+
+  it("returns 200 when the target is the same path as the source (a no-op)", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/copy",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", target: "/hello.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ path: "/hello.txt" });
+  });
 });
 
 describe("POST /fs/rename", () => {
@@ -779,6 +881,56 @@ describe("POST /fs/rename", () => {
         at: CLOCK_ISO,
       },
     ]);
+  });
+
+  it("returns 200 as a no-op when renaming to the same name", async () => {
+    const { app, events } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/rename",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", newName: "hello.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ path: "/hello.txt", name: "hello.txt" });
+    expect(events).toEqual([
+      {
+        type: "fs",
+        op: "move",
+        identityId: ALICE_IDENTITY_ID,
+        paths: ["/hello.txt"],
+        targetPaths: ["/hello.txt"],
+        at: CLOCK_ISO,
+      },
+    ]);
+  });
+
+  it("maps a rename onto an existing sibling to conflict, without touching either file", async () => {
+    const { app } = await buildHarness();
+    await app.request(
+      "/api/v1/fs/upload?path=%2Fsibling.txt",
+      requestedWith({ method: "PUT", body: "sibling content" }),
+    );
+
+    const res = await app.request(
+      "/api/v1/fs/rename",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", newName: "sibling.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    const helloDownload = await app.request("/api/v1/fs/download?path=/hello.txt");
+    expect(await helloDownload.text()).toBe("hello world");
+    const siblingDownload = await app.request("/api/v1/fs/download?path=/sibling.txt");
+    expect(await siblingDownload.text()).toBe("sibling content");
   });
 
   it("rejects an invalid new name with bad_request", async () => {

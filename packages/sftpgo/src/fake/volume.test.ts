@@ -231,11 +231,52 @@ describe("Volume", () => {
       expect(volume.move("/missing", "/dest")).toBe("not_found");
     });
 
-    it("returns conflict when the target already exists", () => {
+    it("overwrites an existing file at the target and removes the source", () => {
+      const volume = new Volume();
+      volume.writeFile("/a.txt", bytes("new content"), 1000, false);
+      volume.writeFile("/b.txt", bytes("old content"), 500, false);
+      expect(volume.move("/a.txt", "/b.txt")).toBe("ok");
+      expect(volume.has("/a.txt")).toBe(false);
+      const node = volume.get("/b.txt");
+      expect(node?.kind === "file" ? new TextDecoder().decode(node.content) : null).toBe(
+        "new content",
+      );
+    });
+
+    it("returns unsupported when moving a file onto itself, leaving it untouched (never a self-deletion)", () => {
+      const volume = new Volume();
+      volume.writeFile("/a.txt", bytes("content"), 1000, false);
+      expect(volume.move("/a.txt", "/a.txt")).toBe("unsupported");
+      const node = volume.get("/a.txt");
+      expect(node?.kind === "file" ? new TextDecoder().decode(node.content) : null).toBe("content");
+    });
+
+    it("returns unsupported when a file is moved onto an existing directory", () => {
       const volume = new Volume();
       volume.writeFile("/a.txt", bytes("hi"), 1000, false);
+      volume.mkdir("/b", false);
+      expect(volume.move("/a.txt", "/b")).toBe("unsupported");
+      expect(volume.isFile("/a.txt")).toBe(true);
+      expect(volume.isDir("/b")).toBe(true);
+    });
+
+    it("returns unsupported when a directory is moved onto an existing directory", () => {
+      const volume = new Volume();
+      volume.mkdir("/a", false);
+      volume.writeFile("/a/x.txt", bytes("hi"), 1000, false);
+      volume.mkdir("/b", false);
+      expect(volume.move("/a", "/b")).toBe("unsupported");
+      expect(volume.isDir("/a")).toBe(true);
+      expect(volume.isDir("/b")).toBe(true);
+    });
+
+    it("returns failure when a directory is moved onto an existing file", () => {
+      const volume = new Volume();
+      volume.mkdir("/a", false);
       volume.writeFile("/b.txt", bytes("hi"), 1000, false);
-      expect(volume.move("/a.txt", "/b.txt")).toBe("conflict");
+      expect(volume.move("/a", "/b.txt")).toBe("failure");
+      expect(volume.isDir("/a")).toBe(true);
+      expect(volume.isFile("/b.txt")).toBe(true);
     });
 
     it("creates missing ancestor directories for the target", () => {
@@ -255,6 +296,14 @@ describe("Volume", () => {
       expect(volume.isFile("/b.txt")).toBe(true);
     });
 
+    it("copying a file onto itself is a harmless no-op (unlike move, never verified as rejected against the real container)", () => {
+      const volume = new Volume();
+      volume.writeFile("/a.txt", bytes("content"), 1000, false);
+      expect(volume.copy("/a.txt", "/a.txt")).toBe("ok");
+      const node = volume.get("/a.txt");
+      expect(node?.kind === "file" ? new TextDecoder().decode(node.content) : null).toBe("content");
+    });
+
     it("copies a directory and its contents", () => {
       const volume = new Volume();
       volume.mkdir("/a", false);
@@ -271,11 +320,149 @@ describe("Volume", () => {
       expect(volume.copy("/missing", "/dest")).toBe("not_found");
     });
 
-    it("returns conflict when the target already exists", () => {
+    it("copies the root itself into a non-existing target, keeping the root", () => {
       const volume = new Volume();
       volume.writeFile("/a.txt", bytes("hi"), 1000, false);
+      volume.mkdir("/sub", false);
+      expect(volume.copy("/", "/backup")).toBe("ok");
+      expect(volume.isDir("/")).toBe(true);
+      expect(volume.isFile("/a.txt")).toBe(true);
+      expect(volume.isDir("/sub")).toBe(true);
+      expect(volume.isFile("/backup/a.txt")).toBe(true);
+      expect(volume.isDir("/backup/sub")).toBe(true);
+    });
+
+    it("overwrites an existing file at the target and keeps the source", () => {
+      const volume = new Volume();
+      volume.writeFile("/a.txt", bytes("new content"), 1000, false);
+      volume.writeFile("/b.txt", bytes("old content"), 500, false);
+      expect(volume.copy("/a.txt", "/b.txt")).toBe("ok");
+      const source = volume.get("/a.txt");
+      expect(source?.kind === "file" ? new TextDecoder().decode(source.content) : null).toBe(
+        "new content",
+      );
+      const target = volume.get("/b.txt");
+      expect(target?.kind === "file" ? new TextDecoder().decode(target.content) : null).toBe(
+        "new content",
+      );
+    });
+
+    // Copying a directory onto an already-existing directory follows the real container's Unix
+    // `cp -r`-style behaviour, verified directly against the container: the source is nested one
+    // level down, at <target>/<basename of source>, not merged straight into the target's own
+    // top level.
+
+    it("nests the source under a new directory named after it, when nothing is there yet", () => {
+      const volume = new Volume();
+      volume.mkdir("/source", false);
+      volume.writeFile("/source/x.txt", bytes("from source"), 1000, false);
+      volume.mkdir("/target", false);
+      volume.writeFile("/target/only-in-target.txt", bytes("from target"), 500, false);
+
+      expect(volume.copy("/source", "/target")).toBe("ok");
+
+      expect(volume.isDir("/source")).toBe(true);
+      // The target's own top-level entries are untouched: no merge happens at that level.
+      expect(volume.isFile("/target/only-in-target.txt")).toBe(true);
+      expect(volume.has("/target/x.txt")).toBe(false);
+      // The nested copy is what actually receives the source's contents.
+      expect(volume.isDir("/target/source")).toBe(true);
+      expect(volume.isFile("/target/source/x.txt")).toBe(true);
+    });
+
+    it("merges into the nested directory when a copy has already landed one there, keeping its own entries and overwriting same-named files", () => {
+      const volume = new Volume();
+      volume.mkdir("/source", false);
+      volume.writeFile("/source/shared.txt", bytes("source version"), 1000, false);
+      volume.mkdir("/target", false);
+      volume.mkdir("/target/source", false);
+      volume.writeFile("/target/source/shared.txt", bytes("old nested version"), 500, false);
+      volume.writeFile("/target/source/only-in-nested-target.txt", bytes("kept"), 500, false);
+
+      expect(volume.copy("/source", "/target")).toBe("ok");
+
+      expect(volume.isFile("/target/source/only-in-nested-target.txt")).toBe(true);
+      const shared = volume.get("/target/source/shared.txt");
+      expect(shared?.kind === "file" ? new TextDecoder().decode(shared.content) : null).toBe(
+        "source version",
+      );
+    });
+
+    it("returns conflict copying a directory onto an existing directory whose nested slot is already a file (never verified against the real container)", () => {
+      const volume = new Volume();
+      volume.mkdir("/source", false);
+      volume.mkdir("/target", false);
+      volume.writeFile("/target/source", bytes("blocking file"), 500, false);
+      expect(volume.copy("/source", "/target")).toBe("conflict");
+    });
+
+    it("returns conflict copying a file onto an existing directory (never verified against the real container)", () => {
+      const volume = new Volume();
+      volume.writeFile("/a.txt", bytes("hi"), 1000, false);
+      volume.mkdir("/b", false);
+      expect(volume.copy("/a.txt", "/b")).toBe("conflict");
+    });
+
+    it("returns conflict copying a directory onto an existing file (never verified against the real container)", () => {
+      const volume = new Volume();
+      volume.mkdir("/a", false);
       volume.writeFile("/b.txt", bytes("hi"), 1000, false);
-      expect(volume.copy("/a.txt", "/b.txt")).toBe("conflict");
+      expect(volume.copy("/a", "/b.txt")).toBe("conflict");
+    });
+
+    it("has no name of its own to nest under, so copying the root onto an existing directory merges its entries straight into it", () => {
+      const volume = new Volume();
+      volume.writeFile("/note.txt", bytes("root file"), 1000, false);
+      volume.mkdir("/existing-target", false);
+      expect(volume.copy("/", "/existing-target")).toBe("ok");
+      expect(volume.isFile("/existing-target/note.txt")).toBe(true);
+    });
+
+    it("nests under the root itself when the target is the root", () => {
+      const volume = new Volume();
+      volume.mkdir("/source", false);
+      volume.writeFile("/source/x.txt", bytes("hi"), 1000, false);
+      expect(volume.copy("/source", "/")).toBe("ok");
+      expect(volume.isFile("/source/x.txt")).toBe(true);
+    });
+
+    it("copies the root onto itself without corrupting data, an edge case never exercised by real usage", () => {
+      const volume = new Volume();
+      volume.writeFile("/note.txt", bytes("hello"), 1000, false);
+      expect(volume.copy("/", "/")).toBe("ok");
+      expect(volume.isFile("/note.txt")).toBe(true);
+    });
+
+    it("overwrites a file at the nested destination with a directory when the source has a directory there", () => {
+      const volume = new Volume();
+      volume.mkdir("/source", false);
+      volume.mkdir("/source/inner", false);
+      volume.writeFile("/source/inner/deep.txt", bytes("deep"), 1000, false);
+      volume.mkdir("/target", false);
+      volume.mkdir("/target/source", false);
+      volume.writeFile("/target/source/inner", bytes("blocking file"), 500, false);
+
+      expect(volume.copy("/source", "/target")).toBe("ok");
+
+      expect(volume.isDir("/target/source/inner")).toBe(true);
+      expect(volume.isFile("/target/source/inner/deep.txt")).toBe(true);
+    });
+
+    it("keeps an already-existing nested subdirectory as-is when both sides are directories", () => {
+      const volume = new Volume();
+      volume.mkdir("/source", false);
+      volume.mkdir("/source/sub", false);
+      volume.writeFile("/source/sub/new.txt", bytes("from source"), 1000, false);
+      volume.mkdir("/target", false);
+      volume.mkdir("/target/source", false);
+      volume.mkdir("/target/source/sub", false);
+      volume.writeFile("/target/source/sub/kept.txt", bytes("already there"), 500, false);
+
+      expect(volume.copy("/source", "/target")).toBe("ok");
+
+      expect(volume.isDir("/target/source/sub")).toBe(true);
+      expect(volume.isFile("/target/source/sub/kept.txt")).toBe(true);
+      expect(volume.isFile("/target/source/sub/new.txt")).toBe(true);
     });
   });
 });
