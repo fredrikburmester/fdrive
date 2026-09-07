@@ -300,3 +300,11 @@ available and followed the project instructions.
   `jsonMaxBytes` wired into fs routes, setup token logged at warn with a rotate-logs note.
   `apps/api` integration files now run sequentially (`fileParallelism: false`) after the
   rotating container-stopped flakes under parallel Docker load.
+- Merged: `ux-shell` (117e671) and `ux-shares` (d3400a8). Primary follow-ups: Shares and
+  Trash moved below the metadata sections (user intent), no-ellipsis rule applied across
+  action labels (PLAN.md decision 14), inspector Tags/Favorite inset aligned, dev-only
+  `unsafe-eval` in the CSP, galleries never rendered for download-limited links (each tile
+  is a counted download). Gates green: lint 982 files, typecheck 13, coverage 8/8 (web
+  1302), integration 4/4, Playwright 88/88 across full and per-spec runs after two label
+  fixes in specs. A leftover `apps/web-e2e-shadow-*` workspace broke `pnpm install` once;
+  removed. Repo pushed. Idle: no worktrees, no workers.
