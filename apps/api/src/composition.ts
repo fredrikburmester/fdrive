@@ -374,7 +374,8 @@ export async function composeApp(
   if ((await connectionStore.current()) === null) {
     // One-time credential: the guard invalidates it after setup, and setup cannot be
     // re-run, but the line still lands in log storage. Operators rotate logs afterwards.
-    logger.warn(`setup token (one-time, rotate logs after setup): ${setupToken}`);
+    logger.warn(`setup token: ${setupToken}`);
+    logger.warn("the setup token is one-time and invalidated after setup; rotate logs afterwards");
     logger.info(`open ${config.fdrivePublicUrl ?? ""}/setup to finish setup`);
   }
 

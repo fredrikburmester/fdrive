@@ -19,17 +19,18 @@ function createTestLogger(): Logger {
   } as unknown as Logger;
 }
 
-/** A logger that records every string passed to `info`, so a test can recover the logged setup token. */
+/** A logger that records every string passed to `info` or `warn`, so a test can recover the logged setup token. */
 function createCapturingLogger(): { logger: Logger; messages: string[] } {
   const messages: string[] = [];
+  const record = (arg: unknown) => {
+    if (typeof arg === "string") {
+      messages.push(arg);
+    }
+  };
   const logger = {
-    info: (arg: unknown) => {
-      if (typeof arg === "string") {
-        messages.push(arg);
-      }
-    },
+    info: record,
     error: () => undefined,
-    warn: () => undefined,
+    warn: record,
     debug: () => undefined,
     fatal: () => undefined,
     trace: () => undefined,
