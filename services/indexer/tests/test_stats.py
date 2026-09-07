@@ -31,9 +31,11 @@ def test_shape_stats_default_errors_sample() -> None:
             }
         ],
         "thumbnails": 2,
+        "image_embeddings": 0,
         "queue_depth": 0,
         "errors_sample": [],
         "thumbnail_rebuild": None,
+        "image_embedding_rebuild": None,
     }
 
 
@@ -42,6 +44,16 @@ def test_shape_stats_with_thumbnail_rebuild() -> None:
     job = {"running": True, "processed": 2, "total": 5, "started_at": "2026-01-01T00:00:00Z", "finished_at": None, "errors": 0}
     result = shape_stats([root], thumbnails_count=0, queue_depth=0, thumbnail_rebuild=job)
     assert result["thumbnail_rebuild"] == job
+
+
+def test_shape_stats_with_image_embeddings() -> None:
+    root = RootStats(root="sftpgo", counts_by_status={"indexed": 1}, chunks=1, chunks_embedded=1)
+    job = {"running": False, "processed": 4, "total": 4, "started_at": None, "finished_at": None, "errors": 0}
+    result = shape_stats(
+        [root], thumbnails_count=0, queue_depth=0, image_embeddings_count=4, image_embedding_rebuild=job
+    )
+    assert result["image_embeddings"] == 4
+    assert result["image_embedding_rebuild"] == job
 
 
 def test_shape_stats_with_errors_and_last_scan() -> None:

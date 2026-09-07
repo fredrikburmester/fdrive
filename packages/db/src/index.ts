@@ -41,6 +41,8 @@ export type {
   FileFilter,
   FilenameHit,
   FileOrder,
+  ImageEmbeddingStats,
+  ImageSearchHit,
   IndexedFile,
   IndexQueries,
   IndexStats,

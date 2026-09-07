@@ -1,6 +1,6 @@
 import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { thumbnails } from "../schema/app.js";
+import { imageEmbeddings, thumbnails } from "../schema/app.js";
 import { chunks, files, moves, roots } from "../schema/idx.js";
 import { formatVectorLiteral } from "../vector.js";
 
@@ -47,6 +47,16 @@ export function toScopeClauses(prefixes: readonly ScopePrefix[]): ScopeClause[] 
  */
 export function escapeLikePattern(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+/**
+ * Converts `mtimeNs` (nanoseconds since epoch, as the indexer stores it) to
+ * a `Date`, truncating to millisecond precision. Mirrors `apps/api`'s
+ * `dateFromMtimeNs`; duplicated here rather than imported so this package
+ * has no dependency on the API app.
+ */
+function dateFromMtimeNs(mtimeNs: bigint): Date {
+  return new Date(Number(mtimeNs / 1_000_000n));
 }
 
 /** A parsed `idx.files` row. */
@@ -166,6 +176,25 @@ export interface SimilarFile {
   readonly similarity: number;
 }
 
+/** One result from `searchImages`: a live file whose thumbnail's embedding matched, ranked by cosine similarity (1 - distance). */
+export interface ImageSearchHit {
+  readonly rootId: number;
+  readonly path: string;
+  readonly size: number;
+  readonly modifiedAt: Date;
+  readonly score: number;
+}
+
+/**
+ * Aggregate counts for `app.image_embeddings`, backing the System page.
+ * `model` is the id embedding the most rows (rows from a stale model, left
+ * behind by a model change, sort after it); `null` when the table is empty.
+ */
+export interface ImageEmbeddingStats {
+  readonly total: number;
+  readonly model: string | null;
+}
+
 /**
  * The hybrid-search and index-browsing queries, every one of which takes a
  * mandatory `scopePrefixes` (except `filesByIds`, `fileByPath`, and
@@ -252,6 +281,21 @@ export interface IndexQueries {
   recentFiles(scopePrefixes: readonly ScopePrefix[], limit: number): Promise<IndexedFile[]>;
   /** The cached thumbnail file for `(contentKey, size)`, `null` when not generated yet. */
   thumbnail(contentKey: string, size: number): Promise<{ storagePath: string } | null>;
+  /**
+   * Live files whose thumbnail embedding (joined `app.image_embeddings` on
+   * `files.sha256 = image_embeddings.content_key`) is closest to `vector`
+   * by cosine distance, restricted to rows written by `model` and to the
+   * caller's scope. Rows from a different model never match, so a mid-flight
+   * rebuild never mixes two embedding spaces into one ranking.
+   */
+  searchImages(
+    scopePrefixes: readonly ScopePrefix[],
+    vector: readonly number[],
+    model: string,
+    limit: number,
+  ): Promise<ImageSearchHit[]>;
+  /** Total embedded rows and the model that wrote the most of them, for the System page. */
+  imageEmbeddingStats(): Promise<ImageEmbeddingStats>;
   /** Appends a row to `idx.moves`, the audit log the MCP `move_path` tool writes to and `recentMoves` reads back. */
   recordMove(input: { rootId: number; src: string; dst: string; actor: string }): Promise<void>;
   /** The most recent `idx.moves` rows for `actor`, restricted to roots present in `scopePrefixes`. */
@@ -603,6 +647,49 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(thumbnails)
         .where(and(eq(thumbnails.contentKey, contentKey), eq(thumbnails.size, size)));
       return row ?? null;
+    },
+
+    async searchImages(scopePrefixes, vector, model, limit) {
+      const vectorLiteral = formatVectorLiteral(vector);
+      const distance = sql<number>`${imageEmbeddings.embedding} <=> ${vectorLiteral}::vector`;
+      const rows = await db
+        .select({
+          rootId: files.rootId,
+          path: files.path,
+          size: files.size,
+          mtimeNs: files.mtimeNs,
+          distance: distance.as("distance"),
+        })
+        .from(imageEmbeddings)
+        .innerJoin(files, eq(files.sha256, imageEmbeddings.contentKey))
+        .where(
+          and(
+            scopeCondition(scopePrefixes),
+            isNull(files.deletedAt),
+            eq(imageEmbeddings.model, model),
+          ),
+        )
+        .orderBy(sql`distance ASC`)
+        .limit(limit);
+
+      return rows.map((row) => ({
+        rootId: row.rootId,
+        path: row.path,
+        size: row.size,
+        modifiedAt: dateFromMtimeNs(row.mtimeNs),
+        score: 1 - Number(row.distance),
+      }));
+    },
+
+    async imageEmbeddingStats() {
+      const rows = await db
+        .select({ model: imageEmbeddings.model, rows: count() })
+        .from(imageEmbeddings)
+        .groupBy(imageEmbeddings.model)
+        .orderBy(desc(count()));
+
+      const total = rows.reduce((sum, row) => sum + Number(row.rows), 0);
+      return { total, model: rows[0]?.model ?? null };
     },
 
     async recordMove(input) {

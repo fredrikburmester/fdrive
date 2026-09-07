@@ -22,9 +22,11 @@ from .chunking import chunk, max_chunks_for
 from .config import Config
 from .events import build_event
 from .extract import Extractor, embed_passages
+from .image_embed import dimension_guard, embed_images, image_embed_health, is_image_candidate, needs_embedding
 from .paths import ext_of
 from .rules import is_text_excluded, should_index_name, should_walk_dir
 from .settings import Settings
+from .thumbs import storage_path as thumb_storage_path
 from .thumbs_io import generate as generate_thumbnails
 
 mimetypes.add_type("application/vnd.apple.pages", ".pages")
@@ -191,6 +193,48 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
             db.upsert_thumbnail(conn, sha, size, rel_thumb_path, width, height)
     except Exception as e:  # noqa: BLE001 - thumbnails never fail the file
         log(f"thumb: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
+
+    if is_image_candidate(ext):
+        try:
+            embed_thumbnail(ctx, sha)
+        except Exception as e:  # noqa: BLE001 - image embedding never fails the file
+            log(f"image embed: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
+
+
+def embed_thumbnail(ctx: RootContext, sha256: str) -> None:
+    """Embeds a file's 256px thumbnail through the image-embed sidecar and
+    upserts the vector under `sha256`, unless it already has a row for the
+    currently configured model. A no-op when `IMAGE_EMBED_URL` is not
+    configured, when the sidecar fails the dimension/status guard, or when
+    the 256px thumbnail was never written (e.g. it was over the thumbnail
+    size budget)."""
+    embed_url = ctx.cfg.image_embed_url
+    if not embed_url:
+        return
+    health = image_embed_health(embed_url)
+    guard = dimension_guard(health)
+    if guard is not None:
+        log(f"image embed: {guard}; skipping")
+        return
+    assert health is not None  # dimension_guard is None only when health is present
+    configured_model = health.model or ""
+
+    conn = ctx.conn()
+    existing_model = db.image_embedding_model(conn, sha256)
+    if not needs_embedding(existing_model, configured_model):
+        return
+
+    thumb_path = os.path.join(ctx.cfg.thumbs_dir, thumb_storage_path(sha256, 256))
+    try:
+        with open(thumb_path, "rb") as fh:
+            data = fh.read()
+    except OSError as e:
+        log(f"image embed: cannot read thumbnail {thumb_path}: {type(e).__name__}: {e}")
+        return
+
+    embeddings, model = embed_images([data], embed_url, ctx.cfg.image_embed_batch_size)
+    if embeddings:
+        db.upsert_image_embedding(conn, sha256, model, embeddings[0])
 
 
 def embed_missing(ctx: RootContext, rel_path: str) -> None:

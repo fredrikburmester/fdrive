@@ -35,7 +35,9 @@ afterAll(async () => {
 }, 180_000);
 
 beforeEach(async () => {
-  await db.execute(sql`truncate table idx.roots, app.thumbnails restart identity cascade`);
+  await db.execute(
+    sql`truncate table idx.roots, app.thumbnails, app.image_embeddings restart identity cascade`,
+  );
 });
 
 /** 384-dim vector that ramps linearly, shifted by `offset`; two close offsets cosine-distance near 0. */
@@ -46,6 +48,20 @@ function rampVector(offset: number): number[] {
 /** A vector pointing the opposite direction of `rampVector`, for a clearly distant embedding. */
 function reverseRampVector(offset: number): number[] {
   return Array.from({ length: 384 }, (_, i) => (383 - i + offset) / 384);
+}
+
+/** 1024-dim vector that ramps linearly, shifted by `offset`; two close offsets cosine-distance near 0. */
+function rampVector1024(offset: number): number[] {
+  return Array.from({ length: 1024 }, (_, i) => (i + offset) / 1024);
+}
+
+/** A vector pointing the opposite direction of `rampVector1024`, for a clearly distant embedding. */
+function reverseRampVector1024(offset: number): number[] {
+  return Array.from({ length: 1024 }, (_, i) => (1023 - i + offset) / 1024);
+}
+
+async function insertImageEmbedding(contentKey: string, model: string, embedding: number[]) {
+  await db.insert(schema.imageEmbeddings).values({ contentKey, model, embedding });
 }
 
 async function insertRoot(name: string): Promise<number> {
@@ -811,6 +827,141 @@ describe("index-queries", () => {
 
     it("returns null for an unknown content key", async () => {
       expect(await queries.thumbnail("unknown", 256)).toBeNull();
+    });
+  });
+
+  describe("searchImages", () => {
+    const model = "google/siglip2-large-patch16-256";
+
+    it("orders files by cosine distance, closest first", async () => {
+      const rootId = await insertRoot("primary");
+      const close = await insertFile(rootId, "alice/photos/close.jpg", { sha256: "sha-close" });
+      const far = await insertFile(rootId, "alice/photos/far.jpg", { sha256: "sha-far" });
+      await insertImageEmbedding("sha-close", model, rampVector1024(0));
+      await insertImageEmbedding("sha-far", model, reverseRampVector1024(0));
+
+      const results = await queries.searchImages(
+        [{ rootId, fsPrefix: "/" }],
+        rampVector1024(0.001),
+        model,
+        10,
+      );
+
+      expect(results.map((r) => r.path)).toEqual([close.path, far.path]);
+      expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? Number.POSITIVE_INFINITY);
+      expect(results[0]?.rootId).toBe(rootId);
+      expect(results[0]?.size).toBe(close.size);
+      expect(results[0]?.modifiedAt).toBeInstanceOf(Date);
+    });
+
+    it("finds every live file sharing a content key, since content is embedded once", async () => {
+      const rootId = await insertRoot("primary");
+      const original = await insertFile(rootId, "alice/photos/original.jpg", { sha256: "sha-dup" });
+      const copy = await insertFile(rootId, "alice/photos/copy.jpg", { sha256: "sha-dup" });
+      await insertImageEmbedding("sha-dup", model, rampVector1024(0));
+
+      const results = await queries.searchImages(
+        [{ rootId, fsPrefix: "/" }],
+        rampVector1024(0),
+        model,
+        10,
+      );
+
+      expect(results.map((r) => r.path).sort()).toEqual([original.path, copy.path].sort());
+    });
+
+    it("excludes rows written by a different model", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/stale.jpg", { sha256: "sha-stale" });
+      await insertImageEmbedding("sha-stale", "other-model", rampVector1024(0));
+
+      const results = await queries.searchImages(
+        [{ rootId, fsPrefix: "/" }],
+        rampVector1024(0),
+        model,
+        10,
+      );
+
+      expect(results).toEqual([]);
+    });
+
+    it("excludes deleted files", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/gone.jpg", {
+        sha256: "sha-gone",
+        deletedAt: new Date(),
+      });
+      await insertImageEmbedding("sha-gone", model, rampVector1024(0));
+
+      const results = await queries.searchImages(
+        [{ rootId, fsPrefix: "/" }],
+        rampVector1024(0),
+        model,
+        10,
+      );
+
+      expect(results).toEqual([]);
+    });
+
+    it("never returns rows outside the given scope prefixes", async () => {
+      const rootId = await insertRoot("primary");
+      const inScope = await insertFile(rootId, "alice/photos/a.jpg", { sha256: "sha-alice" });
+      await insertFile(rootId, "bob/photos/a.jpg", { sha256: "sha-bob" });
+      await insertImageEmbedding("sha-alice", model, rampVector1024(0));
+      await insertImageEmbedding("sha-bob", model, rampVector1024(0));
+
+      const results = await queries.searchImages(
+        [{ rootId, fsPrefix: "/alice" }],
+        rampVector1024(0),
+        model,
+        10,
+      );
+
+      expect(results.map((r) => r.path)).toEqual([inScope.path]);
+    });
+
+    it("matches nothing for an empty scope", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/photos/a.jpg", { sha256: "sha-a" });
+      await insertImageEmbedding("sha-a", model, rampVector1024(0));
+
+      const results = await queries.searchImages([], rampVector1024(0), model, 10);
+
+      expect(results).toEqual([]);
+    });
+
+    it("respects the limit", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "a.jpg", { sha256: "sha-a" });
+      await insertFile(rootId, "b.jpg", { sha256: "sha-b" });
+      await insertImageEmbedding("sha-a", model, rampVector1024(0));
+      await insertImageEmbedding("sha-b", model, rampVector1024(1));
+
+      const results = await queries.searchImages(
+        [{ rootId, fsPrefix: "/" }],
+        rampVector1024(0),
+        model,
+        1,
+      );
+
+      expect(results).toHaveLength(1);
+    });
+  });
+
+  describe("imageEmbeddingStats", () => {
+    it("reports zero and a null model when the table is empty", async () => {
+      expect(await queries.imageEmbeddingStats()).toEqual({ total: 0, model: null });
+    });
+
+    it("counts every row across models and reports the model with the most rows", async () => {
+      await insertImageEmbedding("sha-1", "model-a", rampVector1024(0));
+      await insertImageEmbedding("sha-2", "model-a", rampVector1024(1));
+      await insertImageEmbedding("sha-3", "model-b", rampVector1024(2));
+
+      const stats = await queries.imageEmbeddingStats();
+
+      expect(stats.total).toBe(3);
+      expect(stats.model).toBe("model-a");
     });
   });
 });
