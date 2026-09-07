@@ -42,6 +42,7 @@ vi.mock("@/lib/metadata/deps", async (importOriginal) => ({
   useRename: () => ({ mutate: vi.fn() }),
   useDelete: () => ({ mutate: vi.fn() }),
   useDuplicate: () => ({ mutate: vi.fn() }),
+  useTrashStatus: () => ({ data: undefined }),
   PageHeader: () => null,
   RenameDialog: () => null,
   DeleteDialog: () => null,

@@ -57,8 +57,11 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(PING_EVENT)).toEqual([]);
   });
 
-  it("invalidates the parent directory of every affected path", () => {
-    expect(keysToInvalidate(fsEvent({ paths: ["/a/b.txt"] }))).toEqual([["fs", "list", "/a"]]);
+  it("invalidates the parent directory of every affected path, and the trash list", () => {
+    expect(keysToInvalidate(fsEvent({ paths: ["/a/b.txt"] }))).toEqual([
+      ["fs", "list", "/a"],
+      ["trash", "list"],
+    ]);
   });
 
   it("also invalidates the parent of every target path", () => {
@@ -66,6 +69,7 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(event)).toEqual([
       ["fs", "list", "/a"],
       ["fs", "list", "/c"],
+      ["trash", "list"],
     ]);
   });
 
@@ -77,6 +81,7 @@ describe("keysToInvalidate", () => {
       ["favorites", "list"],
       ["recents", "list"],
       ["tags", "files"],
+      ["trash", "list"],
     ]);
 
     const deleteEvent = fsEvent({ op: "delete", paths: ["/a/b.txt"] });
@@ -85,12 +90,16 @@ describe("keysToInvalidate", () => {
       ["favorites", "list"],
       ["recents", "list"],
       ["tags", "files"],
+      ["trash", "list"],
     ]);
   });
 
   it("deduplicates parents shared by multiple paths", () => {
     const event = fsEvent({ paths: ["/a/b.txt", "/a/c.txt"] });
-    expect(keysToInvalidate(event)).toEqual([["fs", "list", "/a"]]);
+    expect(keysToInvalidate(event)).toEqual([
+      ["fs", "list", "/a"],
+      ["trash", "list"],
+    ]);
   });
 
   it("invalidates nothing for a job event that has not reached done", () => {

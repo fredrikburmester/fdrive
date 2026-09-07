@@ -7,6 +7,7 @@ import { useEffect, useRef } from "react";
 import { accountTransition } from "../account/transition";
 import { useJobsStore } from "../jobs/store";
 import { metadataKeysToInvalidate } from "../metadata/invalidation";
+import { trashKeysToInvalidate } from "../trash/invalidation";
 import { tabEventsUrl } from "./client";
 import { queryKeys } from "./keys";
 
@@ -57,6 +58,7 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
   return [
     ...[...parents].map((parent) => queryKeys.fs.list(parent)),
     ...metadataKeysToInvalidate(event),
+    ...trashKeysToInvalidate(event),
   ];
 }
 

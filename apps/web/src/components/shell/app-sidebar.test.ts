@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatarInitials, isFilesRoute, isSystemRoute } from "./app-sidebar.tsx";
+import { avatarInitials, isFilesRoute, isSystemRoute, isTrashRoute } from "./app-sidebar.tsx";
 
 describe("avatarInitials", () => {
   it("upper-cases the first two letters of the username", () => {
@@ -44,5 +44,19 @@ describe("isSystemRoute", () => {
 
   it("is false when there is no pathname", () => {
     expect(isSystemRoute(null)).toBe(false);
+  });
+});
+
+describe("isTrashRoute", () => {
+  it("is true for the Trash route", () => {
+    expect(isTrashRoute("/trash")).toBe(true);
+  });
+
+  it("is false for another route", () => {
+    expect(isTrashRoute("/files")).toBe(false);
+  });
+
+  it("is false when there is no pathname", () => {
+    expect(isTrashRoute(null)).toBe(false);
   });
 });
