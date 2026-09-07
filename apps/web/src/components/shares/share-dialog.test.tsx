@@ -28,6 +28,7 @@ const share: ManagedShare = {
   usedDownloads: 0,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
+  presentation: "auto",
 };
 afterEach(() => {
   cleanup();
@@ -51,6 +52,7 @@ it("clears transient password immediately, returns a copyable public link and cl
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "transient-password" } });
   fireEvent.click(screen.getByRole("button", { name: "Create link" }));
   expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("Password") as HTMLInputElement).type).toBe("password");
   expect(calls.create).toHaveBeenCalledWith(
     expect.objectContaining({ password: "transient-password", paths: ["/a.txt"] }),
   );
@@ -67,7 +69,7 @@ it("editing a name preserves the existing password and keeps API failures visibl
   calls.update.mockRejectedValue(new Error("Permission denied"));
   render(<ShareDialog entries={[entry]} share={share} onClose={vi.fn()} />);
   expect(screen.queryByLabelText("New password")).toBeNull();
-  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+  fireEvent.change(screen.getByLabelText("Link name"), { target: { value: "Renamed" } });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await screen.findByText("Permission denied");
   expect(calls.update).toHaveBeenCalledWith(share.id, expect.objectContaining({ name: "Renamed" }));
@@ -78,15 +80,13 @@ it("shows friendly access and password labels for every selected option", async 
   const view = render(
     <ShareDialog entries={[{ ...entry, kind: "dir" }]} share={share} onClose={vi.fn()} />,
   );
-  expect(screen.getByRole("combobox", { name: "Access" }).textContent).toContain(
-    "Read and download",
-  );
+  expect(screen.getByRole("combobox", { name: "Access" }).textContent).toContain("Can view");
   expect(screen.getByRole("combobox", { name: "Password protection" }).textContent).toContain(
     "Keep existing password",
   );
   fireEvent.click(screen.getByRole("combobox", { name: "Access" }));
-  fireEvent.keyDown(await screen.findByRole("option", { name: "Upload only" }), { key: "Enter" });
-  expect(screen.getByRole("combobox", { name: "Access" }).textContent).toContain("Upload only");
+  fireEvent.keyDown(await screen.findByRole("option", { name: "Can upload" }), { key: "Enter" });
+  expect(screen.getByRole("combobox", { name: "Access" }).textContent).toContain("Can upload");
   view.unmount();
   for (const label of ["Change password", "Remove password"]) {
     const passwordView = render(<ShareDialog entries={[entry]} share={share} onClose={vi.fn()} />);
@@ -103,4 +103,23 @@ it("shows friendly access and password labels for every selected option", async 
   expect(screen.getByRole("combobox", { name: "Password protection" }).textContent).toContain(
     "Keep without password",
   );
+});
+it("shows a friendly Show as label for every presentation option", async () => {
+  render(<ShareDialog entries={[entry]} share={share} onClose={vi.fn()} />);
+  expect(screen.getByRole("combobox", { name: "Show as" }).textContent).toContain("Automatic");
+  fireEvent.click(screen.getByRole("combobox", { name: "Show as" }));
+  fireEvent.keyDown(await screen.findByRole("option", { name: "Gallery" }), { key: "Enter" });
+  expect(screen.getByRole("combobox", { name: "Show as" }).textContent).toContain("Gallery");
+});
+it("generates a random visible password and reveals it via the eye toggle", async () => {
+  render(<ShareDialog entries={[entry]} onClose={vi.fn()} />);
+  const password = screen.getByLabelText("Password") as HTMLInputElement;
+  expect(password.type).toBe("password");
+  fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+  expect(password.type).toBe("text");
+  expect(password.value).toHaveLength(20);
+  fireEvent.click(screen.getByRole("button", { name: "Hide password" }));
+  expect(password.type).toBe("password");
+  fireEvent.click(screen.getByRole("button", { name: "Show password" }));
+  expect(password.type).toBe("text");
 });

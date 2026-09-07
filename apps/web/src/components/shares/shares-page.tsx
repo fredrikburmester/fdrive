@@ -27,7 +27,8 @@ import {
 } from "@/components/ui/table";
 import { useShareManagement } from "@/lib/shares/management";
 import { publicShareHref } from "@/lib/shares/paths";
-import { shareUsage } from "@/lib/shares/status";
+import { PRESENTATION_LABEL } from "@/lib/shares/presentation-label";
+import { shareAccessLabel, shareItemLabel, shareUsage } from "@/lib/shares/status";
 import { ShareDialog } from "./share-dialog";
 
 export function SharesPage() {
@@ -96,7 +97,9 @@ export function SharesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Item</TableHead>
                 <TableHead>Access</TableHead>
+                <TableHead>Shown as</TableHead>
                 <TableHead>Usage</TableHead>
                 <TableHead>Expires</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -111,10 +114,14 @@ export function SharesPage() {
                       <span className="text-xs text-muted-foreground">Password protected</span>
                     )}
                   </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {shareItemLabel(share.paths)}
+                  </TableCell>
                   <TableCell>
-                    <Badge variant="secondary">
-                      {share.scope === "read" ? "Read" : "Upload only"}
-                    </Badge>
+                    <Badge variant="secondary">{shareAccessLabel(share.scope)}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {PRESENTATION_LABEL[share.presentation]}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{shareUsage(share)}</TableCell>
                   <TableCell className="text-muted-foreground">

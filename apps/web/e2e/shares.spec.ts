@@ -3,7 +3,10 @@ import { ApiError, ManagedShare } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
-import { shareAudioFixture } from "./support/share-fixture.js";
+import { shareAudioFixture, shareImageFixture } from "./support/share-fixture.js";
+
+const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
+const MOBILE_VIEWPORT = { width: 390, height: 844 };
 
 test.use({ storageState: { cookies: [], origins: [] }, actionTimeout: 10_000 });
 test.setTimeout(90_000);
@@ -28,10 +31,10 @@ async function createLink(
   await listing(page).getByText(first, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Share…", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create share link", exact: true });
-  await dialog.getByLabel("Name", { exact: true }).fill(label);
+  await dialog.getByLabel("Link name", { exact: true }).fill(label);
   if (write) {
     await dialog.getByRole("combobox", { name: "Access" }).click();
-    await page.getByRole("option", { name: "Upload only" }).click();
+    await page.getByRole("option", { name: "Can upload" }).click();
   }
   await dialog.getByLabel("Password", { exact: true }).fill(password);
   await dialog.getByRole("button", { name: "Create link", exact: true }).click();
@@ -110,7 +113,7 @@ test("single-file password is checked on explicit download; edit preserves, chan
     ).toBe("Public hello 日本 100%");
     await page.getByRole("button", { name: "Edit Protected file", exact: true }).click();
     let edit = page.getByRole("dialog", { name: "Edit share link" });
-    await edit.getByLabel("Name", { exact: true }).fill("Preserved password");
+    await edit.getByLabel("Link name", { exact: true }).fill("Preserved password");
     await edit.getByRole("button", { name: "Save changes" }).click();
     await expect(edit).toBeHidden();
     await visitor.reload();
@@ -322,5 +325,67 @@ test("upload-only retries password failures, forbids reads, and reports expired 
     expect(forbidden).toEqual([]);
   } finally {
     await context.close().catch(() => {});
+  }
+});
+
+test("an image-only folder shows a gallery with lightbox navigation and per-image download, a plain file still shows the download card, and the dialog uses friendly labels", async ({
+  page,
+  browser,
+}) => {
+  await loginAs(page, "share_owner", "share-owner-test-password");
+  for (const name of ["1.png", "2.png", "3.png"]) {
+    const upload = await page.request.put(
+      `/api/v1/fs/upload?path=${encodeURIComponent(`/images/${name}`)}&mkdirParents=true`,
+      {
+        headers: { "x-requested-with": "fdrive", "content-type": "application/octet-stream" },
+        data: shareImageFixture(),
+      },
+    );
+    expect(upload.ok()).toBe(true);
+  }
+  await page.goto("/files");
+  await listing(page).getByText("images", { exact: true }).click();
+  await listing(page).getByText("images", { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Share…", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create share link", exact: true });
+  await expect(dialog.getByRole("combobox", { name: "Access" })).toContainText("Can view");
+  await expect(dialog.getByRole("combobox", { name: "Show as" })).toContainText("Automatic");
+  await dialog.getByLabel("Link name", { exact: true }).fill("Photo folder");
+  await dialog.getByRole("button", { name: "Create link", exact: true }).click();
+  const ready = page.getByRole("dialog", { name: "Share link ready" });
+  await expect(ready).toBeVisible();
+  const galleryUrl = await ready.getByLabel("Share link", { exact: true }).inputValue();
+  await ready.getByRole("button", { name: "Done" }).click();
+  const documentUrl = await createLink(page, ["hello.txt"], "Plain document");
+
+  for (const viewport of [DESKTOP_VIEWPORT, MOBILE_VIEWPORT]) {
+    const context = await browser.newContext({ viewport });
+    const visitor = await context.newPage();
+    try {
+      await visitor.goto(galleryUrl);
+      const tiles = visitor.locator("button img");
+      await expect(tiles).toHaveCount(3);
+      await tiles.first().click();
+      const lightbox = visitor.getByRole("dialog");
+      await expect(lightbox).toBeVisible();
+      const firstTitle = await lightbox.locator('[data-slot="dialog-title"]').textContent();
+      await visitor.keyboard.press("ArrowRight");
+      await expect(lightbox.locator('[data-slot="dialog-title"]')).not.toHaveText(firstTitle ?? "");
+      const image = await downloaded(visitor, () =>
+        lightbox.getByRole("link", { name: "Download", exact: true }).click(),
+      );
+      expect(image.length).toBeGreaterThan(0);
+      await visitor.keyboard.press("Escape");
+      await expect(lightbox).toBeHidden();
+      await downloaded(visitor, () =>
+        visitor.getByRole("link", { name: "Download ZIP", exact: true }).click(),
+      );
+
+      await visitor.goto(documentUrl);
+      await expect(visitor.getByRole("link", { name: "Download", exact: true })).toBeVisible();
+      await expect(visitor.getByRole("img")).toHaveCount(0);
+    } finally {
+      await context.close().catch(() => {});
+    }
   }
 });
