@@ -282,7 +282,15 @@ export function registerSharesRoutes(
     )
       throw new ApiHttpError("rate_limited", "Too many share requests");
     await next();
-    c.header("Cache-Control", "no-store");
+    // Everything public a share serves is `no-store` by default, except a
+    // handler that deliberately set its own `Cache-Control`: only the thumb
+    // route does, and it must, because a `no-store` thumbnail is re-fetched
+    // for every tile on every render and makes preloading the neighbouring
+    // lightbox images impossible (the preload could never be reused, so it
+    // would only add requests). Thumbnails are safe to cache briefly: they
+    // are derived, content-addressed by sha256, and never counted against
+    // the link's download budget. Full downloads stay `no-store`.
+    if (c.res.headers.get("Cache-Control") === null) c.header("Cache-Control", "no-store");
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Content-Type-Options", "nosniff");
   });
@@ -398,11 +406,20 @@ export function registerSharesRoutes(
     }
     if (resolved === null) throw THUMB_NOT_FOUND();
 
-    return serveThumb(
+    const response = await serveThumb(
       c,
       { indexQueries: deps.indexQueries, thumbsDir: deps.thumbsDir, fileReader: thumbFileReader },
       { rootName: resolved.rootName, fsPath: resolved.fsPath, size: query.size },
     );
+    // Overrides the tail's `private, no-store` (right for the authed route,
+    // where a permission change must never be served stale) with a short
+    // private window: a gallery re-renders its tiles constantly and the
+    // lightbox preloads its neighbours, and both are pointless against a
+    // store that refuses to keep anything. Bounded at a minute so revoking
+    // a link still takes effect promptly, and `private` keeps it out of any
+    // shared proxy cache.
+    response.headers.set("Cache-Control", "private, max-age=60");
+    return response;
   });
   groups.public.get(`${pub}/download`, (c) =>
     shareCall(async () => {
