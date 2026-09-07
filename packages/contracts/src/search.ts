@@ -47,13 +47,19 @@ export type SearchSections = z.infer<typeof SearchSections>;
  * search could not run (the embedding service is unreachable) and results
  * are keyword-only. `unavailable` is true when the caller has no
  * index-backed scope at all (no configured index roots, or the identity's
- * home is not on one); `sections` is empty in that case.
+ * home is not on one); `sections` is empty in that case. `partial`, when
+ * present and true, means the response omits some matches that could not
+ * be confirmed accessible (a live permission check reported "unavailable"
+ * rather than granted or denied) or that the bounded internal fanout was
+ * exhausted before every match could be considered; it is never present
+ * (rather than `false`) on an exhaustive response.
  */
 export const SearchResponse = z.object({
   query: z.string(),
   sections: SearchSections,
   degraded: z.boolean(),
   unavailable: z.boolean(),
+  partial: z.boolean().optional(),
   tookMs: z.number().int().min(0),
 });
 

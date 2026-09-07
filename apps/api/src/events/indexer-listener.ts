@@ -1,12 +1,13 @@
 import type { FsEvent } from "@fdrive/contracts";
-import type { HomeTemplate, Scope } from "@fdrive/core";
-import { toVirtualPath } from "@fdrive/core";
+import { isStorageError, type Scope, type StorageProvider } from "@fdrive/core";
 import type { FavoriteRepo, FileTagRepo, Identity, IdentityRepo, IndexQueries } from "@fdrive/db";
 import { Client } from "pg";
 import { z } from "zod";
 import type { MetadataService } from "../metadata/service.js";
 import { hasTrackedMetadata } from "../metadata/service.js";
-import { usableScopesFor } from "../search/scopes.js";
+import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import { roundTripVirtualPath } from "../scoping/round-trip.ts";
+import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import type { EventBus } from "./bus.js";
 
 /** The `LISTEN`/`NOTIFY` channel the indexer publishes change events on. */
@@ -113,7 +114,17 @@ export interface IndexerListenerDeps {
   readonly favorites: FavoriteRepo;
   readonly metadata: MetadataService;
   readonly bus: EventBus;
-  readonly homeTemplate: HomeTemplate;
+  /**
+   * Resolves an identity's trusted, administrator-controlled scope mapping
+   * (`ScopeResolver.configuredMappings`), the same mapping Office and
+   * metadata-event routing use. Never `verifiedIndexScopes`: this listener
+   * is itself downstream of the indexer, so re-verifying against it would
+   * be circular, and event routing must keep working when the indexer's own
+   * directory-verification path is degraded.
+   */
+  readonly configuredMappingsFor: (identity: Identity) => Promise<ConfiguredMappingsResult>;
+  /** Builds the identity-bound storage a live-read check runs against. */
+  readonly storageForIdentity: (identityId: string) => Promise<StorageProvider>;
   readonly indexRootNames: ReadonlySet<string>;
   readonly clock: () => Date;
   readonly logger: IndexerListenerLogger;
@@ -122,6 +133,8 @@ export interface IndexerListenerDeps {
   readonly reconnectDelayMs?: (attempt: number) => number;
   /** Overrides `setTimeout` for reconnect scheduling; tests inject a synchronous stub. */
   readonly scheduleTimeout?: (fn: () => void, ms: number) => void;
+  /** Overridable for tests; defaults to `createReadAuthorizer`. */
+  readonly createAuthorizer?: (storage: StorageProvider) => ReadAuthorizer;
 }
 
 export interface IndexerListener {
@@ -162,17 +175,17 @@ function publish(
 async function buildScopeCache(
   deps: Pick<
     IndexerListenerDeps,
-    "identities" | "indexQueries" | "homeTemplate" | "indexRootNames"
+    "identities" | "indexQueries" | "configuredMappingsFor" | "indexRootNames"
   >,
 ): Promise<{ entries: IdentityScopeEntry[]; rootIdByName: Map<string, number> }> {
   const identities = await deps.identities.listAll();
   const entries: IdentityScopeEntry[] = [];
   for (const identity of identities as Identity[]) {
-    const scopes = usableScopesFor(
-      deps.homeTemplate,
-      deps.indexRootNames,
-      identity.externalUsername,
-    );
+    const configured = await deps.configuredMappingsFor(identity);
+    if (!configured.available) {
+      continue;
+    }
+    const scopes = configured.scopes.filter((scope) => deps.indexRootNames.has(scope.rootName));
     if (scopes.length > 0) {
       entries.push({ identityId: identity.id, scopes });
     }
@@ -181,19 +194,81 @@ async function buildScopeCache(
   return { entries, rootIdByName: new Map(Object.entries(rootIds)) };
 }
 
+type LiveCheckDeps = Pick<IndexerListenerDeps, "storageForIdentity" | "createAuthorizer">;
+
+/**
+ * Determines whether `path` is currently a file or a directory, or `null`
+ * when that cannot be told safely (missing, denied, or any other error).
+ * Never calls `storage.list` on a path of unknown kind: real SFTPGo drops
+ * the connection for `list` against a path that is actually a file, so
+ * `statFile` must run first and `bad_request` is the only signal this
+ * codebase treats as "it's a directory" (see `auth/storage-factory.ts`'s
+ * `isExistingDirectory`). The indexer's `moved` event payload never says
+ * whether the move was of a file or a directory, so this is required
+ * before the live-read check below can pick the right `ReadAuthorizeTarget`.
+ * A successful `statFile` is not itself used as authorization proof; the
+ * read authorizer's own `authorize` call is.
+ */
+async function detectKind(
+  storage: Pick<StorageProvider, "statFile">,
+  path: string,
+): Promise<"file" | "dir" | null> {
+  try {
+    await storage.statFile(path);
+    return "file";
+  } catch (error) {
+    return isStorageError(error) && error.kind === "bad_request" ? "dir" : null;
+  }
+}
+
+/**
+ * True when `identityId`'s own storage can actually read `virtualPath` right
+ * now. Every created/changed/relinked/moved-into-scope destination must
+ * pass this before it is published to an SSE client or recorded as a
+ * relink target: round-tripping through the identity's mapping proves the
+ * mapping covers the path, not that the caller may see its contents.
+ */
+async function isLiveReadable(
+  deps: LiveCheckDeps,
+  identityId: string,
+  virtualPath: string,
+): Promise<boolean> {
+  let storage: StorageProvider;
+  try {
+    storage = await deps.storageForIdentity(identityId);
+  } catch {
+    return false;
+  }
+  const kind = await detectKind(storage, virtualPath);
+  if (kind === null) {
+    return false;
+  }
+  const authorizer = (deps.createAuthorizer ?? ((s) => createReadAuthorizer({ storage: s })))(
+    storage,
+  );
+  const result = await authorizer.authorize({ path: virtualPath, kind });
+  return result.allowed;
+}
+
 /**
  * Handles a `created`/`changed` event for one identity: publishes an
- * `FsEvent` when the path falls in that identity's scope, so SSE clients
- * refresh listings for changes made over SFTP or any other client.
+ * `FsEvent` when the path round-trips within that identity's scope and a
+ * live read check confirms the identity can read it right now, so SSE
+ * clients refresh listings for changes made over SFTP or any other client
+ * without ever being told about a path a mapping change or permission
+ * change has since made unreadable.
  */
-function handleCreatedOrChanged(
-  deps: Pick<IndexerListenerDeps, "bus">,
+async function handleCreatedOrChanged(
+  deps: LiveCheckDeps & Pick<IndexerListenerDeps, "bus">,
   scopes: readonly Scope[],
   identityId: string,
   event: IndexerEventPayload,
-): void {
-  const virtualPath = toVirtualPath(scopes, event.root, event.path);
+): Promise<void> {
+  const virtualPath = roundTripVirtualPath(scopes, event.root, event.path);
   if (virtualPath === null) {
+    return;
+  }
+  if (!(await isLiveReadable(deps, identityId, virtualPath))) {
     return;
   }
   publish(
@@ -210,16 +285,21 @@ function handleCreatedOrChanged(
  * Handles a `deleted` event for one identity. When the deleted path carried
  * tags or a favorite, checks for exactly one live file elsewhere in the same
  * root and scope with the same sha256 (mechanism 4 in the plan) and, if
- * found, relinks the metadata as a move instead of dropping it.
+ * found, relinks the metadata as a move instead of dropping it. Metadata
+ * continuity always applies once a unique relink candidate exists; the
+ * relink is only ever *announced* to the browser as a move (revealing the
+ * new path) once a live read check confirms the identity can read it,
+ * degrading to a plain delete otherwise.
  */
 async function handleDeleted(
-  deps: Pick<IndexerListenerDeps, "bus" | "metadata" | "fileTags" | "favorites" | "indexQueries">,
+  deps: LiveCheckDeps &
+    Pick<IndexerListenerDeps, "bus" | "metadata" | "fileTags" | "favorites" | "indexQueries">,
   scopes: readonly Scope[],
   rootIdByName: ReadonlyMap<string, number>,
   identityId: string,
   event: IndexerEventPayload,
 ): Promise<void> {
-  const virtualPath = toVirtualPath(scopes, event.root, event.path);
+  const virtualPath = roundTripVirtualPath(scopes, event.root, event.path);
   if (virtualPath === null) {
     return;
   }
@@ -232,12 +312,16 @@ async function handleDeleted(
       if (sha256 !== null) {
         const liveRows = await deps.indexQueries.liveRowsBySha(rootId, sha256);
         const candidates = liveRows
-          .map((row) => toVirtualPath(scopes, event.root, row.path))
+          .map((row) => roundTripVirtualPath(scopes, event.root, row.path))
           .filter((path): path is string => path !== null);
         if (candidates.length === 1) {
           const newVirtualPath = candidates[0] as string;
           await deps.metadata.onMoved(identityId, virtualPath, newVirtualPath, false);
-          publish(deps.bus, identityId, "move", [virtualPath], [newVirtualPath], event.at);
+          if (await isLiveReadable(deps, identityId, newVirtualPath)) {
+            publish(deps.bus, identityId, "move", [virtualPath], [newVirtualPath], event.at);
+          } else {
+            publish(deps.bus, identityId, "delete", [virtualPath], undefined, event.at);
+          }
           return;
         }
       }
@@ -250,16 +334,20 @@ async function handleDeleted(
 
 /**
  * Handles a `moved` event for one identity. Both endpoints in scope is the
- * common case (a real move or rename). When only the source resolves, the
- * path left the identity's scope, so it is treated as a delete; when only
- * the target resolves, a path entered scope from outside it, so it is
- * treated as a create. `isDir` is always `true`: the indexer's event payload
- * does not say whether a rename was of a file or a directory, and treating
- * every rename as a possible directory is harmless (the prefix-only part of
+ * common case (a real move or rename): metadata always follows the move,
+ * but the browser only ever learns the *new* path once a live read check
+ * confirms the identity can read it there, degrading to a delete
+ * notification otherwise. When only the source resolves, the path left the
+ * identity's scope, so it is treated as a delete; when only the target
+ * resolves, a path entered scope from outside it, so it is treated as a
+ * create, again gated on the same live read check. `isDir` is always
+ * `true` for the both-endpoints case: the indexer's event payload does not
+ * say whether a rename was of a file or a directory, and treating every
+ * rename as a possible directory is harmless (the prefix-only part of
  * `movePrefix` simply matches nothing extra for a plain file).
  */
 async function handleMoved(
-  deps: Pick<IndexerListenerDeps, "bus" | "metadata" | "logger">,
+  deps: LiveCheckDeps & Pick<IndexerListenerDeps, "bus" | "metadata" | "logger">,
   scopes: readonly Scope[],
   identityId: string,
   event: IndexerEventPayload,
@@ -269,12 +357,16 @@ async function handleMoved(
     return;
   }
 
-  const srcVirtualPath = toVirtualPath(scopes, event.root, event.path);
-  const targetVirtualPath = toVirtualPath(scopes, event.root, event.target_path);
+  const srcVirtualPath = roundTripVirtualPath(scopes, event.root, event.path);
+  const targetVirtualPath = roundTripVirtualPath(scopes, event.root, event.target_path);
 
   if (srcVirtualPath !== null && targetVirtualPath !== null) {
     await deps.metadata.onMoved(identityId, srcVirtualPath, targetVirtualPath, true);
-    publish(deps.bus, identityId, "move", [srcVirtualPath], [targetVirtualPath], event.at);
+    if (await isLiveReadable(deps, identityId, targetVirtualPath)) {
+      publish(deps.bus, identityId, "move", [srcVirtualPath], [targetVirtualPath], event.at);
+    } else {
+      publish(deps.bus, identityId, "delete", [srcVirtualPath], undefined, event.at);
+    }
     return;
   }
   if (srcVirtualPath !== null) {
@@ -282,24 +374,25 @@ async function handleMoved(
     publish(deps.bus, identityId, "delete", [srcVirtualPath], undefined, event.at);
     return;
   }
-  if (targetVirtualPath !== null) {
+  if (targetVirtualPath !== null && (await isLiveReadable(deps, identityId, targetVirtualPath))) {
     publish(deps.bus, identityId, "create", [targetVirtualPath], undefined, event.at);
   }
 }
 
 /** Dispatches `event` for one identity's scopes to the right handler above. */
 export async function handleEventForIdentity(
-  deps: Pick<
-    IndexerListenerDeps,
-    "bus" | "metadata" | "fileTags" | "favorites" | "indexQueries" | "logger"
-  >,
+  deps: LiveCheckDeps &
+    Pick<
+      IndexerListenerDeps,
+      "bus" | "metadata" | "fileTags" | "favorites" | "indexQueries" | "logger"
+    >,
   scopes: readonly Scope[],
   rootIdByName: ReadonlyMap<string, number>,
   identityId: string,
   event: IndexerEventPayload,
 ): Promise<void> {
   if (event.kind === "created" || event.kind === "changed") {
-    handleCreatedOrChanged(deps, scopes, identityId, event);
+    await handleCreatedOrChanged(deps, scopes, identityId, event);
     return;
   }
   if (event.kind === "deleted") {
@@ -312,10 +405,10 @@ export async function handleEventForIdentity(
 /**
  * Builds the indexer event listener: a `LISTEN idx_events` connection that
  * reconnects with backoff on error, resolves every affected identity per
- * event (caching identities and their scopes for `scopeCacheTtlMs`, default
- * 60s), and drives metadata rename tracking plus SSE change events. Gate
- * construction on `FDRIVE_INDEX_ROOTS` being configured; there is nothing to
- * listen for otherwise.
+ * event (caching identities and their configured scopes for
+ * `scopeCacheTtlMs`, default 60s), and drives metadata rename tracking plus
+ * SSE change events. Gate construction on `FDRIVE_INDEX_ROOTS` being
+ * configured; there is nothing to listen for otherwise.
  */
 export function createIndexerListener(deps: IndexerListenerDeps): IndexerListener {
   const channel = deps.channel ?? DEFAULT_INDEXER_CHANNEL;

@@ -40,6 +40,7 @@ import {
 import {
   accountTokenRoute,
   IDENTITY_HEADER,
+  identityScopeRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -49,6 +50,7 @@ import {
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
+import { IdentityScopeResponse, type SetIdentityScopeRequest } from "./scopes.ts";
 import { SearchResponse, SearchStatusResponse } from "./search.ts";
 import {
   ConnectionTestResponse,
@@ -177,6 +179,10 @@ export interface ApiClient {
   switchIdentity(id: string): Promise<MeResponse>;
   accountFavorites(): Promise<AccountFavoritesResponse>;
   accountSearch(query: string, opts?: ApiClientSearchOptions): Promise<AccountSearchResponse>;
+  /** The identity's scope mapping and index-availability status; 404 for an unknown or unowned id. */
+  identityScope(id: string): Promise<IdentityScopeResponse>;
+  /** Admin + CSRF only: replaces the identity's scope override. `{ scopes: [] }` resets it to the template-derived home scope. */
+  setIdentityScope(id: string, body: SetIdentityScopeRequest): Promise<IdentityScopeResponse>;
   list(path: string): Promise<ListResponse>;
   stat(path: string): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
@@ -510,6 +516,20 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "GET", path: ROUTES.account.favorites },
         AccountFavoritesResponse,
+      );
+    },
+    identityScope(id) {
+      return requestJson(
+        ctx,
+        { method: "GET", path: identityScopeRoute(id) },
+        IdentityScopeResponse,
+      );
+    },
+    setIdentityScope(id, body) {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: identityScopeRoute(id), jsonBody: body },
+        IdentityScopeResponse,
       );
     },
     accountSearch(query, opts) {

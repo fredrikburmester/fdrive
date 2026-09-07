@@ -1,14 +1,16 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StorageProvider } from "@fdrive/core";
-import { parseHomeTemplate } from "@fdrive/core";
-import type { IndexedFile, IndexQueries } from "@fdrive/db";
+import type { Scope, StorageProvider } from "@fdrive/core";
+import type { Identity, IndexedFile, IndexQueries } from "@fdrive/db";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { ScopeResolver } from "../scoping/resolver.ts";
+import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import { registerThumbRoutes, type ThumbFileReader, type ThumbRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
@@ -16,6 +18,10 @@ const REQUIRED_ENV = {
   SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
+
+const HOME_SCOPES: readonly Scope[] = [
+  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+];
 
 function createTestLogger(): Logger {
   const logger = {
@@ -90,28 +96,49 @@ function fakeFileReader(overrides: Partial<ThumbFileReader> = {}): ThumbFileRead
   };
 }
 
-interface BuildAppOptions extends Partial<ThumbRoutesDeps> {
+/** Allows every target by default; pass `allow: false` to deny everything instead. */
+function fakeAuthorizer(allow = true): ReadAuthorizer {
+  return {
+    authorize: async () => (allow ? { allowed: true } : { allowed: false, reason: "denied" }),
+  };
+}
+
+interface BuildAppOptions extends Partial<Omit<ThumbRoutesDeps, "resolver" | "identities">> {
   /** Omits `fileReader` entirely so `registerThumbRoutes` falls back to the real, disk-backed one. */
   readonly useRealFileReader?: boolean;
+  readonly scopes?: readonly Scope[] | null;
+  readonly identity?: Identity | null;
+  readonly authorizerAllows?: boolean;
 }
 
 function buildApp(deps: BuildAppOptions = {}, username = "alice") {
   const storage = {} as StorageProvider;
+  const identity =
+    deps.identity === undefined ? buildIdentity({ externalUsername: username }) : deps.identity;
   const principal: Principal = {
     accountId: "00000000-0000-4000-8000-000000000001",
-    identityId: "00000000-0000-4000-8000-0000000000a1",
+    identityId: identity?.id ?? "00000000-0000-4000-8000-0000000000a1",
     username,
     storage,
     isAdmin: false,
   };
 
-  const { useRealFileReader, ...overrides } = deps;
+  const { useRealFileReader, scopes, authorizerAllows, ...overrides } = deps;
+  const resolvedScopes = scopes === undefined ? HOME_SCOPES : scopes;
+
+  const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = {
+    verifiedIndexScopes: async () =>
+      resolvedScopes === null
+        ? { available: false, reason: "no_roots" }
+        : { available: true, scopes: resolvedScopes },
+  };
 
   const fullDeps: ThumbRoutesDeps = {
     indexQueries: fakeIndexQueries(),
-    homeTemplate: parseHomeTemplate("sftpgo:/{username}"),
-    indexRootNames: new Set(["sftpgo"]),
+    resolver,
+    identities: { get: async () => identity },
     thumbsDir: "/thumbs",
+    createAuthorizer: () => fakeAuthorizer(authorizerAllows ?? true),
     ...(useRealFileReader === true ? {} : { fileReader: fakeFileReader() }),
     ...overrides,
   };
@@ -174,7 +201,7 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/webp");
     expect(res.headers.get("content-length")).toBe("42");
-    expect(res.headers.get("cache-control")).toBe("private, max-age=86400");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get("etag")).toBe('"abc123"');
     expect(await res.text()).toBe("webp-bytes");
   });
@@ -211,8 +238,16 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 404 when the identity has no usable scope", async () => {
-    const app = buildApp({ indexRootNames: new Set(["other-root"]) });
+  it("returns 404 when the identity's verified scopes are unavailable", async () => {
+    const app = buildApp({ scopes: null });
+
+    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 when the caller's identity no longer exists", async () => {
+    const app = buildApp({ identity: null });
 
     const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
 
@@ -269,6 +304,21 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns 404 when the live read check denies the exact path", async () => {
+    const app = buildApp({
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => makeFile(),
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      }),
+      authorizerAllows: false,
+    });
+
+    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
+
+    expect(res.status).toBe(404);
+  });
+
   it("returns 404 when the cached thumbnail file is missing from disk", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
@@ -289,7 +339,7 @@ describe("GET /api/v1/thumb", () => {
   });
 
   it("resolves the path under the caller's own scope, not another user's", async () => {
-    const fileByPath = vi.fn(async () => makeFile());
+    const fileByPath = vi.fn(async () => makeFile({ path: "bob/photo.jpg" }));
     const app = buildApp(
       {
         indexQueries: fakeIndexQueries({
@@ -297,6 +347,7 @@ describe("GET /api/v1/thumb", () => {
           fileByPath,
           thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
         }),
+        scopes: [{ rootName: "sftpgo", fsPrefix: "/bob", virtualPrefix: "/" }],
       },
       "bob",
     );
@@ -304,5 +355,47 @@ describe("GET /api/v1/thumb", () => {
     await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
 
     expect(fileByPath).toHaveBeenCalledWith(1, "bob/photo.jpg");
+  });
+
+  it("uses the default authorizer built from the caller's own storage when none is injected", async () => {
+    const download = vi.fn(async () => ({
+      body: { cancel: async () => undefined } as unknown as ReadableStream<Uint8Array>,
+      contentType: null,
+      contentLength: null,
+      lastModified: null,
+    }));
+    const storage = { list: async () => [], download } as unknown as StorageProvider;
+    const identity = buildIdentity({ externalUsername: "alice" });
+    const principal: Principal = {
+      accountId: "00000000-0000-4000-8000-000000000001",
+      identityId: identity.id,
+      username: "alice",
+      storage,
+      isAdmin: false,
+    };
+    const deps: ThumbRoutesDeps = {
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => makeFile(),
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      }),
+      resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }) },
+      identities: { get: async () => identity },
+      thumbsDir: "/thumbs",
+      fileReader: fakeFileReader(),
+    };
+    const app = createApp({
+      config: loadConfig(REQUIRED_ENV),
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date("2024-06-01T00:00:00.000Z"),
+      principalResolver: async () => principal,
+      registerRoutes: (groups) => registerThumbRoutes(groups, deps),
+    });
+
+    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
+
+    expect(res.status).toBe(200);
+    expect(download).toHaveBeenCalledWith("/photo.jpg");
   });
 });

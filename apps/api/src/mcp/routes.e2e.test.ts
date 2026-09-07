@@ -91,9 +91,6 @@ function stubSearchService(): SearchService {
         tookMs: 1,
       };
     },
-    status() {
-      return { available: true, semantic: false };
-    },
   };
 }
 
@@ -157,6 +154,13 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     homeTemplate: parseHomeTemplate("sftpgo:/{username}"),
     indexRootNames: new Set(["sftpgo"]),
     searchService: stubSearchService(),
+    scopeResolver: {
+      verifiedIndexScopes: async () => ({
+        available: true,
+        scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+      }),
+    },
+    identities: repos.identities,
     fdrivePublicUrl: "https://fdrive.example.com",
     indexerClient: createIndexerExtractClient({
       baseUrl: "http://indexer.test",

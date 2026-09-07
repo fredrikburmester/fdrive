@@ -1,4 +1,4 @@
-import type { HomeTemplate, StorageProvider } from "@fdrive/core";
+import type { Scope, StorageProvider } from "@fdrive/core";
 import type { Identity, Repos, Session, WopiLockRepo } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import type { EventBus } from "../events/bus.js";
@@ -52,7 +52,15 @@ export interface OfficeDeps {
     callback: (scope: { files: OfficeFileRepo; locks: WopiLockRepo }) => Promise<T>,
   ) => Promise<T>;
   readonly clock: () => Date;
-  readonly location: () => Promise<{ providerId: string; homeTemplate: HomeTemplate } | null>;
+  /**
+   * Resolves `identity`'s trusted, administrator-controlled scope mapping
+   * (`ScopeResolver.configuredMappings`, not `verifiedIndexScopes`: office
+   * must keep working when the indexer is down), or `null` when the
+   * identity's provider does not match the currently configured connection.
+   */
+  readonly location: (
+    identity: Identity,
+  ) => Promise<{ providerId: string; scopes: readonly Scope[] } | null>;
   readonly storageFactory: (
     identityId: string,
     providerId: string,
@@ -64,7 +72,8 @@ export interface OfficeActor {
   readonly identity: Identity;
   readonly session: Session;
   readonly storage: StorageProvider;
-  readonly homeTemplate: HomeTemplate;
+  /** The identity's configured scope mapping, resolved once when the actor was built. */
+  readonly scopes: readonly Scope[];
 }
 export interface OpenedFile {
   readonly actor: OfficeActor;

@@ -1,15 +1,19 @@
-import type { SearchResponse, SearchStatusResponse } from "@fdrive/contracts";
+import type { SearchResponse } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
+import type { Identity } from "@fdrive/db";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import { buildIdentity } from "../scoping/test-fixtures/index.ts";
+import type { ScopeStatus } from "../scoping/types.ts";
 import {
   DEFAULT_SEARCH_LIMIT,
   MAX_SEARCH_LIMIT,
   parseSearchLimit,
   registerSearchRoutes,
+  type SearchRoutesDeps,
 } from "./routes.js";
 import type { SearchService, SearchServiceInput } from "./service.js";
 
@@ -39,19 +43,48 @@ const EMPTY_RESPONSE: SearchResponse = {
   tookMs: 1,
 };
 
+const IDENTITY: Identity = buildIdentity({ id: "00000000-0000-4000-8000-0000000000a1" });
+
+const AVAILABLE_STATUS: ScopeStatus = {
+  status: "available",
+  reason: "ok",
+  usesOverride: false,
+  virtualPrefixes: ["/"],
+  warning: "warning",
+  isAdmin: false,
+};
+
 function notImplemented(): never {
   throw new Error("not used in this test");
 }
 
-function buildApp(searchService: SearchService, username = "alice") {
+function fakeResolver(overrides: Partial<SearchRoutesDeps["resolver"]> = {}) {
+  return {
+    verifiedIndexScopes:
+      overrides.verifiedIndexScopes ?? (async () => ({ available: true as const, scopes: [] })),
+    status: overrides.status ?? (async () => AVAILABLE_STATUS),
+  };
+}
+
+function buildApp(
+  searchService: SearchService,
+  overrides: {
+    readonly resolver?: SearchRoutesDeps["resolver"];
+    readonly identity?: Identity | null;
+    readonly semanticEnabled?: boolean;
+    readonly principal?: Partial<Principal>;
+  } = {},
+) {
   const storage = {} as StorageProvider;
   const principal: Principal = {
     accountId: "00000000-0000-4000-8000-000000000001",
     identityId: "00000000-0000-4000-8000-0000000000a1",
-    username,
+    username: "alice",
     storage,
     isAdmin: false,
+    ...overrides.principal,
   };
+  const identity = overrides.identity === undefined ? IDENTITY : overrides.identity;
 
   return createApp({
     config: loadConfig(REQUIRED_ENV),
@@ -59,14 +92,19 @@ function buildApp(searchService: SearchService, username = "alice") {
     version: "1.0.0",
     startedAt: new Date("2024-06-01T00:00:00.000Z"),
     principalResolver: async () => principal,
-    registerRoutes: (groups) => registerSearchRoutes(groups, { searchService }),
+    registerRoutes: (groups) =>
+      registerSearchRoutes(groups, {
+        searchService,
+        resolver: overrides.resolver ?? fakeResolver(),
+        identities: { get: async () => identity },
+        semanticEnabled: overrides.semanticEnabled ?? false,
+      }),
   });
 }
 
 function fakeSearchService(overrides: Partial<SearchService> = {}): SearchService {
   return {
     search: overrides.search ?? (async () => notImplemented()),
-    status: overrides.status ?? notImplemented,
   };
 }
 
@@ -114,30 +152,62 @@ describe("GET /api/v1/search", () => {
     expect(res.status).toBe(400);
   });
 
-  it("passes the identity's username, query, filters, and limit to the service", async () => {
+  it("passes the identity's verified scopes, query, filters, and limit to the service", async () => {
     let received: SearchServiceInput | undefined;
     const search = vi.fn(async (input: SearchServiceInput) => {
       received = input;
       return { ...EMPTY_RESPONSE, query: input.query };
     });
-    const app = buildApp(fakeSearchService({ search }), "alice");
+    const scopes = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
+    const app = buildApp(fakeSearchService({ search }), {
+      resolver: fakeResolver({ verifiedIndexScopes: async () => ({ available: true, scopes }) }),
+    });
 
     const res = await app.request(
       "/api/v1/search?q=readme&limit=5&ext=pdf&folder=%2Fdocs&after=2026-01-01&before=2026-02-01",
     );
 
     expect(res.status).toBe(200);
-    expect(received).toEqual({
-      username: "alice",
-      query: "readme",
-      filters: {
-        exts: [".pdf"],
-        folder: "/docs",
-        after: new Date("2026-01-01"),
-        before: new Date("2026-02-01"),
-      },
-      limit: 5,
+    expect(received?.scopes).toEqual(scopes);
+    expect(received?.query).toBe("readme");
+    expect(received?.filters).toEqual({
+      exts: [".pdf"],
+      folder: "/docs",
+      after: new Date("2026-01-01"),
+      before: new Date("2026-02-01"),
     });
+    expect(received?.limit).toBe(5);
+    expect(received?.authorizer).toBeDefined();
+  });
+
+  it("passes an empty scope list when the identity's verified scopes are unavailable", async () => {
+    let received: SearchServiceInput | undefined;
+    const search = vi.fn(async (input: SearchServiceInput) => {
+      received = input;
+      return EMPTY_RESPONSE;
+    });
+    const app = buildApp(fakeSearchService({ search }), {
+      resolver: fakeResolver({
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
+      }),
+    });
+
+    await app.request("/api/v1/search?q=readme");
+
+    expect(received?.scopes).toEqual([]);
+  });
+
+  it("passes an empty scope list when the caller's identity no longer exists", async () => {
+    let received: SearchServiceInput | undefined;
+    const search = vi.fn(async (input: SearchServiceInput) => {
+      received = input;
+      return EMPTY_RESPONSE;
+    });
+    const app = buildApp(fakeSearchService({ search }), { identity: null });
+
+    await app.request("/api/v1/search?q=readme");
+
+    expect(received?.scopes).toEqual([]);
   });
 
   it("returns the service's response as JSON", async () => {
@@ -165,14 +235,38 @@ describe("GET /api/v1/search", () => {
 });
 
 describe("GET /api/v1/search/status", () => {
-  it("returns the service's status", async () => {
-    const status = vi.fn((): SearchStatusResponse => ({ available: true, semantic: false }));
-    const app = buildApp(fakeSearchService({ status }));
+  it("reports available when the resolver reports available", async () => {
+    const app = buildApp(fakeSearchService(), {
+      resolver: fakeResolver({ status: async () => AVAILABLE_STATUS }),
+      semanticEnabled: true,
+    });
 
     const res = await app.request("/api/v1/search/status");
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ available: true, semantic: false });
+    expect(body).toEqual({ available: true, semantic: true });
+  });
+
+  it("reports unavailable when the resolver reports unavailable", async () => {
+    const app = buildApp(fakeSearchService(), {
+      resolver: fakeResolver({
+        status: async () => ({ ...AVAILABLE_STATUS, status: "unavailable", reason: "no_roots" }),
+      }),
+    });
+
+    const res = await app.request("/api/v1/search/status");
+    const body = await res.json();
+
+    expect(body).toEqual({ available: false, semantic: false });
+  });
+
+  it("reports unavailable when the caller's identity no longer exists", async () => {
+    const app = buildApp(fakeSearchService(), { identity: null });
+
+    const res = await app.request("/api/v1/search/status");
+    const body = await res.json();
+
+    expect(body).toEqual({ available: false, semantic: false });
   });
 });

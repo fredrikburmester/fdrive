@@ -3,6 +3,7 @@ import { parseHomeTemplate } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
+import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import type { SearchService } from "../search/service.js";
 import {
   fileInfoInScope,
@@ -111,7 +112,6 @@ function fakePrincipal(storage: StorageProvider = fakeStorage()): Principal {
 function fakeSearchService(overrides: Partial<SearchService> = {}): SearchService {
   return {
     search: overrides.search ?? (async () => fail("search")),
-    status: overrides.status ?? (() => ({ available: true, semantic: true })),
   };
 }
 
@@ -140,6 +140,8 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
     homeTemplate: HOME_TEMPLATE,
     indexRootNames: new Set(["sftpgo"]),
     searchService: fakeSearchService(),
+    scopeResolver: { verifiedIndexScopes: async () => ({ available: true as const, scopes: [] }) },
+    identities: { get: async () => buildIdentity() },
     fdrivePublicUrl: "https://fdrive.example.com",
     indexerClient: null,
     writesEnabled: false,
@@ -215,6 +217,81 @@ describe("runSearch", () => {
     const result = await runSearch(deps, fakePrincipal(), { query: "x" });
 
     expect(result).toEqual({ query: "x", results: [], available: false });
+  });
+
+  it("passes the identity's verified scopes to the search service", async () => {
+    const scopes: readonly Scope[] = [
+      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+    ];
+    let received: Parameters<SearchService["search"]>[0] | undefined;
+    const deps = baseDeps({
+      scopeResolver: { verifiedIndexScopes: async () => ({ available: true, scopes }) },
+      searchService: fakeSearchService({
+        search: async (input) => {
+          received = input;
+          return {
+            query: input.query,
+            sections: { folders: [], files: [], content: [] },
+            degraded: false,
+            unavailable: false,
+            tookMs: 0,
+          };
+        },
+      }),
+    });
+
+    await runSearch(deps, fakePrincipal(), { query: "report" });
+
+    expect(received?.scopes).toEqual(scopes);
+    expect(received?.authorizer).toBeDefined();
+  });
+
+  it("passes an empty scope list when the caller's verified scopes are unavailable", async () => {
+    let received: Parameters<SearchService["search"]>[0] | undefined;
+    const deps = baseDeps({
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
+      },
+      searchService: fakeSearchService({
+        search: async (input) => {
+          received = input;
+          return {
+            query: input.query,
+            sections: { folders: [], files: [], content: [] },
+            degraded: false,
+            unavailable: true,
+            tookMs: 0,
+          };
+        },
+      }),
+    });
+
+    await runSearch(deps, fakePrincipal(), { query: "report" });
+
+    expect(received?.scopes).toEqual([]);
+  });
+
+  it("passes an empty scope list when the caller's identity no longer exists", async () => {
+    let received: Parameters<SearchService["search"]>[0] | undefined;
+    const deps = baseDeps({
+      identities: { get: async () => null },
+      searchService: fakeSearchService({
+        search: async (input) => {
+          received = input;
+          return {
+            query: input.query,
+            sections: { folders: [], files: [], content: [] },
+            degraded: false,
+            unavailable: true,
+            tookMs: 0,
+          };
+        },
+      }),
+    });
+
+    await runSearch(deps, fakePrincipal(), { query: "report" });
+
+    expect(received?.scopes).toEqual([]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { parseHomeTemplate } from "@fdrive/core";
+import { parseHomeTemplate, scopesFor } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
@@ -10,6 +10,7 @@ import {
   type IndexerListenerLogger,
 } from "../../src/events/indexer-listener.js";
 import { createMetadataService } from "../../src/metadata/service.js";
+import { createMemoryStorage } from "../fixtures/memory-storage.js";
 
 function createSilentLogger(): IndexerListenerLogger {
   return { warn: () => undefined };
@@ -64,6 +65,8 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
       const received: BusEvent[] = [];
       bus.subscribe({ identityId: identity.id }, (event) => received.push(event));
 
+      const storage = createMemoryStorage({ "/b.txt": "moved contents" });
+      const homeTemplate = parseHomeTemplate("sftpgo:/{username}");
       const listener = createIndexerListener({
         createClient: () => createPgNotificationClient(postgres.connectionString),
         identities: repos.identities,
@@ -72,7 +75,13 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
         favorites: repos.favorites,
         metadata,
         bus,
-        homeTemplate: parseHomeTemplate("sftpgo:/{username}"),
+        configuredMappingsFor: async (id) => ({
+          available: true,
+          providerId: id.providerId,
+          homeTemplateRaw: "sftpgo:/{username}",
+          scopes: scopesFor({ template: homeTemplate, username: id.externalUsername }),
+        }),
+        storageForIdentity: async () => storage,
         indexRootNames: new Set(["sftpgo"]),
         clock: () => new Date(),
         logger: createSilentLogger(),

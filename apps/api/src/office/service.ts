@@ -11,7 +11,6 @@ import {
   isStorageError,
   joinPath,
   parentPath,
-  scopesFor,
   toFsPath,
 } from "@fdrive/core";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
@@ -35,10 +34,7 @@ export function officeLocation(
   actor: OfficeActor,
   path: string,
 ): { providerId: string; rootName: string; path: string } {
-  const mapped = toFsPath(
-    scopesFor({ template: actor.homeTemplate, username: actor.identity.externalUsername }),
-    path,
-  );
+  const mapped = toFsPath(actor.scopes, path);
   if (mapped === null) throw new WopiError(404);
   return {
     providerId: actor.identity.providerId,
