@@ -54,17 +54,48 @@ server process.
 | Tool | Purpose |
 |---|---|
 | `search` | Hybrid search (semantic + full-text + filename) over the identity's scope, backed by the same `SearchService` as the web UI's search panel. Filters: `path_prefix`, `ext`, `modified_after`, `modified_before`, `limit`. Results carry a `url` pointing at fdrive (`<FDRIVE_PUBLIC_URL>/view<path>`), snippets, and a relevance score. |
-| `find_files` | Metadata-only lookup (no content): `name_contains`, `path_prefix`, `ext`, date range, `min_size_mb`, `order_by` (`modified_desc`\|`modified_asc`\|`size_desc`\|`path`), `limit`. Backed by the index, not live storage. |
-| `list_directory` | Live listing through `principal.storage.list`, authoritative and always up to date, including files the indexer has not seen yet. |
-| `read_file_text` | Live text extraction via the indexer's internal `POST /extract` endpoint (`FDRIVE_INDEXER_URL`). Supports `offset`/`max_chars` paging. Returns a tool error when `FDRIVE_INDEXER_URL` is not configured. |
-| `file_info` | Index metadata for one file (size, dates, hash, text status) plus every other path in scope holding an identical copy (same sha256). |
-| `find_duplicates` | Groups of byte-identical files, largest waste first, optionally scoped to a `path_prefix`. |
-| `similar_files` | Files whose average chunk embedding is closest to the given file's, for finding other versions of the same document. Requires the file to already be indexed. |
-| `folder_overview` | Aggregate size, file count, newest modification, and top file types per sub-folder, `depth` levels below `path_prefix`. |
-| `index_stats` | Health of the index for the identity's scope: files tracked, chunks embedded, and whether write tools are enabled. |
-| `create_folder` | **Write, gated.** Creates a folder (and parents) through `principal.storage`, so SFTPGo permissions and fdrive's own change events apply. |
-| `move_path` | **Write, gated.** Moves or renames a path through `principal.storage`. When both `src` and `dst` resolve into the same configured index root, records a row in `idx.moves` (`actor = "mcp"`) so the index can update in place instead of re-extracting, and so the move shows up in `recent_moves`. |
-| `recent_moves` | Audit log of moves made through this MCP server (`actor = "mcp"`), newest first, scoped to the identity's index roots. |
+| `find_files` | Metadata-only lookup (no content): `name_contains`, `path_prefix`, `ext`, date range, `min_size_mb`, `order_by` (`modified_desc`\|`modified_asc`\|`size_desc`\|`path`), `limit`. Backed by the index, not live storage. `total_matches` counts only the files this call actually verified are readable right now, never a raw index count. |
+| `list_directory` | Live listing through `principal.storage.list`, authoritative and always up to date, including files the indexer has not seen yet, and authorized by SFTPGo itself: works even when the index or its scope verification is unavailable. |
+| `read_file_text` | Live text extraction via the indexer's internal `POST /extract` endpoint (`FDRIVE_INDEXER_URL`), only after a live download check passes. Supports `offset`/`max_chars` paging. Returns a tool error when `FDRIVE_INDEXER_URL` is not configured, the path is out of scope, or the read is denied (the same message either way, so a denial never discloses that a path exists). |
+| `file_info` | Index metadata for one file (size, dates, hash, text status) plus every other readable path in scope holding an identical copy (same sha256). A read-denied file is reported exactly like an unindexed one. |
+| `find_duplicates` | Groups of byte-identical, currently readable files, largest waste first, optionally scoped to a `path_prefix`. A group with fewer than two readable copies never appears; counts and wasted bytes are computed only from the copies that survive. |
+| `similar_files` | Files whose average chunk embedding is closest to the given file's, for finding other versions of the same document. Requires the file to already be indexed and readable right now (the source file itself is live-read-checked, not only the candidates it is compared against). |
+| `folder_overview` | Aggregate size, file count, newest modification, and top file types per sub-folder, `depth` levels below `path_prefix`. Bytes are only ever added for a file that is both in scope and currently readable. |
+| `index_stats` | Health of the identity's scope: files tracked, chunks embedded, and whether write tools are enabled, computed only from files this call individually verified are readable, never a raw scope-wide count. |
+| `create_folder` | **Write, gated.** Creates a folder (and parents) through `principal.storage`, so SFTPGo permissions and fdrive's own change events apply. Storage-native, like `list_directory`: works even when the index is unavailable. |
+| `move_path` | **Write, gated.** Moves or renames a path through `principal.storage` (storage-native, independent of index availability). When both `src` and `dst` resolve into the same configured index root, records a row in `idx.moves` (`actor = "mcp"`) so the index can update in place instead of re-extracting, and so the move shows up in `recent_moves`. |
+| `recent_moves` | Audit log of moves made through this MCP server (`actor = "mcp"`), newest first, scoped to the identity's index roots. A move only appears once both its source and destination round-trip into scope and its destination passes a live read check; a hidden or shadowed source is never disclosed even when the destination is fine. |
+
+## Scope and live authorization
+
+Every tool above that reads the index resolves the caller's *verified* index scopes
+(`ScopeResolver.verifiedIndexScopes`, see `docs/workflow/P5-SCOPES.md`) for the token's own linked
+identity, never a username/template fallback, and builds one bounded, request-local read authorizer
+against that identity's own storage. Concretely, before any name, hash, text status, snippet, size,
+or aggregate derived from the index can appear in a tool's result:
+
+1. The candidate's physical location is mapped to the caller's virtual path and back
+   (`roundTripVirtualPath`); a mismatch (a more specific scope override shadows the original
+   physical location) drops the candidate silently.
+2. A live read check runs against the caller's own storage: `storage.download` (opened and
+   immediately cancelled, never buffered) for a file, `storage.list` for a folder. Listing or
+   stat succeeding is never treated as proof of read permission on its own.
+
+When verified scopes are unavailable for the caller (no configured index roots, a broken mapping,
+or the indexer being unreachable), every index-backed tool answers with a short, reason-carrying
+error (for example `index features are unavailable for this identity (no_roots)`) rather than a
+partial or best-guess mapping. `list_directory`, `create_folder`, and `move_path` are unaffected:
+they go straight through `principal.storage`, authorized by SFTPGo itself, and keep working even
+when indexing is down entirely.
+
+**`partial: true`.** An aggregate or listing tool (`find_files`, `find_duplicates`, `similar_files`,
+`folder_overview`, `index_stats`, `file_info`'s `identical_copies`, `recent_moves`) authorizes at
+most 2000 candidate files per call, six at a time. Whenever that cap, a denial, or an unavailable
+probe left something out of what the underlying index query reported, the response carries an extra
+`partial: true` field. Treat its absence as "everything this call examined was returned," never as
+"this is the whole index": a response can still be an undercount of the true state of the caller's
+share if, for example, a folder has more than 2000 files in scope. `partial` never appears when
+every examined candidate was returned.
 
 ## Write gating
 
@@ -119,11 +150,20 @@ building result links. To repoint it at fdrive:
 
 - Pure helpers (`apps/api/src/mcp/format.ts`, `scope-context.ts`, `urls.ts`) and every tool's
   business logic (`apps/api/src/mcp/handlers.ts`) are unit tested with stubbed `IndexQueries`,
-  `SearchService`, and `StorageProvider`, including the scope-enforcement branches ("path is
-  outside this identity's scope") using hand-built `ScopeContext` fixtures.
+  `SearchService`, `ReadAuthorizer`, and `StorageProvider`, including the scope-enforcement branches
+  ("path is outside this identity's scope"), exact denied-file exclusion from every tool and
+  aggregate, literal percent-sign paths, the 2000-candidate cap and its `partial: true`, and that
+  scopes always resolve from the bearer token's own identity (never a cookie's), using hand-built
+  `ScopeContext` and fake `ReadAuthorizer` fixtures.
 - `apps/api/src/mcp/routes.e2e.test.ts` exercises the whole stack end to end: a real
   `@hono/node-server` on an ephemeral port, the official MCP TypeScript SDK's client
   (`StreamableHTTPClientTransport`) over real HTTP, the in-memory fake SFTPGo server for storage,
   memory-backed repositories for tokens and identities, and a stub indexer fetch. It covers
   initialize, `tools/list`, calling every tool at least once, `create_folder` gated off then on,
   token-in-path auth, bearer auth, and 401 with no credentials.
+- `apps/api/test/integration/mcp-scopes-sftp.test.ts` runs every scope-sensitive tool above against
+  a real SFTPGo container and a real, migrated Postgres database with two identities (one full
+  access with a virtual-folder override, one list-only) to prove: a shadowed physical location never
+  surfaces under an override's virtual name, an unreadable file never appears in `find_files` or
+  `file_info` even though it is indexed, a duplicate group keeps only its readable copies, and a
+  hidden `recent_moves` source is never disclosed.

@@ -414,6 +414,43 @@ describe("index-queries", () => {
     });
   });
 
+  describe("statsForFileIds", () => {
+    it("counts chunks only for the given file ids, ignoring other files in scope", async () => {
+      const rootId = await insertRoot("primary");
+      const included = await insertFile(rootId, "alice/a.txt");
+      const excluded = await insertFile(rootId, "alice/b.txt");
+      await insertChunk(included.id, 0, "text", rampVector(0));
+      await insertChunk(included.id, 1, "text");
+      await insertChunk(excluded.id, 0, "text", rampVector(0));
+
+      const stats = await queries.statsForFileIds([included.id]);
+
+      expect(stats.chunks).toBe(2);
+      expect(stats.chunksEmbedded).toBe(1);
+    });
+
+    it("returns zero counts for an empty id list without querying", async () => {
+      const stats = await queries.statsForFileIds([]);
+
+      expect(stats).toEqual({ chunks: 0, chunksEmbedded: 0 });
+    });
+
+    it("caps the id list defensively at MAX_STATS_FILE_ID_PARAMS", async () => {
+      const rootId = await insertRoot("primary");
+      const inCap = await insertFile(rootId, "alice/a.txt");
+      await insertChunk(inCap.id, 0, "text");
+      // A huge id far outside any real range: if the cap were not applied,
+      // this alone would not change the result, but this test exists to
+      // document and pin the defensive slice rather than only trusting the
+      // caller to have already capped its input.
+      const idsWithHugeTail = [inCap.id, ...Array.from({ length: 2500 }, (_, i) => 10_000_000 + i)];
+
+      const stats = await queries.statsForFileIds(idsWithHugeTail);
+
+      expect(stats.chunks).toBe(1);
+    });
+  });
+
   describe("duplicates", () => {
     it("groups files sharing a sha256 and size", async () => {
       const rootId = await insertRoot("primary");
