@@ -80,8 +80,10 @@ export const ROUTES = {
   search: {
     /** GET: hybrid search (semantic + full-text + filename) -> `SearchResponse`. 400 for an empty `q`. */
     query: "/api/v1/search",
-    /** GET: whether search is configured, and whether semantic search is up -> `SearchStatusResponse`. */
+    /** GET: whether search is configured, and whether semantic/image search is up -> `SearchStatusResponse`. */
     status: "/api/v1/search/status",
+    /** GET: image-content search over embedded thumbnails -> `ImageSearchResponse`. 400 for an empty `q`. */
+    images: "/api/v1/search/images",
   },
   /** GET: stream a cached WebP thumbnail for a file. 404 when none exists. */
   thumb: "/api/v1/thumb",
@@ -131,6 +133,12 @@ export const ROUTES = {
     search: "/api/v1/system/search",
     /** POST, admin only: re-extract and re-embed every root -> `SystemReembedResponse`. */
     searchReembed: "/api/v1/system/search/reembed",
+    /** GET, admin only: image search health, config, and index totals -> `SystemImageSearchResponse`. */
+    imageSearch: "/api/v1/system/image-search",
+    /** POST, admin only: backfill/rebuild image-content embeddings -> `IndexerThumbnailsRebuildResponse`. */
+    imageSearchRebuild: "/api/v1/system/image-search/rebuild",
+    /** POST, admin only: delete every image-content embedding -> `IndexerClearResponse`. */
+    imageSearchClear: "/api/v1/system/image-search/clear",
     /** GET, admin only: OCR schedule, last run, and settings -> `SystemOcrResponse`. */
     ocr: "/api/v1/system/ocr",
     /** PUT, admin only: update the OCR service's settings -> `OcrSettingsResponse`. */

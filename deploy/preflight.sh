@@ -79,7 +79,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   done
   if [[ "$known" -eq 0 ]]; then
     case "$key" in
-      FDRIVE_INDEX_ROOTS|FDRIVE_INDEXER_URL|FDRIVE_EMBED_URL|FDRIVE_OCR_URL|FDRIVE_THUMBS_DIR)
+      FDRIVE_INDEX_ROOTS|FDRIVE_INDEXER_URL|FDRIVE_EMBED_URL|FDRIVE_IMAGE_EMBED_URL|FDRIVE_OCR_URL|FDRIVE_THUMBS_DIR)
         # compose.yaml fixes these to the stack's own sidecar addresses and
         # the mounted root; a value in .env would be silently ignored, so it
         # is an error rather than a warning.

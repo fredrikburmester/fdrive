@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  ImageSearchHit,
+  ImageSearchQuery,
+  ImageSearchResponse,
   SearchHighlightRange,
   SearchHit,
   SearchQuery,
@@ -129,15 +132,83 @@ describe("SearchQuery", () => {
 
 describe("SearchStatusResponse", () => {
   it("parses a fully available status", () => {
-    expect(SearchStatusResponse.parse({ available: true, semantic: true })).toEqual({
+    expect(SearchStatusResponse.parse({ available: true, semantic: true, images: true })).toEqual({
       available: true,
       semantic: true,
+      images: true,
     });
   });
 
   it("parses an unavailable status", () => {
-    expect(SearchStatusResponse.safeParse({ available: false, semantic: false }).success).toBe(
-      true,
-    );
+    expect(
+      SearchStatusResponse.safeParse({ available: false, semantic: false, images: false }).success,
+    ).toBe(true);
+  });
+
+  it("parses a missing images field (an older API without image search)", () => {
+    expect(SearchStatusResponse.safeParse({ available: true, semantic: true }).success).toBe(true);
+  });
+});
+
+const VALID_IMAGE_HIT = {
+  path: "/photos/cat.jpg",
+  name: "cat.jpg",
+  ext: "jpg",
+  mime: "image/jpeg",
+  size: 1024,
+  modifiedAt: "2024-01-01T00:00:00.000Z",
+  score: 0.82,
+};
+
+describe("ImageSearchHit", () => {
+  it("parses a valid hit", () => {
+    expect(ImageSearchHit.parse(VALID_IMAGE_HIT)).toEqual(VALID_IMAGE_HIT);
+  });
+
+  it("rejects a negative size", () => {
+    expect(ImageSearchHit.safeParse({ ...VALID_IMAGE_HIT, size: -1 }).success).toBe(false);
+  });
+
+  it("allows a null mime", () => {
+    expect(ImageSearchHit.safeParse({ ...VALID_IMAGE_HIT, mime: null }).success).toBe(true);
+  });
+});
+
+describe("ImageSearchResponse", () => {
+  it("parses a full response", () => {
+    const response = {
+      query: "cat",
+      hits: [VALID_IMAGE_HIT],
+      unavailable: false,
+      partial: true,
+      tookMs: 12,
+    };
+    expect(ImageSearchResponse.parse(response)).toEqual(response);
+  });
+
+  it("parses a response without partial", () => {
+    const response = { query: "cat", hits: [], unavailable: true, tookMs: 0 };
+    expect(ImageSearchResponse.safeParse(response).success).toBe(true);
+  });
+
+  it("rejects a negative tookMs", () => {
+    expect(
+      ImageSearchResponse.safeParse({
+        query: "cat",
+        hits: [],
+        unavailable: false,
+        tookMs: -1,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("ImageSearchQuery", () => {
+  it("parses q with an optional limit", () => {
+    expect(ImageSearchQuery.parse({ q: "cat", limit: "10" })).toEqual({ q: "cat", limit: "10" });
+  });
+
+  it("rejects an empty q", () => {
+    expect(ImageSearchQuery.safeParse({ q: "" }).success).toBe(false);
   });
 });

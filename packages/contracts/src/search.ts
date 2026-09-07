@@ -81,6 +81,58 @@ export type SearchQuery = z.infer<typeof SearchQuery>;
 export const SearchStatusResponse = z.object({
   available: z.boolean(),
   semantic: z.boolean(),
+  /**
+   * Whether image-content search (`FDRIVE_IMAGE_EMBED_URL`) is configured.
+   * Optional (rather than required) so a client built against an older
+   * contract version still parses a response from a newer API, and vice
+   * versa.
+   */
+  images: z.boolean().optional(),
 });
 
 export type SearchStatusResponse = z.infer<typeof SearchStatusResponse>;
+
+/**
+ * One image-content search result: a file whose thumbnail was embedded and
+ * matched by cosine similarity to the query text's embedding. There are no
+ * snippets (no matched text to excerpt) and a thumbnail is always assumed to
+ * be present, since the row only exists because a thumbnail was embedded.
+ */
+export const ImageSearchHit = z.object({
+  path: z.string(),
+  name: z.string(),
+  ext: z.string(),
+  mime: z.string().nullable(),
+  size: z.number().int().min(0),
+  modifiedAt: z.iso.datetime(),
+  score: z.number(),
+});
+
+export type ImageSearchHit = z.infer<typeof ImageSearchHit>;
+
+/**
+ * The response to `GET /api/v1/search/images`. `unavailable` is true when
+ * the caller has no verified index scope, image search is not configured, or
+ * the sidecar did not return an embedding for the query (a text-embed
+ * failure is not "degraded"; there is no keyword fallback for images).
+ * `partial`, when present and true, means the bounded internal fanout was
+ * exhausted before every match could be considered, or a live permission
+ * check reported "unavailable" for some candidate.
+ */
+export const ImageSearchResponse = z.object({
+  query: z.string(),
+  hits: z.array(ImageSearchHit),
+  unavailable: z.boolean(),
+  partial: z.boolean().optional(),
+  tookMs: z.number().int().min(0),
+});
+
+export type ImageSearchResponse = z.infer<typeof ImageSearchResponse>;
+
+/** Query parameters for `GET /api/v1/search/images`. Every field arrives as a raw string. */
+export const ImageSearchQuery = z.object({
+  q: z.string().min(1, "q must not be empty"),
+  limit: z.string().optional(),
+});
+
+export type ImageSearchQuery = z.infer<typeof ImageSearchQuery>;

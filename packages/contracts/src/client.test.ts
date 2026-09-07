@@ -526,14 +526,43 @@ describe("createApiClient: search", () => {
 describe("createApiClient: searchStatus", () => {
   it("gets search status and returns SearchStatusResponse", async () => {
     const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, { available: true, semantic: false }),
+      jsonResponse(200, { available: true, semantic: false, images: false }),
     ]);
     const client = createApiClient({ fetch: fetchStub });
 
     const result = await client.searchStatus();
 
-    expect(result).toEqual({ available: true, semantic: false });
+    expect(result).toEqual({ available: true, semantic: false, images: false });
     expect(calls[0]?.url).toBe("/api/v1/search/status");
+  });
+});
+
+const VALID_IMAGE_SEARCH_RESPONSE = {
+  query: "cat",
+  hits: [],
+  unavailable: false,
+  tookMs: 9,
+};
+
+describe("createApiClient: searchImages", () => {
+  it("gets search/images with just q and returns ImageSearchResponse", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_IMAGE_SEARCH_RESPONSE)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.searchImages("cat");
+
+    expect(result).toEqual(VALID_IMAGE_SEARCH_RESPONSE);
+    expect(calls[0]?.url).toBe("/api/v1/search/images?q=cat");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("serializes an optional limit", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_IMAGE_SEARCH_RESPONSE)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    await client.searchImages("cat", { limit: 5 });
+
+    expect(calls[0]?.url).toBe("/api/v1/search/images?q=cat&limit=5");
   });
 });
 
@@ -806,6 +835,50 @@ describe("createApiClient: system", () => {
 
     expect(await client.systemReembed()).toEqual(result);
     expect(calls[0]?.init.method).toBe("POST");
+  });
+
+  it("gets system/image-search", async () => {
+    const result = {
+      configured: true,
+      healthy: true,
+      model: "google/siglip2-large-patch16-256",
+      dim: 1024,
+      embedded: 3,
+      embeddedModel: "google/siglip2-large-patch16-256",
+    };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemImageSearch()).toEqual(result);
+    expect(calls[0]?.url).toBe("/api/v1/system/image-search");
+  });
+
+  it("posts system/image-search/rebuild with an empty body by default", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 5 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemImageSearchRebuild()).toEqual({ started: true, total: 5 });
+    expect(calls[0]?.url).toBe("/api/v1/system/image-search/rebuild");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
+  });
+
+  it("posts system/image-search/rebuild with force", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 2 })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemImageSearchRebuild({ force: true })).toEqual({
+      started: true,
+      total: 2,
+    });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ force: true });
+  });
+
+  it("posts system/image-search/clear", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemImageSearchClear()).toEqual({ started: true });
+    expect(calls[0]?.url).toBe("/api/v1/system/image-search/clear");
   });
 
   it("gets system/ocr", async () => {

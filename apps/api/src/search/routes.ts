@@ -1,4 +1,6 @@
 import {
+  ImageSearchQuery,
+  type ImageSearchResponse,
   ROUTES,
   SearchQuery,
   type SearchResponse,
@@ -10,6 +12,7 @@ import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
+import type { ImageSearchService } from "./image-service.js";
 import type { SearchService } from "./service.js";
 
 const API_PREFIX = "/api/v1";
@@ -21,10 +24,13 @@ function routePath(fullPath: string): string {
 
 export interface SearchRoutesDeps {
   readonly searchService: SearchService;
+  readonly imageSearchService: ImageSearchService;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes" | "status">;
   readonly identities: Pick<IdentityRepo, "get">;
   /** Whether `FDRIVE_EMBED_URL` is configured; `search/status` reports this directly. */
   readonly semanticEnabled: boolean;
+  /** Whether `FDRIVE_IMAGE_EMBED_URL` is configured; `search/status` reports this directly. */
+  readonly imageSearchEnabled: boolean;
 }
 
 /** Default and maximum number of hits returned by `GET /api/v1/search`. */
@@ -92,6 +98,32 @@ export function registerSearchRoutes(
     return c.json(body);
   });
 
+  authed.get(routePath(ROUTES.search.images), async (c) => {
+    const result = ImageSearchQuery.safeParse(c.req.query());
+    if (!result.success) {
+      throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
+    }
+    const principal = c.get("principal");
+    const limit = parseSearchLimit(result.data.limit);
+
+    const identity = await deps.identities.get(principal.identityId);
+    const verified =
+      identity === null
+        ? { available: false as const }
+        : await deps.resolver.verifiedIndexScopes(identity);
+    const authorizer = createReadAuthorizer({ storage: principal.storage });
+
+    const response = await deps.imageSearchService.search({
+      scopes: verified.available ? verified.scopes : [],
+      authorizer,
+      query: result.data.q,
+      limit,
+    });
+
+    const body: ImageSearchResponse = response;
+    return c.json(body);
+  });
+
   authed.get(routePath(ROUTES.search.status), async (c) => {
     const principal = c.get("principal");
     const identity = await deps.identities.get(principal.identityId);
@@ -100,6 +132,7 @@ export function registerSearchRoutes(
     const body: SearchStatusResponse = {
       available: status?.status === "available",
       semantic: deps.semanticEnabled,
+      images: deps.imageSearchEnabled,
     };
     return c.json(body);
   });
