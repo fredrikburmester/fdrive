@@ -452,3 +452,12 @@ available and followed the project instructions.
   logged-in grid never requests thumbnails, and folder size is possible from the index only.
   Running: `grid-thumbs` (`.worktrees/grid-thumbs`), `folder-size` (`.worktrees/folder-size`),
   `image-search-api` rework. Three worker slots in use; `image-search-web` queued.
+- Merged: `grid-thumbs` (c3356b4). Grid tiles request the 256px thumb for image files
+  (`lib/files/thumbnail.ts` reuses `previewKindFor`), icon fallback on error; the activity panel
+  list is a plain `max-h-72 overflow-y-auto` region inside a `max-h-[70vh]` flex card, so the
+  header, progress and collapse control stay put while the list scrolls (Base UI ScrollArea root
+  max-h never bounded its viewport). Primary follow-up (1df9749): the 32px icon slot was too small
+  to read as a picture, so the slot is a 56px square (icons stay 32px centred) and
+  `GRID_TILE_HEIGHT` is 128. Gates: lint 1030, web typecheck, web 1376 tests; Playwright
+  `grid-thumbs.spec.ts` 2/2 in the worker checkout. Pane: /files/photos shows six real thumbnails,
+  the mixed root aligns icons and pictures. Running: `folder-size`, `image-search-api` rework.
