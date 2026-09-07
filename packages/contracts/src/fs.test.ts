@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  ArchiveEntriesFormat,
+  ArchiveEntriesResponse,
+  ArchiveEntry,
   CompressRequest,
   CopyRequest,
   DeleteRequest,
@@ -312,5 +315,81 @@ describe("ExtractRequest", () => {
 
   it("rejects a missing path", () => {
     expect(ExtractRequest.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("ArchiveEntriesFormat", () => {
+  it.each(["zip", "tar", "tar.gz", "tar.zst"])("accepts %s", (format) => {
+    expect(ArchiveEntriesFormat.safeParse(format).success).toBe(true);
+  });
+
+  it("rejects a bare gz (no listable entries of its own)", () => {
+    expect(ArchiveEntriesFormat.safeParse("gz").success).toBe(false);
+  });
+
+  it("rejects an unknown format", () => {
+    expect(ArchiveEntriesFormat.safeParse("rar").success).toBe(false);
+  });
+});
+
+describe("ArchiveEntry", () => {
+  const VALID_FILE_ENTRY = {
+    path: "dir/file.txt",
+    kind: "file",
+    size: 42,
+    modifiedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("parses a valid file entry", () => {
+    expect(ArchiveEntry.parse(VALID_FILE_ENTRY)).toEqual(VALID_FILE_ENTRY);
+  });
+
+  it("parses a directory entry", () => {
+    expect(ArchiveEntry.safeParse({ ...VALID_FILE_ENTRY, kind: "dir" }).success).toBe(true);
+  });
+
+  it("accepts a null modifiedAt", () => {
+    expect(ArchiveEntry.safeParse({ ...VALID_FILE_ENTRY, modifiedAt: null }).success).toBe(true);
+  });
+
+  it("rejects a negative size", () => {
+    expect(ArchiveEntry.safeParse({ ...VALID_FILE_ENTRY, size: -1 }).success).toBe(false);
+  });
+
+  it("rejects an unknown kind", () => {
+    expect(ArchiveEntry.safeParse({ ...VALID_FILE_ENTRY, kind: "symlink" }).success).toBe(false);
+  });
+});
+
+describe("ArchiveEntriesResponse", () => {
+  const VALID_ENTRY = {
+    path: "dir/file.txt",
+    kind: "file",
+    size: 42,
+    modifiedAt: null,
+  };
+
+  it("parses a valid payload", () => {
+    const payload = { format: "zip", entries: [VALID_ENTRY], truncated: false };
+    expect(ArchiveEntriesResponse.parse(payload)).toEqual(payload);
+  });
+
+  it("accepts an empty entries array", () => {
+    expect(
+      ArchiveEntriesResponse.safeParse({ format: "tar", entries: [], truncated: false }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an invalid entry in the array", () => {
+    const payload = {
+      format: "zip",
+      entries: [{ ...VALID_ENTRY, size: -1 }],
+      truncated: false,
+    };
+    expect(ArchiveEntriesResponse.safeParse(payload).success).toBe(false);
+  });
+
+  it("rejects a missing truncated flag", () => {
+    expect(ArchiveEntriesResponse.safeParse({ format: "zip", entries: [] }).success).toBe(false);
   });
 });

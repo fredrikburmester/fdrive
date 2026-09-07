@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import {
+  ArchiveEntriesResponse,
   CompressRequest,
   DuplicateRequest,
   EntryResponse,
@@ -8,6 +9,7 @@ import {
   type JobAccepted,
   JobStatus,
   type JobsResponse,
+  PathQuery,
   ROUTES,
 } from "@fdrive/contracts";
 import {
@@ -23,8 +25,14 @@ import {
 import type { AppHono, AuthedHono } from "../app.js";
 import { compressToTemp } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
+import {
+  peekArchive,
+  UnreadableArchiveError,
+  UnsupportedPeekFormatError,
+} from "../archive/peek.js";
 import { isZstdSupported, webStreamFromNodeReadable } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
+import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import { JobQueueFullError } from "../jobs/runner.js";
 import {
@@ -38,6 +46,21 @@ import {
   statEntry,
   toApiHttpError,
 } from "./routes.js";
+
+/**
+ * `registerArchiveRoutes`'s own dependencies: every `FsRoutesDeps` field
+ * (it is always called with the same object `registerFsRoutes` itself
+ * received) plus `archivePeekMaxBytes`, which is not part of the shared
+ * `FsRoutesDeps` interface (owned by `routes.ts`, outside this chunk's
+ * scope). `composition.ts` attaches it to the object it passes through
+ * `registerFsRoutes` via an intermediate variable rather than a fresh
+ * object literal, so TypeScript's excess-property check (which only
+ * applies to literals) never rejects it there; the field being optional
+ * here makes a plain `FsRoutesDeps` value (every existing caller, in
+ * `routes.ts` and in tests that do not care about this route) assignable
+ * without any further change.
+ */
+type ArchiveRoutesDeps = FsRoutesDeps & { readonly archivePeekMaxBytes?: number };
 
 const API_PREFIX = "/api/v1";
 
@@ -128,7 +151,7 @@ async function pathExists(storage: Principal["storage"], path: string): Promise<
  */
 export function registerArchiveRoutes(
   groups: { public: AppHono; authed: AuthedHono },
-  deps: FsRoutesDeps,
+  deps: ArchiveRoutesDeps,
 ): void {
   const { authed } = groups;
 
@@ -151,6 +174,7 @@ export function registerArchiveRoutes(
 
   authed.post(routePath(ROUTES.fs.compress), (c) => handleCompress(c, deps));
   authed.post(routePath(ROUTES.fs.extract), (c) => handleExtract(c, deps));
+  authed.get(routePath(ROUTES.fs.archiveEntries), (c) => handleArchiveEntries(c, deps));
 
   authed.get(routePath(ROUTES.fs.jobs), (c) => {
     const principal = c.get("principal");
@@ -263,6 +287,58 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
 
   const responseBody: JobAccepted = { jobId: job.id };
   return c.json(responseBody, 202);
+}
+
+function parsePathQuery(query: Record<string, string | undefined>): PathQuery {
+  const result = PathQuery.safeParse(query);
+  if (!result.success) {
+    throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
+  }
+  return result.data;
+}
+
+/**
+ * `GET /fs/archive-entries`: reads an archive's entries without extracting
+ * it, via `peekArchive`. Maps `UnsupportedPeekFormatError` (an extension
+ * `peekArchive` does not read) and `UnreadableArchiveError` (a recognized
+ * but corrupt archive) both to `bad_request`, matching every other
+ * storage-backed route's `StorageError` mapping otherwise.
+ */
+async function handleArchiveEntries(c: FsContext, deps: ArchiveRoutesDeps): Promise<Response> {
+  const principal = c.get("principal");
+  const query = parsePathQuery(c.req.query());
+  const path = normalizeOrThrow(query.path);
+  const maxBytes = deps.archivePeekMaxBytes ?? DEFAULT_ARCHIVE_PEEK_MAX_BYTES;
+
+  let result: Awaited<ReturnType<typeof peekArchive>>;
+  try {
+    result = await peekArchive({
+      storage: principal.storage,
+      path,
+      maxBytes,
+      signal: c.req.raw.signal,
+    });
+  } catch (error) {
+    if (error instanceof UnsupportedPeekFormatError || error instanceof UnreadableArchiveError) {
+      throw new ApiHttpError("bad_request", error.message);
+    }
+    if (isStorageError(error)) {
+      throw toApiHttpError(error);
+    }
+    throw error;
+  }
+
+  const responseBody: ArchiveEntriesResponse = ArchiveEntriesResponse.parse({
+    format: result.format,
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      kind: entry.kind,
+      size: entry.size,
+      modifiedAt: entry.modifiedAt?.toISOString() ?? null,
+    })),
+    truncated: result.truncated,
+  });
+  return c.json(responseBody);
 }
 
 function submitJob(

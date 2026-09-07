@@ -419,6 +419,23 @@ describe("createApiClient: extract", () => {
   });
 });
 
+describe("createApiClient: archiveEntries", () => {
+  it("gets fs/archive-entries with a path query", async () => {
+    const payload = {
+      format: "zip",
+      entries: [{ path: "dir/file.txt", kind: "file", size: 1, modifiedAt: null }],
+      truncated: false,
+    };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, payload)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    const result = await client.archiveEntries("/a.zip");
+
+    expect(result).toEqual(payload);
+    expect(calls[0]?.url).toBe("/api/v1/fs/archive-entries?path=%2Fa.zip");
+  });
+});
+
 describe("createApiClient: jobs", () => {
   it("gets fs/jobs and unwraps the jobs array", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { jobs: [VALID_JOB_STATUS] })]);

@@ -36,6 +36,7 @@ describe("ROUTES", () => {
       compress: "/api/v1/fs/compress",
       extract: "/api/v1/fs/extract",
       jobs: "/api/v1/fs/jobs",
+      archiveEntries: "/api/v1/fs/archive-entries",
       tags: "/api/v1/fs/tags",
     });
   });

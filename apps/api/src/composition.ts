@@ -425,18 +425,25 @@ export async function composeApp(
         config,
       });
       registerAdminRoutes(groups, { connectionStore, fetch: fetchImpl, clock });
-      registerFsRoutes(groups, {
+      // Built as a local variable (not a fresh object literal at the call
+      // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
+      // itself; see `fs/archive-routes.ts`'s `ArchiveRoutesDeps`) reaches
+      // `registerArchiveRoutes` without TypeScript's excess-property check
+      // rejecting it.
+      const fsRoutesDeps = {
         bus,
         clock,
         jobRunner,
         tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
+        archivePeekMaxBytes: config.fdriveArchivePeekMaxBytes,
         jsonMaxBytes: config.fdriveJsonMaxBytes,
         metadata: fsMetadata,
         ...(config.fdriveSftpgoTrashPath === null
           ? {}
           : { trashPath: config.fdriveSftpgoTrashPath }),
-      });
+      };
+      registerFsRoutes(groups, fsRoutesDeps);
       registerTrashRoutes(groups, {
         bus,
         clock,

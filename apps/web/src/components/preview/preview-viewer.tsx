@@ -1,5 +1,6 @@
 import type { FsEntry } from "@fdrive/contracts";
-import { previewKindFor, previewUnavailableReason } from "@/lib/preview/kind";
+import { previewKindFor } from "@/lib/preview/kind";
+import { ArchivePreview } from "./archive-preview";
 import { AudioViewer } from "./audio-viewer";
 import { CodeViewer } from "./code-viewer";
 import { ImageViewer } from "./image-viewer";
@@ -7,7 +8,6 @@ import { MarkdownViewer } from "./markdown-viewer";
 import { OfficePreview } from "./office-preview";
 import { PdfViewer } from "./pdf-viewer";
 import { TextViewer } from "./text-viewer";
-import { Unsupported } from "./unsupported";
 import { VideoViewer } from "./video-viewer";
 
 export interface PreviewViewerProps {
@@ -41,14 +41,6 @@ export function PreviewViewer({ entry, inlineUrl, downloadUrl }: PreviewViewerPr
     case "none":
       return <OfficePreview entry={entry} downloadUrl={downloadUrl} />;
     case "archive":
-      return (
-        <Unsupported
-          name={entry.name}
-          size={entry.size}
-          kind={kind}
-          reason={previewUnavailableReason(entry)}
-          downloadUrl={downloadUrl}
-        />
-      );
+      return <ArchivePreview entry={entry} downloadUrl={downloadUrl} />;
   }
 }

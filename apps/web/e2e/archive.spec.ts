@@ -137,3 +137,99 @@ test("Extract to unpacks the archive into a new folder under the chosen destinat
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/extracted/docs/docs$`));
   await expect(listing(page).getByText("note.txt", { exact: true })).toBeVisible();
 });
+
+test("opening a zip previews its entries and filters them", async ({ page }) => {
+  const sandbox = await createSandbox(page);
+  await createFolder(page, "docs");
+  await listing(page).getByText("docs", { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
+  await uploadTextFile(page, "note.txt", "a note");
+  await uploadTextFile(page, "other.txt", "something else");
+  await page.getByRole("link", { name: "Home" }).click();
+  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+
+  await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Compress" }).click();
+  const compressDialog = page.getByRole("dialog").filter({ hasText: "Compress" });
+  await compressDialog.getByRole("button", { name: "Compress" }).click();
+  await expect(compressDialog).toBeHidden();
+  await expect(listing(page).getByText("docs.zip", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await listing(page).getByText("docs.zip", { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/view/${sandbox}/docs\\.zip$`));
+
+  await expect(page.getByText("docs/note.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("docs/other.txt", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Extract here" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Extract to" })).toBeVisible();
+
+  await page.getByPlaceholder("Filter entries").fill("note");
+  await expect(page.getByText("docs/note.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("docs/other.txt", { exact: true })).toBeHidden();
+});
+
+test("extracting from the preview unpacks the archive into a chosen destination", async ({
+  page,
+}) => {
+  const sandbox = await createSandbox(page);
+  await createFolder(page, "docs");
+  await listing(page).getByText("docs", { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
+  await uploadTextFile(page, "note.txt", "a note");
+  await page.getByRole("link", { name: "Home" }).click();
+  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+
+  await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Compress" }).click();
+  const compressDialog = page.getByRole("dialog").filter({ hasText: "Compress" });
+  await compressDialog.getByRole("button", { name: "Compress" }).click();
+  await expect(compressDialog).toBeHidden();
+  await expect(listing(page).getByText("docs.zip", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await createFolder(page, "extracted");
+
+  await listing(page).getByText("docs.zip", { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/view/${sandbox}/docs\\.zip$`));
+  await expect(page.getByText("docs/note.txt", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Extract to" }).click();
+  const extractDialog = page.getByRole("dialog").filter({ hasText: "Extract to" });
+  await expect(extractDialog).toBeVisible();
+  await extractDialog.getByRole("button", { name: "extracted" }).click();
+  await extractDialog.getByRole("button", { name: "Extract here" }).click();
+  await expect(extractDialog).toBeHidden();
+
+  await page.goto(`/files/${sandbox}/extracted`);
+  await expect(listing(page).getByText("docs", { exact: true })).toBeVisible({ timeout: 20_000 });
+});
+
+test("opening a tar.gz previews its entries", async ({ page }) => {
+  const sandbox = await createSandbox(page);
+  await createFolder(page, "docs");
+  await listing(page).getByText("docs", { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
+  await uploadTextFile(page, "note.txt", "a note");
+  await page.getByRole("link", { name: "Home" }).click();
+  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+
+  await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Compress" }).click();
+  const compressDialog = page.getByRole("dialog").filter({ hasText: "Compress" });
+  await compressDialog.getByRole("radio", { name: /Tar\.gz/ }).click();
+  await compressDialog.getByRole("button", { name: "Compress" }).click();
+  await expect(compressDialog).toBeHidden();
+  await expect(listing(page).getByText("docs.tar.gz", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await listing(page).getByText("docs.tar.gz", { exact: true }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/view/${sandbox}/docs\\.tar\\.gz$`));
+
+  await expect(page.getByText("docs/note.txt", { exact: true })).toBeVisible();
+});
