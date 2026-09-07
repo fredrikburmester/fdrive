@@ -4,7 +4,7 @@
 #
 # Run it from anywhere; it changes into the repo's deploy directory itself.
 #
-# Environment (all optional):
+# Environment (all optional; the first two may also be set in deploy/.env):
 #   FDRIVE_COMPOSE_FILES  extra compose files, space separated, added after compose.yaml
 #                         (for example "compose.sftpgo-network.yaml compose.office.yaml").
 #                         Every file you normally pass with -f must be listed, or the
@@ -22,6 +22,17 @@ git pull --ff-only
 echo "==> after:  $(git log --oneline -1)"
 
 cd "$repo/deploy"
+# The two selectors may also live in deploy/.env next to the other settings, so a
+# host needs no wrapper script. Only these two keys are read; nothing else in the
+# file is exported.
+if [[ -f .env ]]; then
+  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES; do
+    if [[ -z "${!key:-}" ]]; then
+      value="$(grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')"
+      [[ -n "$value" ]] && export "$key=$value"
+    fi
+  done
+fi
 args=(-f compose.yaml)
 for file in ${FDRIVE_COMPOSE_FILES:-}; do
   args+=(-f "$file")
