@@ -268,3 +268,17 @@ pnpm dev:env:reset
 Both commands operate on the standalone `deploy/compose.dev.yaml` project
 (`fdrive-dev`), which is separate from the production-shaped
 `deploy/compose.yaml` stack described in `deploy/README.md`.
+
+## Scripts
+
+Run these from the repository root (Node 24, pnpm 10, Docker running):
+
+- `pnpm lint`: formatting, import order and lint rules with Biome.
+- `pnpm lint:fix`: apply Biome's automatic fixes.
+- `pnpm typecheck`: type-check every package via Turborepo.
+- `pnpm test`: unit tests once.
+- `pnpm test:coverage`: unit tests with coverage, enforcing each package's thresholds.
+- `pnpm test:integration`: the Docker-backed integration suites via Turborepo.
+- `pnpm --filter @fdrive/web test:e2e`: the Playwright suite on a real stack.
+- `pnpm build`: build every app and package.
+- `pnpm dev`: every app and package in watch mode.
