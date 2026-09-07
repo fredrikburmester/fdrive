@@ -280,3 +280,11 @@ available and followed the project instructions.
   real SFTPGo container's data directory through `docker exec` (attached from
   `global-setup.ts`'s `prepareSftpgo`), search specs 8/8. Running: `hardening-2`,
   `scope-mcp` (MCP consumers chunk). Repo pushed to github.com/fredrikburmester/fdrive-web.
+- Merged: `hardening-2` (c60016d). Gates: lint clean after replacing a control-character
+  regex in the e2e fake indexer, typecheck 13, coverage 8/8 (API 1500, web 1261), Playwright
+  81/81 on the production build with CSP. The first integration run failed at db teardown
+  under turbo parallelism (216 passed, exit 1) and interrupted the api suite; both pass on
+  rerun (db 216, api 18). Primary follow-ups done: office overlays pass
+  `FDRIVE_OFFICE_PUBLIC_URL` as a web build arg for the CSP frame-src, api Dockerfile Node
+  image digest-pinned, `.env.example` limit lines appended. Still pending in
+  `composition.ts` after `scope-mcp` merges: `jsonMaxBytes` wiring and the setup-token log.

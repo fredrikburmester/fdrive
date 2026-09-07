@@ -104,7 +104,16 @@ export interface DirectorySource {
 }
 
 const MAX_DIRECTORY_ENTRIES = 10000;
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
+/** True when `value` contains a C0 or C1 control character (Unicode category Cc). */
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Mirrors the real endpoint's `directory_parts`: canonical root-relative path only. */
 function directoryParts(path: string): string[] | null {
@@ -112,7 +121,7 @@ function directoryParts(path: string): string[] | null {
     !path.startsWith("/") ||
     path.length > 4096 ||
     path.includes("\\") ||
-    CONTROL_CHARACTERS.test(path)
+    hasControlCharacter(path)
   ) {
     return null;
   }
