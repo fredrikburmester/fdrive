@@ -477,3 +477,21 @@ available and followed the project instructions.
   intersection in SQL). Known limit to fix later: a folder that contains the trash folder (Home)
   sums trashed files too, only the requested path itself is trash-checked. Merge pending the
   api integration run on main.
+- Merged: `image-search-web` (1cecd46) and `folder-size` (ea295c5, one test-fake conflict in
+  `system/routes.test.ts` resolved by keeping both `imageEmbeddingStats` and `subtreeSize`).
+  Images mode: a Toggle beside the filter chips, shown only when `search/status` says `images`,
+  hides type/folder chips and the identity switcher, renders a thumbnail grid inside the command
+  list so Enter opens or reveals like a file hit; mode kept in sessionStorage. System > Image
+  search page mirrors Thumbnails (status with variable name, embedded count, model mismatch badge,
+  Rebuild with a force switch, Clear confirm, progress), sidebar entry after Thumbnails.
+  Folder size: `GET /fs/folder-size` (`fs/folder-size.ts`), `IndexQueries.subtreeSize` with scope
+  intersection and 8 container tests, Inspector rows Size / Files with a "From the index" note or
+  "Not indexed"; a live-read `unavailable` answers 502. Gates on main after both: lint 1044,
+  typecheck 13, contracts 578, db 194, api 1773 + integration 20, web 1419, db integration 238.
+  Pane: "a warm orange sunset" in Images mode shows sunset.png then sand.png as real thumbnails,
+  System > Image search reports Reachable, 9 embedded, the earlier rebuild's 1 error; Inspector on
+  the photos folder shows 39.8 KB, 6 files, From the index. The API restart logged the pane out
+  once; signed back in as dev. Idle: no worktrees, no workers. Repo pushed.
+- Follow-ups not started: exclude the trash subtree from folder sums; "some results omitted" hint
+  for the text panel's `partial` flag (only the image grid shows it); an MCP image search tool;
+  production search performance (search25k p95 over budget) remains on hold.
