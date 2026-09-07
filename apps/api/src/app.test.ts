@@ -164,7 +164,7 @@ describe("sftpgoHostLabel", () => {
 });
 
 describe("createApp about route", () => {
-  it("returns the version and SFTPGo attribution", async () => {
+  it("returns the version and SFTPGo attribution, redacting the host for an anonymous caller", async () => {
     const { app } = buildApp();
 
     const res = await app.request("/api/v1/about");
@@ -175,12 +175,47 @@ describe("createApp about route", () => {
     expect(body).toEqual({
       version: "1.2.3",
       builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-      provider: { type: "sftpgo", label: "localhost:8080" },
+      provider: { type: "sftpgo", label: null },
       setupRequired: false,
     });
   });
 
-  it("derives the provider label from the SFTPGo URL's host, dropping scheme and path", async () => {
+  it("reveals the SFTPGo host's label once the caller has a resolvable session", async () => {
+    const { app } = buildApp({
+      principalResolver: async () => ({
+        accountId: "account-1",
+        identityId: "identity-1",
+        username: "alice",
+        storage: FAKE_STORAGE,
+        isAdmin: false,
+      }),
+    });
+
+    const res = await app.request("/api/v1/about");
+    const body = await res.json();
+
+    expect(body).toMatchObject({ provider: { type: "sftpgo", label: "localhost:8080" } });
+  });
+
+  it("derives the provider label from the SFTPGo URL's host, dropping scheme and path, for an authenticated caller", async () => {
+    const { app } = buildApp({
+      config: loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "https://sftpgo.internal:9443/base" }),
+      principalResolver: async () => ({
+        accountId: "account-1",
+        identityId: "identity-1",
+        username: "alice",
+        storage: FAKE_STORAGE,
+        isAdmin: false,
+      }),
+    });
+
+    const res = await app.request("/api/v1/about");
+    const body = await res.json();
+
+    expect(body).toMatchObject({ provider: { type: "sftpgo", label: "sftpgo.internal:9443" } });
+  });
+
+  it("keeps the label redacted for an anonymous caller even with a custom SFTPGo host", async () => {
     const { app } = buildApp({
       config: loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "https://sftpgo.internal:9443/base" }),
     });
@@ -188,7 +223,7 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ provider: { type: "sftpgo", label: "sftpgo.internal:9443" } });
+    expect(body).toMatchObject({ provider: { type: "sftpgo", label: null } });
   });
 
   it("reports setupRequired and a null provider when connectionStatus says so", async () => {

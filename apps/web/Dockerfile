@@ -10,8 +10,12 @@
 # "build" script (when present) for @fdrive/web and every workspace
 # package it depends on, in topological (dependency-first) order, without
 # needing turbo installed.
+#
+# `node:24-alpine` is pinned by digest (see deploy/README.md's pins table)
+# so a rebuild never silently picks up a new base image without a
+# deliberate bump of the digest in both FROM lines below.
 
-FROM node:24-alpine AS base
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS base
 RUN corepack enable && corepack prepare pnpm@10.11.0 --activate
 WORKDIR /repo
 
@@ -23,11 +27,22 @@ FROM base AS build
 # address must pass --build-arg API_INTERNAL_URL=... to get a correct build.
 ARG API_INTERNAL_URL=http://api:3001
 ENV API_INTERNAL_URL=$API_INTERNAL_URL
+# Same "baked at build time, not re-read by `next start`" rule applies to
+# the Content-Security-Policy's `frame-src` (see next.config.ts's
+# buildContentSecurityPolicy): verified empirically that setting this as a
+# plain runtime `-e`/compose `environment:` value has no effect once the
+# image is built. Empty by default (no office origin allowed); an office
+# overlay (compose.office.yaml, compose.office.collabora.yaml) must pass
+# --build-arg FDRIVE_OFFICE_PUBLIC_URL=... matching its own
+# FDRIVE_OFFICE_PUBLIC_URL for the office editor iframe to load under the
+# CSP.
+ARG FDRIVE_OFFICE_PUBLIC_URL=
+ENV FDRIVE_OFFICE_PUBLIC_URL=$FDRIVE_OFFICE_PUBLIC_URL
 COPY . .
 RUN pnpm install --filter @fdrive/web... --frozen-lockfile
 RUN pnpm --filter @fdrive/web... run build
 
-FROM node:24-alpine AS runtime
+FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
@@ -45,4 +60,10 @@ COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public ./apps/web/public
 
 USER nextjs
 EXPOSE 3000
+# Alpine ships neither curl nor wget; Node's own fetch (stable since Node 18)
+# hits /login (public, no auth or setup gate) rather than / (which redirects
+# signed-out visitors, see e2e/smoke.spec.ts) so a plain 200 means the app is
+# actually serving pages, not just that the process is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/login').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "apps/web/server.js"]

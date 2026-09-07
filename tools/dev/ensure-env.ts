@@ -14,9 +14,12 @@
  * versions of this script instead of only ever writing it once.
  */
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/** Permission bits every generated env file gets: owner read-write only. */
+export const ENV_FILE_MODE = 0o600;
 
 /** Generates a fresh FDRIVE_MASTER_KEY: 32 random bytes, base64-encoded. */
 export function generateMasterKey(randomBytesFn: (size: number) => Buffer = randomBytes): string {
@@ -170,6 +173,27 @@ export function planApiEnvDev(
 }
 
 /**
+ * Writes `contents` to `path` with owner-only permissions (`ENV_FILE_MODE`,
+ * 0600): these files hold secrets (`FDRIVE_MASTER_KEY`, database
+ * credentials), so a stray group- or world-readable file is not
+ * acceptable. `writeFileSync`'s `mode` option only takes effect for a file
+ * it creates; an already-existing file keeps whatever permissions it had
+ * before, so this always follows up with an explicit `chmodSync`, which
+ * covers both the fresh-file and updated-existing-file cases the same way.
+ */
+export function writeEnvFile(
+  path: string,
+  contents: string,
+  fns: {
+    readonly writeFileSync: typeof writeFileSync;
+    readonly chmodSync: typeof chmodSync;
+  } = { writeFileSync, chmodSync },
+): void {
+  fns.writeFileSync(path, contents, { encoding: "utf-8", mode: ENV_FILE_MODE });
+  fns.chmodSync(path, ENV_FILE_MODE);
+}
+
+/**
  * Writes `spec.contents` to `spec.path` only if no file already exists
  * there, creating parent directories as needed. Returns whether it wrote
  * the file (false means it was left alone because it already existed).
@@ -182,7 +206,7 @@ export function ensureEnvFile(
     return false;
   }
   mkdirSync(dirname(spec.path), { recursive: true });
-  writeFileSync(spec.path, spec.contents, "utf-8");
+  writeEnvFile(spec.path, spec.contents);
   return true;
 }
 
@@ -198,10 +222,10 @@ function main(): void {
 
   if (!apiEnvExisted) {
     mkdirSync(dirname(apiEnvPath), { recursive: true });
-    writeFileSync(apiEnvPath, plan.contents, "utf-8");
+    writeEnvFile(apiEnvPath, plan.contents);
     console.log(`Created ${apiEnvPath}`);
   } else if (plan.addedKeys.length > 0) {
-    writeFileSync(apiEnvPath, plan.contents, "utf-8");
+    writeEnvFile(apiEnvPath, plan.contents);
     console.log(`Updated ${apiEnvPath} (added ${plan.addedKeys.join(", ")})`);
   } else {
     console.log(`Skipped ${apiEnvPath} (already exists)`);
