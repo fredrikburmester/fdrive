@@ -63,18 +63,19 @@ the OCR service's settings and endpoints. The api's `FDRIVE_OCR_URL` points at
 `ocr` so the web app's System page can show OCR status; it is only reachable
 when the `index` profile is up.
 
-The `indexer` service (`services/indexer/Dockerfile`) runs as a non-root user,
-uid/gid `1001`. Its thumbnail cache (`/thumbs`, read from the `api` service's
+The `indexer` service (`services/indexer/Dockerfile`) runs as a non-root user
+with the same uid/gid as SFTPGo, `1000` by default (`FDRIVE_INDEX_UID` in `.env`),
+so folders users keep at mode `700` stay readable to it. Its thumbnail cache (`/thumbs`, read from the `api` service's
 `FDRIVE_THUMBS_DIR`) is a named volume, `fdrive-thumbs`, rather than a host
 bind mount: Docker always creates a bind-mounted host directory owned by
-root, which uid 1001 could not then write into, and this cache is never
+root, which that uid could not then write into, and this cache is never
 operator-facing (only `api` and `indexer` ever touch it). A one-shot
-`thumbs-init` service chowns the named volume to `1001:1001` once, before
+`thumbs-init` service chowns the named volume to that uid once, before
 `indexer` starts, the same pattern `compose.dev.yaml`'s `sftpgo-seed` uses for
 SFTPGo's own data volume; `indexer`'s `depends_on` waits for it to complete.
 If you ever need the thumbnail cache on the host instead (for example to
 inspect it directly), replace the `fdrive-thumbs` named volume with a bind
-mount and either pre-create that directory owned by uid 1001, or add an
+mount and either pre-create that directory owned by the indexer uid, or add an
 equivalent `chown`-only init step ahead of it.
 
 ## The external SFTPGo assumption

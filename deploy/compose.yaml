@@ -124,8 +124,9 @@ services:
   #
   # `fdrive-thumbs` (below) is a named volume, not a host bind mount: Docker
   # always creates a bind-mounted host directory owned by root, which the
-  # indexer's non-root uid 1001 (see services/indexer/Dockerfile) could not
-  # then write into. `thumbs-init` chowns the named volume to that uid once,
+  # indexer's non-root uid (FDRIVE_INDEX_UID, default 1000 to match SFTPGo so
+  # 700 folders stay readable) could not then write into. `thumbs-init` chowns
+  # the named volume to that uid once,
   # before the indexer starts, the same one-shot pattern
   # deploy/compose.dev.yaml's `sftpgo-seed` uses for SFTPGo's own data
   # volume. Thumbnails are never operator-facing (only the api and indexer
@@ -136,13 +137,16 @@ services:
     profiles: [index]
     volumes:
       - fdrive-thumbs:/thumbs
-    command: ["chown", "-R", "1001:1001", "/thumbs"]
+    command: ["chown", "-R", "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}", "/thumbs"]
     logging: *default-logging
 
   indexer:
     build:
       context: ../services/indexer
       dockerfile: Dockerfile
+      args:
+        INDEXER_UID: ${FDRIVE_INDEX_UID:-1000}
+        INDEXER_GID: ${FDRIVE_INDEX_UID:-1000}
     profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive

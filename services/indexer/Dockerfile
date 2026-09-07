@@ -24,8 +24,13 @@ RUN pip install --no-cache-dir -e ".[dev]"
 # Docker socket for testcontainers; on a host where that socket is not
 # world-writable, run that script with `docker run --user root` to keep
 # using it, since this uid otherwise cannot reach the socket.
-RUN addgroup --gid 1001 indexer && \
-    adduser --uid 1001 --gid 1001 --no-create-home --disabled-password --gecos "" indexer && \
+# The indexer must read every file SFTPGo serves, including folders users keep at
+# mode 700, so it runs as the same uid/gid as the SFTPGo process (1000 in the
+# official image). Override at build time when your SFTPGo runs as another uid.
+ARG INDEXER_UID=1000
+ARG INDEXER_GID=1000
+RUN addgroup --gid "${INDEXER_GID}" indexer && \
+    adduser --uid "${INDEXER_UID}" --gid "${INDEXER_GID}" --no-create-home --disabled-password --gecos "" indexer && \
     chown -R indexer:indexer /app
 
 ENV PYTHONUNBUFFERED=1
