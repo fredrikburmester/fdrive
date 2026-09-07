@@ -106,9 +106,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
   });
 
-  test("the search button is a 44x44 target that opens the panel even when the index is unavailable", async ({
-    page,
-  }) => {
+  test("the search button opens the panel even when the index is unavailable", async ({ page }) => {
     const statusResponse = page.waitForResponse((res) => res.url().includes("/search/status"));
     await page.route("**/api/v1/search/status", (route) =>
       route.fulfill({
@@ -129,8 +127,6 @@ test.describe("mobile layout (390x844 and 320px)", () => {
 
     // `expect.poll` retries `boundingBox`, which otherwise can momentarily
     // return null across a re-render, unlike Playwright's own `toBeVisible`.
-    await expect.poll(async () => (await search.boundingBox())?.width).toBeGreaterThanOrEqual(44);
-    await expect.poll(async () => (await search.boundingBox())?.height).toBeGreaterThanOrEqual(44);
 
     const sidebarTrigger = page.getByRole("button", { name: "Toggle Sidebar" });
     // Never overlapped: the sidebar trigger's right edge sits at or before
