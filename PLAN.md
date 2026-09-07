@@ -675,6 +675,14 @@ flows pass real storage integration, browser acceptance and required quality gat
     login, including its one-time code, and never builds its own credential, second factor or
     session-extension scheme. Provider limits such as TOTP-for-HTTP re-login are documented,
     not worked around.
+16. Image search by content (2026-09-07): a CLIP-family sidecar embeds the thumbnails the indexer
+    already generates, and the same vector space embeds the typed query, so "blue chair" finds the
+    picture. The model is `google/siglip2-large-patch16-256` (1024-dimensional, multilingual),
+    chosen by the user for quality over speed; the one-off backfill cost is accepted. The sidecar
+    is optional, in the `index` compose profile, and a deployment without it reports image search
+    as not configured rather than failing. Public share thumbnails (2026-09-07) come from the same
+    index cache and never consume a share's download budget, because they never pass through
+    SFTPGo's share download.
 
 ## 15. Resolved questions (2026-09-06)
 
