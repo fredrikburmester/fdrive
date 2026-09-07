@@ -115,4 +115,58 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     secret: false,
     subsystem: "ocr",
   },
+  {
+    key: "SFTPGO_ADMIN_USERNAME",
+    description:
+      "Admin username the bundled SFTPGo (compose.sftpgo.yaml) creates on first boot. Ignored unless that overlay is in use.",
+    default: "admin",
+    example: "admin",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "SFTPGO_ADMIN_PASSWORD",
+    description:
+      "Admin password for the bundled SFTPGo (compose.sftpgo.yaml). Treat as a secret. Required when that overlay is in use, ignored otherwise.",
+    default: null,
+    example: "a-strong-password",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "SFTPGO_ADMIN_PORT",
+    description:
+      "Loopback host port the bundled SFTPGo's admin UI and API are published on (compose.sftpgo.yaml). Reach it through an SSH tunnel; never expose it.",
+    default: "8091",
+    example: "8091",
+    secret: false,
+    subsystem: "network",
+  },
+  {
+    key: "SFTPGO_ADMIN_BIND",
+    description:
+      "Host address the bundled SFTPGo's admin port binds to (compose.sftpgo.yaml). Default reaches it only from the server itself; set 0.0.0.0 to open it to your LAN, and keep it firewalled from the internet.",
+    default: "127.0.0.1",
+    example: "0.0.0.0",
+    secret: false,
+    subsystem: "network",
+  },
+  {
+    key: "ONLYOFFICE_JWT_SECRET",
+    description:
+      "Shared secret between the api and ONLYOFFICE (compose.office.yaml): at least 32 letters, digits, underscores or hyphens, e.g. from `openssl rand -hex 32`. Treat as a secret. Required with that overlay, ignored otherwise.",
+    default: null,
+    example: "output-of-openssl-rand-hex-32",
+    secret: false,
+    subsystem: "office",
+  },
+  {
+    key: "FDRIVE_COLLABORA_HOST",
+    description:
+      "Public hostname for Collabora (compose.office.collabora.yaml), routed to the same proxy port as fdrive. Required with that overlay, ignored otherwise.",
+    default: null,
+    example: "office.example.com",
+    secret: false,
+    subsystem: "office",
+  },
 ];

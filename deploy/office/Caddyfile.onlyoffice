@@ -3,7 +3,7 @@
 # no edge in front: without an accurate X-Forwarded-Proto the session cookie
 # can never become Secure (see FDRIVE_COOKIE_SECURE=auto in
 # deploy/.env.example and the "TLS and network placement" section of
-# deploy/README.md). WOPI callbacks never traverse this proxy: the office
+# deploy/REFERENCE.md). WOPI callbacks never traverse this proxy: the office
 # server reaches the API directly at http://api:3001/wopi over the compose
 # network.
 :80 {
