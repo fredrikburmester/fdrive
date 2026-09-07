@@ -371,3 +371,13 @@ available and followed the project instructions.
   Dev-environment fix along the way: the running indexer image predated `/directory`, so scope
   verification failed and *all* index features (search, thumbnails) were silently unavailable;
   rebuilt it. Running: `image-embed-service`, `image-embed-db`.
+- Merged: `image-embed-service` (b4ce6f7). New `services/image-embed` sidecar (Starlette, sibling
+  of `services/ocr`): `GET /health` reporting `loading`/`ok` with the model's real dimension,
+  `POST /embed/image` (multipart) and `POST /embed/text`, every vector L2-normalized by the
+  service, bounds at 32 images / 64 texts / 8 MiB per image / 512 chars per text. torch,
+  transformers and pillow sit in a `runtime` extra so the test venv never downloads a model and
+  never imports torch; the Dockerfile installs CPU-only wheels. Gates: ruff clean, mypy strict on
+  11 files, pytest 62 tests at 100% coverage. `deploy/compose.dev.yaml` gains the service under the
+  `index` profile on 58012 with a `/models` weight-cache volume, and pre-wires `IMAGE_EMBED_URL`
+  into the indexer. The whole `siglip.py` backend is `# pragma: no cover` by design, so a real
+  image build and model load is the primary's verification and is running.
