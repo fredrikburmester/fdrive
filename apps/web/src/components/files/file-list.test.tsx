@@ -32,7 +32,6 @@ function renderList(overrides: Partial<React.ComponentProps<typeof FileList>> = 
       getDragPaths={() => []}
       onInternalDrop={noop}
       onToggleSelectAll={noop}
-      onChangeSelection={noop}
       onClearSelection={noop}
       {...overrides}
     />,
@@ -55,9 +54,9 @@ describe("FileList", () => {
   });
 
   it("selects nothing when a pointer drags across several rows", () => {
-    const onChangeSelection = vi.fn();
+    const onEntryClick = vi.fn();
     const onClearSelection = vi.fn();
-    const { container } = renderList({ onChangeSelection, onClearSelection });
+    const { container } = renderList({ onEntryClick, onClearSelection });
 
     const rows = container.querySelectorAll("[data-path]");
     expect(rows.length).toBeGreaterThan(1);
@@ -73,7 +72,6 @@ describe("FileList", () => {
     fireEvent.pointerMove(last, { clientX: 0, clientY: 200 });
     fireEvent.pointerUp(last, { clientX: 0, clientY: 200 });
 
-    expect(onChangeSelection).not.toHaveBeenCalled();
     expect(onClearSelection).not.toHaveBeenCalled();
     for (const row of rows) {
       expect(row.getAttribute("data-selected")).toBe("false");

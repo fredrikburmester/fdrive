@@ -904,7 +904,6 @@ export function FileBrowser({
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
-                onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
                 onClearSelection={() => dispatchSelection({ type: "clear" })}
                 tags={tags}
                 onToggleTag={handleToggleTag}
@@ -924,7 +923,6 @@ export function FileBrowser({
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
-                onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
                 onClearSelection={() => dispatchSelection({ type: "clear" })}
                 tags={tags}
                 onToggleTag={handleToggleTag}
@@ -944,7 +942,6 @@ export function FileBrowser({
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
-                onChangeSelection={(paths) => dispatchSelection({ type: "set", paths })}
                 onClearSelection={() => dispatchSelection({ type: "clear" })}
                 treeDepths={treeDepths}
                 treeExpanded={treeState.expanded}

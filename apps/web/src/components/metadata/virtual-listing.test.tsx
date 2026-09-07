@@ -49,16 +49,14 @@ vi.mock("@/lib/metadata/deps", async (importOriginal) => ({
   FileList: ({
     entries,
     onContextAction,
-    onChangeSelection,
+    onToggleSelectAll,
   }: {
     entries: FsEntry[];
     onContextAction: (action: "share", entry: FsEntry) => void;
-    onChangeSelection: (paths: string[]) => void;
+    onToggleSelectAll: () => void;
   }) => (
     <>
-      <Button onClick={() => onChangeSelection(entries.map((entry) => entry.path))}>
-        Select both
-      </Button>
+      <Button onClick={onToggleSelectAll}>Select both</Button>
       <Button
         onClick={() => {
           const first = entries[0];

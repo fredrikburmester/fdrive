@@ -41,7 +41,6 @@ function renderGrid(overrides: Partial<React.ComponentProps<typeof FileGrid>> = 
       getDragPaths={() => []}
       onInternalDrop={noop}
       onToggleSelectAll={noop}
-      onChangeSelection={noop}
       onClearSelection={noop}
       {...overrides}
     />,
@@ -103,10 +102,10 @@ describe("FileGrid", () => {
 
   it("selects nothing when a pointer drags across several tiles", () => {
     window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
-    const onChangeSelection = vi.fn();
+    const onEntryClick = vi.fn();
     const onClearSelection = vi.fn();
 
-    const { container } = renderGrid({ onChangeSelection, onClearSelection });
+    const { container } = renderGrid({ onEntryClick, onClearSelection });
 
     const tiles = container.querySelectorAll("[data-path]");
     expect(tiles.length).toBeGreaterThan(1);
@@ -122,7 +121,6 @@ describe("FileGrid", () => {
     fireEvent.pointerMove(last, { clientX: 200, clientY: 200 });
     fireEvent.pointerUp(last, { clientX: 200, clientY: 200 });
 
-    expect(onChangeSelection).not.toHaveBeenCalled();
     expect(onClearSelection).not.toHaveBeenCalled();
     for (const tile of tiles) {
       expect(tile.getAttribute("data-selected")).toBe("false");
