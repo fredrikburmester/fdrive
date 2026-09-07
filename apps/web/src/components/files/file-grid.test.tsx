@@ -13,7 +13,7 @@ class FakeResizeObserver {
   disconnect() {}
 }
 
-function makeEntry(name: string): FsEntry {
+function makeEntry(name: string, overrides: Partial<FsEntry> = {}): FsEntry {
   return {
     path: `/${name}`,
     name,
@@ -22,6 +22,7 @@ function makeEntry(name: string): FsEntry {
     modifiedAt: "2024-01-01T00:00:00.000Z",
     ext: "",
     mime: null,
+    ...overrides,
   };
 }
 
@@ -166,5 +167,45 @@ describe("FileGrid", () => {
     const [entry, modifiers] = onEntryClick.mock.calls[0] as [FsEntry, { shift: boolean }];
     expect(entry.path).toBe("/file-2.txt");
     expect(modifiers.shift).toBe(true);
+  });
+
+  it("renders an image thumbnail for an image file, using the thumb URL", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const entries = [makeEntry("photo.png", { ext: ".png" })];
+
+    const { container } = renderGrid({ entries });
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute("src")).toContain(encodeURIComponent("/photo.png"));
+    expect(img?.getAttribute("loading")).toBe("lazy");
+    expect(img?.getAttribute("decoding")).toBe("async");
+  });
+
+  it("falls back to the file icon once an image thumbnail fails to load", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const entries = [makeEntry("photo.png", { ext: ".png" })];
+
+    const { container } = renderGrid({ entries });
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    if (img === null) {
+      return;
+    }
+    fireEvent.error(img);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
+
+  it("never renders an image thumbnail for a folder", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const entries = [makeEntry("folder", { kind: "dir", ext: "" })];
+
+    const { container } = renderGrid({ entries });
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
   });
 });
