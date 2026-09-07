@@ -4,6 +4,7 @@ import {
   ChevronsUpDown,
   Database,
   Image,
+  Images,
   Link2,
   LogOut,
   Monitor,
@@ -88,6 +89,7 @@ const SYSTEM_INDEXER_ROUTE = "/system/indexer" as Route;
 const SYSTEM_SEARCH_ROUTE = "/system/search" as Route;
 const SYSTEM_OCR_ROUTE = "/system/ocr" as Route;
 const SYSTEM_THUMBNAILS_ROUTE = "/system/thumbnails" as Route;
+const SYSTEM_IMAGE_SEARCH_ROUTE = "/system/image-search" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
 
 const SYSTEM_NAV_ITEMS = [
@@ -96,6 +98,7 @@ const SYSTEM_NAV_ITEMS = [
   { href: SYSTEM_SEARCH_ROUTE, label: "Search", Icon: Search },
   { href: SYSTEM_OCR_ROUTE, label: "OCR", Icon: ScanText },
   { href: SYSTEM_THUMBNAILS_ROUTE, label: "Thumbnails", Icon: Image },
+  { href: SYSTEM_IMAGE_SEARCH_ROUTE, label: "Image search", Icon: Images },
 ] as const;
 
 export function AppSidebar() {

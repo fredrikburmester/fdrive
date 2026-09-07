@@ -1,8 +1,8 @@
 "use client";
 
-import type { FsEntry, SearchHit, SearchSnippet } from "@fdrive/contracts";
+import type { FsEntry, ImageSearchHit, SearchHit, SearchSnippet } from "@fdrive/contracts";
 import { baseName } from "@fdrive/core";
-import { FolderIcon, FolderOpenIcon } from "lucide-react";
+import { FolderIcon, FolderOpenIcon, ImagesIcon } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -56,9 +56,10 @@ import {
   type SearchTypeFilter,
 } from "@/lib/search/filters";
 import { splitSnippetSegments } from "@/lib/search/highlight";
+import { readImageMode, writeImageMode } from "@/lib/search/image-mode";
 import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
 import { searchPanelLayout } from "@/lib/search/panel-layout";
-import { useSearchResults } from "@/lib/search/queries";
+import { useImageSearchResults, useSearchResults, useSearchStatus } from "@/lib/search/queries";
 import { pushRecent, type RecentItem, readRecent } from "@/lib/search/recent";
 import { revealHref } from "@/lib/search/reveal";
 
@@ -93,6 +94,35 @@ function HitThumbnail({ hit }: { hit: SearchHit }) {
       className="size-8 shrink-0 rounded-md object-cover"
       onError={() => setErrored(true)}
     />
+  );
+}
+
+/**
+ * A square tile for one image-search hit: its 256px thumbnail (assumed
+ * present, since the row only exists because a thumbnail was embedded) and
+ * its name below, truncated to one line.
+ */
+function ImageHitTile({ hit }: { hit: ImageSearchHit }) {
+  const [errored, setErrored] = useState(false);
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div className="aspect-square w-full overflow-hidden rounded-md ring-1 ring-border">
+        {errored ? (
+          <div className="flex size-full items-center justify-center bg-muted">
+            <FileIcon kind="file" ext={hit.ext} mime={hit.mime} />
+          </div>
+        ) : (
+          // biome-ignore lint/performance/noImgElement: a 256px thumbnail from the API, not a static asset next/image can optimize
+          <img
+            src={apiClient.thumbUrl(hit.path, 256)}
+            alt=""
+            className="size-full object-cover"
+            onError={() => setErrored(true)}
+          />
+        )}
+      </div>
+      <p className="truncate text-xs text-muted-foreground">{hit.name}</p>
+    </div>
   );
 }
 
@@ -248,6 +278,9 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const [selectedValue, setSelectedValue] = useState("");
   const [enterAction, setEnterActionState] = useState<EnterAction>(DEFAULT_ENTER_ACTION);
+  const [imageMode, setImageModeState] = useState(false);
+  const { data: searchStatus } = useSearchStatus();
+  const imagesAvailable = searchStatus?.images === true;
 
   const debouncerRef = useRef<Debounced<string> | null>(null);
   if (debouncerRef.current === null) {
@@ -275,6 +308,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
         : [],
     );
     setEnterActionState(readEnterAction(window.localStorage));
+    setImageModeState(readImageMode(window.sessionStorage));
   }, [open, me]);
 
   const handleInputChange = useCallback((value: string) => {
@@ -287,16 +321,30 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     writeEnterAction(window.localStorage, action);
   }, []);
 
+  const handleImageModeChange = useCallback((next: boolean) => {
+    setImageModeState(next);
+    writeImageMode(window.sessionStorage, next);
+  }, []);
+
   const trimmedQuery = committedQuery.trim();
+  const imageSearchActive = imageMode && imagesAvailable;
   const {
     data: response,
     isFetching,
     error: searchError,
   } = useSearchResults(committedQuery, chips, currentFolder, {
-    enabled: open && trimmedQuery.length > 0 && me !== undefined,
+    enabled: open && trimmedQuery.length > 0 && me !== undefined && !imageSearchActive,
     ...(me
       ? { scope: { accountId: me.account.id, identityId: me.activeIdentityId, all: allLogins } }
       : {}),
+  });
+
+  const {
+    data: imageResponse,
+    isFetching: isImageFetching,
+    error: imageSearchError,
+  } = useImageSearchResults(committedQuery, {
+    enabled: open && imageSearchActive,
   });
 
   const navigateItem = useCallback(
@@ -397,6 +445,11 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     sections.folders.length === 0 &&
     sections.files.length === 0 &&
     sections.content.length === 0;
+  const imageHits = imageResponse?.hits ?? [];
+  const imageUnavailable = imageResponse?.unavailable ?? false;
+  const imagePartial = imageResponse?.partial ?? false;
+  const imageNoResults =
+    !showRecent && !isImageFetching && imageResponse !== undefined && imageHits.length === 0;
 
   return (
     <CommandDialog
@@ -421,7 +474,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
           onKeyDownCapture={handleInputKeyDownCapture}
           placeholder="Search files and content..."
         />
-        {me && me.identities.length > 1 ? (
+        {me && me.identities.length > 1 && !imageSearchActive ? (
           <ToggleGroup
             aria-label="Search scope"
             className="justify-start px-2 pt-2"
@@ -442,48 +495,75 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               : "flex flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5"
           }
         >
-          <ToggleGroup
-            value={[chips.type]}
-            onValueChange={(values) =>
-              setChips((current) => ({
-                ...current,
-                type: (values[0] as SearchTypeFilter | undefined) ?? "any",
-              }))
-            }
-            size="sm"
-            className={mobileLayout ? "shrink-0" : undefined}
-          >
-            {SEARCH_TYPE_FILTERS.map((type) => (
-              <ToggleGroupItem key={type} value={type} aria-label={SEARCH_TYPE_LABELS[type]}>
-                {SEARCH_TYPE_LABELS[type]}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          <Toggle
-            size="sm"
-            variant="outline"
-            pressed={chips.folderOnly}
-            onPressedChange={(pressed) =>
-              setChips((current) => ({ ...current, folderOnly: pressed }))
-            }
-            className={mobileLayout ? "shrink-0" : undefined}
-          >
-            This folder only
-          </Toggle>
+          {imageSearchActive ? null : (
+            <>
+              <ToggleGroup
+                value={[chips.type]}
+                onValueChange={(values) =>
+                  setChips((current) => ({
+                    ...current,
+                    type: (values[0] as SearchTypeFilter | undefined) ?? "any",
+                  }))
+                }
+                size="sm"
+                className={mobileLayout ? "shrink-0" : undefined}
+              >
+                {SEARCH_TYPE_FILTERS.map((type) => (
+                  <ToggleGroupItem key={type} value={type} aria-label={SEARCH_TYPE_LABELS[type]}>
+                    {SEARCH_TYPE_LABELS[type]}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <Toggle
+                size="sm"
+                variant="outline"
+                pressed={chips.folderOnly}
+                onPressedChange={(pressed) =>
+                  setChips((current) => ({ ...current, folderOnly: pressed }))
+                }
+                className={mobileLayout ? "shrink-0" : undefined}
+              >
+                This folder only
+              </Toggle>
+            </>
+          )}
+          {imagesAvailable ? (
+            <Toggle
+              size="sm"
+              variant="outline"
+              pressed={imageMode}
+              onPressedChange={handleImageModeChange}
+              aria-label="Search images"
+              className={mobileLayout ? "ml-auto shrink-0" : "ml-auto"}
+            >
+              <ImagesIcon />
+              Images
+            </Toggle>
+          ) : null}
         </div>
-        {actions.error || navigationError || searchError ? (
+        {actions.error ||
+        navigationError ||
+        searchError ||
+        (imageSearchActive && imageSearchError) ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">
-            {actions.error ?? navigationError ?? describeApiError(searchError)}
+            {actions.error ??
+              navigationError ??
+              describeApiError(imageSearchActive ? imageSearchError : searchError)}
           </p>
         ) : null}
-        {unavailableIds.length > 0 && me ? (
+        {!imageSearchActive && unavailableIds.length > 0 && me ? (
           <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
             Search unavailable for{" "}
             {unavailableIds.map((id) => identityLabel(me.identities, id)).join(", ")}. Other results
             remain available.
           </p>
         ) : null}
-        {degraded ? (
+        {imageSearchActive && imagePartial ? (
+          <p className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+            Some results omitted.
+          </p>
+        ) : null}
+        {!imageSearchActive && degraded ? (
           <p className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
             Semantic search unavailable, showing keyword matches.
           </p>
@@ -503,6 +583,27 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                     <RecentRow item={item} />
                   </CommandItem>
                 ))}
+              </CommandGroup>
+            )
+          ) : imageSearchActive ? (
+            imageUnavailable ? (
+              <CommandEmpty>Image search is not available.</CommandEmpty>
+            ) : imageNoResults ? (
+              <CommandEmpty>No matching images</CommandEmpty>
+            ) : (
+              <CommandGroup heading="Images">
+                <div className="grid grid-cols-3 gap-2 p-1 sm:grid-cols-4">
+                  {imageHits.map((hit) => (
+                    <CommandItem
+                      key={makeItemValue("file", hit.path)}
+                      value={makeItemValue("file", hit.path)}
+                      onSelect={handleSelect}
+                      className="flex-col items-stretch gap-1"
+                    >
+                      <ImageHitTile hit={hit} />
+                    </CommandItem>
+                  ))}
+                </div>
               </CommandGroup>
             )
           ) : unavailable ? (
