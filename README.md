@@ -48,10 +48,10 @@ I run SFTPGo as the one place all my files live. The web front-ends I tried eith
 
 ## Alternatives
 
-- [Filestash](https://www.filestash.app): a general-purpose web client for many backends. fdrive replaced it here because it has no search, tags or office editing.
-- [Nextcloud](https://nextcloud.com): a full platform that owns its storage. Excellent if you want that; fdrive exists because I did not.
+- [Filestash](https://www.filestash.app): a capable web client, office editing included, built to front many storage backends. I only have one, its development is slow, and it lacks the features I use daily: search worth the name, OCR, compressing files, favorites, tags.
+- [Nextcloud](https://nextcloud.com): slow and clunky for this purpose, large and heavy, and it does far too many things. It also wants a database between you and your files. I want my files in a plain directory, nothing else.
 - [FileBrowser](https://filebrowser.org): a lightweight file manager over a local directory, without SFTPGo's user model.
-- SFTPGo's built-in web client: fine for transfers, without previews, search or sharing pages.
+- SFTPGo's built-in web client: has sharing pages and handles transfers, but lacks previews, search and most other basics of a daily-use file UI.
 
 ## Security
 
