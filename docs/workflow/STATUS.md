@@ -265,3 +265,12 @@ available and followed the project instructions.
   session's env-file rule blocks in-place edits; the new variables were appended).
 - Next: `hardening-2` (HARDENING-REVIEW items 6, 9, 10 and the lower-priority list), then
   P5-SCOPE-CONSUMERS wiring, then search performance.
+- 2026-09-07 10:00: user chose security over performance. Running in parallel:
+  `hardening-2` (`.worktrees/hardening-2`: web CSP/headers, indexer non-root, image pins,
+  container hardening, env file modes, CI permissions/timeouts, JSON/upload caps, /about
+  redaction, no-redirect SFTPGo client) and `scope-consumers` HTTP/Office/events chunk
+  (`.worktrees/scope-consumers`: resolver in composition, scope routes, search on verified
+  scopes with live-read filtering, thumbnails, office actor mappings, indexer listener).
+  Queued after it: the MCP consumers chunk. Primary-owned follow-ups: setup-token log line
+  in composition.ts, `.env.example` lines from the hardening-2 report. Search performance
+  is on hold.
