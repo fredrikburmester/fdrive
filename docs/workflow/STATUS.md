@@ -427,3 +427,16 @@ available and followed the project instructions.
   image-search get/rebuild/clear routes, compose passthrough) and `share-peek-api`
   (`.worktrees/share-peek-api`, spec in `P7-UX-2.md`). Expected trivial union merge in
   `packages/contracts/src/{routes,client}.ts`. Queued after: `image-search-web`, `share-peek-web`.
+- Merged: `share-peek-api` (eb554e3). `GET /public/shares/:id/archive-entries` through a
+  storage-shaped adapter (`shares/peek-adapter.ts`, suffix-range size probe with pure Content-Range
+  parsing); `peekArchive` narrowed to `PeekStoragePort`. Gates: lint 1021, typecheck, contracts 555,
+  api 1700. Verified on the dev stack via temporary shares (deleted afterwards): single-file and
+  directory zip shares list entries, a limited link answers 403, a non-archive path 400; one peek
+  costs three counted downloads on an unlimited link, as the spec accepts. Running: `image-search-api`,
+  `share-peek-web` (`.worktrees/share-peek-web`).
+- Lesson: the `image-search-api` worktree was created before the spec was committed, so the
+  worker never saw `P7-IMAGE-SEARCH-API.md` and built an `images` section inside every text
+  search response with an absolute margin. Rejected (a SigLIP text-tower call per text query, and
+  required contract fields broke the web typecheck); spec copied into the worktree and a rework
+  pass launched: separate `GET /search/images`, ratio margin, `system/image-search` routes,
+  `SearchResponse` unchanged. Always commit or copy a spec before `git worktree add`.
