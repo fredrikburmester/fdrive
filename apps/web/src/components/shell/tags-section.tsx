@@ -15,7 +15,11 @@ import {
 } from "@/components/ui/sidebar";
 import { tagDotClassName } from "@/lib/metadata/colors";
 import { useTags } from "@/lib/metadata/queries";
-import { readSidebarSectionOpen, writeSidebarSectionOpen } from "@/lib/metadata/sidebar-sections";
+import {
+  readSidebarSectionOpen,
+  sidebarSectionState,
+  writeSidebarSectionOpen,
+} from "@/lib/metadata/sidebar-sections";
 import { cn } from "@/lib/utils";
 import { TagManagerDialog } from "../metadata/tag-manager-dialog";
 
@@ -24,12 +28,15 @@ function tagRoute(id: string): Route {
 }
 
 /** The sidebar's "Tags" section: every tag with its color dot, linking to
- * `/tags/<id>`, plus "Manage tags…" opening the `TagManagerDialog`.
- * Renders nothing while the account has no tags. */
+ * `/tags/<id>`, plus "Manage tags…" opening the `TagManagerDialog`. Always
+ * renders once loaded, even with no tags yet, so tags can be created
+ * before anything is tagged; a muted placeholder line replaces the tag
+ * list while it is empty. */
 export function TagsSection() {
   const { data: tags } = useTags();
   const [open, setOpen] = useState(true);
   const [managerOpen, setManagerOpen] = useState(false);
+  const state = sidebarSectionState(tags);
 
   useEffect(() => {
     setOpen(readSidebarSectionOpen(window.localStorage, "tags"));
@@ -40,7 +47,7 @@ export function TagsSection() {
     writeSidebarSectionOpen(window.localStorage, "tags", next);
   }
 
-  if (tags === undefined || tags.length === 0) {
+  if (state === "loading") {
     return null;
   }
 
@@ -59,8 +66,11 @@ export function TagsSection() {
           </CollapsibleTrigger>
           <CollapsibleContent>
             <SidebarGroupContent>
+              {state === "empty" ? (
+                <p className="px-2 py-1 text-muted-foreground text-xs">No tags yet</p>
+              ) : null}
               <SidebarMenu>
-                {tags.map((tag) => (
+                {(tags ?? []).map((tag) => (
                   <SidebarMenuItem key={tag.id}>
                     <SidebarMenuButton render={<Link href={tagRoute(tag.id)} />}>
                       <span

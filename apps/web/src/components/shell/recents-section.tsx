@@ -16,7 +16,11 @@ import {
 } from "@/components/ui/sidebar";
 import { viewHref } from "@/lib/metadata/deps";
 import { useRecents } from "@/lib/metadata/queries";
-import { readSidebarSectionOpen, writeSidebarSectionOpen } from "@/lib/metadata/sidebar-sections";
+import {
+  readSidebarSectionOpen,
+  sidebarSectionState,
+  writeSidebarSectionOpen,
+} from "@/lib/metadata/sidebar-sections";
 import { cn } from "@/lib/utils";
 
 const MAX_VISIBLE = 8;
@@ -27,11 +31,13 @@ function toRoute(href: string): Route {
 }
 
 /** The sidebar's "Recents" section: the last 8 opened files, each opening
- * its preview, plus a "Show all" link to `/recents`. Renders nothing while
- * there are no recents. */
+ * its preview, plus a "Show all" link to `/recents`. Always renders once
+ * loaded, even with nothing opened yet, showing a muted placeholder line
+ * instead of disappearing. */
 export function RecentsSection() {
   const { data: items } = useRecents();
   const [open, setOpen] = useState(true);
+  const state = sidebarSectionState(items);
 
   useEffect(() => {
     setOpen(readSidebarSectionOpen(window.localStorage, "recents"));
@@ -42,11 +48,11 @@ export function RecentsSection() {
     writeSidebarSectionOpen(window.localStorage, "recents", next);
   }
 
-  if (items === undefined || items.length === 0) {
+  if (state === "loading") {
     return null;
   }
 
-  const visible = items.slice(0, MAX_VISIBLE);
+  const visible = (items ?? []).slice(0, MAX_VISIBLE);
 
   return (
     <SidebarGroup>
@@ -60,24 +66,28 @@ export function RecentsSection() {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {visible.map((item) => (
-                <SidebarMenuItem key={item.path}>
-                  <SidebarMenuButton render={<Link href={toRoute(viewHref(item.path))} />}>
-                    <ClockIcon />
-                    <span className="truncate">{baseName(item.path)}</span>
+            {state === "empty" ? (
+              <p className="px-2 py-1 text-muted-foreground text-xs">Files you open show up here</p>
+            ) : (
+              <SidebarMenu>
+                {visible.map((item) => (
+                  <SidebarMenuItem key={item.path}>
+                    <SidebarMenuButton render={<Link href={toRoute(viewHref(item.path))} />}>
+                      <ClockIcon />
+                      <span className="truncate">{baseName(item.path)}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    render={<Link href={RECENTS_ROUTE} />}
+                    className="text-muted-foreground"
+                  >
+                    <span>Show all</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-              ))}
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  render={<Link href={RECENTS_ROUTE} />}
-                  className="text-muted-foreground"
-                >
-                  <span>Show all</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
+              </SidebarMenu>
+            )}
           </SidebarGroupContent>
         </CollapsibleContent>
       </Collapsible>
