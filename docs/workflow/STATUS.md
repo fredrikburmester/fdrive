@@ -385,12 +385,12 @@ available and followed the project instructions.
   `# pragma: no cover`, so this is the only proof it works). `/health` reports
   `dim: 1024`, confirming the migration's hard-coded `vector(1024)`. The first live request
   500ed: transformers 5.16 returns `BaseModelOutputWithPooling` from `get_image_features` /
-  `get_text_features`, not a tensor, so `.to("cpu")` blew up — no fake could have caught this.
+  `get_text_features`, not a tensor, so `.to("cpu")` blew up: no fake could have caught this.
   Fixed in f987c33 by moving the version-dependent unwrapping into a pure, tested
   `features.py` (`pooled_features`) instead of leaving it inside the uncovered backend; 66
   tests, still 100%. After the fix: image and text vectors are both 1024-d with norm exactly
   1.0, and each colour query picks its own colour (blue 0.143 vs 0.075/0.087, red 0.142, green
-  0.153). Note how low the absolute scores are even for a correct match — confirmation that
+  0.153). Note how low the absolute scores are even for a correct match; confirmation that
   ranking must be top-k with a relative margin, never an absolute cosine threshold, as the
   build spec already requires. Also fixed the root `biome.json` (7575cbe): `**/.worktrees`
   matched a worktree's own path segment, so `pnpm lint` inside any worker checkout reported
@@ -415,7 +415,7 @@ available and followed the project instructions.
   scope, so its own gates passed while the repo did not typecheck). Gates: lint 1018, typecheck 13,
   coverage 8/8 (api 1679, web 1341, db 194), db integration 230.
 - Image search verified end to end on the dev stack: rebuild embedded 10 candidates in ~12 s
-  (1 error, a thumbnail row whose file I had deleted by hand — logged and skipped, which is the
+  (1 error, a thumbnail row whose file I had deleted by hand: logged and skipped, which is the
   intended behaviour), 9 rows at `vector_dims = 1024` under `google/siglip2-large-patch16-256`.
   Nearest-neighbour queries through the sidecar's text tower: "a blue ocean" → ocean.png (0.091),
   "a green forest" → forest.png (0.068), "a warm orange sunset" → sunset.png (0.110), and in
@@ -495,3 +495,9 @@ available and followed the project instructions.
 - Follow-ups not started: exclude the trash subtree from folder sums; "some results omitted" hint
   for the text panel's `partial` flag (only the image grid shows it); an MCP image search tool;
   production search performance (search25k p95 over budget) remains on hold.
+- 2026-09-07 night: documentation overhaul and simplification completed. Rewrote root README.md,
+  deploy/README.md (home-server & LAN first), deploy/REFERENCE.md, docs/OFFICE.md, docs/MCP.md,
+  docs/DEVELOPMENT.md, docs/CONTRIBUTING.md, and apps/web/README.md; added dedicated simplified guides
+  docs/TRASH.md and docs/SEARCH-AND-AI.md; added navigation banners to technical docs docs/INDEXER.md
+  and docs/OCR.md. Zero Biome diagnostics across 1044 files; 16 workflow regression groups passed.
+

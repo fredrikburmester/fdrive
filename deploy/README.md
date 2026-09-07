@@ -1,264 +1,229 @@
-# Setting up fdrive
+# Setting up fdrive on your Home Server
 
-This guide puts fdrive in front of the SFTPGo you already run, with **everything
-turned on**: files, search, image search, thumbnails, OCR, trash, office editing
-and the MCP server, all in one Docker Compose stack.
+This guide walks you through setting up fdrive with Docker.
 
-Follow the steps in order. Every step is one thing. Need the details behind any
-of it? See [REFERENCE.md](REFERENCE.md).
+We start with the **basic setup** (a fast, lightweight file manager on your home network), and then show you the exact steps to enable the **full setup with all the bells and whistles** (AI document search, photo search by description, nightly OCR, browser office editing, trash, and Claude AI integration).
 
-## What you need
+---
 
-- A running SFTPGo, and access to its web admin.
-- A Linux server with Docker and Docker Compose. It must see the directory
-  SFTPGo stores its users' files in, so usually it is the same machine SFTPGo
-  runs on.
-- About 12 GB of RAM with everything on (the search models are the heavy part).
-- A domain name for fdrive, for example `drive.example.com`, and something that
-  does HTTPS in front of it: Caddy, Nginx Proxy Manager, Traefik, Cloudflare
-  Tunnel, anything. fdrive itself only speaks plain HTTP on `127.0.0.1:8090`.
+## Hardware Requirements
 
-No SFTPGo yet? `compose.sftpgo.yaml` starts one for you; see
-[REFERENCE.md](REFERENCE.md). This guide assumes you have one.
+- **Basic Setup**: < 500 MB RAM (runs on almost anything, including a Raspberry Pi).
+- **Full Setup (All Bells & Whistles)**: ~6 GB RAM (runs the local AI text and vision models plus ONLYOFFICE).
 
-## Step 1: Get the code
+---
+
+# Part 1: Basic Setup (2 Minutes)
+
+This gets your core file manager running on your local network (LAN) at `http://<your-server-ip>:8090`.
+
+### Step 1: Download fdrive
+
+Open a terminal on your server:
 
 ```bash
-git clone https://github.com/fredrikburmester/fdrive-web.git /opt/fdrive
+git clone https://github.com/fredrikburmester/fdrive-web.git /path/to/fdrive
+cd /path/to/fdrive/deploy
 ```
 
-```bash
-cd /opt/fdrive/deploy
-```
+All commands in this guide are run from inside your deploy directory (`/path/to/fdrive/deploy`).
 
-Everything below happens inside `/opt/fdrive/deploy`.
-
-## Step 2: Create your settings file
+### Step 2: Create your `.env` file
 
 ```bash
 cp .env.example .env && chmod 600 .env
 ```
 
-Generate the two secrets:
+Generate two secret keys:
 
 ```bash
 openssl rand -base64 32
+openssl rand -base64 32
 ```
 
-Run that twice. The first result is your `FDRIVE_MASTER_KEY`, the second your
-`POSTGRES_PASSWORD`.
-
-Open `.env` in an editor. It is long, but only the settings below matter. In
-`.env.example` most of them are switched off with a `#` in front of the name,
-like `#FDRIVE_PUBLIC_URL=`. Remove that `#` and fill in the value.
+Open `.env` in an editor (e.g. `nano .env`) and set these 5 basic lines:
 
 ```dotenv
-FDRIVE_MASTER_KEY=<first openssl result>
-POSTGRES_PASSWORD=<second openssl result>
+# Paste the two keys generated above:
+FDRIVE_MASTER_KEY=<first openssl key>
+POSTGRES_PASSWORD=<second openssl key>
 
-FDRIVE_PUBLIC_URL=https://drive.example.com
-FDRIVE_COOKIE_SECURE=true
+# How fdrive reaches your SFTPGo server:
+# If SFTPGo runs on the host outside Docker: http://172.17.0.1:8080
+# If SFTPGo runs on another machine on LAN:  http://192.168.1.X:8080
+SFTPGO_URL=http://172.17.0.1:8080
 
-SFTPGO_URL=http://<sftpgo host>:8080
-FDRIVE_INDEX_SFTPGO_DIR=<directory on this server that holds the users' home folders>
+# The folder on this machine where SFTPGo stores user files:
+FDRIVE_INDEX_SFTPGO_DIR=/srv/sftpgo/data
 
-FDRIVE_ADMIN_USERS=<your SFTPGo username>
+# Your SFTPGo username (grants admin rights in fdrive):
+FDRIVE_ADMIN_USERS=myusername
 
-FDRIVE_SFTPGO_TRASH_PATH=/.trash
-FDRIVE_SFTPGO_TRASH_RETENTION_HOURS=720
-
-ONLYOFFICE_JWT_SECRET=<run: openssl rand -hex 32>
-
-FDRIVE_COMPOSE_FILES="compose.office.yaml"
-FDRIVE_PROFILES="index office"
+# Allow plain HTTP access on your home Wi-Fi:
+FDRIVE_COOKIE_SECURE=false
 ```
 
-About the two SFTPGo lines:
+> [!TIP]
+> **Don't have SFTPGo yet?** See [Starting with a fresh SFTPGo](#starting-with-a-fresh-sftpgo) below.
 
-- `SFTPGO_URL` is the address of SFTPGo's HTTP port as seen from a container on
-  this server. If SFTPGo runs on the host, `http://172.17.0.1:8080` (Docker's
-  host address) usually works. If SFTPGo runs in its own compose project, copy
-  `compose.sftpgo-network.example.yaml` to `compose.sftpgo-network.yaml`, put
-  that project's network name in it, add the file to `FDRIVE_COMPOSE_FILES`, and
-  use the SFTPGo container name, like `http://sftpgo:8080`.
-- `FDRIVE_INDEX_SFTPGO_DIR` is the folder that contains one subfolder per SFTPGo
-  user. If SFTPGo itself sees that folder at a different path than this server
-  does (it runs in a container, say), also set `FDRIVE_INDEX_SFTPGO_PATH` to the
-  path SFTPGo sees. The default is `/srv/sftpgo/data`.
-
-Do not leave any `change-me` in the file. The next step refuses to start if you do.
-
-## Step 3: Start everything
+### Step 3: Start fdrive
 
 ```bash
 ./update.sh
 ```
 
-This pulls, builds, checks your `.env`, starts every container and waits for
-fdrive to report healthy. The first run takes a while: it builds the images and
-downloads the search models (a few GB). Later runs are fast.
+Once it finishes, open your browser to **`http://<your-server-ip>:8090`** and sign in with your SFTPGo credentials.
 
-When it finishes you should see `preflight OK` and a JSON health line at the
-bottom. If it stops earlier, the message names the exact `.env` line to fix.
+You now have a fast, working drive for browsing, uploading, and sharing files!
 
-## Step 4: Put HTTPS in front
+---
 
-fdrive listens on `127.0.0.1:8090`. Make your HTTPS proxy forward
-`https://drive.example.com` to `http://127.0.0.1:8090`. The proxy must allow
-WebSockets and large uploads.
+# Part 2: The Full Setup (All the Bells & Whistles)
 
-With Caddy on the same server, the whole config is:
+Once the basic setup works, follow these steps to turn on **everything**:
+1. Full-text search inside PDFs, Word docs, and spreadsheets.
+2. AI vision search: search photos by description (e.g. "red sports car").
+3. Nightly OCR for scanned paper documents.
+4. Browser office editing with ONLYOFFICE.
+5. Trash and file restoration.
 
-```
-drive.example.com {
-	reverse_proxy 127.0.0.1:8090
-}
-```
+---
 
-If your proxy runs in its own container (Nginx Proxy Manager is the usual case),
-it cannot reach the host's `127.0.0.1`. Set `FDRIVE_HTTP_BIND=0.0.0.0` in `.env`,
-point the proxy at the server's LAN address on port 8090, run `./update.sh`
-again, and firewall port 8090 from everything but the proxy.
+### Step 4: Turn on the Full Service Stack in `.env`
 
-Now open `https://drive.example.com` and sign in with your normal SFTPGo username
-and password. Your files are there.
-
-Upload something. It shows up in search a minute later, with a thumbnail if it is
-an image. If not, open **System** in the sidebar: each page says exactly what is
-missing.
-
-## Step 5: Turn on trash
-
-fdrive never keeps deleted files itself. Trash works by telling SFTPGo to move a
-file into a `/.trash` folder instead of deleting it, so it also catches deletes
-made over SFTP or WebDAV. You set this up once, in SFTPGo's web admin, and it
-applies to every user.
-
-In the SFTPGo admin, open **Event Manager**.
-
-1. Under **Actions**, add one:
-   - Name: `fdrive-move-to-trash`
-   - Type: **Filesystem**, sub-type **Rename**
-   - Rename from: `/{{.VirtualPath}}`
-   - Rename to: `/.trash/{{.VirtualDirPath}}/{{.ObjectName}}/{{.Timestamp}}`
-2. Under **Rules**, add one:
-   - Name: `fdrive-trash`
-   - Trigger: **Filesystem events**, event **pre-delete**
-   - Path filter: `/.trash/**` with **inverse match** ticked
-   - Actions: `fdrive-move-to-trash`, with **execute sync** and **stop on
-     failure** ticked
-
-Save both. Reload fdrive, delete a file, and it appears under **Trash** in the
-sidebar with Restore and Delete forever.
-
-**Automatic emptying.** fdrive says "removed after 720 hours" because of
-`FDRIVE_SFTPGO_TRASH_RETENTION_HOURS`, but SFTPGo has to do the actual removing.
-Add one more action and rule:
-
-1. Action `fdrive-trash-retention`, type **Data retention check**, folder
-   `/.trash`, retention `720` hours, **delete empty dirs** and **ignore user
-   permissions** ticked.
-2. Rule `fdrive-trash-retention`, trigger **Schedule**, once a day (for example
-   hour `3`, everything else `*`), action `fdrive-trash-retention`.
-
-Keep the retention hours and `FDRIVE_SFTPGO_TRASH_RETENTION_HOURS` the same.
-
-Two things to know: deleting a folder trashes each file inside it one by one,
-and overwriting a file (upload over an existing name) is not a delete, so the
-old version is not trashed.
-
-## Step 6: Office editing
-
-ONLYOFFICE is already running and documents open in the browser. Editing is off
-by default though: everything is view-only until you say who may edit what.
-
-First find the provider id. Sign in to fdrive, then run:
+Generate an office secret:
 
 ```bash
-docker compose -f compose.yaml exec db psql -U fdrive -d fdrive -c "SELECT p.id AS provider_id, i.external_username FROM app.identities i JOIN app.providers p ON p.id = i.provider_id;"
+openssl rand -hex 32
 ```
 
-Then add a rule to `.env`. This one lets `alice` edit everything in her home:
+Open `.env` and add these settings to enable all the companion services:
 
 ```dotenv
-FDRIVE_OFFICE_EDIT_RULES='[{"providerId":"<provider_id from above>","username":"alice","path":"/","recursive":true,"allow":true}]'
+# 1. Enable ONLYOFFICE:
+FDRIVE_COMPOSE_FILES="compose.office.yaml"
+ONLYOFFICE_JWT_SECRET=<hex key generated above>
+
+# 2. Enable Search, AI vision embeddings, OCR, and Office together:
+FDRIVE_PROFILES="index office"
+
+# 3. Enable Trash display in fdrive:
+FDRIVE_SFTPGO_TRASH_PATH=/.trash
+FDRIVE_SFTPGO_TRASH_RETENTION_HOURS=720
 ```
 
-Run `./update.sh`. Alice can now edit. Add one object per person. The full rule
-format, and how to use Collabora instead of ONLYOFFICE, is in
-[docs/OFFICE.md](../docs/OFFICE.md).
-
-## Step 7: Connect an AI assistant (MCP)
-
-Open **Account** in fdrive and create an API token. Give the token to your MCP
-client with the URL `https://drive.example.com/mcp` as a bearer token, or use
-`https://drive.example.com/mcp/t/<token>` for clients that cannot set headers.
-The assistant can then search and read exactly what that user can. Writes stay
-off unless you set `FDRIVE_MCP_WRITES=true`. Details in [docs/MCP.md](../docs/MCP.md).
-
-## What is now running
-
-| Feature | Where you see it | Turned on by |
-| --- | --- | --- |
-| Files, previews, shares, favorites, tags | Everywhere | Always on |
-| Full-text and semantic search | The search box | `index` profile |
-| Image search (describe a picture in words) | Search box, **Images** toggle | `index` profile |
-| Thumbnails and folder overviews | File list and Inspector | `index` profile |
-| OCR for scanned PDFs, nightly | System, OCR | `index` profile |
-| Trash with restore | Sidebar, **Trash** | Step 5 |
-| Office editing | Opening a document | `office` profile plus step 6 |
-| MCP server | `/mcp` | Step 7 |
-
-Everything under **System** in the sidebar (Connection, Indexer, Search, Image
-search, Thumbnails, OCR) shows one of three states per feature: working,
-"Unreachable", or "Not configured: set FDRIVE_X". `docker compose logs api` prints
-the same list at every start.
-
-## Updating
+Apply the changes:
 
 ```bash
-/opt/fdrive/deploy/update.sh
+./update.sh
 ```
 
-That is the whole update procedure. It reads `FDRIVE_COMPOSE_FILES` and
-`FDRIVE_PROFILES` from `.env`, so it always restarts the same set of services you
-set up. Database migrations run automatically.
+*Note: On this run, Docker will download the ONLYOFFICE image and the open-source AI models (about 4 GB total). It may take 3 to 5 minutes depending on your internet speed.*
 
-## Optional tweaks
+---
 
-All of these go in `.env`, followed by `./update.sh`.
+### Step 5: Enable Trash in SFTPGo (2 Minutes)
 
-- `TZ=Europe/Stockholm`: the time zone for the nightly OCR pass.
-- `OCR_EXCLUDE_GLOBS=Photos/**,Videos/**`: folders OCR should skip.
-- `OCR_INCLUDE_GLOBS=alice/**`: only OCR these folders.
-- `FDRIVE_INDEX_UID=1000`: the uid SFTPGo writes files as, so the indexer can read
-  `700` folders. Change it if your SFTPGo runs as another user.
-- `FDRIVE_DATA_DIR=/mnt/big-disk/fdrive`: move Postgres, models and OCR state off
-  the default `./data`.
-- `FDRIVE_SESSION_TTL_DAYS=30`: how long a login lasts.
+To make file deletions move to a recycle bin instead of disappearing immediately:
 
-## Something is wrong
+1. Open your **SFTPGo WebAdmin** (typically `http://<sftpgo-server>:8080/web/admin`).
+2. Go to **Event Manager** in the left menu.
+3. Under **Actions**, click **Add** (`+`):
+   - **Name**: `fdrive-move-to-trash`
+   - **Type**: `Filesystem`, sub-type `Rename`
+   - **Rename from**: `/{{.VirtualPath}}`
+   - **Rename to**: `/.trash/{{.VirtualDirPath}}/{{.ObjectName}}/{{.Timestamp}}`
+   - Click **Save**.
+4. Under **Rules**, click **Add** (`+`):
+   - **Name**: `fdrive-trash`
+   - **Trigger**: `Filesystem events`, check **pre-delete**
+   - **Path filter**: `/.trash/**` and **check "Inverse match"**
+   - **Actions**: Select `fdrive-move-to-trash`, check **"Execute sync"** and **"Stop on failure"**
+   - Click **Save**.
 
-- **`./update.sh` stops at preflight.** Read the line it printed. It is always a
-  leftover `change-me`, a typo in a `FDRIVE_*` name, or a bad `FDRIVE_HOME_TEMPLATE`.
-- **Cannot sign in over `http://<ip>:8090`.** Expected. The cookie is HTTPS-only.
-  Use the HTTPS domain from step 4.
-- **Sign-in fails with a connection error.** `SFTPGO_URL` is not reachable from
-  inside the `api` container. Check with
-  `docker compose -f compose.yaml exec api wget -qO- $SFTPGO_URL/healthz`.
-- **Search says Unreachable.** The `index` profile is not running or is still
-  downloading models. `docker compose -f compose.yaml --profile index ps` and
-  `docker compose -f compose.yaml logs embed`.
-- **Image search says Unreachable.** Same, but the `image-embed` container. It
-  needs a few minutes on first start.
-- **Search finds nothing, or thumbnails never appear.** `FDRIVE_INDEX_SFTPGO_DIR`
-  points at the wrong folder, or `FDRIVE_INDEX_SFTPGO_PATH` does not match what
-  SFTPGo sees. System, Indexer shows what it walked.
-- **Trash item missing from the sidebar.** `FDRIVE_SFTPGO_TRASH_PATH` is not set,
-  or the API was not restarted after setting it.
-- **Delete fails with an error.** The SFTPGo rule exists but the rename into
-  `/.trash` failed. Check the user has write permission on their home.
-- **Office opens but cannot edit.** Step 6. View-only is the default.
-- **The editor iframe is blank.** `FDRIVE_PUBLIC_URL` in `.env` does not match the
-  address in the browser. Fix it and run `./update.sh` (the web image bakes it in
-  at build time).
+Now deleting a file in fdrive moves it to **Trash**, where you can restore it anytime.
+
+---
+
+### Step 6: Enable Office Editing Permissions (1 Minute)
+
+By default, office files open in view mode. To grant yourself editing access:
+
+1. Run this command on your server to find your user's `provider_id`:
+   ```bash
+   docker compose -f compose.yaml exec db psql -U fdrive -d fdrive -c \
+     "SELECT p.id AS provider_id, i.external_username FROM app.identities i JOIN app.providers p ON p.id = i.provider_id;"
+   ```
+2. Copy the UUID returned, and add an edit rule to `.env` (replace with your UUID and username):
+   ```dotenv
+   FDRIVE_OFFICE_EDIT_RULES='[{"providerId":"<your-uuid>","username":"<your-username>","path":"/","recursive":true,"allow":true}]'
+   ```
+3. Run:
+   ```bash
+   ./update.sh
+   ```
+
+You can now edit Word, Excel, and PowerPoint documents collaboratively in the browser!
+
+---
+
+### Step 7: (Optional) Connect Claude or Raycast (MCP)
+
+To let AI assistants search and read your files:
+
+1. In fdrive, go to **Account > API Tokens** and create a token.
+2. In Claude Desktop, run:
+   ```bash
+   claude mcp add --transport http fdrive http://<your-server-ip>:8090/mcp --header "Authorization: Bearer <your-token>"
+   ```
+See [docs/MCP.md](../docs/MCP.md) for full details.
+
+---
+
+### Step 8: (Optional) Remote Access & HTTPS
+
+If you want to access your full fdrive setup from outside your home:
+
+1. Point your reverse proxy (Caddy, Nginx Proxy Manager, or Cloudflare Tunnel) to `http://<your-server-ip>:8090`.
+2. In `.env`, set your public domain and turn secure cookies back on:
+   ```dotenv
+   FDRIVE_PUBLIC_URL=https://drive.yourdomain.com
+   FDRIVE_COOKIE_SECURE=true
+   ```
+3. Run `./update.sh`.
+
+---
+
+## Verification Checklist
+
+To confirm your full setup is healthy:
+
+- **Search**: Open the search bar at the top and type a word inside any text or PDF file.
+- **AI Image Search**: Click the **Images** toggle in the search bar and search for a photo by description (e.g. "mountain").
+- **Office**: Click any `.docx`, `.xlsx`, or `.pptx` file. It should open inside ONLYOFFICE with full editing controls.
+- **Trash**: Delete a test file. Go to **Trash** in the left sidebar and verify it appears with a **Restore** button.
+- **System Dashboard**: Open **System** in the sidebar. Indexer, Search, Image Search, Thumbnails, and OCR should all report healthy status.
+
+---
+
+## Updating fdrive
+
+To update fdrive in the future:
+
+```bash
+cd /path/to/fdrive/deploy && ./update.sh
+```
+
+---
+
+## Starting with a fresh SFTPGo
+
+If you do not have an existing SFTPGo installation:
+
+1. In `.env`, enable the bundled SFTPGo compose file:
+   ```dotenv
+   FDRIVE_COMPOSE_FILES="compose.sftpgo.yaml"
+   SFTPGO_URL=http://sftpgo:8080
+   ```
+2. Run `./update.sh`.
+3. Open `http://<your-server-ip>:8091/web/admin` to create your SFTPGo admin account and your first user.

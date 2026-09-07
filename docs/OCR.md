@@ -1,5 +1,8 @@
 # The OCR service
 
+> [!TIP]
+> **Looking to configure or use OCR in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the Python OCR service.
+
 `services/ocr` is a small Python service that runs a nightly OCR pass over one
 or more disk roots, giving scanned PDFs a text layer so the indexer (and
 therefore search) can find them. It is the direct port of filesai's
@@ -129,7 +132,7 @@ python scripts/import-done-tsv.py done.tsv --root sftpgo \
 filesai's key only has second-precision mtimes, while `idx.ocr_log` keys on
 `mtime_ns`; the importer scales seconds to nanoseconds. If a file's real mtime
 carries sub-second precision the imported key will not match on the first
-pass, so that one file gets reprocessed once — safe, since OCR is idempotent
+pass, so that one file gets reprocessed once; this is safe, since OCR is idempotent
 and refuses PDFs that already have text. It is otherwise idempotent: rows are
 inserted `ON CONFLICT ... DO NOTHING` on the same unique key the service
 itself uses, so running it twice is a no-op the second time.

@@ -1,77 +1,104 @@
 # fdrive
 
-fdrive is a self-hostable web drive that sits in front of an existing [SFTPGo](https://github.com/drakkan/sftpgo) server. Your files stay exactly where they are, on disk, owned by SFTPGo; fdrive adds the browser, the search, the sharing and the editing on top.
+**fdrive** is a clean, fast web drive for your home server. It connects to your existing [SFTPGo](https://github.com/drakkan/sftpgo) storage so you can browse, upload, preview, and share your files from any browser on your home network, without moving your data into a database or giving up control.
 
-It is built for the person who already runs SFTPGo for the SFTP and WebDAV clients and wants a proper web UI, full-text and semantic search across everything, and office editing, without moving the data into yet another app's database.
+Think of it like Google Drive or iCloud Drive, but running completely on your own hardware, right over your existing files.
 
-## Features
+---
 
-- Browse, upload, download, move, rename and delete over SFTPGo's user API, as the signed-in user, with SFTPGo's own permissions enforced.
-- Previews for images, video, audio, PDF, text, code and markdown; in-place editing of text and markdown.
-- Full-text and semantic search over file contents, with thumbnails, duplicates and folder overviews, backed by a Postgres index that respects every user's SFTPGo scope.
-- Tags, favorites and recents that follow files through renames, even renames made over SFTP by other clients.
-- Office documents opened and co-edited in the browser through WOPI, with ONLYOFFICE or Collabora, view-only by default and editing granted per operator policy.
-- Public share links proxied through fdrive, with passwords, expiry, download limits, list, gallery or download-only presentation, and upload-only drop links.
-- Trash with restore, provided by SFTPGo's own Event Manager rule so deletes from any client end up in the same recycle folder.
-- Multiple SFTPGo identities linked to one account, with one-click switching and cross-identity favorites and search.
-- OCR for scanned PDFs on a nightly pass, so they become searchable.
-- A built-in MCP server with per-identity tokens, so an AI assistant can search and read files with exactly the caller's permissions.
-- Every archive, ZIP download and OCR pass runs as a job with progress; the UI updates live over server-sent events.
+## Highlights
+
+- **Your files stay yours**: Files remain plain files on your disk, managed by SFTPGo. fdrive never moves, hides, or locks them into a proprietary format.
+- **Lightning fast & clean**: Minimalist, distraction-free interface with dark mode, keyboard navigation, and mobile support.
+- **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
+- **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file over SFTP or directly on disk.
+- **Share with family & friends**: Create password-protected links with expiration dates, download limits, and beautiful photo galleries.
+- **Built-in Trash**: Safely restore accidentally deleted files.
+- **Modular power-ups**: Keep it featherlight (< 300 MB RAM) for basic browsing, or switch on full-text search, AI image search, OCR, and browser office editing whenever you want.
+
+---
+
+## 2-Minute Quickstart (Home Server / LAN)
+
+If you already have Docker and SFTPGo running on your home server:
+
+### 1. Download fdrive
+```bash
+git clone https://github.com/fredrikburmester/fdrive-web.git /path/to/fdrive
+cd /path/to/fdrive/deploy
+cp .env.example .env
+```
+
+### 2. Generate two secret keys
+```bash
+openssl rand -base64 32
+openssl rand -base64 32
+```
+
+### 3. Edit `.env`
+Open `.env` in your favorite editor. For a simple home server on your local network (LAN), you only need to set these lines:
+
+```dotenv
+# Paste the two keys you generated above:
+FDRIVE_MASTER_KEY=<first-openssl-key>
+POSTGRES_PASSWORD=<second-openssl-key>
+
+# Address of your SFTPGo server:
+SFTPGO_URL=http://127.0.0.1:8080
+
+# The folder on this machine where SFTPGo keeps user files:
+FDRIVE_INDEX_SFTPGO_DIR=/srv/sftpgo/data
+
+# Your SFTPGo username (makes you an admin in fdrive):
+FDRIVE_ADMIN_USERS=myusername
+
+# Allow plain HTTP login on your home Wi-Fi:
+FDRIVE_COOKIE_SECURE=false
+```
+
+### 4. Start it up
+```bash
+./update.sh
+```
+
+Now open your browser to **`http://<your-server-ip>:8090`** and log in with your normal SFTPGo username and password!
+
+---
+
+## Resource Requirements
+
+fdrive is designed to be lightweight by default. You only pay for what you use:
+
+| Setup | Recommended RAM | What you get |
+| :--- | :--- | :--- |
+| **Core fdrive** | **< 500 MB** | Full file manager, previews, tags, favorites, public shares, and trash. Runs on a Raspberry Pi or low-end NAS. |
+| **+ Search & AI** | **~4 GB** | Full-text search inside documents, AI image search (search photos by description), and nightly OCR for scanned PDFs. |
+| **+ Office Editing** | **~2 GB** | Collaborative Word, Excel, and PowerPoint editing in the browser via ONLYOFFICE. |
+
+---
 
 ## Documentation
 
-- [Setup guide](deploy/README.md): step by step from an empty server to everything turned on, including trash, search, image search, office editing and MCP.
-- [Deployment reference](deploy/REFERENCE.md): every compose file, TLS and network placement, container hardening and pinned images.
-- [Office editing](docs/OFFICE.md): ONLYOFFICE and Collabora setup, proof keys, edit policy.
-- [Search and indexing](docs/INDEXER.md): what gets indexed, settings, the indexer's internal API.
-- [OCR](docs/OCR.md): the nightly pass and its safety guarantees.
-- [MCP](docs/MCP.md): tools, tokens and scoping.
-- [Authentication](docs/AUTH.md): credential mode, sessions and linked identities.
-- [Development](docs/DEVELOPMENT.md): running the dev stack, tests and the trash rule.
-- [Architecture and decisions](PLAN.md): the full design, domain model and phased plan.
+- 🚀 **[Home Server Setup Guide](deploy/README.md)**: Full step-by-step setup guide, optional add-ons, and LAN configuration.
+- 🗑️ **[Trash Setup](docs/TRASH.md)**: Enable safe recycle-bin restore for deleted files.
+- 🔍 **[Search, Thumbnails & AI](docs/SEARCH-AND-AI.md)**: How document search, image search, and OCR work.
+- 📝 **[Office Documents & Editing](docs/OFFICE.md)**: View and collaboratively edit office files in your browser.
+- 🤖 **[AI Assistant Integration (MCP)](docs/MCP.md)**: Connect Claude or Raycast to search and read your files.
+- 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
+- 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
 
-## Screenshots
+---
 
-Coming with the first tagged release. Until then, the dev stack in [Development](docs/DEVELOPMENT.md) boots a seeded instance in a few minutes.
+## Why fdrive?
 
-## Stack
+Most self-hosted drives either try to replace your filesystem with their own database (like Nextcloud), or they're too barebones to replace Google Drive or iCloud Drive.
 
-- [Next.js](https://nextjs.org) with [shadcn/ui](https://ui.shadcn.com) for the web app.
-- [Hono](https://hono.dev) for the API, on Node 24.
-- [Postgres](https://www.postgresql.org) with [pgvector](https://github.com/pgvector/pgvector) for metadata and the search index, migrations owned by [Drizzle](https://orm.drizzle.team).
-- A Python indexer using [Apache Tika](https://tika.apache.org), [text-embeddings-inference](https://github.com/huggingface/text-embeddings-inference) and [OCRmyPDF](https://ocrmypdf.readthedocs.io).
-- [Caddy](https://caddyserver.com) as the single-origin proxy inside the Compose stack.
-- A pnpm and Turborepo monorepo with Vitest, Playwright and Biome.
+fdrive sits right in the sweet spot:
+1. **SFTPGo handles storage & protocols**: SFTP, user management, and permissions are handled by SFTPGo, a rock-solid, battle-tested Go server.
+2. **fdrive handles the modern web experience**: A polished, responsive browser UI, fast search, document editing, and mobile-friendly links.
 
-## Why I built it
-
-I run SFTPGo as the one place all my files live. The web front-ends I tried either wanted to own the files, copied them into their own store, or knew nothing about the content. fdrive is the opposite: SFTPGo stays the source of truth and is never touched below its public API, and everything fdrive adds, index, tags, shares, office sessions, is derived data that can be rebuilt.
-
-## Alternatives
-
-- [Filestash](https://www.filestash.app): a capable web client, office editing included, built to front many storage backends. I only have one, its development is slow, and it lacks the features I use daily: search worth the name, OCR, compressing files, favorites, tags.
-- [Nextcloud](https://nextcloud.com): slow and clunky for this purpose, large and heavy, and it does far too many things. It also wants a database between you and your files. I want my files in a plain directory, nothing else.
-- [FileBrowser](https://filebrowser.org): a lightweight file manager over a local directory, without SFTPGo's user model.
-- SFTPGo's built-in web client: has sharing pages and handles transfers, but lacks previews, search and most other basics of a daily-use file UI.
-
-## Security
-
-- Credential mode only: fdrive never holds an SFTPGo admin token. Each user signs in with their own SFTPGo account; the password is stored encrypted and only ever sent to the exact server it was captured against.
-- Every index-backed result is checked against a live read through the user's own SFTPGo session before it is shown, so search can never reveal a file the user cannot open.
-- Office editing is deny-by-default; WOPI proof-key verification cannot be switched off.
-- Share traffic is proxied; the SFTPGo host is never exposed to a visitor.
-- Containers run with dropped capabilities, read-only filesystems where possible and digest-pinned images. See the [deployment reference](deploy/REFERENCE.md).
-
-Found a vulnerability? Please open a private security advisory on GitHub rather than a public issue.
-
-## Status
-
-Under active development and running as my daily driver. Expect the occasional breaking change until the first tagged release; migrations are automatic, and `deploy/update.sh` updates a running stack in place.
-
-## Contributing
-
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](docs/CONTRIBUTING.md) first; the short version is that every change comes with tests and passes `pnpm lint`, `pnpm typecheck` and `pnpm test:coverage`.
+---
 
 ## License
 
-AGPL-3.0. fdrive is built on [SFTPGo](https://github.com/drakkan/sftpgo), which it uses unmodified as an external service.
+[AGPL-3.0](LICENSE). fdrive is built on top of [SFTPGo](https://github.com/drakkan/sftpgo), which it uses unmodified as an external service.
