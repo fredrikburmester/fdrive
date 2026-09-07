@@ -10,6 +10,7 @@ import {
   type OcrSettingsResponse,
   OcrSettingsUpdateRequest,
   ROUTES,
+  type SystemImageSearchResponse,
   type SystemIndexerResponse,
   type SystemOcrResponse,
   type SystemReembedResponse,
@@ -22,6 +23,7 @@ import type { AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
 import { ApiHttpError } from "../errors.js";
+import type { ImageEmbedClient } from "../search/image-embed-client.js";
 import { fetchEmbedStatus } from "./embed-status.js";
 import type { IndexerClient } from "./indexer-client.js";
 import type { OcrClient } from "./ocr-client.js";
@@ -55,6 +57,8 @@ export interface SystemRoutesDeps {
   readonly ocrClient: OcrClient | null;
   /** The TEI base URL (`FDRIVE_EMBED_URL`), `undefined` when semantic search is not configured. */
   readonly embedUrl: string | undefined;
+  /** `null` when `FDRIVE_IMAGE_EMBED_URL` is not configured. */
+  readonly imageEmbedClient: ImageEmbedClient | null;
   /** `FDRIVE_THUMBS_DIR`, `undefined` when thumbnails are not configured. */
   readonly thumbsDir: string | undefined;
   /** Every configured index root's name (`FDRIVE_INDEX_ROOTS`). */
@@ -297,6 +301,69 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
     const body: SystemReembedResponse = { marked, roots: [...deps.indexRootNames] };
     return c.json(body);
+  });
+
+  authed.get(withoutApiV1Prefix(ROUTES.system.imageSearch), requireAdmin, async (c) => {
+    const [healthResult, embeddingStats, statsResult] = await Promise.all([
+      deps.imageEmbedClient === null ? Promise.resolve(null) : deps.imageEmbedClient.health(),
+      deps.indexQueries.imageEmbeddingStats(),
+      deps.indexerClient === null ? Promise.resolve(null) : deps.indexerClient.stats(),
+    ]);
+
+    const stats = statsResult?.ok === true ? statsResult.data : undefined;
+
+    const body: SystemImageSearchResponse = {
+      configured: deps.imageEmbedClient !== null,
+      healthy: healthResult?.ok === true && healthResult.data.status === "ok",
+      ...(healthResult?.ok === true
+        ? {
+            model: healthResult.data.model,
+            ...(healthResult.data.dim !== null ? { dim: healthResult.data.dim } : {}),
+          }
+        : {}),
+      embedded: embeddingStats.total,
+      embeddedModel: embeddingStats.model,
+      ...(stats?.imageEmbeddingRebuild !== undefined
+        ? { rebuild: stats.imageEmbeddingRebuild }
+        : {}),
+      ...(stats?.imageEmbeddingClear !== undefined ? { clear: stats.imageEmbeddingClear } : {}),
+    };
+    return c.json(body);
+  });
+
+  authed.post(withoutApiV1Prefix(ROUTES.system.imageSearchRebuild), requireAdmin, async (c) => {
+    if (deps.indexerClient === null) {
+      throw new ApiHttpError("bad_request", "the indexer is not configured");
+    }
+
+    const rawBody: unknown = await c.req.json().catch(() => ({}));
+    const parsed = IndexerThumbnailsRebuildRequest.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid request", { issues: parsed.error.issues });
+    }
+
+    const result = await deps.indexerClient.imageEmbeddingsRebuild(parsed.data);
+    if (!result.ok) {
+      throwForThumbnailsRebuildFailure(result);
+    }
+
+    const body: IndexerThumbnailsRebuildResponse = result.data;
+    return c.json(body, 202);
+  });
+
+  authed.post(withoutApiV1Prefix(ROUTES.system.imageSearchClear), requireAdmin, async (c) => {
+    if (deps.indexerClient === null) {
+      throw new ApiHttpError("bad_request", "the indexer is not configured");
+    }
+    const parsed = z.strictObject({}).safeParse(parseClearBody(await c.req.text()));
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid clear request", {
+        issues: parsed.error.issues,
+      });
+    }
+    const result = await deps.indexerClient.clearImageEmbeddings();
+    if (!result.ok) throwForClearFailure(result);
+    return c.json(result.data, 202);
   });
 
   authed.get(withoutApiV1Prefix(ROUTES.system.ocr), requireAdmin, async (c) => {

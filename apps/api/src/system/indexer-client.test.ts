@@ -145,6 +145,50 @@ describe("createIndexerClient: stats", () => {
     expect(result.ok && result.data.thumbnailRebuild).toBeUndefined();
   });
 
+  it("maps image_embedding_rebuild and image_embedding_clear when present", async () => {
+    const job = {
+      running: false,
+      processed: 4,
+      total: 4,
+      started_at: "2026-01-01T00:00:00+00:00",
+      finished_at: "2026-01-01T00:01:00+00:00",
+      errors: 0,
+    };
+    const fetchStub = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        ...STATS_RAW,
+        image_embedding_rebuild: job,
+        image_embedding_clear: job,
+      }),
+    );
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.stats();
+
+    expect(result.ok).toBe(true);
+    const expected = {
+      running: false,
+      processed: 4,
+      total: 4,
+      startedAt: "2026-01-01T00:00:00+00:00",
+      finishedAt: "2026-01-01T00:01:00+00:00",
+      errors: 0,
+    };
+    expect(result.ok && result.data.imageEmbeddingRebuild).toEqual(expected);
+    expect(result.ok && result.data.imageEmbeddingClear).toEqual(expected);
+  });
+
+  it("omits imageEmbeddingRebuild and imageEmbeddingClear when absent", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, STATS_RAW));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.stats();
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data.imageEmbeddingRebuild).toBeUndefined();
+    expect(result.ok && result.data.imageEmbeddingClear).toBeUndefined();
+  });
+
   it("maps a null last_scan through to a null lastScan", async () => {
     const fetchStub = vi.fn().mockResolvedValue(
       jsonResponse(200, {
@@ -238,6 +282,57 @@ describe("createIndexerClient: thumbnailsRebuild", () => {
       detail: "status 409",
       status: 409,
     });
+  });
+});
+
+describe("createIndexerClient: imageEmbeddingsRebuild", () => {
+  it("posts an empty body when no options are given", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 12 }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.imageEmbeddingsRebuild();
+
+    expect(result).toEqual({ ok: true, data: { started: true, total: 12 } });
+    expect(fetchStub).toHaveBeenCalledWith(
+      "http://indexer:8010/image-embeddings/rebuild",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({});
+  });
+
+  it("scopes the request to a root, path, and force when given", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 3 }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    await client.imageEmbeddingsRebuild({ root: "sftpgo", path: "folder", force: true });
+
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", path: "folder", force: true });
+  });
+
+  it("carries the sidecar's status through on failure (e.g. 409 already running)", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(409, { error: "already running" }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.imageEmbeddingsRebuild();
+
+    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 409", status: 409 });
+  });
+});
+
+describe("createIndexerClient: clearImageEmbeddings", () => {
+  it("posts an empty body", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+
+    const result = await client.clearImageEmbeddings();
+
+    expect(result).toEqual({ ok: true, data: { started: true } });
+    expect(fetchStub).toHaveBeenCalledWith(
+      "http://indexer:8010/image-embeddings/clear",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });
 

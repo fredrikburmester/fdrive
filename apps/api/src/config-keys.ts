@@ -11,6 +11,7 @@ export const SUBSYSTEMS = [
   "core",
   "index",
   "search",
+  "imageSearch",
   "ocr",
   "thumbnails",
   "office",
@@ -250,6 +251,14 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "search",
   },
   {
+    key: "FDRIVE_IMAGE_EMBED_URL",
+    description: "Base URL of the SigLIP image-embedding sidecar. Unset disables image search.",
+    default: null,
+    example: "http://image-embed:8012",
+    secret: false,
+    subsystem: "imageSearch",
+  },
+  {
     key: "FDRIVE_THUMBS_DIR",
     description:
       "Directory the indexer writes thumbnails into, read by the API. Unset disables thumbnails.",
@@ -374,6 +383,10 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
     search:
       config.fdriveEmbedUrl === undefined
         ? { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] }
+        : { status: "configured", missing: [] },
+    imageSearch:
+      config.fdriveImageEmbedUrl === undefined
+        ? { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] }
         : { status: "configured", missing: [] },
     thumbnails:
       config.fdriveThumbsDir === undefined

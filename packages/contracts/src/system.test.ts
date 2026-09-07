@@ -23,6 +23,7 @@ import {
   OcrStats,
   SemanticStatus,
   SettingSource,
+  SystemImageSearchResponse,
   SystemIndexerResponse,
   SystemIndexTotals,
   SystemOcrResponse,
@@ -144,6 +145,33 @@ describe("IndexerStats", () => {
         processed: 2,
         total: 10,
         startedAt: "2026-09-06T18:21:28.128513+00:00",
+        finishedAt: null,
+        errors: 0,
+      },
+    };
+    expect(IndexerStats.parse(valid)).toEqual(valid);
+  });
+
+  it("parses with imageEmbeddings and image-embedding jobs", () => {
+    const valid = {
+      roots: [],
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+      imageEmbeddings: 12,
+      imageEmbeddingRebuild: {
+        running: false,
+        processed: 12,
+        total: 12,
+        startedAt: "2026-09-06T18:21:28.128513+00:00",
+        finishedAt: "2026-09-06T18:22:00.000000+00:00",
+        errors: 0,
+      },
+      imageEmbeddingClear: {
+        running: false,
+        processed: 0,
+        total: 0,
+        startedAt: null,
         finishedAt: null,
         errors: 0,
       },
@@ -387,6 +415,41 @@ describe("SystemReembedResponse", () => {
       marked: 5,
       roots: ["sftpgo"],
     });
+  });
+});
+
+describe("SystemImageSearchResponse", () => {
+  it("parses a fully configured and healthy payload", () => {
+    const valid = {
+      configured: true,
+      healthy: true,
+      model: "google/siglip2-large-patch16-256",
+      dim: 1024,
+      embedded: 12,
+      embeddedModel: "google/siglip2-large-patch16-256",
+      rebuild: {
+        running: false,
+        processed: 12,
+        total: 12,
+        startedAt: "2026-09-06T18:21:28.128513+00:00",
+        finishedAt: "2026-09-06T18:22:00.000000+00:00",
+        errors: 0,
+      },
+      clear: {
+        running: false,
+        processed: 0,
+        total: 0,
+        startedAt: null,
+        finishedAt: null,
+        errors: 0,
+      },
+    };
+    expect(SystemImageSearchResponse.parse(valid)).toEqual(valid);
+  });
+
+  it("parses an unconfigured payload without model, dim, rebuild, or clear", () => {
+    const valid = { configured: false, healthy: false, embedded: 0, embeddedModel: null };
+    expect(SystemImageSearchResponse.safeParse(valid).success).toBe(true);
   });
 });
 

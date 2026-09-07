@@ -10,6 +10,7 @@ export const HealthSubsystemName = z.enum([
   "core",
   "index",
   "search",
+  "imageSearch",
   "ocr",
   "thumbnails",
   "office",

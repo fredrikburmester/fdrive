@@ -79,10 +79,25 @@ export const IndexerThumbnailRebuildJob = z.object({
 
 export type IndexerThumbnailRebuildJob = z.infer<typeof IndexerThumbnailRebuildJob>;
 
-/** Progress shared by index and thumbnail clear passes. */
+/** Progress shared by index, thumbnail, and image-embedding clear passes. */
 export const IndexerClearJob = IndexerThumbnailRebuildJob;
 
 export type IndexerClearJob = z.infer<typeof IndexerClearJob>;
+
+/**
+ * Progress of the most recent
+ * `POST /api/v1/system/search/image-embeddings/rebuild` pass, mirrored from
+ * the indexer's `GET /stats`'s `image_embedding_rebuild` field. Same shape
+ * as `IndexerThumbnailRebuildJob`.
+ */
+export const ImageEmbeddingRebuildJob = IndexerThumbnailRebuildJob;
+
+export type ImageEmbeddingRebuildJob = z.infer<typeof ImageEmbeddingRebuildJob>;
+
+/** Progress of the most recent `POST /api/v1/system/search/image-embeddings/clear` pass. */
+export const ImageEmbeddingClearJob = IndexerThumbnailRebuildJob;
+
+export type ImageEmbeddingClearJob = z.infer<typeof ImageEmbeddingClearJob>;
 
 /** Clear all roots, one root, or an exact file or directory subtree. */
 export const IndexerClearRequest = z
@@ -116,6 +131,10 @@ export const IndexerStats = z.object({
   thumbnailRebuild: IndexerThumbnailRebuildJob.optional(),
   indexClear: IndexerClearJob.optional(),
   thumbnailClear: IndexerClearJob.optional(),
+  /** Count of embedded image thumbnails, mirrored from the indexer's `image_embeddings`. */
+  imageEmbeddings: z.number().int().optional(),
+  imageEmbeddingRebuild: ImageEmbeddingRebuildJob.optional(),
+  imageEmbeddingClear: ImageEmbeddingClearJob.optional(),
 });
 
 export type IndexerStats = z.infer<typeof IndexerStats>;
@@ -277,6 +296,27 @@ export const SystemReembedResponse = z.object({
 });
 
 export type SystemReembedResponse = z.infer<typeof SystemReembedResponse>;
+
+/**
+ * Response for `GET /api/v1/system/image-search`. `configured` is false when
+ * `FDRIVE_IMAGE_EMBED_URL` is unset. `model`/`dim` mirror the sidecar's own
+ * `/health` (present only when reachable). `embedded`/`embeddedModel` are
+ * mirrored from `IndexQueries.imageEmbeddingStats`; `embeddedModel` is `null`
+ * when no thumbnail has been embedded yet. `rebuild`/`clear` mirror the
+ * indexer's `image_embedding_rebuild`/`image_embedding_clear` stats.
+ */
+export const SystemImageSearchResponse = z.object({
+  configured: z.boolean(),
+  healthy: z.boolean(),
+  model: z.string().optional(),
+  dim: z.number().int().optional(),
+  embedded: z.number().int(),
+  embeddedModel: z.string().nullable(),
+  rebuild: IndexerThumbnailRebuildJob.optional(),
+  clear: IndexerClearJob.optional(),
+});
+
+export type SystemImageSearchResponse = z.infer<typeof SystemImageSearchResponse>;
 
 // ---------------------------------------------------------------------------
 // OCR

@@ -5,6 +5,7 @@ import {
   IndexerThumbnailsRebuildResponse,
   OcrRunResponse,
   OcrSettingsResponse,
+  SystemImageSearchResponse,
   SystemIndexerResponse,
   SystemOcrResponse,
   SystemReembedResponse,
@@ -52,7 +53,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     deletedRowSha: notImplemented,
     liveRowsBySha: notImplemented,
     searchImages: notImplemented,
-    imageEmbeddingStats: notImplemented,
+    imageEmbeddingStats: async () => ({ total: 0, model: null }),
     ...overrides,
   };
 }
@@ -70,6 +71,16 @@ function fakeIndexerClient(overrides: Partial<IndexerClient> = {}): IndexerClien
     clearIndex: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     clearThumbnails: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     thumbnailsRebuild: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    imageEmbeddingsRebuild: async () => ({
+      ok: false,
+      reason: "unreachable",
+      detail: "not stubbed",
+    }),
+    clearImageEmbeddings: async () => ({
+      ok: false,
+      reason: "unreachable",
+      detail: "not stubbed",
+    }),
     ...overrides,
   };
 }
@@ -93,6 +104,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     indexerClient: null,
     ocrClient: null,
     embedUrl: undefined,
+    imageEmbedClient: null,
     thumbsDir: undefined,
     indexRootNames: [],
     fetch: vi.fn() as unknown as typeof globalThis.fetch,
@@ -516,6 +528,251 @@ describe("GET /system/search", () => {
       model: "m",
       maxInputLength: 512,
     });
+  });
+});
+
+describe("GET /system/image-search", () => {
+  it("reports not configured when there is no image-embed client", async () => {
+    const { app } = buildApp({});
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body).toEqual({
+      configured: false,
+      healthy: false,
+      embedded: 0,
+      embeddedModel: null,
+    });
+  });
+
+  it("reports healthy with the model and dim when the sidecar's model is loaded", async () => {
+    const imageEmbedClient = {
+      health: async () => ({
+        ok: true as const,
+        data: { status: "ok" as const, model: "m", dim: 1024, device: "cpu" as const },
+      }),
+      embedText: async () => null,
+    };
+    const { app } = buildApp({ deps: { imageEmbedClient } });
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body.configured).toBe(true);
+    expect(body.healthy).toBe(true);
+    expect(body.model).toBe("m");
+    expect(body.dim).toBe(1024);
+  });
+
+  it("reports configured but not healthy while the model is loading", async () => {
+    const imageEmbedClient = {
+      health: async () => ({
+        ok: true as const,
+        data: { status: "loading" as const, model: "m", dim: null, device: "cpu" as const },
+      }),
+      embedText: async () => null,
+    };
+    const { app } = buildApp({ deps: { imageEmbedClient } });
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body.configured).toBe(true);
+    expect(body.healthy).toBe(false);
+    expect(body.model).toBe("m");
+    expect(body.dim).toBeUndefined();
+  });
+
+  it("reports configured but not healthy when the sidecar is unreachable", async () => {
+    const imageEmbedClient = {
+      health: async () => ({ ok: false as const, reason: "unreachable" as const, detail: "down" }),
+      embedText: async () => null,
+    };
+    const { app } = buildApp({ deps: { imageEmbedClient } });
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body).toEqual({ configured: true, healthy: false, embedded: 0, embeddedModel: null });
+  });
+
+  it("reports embedded totals from the index", async () => {
+    const indexQueries = fakeIndexQueries({
+      imageEmbeddingStats: async () => ({ total: 12, model: "m" }),
+    });
+    const { app } = buildApp({ deps: { indexQueries } });
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body.embedded).toBe(12);
+    expect(body.embeddedModel).toBe("m");
+  });
+
+  it("reports rebuild and clear jobs from the indexer's stats when present", async () => {
+    const job = {
+      running: false,
+      processed: 4,
+      total: 4,
+      startedAt: "2026-01-01T00:00:00+00:00",
+      finishedAt: "2026-01-01T00:01:00+00:00",
+      errors: 0,
+    };
+    const indexerClient = fakeIndexerClient({
+      stats: async () => ({
+        ok: true,
+        data: {
+          roots: [],
+          thumbnails: 0,
+          queueDepth: 0,
+          errorsSample: [],
+          imageEmbeddingRebuild: job,
+          imageEmbeddingClear: job,
+        },
+      }),
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body.rebuild).toEqual(job);
+    expect(body.clear).toEqual(job);
+  });
+
+  it("omits rebuild and clear when the indexer is not configured", async () => {
+    const { app } = buildApp({});
+
+    const res = await app.request("/api/v1/system/image-search");
+    const body = SystemImageSearchResponse.parse(await res.json());
+
+    expect(body.rebuild).toBeUndefined();
+    expect(body.clear).toBeUndefined();
+  });
+});
+
+describe("POST /system/image-search/rebuild", () => {
+  it("400s when the indexer is not configured", async () => {
+    const { app } = buildApp({});
+
+    const res = await app.request("/api/v1/system/image-search/rebuild", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("400s an invalid body", async () => {
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient() } });
+
+    const res = await app.request("/api/v1/system/image-search/rebuild", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ root: 5 }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns started and total on success, forwarding options", async () => {
+    const indexerClient = fakeIndexerClient({
+      imageEmbeddingsRebuild: async (options) => {
+        expect(options).toEqual({ root: "sftpgo", force: true });
+        return { ok: true, data: { started: true, total: 7 } };
+      },
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/image-search/rebuild", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ root: "sftpgo", force: true }),
+    });
+    const body = IndexerThumbnailsRebuildResponse.parse(await res.json());
+
+    expect(res.status).toBe(202);
+    expect(body).toEqual({ started: true, total: 7 });
+  });
+
+  it("409s (conflict) when a rebuild is already running", async () => {
+    const indexerClient = fakeIndexerClient({
+      imageEmbeddingsRebuild: async () => ({
+        ok: false,
+        reason: "unreachable",
+        detail: "status 409",
+        status: 409,
+      }),
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/image-search/rebuild", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("POST /system/image-search/clear", () => {
+  it("400s when the indexer is not configured", async () => {
+    const { app } = buildApp({});
+
+    const res = await app.request("/api/v1/system/image-search/clear", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("400s a non-empty body", async () => {
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient() } });
+
+    const res = await app.request("/api/v1/system/image-search/clear", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ root: "sftpgo" }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns started on success", async () => {
+    const indexerClient = fakeIndexerClient({
+      clearImageEmbeddings: async () => ({ ok: true, data: { started: true } }),
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/image-search/clear", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+    const body = IndexerClearResponse.parse(await res.json());
+
+    expect(res.status).toBe(202);
+    expect(body).toEqual({ started: true });
+  });
+
+  it("409s (conflict) when a clear or rebuild is already running", async () => {
+    const indexerClient = fakeIndexerClient({
+      clearImageEmbeddings: async () => ({
+        ok: false,
+        reason: "unreachable",
+        detail: "status 409",
+        status: 409,
+      }),
+    });
+    const { app } = buildApp({ deps: { indexerClient } });
+
+    const res = await app.request("/api/v1/system/image-search/clear", {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive" },
+    });
+
+    expect(res.status).toBe(409);
   });
 });
 
