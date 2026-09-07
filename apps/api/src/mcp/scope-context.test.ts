@@ -38,6 +38,7 @@ describe("resolveScopeContext", () => {
       TEMPLATE,
       new Set(),
       "alice",
+      null,
     );
     expect(ctx).toBeNull();
   });
@@ -48,6 +49,7 @@ describe("resolveScopeContext", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "../etc",
+      null,
     );
     expect(ctx).toBeNull();
   });
@@ -58,6 +60,7 @@ describe("resolveScopeContext", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
     expect(ctx).toBeNull();
   });
@@ -68,6 +71,7 @@ describe("resolveScopeContext", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
 
     expect(ctx).not.toBeNull();
@@ -82,6 +86,7 @@ describe("virtualPathFor", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -96,6 +101,7 @@ describe("virtualPathFor", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -110,12 +116,58 @@ describe("virtualPathFor", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
     }
 
     expect(virtualPathFor(ctx, 1, "bob/a.txt")).toBeNull();
+  });
+
+  it("returns null for a path nested under the configured trash path", async () => {
+    const ctx = await resolveScopeContext(
+      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      TEMPLATE,
+      new Set(["sftpgo"]),
+      "alice",
+      "/.trash",
+    );
+    if (ctx === null) {
+      throw new Error("expected a scope context");
+    }
+
+    expect(virtualPathFor(ctx, 1, "alice/.trash/report.pdf/168176641123456789")).toBeNull();
+  });
+
+  it("returns null for a path equal to the configured trash path itself", async () => {
+    const ctx = await resolveScopeContext(
+      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      TEMPLATE,
+      new Set(["sftpgo"]),
+      "alice",
+      "/.trash",
+    );
+    if (ctx === null) {
+      throw new Error("expected a scope context");
+    }
+
+    expect(virtualPathFor(ctx, 1, "alice/.trash")).toBeNull();
+  });
+
+  it("still maps a path outside the trash when a trashPath is configured", async () => {
+    const ctx = await resolveScopeContext(
+      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      TEMPLATE,
+      new Set(["sftpgo"]),
+      "alice",
+      "/.trash",
+    );
+    if (ctx === null) {
+      throw new Error("expected a scope context");
+    }
+
+    expect(virtualPathFor(ctx, 1, "alice/docs/report.pdf")).toBe("/docs/report.pdf");
   });
 });
 
@@ -126,6 +178,7 @@ describe("narrowScopePrefixes", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -149,6 +202,7 @@ describe("narrowScopePrefixes", () => {
       scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
       rootNameById: new Map([[1, "sftpgo"]]),
       rootIdByName: new Map([["sftpgo", 1]]),
+      trashPath: null,
     };
 
     expect(narrowScopePrefixes(narrowScope, "/elsewhere")).toBeNull();
@@ -160,6 +214,7 @@ describe("narrowScopePrefixes", () => {
       TEMPLATE,
       new Set(["sftpgo"]),
       "alice",
+      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
