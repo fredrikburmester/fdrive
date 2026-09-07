@@ -6,12 +6,14 @@ import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
+import { apiClient } from "@/lib/api/client";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
+import { wantsGridThumbnail } from "@/lib/files/thumbnail";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
@@ -85,6 +87,35 @@ function groupFavorite(entries: readonly FsEntry[]): boolean {
 
 function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
   return { shift: event.shiftKey, meta: event.metaKey || event.ctrlKey };
+}
+
+const GRID_THUMBNAIL_SIZE = 256;
+
+/**
+ * A grid tile's icon slot: an image thumbnail for a file `wantsGridThumbnail`
+ * accepts, falling back to `FileIcon` for good once that thumbnail request
+ * fails (or permanently, for every other entry). The fallback state is keyed
+ * by `entry.path` via `key` on the caller, so navigating to a different entry
+ * at the same tile position starts from the thumbnail again.
+ */
+function GridTileIcon({ entry }: { entry: FsEntry }) {
+  const [errored, setErrored] = useState(false);
+
+  if (errored || !wantsGridThumbnail(entry)) {
+    return <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} className="size-8" />;
+  }
+
+  return (
+    // biome-ignore lint/performance/noImgElement: a thumbnail from the API, not a static asset next/image can optimize
+    <img
+      src={apiClient.thumbUrl(entry.path, GRID_THUMBNAIL_SIZE)}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="size-8 shrink-0 rounded-md object-cover ring-1 ring-border"
+      onError={() => setErrored(true)}
+    />
+  );
 }
 
 /** A virtualized grid of tiles, one row of tiles per virtualized "row". */
@@ -313,12 +344,7 @@ export function FileGrid({
                             "data-[selected=true]:bg-primary/10",
                           )}
                         >
-                          <FileIcon
-                            kind={entry.kind}
-                            ext={entry.ext}
-                            mime={entry.mime}
-                            className="size-8"
-                          />
+                          <GridTileIcon key={entry.path} entry={entry} />
                           <span className="line-clamp-2 w-full break-words text-xs">
                             {entry.name}
                           </span>

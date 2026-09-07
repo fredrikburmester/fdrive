@@ -18,7 +18,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { activityTitle } from "@/lib/activity/summary";
@@ -348,7 +347,7 @@ export function ActivityPanel() {
   return (
     <Card
       data-slot="activity-panel"
-      className="fixed right-4 bottom-4 z-50 w-80 gap-3 shadow-lg max-md:inset-x-3 max-md:right-3 max-md:w-auto max-md:max-h-[50vh] max-md:overflow-y-auto"
+      className="fixed right-4 bottom-4 z-50 flex max-h-[70vh] w-80 flex-col gap-3 shadow-lg max-md:inset-x-3 max-md:right-3 max-md:w-auto max-md:max-h-[50vh]"
     >
       {/* The card header is a grid by default; `flex` keeps the title and actions on one row. */}
       <CardHeader className="flex flex-row items-center justify-between gap-2">
@@ -370,9 +369,9 @@ export function ActivityPanel() {
         </div>
       </CardHeader>
       <Separator />
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
         {!finished && activeUploads.length > 0 && (
-          <div className="flex flex-col gap-1">
+          <div className="flex shrink-0 flex-col gap-1">
             <Progress value={uploadSummary.overallProgress * 100} />
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{formatSpeed(speed)}</span>
@@ -380,7 +379,7 @@ export function ActivityPanel() {
             </div>
           </div>
         )}
-        <ScrollArea className="max-h-72">
+        <div className="max-h-72 min-h-0 overflow-y-auto" data-slot="activity-panel-list">
           <ul className="divide-y divide-border">
             {uploadItems.map((item) => (
               <UploadRow
@@ -400,7 +399,7 @@ export function ActivityPanel() {
               />
             ))}
           </ul>
-        </ScrollArea>
+        </div>
       </CardContent>
     </Card>
   );
