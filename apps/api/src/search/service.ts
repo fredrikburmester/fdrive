@@ -6,6 +6,7 @@ import {
   fuseRankings,
   type HomeTemplate,
   highlightRanges,
+  isUnderPath,
   matchesSearchFilters,
   mimeFromExtension,
   parentPath,
@@ -36,6 +37,13 @@ export interface SearchServiceDeps {
   readonly indexRootNames: ReadonlySet<string>;
   /** Whether `FDRIVE_THUMBS_DIR` is configured; when false, every hit reports `hasThumbnail: false`. */
   readonly thumbsEnabled: boolean;
+  /**
+   * The storage provider's recycle folder virtual path, when configured.
+   * A result whose virtual path is this path or nested under it is treated
+   * as unmapped (as if it were out of scope), so trashed files never
+   * appear in search hits, folder grouping, or counts.
+   */
+  readonly trashPath: string | null;
   readonly clock: () => Date;
 }
 
@@ -173,7 +181,17 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         if (rootName === undefined) {
           return null;
         }
-        return toVirtualPath(usableScopes, rootName, file.path);
+        const virtualPath = toVirtualPath(usableScopes, rootName, file.path);
+        if (virtualPath === null) {
+          return null;
+        }
+        if (
+          deps.trashPath !== null &&
+          (virtualPath === deps.trashPath || isUnderPath(deps.trashPath, virtualPath))
+        ) {
+          return null;
+        }
+        return virtualPath;
       }
 
       const topRanked = ranked.slice(0, input.limit);

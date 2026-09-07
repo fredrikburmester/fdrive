@@ -59,6 +59,7 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
     homeTemplate: HOME_TEMPLATE,
     indexRootNames: new Set(["sftpgo"]),
     thumbsEnabled: false,
+    trashPath: null,
     clock: () => NOW,
     ...overrides,
   };
@@ -407,6 +408,55 @@ describe("createSearchService: search - hits", () => {
       filesByIds: async () => [file],
     });
     const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput());
+
+    expect(result.sections.folders).toEqual([]);
+  });
+
+  it("excludes a file whose virtual path is inside the trash from search hits", async () => {
+    const file = makeFile({ id: 71, path: "alice/.trash/removed.txt", name: "removed.txt" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [{ fileId: 71, snippet: "hit" }],
+      filename: async () => [],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
+
+    const result = await service.search(baseInput());
+
+    expect(result.sections.files).toEqual([]);
+    expect(result.sections.content).toEqual([]);
+  });
+
+  it("excludes a file whose virtual path equals the trash folder itself", async () => {
+    const file = makeFile({ id: 73, path: "alice/.trash", name: ".trash" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [{ fileId: 73, snippet: "hit" }],
+      filename: async () => [],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
+
+    const result = await service.search(baseInput());
+
+    expect(result.sections.files).toEqual([]);
+  });
+
+  it("excludes the trash folder itself from derived folder groupings", async () => {
+    const file = makeFile({ id: 72, path: "alice/.trash/leaf.txt", name: "leaf.txt" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 72, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
 
     const result = await service.search(baseInput());
 

@@ -211,6 +211,30 @@ describe("createMetadataService: onDeleted", () => {
   });
 });
 
+describe("createMetadataService: onTrashed", () => {
+  it("drops only recents, keeping tags and favorites at the original path", async () => {
+    const { repos, service } = buildService();
+    const account = await repos.accounts.create({ displayName: "Alice" });
+    const tag = await service.createTag(account.id, { name: "Work", color: null });
+    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
+    await service.touchRecent(IDENTITY_ID, "/a.txt");
+
+    await service.onTrashed(IDENTITY_ID, "/a.txt", false);
+
+    expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual(["/a.txt"]);
+    expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/a.txt"]);
+    expect(await service.listRecents(IDENTITY_ID)).toEqual([]);
+  });
+
+  it("is idempotent: trashing an already-gone path is harmless", async () => {
+    const { service } = buildService();
+    await expect(
+      service.onTrashed(IDENTITY_ID, "/never-existed.txt", false),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("createMetadataService: onCopied", () => {
   it("does not copy tags or favorites onto the target", async () => {
     const { repos, service } = buildService();

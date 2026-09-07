@@ -76,6 +76,14 @@ export interface MetadataService {
   /** Drops tag, favorite, and recent rows after a delete made through fdrive or seen on disk. */
   onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
+   * Drops only the recent-files entries after a delete that moved the item
+   * into the storage provider's trash instead of removing it. Tags and
+   * favorites are left in place (keyed at the original path) so a
+   * same-path restore recovers them; a restore to a different target
+   * without an index configured loses them.
+   */
+  onTrashed(identityId: string, path: string, isDir: boolean): Promise<void>;
+  /**
    * No-op by design: a copy is a brand new file as far as metadata is
    * concerned, so tags, favorites, and recents on the source are never
    * duplicated onto the copy. Kept as an explicit method (rather than
@@ -187,6 +195,10 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
         deps.favorites.deletePrefix(identityId, path, isDir),
         deps.recents.deletePrefix(identityId, path, isDir),
       ]);
+    },
+
+    async onTrashed(identityId, path, isDir) {
+      await deps.recents.deletePrefix(identityId, path, isDir);
     },
 
     onCopied() {
