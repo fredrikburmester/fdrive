@@ -84,6 +84,8 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
     deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
     liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
+    searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
+    imageEmbeddingStats: overrides.imageEmbeddingStats ?? (async () => fail("imageEmbeddingStats")),
   };
 }
 
