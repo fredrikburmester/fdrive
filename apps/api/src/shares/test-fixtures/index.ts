@@ -21,7 +21,20 @@ export function sharesHarness() {
     principalResolver: h.auth.principalResolver,
     registerRoutes: (groups) => {
       h.auth.registerRoutes(groups);
-      registerSharesRoutes(groups, { service, codec, limiter, config: h.config });
+      registerSharesRoutes(groups, {
+        service,
+        codec,
+        limiter,
+        config: h.config,
+        indexQueries: {
+          rootIdsByName: async () => ({}),
+          fileByPath: async () => null,
+          thumbnail: async () => null,
+        },
+        resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) },
+        identities: h.repos.identities,
+        thumbsDir: undefined,
+      });
     },
   });
   async function request(

@@ -163,6 +163,8 @@ export interface ApiClient {
   shareEntries(id: string, path?: string): Promise<ShareEntriesResponse>;
   shareDownloadUrl(id: string, path?: string): string;
   shareArchiveUrl(id: string): string;
+  /** A public gallery tile's thumbnail: never counts as a download, unlike `shareDownloadUrl`. */
+  shareThumbUrl(id: string, path: string, size: ThumbSize): string;
   shareUpload(
     id: string,
     path: string,
@@ -467,6 +469,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     shareArchiveUrl(id) {
       return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/archive`);
+    },
+    shareThumbUrl(id, path, size) {
+      return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/thumb`, {
+        path,
+        size: String(size),
+      });
     },
     shareUpload(id, path, body, signal) {
       return requestJson(

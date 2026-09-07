@@ -463,6 +463,10 @@ export async function composeApp(
         codec: createShareCredentialCodec(master, clock),
         limiter: createShareLimiter(clock),
         config,
+        indexQueries,
+        resolver: scopeResolver,
+        identities: repos.identities,
+        thumbsDir: config.fdriveThumbsDir,
       });
       registerAccountsRoutes(groups, {
         service: accountsService,

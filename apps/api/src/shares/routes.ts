@@ -5,8 +5,12 @@ import {
   ShareId,
   SharePath,
   ShareUploadPath,
+  THUMB_SIZES,
+  type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
+import { toFsPath } from "@fdrive/core";
+import type { IdentityRepo, IndexQueries } from "@fdrive/db";
 import type { DownloadOptions, DownloadResult } from "@fdrive/sftpgo";
 import { SftpgoError } from "@fdrive/sftpgo";
 import type { Context } from "hono";
@@ -19,12 +23,20 @@ import { cookieSecureFor } from "../auth/sessions.ts";
 import type { AppConfig } from "../config.ts";
 import { ApiHttpError } from "../errors.ts";
 import { extractClientIp } from "../net.ts";
+import type { ScopeResolver } from "../scoping/resolver.ts";
+import {
+  createNodeThumbFileReader,
+  serveThumb,
+  THUMB_NOT_FOUND,
+  type ThumbFileReader,
+} from "../thumbs/serve.ts";
 import {
   SHARE_CREDENTIAL_COOKIE,
   SHARE_CREDENTIAL_SECONDS,
   type ShareCredentialCodec,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
+import { createSharePasswordCache } from "./password-cache.ts";
 import { type SharesService, shareCall } from "./service.ts";
 
 export async function publicBody<T>(
@@ -134,6 +146,22 @@ export function publicPath(c: Context, upload = false): string {
   if (!result.success) throw new ApiHttpError("bad_request", "Invalid shared path");
   return result.data;
 }
+/**
+ * Parses `?path=&size=` for the public thumb route. Unlike `publicPath`,
+ * every failure (a repeated `path`, a path that fails `SharePath`, a `size`
+ * outside `THUMB_SIZES`) returns `null` rather than throwing a `400`: the
+ * route must answer every failure the same bare 404, never a distinguishing
+ * `bad_request`.
+ */
+export function publicThumbQuery(c: Context): { path: string; size: ThumbSize } | null {
+  const query = new URL(c.req.url).searchParams;
+  if (query.getAll("path").length > 1) return null;
+  const path = SharePath.safeParse(query.get("path") ?? "/");
+  if (!path.success) return null;
+  const size = THUMB_SIZES.find((candidate) => String(candidate) === query.get("size"));
+  if (size === undefined) return null;
+  return { path: path.data, size };
+}
 export function shareId(c: Context): string {
   const id = ShareId.safeParse(
     c.req.param("id") ?? c.req.path.slice(`${ROUTES.publicShares}/`.length).split("/")[0],
@@ -198,10 +226,18 @@ export function registerSharesRoutes(
     codec: ShareCredentialCodec;
     limiter: ShareLimiter;
     config: AppConfig;
+    indexQueries: Pick<IndexQueries, "rootIdsByName" | "fileByPath" | "thumbnail">;
+    resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+    identities: Pick<IdentityRepo, "get">;
+    /** The directory the indexer writes thumbnails into. `undefined` disables `/thumb` entirely. */
+    thumbsDir: string | undefined;
+    fileReader?: ThumbFileReader;
   },
 ): void {
   const base = withoutApiV1Prefix(ROUTES.shares);
   const pub = `${withoutApiV1Prefix(ROUTES.publicShares)}/:id`;
+  const thumbFileReader = deps.fileReader ?? createNodeThumbFileReader();
+  const passwordCache = createSharePasswordCache();
   groups.authed.get(base, (c) =>
     shareCall(async () => c.json(await deps.service.list(accountContext(c)))),
   );
@@ -297,6 +333,77 @@ export function registerSharesRoutes(
       });
     }),
   );
+  // No `createReadAuthorizer` live probe on this route, unlike the authed
+  // thumb route: the share itself is the authorization for anything under
+  // it, and a live read probe here would either cost a download token (the
+  // public share API has none for a bare storage check) or need the
+  // owner's own credentials, neither of which a thumbnail should ever
+  // require. Every failure below answers the same bare 404: whether the
+  // share does not exist, is a write share, an archive, expired, or
+  // limit-reached, whether the password is wrong or missing, whether the
+  // path fails to resolve, or whether the file is not indexed, this route
+  // must never become an oracle for which of those it was.
+  groups.public.get(`${pub}/thumb`, async (c) => {
+    if (deps.thumbsDir === undefined) throw THUMB_NOT_FOUND();
+
+    const query = publicThumbQuery(c);
+    if (query === null) throw THUMB_NOT_FOUND();
+
+    const id = shareId(c);
+    let target: Awaited<ReturnType<SharesService["publicThumbTarget"]>>;
+    try {
+      target = await deps.service.publicThumbTarget(id);
+    } catch {
+      throw THUMB_NOT_FOUND();
+    }
+    if (target.scope !== "read" || target.unavailableReason !== null || target.paths.length !== 1)
+      throw THUMB_NOT_FOUND();
+    const sharedRoot = target.paths[0];
+    if (sharedRoot === undefined) throw THUMB_NOT_FOUND();
+
+    if (target.hasPassword) {
+      const provided = password(c);
+      if (provided === undefined) throw THUMB_NOT_FOUND();
+      let verified = passwordCache.get(id, provided);
+      if (verified === undefined) {
+        try {
+          verified = await deps.service.verifySharePassword(
+            target.identityId,
+            target.sftpgoShareId,
+            provided,
+          );
+        } catch {
+          throw THUMB_NOT_FOUND();
+        }
+        passwordCache.set(id, provided, verified);
+      }
+      if (!verified) throw THUMB_NOT_FOUND();
+    }
+
+    const virtualPath = query.path === "/" ? sharedRoot : `${sharedRoot}${query.path}`;
+    const identity = await deps.identities.get(target.identityId);
+    if (identity === null) throw THUMB_NOT_FOUND();
+    const verifiedScopes = await deps.resolver.verifiedIndexScopes(identity);
+    if (!verifiedScopes.available) throw THUMB_NOT_FOUND();
+    // `toFsPath` normalizes, and `normalizePath` throws for a segment over
+    // 255 UTF-8 bytes, which `SharePath` (a 4096-character total bound with
+    // no per-segment limit) happily allows through. Catch it here so an
+    // over-long segment is the same bare 404 as everything else rather than
+    // an unhandled 500 that tells the caller its path was the odd one out.
+    let resolved: ReturnType<typeof toFsPath>;
+    try {
+      resolved = toFsPath(verifiedScopes.scopes, virtualPath);
+    } catch {
+      throw THUMB_NOT_FOUND();
+    }
+    if (resolved === null) throw THUMB_NOT_FOUND();
+
+    return serveThumb(
+      c,
+      { indexQueries: deps.indexQueries, thumbsDir: deps.thumbsDir, fileReader: thumbFileReader },
+      { rootName: resolved.rootName, fsPath: resolved.fsPath, size: query.size },
+    );
+  });
   groups.public.get(`${pub}/download`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
