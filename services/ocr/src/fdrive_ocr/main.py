@@ -41,6 +41,7 @@ def run_once(
     timeout_seconds: int,
     jobs: int,
     log_fn: Callable[[str], None],
+    include_globs: tuple[str, ...] = (),
 ) -> bool:
     """Attempts one pass. Returns whether it actually ran: `False` means a run
     was already in progress and this cycle was skipped."""
@@ -51,7 +52,7 @@ def run_once(
     try:
         raw = db.read_settings(conn)
         settings = resolve_settings(raw, default_settings)
-        run_pass(conn, targets, settings, state_dir, timeout_seconds, jobs, log_fn)
+        run_pass(conn, targets, settings, state_dir, timeout_seconds, jobs, log_fn, include_globs)
     except Exception as e:  # noqa: BLE001
         log_fn(f"OCR pass crashed: {type(e).__name__}: {e}")
     finally:
@@ -72,12 +73,15 @@ def scheduler_loop(
     log_fn: Callable[[str], None],
     now: Callable[[], datetime],
     sleep: Callable[[float], None] = time.sleep,
+    include_globs: tuple[str, ...] = (),
 ) -> None:
     """Runs forever: re-reads settings each cycle (an admin edit to `ocr.hour`
     takes effect on the next wakeup), computes the next scheduled hour, sleeps
     until then, runs a pass, repeats."""
     if run_on_start:
-        run_once(run_lock, conn_factory, targets, default_settings, state_dir, timeout_seconds, jobs, log_fn)
+        run_once(
+            run_lock, conn_factory, targets, default_settings, state_dir, timeout_seconds, jobs, log_fn, include_globs
+        )
 
     while True:
         conn = conn_factory()
@@ -91,7 +95,9 @@ def scheduler_loop(
         wait_s = seconds_until(current, target)
         log_fn(f"next OCR pass at {target.isoformat()}")
         sleep(wait_s)
-        run_once(run_lock, conn_factory, targets, default_settings, state_dir, timeout_seconds, jobs, log_fn)
+        run_once(
+            run_lock, conn_factory, targets, default_settings, state_dir, timeout_seconds, jobs, log_fn, include_globs
+        )
 
 
 def main() -> None:
@@ -129,6 +135,7 @@ def main() -> None:
             log,
             lambda: datetime.now(tz),
         ),
+        kwargs={"include_globs": cfg.include_globs},
         daemon=True,
         name="ocr-scheduler",
     )
@@ -145,6 +152,7 @@ def main() -> None:
         now=lambda: datetime.now(tz),
         schema_ready=lambda: db.read_schema_version(bootstrap_conn) is not None,
         log=log,
+        include_globs=cfg.include_globs,
     )
     app = create_app(state)
     log(f"ocr up. roots={list(cfg.roots)} port={cfg.ocr_port}")

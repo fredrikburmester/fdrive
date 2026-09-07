@@ -14,8 +14,16 @@ def root_relative_key(root: str, rel_path: str) -> str:
     return f"{root}/{rel_path}"
 
 
-def is_excluded(root: str, rel_path: str, globs: list[str]) -> bool:
+def is_excluded(root: str, rel_path: str, globs: list[str], include_globs: list[str] | None = None) -> bool:
+    """`include_globs`, when non-empty (`OCR_INCLUDE_GLOBS`), restricts candidates
+    to paths matching at least one of them; this overrides `globs`'s default
+    exclusion behaviour for anything outside that set, but `globs` (the
+    exclude list, whether the built-in default or an operator override) is
+    still applied on top, so a path can be included and then excluded again by
+    a more specific exclude pattern."""
     key = root_relative_key(root, rel_path)
+    if include_globs and not any(fnmatch(key, pattern) for pattern in include_globs):
+        return True
     return any(fnmatch(key, pattern) for pattern in globs)
 
 

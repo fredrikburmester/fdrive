@@ -49,6 +49,13 @@ export function ThumbnailsPage() {
   const busy =
     useSystemMaintenanceBusy(indexer.data?.stats) || rebuild.isPending || clear.isPending;
   const unavailable = !data?.configured || !indexer.data?.reachable || !!error || !!indexer.error;
+  // The thumbnail cache is produced by the indexer, so its own badge and
+  // description share one status computed from both FDRIVE_THUMBS_DIR
+  // (`data.configured`) and the indexer's configured/reachable state,
+  // rather than describing "available" from one signal while the badge
+  // below shows "Not configured" from another.
+  const thumbnailsConfigured = (data?.configured ?? false) && (indexer.data?.configured ?? false);
+  const status = sidecarStatus(thumbnailsConfigured, indexer.data?.reachable ?? false);
   const rootNames =
     indexer.data?.health?.roots ?? indexer.data?.stats?.roots.map((root) => root.root) ?? [];
   const [rebuildOpen, setRebuildOpen] = useState(false);
@@ -122,18 +129,15 @@ export function ThumbnailsPage() {
             <CardHeader>
               <CardTitle>Status</CardTitle>
               <CardDescription>
-                {data.configured
+                {status === "ok"
                   ? "Thumbnail cache is available."
-                  : "Thumbnail cache is not configured."}
+                  : status === "unreachable"
+                    ? "The indexer that generates thumbnails is unreachable."
+                    : "Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              <StatusBadge
-                status={sidecarStatus(
-                  indexer.data?.configured ?? false,
-                  indexer.data?.reachable ?? false,
-                )}
-              />
+              <StatusBadge status={status} />
               <p className="text-sm text-muted-foreground">
                 Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
                 existing previews. Clear cache removes previews globally. Original files, text,

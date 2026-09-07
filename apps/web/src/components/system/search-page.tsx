@@ -67,7 +67,9 @@ export function SearchPage() {
             <CardHeader>
               <CardTitle>Semantic search</CardTitle>
               <CardDescription>
-                The embedding server (TEI) fdrive queries at search time.
+                {data.semantic.configured
+                  ? "The embedding server (TEI) fdrive queries at search time."
+                  : "Not configured: set FDRIVE_EMBED_URL."}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">

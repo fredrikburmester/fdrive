@@ -225,7 +225,7 @@ export function IndexerPage() {
               <CardDescription>
                 {data.configured
                   ? "The indexer's internal API, per configured root."
-                  : "The indexer is not configured."}
+                  : "Not configured: set FDRIVE_INDEXER_URL and FDRIVE_INDEX_ROOTS."}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap items-center gap-3">

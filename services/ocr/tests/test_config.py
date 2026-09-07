@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from fdrive_ocr.config import Config, parse_roots
+from fdrive_ocr.config import DEFAULT_EXCLUDE_GLOBS, Config, parse_glob_list, parse_roots
 
 
 def test_parse_roots_multiple() -> None:
@@ -20,9 +20,27 @@ def test_parse_roots_skips_malformed_pairs() -> None:
     assert parse_roots("sftpgo=/roots/sftpgo,,broken,=novalue,noeq=") == {"sftpgo": "/roots/sftpgo"}
 
 
+def test_parse_glob_list_trims_and_drops_empty_entries() -> None:
+    assert parse_glob_list(" A/**, ,B/** ") == ("A/**", "B/**")
+
+
+def test_parse_glob_list_empty_string() -> None:
+    assert parse_glob_list("") == ()
+
+
+def test_config_treats_an_empty_ocr_exclude_globs_the_same_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A compose passthrough of `${OCR_EXCLUDE_GLOBS:-}` always sets the env
+    # var, just empty when the operator leaves it unset in .env; this must
+    # not silently disable the default exclude list.
+    monkeypatch.setenv("OCR_EXCLUDE_GLOBS", "")
+    cfg = Config()
+    assert cfg.default_exclude_globs == DEFAULT_EXCLUDE_GLOBS
+
+
 def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("INDEX_ROOTS", raising=False)
     monkeypatch.delenv("OCR_RUN_ON_START", raising=False)
+    monkeypatch.delenv("OCR_INCLUDE_GLOBS", raising=False)
     cfg = Config()
     assert cfg.roots == {}
     assert cfg.ocr_port == 8011
@@ -33,6 +51,7 @@ def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.default_hour == 3
     assert cfg.default_langs == "swe+eng"
     assert cfg.default_exclude_globs == ("Programs/**", "Photos/**", "Videos/**")
+    assert cfg.include_globs == ()
     assert cfg.default_max_mb == 200
     assert cfg.default_keep_originals is True
 
@@ -46,6 +65,7 @@ def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCR_HOUR", "5")
     monkeypatch.setenv("OCR_LANGS", "eng")
     monkeypatch.setenv("OCR_EXCLUDE_GLOBS", "A/**,B/**")
+    monkeypatch.setenv("OCR_INCLUDE_GLOBS", "fredrik/**, alice/**")
     monkeypatch.setenv("OCR_MAX_MB", "50")
     monkeypatch.setenv("OCR_KEEP_ORIGINALS", "false")
     cfg = Config()
@@ -57,6 +77,7 @@ def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.default_hour == 5
     assert cfg.default_langs == "eng"
     assert cfg.default_exclude_globs == ("A/**", "B/**")
+    assert cfg.include_globs == ("fredrik/**", "alice/**")
     assert cfg.default_max_mb == 50
     assert cfg.default_keep_originals is False
 

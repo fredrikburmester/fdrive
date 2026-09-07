@@ -455,6 +455,17 @@ const envSchema = z.object({
 });
 
 /**
+ * Every environment variable key `envSchema` reads. `config-keys.ts` holds a
+ * documented table describing each of these keys (description, default,
+ * example, whether it is a secret, and which subsystem it belongs to); a
+ * round-trip test compares this list against that table's keys so the two
+ * can never drift silently.
+ */
+export function configEnvKeys(): readonly string[] {
+  return Object.keys(envSchema.shape);
+}
+
+/**
  * Parses process-environment-shaped input into a typed `AppConfig`. Throws
  * an `Error` whose message lists every invalid variable when validation
  * fails, rather than stopping at the first problem.
