@@ -1,7 +1,7 @@
 import { isOfficePath } from "@fdrive/contracts";
-import { scopesFor, toVirtualPath } from "@fdrive/core";
 import { z } from "zod";
 import { hashSessionId } from "../auth/sessions.js";
+import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import { WopiError } from "./errors.ts";
 import type { OfficeClaims } from "./tokens.ts";
 import type { BrowserOfficeInput, OfficeActor, OfficeDeps, OpenedFile } from "./types.ts";
@@ -21,12 +21,12 @@ export async function officeActor(
     (await deps.repos.accounts.get(session.accountId)) === null
   )
     throw new WopiError(401);
-  const location = await deps.location();
+  const location = await deps.location(identity);
   if (location === null || location.providerId !== identity.providerId) throw new WopiError(401);
   return {
     identity,
     session,
-    homeTemplate: location.homeTemplate,
+    scopes: location.scopes,
     storage: await deps.storageFactory(identity.id, identity.providerId),
   };
 }
@@ -47,11 +47,10 @@ export async function callbackFile(
   const actor = await officeActor(deps, claims.sessionHash, claims.identityId);
   const file = await deps.files.get(fileId);
   if (file === null || file.providerId !== actor.identity.providerId) throw new WopiError(404);
-  const path = toVirtualPath(
-    scopesFor({ template: actor.homeTemplate, username: actor.identity.externalUsername }),
-    file.rootName,
-    `/${file.path}`,
-  );
+  // Round trip, not a plain `toVirtualPath`: a virtual override that shadows
+  // the file's physical location must hide it from this callback too, the
+  // same as any other index/event-derived filesystem reference.
+  const path = roundTripVirtualPath(actor.scopes, file.rootName, `/${file.path}`);
   if (path === null) throw new WopiError(404);
   const stat = await actor.storage.statFile(path);
   const editAllowed = await canEditOfficeFile(deps, actor, path);

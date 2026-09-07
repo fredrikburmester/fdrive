@@ -1,5 +1,11 @@
-import { parseHomeTemplate } from "@fdrive/core";
-import type { FavoriteRepo, FileTagRepo, IndexedFile, IndexQueries } from "@fdrive/db";
+import {
+  type HomeTemplate,
+  parseHomeTemplate,
+  type Scope,
+  StorageError,
+  scopesFor,
+} from "@fdrive/core";
+import type { FavoriteRepo, FileTagRepo, Identity, IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it } from "vitest";
 import type {
@@ -8,6 +14,9 @@ import type {
   MetadataService,
   MetadataTag,
 } from "../metadata/service.js";
+import type { ReadAuthorizeReason, ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import { fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
+import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import { type BusEvent, createEventBus } from "./bus.js";
 import {
   createIndexerListener,
@@ -35,6 +44,48 @@ function makeLogger(): { logger: IndexerListenerLogger; warnings: unknown[][] } 
   return {
     logger: { warn: (obj, msg) => warnings.push([obj, msg]) },
     warnings,
+  };
+}
+
+/** Resolves every identity's configured mapping from `homeTemplate` and its own username, matching `ScopeResolver.configuredMappings` without overrides. */
+function configuredMappingsFor(
+  homeTemplate: HomeTemplate,
+): (identity: Identity) => Promise<ConfiguredMappingsResult> {
+  return async (identity) => {
+    try {
+      const scopes = scopesFor({ template: homeTemplate, username: identity.externalUsername });
+      return {
+        available: true,
+        providerId: identity.providerId,
+        homeTemplateRaw: "sftpgo:/{username}",
+        scopes,
+      };
+    } catch {
+      return { available: false, reason: "invalid_configuration" };
+    }
+  };
+}
+
+/** An authorizer that allows every target, unless `deniedPaths` says otherwise. */
+function fakeAuthorizer(deniedPaths: ReadonlySet<string> = new Set()): ReadAuthorizer {
+  return {
+    async authorize(target) {
+      if (deniedPaths.has(target.path)) {
+        return { allowed: false, reason: "denied" satisfies ReadAuthorizeReason };
+      }
+      return { allowed: true };
+    },
+  };
+}
+
+/** Live-check deps that allow every path by default; `statFile` always resolves so kind detection succeeds. */
+function allowAllLiveCheck(deniedPaths?: ReadonlySet<string>) {
+  return {
+    storageForIdentity: async () =>
+      fakeStorageProvider({
+        statFile: async () => ({ size: 0, modifiedAt: null, contentType: null }),
+      }),
+    createAuthorizer: () => fakeAuthorizer(deniedPaths),
   };
 }
 
@@ -126,7 +177,7 @@ const IDENTITY_ID = "identity-1";
 const ROOT_ID_BY_NAME = new Map([["sftpgo", 1]]);
 
 describe("handleEventForIdentity: created/changed", () => {
-  it("publishes create for a path in scope", async () => {
+  it("publishes create for a path in scope and live-readable", async () => {
     const bus = createEventBus();
     const received: BusEvent[] = [];
     bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
@@ -135,6 +186,7 @@ describe("handleEventForIdentity: created/changed", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: { tagsForPaths: async () => new Map() } as unknown as FileTagRepo,
@@ -162,6 +214,7 @@ describe("handleEventForIdentity: created/changed", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -187,6 +240,7 @@ describe("handleEventForIdentity: created/changed", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -198,6 +252,136 @@ describe("handleEventForIdentity: created/changed", () => {
       ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "created", path: "bob/a.txt" }),
+    );
+
+    expect(received).toEqual([]);
+  });
+
+  it("does not publish when the live read check denies the path", async () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata } = fakeMetadataService();
+    const { logger } = makeLogger();
+
+    await handleEventForIdentity(
+      {
+        ...allowAllLiveCheck(new Set(["/a.txt"])),
+        bus,
+        metadata,
+        fileTags: {} as FileTagRepo,
+        favorites: {} as FavoriteRepo,
+        indexQueries: fakeIndexQueries(),
+        logger,
+      },
+      SCOPES,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "created" }),
+    );
+
+    expect(received).toEqual([]);
+  });
+
+  it("does not publish when the destination is shadowed by a more specific override", async () => {
+    // "/shared" shadows "alice"'s physical "/alice/shared" subtree; an event
+    // reporting a change under that physical path must never surface via the
+    // home scope once the more specific override exists.
+    const scopes: readonly Scope[] = [
+      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+      { rootName: "sftpgo", fsPrefix: "/team", virtualPrefix: "/shared" },
+    ];
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata } = fakeMetadataService();
+
+    await handleEventForIdentity(
+      {
+        ...allowAllLiveCheck(),
+        bus,
+        metadata,
+        fileTags: {} as FileTagRepo,
+        favorites: {} as FavoriteRepo,
+        indexQueries: fakeIndexQueries(),
+        logger: makeLogger().logger,
+      },
+      scopes,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "created", path: "alice/shared/x.txt" }),
+    );
+
+    expect(received).toEqual([]);
+  });
+});
+
+describe("handleEventForIdentity: live-read kind detection", () => {
+  it("live-checks a moved directory destination with list, not download", async () => {
+    // The indexer's `moved` payload never says whether the move was of a
+    // file or a directory; `statFile` reporting `bad_request` is the only
+    // safe signal that a path is a directory (never call `list` on a path
+    // of unknown kind against real SFTPGo).
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata } = fakeMetadataService();
+    const listCalls: string[] = [];
+    const storage = fakeStorageProvider({
+      statFile: async () => {
+        throw new StorageError("bad_request", "is a directory");
+      },
+      list: async (path) => {
+        listCalls.push(path);
+        return [];
+      },
+    });
+
+    await handleEventForIdentity(
+      {
+        storageForIdentity: async () => storage,
+        bus,
+        metadata,
+        fileTags: {} as FileTagRepo,
+        favorites: {} as FavoriteRepo,
+        indexQueries: fakeIndexQueries(),
+        logger: makeLogger().logger,
+      },
+      SCOPES,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "moved", path: "alice/docs", target_path: "alice/renamed" }),
+    );
+
+    expect(listCalls).toEqual(["/renamed"]);
+    expect(received[0]).toMatchObject({ op: "move", paths: ["/docs"], targetPaths: ["/renamed"] });
+  });
+
+  it("does not publish when the destination's kind cannot be determined safely", async () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata } = fakeMetadataService();
+    const storage = fakeStorageProvider({
+      statFile: async () => {
+        throw new StorageError("forbidden", "no access");
+      },
+    });
+
+    await handleEventForIdentity(
+      {
+        storageForIdentity: async () => storage,
+        bus,
+        metadata,
+        fileTags: {} as FileTagRepo,
+        favorites: {} as FavoriteRepo,
+        indexQueries: fakeIndexQueries(),
+        logger: makeLogger().logger,
+      },
+      SCOPES,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "created" }),
     );
 
     expect(received).toEqual([]);
@@ -215,6 +399,7 @@ describe("handleEventForIdentity: deleted", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags,
@@ -249,7 +434,15 @@ describe("handleEventForIdentity: deleted", () => {
     });
 
     await handleEventForIdentity(
-      { bus, metadata, fileTags, favorites, indexQueries, logger: makeLogger().logger },
+      {
+        ...allowAllLiveCheck(),
+        bus,
+        metadata,
+        fileTags,
+        favorites,
+        indexQueries,
+        logger: makeLogger().logger,
+      },
       SCOPES,
       ROOT_ID_BY_NAME,
       IDENTITY_ID,
@@ -259,6 +452,41 @@ describe("handleEventForIdentity: deleted", () => {
     expect(calls.onDeleted).toEqual([]);
     expect(calls.onMoved).toEqual([[IDENTITY_ID, "/a.txt", "/b.txt", false]]);
     expect(received[0]).toMatchObject({ op: "move", paths: ["/a.txt"], targetPaths: ["/b.txt"] });
+  });
+
+  it("still relinks metadata but only announces a delete when the relink target is not live-readable", async () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata, calls } = fakeMetadataService();
+    const fileTags = {
+      tagsForPaths: async () => new Map([["/a.txt", ["tag-1"]]]),
+    } as unknown as FileTagRepo;
+    const favorites = { has: async () => new Set() } as unknown as FavoriteRepo;
+    const indexQueries = fakeIndexQueries({
+      deletedRowSha: async () => "sha-1",
+      liveRowsBySha: async () => [fileAt("alice/b.txt")],
+    });
+
+    await handleEventForIdentity(
+      {
+        ...allowAllLiveCheck(new Set(["/b.txt"])),
+        bus,
+        metadata,
+        fileTags,
+        favorites,
+        indexQueries,
+        logger: makeLogger().logger,
+      },
+      SCOPES,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "deleted" }),
+    );
+
+    expect(calls.onMoved).toEqual([[IDENTITY_ID, "/a.txt", "/b.txt", false]]);
+    expect(received[0]).toMatchObject({ op: "delete", paths: ["/a.txt"] });
+    expect(received[0]).not.toHaveProperty("targetPaths");
   });
 
   it("falls back to a plain delete when more than one live row shares the sha256", async () => {
@@ -274,7 +502,15 @@ describe("handleEventForIdentity: deleted", () => {
     });
 
     await handleEventForIdentity(
-      { bus, metadata, fileTags, favorites, indexQueries, logger: makeLogger().logger },
+      {
+        ...allowAllLiveCheck(),
+        bus,
+        metadata,
+        fileTags,
+        favorites,
+        indexQueries,
+        logger: makeLogger().logger,
+      },
       SCOPES,
       ROOT_ID_BY_NAME,
       IDENTITY_ID,
@@ -298,7 +534,15 @@ describe("handleEventForIdentity: deleted", () => {
     });
 
     await handleEventForIdentity(
-      { bus, metadata, fileTags, favorites, indexQueries, logger: makeLogger().logger },
+      {
+        ...allowAllLiveCheck(),
+        bus,
+        metadata,
+        fileTags,
+        favorites,
+        indexQueries,
+        logger: makeLogger().logger,
+      },
       SCOPES,
       ROOT_ID_BY_NAME,
       IDENTITY_ID,
@@ -318,7 +562,15 @@ describe("handleEventForIdentity: deleted", () => {
     const indexQueries = fakeIndexQueries({ deletedRowSha: async () => null });
 
     await handleEventForIdentity(
-      { bus, metadata, fileTags, favorites, indexQueries, logger: makeLogger().logger },
+      {
+        ...allowAllLiveCheck(),
+        bus,
+        metadata,
+        fileTags,
+        favorites,
+        indexQueries,
+        logger: makeLogger().logger,
+      },
       SCOPES,
       ROOT_ID_BY_NAME,
       IDENTITY_ID,
@@ -336,6 +588,7 @@ describe("handleEventForIdentity: deleted", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags,
@@ -358,6 +611,7 @@ describe("handleEventForIdentity: deleted", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -376,7 +630,7 @@ describe("handleEventForIdentity: deleted", () => {
 });
 
 describe("handleEventForIdentity: moved", () => {
-  it("relinks metadata and publishes move when both endpoints are in scope", async () => {
+  it("relinks metadata and publishes move when both endpoints are in scope and live-readable", async () => {
     const bus = createEventBus();
     const received: BusEvent[] = [];
     bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
@@ -384,6 +638,7 @@ describe("handleEventForIdentity: moved", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -401,6 +656,33 @@ describe("handleEventForIdentity: moved", () => {
     expect(received[0]).toMatchObject({ op: "move", paths: ["/a.txt"], targetPaths: ["/b.txt"] });
   });
 
+  it("still relinks metadata but announces only a delete when the target is not live-readable", async () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata, calls } = fakeMetadataService();
+
+    await handleEventForIdentity(
+      {
+        ...allowAllLiveCheck(new Set(["/b.txt"])),
+        bus,
+        metadata,
+        fileTags: {} as FileTagRepo,
+        favorites: {} as FavoriteRepo,
+        indexQueries: fakeIndexQueries(),
+        logger: makeLogger().logger,
+      },
+      SCOPES,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "moved", path: "alice/a.txt", target_path: "alice/b.txt" }),
+    );
+
+    expect(calls.onMoved).toEqual([[IDENTITY_ID, "/a.txt", "/b.txt", true]]);
+    expect(received[0]).toMatchObject({ op: "delete", paths: ["/a.txt"] });
+    expect(received[0]).not.toHaveProperty("targetPaths");
+  });
+
   it("treats a move out of scope as a delete", async () => {
     const bus = createEventBus();
     const received: BusEvent[] = [];
@@ -409,6 +691,7 @@ describe("handleEventForIdentity: moved", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -434,6 +717,7 @@ describe("handleEventForIdentity: moved", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -452,6 +736,31 @@ describe("handleEventForIdentity: moved", () => {
     expect(received[0]).toMatchObject({ op: "create", paths: ["/a.txt"] });
   });
 
+  it("does not publish a move-into-scope create when the target is not live-readable", async () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
+    const { metadata } = fakeMetadataService();
+
+    await handleEventForIdentity(
+      {
+        ...allowAllLiveCheck(new Set(["/a.txt"])),
+        bus,
+        metadata,
+        fileTags: {} as FileTagRepo,
+        favorites: {} as FavoriteRepo,
+        indexQueries: fakeIndexQueries(),
+        logger: makeLogger().logger,
+      },
+      SCOPES,
+      ROOT_ID_BY_NAME,
+      IDENTITY_ID,
+      makeEvent({ kind: "moved", path: "bob/a.txt", target_path: "alice/a.txt" }),
+    );
+
+    expect(received).toEqual([]);
+  });
+
   it("does nothing for a move entirely outside scope", async () => {
     const bus = createEventBus();
     const received: BusEvent[] = [];
@@ -460,6 +769,7 @@ describe("handleEventForIdentity: moved", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -484,6 +794,7 @@ describe("handleEventForIdentity: moved", () => {
 
     await handleEventForIdentity(
       {
+        ...allowAllLiveCheck(),
         bus,
         metadata,
         fileTags: {} as FileTagRepo,
@@ -549,17 +860,17 @@ function fakeClock(startIso: string) {
   };
 }
 
-describe("createIndexerListener", () => {
-  async function seedIdentity(repos: ReturnType<typeof createMemoryRepos>) {
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://x" });
-    const account = await repos.accounts.create({ displayName: "Alice" });
-    return repos.identities.create({
-      accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
-    });
-  }
+async function seedIdentity(repos: ReturnType<typeof createMemoryRepos>) {
+  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://x" });
+  const account = await repos.accounts.create({ displayName: "Alice" });
+  return repos.identities.create({
+    accountId: account.id,
+    providerId: provider.id,
+    externalUsername: "alice",
+  });
+}
 
+describe("createIndexerListener", () => {
   it("connects and issues LISTEN on start", async () => {
     const repos = createMemoryRepos();
     const identity = await seedIdentity(repos);
@@ -576,10 +887,11 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus,
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
+      ...allowAllLiveCheck(),
     });
 
     await listener.start();
@@ -609,10 +921,11 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus,
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
+      ...allowAllLiveCheck(),
     });
     await listener.start();
 
@@ -641,6 +954,49 @@ describe("createIndexerListener", () => {
     await listener.stop();
   });
 
+  it("never dispatches to an identity whose configured provider no longer matches", async () => {
+    const repos = createMemoryRepos();
+    await seedIdentity(repos);
+    const fake = createFakeNotificationClient();
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    const { metadata } = fakeMetadataService();
+    const clock = fakeClock(AT);
+
+    const listener = createIndexerListener({
+      createClient: () => fake.client,
+      identities: repos.identities,
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      fileTags: repos.fileTags,
+      favorites: repos.favorites,
+      metadata,
+      bus,
+      // A root named "sftpgo" exists in the event, but this identity's
+      // provider mapping never resolves: the same root name on a
+      // different provider must never be treated as this identity's data.
+      configuredMappingsFor: async () => ({ available: false, reason: "provider_mismatch" }),
+      indexRootNames: ROOT_NAMES,
+      clock: clock.now,
+      logger: makeLogger().logger,
+      ...allowAllLiveCheck(),
+    });
+    await listener.start();
+
+    const identities = await repos.identities.listAll();
+    const identityId = identities[0]?.id;
+    if (identityId === undefined) {
+      throw new Error("expected a seeded identity");
+    }
+    bus.subscribe({ identityId }, (e) => received.push(e));
+
+    fake.notify(JSON.stringify(makeEvent()));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(received).toEqual([]);
+
+    await listener.stop();
+  });
+
   it("logs a warning and does not throw on invalid JSON", async () => {
     const repos = createMemoryRepos();
     await seedIdentity(repos);
@@ -657,10 +1013,11 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger,
+      ...allowAllLiveCheck(),
     });
     await listener.start();
 
@@ -687,10 +1044,11 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger,
+      ...allowAllLiveCheck(),
     });
     await listener.start();
 
@@ -725,10 +1083,11 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
+      ...allowAllLiveCheck(),
     });
     await listener.start();
 
@@ -769,11 +1128,12 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       scheduleTimeout: (fn, ms) => scheduled.push([fn, ms]),
+      ...allowAllLiveCheck(),
     });
     await listener.start();
 
@@ -808,11 +1168,12 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       scheduleTimeout: (fn, ms) => scheduled.push([fn, ms]),
+      ...allowAllLiveCheck(),
     });
 
     await listener.start();
@@ -834,11 +1195,12 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       scheduleTimeout: (fn, ms) => scheduled.push([fn, ms]),
+      ...allowAllLiveCheck(),
     });
     await listener.start();
     fake.fail(new Error("boom"));
@@ -870,10 +1232,11 @@ describe("createIndexerListener: stop()", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
+      ...allowAllLiveCheck(),
     });
     await listener.start();
 
@@ -892,10 +1255,11 @@ describe("createIndexerListener: stop()", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
+      ...allowAllLiveCheck(),
     });
 
     await expect(listener.stop()).resolves.toBeUndefined();
@@ -1037,7 +1401,7 @@ describe("global storage registry hook", () => {
       favorites: repos.favorites,
       metadata,
       bus,
-      homeTemplate: HOME_TEMPLATE,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger,
@@ -1045,6 +1409,7 @@ describe("global storage registry hook", () => {
         order.push("registry");
         if (shouldFail) throw new Error("registry failed");
       },
+      ...allowAllLiveCheck(),
     });
     await listener.start();
     fake.notify(JSON.stringify(makeEvent()));
@@ -1054,6 +1419,47 @@ describe("global storage registry hook", () => {
     fake.notify(JSON.stringify(makeEvent()));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(warnings.at(-1)?.[1]).toBe("indexer-listener: event processing failed");
+    await listener.stop();
+  });
+});
+
+describe("createIndexerListener: storageForIdentity failure", () => {
+  it("treats a storage resolution failure as denied, never publishing", async () => {
+    const repos = createMemoryRepos();
+    await seedIdentity(repos);
+    const fake = createFakeNotificationClient();
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    const { metadata } = fakeMetadataService();
+    const clock = fakeClock(AT);
+
+    const listener = createIndexerListener({
+      createClient: () => fake.client,
+      identities: repos.identities,
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      fileTags: repos.fileTags,
+      favorites: repos.favorites,
+      metadata,
+      bus,
+      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      indexRootNames: ROOT_NAMES,
+      clock: clock.now,
+      logger: makeLogger().logger,
+      storageForIdentity: async () => {
+        throw new Error("token unavailable");
+      },
+    });
+    await listener.start();
+
+    const identities = await repos.identities.listAll();
+    const identityId = identities[0]?.id;
+    if (identityId === undefined) throw new Error("expected a seeded identity");
+    bus.subscribe({ identityId }, (e) => received.push(e));
+
+    fake.notify(JSON.stringify(makeEvent()));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(received).toEqual([]);
     await listener.stop();
   });
 });

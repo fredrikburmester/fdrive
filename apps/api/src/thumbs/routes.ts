@@ -3,11 +3,13 @@ import { stat as fsStat } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { ROUTES, ThumbQuery } from "@fdrive/contracts";
-import { type CoreError, type HomeTemplate, normalizePath, toFsPath } from "@fdrive/core";
-import type { IndexQueries } from "@fdrive/db";
+import { type CoreError, normalizePath, type StorageProvider, toFsPath } from "@fdrive/core";
+import type { IdentityRepo, IndexQueries } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
-import { toIndexRelativePath, usableScopesFor } from "../search/scopes.js";
+import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { ScopeResolver } from "../scoping/resolver.ts";
+import { toIndexRelativePath } from "../search/scopes.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -32,23 +34,31 @@ export function createNodeThumbFileReader(): ThumbFileReader {
 
 export interface ThumbRoutesDeps {
   readonly indexQueries: IndexQueries;
-  readonly homeTemplate: HomeTemplate;
-  readonly indexRootNames: ReadonlySet<string>;
+  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly identities: Pick<IdentityRepo, "get">;
   /** The directory the indexer writes thumbnails into. `undefined` disables the route entirely. */
   readonly thumbsDir: string | undefined;
   readonly fileReader?: ThumbFileReader;
+  /** Overridable for tests; defaults to `createReadAuthorizer`. */
+  readonly createAuthorizer?: (
+    storage: Pick<StorageProvider, "list" | "download">,
+  ) => ReadAuthorizer;
 }
 
 const NOT_FOUND = () => new ApiHttpError("not_found", "thumbnail not found");
 
 /**
  * Registers `GET /thumb?path=&size=256|1024`: resolves the virtual `path`
- * to an fs path via the caller's index scopes, looks up the file's sha256
- * in the index, then its cached thumbnail for `size`, and streams the
- * cached WebP from `FDRIVE_THUMBS_DIR/<storage_path>`. 404 whenever
- * thumbnails are not configured, the path cannot be resolved or is out of
- * scope, the file is not indexed or has no sha256, no thumbnail has been
- * generated for that size yet, or the cached file is missing from disk.
+ * to an fs path via the caller's *verified* index scopes, looks up the
+ * file's sha256 in the index, then its cached thumbnail for `size`, proves
+ * the caller can still read that exact path right now (a live
+ * `storage.download` open/cancel probe), and only then streams the cached
+ * WebP from `FDRIVE_THUMBS_DIR/<storage_path>`. 404 whenever thumbnails are
+ * not configured, the path cannot be resolved or verified, the file is not
+ * indexed or has no sha256, no thumbnail has been generated for that size
+ * yet, the cached file is missing from disk, or the live read check fails.
+ * Responses are never cached by the browser (`Cache-Control: private,
+ * no-store`), so a permission or mapping change is never served stale.
  */
 export function registerThumbRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -56,6 +66,7 @@ export function registerThumbRoutes(
 ): void {
   const { authed } = groups;
   const fileReader = deps.fileReader ?? createNodeThumbFileReader();
+  const buildAuthorizer = deps.createAuthorizer ?? ((storage) => createReadAuthorizer({ storage }));
 
   authed.get(routePath(ROUTES.thumb), async (c) => {
     if (deps.thumbsDir === undefined) {
@@ -77,12 +88,16 @@ export function registerThumbRoutes(
     }
 
     const principal = c.get("principal");
-    const scopes = usableScopesFor(deps.homeTemplate, deps.indexRootNames, principal.username);
-    if (scopes.length === 0) {
+    const identity = await deps.identities.get(principal.identityId);
+    if (identity === null) {
+      throw NOT_FOUND();
+    }
+    const verified = await deps.resolver.verifiedIndexScopes(identity);
+    if (!verified.available) {
       throw NOT_FOUND();
     }
 
-    const resolved = toFsPath(scopes, path);
+    const resolved = toFsPath(verified.scopes, path);
     if (resolved === null) {
       throw NOT_FOUND();
     }
@@ -104,6 +119,12 @@ export function registerThumbRoutes(
       throw NOT_FOUND();
     }
 
+    const authorizer = buildAuthorizer(principal.storage);
+    const authResult = await authorizer.authorize({ path, kind: "file" });
+    if (!authResult.allowed) {
+      throw NOT_FOUND();
+    }
+
     const absolutePath = join(deps.thumbsDir, thumb.storagePath);
     let stat: { size: number };
     try {
@@ -116,7 +137,7 @@ export function registerThumbRoutes(
     return c.body(body, 200, {
       "Content-Type": "image/webp",
       "Content-Length": String(stat.size),
-      "Cache-Control": "private, max-age=86400",
+      "Cache-Control": "private, no-store",
       ETag: `"${file.sha256}"`,
     });
   });

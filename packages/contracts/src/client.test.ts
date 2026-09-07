@@ -943,6 +943,39 @@ describe("createApiClient: favorites", () => {
   });
 });
 
+describe("createApiClient: identityScope", () => {
+  const NONADMIN_STATUS = {
+    status: "available",
+    reason: "ok",
+    usesOverride: false,
+    virtualPrefixes: ["/"],
+    warning: "warning text",
+    isAdmin: false,
+  };
+
+  it("gets an identity's scope status", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, NONADMIN_STATUS)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.identityScope(VALID_UUID)).toEqual(NONADMIN_STATUS);
+    expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope`);
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("puts a scope override with the scopes body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, NONADMIN_STATUS)]);
+    const client = createApiClient({ fetch: fetchStub });
+    const body = {
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+    };
+
+    expect(await client.setIdentityScope(VALID_UUID, body)).toEqual(NONADMIN_STATUS);
+    expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope`);
+    expect(calls[0]?.init.method).toBe("PUT");
+    expect(calls[0]?.init.body).toBe(JSON.stringify(body));
+  });
+});
+
 describe("createApiClient: recents", () => {
   const VALID_RECENT = { path: "/a.txt", openedAt: AT };
 

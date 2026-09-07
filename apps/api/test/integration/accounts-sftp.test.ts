@@ -1,5 +1,5 @@
 import { AccountFavoritesResponse, MeResponse, ROUTES } from "@fdrive/contracts";
-import { parseHomeTemplate } from "@fdrive/core";
+import { parseHomeTemplate, scopesFor } from "@fdrive/core";
 import { createDb, createRepos } from "@fdrive/db";
 import { startPostgres, startSftpgo } from "@fdrive/testkit";
 import type { Logger } from "pino";
@@ -115,9 +115,12 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
       ...office.deps,
       repos,
       clock: () => new Date(),
-      location: async () => ({
+      location: async (identity: { externalUsername: string }) => ({
         providerId: provider.id,
-        homeTemplate: parseHomeTemplate("sftpgo:/{username}"),
+        scopes: scopesFor({
+          template: parseHomeTemplate("sftpgo:/{username}"),
+          username: identity.externalUsername,
+        }),
       }),
       storageFactory: async () => storage,
     };

@@ -93,6 +93,16 @@ describe("SearchResponse", () => {
     const { unavailable, ...rest } = VALID_RESPONSE;
     expect(SearchResponse.safeParse(rest).success).toBe(false);
   });
+
+  it("accepts an optional partial flag", () => {
+    const result = SearchResponse.safeParse({ ...VALID_RESPONSE, partial: true });
+    expect(result.success).toBe(true);
+  });
+
+  it("parses without a partial flag present at all", () => {
+    const result = SearchResponse.safeParse(VALID_RESPONSE);
+    expect(result.success && "partial" in result.data).toBe(false);
+  });
 });
 
 describe("SearchQuery", () => {

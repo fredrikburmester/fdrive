@@ -1,10 +1,17 @@
-import { parseHomeTemplate } from "@fdrive/core";
+import type { Scope } from "@fdrive/core";
 import type { ContentHit, FilenameHit, IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  ReadAuthorizeReason,
+  ReadAuthorizer,
+  ReadAuthorizeTarget,
+} from "../scoping/read-authorizer.ts";
 import type { EmbedClient } from "./embeddings.js";
-import { createSearchService, type SearchServiceDeps } from "./service.js";
+import { createSearchService, type SearchServiceDeps, type SearchServiceInput } from "./service.js";
 
-const HOME_TEMPLATE = parseHomeTemplate("sftpgo:/{username}");
+const HOME_SCOPES: readonly Scope[] = [
+  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+];
 const NOW = new Date("2026-03-01T00:00:00.000Z");
 
 function fail(name: string): never {
@@ -52,12 +59,33 @@ function makeFile(overrides: Partial<IndexedFile> & { id: number }): IndexedFile
   };
 }
 
+/** An authorizer that allows every target unless `denied`/`unavailable` says otherwise. */
+function fakeAuthorizer(
+  opts: {
+    readonly denied?: ReadonlySet<string>;
+    readonly unavailable?: ReadonlySet<string>;
+    readonly calls?: ReadAuthorizeTarget[];
+  } = {},
+): ReadAuthorizer {
+  return {
+    async authorize(target) {
+      opts.calls?.push(target);
+      const key = `${target.kind}:${target.path}`;
+      if (opts.unavailable?.has(key) === true) {
+        return { allowed: false, reason: "unavailable" satisfies ReadAuthorizeReason };
+      }
+      if (opts.denied?.has(key) === true) {
+        return { allowed: false, reason: "denied" satisfies ReadAuthorizeReason };
+      }
+      return { allowed: true };
+    },
+  };
+}
+
 function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDeps {
   return {
     indexQueries: fakeIndexQueries(),
     embedClient: null,
-    homeTemplate: HOME_TEMPLATE,
-    indexRootNames: new Set(["sftpgo"]),
     thumbsEnabled: false,
     trashPath: null,
     clock: () => NOW,
@@ -67,11 +95,10 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
 
 const NO_FILTERS = { exts: null, folder: null, after: null, before: null };
 
-function baseInput(
-  overrides: Partial<Parameters<ReturnType<typeof createSearchService>["search"]>[0]> = {},
-) {
+function baseInput(overrides: Partial<SearchServiceInput> = {}): SearchServiceInput {
   return {
-    username: "alice",
+    scopes: HOME_SCOPES,
+    authorizer: fakeAuthorizer(),
     query: "readme",
     filters: NO_FILTERS,
     limit: 20,
@@ -79,24 +106,11 @@ function baseInput(
   };
 }
 
-describe("createSearchService: status", () => {
-  it("is unavailable and non-semantic with no configured roots and no embed client", () => {
-    const service = createSearchService(buildDeps({ indexRootNames: new Set() }));
-    expect(service.status()).toEqual({ available: false, semantic: false });
-  });
-
-  it("is available and semantic when roots and an embed client are configured", () => {
-    const embedClient: EmbedClient = { embed: async () => [0.1] };
-    const service = createSearchService(buildDeps({ embedClient }));
-    expect(service.status()).toEqual({ available: true, semantic: true });
-  });
-});
-
 describe("createSearchService: search - unavailable", () => {
-  it("is unavailable when no index roots are configured, without touching the index", async () => {
-    const service = createSearchService(buildDeps({ indexRootNames: new Set() }));
+  it("is unavailable when no scopes are supplied, without touching the index", async () => {
+    const service = createSearchService(buildDeps());
 
-    const result = await service.search(baseInput());
+    const result = await service.search(baseInput({ scopes: [] }));
 
     expect(result).toEqual({
       query: "readme",
@@ -107,23 +121,7 @@ describe("createSearchService: search - unavailable", () => {
     });
   });
 
-  it("is unavailable when the identity's home root is not a configured index root", async () => {
-    const service = createSearchService(buildDeps({ indexRootNames: new Set(["other-root"]) }));
-
-    const result = await service.search(baseInput());
-
-    expect(result.unavailable).toBe(true);
-  });
-
-  it("is unavailable when the username is not a safe path segment", async () => {
-    const service = createSearchService(buildDeps());
-
-    const result = await service.search(baseInput({ username: "a/b" }));
-
-    expect(result.unavailable).toBe(true);
-  });
-
-  it("is unavailable when the configured root name has no matching row in the index", async () => {
+  it("is unavailable when none of the scopes' roots have a matching row in the index", async () => {
     const indexQueries = fakeIndexQueries({ rootIdsByName: async () => ({}) });
     const service = createSearchService(buildDeps({ indexQueries }));
 
@@ -175,6 +173,19 @@ describe("createSearchService: search - degraded", () => {
     const result = await service.search(baseInput());
     expect(result.unavailable).toBe(false);
     expect(result.sections).toEqual({ folders: [], files: [], content: [] });
+  });
+
+  it("reports partial when the underlying fanout was cut, even with no matches to show", async () => {
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => Array.from({ length: 60 }, (_, i) => ({ fileId: i, snippet: "x" })),
+      filename: async () => [],
+      filesByIds: async () => [],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+    const result = await service.search(baseInput());
+    expect(result.partial).toBe(true);
   });
 });
 
@@ -278,7 +289,69 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files).toEqual([]);
   });
 
-  it("respects the limit", async () => {
+  it("drops a hit the authorizer denies, without leaking it via a thumbnail check", async () => {
+    const file = makeFile({ id: 51, path: "alice/secret.pdf", ext: ".pdf", sha256: "abc" });
+    const thumbnail = vi.fn(async () => ({ storagePath: "x" }));
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 51, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+      thumbnail,
+    });
+    const service = createSearchService(buildDeps({ indexQueries, thumbsEnabled: true }));
+    const authorizer = fakeAuthorizer({ denied: new Set(["file:/secret.pdf"]) });
+
+    const result = await service.search(baseInput({ authorizer }));
+
+    expect(result.sections.files).toEqual([]);
+    expect(thumbnail).not.toHaveBeenCalled();
+    expect(result.partial).toBeUndefined();
+  });
+
+  it("marks the response partial when the live-read check reports unavailable", async () => {
+    const file = makeFile({ id: 52, path: "alice/flaky.pdf", ext: ".pdf" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 52, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+    const authorizer = fakeAuthorizer({ unavailable: new Set(["file:/flaky.pdf"]) });
+
+    const result = await service.search(baseInput({ authorizer }));
+
+    expect(result.sections.files).toEqual([]);
+    expect(result.partial).toBe(true);
+  });
+
+  it("drops a candidate a shadowing override hides, even though its physical location still exists", async () => {
+    // "/shared" shadows "alice"'s physical "/alice/shared" subtree; a row
+    // still filed under "alice/shared/x.txt" must never surface through
+    // the home scope once the more specific override exists.
+    const scopes: readonly Scope[] = [
+      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+      { rootName: "sftpgo", fsPrefix: "/team", virtualPrefix: "/shared" },
+    ];
+    const file = makeFile({ id: 53, path: "alice/shared/x.txt", name: "x.txt" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 53, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput({ scopes }));
+
+    expect(result.sections.files).toEqual([]);
+  });
+
+  it("respects the limit, applied after inaccessible candidates are removed", async () => {
     const files = [makeFile({ id: 1 }), makeFile({ id: 2 }), makeFile({ id: 3 })];
     const filenameHits: FilenameHit[] = files.map((f, i) => ({
       fileId: f.id,
@@ -374,7 +447,7 @@ describe("createSearchService: search - hits", () => {
     expect(thumbnail).not.toHaveBeenCalled();
   });
 
-  it("derives up to five folders from the filename query's parent paths", async () => {
+  it("derives up to five authorized folders from the filename query's parent paths", async () => {
     const files = Array.from({ length: 7 }, (_, i) =>
       makeFile({ id: i + 1, path: `alice/folder${i}/report.pdf`, name: "report.pdf" }),
     );
@@ -396,6 +469,42 @@ describe("createSearchService: search - hits", () => {
 
     expect(result.sections.folders).toHaveLength(5);
     expect(result.sections.folders[0]).toMatchObject({ kind: "dir", size: 0, ext: "", mime: null });
+  });
+
+  it("drops a folder the authorizer denies list access to", async () => {
+    const file = makeFile({ id: 63, path: "alice/private/x.txt" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 63, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+    const authorizer = fakeAuthorizer({ denied: new Set(["dir:/private"]) });
+
+    const result = await service.search(baseInput({ authorizer }));
+
+    expect(result.sections.folders).toEqual([]);
+  });
+
+  it("checks folder access with kind dir, distinct from file checks on the same path", async () => {
+    const file = makeFile({ id: 64, path: "alice/private/x.txt" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [{ fileId: 64, hits: 1, similarity: 0.5 }],
+      filesByIds: async () => [file],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+    const calls: ReadAuthorizeTarget[] = [];
+    const authorizer = fakeAuthorizer({ calls });
+
+    await service.search(baseInput({ authorizer }));
+
+    expect(calls).toContainEqual({ path: "/private/x.txt", kind: "file" });
+    expect(calls).toContainEqual({ path: "/private", kind: "dir" });
   });
 
   it("skips a folder whose file's root cannot be mapped back to a virtual path", async () => {

@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { parseHomeTemplate, type StorageProvider } from "@fdrive/core";
+import { parseHomeTemplate, type StorageProvider, scopesFor } from "@fdrive/core";
 import { createMemoryOfficeFileRepo, createMemoryWopiLockRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { getCookie } from "hono/cookie";
@@ -140,9 +140,12 @@ export async function officeHarness(
     files,
     locks,
     clock,
-    location: async () => ({
+    location: async (identity) => ({
       providerId: provider.id,
-      homeTemplate: parseHomeTemplate("sftpgo:/shared"),
+      scopes: scopesFor({
+        template: parseHomeTemplate("sftpgo:/shared"),
+        username: identity.externalUsername,
+      }),
     }),
     storageFactory: (id) =>
       options.storageForUser?.(
