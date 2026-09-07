@@ -65,6 +65,18 @@ export interface AppConfig {
   readonly fdriveTmpDir: string;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
+  /**
+   * Cap on a JSON request body's bytes for `fs/routes.ts`'s `parseBody`
+   * (mkdir, move, copy, rename, delete, zip). See `DEFAULT_JSON_MAX_BYTES`.
+   */
+  readonly fdriveJsonMaxBytes: number;
+  /**
+   * Cap on a public share upload's bytes (`PUT /public/shares/:id/upload`),
+   * checked against `Content-Length` and enforced while streaming so an
+   * absent or dishonest header cannot bypass it. See
+   * `DEFAULT_SHARE_UPLOAD_MAX_BYTES`.
+   */
+  readonly fdriveShareUploadMaxBytes: number;
   /** Configured index roots (search, thumbnails). `null` when search is unavailable. */
   readonly fdriveIndexRoots: readonly IndexRootConfig[] | null;
   /** Base URL of the TEI embeddings service. `undefined` disables semantic search. */
@@ -97,6 +109,12 @@ export interface AppConfig {
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
 export const DEFAULT_JOB_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+
+/** Default cap on a JSON request body's bytes: 1 MiB. */
+export const DEFAULT_JSON_MAX_BYTES = 1024 * 1024;
+
+/** Default cap on a public share upload's bytes: 10 GiB. */
+export const DEFAULT_SHARE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 
 /**
  * True when `value` parses as an absolute URL whose protocol is http or
@@ -315,6 +333,22 @@ const envSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1)),
   ),
+  FDRIVE_JSON_MAX_BYTES: z.preprocess(
+    (value) => withDefault(value, String(DEFAULT_JSON_MAX_BYTES)),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1)),
+  ),
+  FDRIVE_SHARE_UPLOAD_MAX_BYTES: z.preprocess(
+    (value) => withDefault(value, String(DEFAULT_SHARE_UPLOAD_MAX_BYTES)),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1)),
+  ),
   FDRIVE_INDEX_ROOTS: z.preprocess(
     undefinedWhenEmpty,
     z
@@ -440,6 +474,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
+    fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,
+    fdriveShareUploadMaxBytes: parsed.FDRIVE_SHARE_UPLOAD_MAX_BYTES,
     fdriveIndexRoots: parsed.FDRIVE_INDEX_ROOTS,
     fdriveEmbedUrl: parsed.FDRIVE_EMBED_URL,
     fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,

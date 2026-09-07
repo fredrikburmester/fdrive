@@ -6,9 +6,10 @@ const DEFAULT_SUBTITLE = "Sign in with your SFTPGo account";
 
 /**
  * Builds the login subtitle from the public `/about` endpoint's provider
- * label. Never throws: an unreachable API, or a `null` provider (setup not
- * completed yet), falls back to a generic subtitle rather than breaking
- * the login page.
+ * label. Never throws: an unreachable API, a `null` provider (setup not
+ * completed yet), or a `null` label (the API only reveals the SFTPGo host
+ * to an authenticated caller, and this page is always rendered anonymous)
+ * all fall back to a generic subtitle rather than breaking the login page.
  */
 export async function resolveLoginSubtitle(
   getClient: typeof serverApiClient = serverApiClient,
@@ -16,7 +17,7 @@ export async function resolveLoginSubtitle(
   try {
     const client = await getClient();
     const about = await client.about();
-    if (about.provider === null) {
+    if (about.provider === null || about.provider.label === null) {
       return DEFAULT_SUBTITLE;
     }
     return `Sign in with your SFTPGo account on ${about.provider.label}`;

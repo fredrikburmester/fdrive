@@ -33,6 +33,8 @@ function buildConfig(): AppConfig {
     fdriveAutoMigrate: true,
     fdriveTmpDir: "/tmp",
     fdriveJobMaxBytes: 1_000_000_000,
+    fdriveJsonMaxBytes: 1_048_576,
+    fdriveShareUploadMaxBytes: 1_000_000_000,
     fdriveIndexRoots: null,
     fdriveEmbedUrl: undefined,
     fdriveThumbsDir: undefined,

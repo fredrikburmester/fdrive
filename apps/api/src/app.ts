@@ -159,10 +159,20 @@ export function createApp(deps: AppDeps): AppHono {
 
   v1.get("/about", async (c) => {
     const status = await connectionStatus();
+    // `/about` is reachable without a session (see SETUP_EXEMPT_PREFIXES),
+    // so an anonymous caller must not learn the configured SFTPGo host: only
+    // reveal `provider.label` once `principalResolver` confirms a valid
+    // session. `provider.type` still tells an anonymous caller setup is
+    // complete, which the login page needs to decide whether to redirect to
+    // `/setup`.
+    const principal = status.host === null ? null : await principalResolver(c);
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
       builtOn: { name: "SFTPGo", sourceUrl: SFTPGO_SOURCE_URL },
-      provider: status.host === null ? null : { type: "sftpgo", label: status.host },
+      provider:
+        status.host === null
+          ? null
+          : { type: "sftpgo", label: principal === null ? null : status.host },
       setupRequired: status.required,
     });
     return c.json(body);

@@ -5,9 +5,17 @@ name: fdrive
 # compose.sftpgo-network.example.yaml). Only people who have no SFTPGo yet
 # should add compose.sftpgo.yaml on top of this file.
 
+# Shared json-file log rotation for every service below: without a limit,
+# a long-running container's logs grow unbounded on the host disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   proxy:
-    image: caddy:2
+    image: caddy:2@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
     ports:
       # Loopback-bound by default: an operator's own edge (with TLS) is
       # expected to sit in front and forward to this port. Set
@@ -17,9 +25,28 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
-      - web
-      - api
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    # The official image's caddy binary carries a `cap_net_bind_service`
+    # file capability so it can bind :80 without running fully privileged;
+    # `cap_drop: [ALL]` also strips that capability from the container's
+    # bounding set (verified: caddy fails to exec at all without it, with
+    # "operation not permitted"), so it is the one capability added back.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    pids_limit: 512
+    read_only: true
+    # /tmp for general scratch space; /config and /data are where Caddy
+    # would persist its autosave config and TLS/ACME state, neither of
+    # which this deployment uses (see README.md's TLS section: no
+    # automatic HTTPS, no on-disk certificate cache), so a tmpfs is enough
+    # to stop it logging "read-only file system" on every start.
+    tmpfs: ["/tmp", "/config/caddy", "/data/caddy"]
+    logging: *default-logging
 
   web:
     build:
@@ -30,6 +57,12 @@ services:
     environment:
       API_INTERNAL_URL: http://api:3001
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    read_only: true
+    tmpfs: ["/tmp"]
+    logging: *default-logging
 
   api:
     build:
@@ -51,9 +84,13 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    logging: *default-logging
 
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
     environment:
       POSTGRES_DB: fdrive
       POSTGRES_USER: fdrive
@@ -66,6 +103,17 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    # docker-entrypoint.sh runs as root first to fix ownership/permissions
+    # on the data directory, then drops to the "postgres" user before
+    # starting the server; verified each of these five is required (the
+    # image's own entrypoint script fails without them) and no more:
+    # CHOWN/FOWNER/DAC_OVERRIDE for the permission fixup, SETUID/SETGID to
+    # actually switch users afterward.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, SETUID, SETGID, DAC_OVERRIDE]
+    pids_limit: 512
+    logging: *default-logging
 
   # -- index profile: indexer, tika, embed --------------------------------------
   # Opt in with `--profile index` (see README.md). The indexer walks and watches
@@ -73,6 +121,24 @@ services:
   # SFTPGo serves), extracts text, embeds it, and generates thumbnails. Add more
   # roots by copying the `indexer` service's volume line and `INDEX_ROOTS` entry
   # for each additional `name=/roots/<name>` pair.
+  #
+  # `fdrive-thumbs` (below) is a named volume, not a host bind mount: Docker
+  # always creates a bind-mounted host directory owned by root, which the
+  # indexer's non-root uid 1001 (see services/indexer/Dockerfile) could not
+  # then write into. `thumbs-init` chowns the named volume to that uid once,
+  # before the indexer starts, the same one-shot pattern
+  # deploy/compose.dev.yaml's `sftpgo-seed` uses for SFTPGo's own data
+  # volume. Thumbnails are never operator-facing (only the api and indexer
+  # ever read or write them), so a named volume loses nothing an operator
+  # would otherwise want from a host-visible directory.
+  thumbs-init:
+    image: alpine:3.20
+    profiles: [index]
+    volumes:
+      - fdrive-thumbs:/thumbs
+    command: ["chown", "-R", "1001:1001", "/thumbs"]
+    logging: *default-logging
+
   indexer:
     build:
       context: ../services/indexer
@@ -87,11 +153,17 @@ services:
       INDEXER_PORT: "8010"
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR}:/roots/sftpgo:ro
-      - ${FDRIVE_DATA_DIR:-./data}/thumbs:/thumbs
+      - fdrive-thumbs:/thumbs
     depends_on:
       db:
         condition: service_healthy
+      thumbs-init:
+        condition: service_completed_successfully
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    logging: *default-logging
 
   # Nightly OCR pass over the same roots the indexer reads, filling in text
   # layers for scanned PDFs (see docs/OCR.md). Needs read-write access to the
@@ -115,14 +187,24 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    logging: *default-logging
 
   tika:
-    image: apache/tika:3.2.1.0
+    image: apache/tika:3.2.1.0@sha256:df12b41af58c9833e60bdc231ffc4b59f5b7a83bfe2d63e3dc7aab7da923abba
     profiles: [index]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    logging: *default-logging
 
   embed:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    # Pinned to an explicit version (not :cpu-latest) plus digest, see
+    # deploy/README.md's pins table.
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.2@sha256:16230cd8f679ae5f8a51d585033628b1c0d45cd70c2bc9b0d208170d71218fdb
     platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
     profiles: [index]
     command: ["--model-id", "intfloat/multilingual-e5-small"]
@@ -130,3 +212,14 @@ services:
       - ${FDRIVE_DATA_DIR:-./data}/models:/data
     mem_limit: 4g
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    # Binds :80 as root; verified this image does not need
+    # CAP_NET_BIND_SERVICE added back to do so (unlike caddy, whose binary
+    # carries a file capability that requires it even for root; this
+    # server's own bind call does not).
+    cap_drop: [ALL]
+    pids_limit: 512
+    logging: *default-logging
+
+volumes:
+  fdrive-thumbs:
