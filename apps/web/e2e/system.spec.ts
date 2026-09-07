@@ -58,14 +58,15 @@ test("alice (admin) sees the Search embedding server and OCR as not configured i
   // No embedding server or OCR sidecar runs in the e2e stack (unlike the
   // indexer, which `global-setup.ts` fakes; see the "configured and
   // reachable" tests below), so their own "not configured" state should
-  // render rather than an error.
+  // render rather than an error, naming exactly which variable to set.
   await page.getByRole("link", { name: "Search" }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
-  await expect(page.getByText("Not configured")).toBeVisible();
+  await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
+  await expect(page.getByText("Not configured: set FDRIVE_EMBED_URL.")).toBeVisible();
 
   await page.getByRole("link", { name: "OCR" }).click();
   await expect(page).toHaveURL(/\/system\/ocr$/);
-  await expect(page.getByText("Not configured")).toBeVisible();
+  await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
 });
 
 test("alice (admin) sees the Indexer page render the fake indexer's root, counts, last scan, and errors sample", async ({

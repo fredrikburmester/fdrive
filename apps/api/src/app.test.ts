@@ -94,7 +94,51 @@ describe("createApp health route", () => {
       service: "fdrive-api",
       version: "1.2.3",
       uptimeSeconds: 5,
+      subsystems: {
+        core: { status: "configured", missing: [] },
+        network: { status: "configured", missing: [] },
+        shares: { status: "configured", missing: [] },
+        index: {
+          status: "not_configured",
+          missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+        },
+        search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
+        thumbnails: { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] },
+        ocr: { status: "not_configured", missing: ["FDRIVE_OCR_URL"] },
+        office: {
+          status: "not_configured",
+          missing: [
+            "FDRIVE_OFFICE_PRODUCT",
+            "FDRIVE_OFFICE_URL",
+            "FDRIVE_OFFICE_PUBLIC_URL",
+            "FDRIVE_WOPI_URL",
+          ],
+        },
+        trash: { status: "not_configured", missing: ["FDRIVE_SFTPGO_TRASH_PATH"] },
+      },
     });
+  });
+
+  it("calls subsystemReachability with the config and reports a failed probe as unreachable", async () => {
+    const logger = createTestLogger();
+    const config = loadConfig(REQUIRED_ENV);
+    const app = createApp({
+      config,
+      logger,
+      version: "1.2.3",
+      startedAt: START,
+      clock: () => LATER,
+      subsystemReachability: async (calledWith) => {
+        expect(calledWith).toBe(config);
+        return { index: false };
+      },
+    });
+
+    const res = await app.request("/api/v1/health");
+    const body = (await res.json()) as { subsystems: { index: { status: string } } };
+    // "index" is not_configured in this base config, so a (nonsensical, but
+    // possible) reachability result for it must not override that.
+    expect(body.subsystems.index.status).toBe("not_configured");
   });
 
   it("logs a structured request completion line", async () => {

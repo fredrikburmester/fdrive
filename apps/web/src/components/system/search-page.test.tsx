@@ -138,4 +138,22 @@ describe("SearchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
+
+  it("names the missing variable when semantic search is not configured", async () => {
+    useSystemSearchMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        semantic: { configured: false, healthy: false },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    useReembedMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<SearchPage />);
+
+    expect(await screen.findByText("Not configured: set FDRIVE_EMBED_URL.")).toBeTruthy();
+  });
 });

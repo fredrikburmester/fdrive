@@ -11,6 +11,7 @@ import {
   type PrincipalVariables,
 } from "./auth/principal.js";
 import type { AppConfig } from "./config.js";
+import { applyReachability, type Subsystem, subsystemsStatus } from "./config-keys.js";
 import { ApiHttpError, toApiError } from "./errors.js";
 
 export type AppVariables = {
@@ -59,6 +60,18 @@ export interface AppDeps {
    * first.
    */
   readonly registerRoutes?: (groups: { public: AppHono; authed: AuthedHono }) => void;
+  /**
+   * Probes reachability for whichever subsystems have a liveness check
+   * (indexer, embed/search, OCR, office), called on every `GET
+   * /api/v1/health` request. Returns `true`/`false` per subsystem it
+   * probed; a subsystem it omits keeps its config-only status. Defaults to
+   * probing nothing (every configured subsystem reports "configured" with
+   * no liveness check), which is enough for tests that do not exercise
+   * reachability; `composeApp` wires the real sidecar-backed version.
+   */
+  readonly subsystemReachability?: (
+    config: AppConfig,
+  ) => Promise<Partial<Record<Subsystem, boolean>>>;
 }
 
 const REQUEST_ID_HEADER = "X-Request-Id";
@@ -146,13 +159,18 @@ export function createApp(deps: AppDeps): AppHono {
 
   const v1: AppHono = new Hono();
 
-  v1.get("/health", (c) => {
+  const subsystemReachability = deps.subsystemReachability ?? (async () => ({}));
+
+  v1.get("/health", async (c) => {
     const uptimeSeconds = (clock().getTime() - deps.startedAt.getTime()) / 1000;
+    const reachable = await subsystemReachability(deps.config);
+    const subsystems = applyReachability(subsystemsStatus(deps.config), reachable);
     const body: HealthResponse = HealthResponse.parse({
       status: "ok",
       service: "fdrive-api",
       version: deps.version,
       uptimeSeconds,
+      subsystems,
     });
     return c.json(body);
   });

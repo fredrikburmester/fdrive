@@ -57,6 +57,42 @@ def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path:
     assert any("OCR pass done" in line for line in logs)
 
 
+def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> None:
+    conn = db.connect(postgres_dsn)
+    root_id = db.upsert_root(conn, "sftpgo")
+    conn.close()
+    target_dir = tmp_path / "root"
+    (target_dir / "fredrik").mkdir(parents=True)
+    (target_dir / "fredrik" / "in-scope.pdf").write_bytes(b"HASTEXT\n")
+    (target_dir / "alice").mkdir()
+    (target_dir / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
+    from fdrive_ocr.runner import RootTarget
+
+    targets = [RootTarget(name="sftpgo", root_id=root_id, abs_path=str(target_dir))]
+    lock = RunLock()
+    logs: list[str] = []
+    main.run_once(
+        lock,
+        lambda: db.connect(postgres_dsn),
+        targets,
+        DEFAULT_SETTINGS,
+        str(tmp_path / "state"),
+        30,
+        2,
+        logs.append,
+        include_globs=("sftpgo/fredrik/**",),
+    )
+    conn = db.connect(postgres_dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (root_id,))
+            statuses = dict(cur.fetchall())
+    finally:
+        conn.close()
+    assert statuses[str(Path("alice") / "out-of-scope.pdf")] == "excluded"
+    assert statuses[str(Path("fredrik") / "in-scope.pdf")] == "has_text"
+
+
 def test_run_once_skips_when_already_running(postgres_dsn: str, tmp_path: Path) -> None:
     lock = RunLock()
     lock.try_acquire()

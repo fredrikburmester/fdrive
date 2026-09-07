@@ -9,12 +9,9 @@ cp .env.example .env && chmod 600 .env
 `.env` holds real secrets (database password, master key, JWT secrets), so it
 is created `0600` (owner read-write only) from the start rather than
 inheriting the umask's usual `0644`. Edit every `change-me` placeholder in it
-before starting anything; this preflight one-liner refuses to start while any
-remain (run it from this directory, right before `docker compose up`):
-
-```sh
-! grep -q 'change-me' .env || { echo "error: .env still has a change-me placeholder value" >&2; exit 1; }
-```
+before starting anything; `./preflight.sh` (run automatically by
+`./update.sh`, right before `docker compose up`) refuses to start while any
+remain, along with two other common mistakes. See "Nothing is silent" below.
 
 ## Files
 
@@ -35,7 +32,53 @@ remain (run it from this directory, right before `docker compose up`):
   WOPI host for editing office documents. Also never referenced
   automatically.
 - `.env.example` — every environment variable used by the files above, with
-  placeholder values and comments on what generates a real one.
+  placeholder values and comments on what generates a real one. Generated
+  by `tools/deploy/generate-env-example.ts` (`pnpm env:example`) from the
+  same table `apps/api/src/config-keys.ts` uses; do not hand-edit it, edit
+  that table and regenerate instead.
+- `preflight.sh` — checks `.env` for common mistakes before `docker compose
+  up`; see "Nothing is silent" below.
+- `update.sh` — pulls, rebuilds, runs `preflight.sh`, brings the stack up,
+  and checks the API's health afterwards; see "Running it" below.
+
+## Nothing is silent
+
+A misconfigured fdrive is meant to say so, by variable name, rather than
+start up quietly degraded:
+
+- **Startup summary.** On every boot the API logs one line per subsystem
+  (core, network, index, search, thumbnails, ocr, office, trash, shares):
+  `subsystem=search status=configured` or `subsystem=ocr status=not
+  configured missing=FDRIVE_OCR_URL`, naming exactly which variable to set.
+  `docker compose logs api` shows this right after the container starts.
+- **`GET /api/v1/health`.** Public and unauthenticated (so it never carries
+  secrets), its `subsystems` field reports the same per-subsystem
+  `"configured"` / `"not_configured"` / `"unreachable"` state, with a
+  `missing` array of variable names for anything not configured. A
+  monitoring check against this endpoint catches a sidecar that later goes
+  unreachable, not only a variable that was never set.
+- **The System pages** (`/system/indexer`, `/system/search`, `/system/ocr`,
+  `/system/thumbnails`) show one of exactly three states per subsystem: "Not
+  configured: set `FDRIVE_X`" (naming the variable), "Unreachable", or the
+  working view. A subsystem that only partly depends on another (the
+  Thumbnails page needs both `FDRIVE_THUMBS_DIR` and the indexer) never
+  shows a working-looking description next to a "Not configured" badge.
+- **`./preflight.sh`**, run automatically by `./update.sh` right before `up`
+  (or run directly from this directory). Reads only `deploy/.env` and fails
+  on: a leftover `change-me` placeholder; an unknown `FDRIVE_*` key (almost
+  always a typo, since every real one is documented in `.env.example`); or a
+  `FDRIVE_HOME_TEMPLATE` that does not match `<root>:<path with
+  {username}>`. On success it prints the `FDRIVE_INDEX_ROOTS` value and the
+  bind address that will actually be used, so what you are about to deploy
+  is visible before it happens, not only discoverable afterwards.
+
+**Env-configured installs have no `/setup`.** When `SFTPGO_URL` and
+`FDRIVE_HOME_TEMPLATE` are both set in `.env`, the API records that
+connection on first boot; there is no setup token and the `/setup` wizard
+route is never needed. Leave both unset to use `/setup` instead (sign in
+once as an SFTPGo admin to complete it in the browser). Setting only one of
+the two leaves fdrive waiting on `/setup` regardless, since either the host
+or the home-directory mapping would otherwise be missing.
 
 ## How requests flow
 

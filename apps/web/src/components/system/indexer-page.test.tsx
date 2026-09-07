@@ -316,4 +316,23 @@ describe("IndexerPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
+
+  it("names the missing variables when the indexer is not configured", async () => {
+    useSystemIndexerMock.mockReturnValue({
+      data: { configured: false, reachable: false, settings: CONFIGURED_FIXTURE.settings },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useClearIndexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    render(<IndexerPage />);
+
+    expect(
+      await screen.findByText("Not configured: set FDRIVE_INDEXER_URL and FDRIVE_INDEX_ROOTS."),
+    ).toBeTruthy();
+  });
 });
