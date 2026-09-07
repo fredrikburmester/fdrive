@@ -1,9 +1,20 @@
 // @vitest-environment jsdom
 import type { FsEntry, OfficeStatusResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FileContextMenu } from "./file-context-menu";
 import { FilesToolbarActions, type FilesToolbarActionsProps } from "./toolbar";
+
+// `FilesToolbarActions` now calls `useIsMobile`, which reads
+// `window.matchMedia`; jsdom does not implement it.
+beforeEach(() => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+});
 
 const entry: FsEntry = {
   path: "/a.docx",
@@ -19,7 +30,10 @@ const status: OfficeStatusResponse = {
   product: "onlyoffice",
   extensions: { view: ["docx"], edit: ["docx"], convert: ["docx"] },
 };
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 it("dispatches explicit office actions for a single file", async () => {
   for (const [label, mode] of [
     ["View in office", "view"],

@@ -148,8 +148,9 @@ absolute checkout, allowed paths, parent-only duties, and the ban on recursive d
 - Never run `pnpm test:coverage` (or any turbo task) while a Playwright run is active in the same
   checkout: the e2e harness creates `apps/web-e2e-shadow-<ports>/`, which turbo rejects as a
   duplicate workspace. Run them one after the other.
-- Sidebar Favorites, Recents, and Tags sections render nothing until they have content; do not
-  read their absence in a fresh dev database as a bug.
+- Sidebar Favorites, Recents, and Tags sections always render once their query resolves (a muted
+  one-line placeholder replaces the list while empty); only a still-loading query renders nothing.
+  A fresh dev database shows all three sections with their empty-state copy, not their absence.
 - Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
   file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
   first, list only after it reports `bad_request`.
