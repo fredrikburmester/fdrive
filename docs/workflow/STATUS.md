@@ -233,3 +233,9 @@ available and followed the project instructions.
   plus narrow routes/index additions (P5-SCOPE-ENGINE.md). Expected trivial merge with
   trash-core in `packages/contracts/src/{routes,index}.ts`. `P5-SCOPE-CONSUMERS` stays
   queued until `trash-api` integrates because both edit search and composition.
+- Merged: `trash-core` (836e288) and `scope-engine` (cd3a3fc). Review fixed one real bug in
+  the scope resolver: the SFTP-side verification listed `scope.fsPrefix` through the
+  identity's storage, which speaks virtual paths; it now lists `virtualPrefix` and the
+  indexer gets `fsPrefix`. The read authorizer's target field is `path` (virtual), not
+  `fsPath`. Overrides persist in the existing `SettingsRepo` under `identity_scope:<id>`.
+  Still running: `trash-api` and `trash-web`. Next after both: P5-SCOPE-CONSUMERS wiring.
