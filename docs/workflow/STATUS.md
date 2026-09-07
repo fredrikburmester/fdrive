@@ -354,3 +354,20 @@ available and followed the project instructions.
   New scoping doc `docs/workflow/P7-FOLDER-VIEW.md` (per-folder view setting) and the
   `share-peek-api` / `share-peek-web` chunks appended to `P7-UX-2.md` after the user asked for
   zip peek on shared links.
+- Merged: `share-thumbs` (c7512df). `GET /api/v1/public/shares/:id/thumb?path=&size=` serves the
+  indexer's cached WebP through a tail (`apps/api/src/thumbs/serve.ts`) now shared with the authed
+  thumb route; `shareThumbUrl` added to the contract client. Every failure is the same bare 404.
+  Password-protected shares are verified with one share-root listing per (share, password), cached
+  60 s in a bounded map (`shares/password-cache.ts`). Primary follow-ups before merge: the
+  `toFsPath` call is wrapped so a path segment over 255 bytes is a 404 instead of an unhandled
+  throw (a test proves it: it fails without the guard), and the cache key is now a salted SHA-256
+  instead of the plaintext password. Verified against the real dev stack, not just the fakes:
+  SFTPGo v2.7.5 answers a wrong or missing share password with 401 on `/dirs` *before* it rejects a
+  single-file share with 400, so treating that 400 as "password accepted" is sound; a share listing
+  consumes no download token; twelve thumbnail requests left `used_tokens` unchanged while twelve
+  gallery tiles had previously consumed twelve; no cookie and a wrong password both give 404, the
+  right password gives 200 image/webp; traversal, a file outside the share, and a bad size are all
+  404. Gates: lint 1015 files, typecheck 13, api coverage 1678 tests (functions 99.61, lines 99.48).
+  Dev-environment fix along the way: the running indexer image predated `/directory`, so scope
+  verification failed and *all* index features (search, thumbnails) were silently unavailable;
+  rebuilt it. Running: `image-embed-service`, `image-embed-db`.
