@@ -4,13 +4,13 @@ import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
+import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
-import { buildListLayout } from "@/lib/files/marquee";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { formatBytes, formatDate } from "@/lib/format";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
@@ -18,19 +18,8 @@ import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
-import { useMarqueeSelection } from "./use-marquee-selection";
-
-/** Width used for every row's marquee hit box: wide enough that a marquee
- * drag anywhere horizontally within the listing still counts as overlapping
- * the row, since list/tree selection does not need horizontal precision. */
-const MARQUEE_ROW_WIDTH = 100_000;
 
 export const FILE_ROW_HEIGHT = 36;
-
-/** The sticky column header's height, in pixels (matches its `h-9` class):
- * rows are offset by this much within the scroll container, since the
- * header sits in normal flow above the virtualized rows' own wrapper. */
-const HEADER_HEIGHT = 36;
 
 /** Indent, in pixels, added per tree depth level in tree view. */
 export const TREE_INDENT_PX = 20;
@@ -52,7 +41,11 @@ export interface FileListProps {
   onInternalDrop: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
   /** Toggles between selecting every visible row and none, from the header checkbox. */
   onToggleSelectAll: () => void;
-  /** Replaces the current selection outright, for a marquee drag. */
+  /**
+   * Replaces the current selection outright. Not called by `FileList`
+   * itself (there is no more drag-to-select), but part of the shared
+   * listing prop contract other callers (see `FileGrid`) still rely on.
+   */
   onChangeSelection: (paths: string[]) => void;
   /** Clears the selection, for a plain click on empty listing space. */
   onClearSelection: () => void;
@@ -123,7 +116,6 @@ export function FileList({
   getDragPaths,
   onInternalDrop,
   onToggleSelectAll,
-  onChangeSelection,
   onClearSelection,
   treeDepths,
   treeExpanded,
@@ -150,23 +142,30 @@ export function FileList({
     overscan: 10,
   });
 
-  const marquee = useMarqueeSelection({
-    containerRef: parentRef,
-    getSelected: () => [...selected],
-    onChangeSelection,
-    onClearSelection,
-    getLayout: () =>
-      buildListLayout(
-        entries.map((entry) => entry.path),
-        virtualizer.getVirtualItems().map((item) => ({
-          index: item.index,
-          start: item.start + HEADER_HEIGHT,
-          size: item.size,
-        })),
-        FILE_ROW_HEIGHT,
-        MARQUEE_ROW_WIDTH,
-      ),
-  });
+  const onClearSelectionRef = useRef(onClearSelection);
+  onClearSelectionRef.current = onClearSelection;
+
+  useEffect(() => {
+    const container = parentRef.current;
+    if (container === null) {
+      return;
+    }
+    // A native listener, not a JSX `onClick` prop: a portaled overlay (a
+    // context menu, a dialog) is a React-tree descendant of this listing
+    // even though it renders outside the container in the real DOM, and
+    // React's synthetic events still bubble through the React tree across
+    // that portal boundary. A JSX `onClick` here would misfire and clear
+    // the selection for a click on that unrelated, portaled content; a
+    // native listener only ever fires for events whose real DOM target is
+    // actually inside the container.
+    function handleClick(event: MouseEvent) {
+      if (isBackgroundClick(event.target as Element | null)) {
+        onClearSelectionRef.current();
+      }
+    }
+    container.addEventListener("click", handleClick);
+    return () => container.removeEventListener("click", handleClick);
+  }, []);
 
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
@@ -222,12 +221,13 @@ export function FileList({
   return (
     <div ref={parentRef} className="relative h-full overflow-auto" data-slot="file-list">
       {/**
-       * `data-marquee-exclude`: this header lives inside the same scroll
-       * container the marquee listens on (so it stays `sticky` to it), but
-       * its own controls are not listing content; see `isMarqueeStartTarget`.
+       * `data-selection-exclude`: this header lives inside the same scroll
+       * container the background-click listener listens on (so it stays
+       * `sticky` to it), but its own controls are not listing content; see
+       * `isBackgroundClick`.
        */}
       <div
-        data-marquee-exclude
+        data-selection-exclude
         className="sticky top-0 z-10 flex h-9 items-center gap-3 border-border border-b bg-background/95 px-3 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75"
       >
         <Checkbox
@@ -326,9 +326,8 @@ export function FileList({
                  * Only this inner wrapper (the checkbox through the date
                  * column) is `draggable`, not the row itself: the row's own
                  * padding and this wrapper's leading gap stay plain, un-
-                 * draggable background, so a marquee drag can start there
-                 * (see `isMarqueeStartTarget`) without the browser mistaking
-                 * it for the start of a native HTML5 drag.
+                 * draggable background, so the browser never mistakes a
+                 * plain click there for the start of a native HTML5 drag.
                  */}
                 {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the row's drag handle; click/selection semantics live on the row above it */}
                 <div
@@ -359,19 +358,6 @@ export function FileList({
           );
         })}
       </div>
-      {marquee.rect !== null && (
-        <div
-          aria-hidden
-          data-slot="marquee-rect"
-          className="pointer-events-none absolute rounded-sm border border-foreground/25 bg-foreground/10"
-          style={{
-            left: marquee.rect.left,
-            top: marquee.rect.top,
-            width: marquee.rect.width,
-            height: marquee.rect.height,
-          }}
-        />
-      )}
     </div>
   );
 }
