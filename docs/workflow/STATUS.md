@@ -461,3 +461,19 @@ available and followed the project instructions.
   `GRID_TILE_HEIGHT` is 128. Gates: lint 1030, web typecheck, web 1376 tests; Playwright
   `grid-thumbs.spec.ts` 2/2 in the worker checkout. Pane: /files/photos shows six real thumbnails,
   the mixed root aligns icons and pictures. Running: `folder-size`, `image-search-api` rework.
+- Merged: `image-search-api` (73910fa) after the rework: `GET /api/v1/search/images` on its own
+  service (`search/image-service.ts`, ratio cut `IMAGE_SCORE_RATIO` 0.6, fanout 60, same verified
+  scope / round trip / trash / live-read chain as text search), sidecar client with a 15 s cached
+  health probe binding model id and `dim` 1024, `imageSearch` subsystem (a `loading` sidecar is
+  unreachable), `GET/POST /system/image-search{,/rebuild,/clear}`, compose `image-embed` service
+  and generated env lines. `SearchStatusResponse.images` is optional so the web fixtures stayed
+  valid. Primary follow-up (0dfe843): `tools/dev/ensure-env.ts` seeds `FDRIVE_IMAGE_EMBED_URL`
+  (58012); dev API restarted through `.claude/launch.json`, health shows `imageSearch` configured.
+  Live: "a blue ocean" ocean.png 0.091, "a green forest" forest.png 0.068, "a warm orange sunset"
+  sunset.png 0.110, "en rosa cirkel" rose.png 0.149; cold text tower 3.3 s, warm 0.25 to 0.6 s.
+  Gates: lint 1034, typecheck 13, contracts 573, api 1757 (integration in progress).
+  Running: `image-search-web` (`.worktrees/image-search-web`, spec `P7-IMAGE-SEARCH-WEB.md`).
+- `folder-size` reviewed (route mirrors the thumb chain, live read before the index, scope
+  intersection in SQL). Known limit to fix later: a folder that contains the trash folder (Home)
+  sums trashed files too, only the requested path itself is trash-checked. Merge pending the
+  api integration run on main.
