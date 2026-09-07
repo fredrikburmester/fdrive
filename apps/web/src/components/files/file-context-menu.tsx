@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
 import { detectArchiveKind } from "@fdrive/core";
 import {
   CopyIcon,
@@ -10,6 +10,7 @@ import {
   FilesIcon,
   FolderInputIcon,
   FolderSearchIcon,
+  Link2Icon,
   PackageOpenIcon,
   PencilIcon,
   StarIcon,
@@ -31,9 +32,14 @@ import {
 } from "@/components/ui/context-menu";
 import { tagDotClassName } from "@/lib/metadata/colors";
 import type { TagCheckState } from "@/lib/metadata/tag-set";
+import { OFFICE_MODE_LABELS, officeModesFor } from "@/lib/office/capabilities";
 import { cn } from "@/lib/utils";
 
 export type RowContextAction =
+  | "office:view"
+  | "office:edit"
+  | "office:convert"
+  | "share"
   | "open"
   | "revealInFolder"
   | "download"
@@ -47,6 +53,7 @@ export type RowContextAction =
   | "extractTo";
 
 export interface FileContextMenuProps {
+  officeStatus?: OfficeStatusResponse | undefined;
   entry: FsEntry;
   children: ReactNode;
   onAction: (action: RowContextAction, entry: FsEntry) => void;
@@ -107,6 +114,7 @@ const DEFAULT_NO_OP = () => {};
 /** The right-click menu shared by list rows and grid tiles. */
 export function FileContextMenu({
   entry,
+  officeStatus,
   children,
   onAction,
   selectionCount = 1,
@@ -129,10 +137,20 @@ export function FileContextMenu({
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onClick={() => onAction("share", entry)}>
+          <Link2Icon />
+          Share…
+        </ContextMenuItem>
         <ContextMenuItem onClick={() => onAction("open", entry)}>
           <ExternalLinkIcon />
           Open
         </ContextMenuItem>
+        {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
+          <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
+            <ExternalLinkIcon />
+            {OFFICE_MODE_LABELS[mode]}
+          </ContextMenuItem>
+        ))}
         {showReveal && (
           <ContextMenuItem onClick={() => onAction("revealInFolder", entry)}>
             <FolderSearchIcon />

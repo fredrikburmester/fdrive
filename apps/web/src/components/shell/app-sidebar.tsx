@@ -4,6 +4,7 @@ import {
   ChevronsUpDown,
   Database,
   Image,
+  Link2,
   LogOut,
   Monitor,
   Moon,
@@ -17,6 +18,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
@@ -47,7 +49,9 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
+  SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
 
 const THEME_OPTIONS = [
@@ -90,6 +94,7 @@ export function AppSidebar() {
   const { data: me } = useShellMe();
   const { theme, setTheme } = useTheme();
   const logout = useLogout();
+  const identityActions = useIdentityActions();
   const pathname = usePathname();
 
   const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
@@ -107,6 +112,15 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <FolderTree />
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={pathname === "/shares"}
+                  render={<Link href={"/shares" as Route} />}
+                >
+                  <Link2 />
+                  <span>Shares</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -156,6 +170,34 @@ export function AppSidebar() {
             }
           />
           <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Logins</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={me?.activeIdentityId ?? ""}
+                onValueChange={(id) => {
+                  if (id !== me?.activeIdentityId)
+                    void identityActions
+                      .switch(id)
+                      .catch(() => toast.error("Could not switch login. Please try again."));
+                }}
+              >
+                {me?.identities.map((identity) => (
+                  <DropdownMenuRadioItem
+                    key={identity.id}
+                    value={identity.id}
+                    disabled={identityActions.pending}
+                  >
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{identity.username}</span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {identity.providerLabel}
+                      </span>
+                    </span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuLabel>{activeIdentity?.username ?? "Account"}</DropdownMenuLabel>
               <DropdownMenuSub>

@@ -26,6 +26,8 @@ export interface UploadStoreDeps {
   readonly concurrency?: number;
   /** Sent as the `x-identity-id` header on every upload request, when set. */
   readonly identityId?: string;
+  /** Production queues reject files without an explicitly captured login. */
+  readonly requireIdentity?: boolean;
   /** Defaults to `() => new XMLHttpRequest()`. Override in tests with a fake. */
   readonly createXhr?: () => XhrLike;
   /** Called with the parent directory of every successfully uploaded file. */
@@ -34,6 +36,10 @@ export interface UploadStoreDeps {
 
 export interface UploadStoreState {
   readonly state: UploadQueueState;
+  readonly activeIdentityId: string | undefined;
+  setActiveIdentity(id: string | undefined): void;
+  cancelIdentity(id: string): void;
+  reset(): void;
   enqueue(items: readonly UploadItem[]): void;
   retry(id: string): void;
   cancel(id: string): void;
@@ -129,7 +135,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
         {
           url: buildUploadUrl(baseUrl, item.targetPath),
           file: item.file,
-          headers: buildUploadHeaders(item, identityId),
+          headers: buildUploadHeaders(item, item.identityId),
           onProgress: (loaded) => dispatch({ type: "progress", id: item.id, loaded }),
           signal: controller.signal,
         },
@@ -139,7 +145,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
           controllers.delete(item.id);
           if (result.status >= 200 && result.status < 300) {
             dispatch({ type: "succeed", id: item.id });
-            onUploaded(parentPath(item.targetPath));
+            if (item.identityId === get().activeIdentityId) onUploaded(parentPath(item.targetPath));
           } else {
             dispatch({
               type: "fail",
@@ -162,9 +168,32 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
 
     return {
       state: initialUploadQueueState,
+      activeIdentityId: identityId,
+      reset() {
+        for (const controller of controllers.values()) controller.abort();
+        controllers.clear();
+        set({ state: initialUploadQueueState, activeIdentityId: undefined });
+      },
+      setActiveIdentity(id) {
+        set({ activeIdentityId: id });
+      },
+      cancelIdentity(id) {
+        for (const item of Object.values(get().state.items)) {
+          if (item.identityId === id) {
+            dispatch({ type: "cancel", id: item.id });
+            controllers.get(item.id)?.abort();
+          }
+        }
+      },
 
       enqueue(items) {
-        dispatch({ type: "enqueue", items });
+        const captured = items.map((item) => {
+          const owner = item.identityId ?? get().activeIdentityId;
+          if (owner === undefined && deps.requireIdentity)
+            throw new Error("Select a login before uploading.");
+          return owner === undefined ? item : { ...item, identityId: owner };
+        });
+        dispatch({ type: "enqueue", items: captured });
         scheduleNext();
       },
 
@@ -200,5 +229,6 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
  * to invalidate against.
  */
 export const useUploadStore: UploadStore = createUploadStore({
+  requireIdentity: true,
   onUploaded: createDefaultOnUploaded(),
 });

@@ -27,7 +27,8 @@ export async function mapWithConcurrency<T, R>(
   }
 
   const workerCount = Math.max(1, Math.min(concurrency, items.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  const settled = await Promise.allSettled(Array.from({ length: workerCount }, () => worker()));
+  for (const result of settled) if (result.status === "rejected") throw result.reason;
 
   return results;
 }

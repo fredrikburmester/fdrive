@@ -1,0 +1,92 @@
+// @vitest-environment jsdom
+import type { FsEntry, OfficeStatusResponse } from "@fdrive/contracts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { FileContextMenu } from "./file-context-menu";
+import { FilesToolbarActions, type FilesToolbarActionsProps } from "./toolbar";
+
+const entry: FsEntry = {
+  path: "/a.docx",
+  name: "a.docx",
+  kind: "file",
+  size: 1,
+  ext: ".docx",
+  mime: null,
+  modifiedAt: "2026-01-01T00:00:00.000Z",
+};
+const status: OfficeStatusResponse = {
+  available: true,
+  product: "onlyoffice",
+  extensions: { view: ["docx"], edit: ["docx"], convert: ["docx"] },
+};
+afterEach(cleanup);
+it("dispatches explicit office actions for a single file", async () => {
+  for (const [label, mode] of [
+    ["View in office", "view"],
+    ["Edit in office", "edit"],
+    ["Convert and edit", "convert"],
+  ] as const) {
+    const action = vi.fn();
+    render(
+      <FileContextMenu entry={entry} officeStatus={status} onAction={action}>
+        <span>File</span>
+      </FileContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByText("File"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+    expect(action).toHaveBeenCalledWith(`office:${mode}`, entry);
+    cleanup();
+  }
+});
+it("hides office items when unavailable or acting on multiple files", async () => {
+  for (const [available, selectionCount] of [
+    [false, 1],
+    [true, 2],
+  ] as const) {
+    render(
+      <FileContextMenu
+        entry={entry}
+        officeStatus={{ ...status, available }}
+        selectionCount={selectionCount}
+        onAction={vi.fn()}
+      >
+        <span>File</span>
+      </FileContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByText("File"));
+    await screen.findByRole("menuitem", { name: "Open" });
+    expect(screen.queryByRole("menuitem", { name: "Edit in office" })).toBeNull();
+    cleanup();
+  }
+});
+it("adds Document, Spreadsheet and Presentation only when office creation is available", async () => {
+  const create = vi.fn();
+  const props: FilesToolbarActionsProps = {
+    viewMode: "list",
+    onViewModeChange: vi.fn(),
+    sortSpec: { key: "name", direction: "asc" },
+    onSortSpecChange: vi.fn(),
+    onNewFolder: vi.fn(),
+    onNewFile: vi.fn(),
+    onUploadFiles: vi.fn(),
+    onUploadFolder: vi.fn(),
+    detailsOpen: false,
+    onToggleDetails: vi.fn(),
+    selectedCount: 0,
+    onClearSelection: vi.fn(),
+    onDuplicateSelection: vi.fn(),
+    onCompressSelection: vi.fn(),
+  };
+  render(<FilesToolbarActions {...props} />);
+  fireEvent.click(screen.getByTitle("New"));
+  await screen.findByRole("menuitem", { name: "Text file" });
+  expect(screen.queryByRole("menuitem", { name: "Document" })).toBeNull();
+  cleanup();
+  for (const kind of ["Document", "Spreadsheet", "Presentation"]) {
+    render(<FilesToolbarActions {...props} onNewOfficeDocument={create} />);
+    fireEvent.click(screen.getByTitle("New"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: kind }));
+    expect(create).toHaveBeenLastCalledWith(kind.toLowerCase());
+    cleanup();
+  }
+});

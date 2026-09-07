@@ -7,6 +7,8 @@ export type UploadStatus = "queued" | "uploading" | "done" | "error" | "skipped"
 
 export interface UploadItem {
   readonly id: string;
+  /** Captured before conflict handling; retries keep this identity. */
+  readonly identityId?: string;
   readonly file: File;
   /** Absolute destination path this file will be written to. */
   readonly targetPath: string;

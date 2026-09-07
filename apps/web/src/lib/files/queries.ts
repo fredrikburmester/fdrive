@@ -1,4 +1,5 @@
 import {
+  type ApiClient,
   ApiClientError,
   type DeleteRequest,
   type FsEntry,
@@ -8,7 +9,9 @@ import { parentPath } from "@fdrive/core";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { apiClient, queryKeys } from "./deps";
+import { refreshIdentityQuery } from "@/lib/account/invalidation";
+import { accountTransition } from "@/lib/account/transition";
+import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
 import { shouldShowSkeleton } from "./tree";
 import { reachableExpandedDirs } from "./tree-rows";
 
@@ -159,21 +162,36 @@ function useInvalidateAffected() {
   const queryClient = useQueryClient();
   return (input: AffectedListKeysInput) => {
     for (const key of affectedListKeys(input)) {
-      void queryClient.invalidateQueries({ queryKey: key });
+      void refreshIdentityQuery(queryClient, key);
     }
   };
 }
 
 function useFsMutation<TVariables, TResult>(config: {
-  mutationFn: (vars: TVariables) => Promise<TResult>;
+  mutationFn: (vars: TVariables, client: ApiClient) => Promise<TResult>;
   toAffected: (vars: TVariables, result: TResult) => AffectedListKeysInput;
   errorFallback: string;
 }) {
   const invalidate = useInvalidateAffected();
+  // A paused mutation keeps the login that owned the displayed file browser.
+  const [scope] = useState(() => ({
+    generation: accountTransition.getSnapshot().generation,
+    client: snapshotTabApiClient(),
+  }));
   return useMutation({
-    mutationFn: config.mutationFn,
-    onSuccess: (result, vars) => invalidate(config.toAffected(vars, result)),
+    mutationFn: (vars: TVariables) => {
+      const current = accountTransition.getSnapshot();
+      if (current.pending || current.generation !== scope.generation) {
+        return Promise.reject(new Error("The active login changed."));
+      }
+      return config.mutationFn(vars, scope.client);
+    },
+    onSuccess: (result, vars) => {
+      if (scope.generation !== accountTransition.getSnapshot().generation) return;
+      invalidate(config.toAffected(vars, result));
+    },
     onError: (error) => {
+      if (scope.generation !== accountTransition.getSnapshot().generation) return;
       toast.error(describeFsError(error, config.errorFallback));
     },
   });
@@ -182,7 +200,7 @@ function useFsMutation<TVariables, TResult>(config: {
 /** Creates a directory at `path`, invalidating its parent's listing. */
 export function useMkdir() {
   return useFsMutation<string, FsEntry>({
-    mutationFn: (path) => apiClient.mkdir(path),
+    mutationFn: (path, client) => client.mkdir(path),
     toAffected: (path) => ({ op: "mkdir", paths: [path] }),
     errorFallback: "Could not create the folder.",
   });
@@ -191,7 +209,7 @@ export function useMkdir() {
 /** Copies `path` next to itself under a unique name, invalidating its parent's listing. */
 export function useDuplicate() {
   return useFsMutation<string, FsEntry>({
-    mutationFn: (path) => apiClient.duplicate(path),
+    mutationFn: (path, client) => client.duplicate(path),
     toAffected: (_path, result) => ({ op: "duplicate", paths: [result.path] }),
     errorFallback: "Could not duplicate.",
   });
@@ -205,7 +223,7 @@ export interface RenameVariables {
 /** Renames `path` to `newName` in place, invalidating its parent's listing. */
 export function useRename() {
   return useFsMutation<RenameVariables, FsEntry>({
-    mutationFn: (vars) => apiClient.rename(vars.path, vars.newName),
+    mutationFn: (vars, client) => client.rename(vars.path, vars.newName),
     toAffected: (vars, result) => ({ op: "rename", paths: [vars.path], targets: [result.path] }),
     errorFallback: "Could not rename.",
   });
@@ -219,7 +237,7 @@ export interface MoveVariables {
 /** Moves `path` to `target`, invalidating both parents' listings. */
 export function useMove() {
   return useFsMutation<MoveVariables, FsEntry>({
-    mutationFn: (vars) => apiClient.move(vars.path, vars.target),
+    mutationFn: (vars, client) => client.move(vars.path, vars.target),
     toAffected: (vars) => ({ op: "move", paths: [vars.path], targets: [vars.target] }),
     errorFallback: "Could not move.",
   });
@@ -233,7 +251,7 @@ export interface CopyVariables {
 /** Copies `path` to `target`, invalidating only the target's listing. */
 export function useCopy() {
   return useFsMutation<CopyVariables, FsEntry>({
-    mutationFn: (vars) => apiClient.copy(vars.path, vars.target),
+    mutationFn: (vars, client) => client.copy(vars.path, vars.target),
     toAffected: (vars) => ({ op: "copy", paths: [vars.path], targets: [vars.target] }),
     errorFallback: "Could not copy.",
   });
@@ -288,8 +306,8 @@ export function useTreeChildren(
 /** Deletes `items`, invalidating each deleted entry's parent listing. */
 export function useDelete() {
   return useFsMutation<DeleteRequest["items"], void>({
-    mutationFn: async (items) => {
-      await apiClient.remove(items);
+    mutationFn: async (items, client) => {
+      await client.remove(items);
     },
     toAffected: (items) => ({ op: "delete", paths: items.map((item) => item.path) }),
     errorFallback: "Could not delete.",

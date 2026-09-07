@@ -4,7 +4,14 @@ import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startPostgres, startSftpgo } from "@fdrive/testkit";
+import {
+  SEED_FILES,
+  SEED_USERS,
+  type StartSftpgoOptions,
+  startPostgres,
+  startSftpgo,
+} from "@fdrive/testkit";
+import { ACCOUNT_FILES, ACCOUNT_USERS } from "./account-fixture.js";
 import {
   E2E_HOST,
   getApiBaseUrl,
@@ -14,6 +21,7 @@ import {
   getWebBaseUrl,
   getWebPort,
 } from "./paths.js";
+import { SHARE_FILES, SHARE_USERS } from "./share-fixture.js";
 import { waitForHttpOk } from "./wait.js";
 
 const supportDir = dirname(fileURLToPath(import.meta.url));
@@ -32,10 +40,16 @@ function isDevServerMode(): boolean {
 export interface RunningEnvironment {
   /** The seeded Postgres container's connection string, for tests that seed extra rows directly. */
   readonly databaseUrl: string;
+  readonly sftpgoUrl: string;
   stop(): Promise<void>;
 }
 
 export interface StartEnvironmentOptions {
+  /** Dedicated test composition entrypoint. Defaults to the production entrypoint. */
+  readonly apiEntrypoint?: string;
+  readonly sftpgoOptions?: StartSftpgoOptions;
+  /** Fixture-only configuration before API startup, using this disposable server. */
+  readonly prepareSftpgo?: (baseUrl: string) => Promise<void>;
   /**
    * Extra environment variables merged into the spawned API process's env,
    * on top of the fixed set below (e.g. `FDRIVE_INDEX_ROOTS` for the search
@@ -172,14 +186,20 @@ export async function startEnvironment(
     const postgres = await startPostgres();
     stopFns.push(() => postgres.stop());
 
-    const sftpgo = await startSftpgo();
+    const sftpgo = await startSftpgo(
+      options.sftpgoOptions ?? {
+        users: [...SEED_USERS, ...ACCOUNT_USERS, ...SHARE_USERS],
+        files: { ...SEED_FILES, ...ACCOUNT_FILES, ...SHARE_FILES },
+      },
+    );
     stopFns.push(() => sftpgo.stop());
+    await options.prepareSftpgo?.(sftpgo.baseUrl);
 
     const masterKey = randomBytes(32).toString("base64");
 
     const apiChild = spawn(
       join(apiDir, "node_modules", ".bin", "tsx"),
-      ["--conditions=development", "src/main.ts"],
+      ["--conditions=development", options.apiEntrypoint ?? "src/main.ts"],
       {
         cwd: apiDir,
         env: {
@@ -322,7 +342,7 @@ export async function startEnvironment(
       webPort,
     });
 
-    return { databaseUrl: postgres.connectionString, stop: stopAll };
+    return { databaseUrl: postgres.connectionString, sftpgoUrl: sftpgo.baseUrl, stop: stopAll };
   } catch (error) {
     await stopAll();
     throw error;

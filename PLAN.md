@@ -4,7 +4,7 @@ A self-hosted Google Drive / Filestash replacement that runs **on top of an exis
 It absorbs the `filesai` stack (index, search, OCR, embeddings, MCP) and adds a modern web UI,
 tags, favorites, multi-account login, and ONLYOFFICE editing. One Docker Compose stack.
 
-Status: plan v1, 2026-09-06. Progress: phase 0 and phase 1 done; phase 2 waves 1 and 2 merged (indexer, search, admin setup, System pages, OCR service, MCP with API tokens); phase 3 (tags, favorites, recents, rename tracking) merged on 2026-09-06 evening, API and web; thumbnail-only rebuild job merged; next: P2-CLEAR-JOBS (clear thumbnails / clear index data, move all thumbnail UI to the Thumbnails page, Indexer settings descriptions), then phase 4 ONLYOFFICE WOPI. Investigation notes that back this plan: filesai source read in
+Status: plan v1, 2026-09-06. Progress: phase 0 and phase 1 done; phase 2 waves 1 and 2 merged (indexer, search, admin setup, System pages, OCR service, MCP with API tokens); phase 3 (tags, favorites, recents, rename tracking) merged on 2026-09-06 evening, API and web; thumbnail-only rebuild job merged; P2-CLEAR-JOBS implemented in the working tree (background clears, thumbnail controls consolidated, settings descriptions); phase 3 real SFTP rename validated (metadata propagation 2.39s); phase 4 complete in the working tree on 2026-09-07: WOPI host, registry, deployment, edit admission, and the opt-in real-editor suite (ONLYOFFICE 7/7, Collabora 4/4); phase 5 accounts, shares, provider-bound credentials, and the blocking performance harness integrated (search p95 budget still failing on this machine, see docs/workflow/STATUS.md); nothing committed since 1fe7388. Investigation notes that back this plan: filesai source read in
 full; SFTPGo verified against the OpenAPI spec on `main` (v2.7.0) and Go source, stable release
 v2.7.5; ONLYOFFICE verified against Document Server 9.4 docs and source, Microsoft WOPI spec, and oCIS.
 
@@ -26,7 +26,10 @@ v2.7.5; ONLYOFFICE verified against Document Server 9.4 docs and source, Microso
 - Compose stack that points at an existing SFTPGo, or optionally bundles one.
 - Performance, testability, coverage gates in CI (see §10).
 
-**Non-goals (v1, explicitly deferred)**
+**Original v1 non-goals**
+
+The 2026-09-07 all-phases request schedules the recovery and second-provider items in Phase 6.
+Other exclusions below remain unchanged; configurable embeddings remain separately deferred.
 
 - Storage providers other than SFTPGo. The design leaves room (see §4.2) but ships none.
 - Versioning / file history, trash, comments, real-time collaboration outside ONLYOFFICE.
@@ -151,6 +154,7 @@ without booting Next. Next.js stays for what it is good at: the UI, routing, RSC
 | `favorites`, `recents` | (`identity_id`, `path`) rows with timestamps. |
 | `thumbnails` | Cache manifest: content key → file on disk, sizes, generated_at. |
 | `wopi_locks` | WOPI lock state per file id (§8). |
+| `office_files` | Durable office UUIDs per provider/root/path, retained across rename and independent of index clearing. Deleted paths are tombstoned; recreation gets a new UUID. |
 | `shares` | fdrive's record of shares created through SFTPGo: SFTPGo share id, identity, paths, scope, expiry, whether a password is set, view counters. The public page (§6.1) reads this and proxies to SFTPGo. |
 | `settings` | Key/value for things an admin might edit in the UI later (index rules, feature flags). |
 
@@ -187,13 +191,15 @@ FDRIVE_INDEX_ROOTS: |
 
 - From `FDRIVE_HOME_TEMPLATE`, default `sftpgo:/{username}` (root name, then the path of the
   user's home inside that root). Per-identity overrides live in `settings` for users whose home
-  or virtual folders do not follow the template; editable from the account page.
+  or virtual folders do not follow the template; administrator-editable from the account page.
 - If the identity's storage is not on a configured root (S3-backed SFTPGo user, remote SFTPGo),
   the scope is empty: browsing still works through SFTPGo, search and thumbnails are hidden.
 - Correctness check on login: the API lists the identity's root through SFTPGo and compares entry
   names against the scope's directory on disk via the indexer. A mismatch disables index-backed
-  features for that identity and shows a warning, so a wrong template can never leak another
-  user's files into search results.
+  features for that identity and shows a warning. This detects obvious mistakes, not identity:
+  two different roots can contain identical names. Administrator-controlled mappings remain
+  the authorization boundary; live per-path SFTP read checks additionally protect cached
+  content from read-permission changes. See `docs/workflow/P5-SCOPES.md`.
 
 Every index query (search, duplicates, similar, overview, thumbnails, live extraction) takes a
 `Scope[]` and adds `WHERE (root_id, path) under any prefix`. Results are mapped back to virtual
@@ -304,6 +310,12 @@ a mandatory argument. Same service backs the search page, the command palette, a
 - Internal HTTP (bound to the compose network only): `GET /health`, `GET /stats`,
   `POST /extract` (live text for a root-relative path), `POST /reindex` (path or all).
 - Schema is applied by the TS migrations; the indexer waits for the expected schema version.
+- Maintenance clears run in background threads, with progress in `/stats` and shared
+  admission with explicit thumbnail rebuilds. Index clear removes scoped file rows and
+  their chunks/embeddings, preserving originals, app metadata, cache, and event history.
+  Thumbnail clear removes the shared preview cache and manifest, preserving text/index
+  data; unsafe paths and failed deletions are retained and reported. Neither action pauses
+  normal scans or on-demand generation, so derived data can subsequently reappear.
 - Prefix rules (`TEXT_EXCLUDE_PREFIXES`, `OCR_IMAGE_PREFIXES`) become per-root globs, still env
   driven in v1, editable in `settings` later.
 
@@ -334,16 +346,16 @@ force save, save-as, rename, PDF forms, and conversion of legacy formats.
 |---|---|
 | Version | Document Server 9.4.0 (2026-05-19), docker `onlyoffice/documentserver:9.4.0.1`. 9.4 **removed the 20-connection limit** in the Community build. Community still has mobile view only, no mobile edit. |
 | Enabling | WOPI is off by default. `WOPI_ENABLED=true` in the container. `wopi.wopiZone` must be `external-https` when served over TLS. |
-| Proof keys | **The stock image ships the same proof key pair on every install.** We generate our own RSA pair and pass `WOPI_PRIVATE_KEY` / `WOPI_PUBLIC_KEY`. The host verifies `X-WOPI-Proof` / `X-WOPI-ProofOld` over `len(token)+token+len(URL)+UPPER(URL)+len(ts)+ts` with RSA-SHA256, rejects timestamps older than 20 min, and re-fetches discovery when only the old key verifies. The URL in the proof is the one Document Server actually called, so the API reconstructs it from `X-Forwarded-Proto` and `Host`. |
+| Proof keys | Pinned Docker startup uses `/var/www/onlyoffice/Data/wopi_private.key` and `wopi_public.key`, ignoring similarly named path env overrides. Our wrapper generates a private deployment key with restrictive permissions and persists it. The host verifies `X-WOPI-Proof` / `X-WOPI-ProofOld` with RSA-SHA256, rejects timestamps older than20min or more than5min ahead, and refreshes discovery for rotation. The full proof URL comes from configured callback base plus raw path/query, never arbitrary forwarded headers. |
 | Discovery | `GET {DS}/hosting/discovery`. ONLYOFFICE lists `view` before `edit` for the same extension, so action selection matches on `@ext` **and** `@name`. Placeholders `<name=VALUE&>` are stripped or filled; we fill `ui`, `rs`, `thm`, `dchat`, and append `WOPISrc`. Cache 12 h. |
 | Host page | Form POST into the iframe with `access_token` and `access_token_ttl`. The TTL is an **absolute epoch in milliseconds**, not a duration. ONLYOFFICE also accepts a `docs_api_config` form field, the only way to pass `customization.forcesave` and similar options over WOPI. |
 | Endpoints ONLYOFFICE calls | CheckFileInfo, GetFile, Lock, RefreshLock (every 10 min), Unlock, PutFile, PutRelativeFile (save-as and conversion), RenameFile. It never calls GetLock or UnlockAndRelock, but we implement them because Collabora and the WOPI validator do. |
-| CheckFileInfo | Required by ONLYOFFICE: `BaseFileName`, `Size`, `Version`. Microsoft adds `OwnerId`, `UserId`. We send all five plus `UserFriendlyName`, `LastModifiedTime`, `UserCanWrite`, `UserCanRename`, `SupportsLocks`, `SupportsUpdate`, `SupportsRename`, `ReadOnly`, `Breadcrumb*`, `CloseUrl`, `PostMessageOrigin`, `FileNameMaxLength`. |
-| Sessions and cache | Edit sessions are keyed by the **file id alone**, so all editors of one file share one session. `Version` and `LastModifiedTime` must change on every content change, including changes made over SFTP, or ONLYOFFICE serves a cached document. Our `Version` is `mtime_ns:size:sha256-prefix` when the index knows the hash, else `mtime_ns:size`. |
+| CheckFileInfo | Required by ONLYOFFICE: `BaseFileName`, `Size`, `Version`. Microsoft adds `OwnerId`, `UserId`. We send all five plus `UserFriendlyName`, `LastModifiedTime` (Collabora only), `UserCanWrite`, `UserCanRename`, `SupportsLocks`, `SupportsUpdate`, `SupportsRename`, `ReadOnly`, `Breadcrumb*`, `CloseUrl`, `PostMessageOrigin`, `FileNameMaxLength`. |
+| Sessions and cache | Edit sessions are keyed by the **file id alone**, so all editors of one file share one session. Our `Version` is `mtime_ns:size:sha256-prefix`, hashing a bounded live upstream stream. ONLYOFFICE prioritizes optional `LastModifiedTime` over `Version` for viewer cache keys, so omit that field for ONLYOFFICE and retain it for Collabora. This makes same-size, same-timestamp external writes change the viewer cache key even without an indexer. |
 | Locks | Deterministic lock id (the sanitized file id). 30-minute expiry, refreshed. 409 with `X-WOPI-Lock` on mismatch. ONLYOFFICE sends Lock even for read-only opens and shows an error dialog on 409, so **Lock returns 200 for read-only sessions** (oCIS fix). Locks are not user-owned: Unlock with a matching lock id from another user succeeds. |
 | Empty files | `Size: 0` makes ONLYOFFICE substitute a locale template. For 0-byte `docx/xlsx/pptx` that is what we want for "new document"; for `odt/ods/odp` the `Size` field is omitted instead. |
 | Save path | PutFile arrives on autosave, force save, and exit save, with `X-LOOL-WOPI-IsModifiedByUser`, `IsAutosave`, `IsExitSave`, `Timestamp` headers. On an unlocked file only a 0-byte target is accepted, else 409. Behind the scenes the API streams the body to SFTPGo's upload endpoint, then refreshes `Version`. |
-| Networking | Document Server refuses private IPs by default: `ALLOW_PRIVATE_IP_ADDRESS=true` and `ALLOW_META_IP_ADDRESS=true`. Set `JWT_SECRET` explicitly or it rotates on every restart. Proxy must send `X-Forwarded-Proto` or the iframe URL comes out `http://`. `maxDownloadBytes` is 100 MiB by default. Do not bind-mount `local.json`; the entrypoint rewrites it. Health check on `/hosting/discovery`. |
+| Networking | Enable private-IP callbacks for the internal API; metadata-IP access stays disabled. Persist an explicit `JWT_SECRET`. Public proxy forwarding must preserve the configured office origin/prefix. Default file limit100MiB. Do not bind-mount `local.json`; startup rewrites it. Health check on `/hosting/discovery`. |
 | Formats | Edit: docx dotx docm odt txt, xlsx xltx xlsm ods csv, pptx potx pptm odp, pdf. View plus `convert` action: doc rtf html epub pages…, xls numbers…, ppt key…, djvu xps. `md` is not in any default list; we add it to `wopi.wordView` for viewing. Legacy formats are not converted implicitly: the UI offers "Convert and edit", which runs the `convert` action and lands in PutRelativeFile with `X-WOPI-FileConversion: true`. |
 | Access control | WOPI cannot restrict who reaches the editor; the access token and our CheckFileInfo do that. Optionally `services.CoAuthoring.ipfilter` to restrict which hosts Document Server will fetch from. |
 
@@ -354,12 +366,27 @@ force save, save-as, rename, PDF forms, and conversion of legacy formats.
   product profile (`onlyoffice`, `collabora`) for the quirks above. Discovery parsing, action
   selection, proof verification, lock state machine, and `Version` derivation are pure functions
   with fixtures from real discovery XML and Microsoft's proof-key test vectors.
-- WOPI file id: opaque, URL-safe, `base64url(identity_id + ':' + path)` signed with the master key
-  so it cannot be forged and does not need a lookup table. Rename and move produce a new id; open
-  sessions are told through `RenameFile` when the rename originated in the editor and through
-  session close plus reopen otherwise (there is no WOPI message for an external move).
+- WOPI file id: durable opaque UUID in `app.office_files`, keyed by provider/root/path,
+  shared across users of the same mapped file. Renames preserve the UUID and update
+  its location. Index clearing cannot reset it. This corrects the earlier signed
+  identity/path design, which would split co-editing sessions and violate stable-ID
+  requirements. Every callback independently checks current identity scope and storage
+  access; knowing a file UUID grants no authority. See `docs/workflow/P4-HOST-DESIGN.md`.
 - Access token: short JWT (8 h absolute TTL) bound to session id, identity, file id, and
   permissions. Every WOPI request re-validates the session and the SFTPGo permission for the path.
+  Tokens use the hashed session ID, expire no later than that session, and distinguish
+  view from edit authority. SFTPGo's credential-only user API does not expose a
+  per-path write-permission map. Real coediting testing disproved the earlier
+  edit-intent assumption: another writer can save a read-only participant's changes.
+  Denying that participant's own PutFile is insufficient. Preserve credential-only
+  authentication with an explicit server-side operator policy, default deny. Rules
+  bind provider UUID, exact username and virtual paths; operators grant only a subset
+  of SFTPGo overwrite rights and close office sessions when rights change. This is
+  trusted configuration, not automatic permission discovery. No write probes: even
+  a zero-byte SFTP open/close can rename/delete originals through upload hooks.
+  See `docs/workflow/P4-EDIT-ADMISSION.md`; Phase4 incomplete until guard and regression pass.
+- Proof URLs use an explicitly configured callback base and the raw request path/query;
+  arbitrary Host and forwarded headers cannot choose the signed origin.
 - `wopi_locks` table: file id, lock id, expires_at. Refreshed by RefreshLock, purged by a sweep.
 - `GetFile` streams from SFTPGo with the identity's credentials; `PutFile` streams to SFTPGo,
   sets mtime from the response, refreshes the cached listing, and emits an SSE change event.
@@ -381,15 +408,17 @@ onlyoffice:
     JWT_ENABLED: "true"
     JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
     ALLOW_PRIVATE_IP_ADDRESS: "true"
-    ALLOW_META_IP_ADDRESS: "true"
-    WOPI_PRIVATE_KEY: /run/secrets/wopi_private.pem
-    WOPI_PUBLIC_KEY: /run/secrets/wopi_public.pem
+    ALLOW_META_IP_ADDRESS: "false"
+  volumes:
+    - office_onlyoffice_data:/var/www/onlyoffice/Data
   healthcheck: { test: ["CMD", "curl", "-fs", "http://localhost/hosting/discovery"] }
 ```
 
 The proxy exposes Document Server under `/onlyoffice/` on the same origin with
 `X-Forwarded-Proto`. Document Server reaches the API at `http://api:3001/wopi/...` inside the
-compose network, so `WOPISrc` uses that internal host and the proof URL is reconstructed from it.
+compose network, so `WOPISrc` uses that explicitly configured internal callback base.
+Concrete overlays, persisted proof-key setup and the distroless Collabora profile
+are documented in `docs/OFFICE.md`. Dev profiles bind loopback58090/58091.
 
 **Testing**
 
@@ -474,10 +503,14 @@ and shows the server host from a public config endpoint, never "fdrive account".
 sidecar: Indexer (roots, scan interval, watcher status, queue depth, last scan, errors, reindex
 actions), Search and embeddings (model, dimension, chunks embedded, embedding server health,
 re-embed), OCR (schedule, languages, excluded folders, last run, processed and skipped counts,
-originals location, run now), Thumbnails (cache size, regenerate), and later ONLYOFFICE
+originals location, run now), Thumbnails (cache size, scoped rebuild, force regenerate,
+clear cache, job progress), and later ONLYOFFICE
 (reachability, WOPI discovery status). Each page reads live status over the internal HTTP
 endpoints of the services and writes options to the `settings` table, which the services pick
-up on their next cycle. All of it is controlled from fdrive web; nothing needs a shell.
+up on their next cycle. Thumbnail controls belong only on Thumbnails; Indexer owns
+reindex and scoped clear-index controls. Clear actions require confirmation explaining
+their effects and eventual regeneration. Each Indexer setting has a one-line description.
+All of it is controlled from fdrive web; nothing needs a shell.
 
 Components are covered by Playwright end-to-end tests and a small number of component tests;
 hooks and pure UI helpers (sorting, formatting, selection logic, upload planning) live in
@@ -607,9 +640,12 @@ Link multiple identities, identity switcher, cross-identity favorites and search
 SFTPGo's share API with fdrive's own public pages proxied through the app (§6.1), API token
 management, zero-copy download path if the budget demands it, perf budgets become blocking.
 
-**Phase 6 — Later (unscheduled)**
-Trash, versions via SFTPGo events or a snapshot folder, similar-image dedupe, admin settings UI
-for index rules, second storage provider.
+**Phase 6 — Recovery and extensions (scheduled 2026-09-07)**
+Trash, snapshot versions, similar-image comparison/dedupe, admin settings UI for index rules,
+and a WebDAV storage provider. Scheduled by the latest all-phases instruction; architectural
+contract and sequencing: `docs/workflow/P6-DESIGN.md`. Configurable embeddings remain deferred.
+Done when: owned recovery/restore, image comparison, rules and second-provider browse/transfer
+flows pass real storage integration, browser acceptance and required quality gates.
 
 ---
 

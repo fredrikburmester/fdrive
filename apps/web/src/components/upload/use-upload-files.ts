@@ -11,6 +11,7 @@ function createUploadId(): string {
 }
 
 interface PendingConflict {
+  readonly identityId: string | undefined;
   readonly files: readonly DroppedFile[];
   readonly destination: string;
   readonly existingNames: ReadonlySet<string>;
@@ -65,15 +66,18 @@ export function useUploadFiles(): UseUploadFilesResult {
       destination: string,
       existingNames: ReadonlySet<string>,
       policy: "replace" | "skip" | "ask",
+      identityId: string | undefined,
     ) => {
       const result = planUploads(files, destination, existingNames, policy, createUploadId);
 
       if (policy === "ask" && result.conflicts.length > 0) {
-        setPending({ files, destination, existingNames, conflicts: result.conflicts });
+        setPending({ files, destination, existingNames, conflicts: result.conflicts, identityId });
         return;
       }
 
-      enqueue(result.items);
+      enqueue(
+        result.items.map((item) => (identityId === undefined ? item : { ...item, identityId })),
+      );
       const skipped = result.items.filter((item) => item.status === "skipped").length;
       summaryToast(destination, result.items.length - skipped, skipped);
     },
@@ -85,7 +89,7 @@ export function useUploadFiles(): UseUploadFilesResult {
       if (files.length === 0) {
         return;
       }
-      plan(files, destination, existingNames, "ask");
+      plan(files, destination, existingNames, "ask", useUploadStore.getState().activeIdentityId);
     },
     [plan],
   );
@@ -95,9 +99,9 @@ export function useUploadFiles(): UseUploadFilesResult {
       if (pending === null) {
         return;
       }
-      const { files, destination, existingNames } = pending;
+      const { files, destination, existingNames, identityId } = pending;
       setPending(null);
-      plan(files, destination, existingNames, policy);
+      plan(files, destination, existingNames, policy, identityId);
     },
     [pending, plan],
   );

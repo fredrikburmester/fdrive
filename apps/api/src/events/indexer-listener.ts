@@ -105,6 +105,7 @@ export interface IndexerListenerLogger {
 }
 
 export interface IndexerListenerDeps {
+  readonly onStorageEvent?: (event: IndexerEventPayload) => Promise<void>;
   readonly createClient: () => NotificationClient;
   readonly identities: IdentityRepo;
   readonly indexQueries: IndexQueries;
@@ -355,6 +356,7 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
       return;
     }
     const event = result.data;
+    await deps.onStorageEvent?.(event);
     const { entries, rootIdByName } = await getCache();
     for (const entry of entries) {
       await handleEventForIdentity(deps, entry.scopes, rootIdByName, entry.identityId, event);
@@ -379,7 +381,9 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
     const nextClient = deps.createClient();
     client = nextClient;
     nextClient.onNotification((payload) => {
-      void handlePayload(payload);
+      void handlePayload(payload).catch((error) =>
+        deps.logger.warn({ error }, "indexer-listener: event processing failed"),
+      );
     });
     nextClient.onError((error) => {
       deps.logger.warn({ error }, "indexer-listener: connection error, reconnecting");

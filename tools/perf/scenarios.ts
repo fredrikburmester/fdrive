@@ -1,232 +1,201 @@
-/**
- * The perf scenarios from PLAN.md §6: each one drives the real, running
- * stack (`PerfStack` from `stack.ts`) with either `autocannon` (a short
- * load test) or plain `fetch` (a single cold request, or a small burst),
- * and returns a `ScenarioResult`. The scenario functions themselves are
- * I/O and are exercised by `pnpm perf`; the pure pieces they are built
- * from (`toScenarioResult`, `computeLatencyStats`, `mapWithConcurrency`,
- * `fillPseudoRandomBytes`) each have their own unit tests.
- */
-
-import { ROUTES } from "@fdrive/contracts";
-import autocannon from "autocannon";
+import { ListResponse, SearchResponse } from "@fdrive/contracts";
 import { fillPseudoRandomBytes } from "./byte-generator.js";
 import { mapWithConcurrency } from "./concurrency.js";
+import { alternatingPairs, drain } from "./measure.js";
 import { type ScenarioResult, toScenarioResult } from "./results.js";
-import type { PerfStack } from "./stack.js";
-
-/** Header the API's CSRF guard requires on every state-changing request. */
-const REQUESTED_WITH_HEADER = { "x-requested-with": "fdrive" } as const;
-
-const WARM_UP_REQUESTS = 20;
-const UPLOAD_BURST_COUNT = 200;
-const UPLOAD_BURST_CONCURRENCY = 6;
-const UPLOAD_BURST_FILE_BYTES = 4 * 1024;
-/** Generous per-request timeout for the 512 MiB download scenarios; see `LoadScenarioOptions.timeoutSeconds`. */
-const DOWNLOAD_TIMEOUT_SECONDS = 180;
-/**
- * A floor under `--quick`'s 5 s for the download scenarios: autocannon
- * hard-destroys every in-flight connection once its duration elapses (see
- * `run.ts` in the `autocannon` package), so a duration shorter than one full
- * 512 MiB transfer measures nothing at all (0 req/s, 0 bytes/s) rather than
- * a real, if limited, data point. 20 s comfortably covers one transfer on a
- * typical dev machine while still being well under the full 30 s duration.
- */
-const MIN_DOWNLOAD_QUICK_SECONDS = 20;
-
+import { TOPICS } from "./search-fixture.js";
+import { BIG_FILE_BYTES, type PerfStack } from "./stack.js";
 export interface DurationOptions {
-  /** Shortens every timed scenario to this many seconds instead of its normal duration. */
   readonly quickSeconds?: number;
 }
-
-/**
- * Resolves the duration (in seconds) a load scenario should run for:
- * `options.quickSeconds` when set, clamped up to `floorSeconds` (defaults
- * to 0, i.e. no floor), otherwise `normalSeconds`. Pure.
- */
 export function durationSeconds(
   normalSeconds: number,
   options: DurationOptions,
   floorSeconds = 0,
 ): number {
-  const requested = options.quickSeconds ?? normalSeconds;
-  return Math.max(requested, floorSeconds);
+  return Math.max(options.quickSeconds ?? normalSeconds, floorSeconds);
 }
-
-/** Sends `count` GETs to `url` sequentially and discards the bodies, to warm the API's list cache. */
-async function warmUp(url: string, headers: Record<string, string>, count: number): Promise<void> {
-  for (let i = 0; i < count; i++) {
-    const response = await fetch(url, { headers });
-    await response.arrayBuffer();
-  }
+async function listing(stack: PerfStack, path: string, count: number): Promise<void> {
+  const response = await fetch(
+    `${stack.apiBaseUrl}/api/v1/fs/list?${new URLSearchParams({ path })}`,
+    { headers: { cookie: stack.cookie }, signal: AbortSignal.timeout(30000) },
+  );
+  if (!response.ok) throw Error(`Listing failed: ${response.status}`);
+  const body = ListResponse.parse(await response.json());
+  if (body.entries.length !== count)
+    throw Error(`Expected ${count} listing entries, received ${body.entries.length}`);
 }
-
-interface LoadScenarioOptions {
-  readonly name: string;
-  readonly url: string;
-  readonly headers?: Record<string, string>;
-  readonly connections: number;
-  readonly durationSeconds: number;
-  /**
-   * Per-request response timeout, in seconds (autocannon's own `timeout`
-   * option, default 10). A 512 MiB file can legitimately take longer than
-   * 10 s to finish downloading over Docker Desktop's networking, so the
-   * download scenarios pass a much larger value here; without it,
-   * autocannon aborts every in-flight request once `timeout` elapses,
-   * which reads as 0 requests/sec and 0 bytes/sec rather than a real
-   * (slow) measurement.
-   */
-  readonly timeoutSeconds?: number;
-}
-
-/**
- * Runs a `GET` autocannon load test against `options.url`, tracking every
- * individual response's latency itself (via `setupClient`) so the result's
- * p50/p95/p99 are exact percentiles rather than autocannon's own nearest
- * bucket (which does not include p95). Requests-per-second and
- * bytes-per-second come from autocannon's own aggregate stats. Every perf
- * scenario that goes through this helper is a `GET` (list, download); the
- * upload burst scenario uses plain `fetch` instead, since it needs a
- * distinct body per request.
- */
-async function runLoadScenario(options: LoadScenarioOptions): Promise<ScenarioResult> {
-  const latenciesMs: number[] = [];
-
-  const result = await autocannon({
-    url: options.url,
-    method: "GET",
-    headers: options.headers ?? {},
-    connections: options.connections,
-    duration: options.durationSeconds,
-    ...(options.timeoutSeconds !== undefined ? { timeout: options.timeoutSeconds } : {}),
-    setupClient(client) {
-      client.on("response", (_statusCode, _resBytes, responseTime) => {
-        latenciesMs.push(responseTime);
-      });
-    },
-  });
-
-  const errors = result.errors + result.non2xx + result.timeouts;
-  return toScenarioResult(options.name, latenciesMs, result.requests.average, errors, {
-    bytesPerSecond: result.throughput.average,
-  });
-}
-
-/** A single, uncached `GET /fs/list?path=/flat-1k`, measured once with `performance.now()`. */
 export async function runList1kCold(stack: PerfStack): Promise<ScenarioResult> {
-  const url = `${stack.apiBaseUrl}${ROUTES.fs.list}?path=/flat-1k`;
-  const start = performance.now();
-  const response = await fetch(url, { headers: { cookie: stack.cookie } });
-  await response.arrayBuffer();
-  const elapsedMs = performance.now() - start;
-  const errors = response.ok ? 0 : 1;
-  const requestsPerSecond = elapsedMs > 0 ? 1000 / elapsedMs : Number.NaN;
-  return toScenarioResult("list1kCold", [elapsedMs], requestsPerSecond, errors);
+  const samples: number[] = [];
+  for (let i = 0; i < 20; i++) {
+    const start = performance.now();
+    await listing(stack, `/cold-${i}`, 1000);
+    samples.push(performance.now() - start);
+  }
+  return toScenarioResult("list1kCold", samples, 20000 / samples.reduce((a, b) => a + b, 0), 0, {
+    uniquePaths: 20,
+  });
 }
-
-/** `GET /fs/list?path=/flat-1k`, warm: 20 warm-up requests, then a 15 s (5 s quick) load test at 10 connections. */
-export async function runList1kWarm(
+async function warmListing(
+  stack: PerfStack,
+  path: string,
+  count: number,
+  name: string,
+  options: DurationOptions,
+): Promise<ScenarioResult> {
+  for (let i = 0; i < 20; i++) await listing(stack, path, count);
+  const samples: number[] = [];
+  for (let i = 0; i < (options.quickSeconds ? 10 : 100); i++) {
+    const start = performance.now();
+    await listing(stack, path, count);
+    samples.push(performance.now() - start);
+  }
+  return toScenarioResult(
+    name,
+    samples,
+    (samples.length * 1000) / samples.reduce((a, b) => a + b, 0),
+    0,
+    { warmupCount: 20 },
+  );
+}
+export function runList1kWarm(
   stack: PerfStack,
   options: DurationOptions = {},
 ): Promise<ScenarioResult> {
-  const url = `${stack.apiBaseUrl}${ROUTES.fs.list}?path=/flat-1k`;
-  const headers = { cookie: stack.cookie };
-  await warmUp(url, headers, WARM_UP_REQUESTS);
-  return runLoadScenario({
-    name: "list1k",
-    url,
-    headers,
-    connections: 10,
-    durationSeconds: durationSeconds(15, options),
-  });
+  return warmListing(stack, "/flat-1k", 1000, "list1k", options);
 }
-
-/** `GET /fs/list?path=/flat-10k`, warm: same shape as `runList1kWarm`. */
-export async function runList10kWarm(
+export function runList10kWarm(
   stack: PerfStack,
   options: DurationOptions = {},
 ): Promise<ScenarioResult> {
-  const url = `${stack.apiBaseUrl}${ROUTES.fs.list}?path=/flat-10k`;
-  const headers = { cookie: stack.cookie };
-  await warmUp(url, headers, WARM_UP_REQUESTS);
-  return runLoadScenario({
-    name: "list10k",
-    url,
-    headers,
-    connections: 10,
-    durationSeconds: durationSeconds(15, options),
-  });
+  return warmListing(stack, "/flat-10k", 10000, "list10k", options);
 }
-
-/**
- * `GET /fs/download?path=/big/large.bin` through the fdrive API, 2
- * connections, 30 s (20 s floor under `--quick`; see
- * `MIN_DOWNLOAD_QUICK_SECONDS`).
- */
-export async function runDownloadViaApi(
+export async function runDownloads(
   stack: PerfStack,
   options: DurationOptions = {},
-): Promise<ScenarioResult> {
-  const url = `${stack.apiBaseUrl}${ROUTES.fs.download}?path=/big/large.bin`;
-  return runLoadScenario({
-    name: "downloadViaApi",
-    url,
-    headers: { cookie: stack.cookie },
-    connections: 2,
-    durationSeconds: durationSeconds(30, options, MIN_DOWNLOAD_QUICK_SECONDS),
-    timeoutSeconds: DOWNLOAD_TIMEOUT_SECONDS,
-  });
-}
-
-/** The same file straight from SFTPGo's user API, for the ≥ 90% throughput ratio budget. */
-export async function runDownloadDirect(
-  stack: PerfStack,
-  options: DurationOptions = {},
-): Promise<ScenarioResult> {
-  const url = `${stack.sftpgoBaseUrl}/api/v2/user/files?path=/big/large.bin`;
-  return runLoadScenario({
-    name: "downloadDirect",
-    url,
-    headers: { authorization: `Bearer ${stack.sftpgoToken}` },
-    connections: 2,
-    durationSeconds: durationSeconds(30, options, MIN_DOWNLOAD_QUICK_SECONDS),
-    timeoutSeconds: DOWNLOAD_TIMEOUT_SECONDS,
-  });
-}
-
-/** 200 x 4 KiB `PUT /fs/upload` calls, 6 concurrent workers, plain `fetch`, measuring wall time. */
-export async function runUploadSmallBurst(stack: PerfStack): Promise<ScenarioResult> {
-  const digits = String(UPLOAD_BURST_COUNT - 1).length;
-  const indices = Array.from({ length: UPLOAD_BURST_COUNT }, (_, i) => i);
-  const latenciesMs: number[] = [];
-  let errors = 0;
-
-  const start = performance.now();
-  await mapWithConcurrency(indices, UPLOAD_BURST_CONCURRENCY, async (index) => {
-    const name = String(index).padStart(digits, "0");
-    const { bytes } = fillPseudoRandomBytes(UPLOAD_BURST_FILE_BYTES, index + 1);
-    const url = `${stack.apiBaseUrl}${ROUTES.fs.upload}?path=/burst/${name}.bin&mkdirParents=true`;
-    const requestStart = performance.now();
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        cookie: stack.cookie,
-        "content-type": "application/octet-stream",
-        ...REQUESTED_WITH_HEADER,
-      },
-      body: bytes,
-    });
-    const responseBody = await response.text();
-    latenciesMs.push(performance.now() - requestStart);
-    if (!response.ok) {
-      errors += 1;
-      console.error(`[perf] uploadSmallBurst: ${url} -> ${response.status} ${responseBody}`);
+): Promise<{ downloadDirect: ScenarioResult; downloadViaApi: ScenarioResult }> {
+  const measurements = {
+    direct: { samples: [] as number[], bytes: [] as number[] },
+    api: { samples: [] as number[], bytes: [] as number[] },
+  };
+  async function transfer(kind: "direct" | "api", record: boolean) {
+    const direct = kind === "direct";
+    const url = direct
+      ? `${stack.sftpgoBaseUrl}/api/v2/user/files?path=/big/large.bin`
+      : `${stack.apiBaseUrl}/api/v1/fs/download?path=/big/large.bin`;
+    const start = performance.now();
+    const bytes = await drain(
+      await fetch(url, {
+        headers: direct
+          ? { authorization: `Bearer ${stack.sftpgoToken}` }
+          : { cookie: stack.cookie },
+        signal: AbortSignal.timeout(180000),
+      }),
+      BIG_FILE_BYTES,
+    );
+    if (record) {
+      measurements[kind].samples.push(performance.now() - start);
+      measurements[kind].bytes.push(bytes);
     }
+  }
+  await transfer("direct", false);
+  await transfer("api", false);
+  for (const pair of alternatingPairs(options.quickSeconds ? 1 : 3))
+    for (const kind of pair) await transfer(kind, true);
+  function result(kind: "direct" | "api") {
+    const m = measurements[kind];
+    const seconds = m.samples.reduce((a, b) => a + b, 0) / 1000;
+    return toScenarioResult(
+      kind === "direct" ? "downloadDirect" : "downloadViaApi",
+      m.samples,
+      m.samples.length / seconds,
+      0,
+      {
+        bytesPerSecond: m.bytes.reduce((a, b) => a + b, 0) / seconds,
+        completedBytes: m.bytes,
+        expectedBytes: BIG_FILE_BYTES,
+        warmupCount: 1,
+      },
+    );
+  }
+  return { downloadDirect: result("direct"), downloadViaApi: result("api") };
+}
+export async function runUploadSmallBurst(stack: PerfStack): Promise<ScenarioResult> {
+  const indices = Array.from({ length: 200 }, (_, i) => i);
+  const samples: number[] = [];
+  const start = performance.now();
+  await mapWithConcurrency(indices, 6, async (i) => {
+    const bytes = fillPseudoRandomBytes(4096, i + 1).bytes;
+    const one = performance.now();
+    await drain(
+      await fetch(
+        `${stack.apiBaseUrl}/api/v1/fs/upload?path=/burst/${String(i).padStart(3, "0")}.bin`,
+        {
+          method: "PUT",
+          headers: {
+            cookie: stack.cookie,
+            "x-requested-with": "fdrive",
+            "content-type": "application/octet-stream",
+          },
+          body: bytes,
+          signal: AbortSignal.timeout(30000),
+        },
+      ),
+    );
+    samples.push(performance.now() - one);
   });
   const wallTimeMs = performance.now() - start;
-
-  const requestsPerSecond = wallTimeMs > 0 ? (UPLOAD_BURST_COUNT * 1000) / wallTimeMs : Number.NaN;
-  return toScenarioResult("uploadSmallBurst", latenciesMs, requestsPerSecond, errors, {
-    wallTimeMs,
+  await listing(stack, "/burst", 200);
+  await mapWithConcurrency(indices, 6, async (i) => {
+    const response = await fetch(
+      `${stack.apiBaseUrl}/api/v1/fs/download?path=/burst/${String(i).padStart(3, "0")}.bin`,
+      { headers: { cookie: stack.cookie } },
+    );
+    if (!response.ok) throw Error("Upload verification download failed");
+    const actual = new Uint8Array(await response.arrayBuffer());
+    const expected = fillPseudoRandomBytes(4096, i + 1).bytes;
+    if (actual.length !== expected.length || actual.some((v, n) => v !== expected[n]))
+      throw Error("Uploaded bytes differ");
   });
+  return toScenarioResult("uploadSmallBurst", samples, 200000 / wallTimeMs, 0, {
+    wallTimeMs,
+    verifiedCount: 200,
+  });
+}
+export async function runSearch(
+  stack: PerfStack,
+  options: DurationOptions = {},
+): Promise<ScenarioResult> {
+  async function query(index: number, cookie: string, forbidden = false) {
+    const topic = TOPICS[index % TOPICS.length];
+    if (!topic) throw Error("Missing query");
+    const response = await fetch(
+      `${stack.apiBaseUrl}/api/v1/search?${new URLSearchParams({ q: index % 3 === 0 ? (topic.split(" ")[0] ?? topic) : index % 3 === 1 ? topic : `practical observations about ${topic}`, limit: "30" })}`,
+      { headers: { cookie }, signal: AbortSignal.timeout(30000) },
+    );
+    if (!response.ok) throw Error(`Search failed: ${response.status}`);
+    const body = SearchResponse.parse(await response.json());
+    const hits = [...body.sections.files, ...body.sections.content];
+    if (body.degraded || body.unavailable || hits.length === 0)
+      throw Error("Hybrid search degraded, unavailable or empty");
+    if (hits.some((h) => h.name.startsWith("FORBIDDEN") !== forbidden))
+      throw Error("Search crossed identity boundary");
+    if (!forbidden && !hits.some((h) => h.name.startsWith(topic.split(" ")[0] ?? "")))
+      throw Error("Expected topical hit absent");
+  }
+  await query(0, stack.forbiddenCookie, true);
+  for (let i = 0; i < 20; i++) await query(i, stack.cookie);
+  const samples: number[] = [];
+  for (let i = 0; i < (options.quickSeconds ? 10 : 100); i++) {
+    const start = performance.now();
+    await query(i, stack.cookie);
+    samples.push(performance.now() - start);
+  }
+  return toScenarioResult(
+    "search25k",
+    samples,
+    (samples.length * 1000) / samples.reduce((a, b) => a + b, 0),
+    0,
+    { warmupCount: 20, verifiedCount: 25000 },
+  );
 }

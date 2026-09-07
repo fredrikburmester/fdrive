@@ -6,6 +6,7 @@ import { FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShellMe } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -21,6 +22,9 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { identityLabel, navigateAccountItem } from "@/lib/account/identities";
+import { useIdentityActions } from "@/lib/account/use-identities";
+import { describeApiError } from "@/lib/api/errors";
 import { createDebouncer, type Debounced } from "@/lib/search/debounce";
 import {
   apiClient,
@@ -105,15 +109,28 @@ function SnippetText({ snippet }: { snippet: SearchSnippet }) {
   );
 }
 
-function HitRow({ hit }: { hit: SearchHit }) {
+function HitRow({
+  hit,
+  label,
+  iconsOnly,
+}: {
+  hit: SearchHit;
+  label: string | undefined;
+  iconsOnly: boolean;
+}) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
-      <HitThumbnail hit={hit} />
+      {iconsOnly ? (
+        <FileIcon kind={hit.kind} ext={hit.ext} mime={hit.mime} />
+      ) : (
+        <HitThumbnail hit={hit} />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="truncate text-sm">{hit.name}</span>
           <span className="shrink-0 truncate text-xs text-muted-foreground">{hit.path}</span>
         </div>
+        {label ? <p className="truncate text-xs text-muted-foreground">{label}</p> : null}
         {hit.snippets[0] !== undefined ? <SnippetText snippet={hit.snippets[0]} /> : null}
       </div>
     </div>
@@ -152,7 +169,7 @@ function RevealButton({ path, onReveal }: { path: string; onReveal: (path: strin
   );
 }
 
-function FolderRow({ folder }: { folder: FsEntry }) {
+function FolderRow({ folder, label }: { folder: FsEntry; label: string | undefined }) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
       <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
@@ -160,6 +177,7 @@ function FolderRow({ folder }: { folder: FsEntry }) {
       </div>
       <div className="min-w-0 flex-1">
         <span className="truncate text-sm">{folder.name || "Home"}</span>
+        {label ? <p className="truncate text-xs text-muted-foreground">{label}</p> : null}
       </div>
     </div>
   );
@@ -193,6 +211,10 @@ function RecentRow({ item }: { item: RecentItem }) {
 export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const { data: me } = useShellMe();
+  const actions = useIdentityActions();
+  const [allLogins, setAllLogins] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
   const currentFolder = pathFromFilesPathname(pathname) ?? "/";
 
   const [inputValue, setInputValue] = useState("");
@@ -216,11 +238,19 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       setInputValue("");
       setCommittedQuery("");
       setChips(DEFAULT_SEARCH_CHIPS);
+      setAllLogins(false);
       return;
     }
-    setRecent(readRecent(window.localStorage));
+    setRecent(
+      me
+        ? readRecent(window.localStorage, {
+            accountId: me.account.id,
+            identityId: me.activeIdentityId,
+          })
+        : [],
+    );
     setEnterActionState(readEnterAction(window.localStorage));
-  }, [open]);
+  }, [open, me]);
 
   const handleInputChange = useCallback((value: string) => {
     setInputValue(value);
@@ -233,28 +263,57 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   }, []);
 
   const trimmedQuery = committedQuery.trim();
-  const { data: response, isFetching } = useSearchResults(committedQuery, chips, currentFolder, {
-    enabled: open && trimmedQuery.length > 0,
+  const {
+    data: response,
+    isFetching,
+    error: searchError,
+  } = useSearchResults(committedQuery, chips, currentFolder, {
+    enabled: open && trimmedQuery.length > 0 && me !== undefined,
+    ...(me
+      ? { scope: { accountId: me.account.id, identityId: me.activeIdentityId, all: allLogins } }
+      : {}),
   });
 
-  const openItem = useCallback(
-    (kind: "folder" | "file", path: string) => {
-      const name = baseName(path);
-      if (kind === "file") {
-        pushRecent(window.localStorage, { path, name, openedAt: new Date().toISOString() });
+  const navigateItem = useCallback(
+    async (kind: "folder" | "file" | "reveal", path: string, identityId?: string) => {
+      if (!me || actions.pending) return;
+      setNavigationError(null);
+      const owner = identityId ?? me.activeIdentityId;
+      const href =
+        kind === "reveal"
+          ? revealHref(path)
+          : kind === "folder"
+            ? pathToHref(path)
+            : viewHref(path);
+      try {
+        await navigateAccountItem(me, owner, href, actions.switch, (target) =>
+          router.push(toRoute(target)),
+        );
+        if (kind === "file")
+          pushRecent(
+            window.localStorage,
+            { path, name: baseName(path), openedAt: new Date().toISOString() },
+            { accountId: me.account.id, identityId: owner },
+          );
+        onOpenChange(false);
+      } catch (error) {
+        setNavigationError(describeApiError(error));
       }
-      onOpenChange(false);
-      router.push(toRoute(kind === "folder" ? pathToHref(path) : viewHref(path)));
     },
-    [onOpenChange, router],
+    [me, actions, router, onOpenChange],
   );
 
-  const revealItem = useCallback(
-    (path: string) => {
-      onOpenChange(false);
-      router.push(toRoute(revealHref(path)));
+  const openItem = useCallback(
+    (kind: "folder" | "file", path: string, identityId?: string) => {
+      void navigateItem(kind, path, identityId);
     },
-    [onOpenChange, router],
+    [navigateItem],
+  );
+  const revealItem = useCallback(
+    (path: string, identityId?: string) => {
+      void navigateItem("reveal", path, identityId);
+    },
+    [navigateItem],
   );
 
   const handleSelect = useCallback(
@@ -264,10 +323,10 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
         return;
       }
       if (target.kind !== "folder" && enterAction === "folder") {
-        revealItem(target.path);
+        revealItem(target.path, target.identityId);
         return;
       }
-      openItem(target.kind === "folder" ? "folder" : "file", target.path);
+      openItem(target.kind === "folder" ? "folder" : "file", target.path, target.identityId);
     },
     [openItem, revealItem, enterAction],
   );
@@ -284,16 +343,26 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       event.preventDefault();
       event.stopPropagation();
       if (target.kind !== "folder" && enterAction === "folder") {
-        openItem("file", target.path);
+        openItem("file", target.path, target.identityId);
         return;
       }
-      revealItem(target.path);
+      revealItem(target.path, target.identityId);
     },
     [selectedValue, revealItem, openItem, enterAction],
   );
 
   const showRecent = trimmedQuery.length === 0;
-  const sections = response?.sections;
+  const sections = response?.sections as
+    | {
+        folders: (FsEntry & { identityId?: string })[];
+        files: (SearchHit & { identityId?: string })[];
+        content: (SearchHit & { identityId?: string })[];
+      }
+    | undefined;
+  const unavailableIds =
+    response && "unavailableIdentityIds" in response ? response.unavailableIdentityIds : [];
+  const labelFor = (id: string | undefined) =>
+    allLogins && id && me ? identityLabel(me.identities, id) : undefined;
   const degraded = response?.degraded ?? false;
   const unavailable = response?.unavailable ?? false;
   const noResults =
@@ -319,6 +388,20 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
           onKeyDownCapture={handleInputKeyDownCapture}
           placeholder="Search files and content..."
         />
+        {me && me.identities.length > 1 ? (
+          <ToggleGroup
+            aria-label="Search scope"
+            className="justify-start px-2 pt-2"
+            value={[allLogins ? "all" : "current"]}
+            onValueChange={(values) => {
+              setAllLogins(values[0] === "all");
+              setSelectedValue("");
+            }}
+          >
+            <ToggleGroupItem value="current">Current login</ToggleGroupItem>
+            <ToggleGroupItem value="all">All linked logins</ToggleGroupItem>
+          </ToggleGroup>
+        ) : null}
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5">
           <ToggleGroup
             value={[chips.type]}
@@ -347,6 +430,18 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             This folder only
           </Toggle>
         </div>
+        {actions.error || navigationError || searchError ? (
+          <p role="alert" className="px-3 py-2 text-xs text-destructive">
+            {actions.error ?? navigationError ?? describeApiError(searchError)}
+          </p>
+        ) : null}
+        {unavailableIds.length > 0 && me ? (
+          <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+            Search unavailable for{" "}
+            {unavailableIds.map((id) => identityLabel(me.identities, id)).join(", ")}. Other results
+            remain available.
+          </p>
+        ) : null}
         {degraded ? (
           <p className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
             Semantic search unavailable, showing keyword matches.
@@ -354,7 +449,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
         ) : null}
         <CommandList>
           {showRecent ? (
-            recent.length === 0 ? (
+            allLogins || recent.length === 0 ? (
               <CommandEmpty>Type to search files and content.</CommandEmpty>
             ) : (
               <CommandGroup heading="Recent">
@@ -380,11 +475,11 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                   <CommandGroup heading="Folders">
                     {sections.folders.map((folder) => (
                       <CommandItem
-                        key={folder.path}
-                        value={makeItemValue("folder", folder.path)}
+                        key={makeItemValue("folder", folder.path, folder.identityId)}
+                        value={makeItemValue("folder", folder.path, folder.identityId)}
                         onSelect={handleSelect}
                       >
-                        <FolderRow folder={folder} />
+                        <FolderRow folder={folder} label={labelFor(folder.identityId)} />
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -396,12 +491,15 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                   <CommandGroup heading="Files">
                     {sections.files.map((hit) => (
                       <CommandItem
-                        key={`file:${hit.path}`}
-                        value={makeItemValue("file", hit.path)}
+                        key={makeItemValue("file", hit.path, hit.identityId)}
+                        value={makeItemValue("file", hit.path, hit.identityId)}
                         onSelect={handleSelect}
                       >
-                        <HitRow hit={hit} />
-                        <RevealButton path={hit.path} onReveal={revealItem} />
+                        <HitRow hit={hit} iconsOnly={allLogins} label={labelFor(hit.identityId)} />
+                        <RevealButton
+                          path={hit.path}
+                          onReveal={(path) => revealItem(path, hit.identityId)}
+                        />
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -412,12 +510,15 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                 <CommandGroup heading="Content matches">
                   {sections.content.map((hit) => (
                     <CommandItem
-                      key={`content:${hit.path}`}
-                      value={makeItemValue("content", hit.path)}
+                      key={makeItemValue("content", hit.path, hit.identityId)}
+                      value={makeItemValue("content", hit.path, hit.identityId)}
                       onSelect={handleSelect}
                     >
-                      <HitRow hit={hit} />
-                      <RevealButton path={hit.path} onReveal={revealItem} />
+                      <HitRow hit={hit} iconsOnly={allLogins} label={labelFor(hit.identityId)} />
+                      <RevealButton
+                        path={hit.path}
+                        onReveal={(path) => revealItem(path, hit.identityId)}
+                      />
                     </CommandItem>
                   ))}
                 </CommandGroup>

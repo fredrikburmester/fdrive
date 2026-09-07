@@ -1,23 +1,13 @@
 "use client";
 
 import { SearchIcon } from "lucide-react";
-import { useEffect, useState } from "react";
 import { SearchPanel } from "@/components/search/search-panel";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useMe } from "@/lib/api/auth-queries";
 import { useSearchStatus } from "@/lib/search/queries";
-
-/**
- * True when a keydown event is the "open search" shortcut: Cmd+K on Apple
- * platforms, Ctrl+K everywhere else. Exported so it is unit tested without
- * simulating a real DOM keyboard event.
- */
-export function isSearchShortcut(
-  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey">,
-): boolean {
-  return event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
-}
+import { useSearchShortcut } from "@/lib/search/shortcut";
 
 /**
  * The top-right search entry point: a button showing the ⌘K shortcut (label
@@ -26,21 +16,10 @@ export function isSearchShortcut(
  * Disabled with a tooltip when the search index is not configured.
  */
 export function SearchButton() {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen } = useSearchShortcut();
   const { data: status } = useSearchStatus();
-  const disabled = status?.available === false;
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (!isSearchShortcut(event)) {
-        return;
-      }
-      event.preventDefault();
-      setOpen((current) => !current);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  const { data: me } = useMe();
+  const disabled = status?.available === false && (me?.identities.length ?? 0) < 2;
 
   const button = (
     <Button

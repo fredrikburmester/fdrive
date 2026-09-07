@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { AdminConnectionResponse, MeResponse } from "@fdrive/contracts";
+import type { AdminConnectionResponse, IndexerStats, MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
@@ -22,6 +22,8 @@ const systemUpdateOcrSettingsMock = vi.fn();
 const systemRunOcrMock = vi.fn();
 const systemThumbnailsMock = vi.fn();
 const systemRebuildThumbnailsMock = vi.fn();
+const systemClearIndexMock = vi.fn();
+const systemClearThumbnailsMock = vi.fn();
 
 vi.mock("./client.js", () => ({
   apiClient: {
@@ -42,6 +44,8 @@ vi.mock("./client.js", () => ({
     systemUpdateOcrSettings: (...args: unknown[]) => systemUpdateOcrSettingsMock(...args),
     systemRunOcr: (...args: unknown[]) => systemRunOcrMock(...args),
     systemThumbnails: (...args: unknown[]) => systemThumbnailsMock(...args),
+    systemClearIndex: (...args: unknown[]) => systemClearIndexMock(...args),
+    systemClearThumbnails: (...args: unknown[]) => systemClearThumbnailsMock(...args),
     systemRebuildThumbnails: (...args: unknown[]) => systemRebuildThumbnailsMock(...args),
   },
 }));
@@ -93,6 +97,8 @@ beforeEach(() => {
   systemRunOcrMock.mockReset();
   systemThumbnailsMock.mockReset();
   systemRebuildThumbnailsMock.mockReset();
+  systemClearIndexMock.mockReset();
+  systemClearThumbnailsMock.mockReset();
 });
 
 describe("useSetupStatus", () => {
@@ -452,5 +458,104 @@ describe("useRebuildThumbnails", () => {
     await waitFor(() => expect(mutation.current.data).toEqual({ marked: 20 }));
     expect(systemThumbnailsMock).toHaveBeenCalledTimes(2);
     expect(systemIndexerMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("maintenance mutations", () => {
+  it.each([false, true])(
+    "clears index scope and refreshes counts after failure=%s",
+    async (fail) => {
+      systemIndexerMock.mockResolvedValue(SYSTEM_INDEXER_RESPONSE);
+      systemSearchMock.mockResolvedValue(SYSTEM_SEARCH_RESPONSE);
+      if (fail) systemClearIndexMock.mockRejectedValue(new Error("busy"));
+      else systemClearIndexMock.mockResolvedValue({ started: true });
+      const { useSystemIndexer, useSystemSearch, useClearIndex } = await import(
+        "./system-queries.js"
+      );
+      const wrapper = createWrapper(new QueryClient());
+      const indexer = renderHook(() => useSystemIndexer(), { wrapper });
+      const search = renderHook(() => useSystemSearch(), { wrapper });
+      await waitFor(() =>
+        expect(indexer.result.current.isSuccess && search.result.current.isSuccess).toBe(true),
+      );
+      const mutation = renderHook(() => useClearIndex(), { wrapper });
+      mutation.result.current.mutate({ root: "sftpgo", path: "alice/docs" });
+      await waitFor(() =>
+        expect(fail ? mutation.result.current.isError : mutation.result.current.isSuccess).toBe(
+          true,
+        ),
+      );
+      expect(systemClearIndexMock).toHaveBeenCalledWith({ root: "sftpgo", path: "alice/docs" });
+      expect(systemIndexerMock).toHaveBeenCalledTimes(2);
+      expect(systemSearchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("clears thumbnails and refreshes cache and job progress", async () => {
+    systemIndexerMock.mockResolvedValue(SYSTEM_INDEXER_RESPONSE);
+    systemThumbnailsMock.mockResolvedValue(SYSTEM_THUMBNAILS_RESPONSE);
+    systemClearThumbnailsMock.mockResolvedValue({ started: true });
+    const { useSystemIndexer, useSystemThumbnails, useClearThumbnails } = await import(
+      "./system-queries.js"
+    );
+    const wrapper = createWrapper(new QueryClient());
+    const indexer = renderHook(() => useSystemIndexer(), { wrapper });
+    const thumbnails = renderHook(() => useSystemThumbnails(), { wrapper });
+    await waitFor(() =>
+      expect(indexer.result.current.isSuccess && thumbnails.result.current.isSuccess).toBe(true),
+    );
+    const mutation = renderHook(() => useClearThumbnails(), { wrapper });
+    mutation.result.current.mutate();
+    await waitFor(() => expect(mutation.result.current.isSuccess).toBe(true));
+    expect(systemClearThumbnailsMock).toHaveBeenCalledWith();
+    expect(systemIndexerMock).toHaveBeenCalledTimes(2);
+    expect(systemThumbnailsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([undefined, "indexClear", "thumbnailClear", "thumbnailRebuild"] as const)(
+    "recognizes running job %s",
+    async (key) => {
+      const { useSystemMaintenanceBusy } = await import("./system-queries.js");
+      const stats: IndexerStats | undefined =
+        key === undefined
+          ? undefined
+          : {
+              roots: [],
+              thumbnails: 0,
+              queueDepth: 0,
+              errorsSample: [],
+              [key]: {
+                running: true,
+                processed: 0,
+                total: 0,
+                startedAt: null,
+                finishedAt: null,
+                errors: 0,
+              },
+            };
+      const { result } = renderHook(() => useSystemMaintenanceBusy(stats), {
+        wrapper: createWrapper(new QueryClient()),
+      });
+      expect(result.current).toBe(key !== undefined);
+    },
+  );
+
+  it("shares pending state across mounted maintenance consumers", async () => {
+    let finish: ((value: { started: boolean }) => void) | undefined;
+    systemClearThumbnailsMock.mockImplementation(
+      () =>
+        new Promise<{ started: boolean }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { useClearThumbnails, useSystemMaintenanceBusy } = await import("./system-queries.js");
+    const wrapper = createWrapper(new QueryClient());
+    const mutation = renderHook(() => useClearThumbnails(), { wrapper });
+    const busy = renderHook(() => useSystemMaintenanceBusy(undefined), { wrapper });
+    expect(busy.result.current).toBe(false);
+    mutation.result.current.mutate();
+    await waitFor(() => expect(busy.result.current).toBe(true));
+    finish?.({ started: true });
+    await waitFor(() => expect(busy.result.current).toBe(false));
   });
 });

@@ -5,6 +5,8 @@ without pulling in a full web framework.
 
 from __future__ import annotations
 
+import errno
+import json
 import os
 import threading
 from collections.abc import Callable
@@ -12,12 +14,15 @@ from dataclasses import dataclass, field
 
 import psycopg
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import db
 from .chunking import is_textual
+from .clear_jobs import clear_index, clear_thumbnails, start_clear
+from .directory_listing import directory_query, list_directory
 from .extract import embed_health
 from .indexer import RootContext
 from .paths import ext_of, reindex_scope
@@ -33,6 +38,12 @@ class ServerState:
     conn_factory: Callable[[], psycopg.Connection]
     schema_version: Callable[[], int | None]
     thumbnail_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+    index_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+    thumbnail_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+
+    def __post_init__(self) -> None:
+        self.index_clear_job.admission = self.thumbnail_job.admission
+        self.thumbnail_clear_job.admission = self.thumbnail_job.admission
 
 
 def _safe_abs_path(ctx: RootContext, rel_path: str) -> str | None:
@@ -42,6 +53,26 @@ def _safe_abs_path(ctx: RootContext, rel_path: str) -> str | None:
     if candidate != root and not candidate.startswith(root + os.sep):
         return None
     return candidate
+
+
+async def directory(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    try:
+        root, path = directory_query(request.query_params.multi_items())
+    except ValueError:
+        return JSONResponse({"error": "invalid directory query"}, status_code=400)
+    ctx = state.contexts.get(root)
+    if ctx is None:
+        return JSONResponse({"error": "unknown root"}, status_code=404)
+    try:
+        result = await run_in_threadpool(list_directory, ctx.abs_path, path)
+    except OSError as error:
+        statuses: dict[int | None, int] = {
+            errno.ENOENT: 404, errno.ENOTDIR: 400, errno.ELOOP: 400, errno.EACCES: 403, errno.EPERM: 403
+        }
+        status = statuses.get(error.errno, 503)
+        return JSONResponse({"error": "directory unavailable"}, status_code=status)
+    return JSONResponse(result)
 
 
 async def health(request: Request) -> JSONResponse:
@@ -66,6 +97,8 @@ async def stats(request: Request) -> JSONResponse:
         manifest = db.get_manifest(conn, ctx.root_id)
         queue_depth += sum(1 for row in manifest.values() if row[2] == "pending")
     body = shape_stats(per_root, db.thumbnails_count(conn), queue_depth, errors, state.thumbnail_job.snapshot())
+    body["index_clear"] = state.index_clear_job.snapshot()
+    body["thumbnail_clear"] = state.thumbnail_clear_job.snapshot()
     return JSONResponse(body)
 
 
@@ -142,13 +175,56 @@ async def thumbnails_rebuild(request: Request) -> JSONResponse:
     return JSONResponse({"started": True, "total": total}, status_code=202)
 
 
+async def clear(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    try:
+        payload = await request.json() if await request.body() else {}
+    except (ValueError, json.JSONDecodeError):
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+    thumbnails = request.url.path == "/thumbnails/clear"
+    allowed = set() if thumbnails else {"root", "path"}
+    if set(payload) - allowed:
+        return JSONResponse({"error": "unknown fields"}, status_code=400)
+    for field_name in allowed:
+        if field_name in payload and (not isinstance(payload[field_name], str) or not payload[field_name].strip()):
+            return JSONResponse({"error": f"{field_name} must be a nonempty string"}, status_code=400)
+    root_name = payload.get("root")
+    path = payload.get("path")
+    if path is not None and root_name is None:
+        return JSONResponse({"error": "path requires root"}, status_code=400)
+    if path is not None and (".." in path.split("/") or "\\" in path or "\x00" in path):
+        return JSONResponse({"error": "invalid path"}, status_code=400)
+    if root_name is not None and root_name not in state.contexts:
+        return JSONResponse({"error": f"unknown root: {root_name}"}, status_code=404)
+    contexts = [state.contexts[root_name]] if root_name is not None else list(state.contexts.values())
+    scope = os.path.normpath(path.lstrip("/")) if path is not None else None
+    if scope == ".":
+        scope = None
+    job = state.thumbnail_clear_job if thumbnails else state.index_clear_job
+    try:
+        started = start_clear(
+            job,
+            lambda: clear_thumbnails(contexts, job) if thumbnails else clear_index(contexts, scope, job),
+        )
+    except Exception:
+        return JSONResponse({"error": "could not start clear job"}, status_code=500)
+    if not started:
+        return JSONResponse({"error": "a clear or thumbnail rebuild is already running"}, status_code=409)
+    return JSONResponse({"started": True}, status_code=202)
+
+
 def create_app(state: ServerState) -> Starlette:
     app = Starlette(
         routes=[
             Route("/health", health, methods=["GET"]),
+            Route("/directory", directory, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/extract", extract_text, methods=["POST"]),
             Route("/reindex", reindex, methods=["POST"]),
+            Route("/index/clear", clear, methods=["POST"]),
+            Route("/thumbnails/clear", clear, methods=["POST"]),
             Route("/thumbnails/rebuild", thumbnails_rebuild, methods=["POST"]),
         ]
     )

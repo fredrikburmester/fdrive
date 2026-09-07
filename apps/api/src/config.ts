@@ -1,5 +1,7 @@
 import { tmpdir } from "node:os";
 import { z } from "zod";
+import { officeConfig } from "./office/config.ts";
+import { type OfficeEditRule, parseOfficeEditRules } from "./office/edit-policy.ts";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 const NODE_ENVS = ["development", "production", "test"] as const;
@@ -25,6 +27,12 @@ export interface IndexRootConfig {
 }
 
 export interface AppConfig {
+  readonly fdriveOfficeEditRules?: readonly OfficeEditRule[];
+  readonly fdriveOfficeProduct?: "onlyoffice" | "collabora" | undefined;
+  readonly fdriveOfficeUrl?: string | undefined;
+  readonly fdriveOfficePublicUrl?: string | undefined;
+  readonly fdriveWopiUrl?: string | undefined;
+  readonly fdriveOfficeMaxBytes?: number | undefined;
   readonly port: number;
   readonly host: string;
   readonly logLevel: LogLevel;
@@ -163,6 +171,34 @@ export function parseAdminUsers(value: string | undefined): readonly string[] {
 }
 
 const envSchema = z.object({
+  FDRIVE_OFFICE_EDIT_RULES: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .transform((value, ctx) => {
+        try {
+          return parseOfficeEditRules(value);
+        } catch {
+          ctx.addIssue({
+            code: "custom",
+            message: "must be valid bounded Office edit policy JSON",
+          });
+          return z.NEVER;
+        }
+      }),
+  ),
+  FDRIVE_OFFICE_PRODUCT: z.preprocess(
+    undefinedWhenEmpty,
+    z.enum(["onlyoffice", "collabora"]).optional(),
+  ),
+  FDRIVE_OFFICE_URL: z.preprocess(undefinedWhenEmpty, z.string().optional()),
+  FDRIVE_OFFICE_PUBLIC_URL: z.preprocess(undefinedWhenEmpty, z.string().optional()),
+  FDRIVE_WOPI_URL: z.preprocess(undefinedWhenEmpty, z.string().optional()),
+  FDRIVE_OFFICE_MAX_BYTES: z.preprocess(
+    (v) => withDefault(v, "104857600"),
+    z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(1073741824)),
+  ),
   PORT: z.preprocess(
     (value) => withDefault(value, "3001"),
     z
@@ -307,7 +343,13 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
 
   const parsed = result.data;
 
-  return {
+  const config: AppConfig = {
+    fdriveOfficeEditRules: parsed.FDRIVE_OFFICE_EDIT_RULES,
+    fdriveOfficeProduct: parsed.FDRIVE_OFFICE_PRODUCT,
+    fdriveOfficeUrl: parsed.FDRIVE_OFFICE_URL,
+    fdriveOfficePublicUrl: parsed.FDRIVE_OFFICE_PUBLIC_URL,
+    fdriveWopiUrl: parsed.FDRIVE_WOPI_URL,
+    fdriveOfficeMaxBytes: parsed.FDRIVE_OFFICE_MAX_BYTES,
     port: parsed.PORT,
     host: parsed.HOST,
     logLevel: parsed.LOG_LEVEL,
@@ -331,4 +373,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveOcrUrl: parsed.FDRIVE_OCR_URL,
     fdriveMcpWrites: parsed.FDRIVE_MCP_WRITES,
   };
+  officeConfig(config);
+  return config;
 }

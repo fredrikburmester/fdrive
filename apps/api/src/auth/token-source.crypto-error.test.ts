@@ -43,7 +43,7 @@ describe("openOrReauth: non-CryptoError rethrow", () => {
     const sftpgo = { login: vi.fn() } as unknown as SftpgoClient;
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: () => new Date(),
     });

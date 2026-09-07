@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { type ReactNode, useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { queryKeys } from "@/lib/api/keys";
 import { useUploadStore } from "@/lib/upload/store";
 
@@ -29,7 +30,7 @@ export function Providers({ children }: { children: ReactNode }) {
   // as every other mutation.
   useEffect(() => {
     useUploadStore.getState().setOnUploaded((parentPath) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(parentPath) });
+      void refreshIdentityQuery(queryClient, queryKeys.fs.list(parentPath));
     });
   }, [queryClient]);
 

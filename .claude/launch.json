@@ -4,15 +4,24 @@
     {
       "name": "api",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@fdrive/api", "dev"],
+      "runtimeArgs": [
+        "--filter",
+        "@fdrive/api",
+        "exec",
+        "tsx",
+        "watch",
+        "--conditions=development",
+        "--env-file-if-exists=.env.dev",
+        "--env-file-if-exists=../../.env.office.onlyoffice.dev",
+        "src/main.ts"
+      ],
       "port": 3001
     },
     {
       "name": "web",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@fdrive/web", "dev"],
-      "port": 3000,
-      "autoPort": true
+      "port": 3002
     }
   ]
 }

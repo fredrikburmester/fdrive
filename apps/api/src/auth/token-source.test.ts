@@ -64,7 +64,7 @@ describe("createTokenSource", () => {
   it("mints a token on first use and stores it sealed in the database", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -80,7 +80,7 @@ describe("createTokenSource", () => {
   it("reuses the in-process cache while more than the refresh margin remains", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -94,7 +94,7 @@ describe("createTokenSource", () => {
   it("re-mints once the cached token is within the refresh margin", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -108,12 +108,22 @@ describe("createTokenSource", () => {
   });
 
   it("reads a still-fresh token from the database when the in-process cache is empty", async () => {
-    const first = createTokenSource({ repos, sftpgo, master: MASTER, clock: clockCtl.clock });
+    const first = createTokenSource({
+      repos,
+      clientForIdentity: async () => sftpgo,
+      master: MASTER,
+      clock: clockCtl.clock,
+    });
     const mintedToken = await first.get(identityId);
 
     // A second token source (e.g. a second API process) sharing the same
     // repos should reuse the DB-cached token instead of minting a new one.
-    const second = createTokenSource({ repos, sftpgo, master: MASTER, clock: clockCtl.clock });
+    const second = createTokenSource({
+      repos,
+      clientForIdentity: async () => sftpgo,
+      master: MASTER,
+      clock: clockCtl.clock,
+    });
     const reused = await second.get(identityId);
 
     expect(reused).toBe(mintedToken);
@@ -122,7 +132,7 @@ describe("createTokenSource", () => {
   it("invalidate forgets both the in-process cache and the database record", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -138,7 +148,7 @@ describe("createTokenSource", () => {
   it("withToken runs fn with a valid token and returns its result", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -154,7 +164,7 @@ describe("createTokenSource", () => {
   it("withToken retries exactly once after a 401, minting a fresh token", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -175,7 +185,7 @@ describe("createTokenSource", () => {
   it("withToken lets a non-unauthorized SftpgoError propagate without retrying", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -193,7 +203,7 @@ describe("createTokenSource", () => {
   it("withToken lets a non-SftpgoError propagate without retrying", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -214,7 +224,7 @@ describe("createTokenSource", () => {
     server.state.users.set(USERNAME, { ...existingUser, password: "a-new-password" });
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -227,7 +237,7 @@ describe("createTokenSource", () => {
   it("throws reauth_required when the identity no longer exists", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -250,7 +260,7 @@ describe("createTokenSource", () => {
     });
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -274,7 +284,7 @@ describe("createTokenSource", () => {
     });
     const tokenSource = createTokenSource({
       repos,
-      sftpgo: throwingClient,
+      clientForIdentity: async () => throwingClient,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -298,7 +308,7 @@ describe("createTokenSource", () => {
     });
     const tokenSource = createTokenSource({
       repos,
-      sftpgo: failingClient,
+      clientForIdentity: async () => failingClient,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -311,7 +321,7 @@ describe("createTokenSource", () => {
   it("propagates an ApiHttpError instance for reauth_required", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -325,7 +335,7 @@ describe("createTokenSource", () => {
     const rotatedMaster = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: rotatedMaster,
       clock: clockCtl.clock,
     });
@@ -339,7 +349,7 @@ describe("createTokenSource", () => {
   it("throws reauth_required when a fresh DB-cached token was sealed under a different master key", async () => {
     const firstSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });
@@ -348,7 +358,7 @@ describe("createTokenSource", () => {
     const rotatedMaster = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
     const secondSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: rotatedMaster,
       clock: clockCtl.clock,
     });
@@ -361,7 +371,7 @@ describe("createTokenSource", () => {
   it("prime seals and stores a caller-supplied token without minting a new one", async () => {
     const tokenSource = createTokenSource({
       repos,
-      sftpgo,
+      clientForIdentity: async () => sftpgo,
       master: MASTER,
       clock: clockCtl.clock,
     });

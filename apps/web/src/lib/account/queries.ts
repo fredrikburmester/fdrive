@@ -36,3 +36,12 @@ export function useRevokeApiToken() {
     },
   });
 }
+
+/** Favorites retain their owning identity, including duplicate virtual paths. */
+export function useAccountFavorites(accountId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.account.favorites(accountId ?? ""),
+    queryFn: () => apiClient.accountFavorites(),
+    enabled: accountId !== undefined,
+  });
+}

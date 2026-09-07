@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SEED_FILES } from "@fdrive/testkit";
 import { Client } from "pg";
+import { ACCOUNT_FILES } from "./support/account-fixture.js";
 import { startEnvironment } from "./support/environment.js";
 import { startFakeIndexer } from "./support/fake-indexer.js";
 import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
@@ -53,33 +54,35 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
       throw new Error("fdrive e2e: failed to seed idx.roots");
     }
 
-    const aliceFiles = SEED_FILES.alice ?? {};
+    const indexedFiles = { alice: SEED_FILES.alice ?? {}, ...ACCOUNT_FILES };
     const mtimeNs = (BigInt(Date.now()) * BigInt(1_000_000)).toString();
     let readmeFileId: number | undefined;
     let readmeText: string | undefined;
 
-    for (const [virtualPath, content] of Object.entries(aliceFiles)) {
-      // testkit's SEED_FILES paths are alice-home-relative ("/docs/readme.md");
-      // the index stores root-relative paths with no leading slash
-      // ("alice/docs/readme.md"), matching the indexer's own convention.
-      const relativePath = `alice${virtualPath}`;
-      const name = virtualPath.split("/").at(-1) ?? virtualPath;
-      const ext = extensionOf(name);
-      const size = Buffer.byteLength(content, "utf-8");
-      const sha256 = sha256Hex(content);
+    for (const [username, files] of Object.entries(indexedFiles)) {
+      for (const [virtualPath, content] of Object.entries(files)) {
+        // testkit's SEED_FILES paths are alice-home-relative ("/docs/readme.md");
+        // the index stores root-relative paths with no leading slash
+        // ("alice/docs/readme.md"), matching the indexer's own convention.
+        const relativePath = `${username}${virtualPath}`;
+        const name = virtualPath.split("/").at(-1) ?? virtualPath;
+        const ext = extensionOf(name);
+        const size = Buffer.byteLength(content, "utf-8");
+        const sha256 = sha256Hex(content);
 
-      const fileResult = await client.query<{ id: number }>(
-        `insert into idx.files (root_id, path, name, ext, size, mtime_ns, sha256, text_status)
+        const fileResult = await client.query<{ id: number }>(
+          `insert into idx.files (root_id, path, name, ext, size, mtime_ns, sha256, text_status)
          values ($1, $2, $3, $4, $5, $6, $7, 'done')
          on conflict (root_id, path)
          do update set sha256 = excluded.sha256, size = excluded.size, name = excluded.name
          returning id`,
-        [rootId, relativePath, name, ext, size, mtimeNs, sha256],
-      );
-      const fileId = fileResult.rows[0]?.id;
-      if (relativePath === "alice/docs/readme.md") {
-        readmeFileId = fileId;
-        readmeText = content;
+          [rootId, relativePath, name, ext, size, mtimeNs, sha256],
+        );
+        const fileId = fileResult.rows[0]?.id;
+        if (relativePath === "alice/docs/readme.md") {
+          readmeFileId = fileId;
+          readmeText = content;
+        }
       }
     }
 

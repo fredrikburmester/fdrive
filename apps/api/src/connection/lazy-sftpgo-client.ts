@@ -116,8 +116,11 @@ export function createLazySftpgoClient(deps: CreateLazySftpgoClientDeps): Sftpgo
       async download(path, options) {
         return (await resolveClient()).publicShare(shareId, password).download(path, options);
       },
-      async zip() {
-        return (await resolveClient()).publicShare(shareId, password).zip();
+      async downloadFile(options) {
+        return (await resolveClient()).publicShare(shareId, password).downloadFile(options);
+      },
+      async zip(options) {
+        return (await resolveClient()).publicShare(shareId, password).zip(options);
       },
       async upload(fileName, body, options) {
         return (await resolveClient())

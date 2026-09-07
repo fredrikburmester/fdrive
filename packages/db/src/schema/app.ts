@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   customType,
@@ -9,6 +10,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -212,3 +214,23 @@ export const settings = appSchema.table("settings", {
   value: jsonb("value").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Shared office identity survives index clears and user-specific scopes. */
+export const officeFiles = appSchema.table(
+  "office_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    providerId: uuid("provider_id")
+      .notNull()
+      .references(() => providers.id),
+    rootName: text("root_name").notNull(),
+    path: text("path").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("office_files_active_location_unique")
+      .on(table.providerId, table.rootName, table.path)
+      .where(sql`${table.deletedAt} is null`),
+  ],
+);

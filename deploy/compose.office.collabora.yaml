@@ -1,0 +1,30 @@
+# Production Collabora alternative. Use this overlay instead of compose.office.yaml.
+services:
+  collabora-keys:
+    extends:
+      file: office/compose.services.yaml
+      service: collabora-keys
+    profiles: [collabora]
+  collabora:
+    extends:
+      file: office/compose.services.yaml
+      service: collabora
+    profiles: [collabora]
+    depends_on:
+      collabora-keys:
+        condition: service_completed_successfully
+  api:
+    environment:
+      FDRIVE_OFFICE_PRODUCT: collabora
+      FDRIVE_OFFICE_URL: http://collabora:9980
+      FDRIVE_OFFICE_PUBLIC_URL: https://${FDRIVE_COLLABORA_HOST}
+      FDRIVE_WOPI_URL: http://api:3001/wopi
+      FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-104857600}
+      FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-[]}
+  proxy:
+    environment:
+      FDRIVE_COLLABORA_HOST: ${FDRIVE_COLLABORA_HOST}
+    volumes:
+      - ./office/Caddyfile.collabora:/etc/caddy/Caddyfile:ro
+volumes:
+  office_collabora_keys:

@@ -1,0 +1,26 @@
+# TLS terminates at the operator's edge proxy, routing both hostnames here.
+:80 {
+	request_body {
+		max_size 0
+	}
+	header -Server
+	@office host {$FDRIVE_COLLABORA_HOST}
+	handle @office {
+		reverse_proxy collabora:9980 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+	handle /wopi/* {
+		reverse_proxy api:3001
+	}
+	handle /mcp* {
+		reverse_proxy api:3001
+	}
+	handle {
+		encode zstd gzip
+		reverse_proxy web:3000
+	}
+}

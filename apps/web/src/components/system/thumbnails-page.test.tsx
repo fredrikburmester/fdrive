@@ -2,14 +2,28 @@
 import type { SystemThumbnailsResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const useSystemThumbnailsMock = vi.fn();
-const useRebuildThumbnailsMock = vi.fn();
+const useRebuildIndexerThumbnailsMock = vi.fn();
+const useClearThumbnailsMock = vi.fn();
+const useSystemIndexerMock = vi.fn();
+const useSystemMaintenanceBusyMock = vi.fn(() => false);
+const successToast = vi.fn();
+const errorToast = vi.fn();
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => successToast(...args),
+    error: (...args: unknown[]) => errorToast(...args),
+  },
+}));
 
 vi.mock("@/lib/api/system-queries", () => ({
+  useSystemIndexer: () => useSystemIndexerMock(),
+  useClearThumbnails: () => useClearThumbnailsMock(),
+  useSystemMaintenanceBusy: () => useSystemMaintenanceBusyMock(),
   useSystemThumbnails: () => useSystemThumbnailsMock(),
-  useRebuildThumbnails: () => useRebuildThumbnailsMock(),
+  useRebuildIndexerThumbnails: () => useRebuildIndexerThumbnailsMock(),
 }));
 
 // See `indexer-page.test.tsx` for why `SystemPage` is stubbed rather than
@@ -47,8 +61,18 @@ function mockConfigured() {
     dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
     refetch: vi.fn(),
   });
-  useRebuildThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+  useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 }
+
+beforeEach(() => {
+  useSystemIndexerMock.mockReturnValue({
+    data: { configured: true, reachable: true, health: { roots: ["sftpgo"] } },
+    error: null,
+    refetch: vi.fn(),
+  });
+  useClearThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+  useSystemMaintenanceBusyMock.mockReturnValue(false);
+});
 
 afterEach(() => {
   cleanup();
@@ -61,18 +85,14 @@ describe("ThumbnailsPage", () => {
     render(<ThumbnailsPage />);
 
     expect(await screen.findByText("Reachable")).toBeTruthy();
-    expect(screen.getByText("FDRIVE_THUMBS_DIR is configured.")).toBeTruthy();
+    expect(screen.getByText("Thumbnail cache is available.")).toBeTruthy();
   });
 
   it("renders the rebuild-versus-clear description", async () => {
     mockConfigured();
     render(<ThumbnailsPage />);
 
-    expect(
-      await screen.findByText(
-        "Rebuild runs a background pass over every image, PDF, and video in the index and writes any preview that is missing on disk. It never re-extracts text or embeddings. Existing previews are kept; forcing a regenerate and clearing the cache are coming in a later release.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText(/Clear cache removes previews globally/)).toBeTruthy();
   });
 
   it("renders the thumbnail count and cache size stat cards", async () => {
@@ -94,7 +114,7 @@ describe("ThumbnailsPage", () => {
       dataUpdatedAt: 0,
       refetch: vi.fn(),
     });
-    useRebuildThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 
     render(<ThumbnailsPage />);
 
@@ -110,7 +130,7 @@ describe("ThumbnailsPage", () => {
       dataUpdatedAt: 0,
       refetch,
     });
-    useRebuildThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 
     render(<ThumbnailsPage />);
 
@@ -118,5 +138,74 @@ describe("ThumbnailsPage", () => {
     expect(screen.getByText("thumbnails cache unreachable")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+  it("rebuilds missing previews by default and force is opt in", async () => {
+    mockConfigured();
+    const mutate = vi.fn(
+      (
+        _request: unknown,
+        options: { onSuccess: (result: { started: boolean; total: number }) => void },
+      ) => options.onSuccess({ started: true, total: 6 }),
+    );
+    useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
+    render(<ThumbnailsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild…" }));
+    await screen.findByRole("heading", { name: "Rebuild thumbnails" });
+    expect(screen.getByLabelText("Root").textContent).toContain("All roots");
+    expect(screen.getByLabelText("Root").textContent).not.toContain("__all__");
+    expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("switch", { name: "Regenerate existing thumbnails" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+    expect(mutate).toHaveBeenCalledWith({ force: true }, expect.anything());
+    expect(successToast).toHaveBeenCalledWith("Rebuilding 6 thumbnails…");
+    expect(screen.queryByRole("heading", { name: "Rebuild thumbnails" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+    expect(mutate).toHaveBeenLastCalledWith({}, expect.anything());
+  });
+
+  it("cancels cache removal, then confirms a global clear", async () => {
+    mockConfigured();
+    const mutate = vi.fn(
+      (_request: unknown, options: { onSuccess: (result: { started: boolean }) => void }) =>
+        options.onSuccess({ started: true }),
+    );
+    useClearThumbnailsMock.mockReturnValue({ mutate, isPending: false });
+    render(<ThumbnailsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache…" }));
+    await screen.findByRole("heading", { name: "Clear thumbnail cache?" });
+    expect(screen.getByText(/Removes cached previews for all roots/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
+    expect(mutate).toHaveBeenCalledWith(undefined, expect.anything());
+    expect(successToast).toHaveBeenCalledWith("Thumbnail cache clear started.");
+  });
+
+  it("retains the dialog when clearing fails", () => {
+    mockConfigured();
+    useClearThumbnailsMock.mockReturnValue({
+      mutate: (_request: unknown, options: { onError: (error: Error) => void }) =>
+        options.onError(new Error("busy")),
+      isPending: false,
+    });
+    render(<ThumbnailsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
+    expect(errorToast).toHaveBeenCalledWith("busy");
+    expect(screen.getByRole("heading", { name: "Clear thumbnail cache?" })).toBeTruthy();
+  });
+
+  it.each(["busy", "unreachable", "pending"])("disables conflicting actions when %s", (state) => {
+    mockConfigured();
+    if (state === "busy") useSystemMaintenanceBusyMock.mockReturnValue(true);
+    if (state === "unreachable")
+      useSystemIndexerMock.mockReturnValue({ data: { configured: true, reachable: false } });
+    if (state === "pending")
+      useClearThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: true });
+    render(<ThumbnailsPage />);
+    expect(screen.getByRole("button", { name: "Rebuild…" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Clear cache…" })).toHaveProperty("disabled", true);
   });
 });

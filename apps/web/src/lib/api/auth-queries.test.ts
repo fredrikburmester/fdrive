@@ -16,6 +16,7 @@ const loginMock = vi.fn();
 const logoutMock = vi.fn();
 
 vi.mock("./client.js", () => ({
+  pinTabIdentity: vi.fn(),
   apiClient: {
     me: (...args: unknown[]) => meMock(...args),
     login: (...args: unknown[]) => loginMock(...args),

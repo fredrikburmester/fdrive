@@ -18,9 +18,19 @@ import { toast } from "sonner";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
 import { Inspector } from "@/components/inspector/inspector";
 import { TagsEditDialog } from "@/components/metadata/tags-edit-dialog";
+import { NewOfficeDocumentDialog } from "@/components/office/new-document-dialog";
+import { ShareDialog } from "@/components/shares/share-dialog";
 import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
+import { accountTransition } from "@/lib/account/transition";
+import { useMe } from "@/lib/api/auth-queries";
+import { describeApiError } from "@/lib/api/errors";
+import {
+  officeClientForIdentity,
+  officeStatusQueryOptions,
+  useOfficeStatus,
+} from "@/lib/api/office-queries";
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { editHref } from "@/lib/editor/route";
 import { defaultArchiveName, extractDestinationUnder } from "@/lib/files/archive";
@@ -98,6 +108,9 @@ import {
   useToggleFavorite,
 } from "@/lib/metadata/queries";
 import { tagCheckState as computeTagCheckState, toggleTagId } from "@/lib/metadata/tag-set";
+import { isOfficePreviewCandidate, officeModesFor, opensInOffice } from "@/lib/office/capabilities";
+import type { OfficeDocumentKind } from "@/lib/office/new-document";
+import { officeHref } from "@/lib/office/route";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
 import { DeleteDialog } from "./delete-dialog";
@@ -184,6 +197,11 @@ export function FileBrowser({
   onSelectionChange,
 }: FileBrowserProps) {
   const router = useRouter();
+  const { data: me } = useMe();
+  const { data: officeStatus } = useOfficeStatus();
+  const [officeKind, setOfficeKind] = useState<OfficeDocumentKind | null>(null);
+  const [officePending, setOfficePending] = useState(false);
+  const [officeError, setOfficeError] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const selectName = parseSelectParam(searchParams.toString());
   const queryClient = useQueryClient();
@@ -231,6 +249,7 @@ export function FileBrowser({
   const displayEntries = viewMode === "tree" ? treeRows.map((row) => row.entry) : sortedEntries;
   const orderedPaths = useMemo(() => displayEntries.map((entry) => entry.path), [displayEntries]);
 
+  const [sharing, setSharing] = useState<FsEntry[] | null>(null);
   const [selection, dispatchSelection] = useReducer(
     (state: SelectionState, action: SelectionAction) =>
       selectionReducer(state, action, orderedPaths),
@@ -369,9 +388,21 @@ export function FileBrowser({
     return contextEntries(entry, displayEntries, selection.selected);
   }
 
-  function handleOpen(entry: FsEntry) {
+  async function handleOpen(entry: FsEntry) {
     if (onOpen) {
       onOpen(entry);
+      return;
+    }
+    let availableOffice = officeStatus;
+    if (me && availableOffice === undefined && isOfficePreviewCandidate(entry)) {
+      try {
+        availableOffice = await queryClient.fetchQuery(officeStatusQueryOptions());
+      } catch {
+        availableOffice = undefined;
+      }
+    }
+    if (me && opensInOffice(entry, availableOffice)) {
+      router.push(toRoute(officeHref(me.activeIdentityId, entry.path, "view")));
       return;
     }
     router.push(toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path)));
@@ -417,10 +448,16 @@ export function FileBrowser({
   }
 
   function handleCreateTagFromEditor(name: string, color: TagColor) {
+    const epoch = accountTransition.getSnapshot().generation;
     createTag.mutate(
       { name, color: color === "none" ? null : color },
       {
         onSuccess: (tag) => {
+          if (
+            accountTransition.getSnapshot().pending ||
+            accountTransition.getSnapshot().generation !== epoch
+          )
+            return;
           const targets = tagsEditorEntries ?? [];
           setFileTags.mutate(
             targets.map((target) => ({
@@ -435,6 +472,21 @@ export function FileBrowser({
 
   function handleContextAction(action: RowContextAction, entry: FsEntry) {
     switch (action) {
+      case "share":
+        setSharing(entriesForAction(entry));
+        return;
+      case "office:view":
+      case "office:edit":
+      case "office:convert": {
+        const mode =
+          action === "office:view" ? "view" : action === "office:edit" ? "edit" : "convert";
+        if (
+          me &&
+          officeModesFor(entry, officeStatus, entriesForAction(entry).length).includes(mode)
+        )
+          router.push(toRoute(officeHref(me.activeIdentityId, entry.path, mode)));
+        break;
+      }
       case "open":
         handleOpen(entry);
         break;
@@ -527,6 +579,28 @@ export function FileBrowser({
       toast.error(describeFsError(err, "Could not create the file."));
     } finally {
       setNewFilePending(false);
+    }
+  }
+
+  async function handleCreateOfficeDocument(name: string) {
+    if (!me || officePending) return;
+    const identityId = me.activeIdentityId;
+    setOfficePending(true);
+    setOfficeError(null);
+    try {
+      const created = await officeClientForIdentity(identityId).officeCreateDocument({
+        parent: path,
+        name,
+      });
+      if (created.identityId !== identityId)
+        throw new Error("The document connection could not be verified.");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(path) });
+      setOfficeKind(null);
+      router.push(toRoute(officeHref(identityId, created.path, "edit")));
+    } catch (err) {
+      setOfficeError(describeApiError(err));
+    } finally {
+      setOfficePending(false);
     }
   }
 
@@ -625,7 +699,13 @@ export function FileBrowser({
       return;
     }
 
-    if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (
+      event.key.length === 1 &&
+      event.key !== " " &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
       const buffer = nextTypeAheadBuffer(typeAheadRef.current, event.key, Date.now());
       typeAheadRef.current = buffer;
       const currentIndex = selection.focus === null ? -1 : orderedPaths.indexOf(selection.focus);
@@ -744,6 +824,14 @@ export function FileBrowser({
             onSortSpecChange={setSortSpec}
             onNewFolder={() => setNewFolderOpen(true)}
             onNewFile={setNewFileKind}
+            onNewOfficeDocument={
+              officeStatus?.available && me
+                ? (kind) => {
+                    setOfficeError(null);
+                    setOfficeKind(kind);
+                  }
+                : undefined
+            }
             onUploadFiles={handleUploadFiles}
             onUploadFolder={handleUploadFolder}
             detailsOpen={detailsOpen}
@@ -808,6 +896,7 @@ export function FileBrowser({
                 focusedPath={selection.focus}
                 onEntryClick={handleEntryClick}
                 onEntryDoubleClick={handleOpen}
+                officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
@@ -826,6 +915,7 @@ export function FileBrowser({
                 focusedPath={selection.focus}
                 onEntryClick={handleEntryClick}
                 onEntryDoubleClick={handleOpen}
+                officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
@@ -844,6 +934,7 @@ export function FileBrowser({
                 focusedPath={selection.focus}
                 onEntryClick={handleEntryClick}
                 onEntryDoubleClick={handleOpen}
+                officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
@@ -867,6 +958,19 @@ export function FileBrowser({
         )}
       </div>
 
+      {officeKind !== null && (
+        <NewOfficeDocumentDialog
+          key={officeKind}
+          kind={officeKind}
+          pending={officePending}
+          error={officeError}
+          onClose={() => setOfficeKind(null)}
+          onCreate={(name) => {
+            void handleCreateOfficeDocument(name);
+          }}
+        />
+      )}
+      {sharing && <ShareDialog entries={sharing} onClose={() => setSharing(null)} />}
       <NewFolderDialog
         open={newFolderOpen}
         onOpenChange={setNewFolderOpen}

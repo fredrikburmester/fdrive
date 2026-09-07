@@ -71,3 +71,15 @@ describe("useJobsStore", () => {
     expect(useJobsStore.getState().state.byId["1"]).toBeUndefined();
   });
 });
+
+it("reset rejects old poll, hydration, seed and remove callbacks", () => {
+  const old = useJobsStore.getState();
+  old.upsert(job({ id: "old", state: "running" }));
+  old.reset();
+  useJobsStore.getState().upsert(job({ id: "new", state: "running" }));
+  old.hydrate([job({ id: "old", state: "done" })]);
+  old.upsert(job({ id: "old", state: "done" }));
+  old.seed(job({ id: "old", state: "queued" }), { kind: "extract", req: { path: "/old.zip" } });
+  old.remove("new");
+  expect(useJobsStore.getState().state.order).toEqual(["new"]);
+});

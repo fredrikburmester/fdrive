@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -41,6 +41,7 @@ export interface ClickModifierKeys {
 }
 
 export interface FileListProps {
+  officeStatus?: OfficeStatusResponse | undefined;
   entries: readonly FsEntry[];
   selected: ReadonlySet<string>;
   focusedPath: string | null;
@@ -110,6 +111,7 @@ function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
 /** A virtualized, sortable-columns list view of a folder's entries. */
 export function FileList({
   entries,
+  officeStatus,
   selected,
   focusedPath,
   onEntryClick,
@@ -250,6 +252,7 @@ export function FileList({
 
           return (
             <FileContextMenu
+              officeStatus={officeStatus}
               key={entry.path}
               entry={entry}
               onAction={onContextAction}

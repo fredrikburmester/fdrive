@@ -1,13 +1,21 @@
+import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
+import { ZipFile } from "yazl";
 import { createMemoryStorage } from "../../test/fixtures/memory-storage.js";
 import type { JobProgressPatch } from "../jobs/types.js";
 import { compressToTemp, UnsupportedFormatError } from "./compress.js";
 import { extractArchive } from "./extract.js";
+
+vi.mock("node:fs", async (original) => {
+  const fs = await original<typeof import("node:fs")>();
+  return { ...fs, createWriteStream: vi.fn(fs.createWriteStream) };
+});
 
 const tempPaths: string[] = [];
 
@@ -386,3 +394,201 @@ describe("compressToTemp", () => {
     expect(leftover).toEqual([]);
   });
 });
+
+for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
+  it(`${format} closes all active streams before deleting a cancelled archive`, async () => {
+    const memory = createMemoryStorage({ "/large.txt": "x".repeat(65536) });
+    const controller = new AbortController();
+    let cancelled = false;
+    let delivered = false;
+    const storage: StorageProvider = {
+      ...memory,
+      download: async (...args) => ({
+        ...(await memory.download(...args)),
+        body: new ReadableStream<Uint8Array>({
+          pull(stream) {
+            if (!delivered) {
+              delivered = true;
+              stream.enqueue(new Uint8Array(4096));
+            }
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      }),
+    };
+    const dir = await tmpDirFor(`cancel-stream-${format}`);
+    await expect(
+      compressToTemp({
+        storage,
+        paths: ["/large.txt"],
+        format,
+        tmpDir: dir,
+        signal: controller.signal,
+        report: (patch) => {
+          if ((patch.bytes ?? 0) > 0) controller.abort();
+        },
+      }),
+    ).rejects.toThrow();
+    expect(cancelled).toBe(true);
+    const { readdir } = await import("node:fs/promises");
+    expect(await readdir(dir)).toEqual([]);
+  });
+  it(`${format} awaits output closure after upstream download and body errors`, async () => {
+    for (const bodyError of [false, true]) {
+      const memory = createMemoryStorage({ "/large.txt": "x".repeat(65536) });
+      const failure = new StorageError("upstream_unavailable", "broken upstream");
+      const storage: StorageProvider = {
+        ...memory,
+        download: async (...args) => {
+          if (!bodyError) throw failure;
+          return {
+            ...(await memory.download(...args)),
+            body: new ReadableStream<Uint8Array>({
+              start(stream) {
+                stream.enqueue(new Uint8Array(4096));
+                stream.error(failure);
+              },
+            }),
+          };
+        },
+      };
+      const dir = await tmpDirFor(`upstream-${format}-${bodyError}`);
+      await expect(
+        compressToTemp({
+          storage,
+          paths: ["/large.txt"],
+          format,
+          tmpDir: dir,
+          signal: new AbortController().signal,
+          report: () => {},
+        }),
+      ).rejects.toBe(failure);
+      const { readdir } = await import("node:fs/promises");
+      expect(await readdir(dir)).toEqual([]);
+    }
+  });
+}
+
+for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
+  it(`${format} waits for delayed destination open and actual stream closure on abort`, async () => {
+    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let signalOpen: (() => void) | undefined;
+    const opened = new Promise<void>((resolve) => {
+      signalOpen = resolve;
+    });
+    let releaseOpen: (() => void) | undefined;
+    let output: ReturnType<typeof createWriteStream> | undefined;
+    vi.mocked(createWriteStream).mockImplementationOnce((path) => {
+      output = fs.createWriteStream(path, {
+        fs: {
+          open(path, flags, mode, callback) {
+            releaseOpen = () => fs.open(path, flags, mode, callback);
+            signalOpen?.();
+          },
+          close: fs.close,
+          write: fs.write,
+          writev: fs.writev,
+        },
+      });
+      return output;
+    });
+    const destroyed = new Set<Readable>();
+    const originalDestroy = Readable.prototype.destroy;
+    const destroy = vi.spyOn(Readable.prototype, "destroy").mockImplementation(function (
+      this: Readable,
+      error,
+    ) {
+      destroyed.add(this);
+      return originalDestroy.call(this, error);
+    });
+    try {
+      const controller = new AbortController();
+      const reason = new Error("delayed-open cancellation");
+      const directory = await tmpDirFor(`delayed-open-${format}`);
+      const promise = compressToTemp({
+        storage: createMemoryStorage({ "/file.txt": "content" }),
+        paths: ["/file.txt"],
+        format,
+        tmpDir: directory,
+        signal: controller.signal,
+        report: () => {},
+      });
+      let settled = false;
+      const outcome = promise.then(
+        () => {
+          settled = true;
+          return null;
+        },
+        (error) => {
+          settled = true;
+          return error;
+        },
+      );
+      await opened;
+      controller.abort(reason);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      if (!releaseOpen) throw Error("open callback missing");
+      releaseOpen();
+      expect(await outcome).toBe(reason);
+      expect(output?.closed).toBe(true);
+      expect(destroyed.size).toBeGreaterThan(0);
+      for (const stream of destroyed) expect(stream.closed).toBe(true);
+      expect(await fs.promises.readdir(directory)).toEqual([]);
+    } finally {
+      destroy.mockRestore();
+    }
+  });
+}
+
+it("preserves an archive writer error while closing the output and active input", async () => {
+  const failure = new Error("zip writer failure");
+  const add = vi.spyOn(ZipFile.prototype, "addReadStream").mockImplementationOnce(function (
+    this: ZipFile,
+  ) {
+    this.emit("error", failure);
+  });
+  try {
+    const directory = await tmpDirFor("writer-error");
+    await expect(
+      compressToTemp({
+        storage: createMemoryStorage({ "/a.txt": "data" }),
+        paths: ["/a.txt"],
+        format: "zip",
+        tmpDir: directory,
+        signal: new AbortController().signal,
+        report: () => {},
+      }),
+    ).rejects.toBe(failure);
+    const { readdir } = await import("node:fs/promises");
+    expect(await readdir(directory)).toEqual([]);
+  } finally {
+    add.mockRestore();
+  }
+});
+
+for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
+  it(`${format} preserves destination errors and closes the failed output`, async () => {
+    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const directory = await tmpDirFor(`output-failure-${format}`);
+    let output: ReturnType<typeof createWriteStream> | undefined;
+    vi.mocked(createWriteStream).mockImplementationOnce(() => {
+      output = fs.createWriteStream(directory);
+      return output;
+    });
+    await expect(
+      compressToTemp({
+        storage: createMemoryStorage({ "/a.txt": "data" }),
+        paths: ["/a.txt"],
+        format,
+        tmpDir: directory,
+        signal: new AbortController().signal,
+        report: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "EISDIR" });
+    expect(output?.closed).toBe(true);
+    expect(await fs.promises.readdir(directory)).toEqual([]);
+  });
+}

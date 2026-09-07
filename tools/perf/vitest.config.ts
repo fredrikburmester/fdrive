@@ -1,16 +1,18 @@
 import { defineConfig } from "vitest/config";
 
-/**
- * Standalone Vitest config for `tools/perf`'s unit tests (the pure
- * functions the harness is built from). Not part of the root config's
- * `apps/*`/`packages/*` project globs, so it is run separately via
- * `pnpm test:tools`. No coverage gate: `tools/**` is a script, not a
- * package with an enforced threshold, but every pure function still gets a
- * test.
- */
+/** Pure gates and bounded stream helpers have blocking coverage. Docker/Next/browser
+ * orchestration is exercised by the complete diagnostic and strict fixture runs. */
 export default defineConfig({
   test: {
-    include: ["tools/perf/**/*.test.ts"],
+    include: ["tools/perf/**/*.test.ts", "apps/web/perf/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
+    coverage: {
+      provider: "v8",
+      include: [
+        "tools/perf/{args,budgets,results,format,byte-generator,concurrency,cookie,seed-plan,stack-env,lifecycle,measure,search-fixture,browser-output}.ts",
+      ],
+      reporter: ["text", "json-summary"],
+      thresholds: { lines: 99, functions: 100, branches: 95, statements: 99 },
+    },
   },
 });

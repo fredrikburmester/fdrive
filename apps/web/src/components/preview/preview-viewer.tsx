@@ -4,6 +4,7 @@ import { AudioViewer } from "./audio-viewer";
 import { CodeViewer } from "./code-viewer";
 import { ImageViewer } from "./image-viewer";
 import { MarkdownViewer } from "./markdown-viewer";
+import { OfficePreview } from "./office-preview";
 import { PdfViewer } from "./pdf-viewer";
 import { TextViewer } from "./text-viewer";
 import { Unsupported } from "./unsupported";
@@ -37,8 +38,9 @@ export function PreviewViewer({ entry, inlineUrl, downloadUrl }: PreviewViewerPr
     case "text":
       return <TextViewer url={inlineUrl} />;
     case "office":
-    case "archive":
     case "none":
+      return <OfficePreview entry={entry} downloadUrl={downloadUrl} />;
+    case "archive":
       return (
         <Unsupported
           name={entry.name}

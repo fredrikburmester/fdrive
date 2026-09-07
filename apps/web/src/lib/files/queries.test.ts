@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { ApiClientError, type FsEntry } from "@fdrive/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { accountTransition } from "@/lib/account/transition";
 import { affectedListKeys, describeFsError } from "./queries";
 
 function entry(overrides: Partial<FsEntry> & Pick<FsEntry, "path" | "kind">): FsEntry {
@@ -36,6 +37,15 @@ vi.mock("./deps", () => ({
     remove: (...args: unknown[]) => removeMock(...args),
     duplicate: (...args: unknown[]) => duplicateMock(...args),
   },
+  snapshotTabApiClient: () => ({
+    list: (...args: unknown[]) => listMock(...args),
+    mkdir: (...args: unknown[]) => mkdirMock(...args),
+    rename: (...args: unknown[]) => renameMock(...args),
+    move: (...args: unknown[]) => moveMock(...args),
+    copy: (...args: unknown[]) => copyMock(...args),
+    remove: (...args: unknown[]) => removeMock(...args),
+    duplicate: (...args: unknown[]) => duplicateMock(...args),
+  }),
   queryKeys: {
     fs: {
       list: (path: string) => ["fs", "list", path] as const,
@@ -112,8 +122,9 @@ describe("describeFsError", () => {
   });
 });
 
-function createWrapper(options?: { staleTime?: number }) {
+function createWrapper(options?: { staleTime?: number; onMutate?: () => Promise<void> }) {
   const queryClient = new QueryClient({
+    mutationCache: new MutationCache(options?.onMutate ? { onMutate: options.onMutate } : {}),
     defaultOptions: {
       queries: { retry: false, staleTime: options?.staleTime ?? 0 },
       mutations: { retry: false },
@@ -537,4 +548,89 @@ describe("useDelete", () => {
     expect(removeMock).toHaveBeenCalledWith([{ path: "/a/x", kind: "file" }]);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] });
   });
+});
+
+describe("identity-bound filesystem mutations", () => {
+  it("rejects a queued same-path delete after its displayed login changes", async () => {
+    const { useDelete } = await import("./queries");
+    const gate = Promise.withResolvers<void>();
+    const entered = vi.fn(() => gate.promise);
+    const { wrapper, queryClient } = createWrapper({ onMutate: entered });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { result, rerender } = renderHook(() => useDelete(), { wrapper });
+    act(() => result.current.mutate([{ path: "/same.txt", kind: "file" }]));
+    await waitFor(() => expect(entered).toHaveBeenCalled());
+    act(() => {
+      accountTransition.begin();
+      accountTransition.finish(true);
+    });
+    rerender();
+    gate.resolve();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(removeMock).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mutations while a login change is pending", async () => {
+    const { useRename } = await import("./queries");
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useRename(), { wrapper });
+    accountTransition.begin();
+    try {
+      await act(async () => {
+        await expect(
+          result.current.mutateAsync({ path: "/same.txt", newName: "changed.txt" }),
+        ).rejects.toThrow("The active login changed.");
+      });
+      expect(renameMock).not.toHaveBeenCalled();
+    } finally {
+      accountTransition.finish(false);
+    }
+  });
+
+  it("ignores late success and failure callbacks from the previous login", async () => {
+    const { useRename } = await import("./queries");
+    for (const succeeds of [true, false]) {
+      const response = Promise.withResolvers<FsEntry>();
+      renameMock.mockReturnValue(response.promise);
+      const { wrapper, queryClient } = createWrapper();
+      const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+      const { result, unmount } = renderHook(() => useRename(), { wrapper });
+      act(() => result.current.mutate({ path: "/same.txt", newName: "changed.txt" }));
+      await waitFor(() => expect(renameMock).toHaveBeenCalled());
+      accountTransition.begin();
+      accountTransition.finish(true);
+      if (succeeds) response.resolve(entry({ path: "/changed.txt", kind: "file" }));
+      else response.reject(new Error("old failure"));
+      await waitFor(() => expect(result.current.isPending).toBe(false));
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      unmount();
+      renameMock.mockClear();
+    }
+  });
+});
+
+it("refreshes after mkdir while the first directory listing is still pending", async () => {
+  const { useListing, useMkdir } = await import("./queries");
+  const stale = Promise.withResolvers<{ path: string; entries: FsEntry[] }>();
+  const created = entry({ path: "/a/new", kind: "dir" });
+  listMock.mockReturnValueOnce(stale.promise).mockResolvedValue({ path: "/a", entries: [created] });
+  mkdirMock.mockResolvedValue(created);
+  const { wrapper } = createWrapper();
+  const { result } = renderHook(() => ({ listing: useListing("/a"), mkdir: useMkdir() }), {
+    wrapper,
+  });
+  await waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await result.current.mkdir.mutateAsync("/a/new");
+  });
+  await waitFor(() => expect(result.current.listing.data?.entries).toEqual([created]));
+  await act(async () => {
+    stale.resolve({ path: "/a", entries: [] });
+    await stale.promise;
+  });
+  expect(result.current.listing.data?.entries).toEqual([created]);
+  expect(listMock).toHaveBeenCalledTimes(2);
 });

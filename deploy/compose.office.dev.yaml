@@ -1,0 +1,41 @@
+# Standalone host-run development companion. Normal dev:env never starts office.
+name: fdrive-office-dev
+services:
+  onlyoffice:
+    extends:
+      file: office/compose.services.yaml
+      service: onlyoffice
+    profiles: [office]
+    environment:
+      NODE_CONFIG: '{"wopi":{"wopiZone":"external-http"},"services":{"CoAuthoring":{"request-filtering-agent":{"allowMetaIPAddress":false}}}}'
+    ports: ["127.0.0.1:58090:80"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  collabora-keys:
+    extends:
+      file: office/compose.services.yaml
+      service: collabora-keys
+    profiles: [collabora]
+  collabora:
+    extends:
+      file: office/compose.services.yaml
+      service: collabora
+    profiles: [collabora]
+    depends_on:
+      collabora-keys:
+        condition: service_completed_successfully
+    ports: ["127.0.0.1:58091:9980"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    command:
+      - --o:ssl.enable=false
+      - --o:ssl.termination=false
+      - --o:mount_jail_tree=false
+      - --o:storage.wopi.alias_groups[@mode]=groups
+      - --o:storage.wopi.alias_groups.group[0].host=http://host.docker.internal:3001
+      - --o:storage.wopi.alias_groups.group[0].host[@allow]=true
+      - --o:storage.wopi.max_file_size=104857600
+      - --o:net.content_security_policy=frame-ancestors http://localhost:3002;
+      - --o:server_name=localhost:58091
+      - --o:logging.level=warning
+volumes:
+  office_onlyoffice_data:
+  office_collabora_keys:

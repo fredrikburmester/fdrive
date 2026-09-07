@@ -1,13 +1,15 @@
 # WORKING.md: how fdrive is built
 
-This is the operating manual for a Claude Code session working on fdrive. A fresh session with no
-memory of earlier work should be able to take "implement X, follow WORKING.md" and proceed the same
+This is the shared operating manual for Codex and Claude Code sessions working on fdrive. A fresh
+session with no memory should be able to take "implement X, follow WORKING.md" and proceed the same
 way every earlier session did. Read `PLAN.md` for what fdrive is and what is decided; read this file
 for how work is done.
 
 ## 1. Roles
 
-The session (the orchestrator) does not write production code or tests. It:
+The primary session (the orchestrator) delegates production code, tooling, and tests. It may
+edit workflow documentation and agent configuration itself. These duties apply only to the
+primary agent; workers implement their assigned chunk directly and never delegate. The primary:
 
 - breaks the request into chunks, writes each chunk's spec, and decides the order;
 - owns every design decision on authentication, share proxying, the SFTPGo client's public
@@ -15,16 +17,21 @@ The session (the orchestrator) does not write production code or tests. It:
   the chunk spec rather than leaving them to the agent;
 - reviews every agent's diff before it reaches `main`, reading security-relevant code itself;
 - runs the gates after every merge and looks at the running app in the browser pane;
-- keeps `PLAN.md`, the memory files, and a per-session tracking note current.
+- keeps `PLAN.md` and `docs/workflow/STATUS.md` current.
 
-Subagents do all implementation and all test writing. Two agent definitions exist in
-`.claude/agents/`: `implementer` (production code plus its unit tests, runs the gates) and
-`test-writer` (tests only, never edits `src/`). Both run on `model: sonnet`. Use a stronger model
-only when a chunk genuinely needs it, and say why in the spec.
+Subagents do implementation and test writing. Codex definitions live in `.codex/agents/`:
+`implementer.toml` (production code and its unit tests) and `test-writer.toml` (tests only,
+including colocated tests; never production source). They inherit the parent's model and
+reasoning unless explicitly configured. Record any deliberate model override in the chunk spec.
+`.codex/config.toml` caps workers at three; respect a lower runtime limit.
 
-The agent registry loads at session start, so agent files added mid-session are not selectable
-until the next session; in that case use `general-purpose` with `model: "sonnet"` and paste the
-rules from the agent file into the prompt.
+Claude Code retains equivalent definitions in `.claude/agents/`, with its own model selection.
+Keep both sets of role instructions aligned when changing shared rules.
+
+Start a fresh session after changing agent configuration. If a runtime cannot select the custom
+role, read its file and include the role instructions in a generic worker's prompt. Never claim
+that a named agent was loaded unless the runtime exposes it. All workers must be told their
+absolute checkout, allowed paths, parent-only duties, and the ban on recursive delegation.
 
 ## 2. The chunk loop
 
@@ -36,28 +43,41 @@ rules from the agent file into the prompt.
    assumptions, anything left undone, `git branch --show-current`, `git rev-parse --show-toplevel`).
    Long specs are cheaper than vague ones. Every prompt says "never use git stash" and "never run
    git commands that change state".
-2. **Isolation.** Launch with `isolation: "worktree"` so the agent works in its own checkout under
-   `.claude/worktrees/` (excluded from git status via `.git/info/exclude` and from Biome via
-   `biome.json`). Parallel `pnpm install` in one directory corrupts the lockfile; worktrees avoid
-   it. Chunks that touch disjoint directories run in parallel, typically three to six at once. When
-   two chunks need the same file, the second is queued until the first merges.
+2. **Isolation.** The primary creates a worktree before launching a writing worker, for example
+   `git worktree add -b codex/<chunk> .worktrees/<chunk> HEAD`. Resolve its absolute path and put
+   it in the prompt; all worker commands and edits must use that path. Codex subagents share the
+   parent's directory by default; there is no automatic `isolation: "worktree"` in this workflow.
+   Keep `.worktrees/` ignored by Git and Biome. Claude may use its native worktree isolation under
+   `.claude/worktrees/`. Install dependencies separately in each checkout, never concurrently in
+   one directory. Run up to three disjoint chunks in parallel. Queue overlapping paths until the
+   first chunk integrates. A fresh worktree starts from committed HEAD; commit prerequisites when
+   authorized or explicitly copy needed uncommitted changes and include them in the review scope.
 3. **Review.** When the report arrives, run
-   `ALLOWED="<regex>" tools/orchestration/review-chunk.sh <worktree>` to check scope and the stash,
-   then read the parts that matter: auth, scoping, anything touching user data, and whatever the
-   report flagged as a judgement call. A truncated report is not a pass; inspect the worktree and
+   `ALLOWED="<regex>" tools/orchestration/review-chunk.sh <worktree>` to check scope and the stash.
+   The script exits nonzero on violations. Read auth, scoping, anything touching user data, and
+   whatever the report flagged as a judgement call. A truncated report is not a pass; inspect the worktree and
    run its gates yourself.
-4. **Merge.** `tools/orchestration/merge-chunk.sh <worktree> "<conventional commit message>"`
-   commits the chunk on its branch, merges into `main`, and regenerates the lockfile when it
-   conflicts. Conflicting package manifests are resolved by taking the union of dependencies and
-   scripts. Code conflicts between two parallel chunks go to an `implementer` on `main` with the
-   instruction to keep both sides, never commit, and run every gate; the orchestrator then commits
-   with `git commit --no-edit`.
+4. **Merge.** Run `ALLOWED="<regex>" tools/orchestration/merge-chunk.sh <worktree>
+   "<conventional commit message>" <target-checkout>` on one shell line. The target must be an
+   explicit clean checkout on the intended branch, normally `main`; do not assume the primary
+   session itself is on `main`. The helper checks scope before staging, commits the chunk, and
+   creates a merge commit. It preserves Git hooks and stops on errors. Set `CO_AUTHOR` only when
+   an actual co-author trailer is required; there is no default attribution. If only the lockfile
+   conflicts, regenerate it using pnpm. Conflicting manifests need the union of dependencies and
+   scripts; do not discard either side. Assign code conflicts to one implementer in the target
+   checkout as an explicit isolation exception: keep both intended changes, never commit, run the
+   gates. The primary inspects, stages, and finishes the merge. If commits were not requested,
+   review and apply the chunk diff to the target as uncommitted changes instead; retain its
+   worktree until every change has been verified as transferred.
 5. **Verify.** After every merge: `pnpm lint`, `pnpm typecheck`, `pnpm test:coverage` (per-package
    gates through turbo), and when the chunk touched the API or the schema, the integration suites.
    When anything visible changed, restart the dev servers if needed and look at it in the browser
    pane; several real bugs (SSE never reaching the browser, `fetch` "Illegal invocation", the
    Indexer page stuck on Loading, compress failing only in dev) surfaced there and nowhere else.
-6. **Clean up.** `git worktree remove --force <path>` and delete its branch. Record the outcome.
+6. **Clean up.** After verifying that the complete chunk is integrated, remove a clean worktree
+   with `git worktree remove <path>` and delete its merged branch. Do not force-remove unreviewed
+   work. For a diff transferred without commits, verify tracked and untracked files before
+   removing the disposable checkout. Record the outcome and remaining work.
 
 ## 3. Quality gates, the non-negotiables
 
@@ -74,23 +94,25 @@ rules from the agent file into the prompt.
 - Frontend: only shadcn/ui components added with the shadcn CLI, no hand-rolled primitives, no
   other component library; Apple-like design language; colours only from the tokens in
   `globals.css`. Every settings field carries a one-line description.
-- Never publish the Claude session link anywhere. Commits end with the co-author trailer the
-  harness specifies.
+- Never publish private agent session links. Use a co-author trailer only when the active
+  harness or user specifies one; never attribute Codex work to Claude.
 
 ## 4. Environment
 
-- Node 24 LTS. On this Mac the nvm default is still 22, so every shell that runs pnpm starts with
-  `unset -f node npm npx pnpm; export PATH=$HOME/.nvm/versions/node/v24.20.0/bin:$PATH`. Docker
-  Desktop must be running.
+- Node 24, as pinned by `.node-version` and `.nvmrc`. Check `node --version` in each worker
+  shell; activate Node 24 with your version manager when needed. On this Mac the installed
+  binary is `$HOME/.nvm/versions/node/v24.20.0/bin/node`; avoid the older shell default. Docker
+  Desktop must be running for container-backed work.
 - Dev stack: `pnpm dev:env` starts a seeded SFTPGo (`127.0.0.1:58080`, users `dev/dev`,
   `alice/alice-password`, `bob/bob-password`, `carol/carol-password`, admin
   `admin/admin-dev-password`), Postgres (`55432`), and with the `index` profile the indexer
   (`58010`), embeddings (`58081`), Tika, and OCR (`58011`). It also upserts `apps/api/.env.dev`.
   See `docs/DEVELOPMENT.md`.
-- Dev servers come from `.claude/launch.json`: `api` on 3001 and `web` on an auto-assigned port
-  (3000 is taken on this machine). Start them with the browser pane's preview tool. A merge that
-  adds a dependency kills the API watcher mid-install; restart it afterwards. The pane may drop the
-  web server after a while because `/` redirects and its readiness probe never passes; restart it.
+- Start dev servers in separate persistent terminals: `pnpm --filter @fdrive/api dev` and
+  `pnpm --filter @fdrive/web dev --port 3002`. API uses 3001; choose another free web port if
+  3002 is occupied. Open the actual printed web URL in Codex's browser and log in as `dev`.
+  `pnpm dev:env` prepares the local env files; restart servers after env or dependency changes.
+  `.claude/launch.json` remains an optional Claude launcher, not a Codex configuration file.
 - Nothing in development touches the user's live SFTPGo. Pointing fdrive at it is a config change
   (`SFTPGO_URL` or the setup page), not a code change, and is the user's call.
 
@@ -98,13 +120,15 @@ rules from the agent file into the prompt.
 
 - `PLAN.md`: scope, architecture, decisions, phases with "done when" criteria. Amend it whenever
   the user decides something; the plan is the contract.
-- A per-session tracking note in the scratchpad (`phase<N>-wave<M>.md`): merged chunks, running
-  chunks with what they touch, queued chunks with their spec fragments and why they wait, expected
-  conflicts. Update it on every launch and merge; it is what survives context compaction.
-- Memory (`~/.claude/projects/<project>/memory/`): user decisions that are not derivable from the
-  code, and a status file with the current phase and open items. Update both when state changes.
-- Git: one commit per chunk plus merge commits, conventional messages, so `git log --oneline` is
-  the timeline. Never commit `.claude/worktrees`, env files, or Playwright output.
+- `docs/workflow/STATUS.md`: current work, merged chunks, running workers and owned paths,
+  queued specs and dependencies, expected conflicts, and validation results. Update on each
+  launch and integration; the file is the shared handoff across sessions and tools. Keep active
+  notes outside a merge target while integrating if necessary, then reconcile them afterward.
+- Keep durable user decisions in `PLAN.md`, not hidden personal memory. Do not automatically
+  update `~/.claude/` or `~/.codex/` memory. Personal memory writes require an explicit user request.
+- Git: when committing is requested, one conventional commit per chunk plus merge commits, so
+  `git log --oneline` is the timeline. Never commit `.worktrees/`, `.claude/worktrees/`, env files,
+  or Playwright output. Do not commit or merge unrelated user changes.
 - The user follows along in the browser pane; announce what merged and what it looks like.
 
 ## 6. Pitfalls learned the hard way
@@ -134,10 +158,27 @@ rules from the agent file into the prompt.
 - Base UI: `DropdownMenuLabel` must sit inside a group; never nest a `ToggleGroup` in a menu; pass
   `nativeButton={false}` when a `Button` renders a link; React events bubble through portals, so
   listen on the DOM node when a container must ignore its portalled children.
+- Base UI Select: use `null` for an empty controlled value, not `undefined`; switching from
+  undefined to a root name causes an uncontrolled-to-controlled warning. Give sentinel values
+  explicit `SelectValue` display text so users see "All roots" instead of `__all__`.
 
 ## 7. Starting a new session
 
-1. Read `PLAN.md` §13 for the current phase, then this file, then the memory status file.
+1. Read `PLAN.md` §13 for the current phase, then this file and `docs/workflow/STATUS.md`.
 2. `git log --oneline | head -30` and `git worktree list` to see what landed and what was left.
-3. `pnpm dev:env`, start the `api` and `web` dev servers, open the pane, log in as `dev`.
+3. For application work, run `pnpm dev:env`, start the `api` and `web` servers, open the browser,
+   and log in as `dev`. Documentation or orchestration-only changes do not need a dev stack.
 4. Break the request into chunks, write specs, launch in worktrees, review, merge, verify, record.
+
+## 8. Codex configuration checks
+
+- Root `AGENTS.md` is the automatic entry point; `WORKING.md` holds shared detail.
+- Custom agents are standalone `.codex/agents/*.toml` files with `name`, `description`, and
+  `developer_instructions`. Claude frontmatter and tool names are not Codex settings.
+- Configuration changes require a fresh session to verify discovery. Ask it to summarize the
+  active project instructions and available roles before starting the first chunk.
+- For orchestration-only changes, run `bash tools/orchestration/test-orchestration.sh`, shell
+  syntax checks, TOML parsing, and `pnpm lint`. Full application gates remain required after
+  application merges; do not run Docker or browser tests for documentation-only changes.
+- Official references: [instructions](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+  and [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents).

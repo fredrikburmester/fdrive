@@ -3,7 +3,7 @@ import { parseArgs } from "./args.js";
 
 describe("parseArgs", () => {
   it("defaults to no --only, not quick, not strict", () => {
-    expect(parseArgs([])).toEqual({ only: undefined, quick: false, strict: false });
+    expect(parseArgs([])).toEqual({ only: undefined, quick: false, strict: true });
   });
 
   it("parses --quick", () => {
@@ -18,9 +18,14 @@ describe("parseArgs", () => {
     expect(parseArgs(["--only", "list1k"]).only).toBe("list1k");
   });
 
-  it("combines flags in any order", () => {
-    const options = parseArgs(["--strict", "--only", "downloadDirect", "--quick"]);
-    expect(options).toEqual({ only: "downloadDirect", quick: true, strict: true });
+  it("diagnostics cannot claim strict success", () => {
+    expect(parseArgs(["--diagnostic"]).strict).toBe(false);
+    for (const flags of [
+      ["--strict", "--quick"],
+      ["--strict", "--only", "downloadDirect"],
+      ["--strict", "--diagnostic"],
+    ])
+      expect(() => parseArgs(flags)).toThrow(/requires all/);
   });
 
   it("throws when --only is missing its value", () => {

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 
 export interface ImageViewerProps {
   readonly src: string;
+  readonly onError?: () => void;
   readonly alt: string;
 }
 
@@ -28,7 +29,7 @@ const CHECKERBOARD_STYLE: React.CSSProperties = {
  * natural (100%) size inside a scrollable viewport. A subtle checkerboard
  * shows through transparent pixels.
  */
-export function ImageViewer({ src, alt }: ImageViewerProps) {
+export function ImageViewer({ src, alt, onError }: ImageViewerProps) {
   const [zoomed, setZoomed] = useState(false);
 
   return (
@@ -46,6 +47,7 @@ export function ImageViewer({ src, alt }: ImageViewerProps) {
         {/* biome-ignore lint/performance/noImgElement: previews load arbitrary API-served bytes, not a static asset next/image can optimize */}
         <img
           src={src}
+          onError={onError}
           alt={alt}
           className={zoomed ? "max-w-none" : "max-h-full max-w-full object-contain"}
         />

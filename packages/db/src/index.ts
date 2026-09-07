@@ -9,6 +9,31 @@ import * as idxSchema from "./schema/idx.js";
 export { resolveMigrationsFolder } from "./migrationsPath.js";
 export * from "./parseDatabaseUrl.js";
 export { createRepos } from "./repos/drizzle.js";
+export { createIdentityLinksRepo } from "./repos/identity-links.js";
+export type {
+  IdentityLinksErrorCode,
+  IdentityLinksRepo,
+  LinkVerifiedInput,
+  LoginSessionInput,
+  LoginVerifiedInput,
+  LoginVerifiedResult,
+  RotateSessionInput,
+  SealedIdentityCredential,
+  SwitchActiveIdentityInput,
+  UnlinkIdentityInput,
+  UnlinkIdentityResult,
+} from "./repos/identity-links-types.js";
+export {
+  IdentityLinksError,
+  validateIdentityLinkId,
+  validateLinkVerified,
+  validateLoginVerified,
+  validateRotateSession,
+  validateSealedIdentityCredential,
+  validateSessionIdHash,
+  validateSwitchActiveIdentity,
+  validateUnlinkIdentity,
+} from "./repos/identity-links-types.js";
 export type {
   ContentHit,
   DuplicateGroup,
@@ -29,6 +54,36 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
+export { createOfficeFileRepo } from "./repos/office-files.js";
+export type {
+  MemoryOfficeFileOptions,
+  OfficeFile,
+  OfficeFileDelete,
+  OfficeFileLocation,
+  OfficeFileMove,
+  OfficeFileRepo,
+} from "./repos/office-files-state.js";
+export { createMemoryOfficeFileRepo } from "./repos/office-files-state.js";
+export type { OfficeWriteContext, OfficeWriteScope } from "./repos/office-write-scope.js";
+export { createOfficeWriteScope } from "./repos/office-write-scope.js";
+export { createShareRepo } from "./repos/shares.js";
+export type {
+  MemoryShareOptions,
+  ShareListOptions,
+  ShareRecord,
+  ShareRepo,
+  ShareScope,
+  ShareUpsertInput,
+} from "./repos/shares-state.js";
+export {
+  createMemoryShareRepo,
+  parseShareScope,
+  shareListLimit,
+  validateShareId,
+  validateShareOwnership,
+  validateSharePath,
+  validateShareUpsert,
+} from "./repos/shares-state.js";
 export type {
   Account,
   AccountRepo,
@@ -54,6 +109,23 @@ export type {
   TagRepo,
 } from "./repos/types.js";
 export { ConflictError } from "./repos/types.js";
+export type {
+  BoundWopiLockRepo,
+  LockInput,
+  LockOperation,
+  LockRequest,
+  LockResult,
+  WopiLockRepo,
+  WopiLockState,
+  WopiLockTransition,
+} from "./repos/wopi-lock-state.js";
+export {
+  createMemoryWopiLockRepo,
+  transitionWopiLock,
+  WOPI_FILE_ID_MAX_BYTES,
+  WOPI_LOCK_TTL_MS,
+} from "./repos/wopi-lock-state.js";
+export { createWopiLockRepo } from "./repos/wopi-locks.js";
 export * from "./vector.js";
 
 export const schema = { ...appSchema, ...idxSchema };

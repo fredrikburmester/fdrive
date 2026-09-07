@@ -18,9 +18,16 @@ Rules
   package's `test:integration` script, never to the default `test` script.
 - Run the tests you wrote and paste the final summary lines. Run `pnpm biome check --write` on
   the files you touched.
-- Never run `git commit`, `git push`, `git checkout`, or `git reset`.
+- Never use `git stash` or run Git commands that change repository state. The orchestrator commits.
 - Prose in comments: plain sentences, no em dashes.
 - If something is ambiguous, choose the reading that produces the stricter test and note it.
 
 Report format (final message): tests added, files created or changed, commands run with their
 final summary lines, bugs found in production code (with the failing test name), gaps left.
+
+Worker boundaries
+- Read WORKING.md for shared rules. Its orchestration loop applies only to the primary agent.
+- Work directly on the assigned chunk; never delegate to another agent.
+- Use only the absolute worktree path assigned by the primary for commands and edits.
+- Stay inside the assigned file scope. Report required out-of-scope changes without making them.
+- Include `git branch --show-current` and `git rev-parse --show-toplevel` in the final report.

@@ -53,3 +53,19 @@ describe("makeItemValue and parseItemValue", () => {
     expect(parseItemValue(":/a.txt")).toBeNull();
   });
 });
+
+it("roundtrips identity-qualified duplicate paths and rejects malformed account values", () => {
+  const a = makeItemValue("file", "/same:[]", "one");
+  const b = makeItemValue("file", "/same:[]", "two");
+  expect(a).not.toBe(b);
+  expect(parseItemValue(a)).toEqual({ kind: "file", path: "/same:[]", identityId: "one" });
+  for (const value of [
+    "account:oops",
+    "account:{}",
+    'account:["bad","/x","one"]',
+    'account:["file","", "one"]',
+    'account:["file","/x", ""]',
+    'account:["file","/x", 1]',
+  ])
+    expect(parseItemValue(value)).toBeNull();
+});

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { accountTransition } from "../account/transition";
 import {
   applyJobEvent,
   invalidateForEvent,
@@ -240,6 +241,25 @@ describe("useFsEvents", () => {
     vi.unstubAllGlobals();
   });
 
+  it("closes synchronously before account mutation and ignores late events/reconnects", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const store = fakeJobsStore();
+    const { unmount } = renderHook(() => useFsEvents(store), { wrapper: createWrapper(client) });
+    const source = FakeEventSource.instances[0];
+    source?.emitError();
+    accountTransition.begin();
+    expect(source?.closed).toBe(true);
+    source?.emitMessage(fsEvent());
+    source?.emitMessage(jobEvent({ id: "late", state: "done" }));
+    source?.emitError();
+    vi.advanceTimersByTime(30_000);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(store.upserted).toEqual([]);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    accountTransition.finish(false);
+    unmount();
+  });
   it("opens exactly one EventSource to ROUTES.events on mount", () => {
     const queryClient = new QueryClient();
     renderHook(() => useFsEvents(), { wrapper: createWrapper(queryClient) });

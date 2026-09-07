@@ -1,5 +1,6 @@
 import {
   IndexerActionResponse,
+  IndexerClearResponse,
   IndexerSettingsResponse,
   IndexerThumbnailsRebuildResponse,
   OcrRunResponse,
@@ -59,9 +60,12 @@ function fakeThumbnailsRepo(count = 0): ThumbnailsRepo {
 
 function fakeIndexerClient(overrides: Partial<IndexerClient> = {}): IndexerClient {
   return {
+    directory: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     health: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     stats: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     reindex: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    clearIndex: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    clearThumbnails: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     thumbnailsRebuild: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     ...overrides,
   };
@@ -410,6 +414,8 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
 
   it("409s (conflict) when a rebuild is already running", async () => {
     const indexerClient = fakeIndexerClient({
+      clearIndex: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+      clearThumbnails: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
       thumbnailsRebuild: async () => ({
         ok: false,
         reason: "unreachable",
@@ -780,6 +786,8 @@ describe("POST /system/thumbnails/rebuild", () => {
 
   it("409s (conflict) when a rebuild is already running", async () => {
     const indexerClient = fakeIndexerClient({
+      clearIndex: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+      clearThumbnails: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
       thumbnailsRebuild: async () => ({
         ok: false,
         reason: "unreachable",
@@ -795,5 +803,178 @@ describe("POST /system/thumbnails/rebuild", () => {
     });
 
     expect(res.status).toBe(409);
+  });
+});
+
+describe.each([
+  ["indexer", "clearIndex"],
+  ["thumbnails", "clearThumbnails"],
+] as const)("POST /system/%s/clear", (area, method) => {
+  const url = `/api/v1/system/${area}/clear`;
+
+  it("rejects non-admins before calling the sidecar", async () => {
+    const action = vi.fn();
+    const { app } = buildApp({
+      isAdmin: false,
+      deps: { indexerClient: fakeIndexerClient({ [method]: action }) },
+    });
+    expect(
+      (
+        await app.request(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(403);
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("rejects actions without an indexer", async () => {
+    const { app } = buildApp({});
+    expect(
+      (
+        await app.request(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it.each([undefined, "{}"])("accepts empty request %j", async (body) => {
+    const action = vi.fn().mockResolvedValue({ ok: true, data: { started: true } });
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ [method]: action }) } });
+    const res = await app.request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      ...(body === undefined ? {} : { body }),
+    });
+    expect(res.status).toBe(202);
+    expect(IndexerClearResponse.parse(await res.json())).toEqual({ started: true });
+    expect(action).toHaveBeenCalledWith(...(area === "indexer" ? [{}] : []));
+  });
+
+  it.each(["{", " ", "null", "[]", '"oops"', '{"root":2}', '{"path":"/"}', '{"unexpected":true}'])(
+    "rejects invalid body %s without clearing",
+    async (body) => {
+      const action = vi.fn();
+      const { app } = buildApp({
+        deps: { indexerClient: fakeIndexerClient({ [method]: action }) },
+      });
+      expect(
+        (
+          await app.request(url, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+            body,
+          })
+        ).status,
+      ).toBe(400);
+      expect(action).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [400, 400],
+    [404, 404],
+    [409, 409],
+    [500, 502],
+    [undefined, 502],
+  ])("maps upstream %s to %s", async (status, expected) => {
+    const action = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "unreachable",
+      detail: "failed",
+      ...(status === undefined ? {} : { status }),
+    });
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ [method]: action }) } });
+    expect(
+      (
+        await app.request(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(expected);
+  });
+});
+
+describe("clear scoping", () => {
+  it.each([
+    { root: "sftpgo" },
+    { root: "sftpgo", path: "/" },
+    { root: "sftpgo", path: "/folder/file.pdf" },
+  ])("forwards index scope %j", async (scope) => {
+    const clearIndex = vi.fn().mockResolvedValue({ ok: true, data: { started: true } });
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ clearIndex }) } });
+    const res = await app.request("/api/v1/system/indexer/clear", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify(scope),
+    });
+    expect(res.status).toBe(202);
+    expect(clearIndex).toHaveBeenCalledWith(scope);
+  });
+
+  it.each([{ root: "" }, { root: "r", path: "../file" }, { root: "r", path: "a/../file" }])(
+    "rejects unsafe index scope %j",
+    async (scope) => {
+      const clearIndex = vi.fn();
+      const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ clearIndex }) } });
+      expect(
+        (
+          await app.request("/api/v1/system/indexer/clear", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+            body: JSON.stringify(scope),
+          })
+        ).status,
+      ).toBe(400);
+      expect(clearIndex).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects scoped thumbnail clears", async () => {
+    const clearThumbnails = vi.fn();
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ clearThumbnails }) } });
+    expect(
+      (
+        await app.request("/api/v1/system/thumbnails/clear", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+          body: '{"root":"sftpgo"}',
+        })
+      ).status,
+    ).toBe(400);
+    expect(clearThumbnails).not.toHaveBeenCalled();
+  });
+
+  it("exposes clear progress in the indexer summary", async () => {
+    const progress = {
+      running: false,
+      processed: 10,
+      total: 10,
+      errors: 1,
+      startedAt: "2026-09-06T18:21:28+00:00",
+      finishedAt: "2026-09-06T18:21:29+00:00",
+    };
+    const stats = {
+      roots: [],
+      thumbnails: 1,
+      queueDepth: 0,
+      errorsSample: [],
+      indexClear: progress,
+      thumbnailClear: progress,
+    };
+    const { app } = buildApp({
+      deps: {
+        indexerClient: fakeIndexerClient({ stats: async () => ({ ok: true, data: stats }) }),
+      },
+    });
+    const res = await app.request("/api/v1/system/indexer");
+    expect(SystemIndexerResponse.parse(await res.json()).stats).toEqual(stats);
   });
 });

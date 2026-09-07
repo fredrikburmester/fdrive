@@ -7,6 +7,6 @@
 
 export type { PageHeaderProps } from "@/components/shell/page-header";
 export { PageHeader } from "@/components/shell/page-header";
-export { apiClient } from "@/lib/api/client";
+export { apiClient, snapshotTabApiClient } from "@/lib/api/client";
 export { queryKeys } from "@/lib/api/keys";
 export { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/dnd";

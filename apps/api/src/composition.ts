@@ -1,9 +1,24 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseHomeTemplate } from "@fdrive/core";
-import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
+import { parseHomeTemplate, parseSearchFilters } from "@fdrive/core";
+import {
+  createDb,
+  createIdentityLinksRepo,
+  createIndexQueries,
+  createOfficeFileRepo,
+  createOfficeWriteScope,
+  createRepos,
+  createShareRepo,
+  createWopiLockRepo,
+  migrate,
+} from "@fdrive/db";
+import { createSftpgoClient } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
+import { registerAccountsRoutes } from "./accounts/routes.ts";
+import { createAccountsService } from "./accounts/service.ts";
+import type { AccountsDeps } from "./accounts/types.ts";
+import { createAccountViews } from "./accounts/views.ts";
 import { registerAdminRoutes } from "./admin/routes.js";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
@@ -13,9 +28,11 @@ import {
   createTokenSource,
   parseMasterKey,
 } from "./auth/index.js";
+import { createIdentityClientResolver } from "./auth/provider-client.ts";
+import { createIdentityStorageFactory } from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
-import { createLazySftpgoClient } from "./connection/lazy-sftpgo-client.js";
 import { createConnectionStore } from "./connection/store.js";
+import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
 import { registerEventRoutes } from "./events/routes.js";
@@ -25,13 +42,26 @@ import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
 import { createMetadataService } from "./metadata/service.js";
+import { officeConfig } from "./office/config.ts";
+import { allowsOfficeEdit } from "./office/edit-policy.ts";
+import { WopiError } from "./office/errors.ts";
+import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
+import { applyOfficeStorageEvent, withOfficeMetadata } from "./office/registry-events.ts";
+import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
+import { createOfficeService } from "./office/service.ts";
+import { createOfficeStorageFactory } from "./office/storage.ts";
+import { createOfficeTokenCodec } from "./office/tokens.ts";
+import type { OfficeDeps } from "./office/types.ts";
 import { createEmbedClient } from "./search/embeddings.js";
-import { registerSearchRoutes } from "./search/routes.js";
+import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
-import { createSftpgoStorageProvider } from "./storage/sftpgo-provider.js";
+import { createShareCredentialCodec } from "./shares/credentials.ts";
+import { createShareLimiter } from "./shares/limiter.ts";
+import { registerSharesRoutes } from "./shares/routes.ts";
+import { createSharesService } from "./shares/service.ts";
 import { createIndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
 import { registerSystemRoutes } from "./system/routes.js";
@@ -42,6 +72,8 @@ import { registerTokenRoutes } from "./tokens/routes.js";
 import { createTokenService } from "./tokens/service.js";
 
 export interface ComposeAppDeps {
+  /** Explicit server-side admission override for isolated integration fixtures. */
+  readonly officeCanEdit?: OfficeDeps["canEdit"];
   /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -83,27 +115,33 @@ export async function composeApp(
   });
 
   const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const sftpgo = createLazySftpgoClient({ store: connectionStore, fetch: fetchImpl });
+  const clientForBaseUrl = (baseUrl: string) => createSftpgoClient({ baseUrl, fetch: fetchImpl });
+  const clientForIdentity = createIdentityClientResolver({
+    identities: repos.identities,
+    providers: repos.providers,
+    connections: connectionStore,
+    clientForBaseUrl,
+  });
 
   const bus = createEventBus();
   const jobRunner = createJobRunner({ clock, bus });
   const limiter = createLoginLimiter({ clock });
-  const tokenSource = createTokenSource({ repos, sftpgo, master, clock });
+  const tokenSource = createTokenSource({ repos, clientForIdentity, master, clock });
 
+  const storageFactory = createIdentityStorageFactory({ clientForIdentity, tokenSource });
+  const identityLinks = createIdentityLinksRepo(db);
   const auth = createAuthModule({
+    identityLinks,
     repos,
-    sftpgo,
+    clientForBaseUrl,
+    clientForIdentity,
     master,
     clock,
     config,
     limiter,
     tokenSource,
     connectionStore,
-    storageFactory: (identityId) =>
-      createSftpgoStorageProvider({
-        client: sftpgo,
-        withToken: (fn) => tokenSource.withToken(identityId, fn),
-      }),
+    storageFactory,
   });
 
   // Search and thumbnails: available only once at least one index root is
@@ -125,11 +163,109 @@ export async function composeApp(
     clock,
   });
 
+  const accountStorage = createOfficeStorageFactory({
+    connections: connectionStore,
+    providers: repos.providers,
+    tokens: tokenSource,
+    fetch: fetchImpl,
+  });
+  const accountDeps: AccountsDeps = {
+    repos,
+    links: identityLinks,
+    auth: auth.service,
+    tokenSource,
+    clientForBaseUrl,
+    limiter,
+    master,
+    clock,
+    connectionStore,
+    storageForIdentity: async (identity) => {
+      try {
+        return await accountStorage(identity.id, identity.providerId);
+      } catch (error) {
+        if (error instanceof WopiError && error.status === 401)
+          throw new ApiHttpError("upstream_unavailable", "identity provider unavailable");
+        throw error;
+      }
+    },
+    searchForIdentity: async (identity, query) => {
+      const current = await repos.identities.get(identity.id);
+      if (current?.accountId !== identity.accountId)
+        throw new ApiHttpError("forbidden", "identity ownership changed");
+      const connection = await connectionStore.current();
+      if (connection === null)
+        throw new ApiHttpError("setup_required", "storage connection unavailable");
+      const provider = await repos.providers.ensure({
+        type: "sftpgo",
+        baseUrl: connection.baseUrl,
+      });
+      if (provider.id !== identity.providerId)
+        throw new ApiHttpError("forbidden", "identity provider unavailable");
+      const service = createSearchService({
+        indexQueries,
+        embedClient,
+        homeTemplate: parseHomeTemplate(connection.homeTemplate),
+        indexRootNames,
+        thumbsEnabled: config.fdriveThumbsDir !== undefined,
+        clock,
+      });
+      return service.search({
+        username: identity.externalUsername,
+        query: query.q,
+        filters: parseSearchFilters(query),
+        limit: parseSearchLimit(query.limit),
+      });
+    },
+  };
+  const accountsService = createAccountsService(accountDeps);
+  const accountViews = createAccountViews(accountDeps);
+
   // Metadata (phase 3): tags, favorites, recents. `onMoved`/`onDeleted` are
   // called both from the fs routes below (moves and deletes made through
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
   const metadataService = createMetadataService(repos);
+  const officeFiles = createOfficeFileRepo(db);
+  const fsMetadata = withOfficeMetadata(
+    metadataService,
+    officeFiles,
+    repos.identities,
+    connectionStore,
+    clock,
+  );
+  const officeSettings = officeConfig(config);
+  const officeLocation = async () => {
+    const connection = await connectionStore.current();
+    if (connection === null) return null;
+    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: connection.baseUrl });
+    return { providerId: provider.id, homeTemplate: parseHomeTemplate(connection.homeTemplate) };
+  };
+  const officeService = createOfficeService({
+    canEdit:
+      deps.officeCanEdit ??
+      (async (actor, path) =>
+        allowsOfficeEdit(config.fdriveOfficeEditRules ?? [], actor.identity, path)),
+    config: officeSettings,
+    discovery:
+      officeSettings === null
+        ? null
+        : createDiscoveryCache({ serverUrl: officeSettings.serverUrl, fetch: fetchImpl }),
+    tokens: createOfficeTokenCodec(master),
+    repos,
+    files: officeFiles,
+    locks: createWopiLockRepo(db),
+    withWriteScope: createOfficeWriteScope(db),
+    clock,
+    location: officeLocation,
+    storageFactory: createOfficeStorageFactory({
+      connections: connectionStore,
+      providers: repos.providers,
+      tokens: tokenSource,
+      fetch: fetchImpl,
+    }),
+    metadata: metadataService,
+    bus,
+  });
 
   // The indexer's `LISTEN idx_events` connection only has anything to listen
   // for once at least one index root is configured; it is otherwise left
@@ -145,6 +281,11 @@ export async function composeApp(
           fileTags: repos.fileTags,
           favorites: repos.favorites,
           metadata: metadataService,
+          onStorageEvent: async (event) => {
+            const location = await officeLocation();
+            if (location !== null)
+              await applyOfficeStorageEvent(officeFiles, location.providerId, event);
+          },
           bus,
           homeTemplate,
           indexRootNames,
@@ -177,11 +318,7 @@ export async function composeApp(
     apiTokens: repos.apiTokens,
     identities: repos.identities,
     clock,
-    storageFactory: (identityId) =>
-      createSftpgoStorageProvider({
-        client: sftpgo,
-        withToken: (fn) => tokenSource.withToken(identityId, fn),
-      }),
+    storageFactory,
   });
   // The MCP `read_file_text` tool talks to the indexer's `POST /extract`
   // endpoint, a different shape from the System pages' `IndexerClient`
@@ -225,6 +362,26 @@ export async function composeApp(
     },
     registerRoutes: (groups) => {
       auth.registerRoutes(groups);
+      registerSharesRoutes(groups, {
+        service: createSharesService({
+          repos,
+          shares: createShareRepo(db),
+          clientFor: (baseUrl) => createSftpgoClient({ baseUrl, fetch: fetchImpl }),
+          tokenSource,
+          connectionStore,
+          clock,
+          logger,
+        }),
+        codec: createShareCredentialCodec(master, clock),
+        limiter: createShareLimiter(clock),
+        config,
+      });
+      registerAccountsRoutes(groups, {
+        service: accountsService,
+        views: accountViews,
+        config,
+        clock,
+      });
       registerSetupRoutes(groups, {
         service: setupService,
         tokenGuard: setupTokenGuard,
@@ -238,8 +395,9 @@ export async function composeApp(
         jobRunner,
         tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
-        metadata: metadataService,
+        metadata: fsMetadata,
       });
+      registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });
       registerEventRoutes(groups, { bus, clock });
       registerSearchRoutes(groups, { searchService });
@@ -263,6 +421,8 @@ export async function composeApp(
       registerTokenRoutes(groups, { service: tokenService });
     },
   });
+
+  registerWopiRoutes(app, { service: officeService });
 
   // Mounted directly on the top-level app, outside `/api/v1`: the MCP
   // endpoint is bearer- (or path-token-) authenticated, not session/CSRF

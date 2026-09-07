@@ -46,6 +46,7 @@ describe("formatMs", () => {
 
 function result(overrides: Partial<ScenarioResult> & { name: string }): ScenarioResult {
   return {
+    samplesMs: [1, 2, 3],
     p50Ms: 1,
     p95Ms: 2,
     p99Ms: 3,

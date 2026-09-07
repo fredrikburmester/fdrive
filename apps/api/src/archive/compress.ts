@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { stat as fsStat, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { finished } from "node:stream/promises";
+import type { Readable } from "node:stream";
+import { finished, pipeline } from "node:stream/promises";
 import { createGzip, createZstdCompress } from "node:zlib";
 import {
   type ArchiveFormat,
@@ -151,6 +152,44 @@ async function collectDirectory(
   }
 }
 
+type Completion = { ok: true } | { ok: false; error: unknown };
+
+/** Observe rejection immediately, including while another archive entry is awaited. */
+function observe(promise: Promise<void>, controller: AbortController): Promise<Completion> {
+  return promise.then(
+    () => ({ ok: true }),
+    (error: unknown) => {
+      controller.abort(error);
+      return { ok: false, error };
+    },
+  );
+}
+
+function requireCompleted(result: Completion): void {
+  if (!result.ok) throw result.error;
+}
+
+/** Yazl's private pipe chain exposes each upstream source through public unpipe events. */
+function cancelZipSources(
+  output: NodeJS.ReadableStream,
+  controller: AbortController,
+  signal: AbortSignal,
+): Promise<Completion>[] {
+  const closed: Promise<Completion>[] = [];
+  const watched = new WeakSet<NodeJS.ReadableStream>();
+  function watch(stream: NodeJS.ReadableStream): void {
+    watched.add(stream);
+    stream.on("unpipe", (source: Readable) => {
+      if (!signal.aborted || watched.has(source)) return;
+      watch(source);
+      closed.push(observe(finished(source, { cleanup: true }), controller));
+      source.destroy();
+    });
+  }
+  watch(output);
+  return closed;
+}
+
 async function writeZip(
   files: readonly CollectedFile[],
   storage: StorageProvider,
@@ -158,48 +197,52 @@ async function writeZip(
   signal: AbortSignal,
   report: ReportProgress,
 ): Promise<void> {
+  const controller = new AbortController();
+  const combined = AbortSignal.any([signal, controller.signal]);
   const zipfile = new ZipFile();
   const outStream = createWriteStream(destPath);
-  zipfile.outputStream.pipe(outStream);
-  const outFinished = finished(outStream);
-
-  let processed = 0;
-  let bytes = 0;
-  for (const file of files) {
-    throwIfAborted(signal);
-    const download = await storage.download(file.path, { signal });
-    const nodeStream = nodeReadableFromWeb(download.body);
-    // `addReadStream` reads lazily, only once its internal queue reaches
-    // this entry (it writes entries to the zip strictly in order), so this
-    // stream may sit unread for a while. Piping through `countingTransform`
-    // rather than attaching a `data` listener directly to `nodeStream`
-    // matters here: a `data` listener would resume `nodeStream` into
-    // flowing mode immediately and drain it before yazl ever reads it,
-    // losing the entry's contents. The transform instead buffers safely in
-    // paused mode until yazl actually pulls from it.
-    const counted = nodeStream.pipe(
-      countingTransform((n) => {
+  const privateStreams = cancelZipSources(zipfile.outputStream, controller, combined);
+  zipfile.on("error", (error: unknown) => controller.abort(error));
+  const outFinished = observe(
+    pipeline(zipfile.outputStream, outStream, { signal: combined }),
+    controller,
+  );
+  let inputFinished: Promise<Completion> | undefined;
+  try {
+    let processed = 0;
+    let bytes = 0;
+    for (const file of files) {
+      throwIfAborted(combined);
+      const download = await storage.download(file.path, { signal: combined });
+      const nodeStream = nodeReadableFromWeb(download.body);
+      const counted = countingTransform((n) => {
         bytes += n;
         report({ bytes });
-      }),
-    );
-
-    await new Promise<void>((resolve, reject) => {
-      nodeStream.once("error", reject);
-      counted.once("error", reject);
-      counted.once("end", resolve);
+      });
+      // Wait for consumption as well as writing, since yazl pulls entries lazily.
+      const consumed = observe(finished(counted, { cleanup: true }), controller);
+      inputFinished = observe(pipeline(nodeStream, counted, { signal: combined }), controller);
       zipfile.addReadStream(counted, file.entryName, {
         mtime: file.modifiedAt,
         compress: !isPrecompressedEntry(file.entryName),
       });
-    });
-
-    processed += 1;
-    report({ processed, total: files.length, bytes });
+      requireCompleted(await consumed);
+      requireCompleted(await inputFinished);
+      processed += 1;
+      report({ processed, total: files.length, bytes });
+    }
+    throwIfAborted(combined);
+    zipfile.end();
+    requireCompleted(await outFinished);
+  } catch (error) {
+    throw combined.aborted ? combined.reason : error;
+  } finally {
+    controller.abort();
+    await inputFinished;
+    await outFinished;
+    // Destroying one destination can expose another source on its close event.
+    for (let index = 0; index < privateStreams.length; index++) await privateStreams[index];
   }
-
-  zipfile.end();
-  await outFinished;
 }
 
 async function writeTar(
@@ -210,44 +253,50 @@ async function writeTar(
   report: ReportProgress,
   compression: "gzip" | "zstd",
 ): Promise<void> {
+  const controller = new AbortController();
+  const combined = AbortSignal.any([signal, controller.signal]);
   const pack = tar.pack();
   const outStream = createWriteStream(destPath);
   const compressor = compression === "gzip" ? createGzip() : createZstdCompress();
-  pack.pipe(compressor).pipe(outStream);
-  const outFinished = finished(outStream);
-
-  let processed = 0;
-  let bytes = 0;
-  for (const file of files) {
-    throwIfAborted(signal);
-    const download = await storage.download(file.path, { signal });
-    const nodeStream = nodeReadableFromWeb(download.body);
-    const counted = nodeStream.pipe(
-      countingTransform((n) => {
+  const outFinished = observe(
+    pipeline(pack, compressor, outStream, { signal: combined }),
+    controller,
+  );
+  let inputFinished: Promise<Completion> | undefined;
+  try {
+    let processed = 0;
+    let bytes = 0;
+    for (const file of files) {
+      throwIfAborted(combined);
+      const download = await storage.download(file.path, { signal: combined });
+      const nodeStream = nodeReadableFromWeb(download.body);
+      const counted = countingTransform((n) => {
         bytes += n;
         report({ bytes });
-      }),
-    );
-
-    const entryStream = pack.entry({
-      name: file.entryName,
-      size: file.size,
-      mtime: file.modifiedAt,
-    });
-    await new Promise<void>((resolve, reject) => {
-      nodeStream.once("error", reject);
-      counted.once("error", reject);
-      entryStream.once("error", reject);
-      entryStream.once("finish", resolve);
-      counted.pipe(entryStream);
-    });
-
-    processed += 1;
-    report({ processed, total: files.length, bytes });
+      });
+      const entryStream = pack.entry({
+        name: file.entryName,
+        size: file.size,
+        mtime: file.modifiedAt,
+      });
+      inputFinished = observe(
+        pipeline(nodeStream, counted, entryStream, { signal: combined }),
+        controller,
+      );
+      requireCompleted(await inputFinished);
+      processed += 1;
+      report({ processed, total: files.length, bytes });
+    }
+    throwIfAborted(combined);
+    pack.finalize();
+    requireCompleted(await outFinished);
+  } catch (error) {
+    throw combined.aborted ? combined.reason : error;
+  } finally {
+    controller.abort();
+    await inputFinished;
+    await outFinished;
   }
-
-  pack.finalize();
-  await outFinished;
 }
 
 /**

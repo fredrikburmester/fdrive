@@ -1,0 +1,72 @@
+# Shared opt-in services. Compose resolves these bind paths relative to this file.
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:9.4.0.1@sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212
+    entrypoint: ["/bin/bash", "/fdrive/onlyoffice-entrypoint.sh"]
+    environment:
+      WOPI_ENABLED: "true"
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-}
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "false"
+      NODE_CONFIG: '{"wopi":{"wopiZone":"external-https"},"services":{"CoAuthoring":{"request-filtering-agent":{"allowMetaIPAddress":false}}}}'
+    volumes:
+      - office_onlyoffice_data:/var/www/onlyoffice/Data
+      - type: bind
+        source: ./onlyoffice-entrypoint.sh
+        target: /fdrive/onlyoffice-entrypoint.sh
+        read_only: true
+        bind: { create_host_path: false }
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost/hosting/discovery"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  collabora-keys:
+    build:
+      context: ../..
+      dockerfile: deploy/office/Dockerfile.collabora-keys
+    user: "0:0"
+    volumes:
+      - office_collabora_keys:/keys
+    network_mode: none
+    restart: "no"
+
+  collabora:
+    image: collabora/code:26.04.3.2.1@sha256:379b8f1fc955dd6d01ba24adf61d1b177048ddaae179ae8c1e6a6342daccb282
+    # Keep default isolation and syscall filtering. No SYS_ADMIN or privileged mode.
+    cap_add: [MKNOD]
+    command:
+      - --o:ssl.enable=false
+      - --o:ssl.termination=true
+      - --o:mount_jail_tree=false
+      - --o:storage.wopi.alias_groups[@mode]=groups
+      - --o:storage.wopi.alias_groups.group[0].host=http://api:3001
+      - --o:storage.wopi.alias_groups.group[0].host[@allow]=true
+      - --o:storage.wopi.max_file_size=104857600
+      - --o:net.content_security_policy=frame-ancestors ${FDRIVE_PUBLIC_URL:-https://localhost};
+      - --o:server_name=${FDRIVE_COLLABORA_HOST:-office.localhost}
+      - --o:logging.level=warning
+    volumes:
+      - office_collabora_keys:/etc/coolwsd:ro
+    environment:
+      DONT_GEN_SSL_CERT: "true"
+    entrypoint:
+      - /usr/bin/coolwsd
+      - --use-env-vars
+      - --o:sys_template_path=/opt/cool/systemplate
+      - --o:child_root_path=/opt/cool/child-roots
+      - --o:file_server_root_path=/usr/share/coolwsd
+      - --o:cache_files.path=/opt/cool/cache
+      - --o:logging.color=false
+      - --o:stop_on_config_change=true
+    healthcheck:
+      test: ["CMD", "/usr/bin/coolwsd", "--probe", "--o:ssl.enable=false"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped

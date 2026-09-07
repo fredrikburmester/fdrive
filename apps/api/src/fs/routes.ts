@@ -58,7 +58,7 @@ export interface FsRoutesDeps {
   /** Total bytes a single extract job may read before it fails. */
   readonly jobMaxBytes: number;
   /**
-   * Decorates `fs/list` entries with tag/favorite metadata and keeps tag,
+   * Decorates `fs/list` and `fs/stat` entries with tag/favorite metadata and keeps tag,
    * favorite, and recent rows in sync with moves, renames, and deletes made
    * through these routes. Optional so route tests that do not exercise
    * metadata can omit it; `composition.ts` always wires the real service.
@@ -346,7 +346,12 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entry = await statEntry(principal.storage, path);
-    const body: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    const serialized = serializeEntry(entry);
+    const decorated =
+      deps.metadata !== undefined
+        ? await deps.metadata.decorate(principal.identityId, [serialized])
+        : [serialized];
+    const body: EntryResponse = EntryResponse.parse(decorated[0]);
     return c.json(body);
   });
 

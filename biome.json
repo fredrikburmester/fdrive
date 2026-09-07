@@ -17,8 +17,10 @@
       "!**/*.gen.ts",
       "!**/pnpm-lock.yaml",
       "!**/.claude/worktrees",
+      "!**/.worktrees",
       "!**/playwright-report",
-      "!**/test-results"
+      "!**/test-results",
+      "!**/tools/perf/results"
     ]
   },
   "formatter": {

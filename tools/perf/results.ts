@@ -1,6 +1,14 @@
 /** The structured result every perf scenario returns. */
 export interface ScenarioResult {
   readonly name: string;
+  readonly samplesMs: readonly number[];
+  readonly warmupCount?: number;
+  readonly uniquePaths?: number;
+  readonly verifiedCount?: number;
+  readonly maxMounted?: number;
+  readonly diagnostics?: unknown;
+  readonly completedBytes?: readonly number[];
+  readonly expectedBytes?: number;
   readonly p50Ms: number;
   readonly p95Ms: number;
   readonly p99Ms: number;
@@ -62,11 +70,18 @@ export function toScenarioResult(
   latenciesMs: readonly number[],
   requestsPerSecond: number,
   errors: number,
-  extra: { bytesPerSecond?: number; wallTimeMs?: number } = {},
+  extra: Partial<
+    Omit<
+      ScenarioResult,
+      "name" | "samplesMs" | "p50Ms" | "p95Ms" | "p99Ms" | "requestsPerSecond" | "errors"
+    >
+  > = {},
 ): ScenarioResult {
   const stats = computeLatencyStats(latenciesMs);
   return {
+    ...extra,
     name,
+    samplesMs: [...latenciesMs],
     p50Ms: stats.p50,
     p95Ms: stats.p95,
     p99Ms: stats.p99,
