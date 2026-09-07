@@ -1,11 +1,15 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { FsEvent, JobStatus } from "@fdrive/contracts";
+import { gzipSync } from "node:zlib";
+import type { ArchiveEntriesResponse, FsEvent, JobStatus } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
+import * as tar from "tar-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ZipFile } from "yazl";
 import { createApp } from "../app.js";
 import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
@@ -15,6 +19,36 @@ import { registerEventRoutes } from "../events/routes.js";
 import { createJobRunner } from "../jobs/runner.js";
 import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerFsRoutes } from "./routes.js";
+
+/** Drains a yazl `ZipFile`'s output stream into one `Buffer`. */
+async function buildZipBuffer(build: (zipfile: ZipFile) => void): Promise<Buffer> {
+  const zipfile = new ZipFile();
+  build(zipfile);
+  const chunks: Buffer[] = [];
+  const done = new Promise<void>((resolve, reject) => {
+    zipfile.outputStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    zipfile.outputStream.on("end", resolve);
+    zipfile.outputStream.on("error", reject);
+  });
+  zipfile.end();
+  await done;
+  return Buffer.concat(chunks);
+}
+
+/** Drains a tar-stream `pack()` into one `Buffer`. */
+function buildTarBuffer(entries: readonly { name: string; content: string }[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const pack = tar.pack();
+    const chunks: Buffer[] = [];
+    pack.on("data", (chunk: Buffer) => chunks.push(chunk));
+    pack.on("end", () => resolve(Buffer.concat(chunks)));
+    pack.on("error", reject);
+    for (const entry of entries) {
+      pack.entry({ name: entry.name, size: Buffer.byteLength(entry.content) }, entry.content);
+    }
+    pack.finalize();
+  });
+}
 
 vi.mock("../archive/stream-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../archive/stream-utils.js")>();
@@ -125,6 +159,63 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
 
   const harness: Harness = { app, bus, fsEvents, tmpDir };
   return harness;
+}
+
+/**
+ * Builds a harness the same way `buildHarness` does, but with an explicit
+ * `archivePeekMaxBytes` (composition.ts's own way of passing it, see
+ * `fs/archive-routes.ts`'s `ArchiveRoutesDeps`): built as a local variable
+ * rather than a fresh object literal, so passing a field `FsRoutesDeps`
+ * itself does not declare never trips TypeScript's excess-property check.
+ */
+async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number): Promise<Harness> {
+  const server = createFakeSftpgoServer(SEED);
+  const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
+  const withToken = await withTokenFor(client, "alice", "secret");
+  const storage = createSftpgoStorageProvider({ client, withToken });
+
+  const principal: Principal = {
+    accountId: ACCOUNT_ID,
+    identityId: ALICE_IDENTITY_ID,
+    username: "alice",
+    storage,
+    isAdmin: false,
+  };
+
+  const bus = createEventBus();
+  const fsEvents: FsEvent[] = [];
+  bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => {
+    if (event.type === "fs") {
+      fsEvents.push(event);
+    }
+  });
+
+  const clock = () => new Date();
+  const jobRunner = createJobRunner({ clock, bus });
+  const tmpDir = join(tmpdir(), `fdrive-archive-routes-peek-${Date.now()}-${Math.random()}`);
+  await mkdir(tmpDir, { recursive: true });
+  tempDirs.push(tmpDir);
+
+  const config = loadConfig(REQUIRED_ENV);
+  const fsRoutesDeps = {
+    bus,
+    clock,
+    jobRunner,
+    tmpDir,
+    jobMaxBytes: 10 * 1024 * 1024,
+    archivePeekMaxBytes,
+  };
+  const app = createApp({
+    config,
+    logger: createTestLogger(),
+    version: "1.0.0",
+    startedAt: new Date(),
+    clock,
+    principalResolver: async () => principal,
+    registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
+  });
+
+  return { app, bus, fsEvents, tmpDir };
 }
 
 /** Builds a harness around an arbitrary `StorageProvider`, for exercising error-mapping branches. */
@@ -574,6 +665,125 @@ describe("POST /fs/extract and the resulting job", () => {
     const res = await app.request("/api/v1/fs/extract", jsonPost({ path: "/missing.zip" }));
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /fs/archive-entries", () => {
+  async function uploadBinary(
+    app: ReturnType<typeof createApp>,
+    path: string,
+    content: Buffer,
+  ): Promise<void> {
+    const res = await app.request(
+      `/api/v1/fs/upload?path=${encodeURIComponent(path)}`,
+      requestedWith({
+        method: "PUT",
+        headers: { "content-length": String(content.length) },
+        body: content,
+      }),
+    );
+    if (res.status !== 201) {
+      throw new Error(`upload failed: ${res.status}`);
+    }
+  }
+
+  it("lists a zip's entries, sorted by path, via two Range reads", async () => {
+    const { app } = await buildHarness();
+    const zipBytes = await buildZipBuffer((zipfile) => {
+      zipfile.addBuffer(Buffer.from("bravo"), "b.txt");
+      zipfile.addBuffer(Buffer.from("alpha"), "a.txt");
+      zipfile.addEmptyDirectory("sub");
+    });
+    await uploadBinary(app, "/docs.zip", zipBytes);
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/docs.zip");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ArchiveEntriesResponse;
+    expect(body.format).toBe("zip");
+    expect(body.truncated).toBe(false);
+    expect(body.entries.map((e) => e.path)).toEqual(["a.txt", "b.txt", "sub"]);
+    expect(body.entries.find((e) => e.path === "sub")?.kind).toBe("dir");
+  });
+
+  it("lists a tar.gz's entries", async () => {
+    const { app } = await buildHarness();
+    const tarBytes = await buildTarBuffer([{ name: "hello.txt", content: "hi there" }]);
+    await uploadBinary(app, "/docs.tar.gz", gzipSync(tarBytes));
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/docs.tar.gz");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ArchiveEntriesResponse;
+    expect(body).toEqual({
+      format: "tar.gz",
+      entries: [{ path: "hello.txt", kind: "file", size: 8, modifiedAt: expect.any(String) }],
+      truncated: false,
+    });
+  });
+
+  it("rejects a path with no recognized archive extension", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/hello.txt");
+
+    expect(res.status).toBe(400);
+  });
+
+  it("reports a corrupt zip as 'not a readable archive'", async () => {
+    const { app } = await buildHarness();
+    await uploadBinary(app, "/bad.zip", Buffer.from("not actually a zip file at all"));
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/bad.zip");
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorJson;
+    expect(body.error.message).toBe("not a readable archive");
+  });
+
+  it("returns not_found for a missing archive", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/missing.zip");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects tar.zst up front when unsupported on this server", async () => {
+    vi.mocked(isZstdSupported).mockReturnValue(false);
+    const { app } = await buildHarness();
+    const tarBytes = await buildTarBuffer([{ name: "a.txt", content: "x" }]);
+    await uploadBinary(app, "/docs.tar.zst", tarBytes);
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/docs.tar.zst");
+
+    expect(res.status).toBe(400);
+  });
+
+  it("truncates a tar.gz once the configured archivePeekMaxBytes is exceeded", async () => {
+    const { app } = await buildHarnessWithArchivePeekMaxBytes(200);
+    // Random, incompressible content: unlike a repeated character, gzip
+    // cannot shrink this below `archivePeekMaxBytes`, so the cap is
+    // actually exercised instead of never triggering.
+    const tarBytes = await buildTarBuffer([
+      { name: "a.txt", content: randomBytes(4000).toString("base64") },
+      { name: "b.txt", content: randomBytes(4000).toString("base64") },
+    ]);
+    await uploadBinary(app, "/big.tar.gz", gzipSync(tarBytes));
+
+    const res = await app.request("/api/v1/fs/archive-entries?path=/big.tar.gz");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ArchiveEntriesResponse;
+    expect(body.truncated).toBe(true);
+  });
+
+  it("rejects a request with no path query parameter", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request("/api/v1/fs/archive-entries");
+
+    expect(res.status).toBe(400);
   });
 });
 

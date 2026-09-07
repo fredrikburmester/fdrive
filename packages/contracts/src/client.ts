@@ -9,6 +9,7 @@ import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./ad
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import {
+  ArchiveEntriesResponse,
   type CompressRequest,
   type DeleteRequest,
   EntryResponse,
@@ -196,6 +197,8 @@ export interface ApiClient {
   duplicate(path: string): Promise<FsEntry>;
   compress(req: CompressRequest): Promise<JobAccepted>;
   extract(req: ExtractRequest): Promise<JobAccepted>;
+  /** Lists an archive's entries without extracting it. */
+  archiveEntries(path: string): Promise<ArchiveEntriesResponse>;
   jobs(): Promise<JobStatus[]>;
   job(id: string): Promise<JobStatus>;
   cancelJob(id: string): Promise<JobStatus>;
@@ -675,6 +678,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "POST", path: ROUTES.fs.extract, jsonBody: req },
         JobAccepted,
+      );
+    },
+
+    archiveEntries(path: string): Promise<ArchiveEntriesResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.fs.archiveEntries, query: { path } },
+        ArchiveEntriesResponse,
       );
     },
 

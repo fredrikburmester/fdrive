@@ -175,3 +175,36 @@ export const ExtractRequest = z.object({
 });
 
 export type ExtractRequest = z.infer<typeof ExtractRequest>;
+
+/** The archive formats `GET /fs/archive-entries` can list, a superset of
+ * `@fdrive/core`'s tar-family `ArchiveKind` plus `zip` (a bare `.gz`, whose
+ * single member has no entries of its own, is not included). */
+export const ArchiveEntriesFormat = z.enum(["zip", "tar", "tar.gz", "tar.zst"]);
+
+export type ArchiveEntriesFormat = z.infer<typeof ArchiveEntriesFormat>;
+
+/** One entry as listed by `GET /fs/archive-entries`: `path` is the raw
+ * path stored inside the archive (not an fdrive virtual filesystem path,
+ * and never resolved against one), reported as-is even for a name
+ * containing `..` or an absolute root, which is always reported with
+ * `kind: "file"` regardless of a trailing slash in its raw name. */
+export const ArchiveEntry = z.object({
+  path: z.string(),
+  kind: z.enum(["file", "dir"]),
+  size: z.number().int().min(0),
+  modifiedAt: z.iso.datetime().nullable(),
+});
+
+export type ArchiveEntry = z.infer<typeof ArchiveEntry>;
+
+/**
+ * Returned by `GET /fs/archive-entries`: the archive's format, its entries
+ * (bounded at 5000, sorted by `path`), and whether that bound was hit.
+ */
+export const ArchiveEntriesResponse = z.object({
+  format: ArchiveEntriesFormat,
+  entries: z.array(ArchiveEntry),
+  truncated: z.boolean(),
+});
+
+export type ArchiveEntriesResponse = z.infer<typeof ArchiveEntriesResponse>;

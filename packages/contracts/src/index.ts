@@ -24,6 +24,9 @@ export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from 
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
 export { FsEvent, JobEvent, PingEvent, SseEvent } from "./events.ts";
 export {
+  ArchiveEntriesFormat,
+  ArchiveEntriesResponse,
+  ArchiveEntry,
   CompressRequest,
   CopyRequest,
   DeleteRequest,
