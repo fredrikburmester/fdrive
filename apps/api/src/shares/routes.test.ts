@@ -1,13 +1,164 @@
 import { ManagedShare, PublicShare, ShareEntriesResponse, SharesResponse } from "@fdrive/contracts";
+import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryShareRepo } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { accountsHarness, cookieFrom } from "../accounts/test-fixtures/index.ts";
 import { createApp } from "../app.ts";
+import type { ScopeResolver } from "../scoping/resolver.ts";
+import type { ThumbFileReader } from "../thumbs/serve.ts";
 import { createShareCredentialCodec } from "./credentials.ts";
 import { createShareLimiter } from "./limiter.ts";
 import { capByteStream, contentLengthExceeds, registerSharesRoutes } from "./routes.ts";
 import { createSharesService } from "./service.ts";
 import { sharesHarness } from "./test-fixtures/index.ts";
+
+function fail(name: string): never {
+  throw new Error(`unexpected call to ${name} in this test`);
+}
+
+/** A minimal `IndexQueries` fake covering only the methods the public thumb route touches. */
+function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
+  return {
+    semantic: overrides.semantic ?? (async () => fail("semantic")),
+    fulltext: overrides.fulltext ?? (async () => fail("fulltext")),
+    filename: overrides.filename ?? (async () => fail("filename")),
+    filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
+    fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
+    listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
+    filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
+    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
+    stats: overrides.stats ?? (async () => fail("stats")),
+    statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
+    duplicates: overrides.duplicates ?? (async () => fail("duplicates")),
+    similar: overrides.similar ?? (async () => fail("similar")),
+    recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
+    thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
+    recordMove: overrides.recordMove ?? (async () => fail("recordMove")),
+    recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
+    deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
+    liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
+  };
+}
+
+function makeIndexedFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
+  return {
+    id: 1,
+    rootId: 1,
+    path: "alice/a.docx",
+    name: "a.docx",
+    ext: ".docx",
+    size: 100,
+    mtimeNs: 1n,
+    sha256: "abc123",
+    mime: null,
+    textStatus: "done",
+    textChars: 0,
+    error: null,
+    indexedAt: null,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+function fakeFileReader(overrides: Partial<ThumbFileReader> = {}): ThumbFileReader {
+  return {
+    stat: overrides.stat ?? (async () => ({ size: 42 })),
+    readStream:
+      overrides.readStream ??
+      (() =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("webp-bytes"));
+            controller.close();
+          },
+        })),
+  };
+}
+
+const ALICE_HOME_SCOPES = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
+
+/** Builds a shares app wired for the public thumb route, on top of the same real fake-SFTPGo-backed harness `sharesHarness` uses. */
+function sharesHarnessWithThumbs(
+  overrides: {
+    indexQueries?: Partial<IndexQueries>;
+    resolver?: Pick<ScopeResolver, "verifiedIndexScopes">;
+    /** `null` explicitly disables the route (the default is `"/thumbs"`, not disabled). */
+    thumbsDir?: string | null;
+    fileReader?: Partial<ThumbFileReader>;
+  } = {},
+) {
+  const h = accountsHarness();
+  const shares = createMemoryShareRepo();
+  const deps = { ...h.deps, shares, logger: h.logger, clientFor: (_baseUrl: string) => h.client };
+  const service = createSharesService(deps);
+  const codec = createShareCredentialCodec(h.master, h.clock);
+  const limiter = createShareLimiter(h.clock);
+  const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = overrides.resolver ?? {
+    verifiedIndexScopes: async () => ({ available: true, scopes: ALICE_HOME_SCOPES }),
+  };
+  const indexQueries = fakeIndexQueries(overrides.indexQueries);
+  const thumbsDir = overrides.thumbsDir === null ? undefined : (overrides.thumbsDir ?? "/thumbs");
+  const fileReader = fakeFileReader(overrides.fileReader);
+  const app = createApp({
+    config: h.config,
+    logger: h.logger,
+    clock: h.clock,
+    version: "test",
+    startedAt: h.clock(),
+    principalResolver: h.auth.principalResolver,
+    registerRoutes: (groups) => {
+      h.auth.registerRoutes(groups);
+      registerSharesRoutes(groups, {
+        service,
+        codec,
+        limiter,
+        config: h.config,
+        indexQueries,
+        resolver,
+        identities: h.repos.identities,
+        thumbsDir,
+        fileReader,
+      });
+    },
+  });
+  async function request(
+    path: string,
+    options: {
+      method?: string;
+      cookie?: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+    } = {},
+  ) {
+    return app.request(path, {
+      method: options.method ?? "GET",
+      headers: {
+        "x-requested-with": "fdrive",
+        ...(options.cookie ? { cookie: options.cookie } : {}),
+        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+        ...options.headers,
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
+  }
+  async function login(username = "alice") {
+    const res = await request("/api/v1/auth/login", {
+      method: "POST",
+      body: { username, password: `${username}-pass` },
+    });
+    return cookieFrom(res);
+  }
+  async function create(cookie: string, patch: Record<string, unknown> = {}) {
+    const response = await request("/api/v1/shares", {
+      method: "POST",
+      cookie,
+      body: { name: "Document", paths: ["/a.docx"], scope: "read", ...patch },
+    });
+    if (response.status !== 201) throw new Error(await response.text());
+    return response.json() as Promise<{ id: string; hasPassword: boolean }>;
+  }
+  return { ...h, shares, deps, service, codec, limiter, app, request, login, create };
+}
 
 const base = "/api/v1/shares";
 const publicBase = (id: string) => `/api/v1/public/shares/${id}`;
@@ -343,7 +494,20 @@ function sharesHarnessWithUploadLimit(maxBytes: number) {
     principalResolver: h.auth.principalResolver,
     registerRoutes: (groups) => {
       h.auth.registerRoutes(groups);
-      registerSharesRoutes(groups, { service, codec, limiter, config });
+      registerSharesRoutes(groups, {
+        service,
+        codec,
+        limiter,
+        config,
+        indexQueries: {
+          rootIdsByName: async () => ({}),
+          fileByPath: async () => null,
+          thumbnail: async () => null,
+        },
+        resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) },
+        identities: h.repos.identities,
+        thumbsDir: undefined,
+      });
     },
   });
   async function request(
@@ -488,5 +652,391 @@ describe("PUT /public/shares/:id/upload byte ceiling", () => {
     });
 
     expect(response.status).not.toBe(413);
+  });
+});
+
+describe("GET /public/shares/:id/thumb", () => {
+  it("streams the shared file's own thumbnail with the expected headers", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile());
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath,
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/webp");
+    expect(res.headers.get("content-length")).toBe("42");
+    // The shares public-route middleware overwrites Cache-Control with its
+    // own blanket "no-store" after the handler returns (same as every other
+    // public share route), a strictly stronger guarantee than the tail's
+    // own "private, no-store".
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("etag")).toBe('"abc123"');
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(await res.text()).toBe("webp-bytes");
+    expect(fileByPath).toHaveBeenCalledWith(1, "alice/a.docx");
+  });
+
+  it("defaults path to the shared root when omitted", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile());
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath,
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?size=256`);
+
+    expect(res.status).toBe(200);
+    expect(fileByPath).toHaveBeenCalledWith(1, "alice/a.docx");
+  });
+
+  it("streams a thumbnail for a file inside a directory share", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile({ path: "alice/folder/photo.jpg" }));
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath,
+        thumbnail: async () => ({ storagePath: "ab/abc123.1024.webp" }),
+      },
+    });
+    const cookie = await h.login();
+    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+    await h.client.user(auth.accessToken).mkdir("/folder");
+    const { id } = await h.create(cookie, { paths: ["/folder"] });
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2Fphoto.jpg&size=1024`);
+
+    expect(res.status).toBe(200);
+    expect(fileByPath).toHaveBeenCalledWith(1, "alice/folder/photo.jpg");
+  });
+
+  it("404s when thumbnails are not configured", async () => {
+    const h = sharesHarnessWithThumbs({ thumbsDir: null });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+    expect((await res.json()) as { error: { kind: string } }).toMatchObject({
+      error: { kind: "not_found" },
+    });
+  });
+
+  it("404s for a size outside THUMB_SIZES", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=512`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for a missing size", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for a repeated path query parameter", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2Fa&path=%2Fb&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for every path SharePath already rejects, instead of adding a second sanitiser", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    for (const path of ["..%2F", "/a/../b", "//", "/a\\b", "C:\\Windows\\win.ini"]) {
+      const res = await h.request(
+        `${publicBase(id)}/thumb?path=${encodeURIComponent(path)}&size=256`,
+      );
+      expect(res.status).toBe(404);
+    }
+  });
+
+  it("404s for a path segment over 255 bytes, which SharePath allows but normalization rejects", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(
+      `${publicBase(id)}/thumb?path=${encodeURIComponent(`/${"a".repeat(300)}.jpg`)}&size=256`,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for an unknown share", async () => {
+    const h = sharesHarnessWithThumbs();
+
+    const res = await h.request(
+      "/api/v1/public/shares/00000000-0000-4000-8000-000000000000/thumb?path=%2F&size=256",
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for a write-scope share", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+    await h.client.user(auth.accessToken).mkdir("/folder");
+    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2Fa.jpg&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for an archive share (more than one shared path)", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/a.docx", "/report.txt"] });
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for an expired share", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, {
+      expiresAt: new Date(h.clock().getTime() + 1000).toISOString(),
+    });
+    h.now.value = new Date(h.clock().getTime() + 2000);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for a limit-reached share", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { maxDownloads: 1 });
+    await h.request(`${publicBase(id)}/download`);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for a password-protected share with no credential cookie", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s for a password-protected share with the wrong password", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    const path = publicBase(id);
+    const credentials = await h.request(`${path}/credentials`, {
+      method: "POST",
+      body: { password: "wrong" },
+    });
+    const envelope = cookieFrom(credentials);
+
+    const res = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("streams the thumbnail once the correct password cookie is set, and caches the check", async () => {
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => makeIndexedFile(),
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    const path = publicBase(id);
+    const credentials = await h.request(`${path}/credentials`, {
+      method: "POST",
+      body: { password: "secret" },
+    });
+    const envelope = cookieFrom(credentials);
+    const verify = vi.spyOn(h.service, "verifySharePassword");
+
+    const first = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
+    const second = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("404s when the file is not indexed", async () => {
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => null,
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the indexed file has no sha256", async () => {
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => makeIndexedFile({ sha256: null }),
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when no thumbnail has been generated for that size", async () => {
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => makeIndexedFile(),
+        thumbnail: async () => null,
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the cached thumbnail file is missing from disk", async () => {
+    const h = sharesHarnessWithThumbs({
+      indexQueries: {
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        fileByPath: async () => makeIndexedFile(),
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      },
+      fileReader: {
+        stat: async () => {
+          throw new Error("ENOENT");
+        },
+      },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the path cannot be resolved to a configured root", async () => {
+    const h = sharesHarnessWithThumbs({
+      indexQueries: { rootIdsByName: async () => ({}) },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the owner's verified index scopes are unavailable", async () => {
+    const h = sharesHarnessWithThumbs({
+      resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the owner's scopes do not cover the shared path", async () => {
+    const h = sharesHarnessWithThumbs({
+      resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: [] }) },
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the owning identity no longer exists", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+    // `publicThumbTarget` itself resolves the owner's connection (three
+    // calls to `identities.get`: twice from the service's `owner()`
+    // helper, once from the token source's client resolution) before the
+    // route makes its own separate lookup; only that fourth, route-level
+    // call should see a missing identity here.
+    const original = h.repos.identities.get.bind(h.repos.identities);
+    let calls = 0;
+    vi.spyOn(h.repos.identities, "get").mockImplementation(async (identityId) => {
+      calls += 1;
+      return calls > 3 ? null : original(identityId);
+    });
+
+    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
+
+    expect(res.status).toBe(404);
+    expect(calls).toBe(4);
+  });
+
+  it("404s when verifying the password throws for a reason other than a wrong password", async () => {
+    const h = sharesHarnessWithThumbs();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    const path = publicBase(id);
+    const credentials = await h.request(`${path}/credentials`, {
+      method: "POST",
+      body: { password: "secret" },
+    });
+    const envelope = cookieFrom(credentials);
+    vi.spyOn(h.service, "verifySharePassword").mockRejectedValueOnce(new Error("upstream down"));
+
+    const res = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
+
+    expect(res.status).toBe(404);
   });
 });

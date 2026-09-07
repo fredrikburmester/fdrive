@@ -537,6 +537,40 @@ describe("createApiClient: searchStatus", () => {
   });
 });
 
+describe("createApiClient: shareThumbUrl", () => {
+  it("builds a public share thumbnail URL with path and size", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+
+    expect(client.shareThumbUrl("share-1", "/photo.jpg", 256)).toBe(
+      "https://api.test/api/v1/public/shares/share-1/thumb?path=%2Fphoto.jpg&size=256",
+    );
+  });
+
+  it("builds a 1024 thumbnail URL for the share root", () => {
+    const client = createApiClient({});
+
+    expect(client.shareThumbUrl("share-1", "/", 1024)).toBe(
+      "/api/v1/public/shares/share-1/thumb?path=%2F&size=1024",
+    );
+  });
+
+  it("encodes a path with spaces", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+
+    expect(client.shareThumbUrl("share-1", "/my photo.jpg", 256)).toBe(
+      "https://api.test/api/v1/public/shares/share-1/thumb?path=%2Fmy+photo.jpg&size=256",
+    );
+  });
+
+  it("encodes a non-ASCII path", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+
+    expect(client.shareThumbUrl("share-1", "/café/日本語.jpg", 256)).toBe(
+      "https://api.test/api/v1/public/shares/share-1/thumb?path=%2Fcaf%C3%A9%2F%E6%97%A5%E6%9C%AC%E8%AA%9E.jpg&size=256",
+    );
+  });
+});
+
 describe("createApiClient: thumbUrl", () => {
   it("builds a thumbnail URL with path and size", () => {
     const client = createApiClient({ baseUrl: "https://api.test" });

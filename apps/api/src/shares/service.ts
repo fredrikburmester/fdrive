@@ -33,6 +33,19 @@ export function unavailableReason(share: SftpgoShare, now: Date): "expired" | "l
   if (share.maxTokens > 0 && share.usedTokens >= share.maxTokens) return "limit";
   return null;
 }
+/**
+ * Everything the public share thumb route needs to decide whether a
+ * thumbnail may be served, without reaching into `ShareRepo` or the SFTPGo
+ * client itself: see `SharesService.publicThumbTarget`.
+ */
+export interface PublicThumbTarget {
+  readonly identityId: string;
+  readonly sftpgoShareId: string;
+  readonly scope: SftpgoShare["scope"];
+  readonly paths: readonly string[];
+  readonly hasPassword: boolean;
+  readonly unavailableReason: ReturnType<typeof unavailableReason>;
+}
 export function managedShare(row: ShareRecord, share: SftpgoShare): ManagedShare {
   return {
     id: row.id,
@@ -279,6 +292,58 @@ export function createSharesService(deps: SharesDeps) {
         );
       const location = await owner(row.identityId);
       return { share, api: deps.clientFor(location.baseUrl).publicShare(share.id, password) };
+    },
+    /**
+     * Loads just enough of a share for the public thumb route to decide
+     * whether it may serve a thumbnail: the owning identity, scope,
+     * shared paths, password requirement, and expiry/limit state. Throws
+     * (never distinguishing why) when the share row is gone, the upstream
+     * share is gone, or the owner's connection is unreachable; the route
+     * turns every one of those into the same 404.
+     */
+    async publicThumbTarget(id: string): Promise<PublicThumbTarget> {
+      const { row, share } = await loadPublic(id);
+      return {
+        identityId: row.identityId,
+        sftpgoShareId: share.id,
+        scope: share.scope,
+        paths: share.paths,
+        hasPassword: share.hasPassword,
+        unavailableReason: unavailableReason(share, deps.clock()),
+      };
+    },
+    /**
+     * Verifies `password` for a password-protected share by listing its
+     * root through the public-share API, the same call `/entries` already
+     * makes: it consumes no download token, unlike an actual file
+     * download. `false` for a rejected password. SFTPGo checks the
+     * password before checking whether the share is a listable directory,
+     * so a single-file share (the common case for one shared image)
+     * answers a *correct* password with `bad_request` ("listing requires a
+     * single directory share") rather than a listing; reaching that error
+     * still proves the password was accepted, so it counts as verified
+     * too. Any other failure (the owner's connection, upstream
+     * reachability) propagates so the caller does not cache a transient
+     * failure as a settled "wrong password".
+     */
+    async verifySharePassword(
+      identityId: string,
+      sftpgoShareId: string,
+      password: string,
+    ): Promise<boolean> {
+      const location = await owner(identityId);
+      try {
+        await deps.clientFor(location.baseUrl).publicShare(sftpgoShareId, password).list();
+        return true;
+      } catch (error) {
+        if (
+          error instanceof SftpgoError &&
+          (error.kind === "unauthorized" || error.kind === "forbidden")
+        )
+          return false;
+        if (error instanceof SftpgoError && error.kind === "bad_request") return true;
+        throw error;
+      }
     },
   };
 }

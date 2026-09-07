@@ -265,6 +265,16 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns 404 when no verified scope covers the requested path", async () => {
+    const app = buildApp({
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/photos" }],
+    });
+
+    const res = await app.request("/api/v1/thumb?path=/videos/clip.jpg&size=256");
+
+    expect(res.status).toBe(404);
+  });
+
   it("returns 404 when the file is not indexed", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({

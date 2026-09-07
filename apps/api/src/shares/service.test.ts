@@ -129,6 +129,51 @@ it("reports failed compensation, ownership change, unavailable upstream and layo
     kind: "upstream_unavailable",
   });
 });
+it("publicThumbTarget and verifySharePassword expose exactly what the public thumb route needs", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+  await h.client.user(auth.accessToken).mkdir("/folder");
+  const { id } = await h.create(cookie, { paths: ["/folder"], password: "secret" });
+  const row = await h.shares.get(id);
+  if (!row) throw new Error("missing row");
+
+  const target = await h.service.publicThumbTarget(id);
+  expect(target).toMatchObject({
+    identityId: row.identityId,
+    sftpgoShareId: row.sftpgoShareId,
+    scope: "read",
+    paths: ["/folder"],
+    hasPassword: true,
+    unavailableReason: null,
+  });
+
+  await expect(
+    h.service.publicThumbTarget("00000000-0000-4000-8000-000000000000"),
+  ).rejects.toThrow();
+
+  await expect(
+    h.service.verifySharePassword(target.identityId, target.sftpgoShareId, "wrong"),
+  ).resolves.toBe(false);
+  // A directory share (unlike a single-file one) actually completes the
+  // root listing, so the correct password hits the plain success path
+  // rather than the single-file "bad_request" fallback.
+  await expect(
+    h.service.verifySharePassword(target.identityId, target.sftpgoShareId, "secret"),
+  ).resolves.toBe(true);
+
+  const publicShareSpy = vi.spyOn(h.client, "publicShare").mockReturnValueOnce({
+    downloadFile: () => Promise.reject(new Error("not used")),
+    list: () => Promise.reject(new Error("upstream exploded")),
+    download: () => Promise.reject(new Error("not used")),
+    zip: () => Promise.reject(new Error("not used")),
+    upload: () => Promise.reject(new Error("not used")),
+  });
+  await expect(
+    h.service.verifySharePassword(target.identityId, target.sftpgoShareId, "secret"),
+  ).rejects.toThrow("upstream exploded");
+  publicShareSpy.mockRestore();
+});
 it("preserves upstream IP restrictions and refuses unsupported scope before PATCH", async () => {
   const h = sharesHarness();
   const cookie = await h.login();
