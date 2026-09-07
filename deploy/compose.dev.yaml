@@ -118,6 +118,9 @@ services:
     volumes:
       - fdrive-dev-embed-models:/data
     mem_limit: 4g
+    # The emulated amd64 TEI image is the first casualty of memory pressure (exit 137);
+    # come back on its own instead of leaving search "Unreachable" until someone notices.
+    restart: unless-stopped
 
   # Nightly OCR pass, same `index` profile as the indexer. Mounts the dev
   # SFTPGo data volume read-write (the indexer mounts it read-only), so a
