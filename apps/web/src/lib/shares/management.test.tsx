@@ -57,6 +57,7 @@ describe("share management ownership", () => {
       scope: "read" as const,
       expiresAt: null,
       maxDownloads: 0,
+      presentation: "auto" as const,
       password: "local-input",
     };
     await act(async () => {
@@ -119,6 +120,7 @@ describe("share management ownership", () => {
         scope: "read",
         expiresAt: null,
         maxDownloads: 0,
+        presentation: "auto",
       });
     });
     await waitFor(() => expect(result.current.query.data).toEqual({ items: [{ id: "new" }] }));

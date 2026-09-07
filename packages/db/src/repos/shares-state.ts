@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 export type ShareScope = "read" | "write";
+/** Operator-chosen public page rendering. Mirrors `@fdrive/contracts` `SharePresentation`. */
+export type SharePresentation = "auto" | "list" | "gallery" | "download";
 export interface ShareRecord {
   readonly id: string;
   readonly identityId: string;
@@ -12,6 +14,7 @@ export interface ShareRecord {
   readonly expiresAt: Date | null;
   readonly createdAt: Date;
   readonly views: number;
+  readonly presentation: SharePresentation;
 }
 export interface ShareUpsertInput extends Omit<ShareRecord, "id" | "createdAt"> {
   readonly at: Date;
@@ -39,6 +42,16 @@ export function validateShareId(id: string): void {
 export function parseShareScope(scope: string): ShareScope {
   if (scope !== "read" && scope !== "write") throw new TypeError("Invalid share scope");
   return scope;
+}
+export function parseSharePresentation(presentation: string): SharePresentation {
+  if (
+    presentation !== "auto" &&
+    presentation !== "list" &&
+    presentation !== "gallery" &&
+    presentation !== "download"
+  )
+    throw new TypeError("Invalid share presentation");
+  return presentation;
 }
 export function validateSharePath(path: string): void {
   if (
@@ -77,6 +90,7 @@ export function validateShareUpsert(input: ShareUpsertInput): void {
     throw new TypeError("A share requires 1 to 1000 paths");
   for (const path of input.paths) validateSharePath(path);
   if (typeof input.hasPassword !== "boolean") throw new TypeError("Invalid password flag");
+  parseSharePresentation(input.presentation);
   if (!Number.isInteger(input.views) || input.views < 0 || input.views > 2_147_483_647)
     throw new TypeError("Invalid cached share views");
   validateDate(input.at);
@@ -103,6 +117,7 @@ export function shareStoredValues(input: ShareUpsertInput) {
     hasPassword: input.hasPassword,
     expiresAt: input.expiresAt === null ? null : new Date(input.expiresAt),
     views: input.views,
+    presentation: input.presentation,
   };
 }
 export function cloneShareRecord(record: ShareRecord): ShareRecord {

@@ -1,6 +1,12 @@
 import type { ManagedShare } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
-import { canUploadShare, initialShareFields, localDateInput, shareRequest } from "./forms";
+import {
+  canUploadShare,
+  initialShareFields,
+  localDateInput,
+  passwordFromBytes,
+  shareRequest,
+} from "./forms";
 
 const file = { name: "hello.txt", path: "/hello.txt", kind: "file" as const };
 const dir = { name: "Folder", path: "/Folder", kind: "dir" as const };
@@ -17,6 +23,7 @@ const share: ManagedShare = {
   usedDownloads: 1,
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
+  presentation: "gallery",
 };
 describe("share forms", () => {
   it("defaults basename, read access and unlimited use", () => {
@@ -24,6 +31,7 @@ describe("share forms", () => {
     expect(fields).toMatchObject({
       name: "hello.txt",
       scope: "read",
+      presentation: "auto",
       password: "",
       expires: "",
       maxDownloads: "",
@@ -35,6 +43,7 @@ describe("share forms", () => {
       password: "",
       expiresAt: null,
       maxDownloads: 0,
+      presentation: "auto",
     });
     expect(canUploadShare([dir])).toBe(true);
     expect(canUploadShare([file])).toBe(false);
@@ -48,6 +57,7 @@ describe("share forms", () => {
       maxDownloads: "3",
       passwordAction: "keep",
       password: "",
+      presentation: "gallery",
     });
     expect(shareRequest(fields, [file], true)).not.toHaveProperty("password");
     expect(
@@ -84,5 +94,12 @@ describe("share forms", () => {
     expect(
       shareRequest({ ...fields, expires: local, maxDownloads: "2" }, [file], false),
     ).toMatchObject({ expiresAt: "2030-01-02T03:04:00.000Z", maxDownloads: 2 });
+  });
+  it("maps random bytes to a password of the same length using only unambiguous characters", () => {
+    const first = passwordFromBytes(new Uint8Array([0, 1, 2, 255]));
+    expect(first).toHaveLength(4);
+    expect(first).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789]+$/);
+    expect(passwordFromBytes(new Uint8Array())).toBe("");
+    expect(passwordFromBytes(new Uint8Array([0, 0]))).toBe("AA");
   });
 });

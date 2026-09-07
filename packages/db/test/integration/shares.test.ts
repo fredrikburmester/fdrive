@@ -28,6 +28,7 @@ const input: ShareUpsertInput = {
   hasPassword: false,
   expiresAt: null,
   views: 0,
+  presentation: "auto",
   at,
 };
 let container: StartedPostgreSqlContainer | undefined;
@@ -92,6 +93,7 @@ describe("PostgreSQL share metadata", () => {
       hasPassword: true,
       expiresAt: later,
       views: 2147483647,
+      presentation: "gallery",
       at: later,
     });
     expect(updated).toEqual({
@@ -102,6 +104,7 @@ describe("PostgreSQL share metadata", () => {
       hasPassword: true,
       expiresAt: later,
       views: 2147483647,
+      presentation: "gallery",
     });
     expect(await a.get(original.id)).toEqual(updated);
     expect(await a.getOwned(identityId, original.id)).toEqual(updated);
@@ -186,6 +189,7 @@ describe("PostgreSQL share metadata", () => {
       "identity_id",
       "name",
       "paths",
+      "presentation",
       "scope",
       "sftpgo_share_id",
       "views",

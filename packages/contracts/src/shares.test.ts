@@ -3,6 +3,7 @@ import { createApiClient } from "./client.ts";
 import { publicShareRoute, shareRoute } from "./routes.ts";
 import {
   CreateShareRequest,
+  isImageFileName,
   PublicShare,
   SharePath,
   ShareUploadPath,
@@ -28,8 +29,12 @@ describe("share contracts", () => {
       description: "",
       expiresAt: null,
       maxDownloads: 0,
+      presentation: "auto",
     });
     expect(UpdateShareRequest.parse({ name: "New" })).toEqual({ name: "New" });
+    expect(CreateShareRequest.safeParse({ ...input, presentation: "slideshow" }).success).toBe(
+      false,
+    );
     expect(CreateShareRequest.safeParse({ ...input, allowFrom: [] }).success).toBe(false);
     expect(CreateShareRequest.safeParse({ ...input, paths: [] }).success).toBe(false);
     expect(CreateShareRequest.safeParse({ ...input, password: "a".repeat(1025) }).success).toBe(
@@ -52,6 +57,7 @@ describe("share contracts", () => {
       usedDownloads: 0,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
+      presentation: "auto",
     };
     const pub = PublicShare.parse({
       ...managed,
@@ -99,5 +105,11 @@ describe("share contracts", () => {
         .filter((r) => r.method !== "GET")
         .every((r) => r.headers.get("x-requested-with") === "fdrive"),
     ).toBe(true);
+  });
+  it("recognizes image extensions case-insensitively and rejects names without one", () => {
+    for (const name of ["photo.png", "PHOTO.PNG", "a.b.JPEG", "x.webp", "x.gif", "x.bmp", "x.avif"])
+      expect(isImageFileName(name)).toBe(true);
+    for (const name of ["photo.svg", "photo", "photo.", "photo.txt", "photo.pdf"])
+      expect(isImageFileName(name)).toBe(false);
   });
 });
