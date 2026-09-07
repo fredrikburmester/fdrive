@@ -97,6 +97,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
     db.update_file_status(ctx.conn(), file_id, "indexed", 5, None)
     db.insert_chunks(ctx.conn(), file_id, ["hello"], [[0.1] * 384])
     db.upsert_thumbnail(ctx.conn(), "sha1", 256, "sh/sha1.256.webp", 100, 50)
+    db.upsert_image_embedding(ctx.conn(), "sha1", "model-a", [0.1] * 1024)
     client = _make_client(ctx)
     resp = client.get("/stats")
     assert resp.status_code == 200
@@ -104,6 +105,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
     assert body["roots"][0]["root"] == "sftpgo"
     assert body["roots"][0]["counts_by_status"] == {"indexed": 1}
     assert body["thumbnails"] == 1
+    assert body["image_embeddings"] == 1
     assert body["queue_depth"] == 0
     assert body["thumbnail_rebuild"] == {
         "running": False,
@@ -113,6 +115,34 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "finished_at": None,
         "errors": 0,
     }
+    assert body["image_embedding_rebuild"] == {
+        "running": False,
+        "processed": 0,
+        "total": 0,
+        "started_at": None,
+        "finished_at": None,
+        "errors": 0,
+    }
+    assert body["image_embedding_clear"] == {
+        "running": False,
+        "processed": 0,
+        "total": 0,
+        "started_at": None,
+        "finished_at": None,
+        "errors": 0,
+    }
+
+
+def test_stats_reports_running_image_embedding_rebuild(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    client.app.state.server_state.image_embed_rebuild_job.try_start(3)
+    resp = client.get("/stats")
+    body = resp.json()
+    assert body["image_embedding_rebuild"]["running"] is True
+    assert body["image_embedding_rebuild"]["total"] == 3
 
 
 def test_stats_reports_running_thumbnail_rebuild(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -371,6 +401,87 @@ def test_thumbnails_rebuild_invalid_path_type_is_400(
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": 123})
     assert resp.status_code == 400
+
+
+def test_image_embeddings_rebuild_not_configured_reports_zero(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    png = tmp_path / "a.png"
+    _write_png(png)
+    st = png.stat()
+    db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
+    client = _make_client(ctx)
+    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 0}
+
+
+def test_image_embeddings_rebuild_invalid_root_type_is_400(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    resp = client.post("/image-embeddings/rebuild", json={"root": 123})
+    assert resp.status_code == 400
+
+
+def test_image_embeddings_rebuild_invalid_path_type_is_400(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo", "path": 123})
+    assert resp.status_code == 400
+
+
+def test_image_embeddings_rebuild_unknown_root_is_ignored(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    resp = client.post("/image-embeddings/rebuild", json={"root": "unknown"})
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 0}
+
+
+def test_image_embeddings_rebuild_returns_409_when_already_running(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    client = _make_client(ctx)
+    client.app.state.server_state.image_embed_rebuild_job.try_start(1)
+    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
+    assert resp.status_code == 409
+
+
+def test_image_embeddings_rebuild_runs_end_to_end(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fdrive_indexer import image_embed_rebuild
+    from fdrive_indexer.image_embed import ImageEmbedHealth
+
+    monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    monkeypatch.setenv("IMAGE_EMBED_URL", "http://image-embed.invalid")
+    ctx.cfg.image_embed_url = "http://image-embed.invalid"
+    png = tmp_path / "a.png"
+    _write_png(png)
+    st = png.stat()
+    db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
+    thumb_dir = Path(ctx.cfg.thumbs_dir) / "sh"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    (thumb_dir / "sha1.256.webp").write_bytes(b"fake webp")
+    health = ImageEmbedHealth(status="ok", model="model-a", dim=1024, device="cpu")
+    monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: health)
+    monkeypatch.setattr(
+        image_embed_rebuild, "embed_images", lambda data, url, batch: ([[0.1] * 1024 for _ in data], "model-a")
+    )
+    client = _make_client(ctx)
+    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
+    assert resp.status_code == 202
+    assert resp.json() == {"started": True, "total": 1}
+    assert db.image_embedding_model(ctx.conn(), "sha1") == "model-a"
 
 
 def test_directory_endpoint(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

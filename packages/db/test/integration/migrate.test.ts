@@ -19,6 +19,7 @@ const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: 
   { schema: "app", table: "favorites" },
   { schema: "app", table: "recents" },
   { schema: "app", table: "thumbnails" },
+  { schema: "app", table: "image_embeddings" },
   { schema: "app", table: "wopi_locks" },
   { schema: "app", table: "shares" },
   { schema: "app", table: "settings" },
@@ -110,6 +111,35 @@ describe("migrate", () => {
         and file_id = ${file.id}
     `);
     expect(fts.rows).toHaveLength(1);
+  });
+
+  it("stores a 1024-dim image embedding and queries it back by cosine distance", async () => {
+    const embedding = Array.from({ length: 1024 }, (_, i) => i / 1024);
+    await db.insert(schema.imageEmbeddings).values({
+      contentKey: "sha-image-1",
+      model: "google/siglip2-large-patch16-256",
+      embedding,
+    });
+
+    const cosine = await db.execute(sql`
+      select content_key, embedding <=> ${sql.raw(`'[${embedding.join(",")}]'`)}::vector as distance
+      from app.image_embeddings
+      where content_key = 'sha-image-1'
+    `);
+    expect(cosine.rows).toHaveLength(1);
+    expect(Number(cosine.rows[0]?.distance)).toBeCloseTo(0, 5);
+  });
+
+  it("creates an HNSW cosine index on app.image_embeddings.embedding", async () => {
+    const result = await db.execute(sql`
+      select indexdef
+      from pg_indexes
+      where schemaname = 'app' and tablename = 'image_embeddings' and indexname = 'image_embeddings_hnsw_idx'
+    `);
+    expect(result.rows).toHaveLength(1);
+    const indexDef = String(result.rows[0]?.indexdef);
+    expect(indexDef).toContain("USING hnsw");
+    expect(indexDef).toContain("vector_cosine_ops");
   });
 
   it("rejects a duplicate (root_id, path) pair in idx.files", async () => {

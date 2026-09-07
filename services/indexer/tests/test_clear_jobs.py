@@ -221,6 +221,47 @@ def test_missing_cache_and_no_contexts(postgres_dsn, monkeypatch, tmp_path):
     assert job.snapshot()["processed"] == 1
 
 
+def test_clear_image_embeddings_no_contexts_is_noop(postgres_dsn, monkeypatch, tmp_path):
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "one", str(tmp_path))
+    db.upsert_image_embedding(ctx.conn(), "sha-a", "model-a", [0.1] * 1024)
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    clear_jobs.clear_image_embeddings([], job)
+    assert db.image_embeddings_count(ctx.conn()) == 1
+
+
+def test_clear_image_embeddings_deletes_all_rows(postgres_dsn, monkeypatch, tmp_path):
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "one", str(tmp_path))
+    db.upsert_image_embedding(ctx.conn(), "sha-a", "model-a", [0.1] * 1024)
+    db.upsert_image_embedding(ctx.conn(), "sha-b", "model-a", [0.2] * 1024)
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    monkeypatch.setattr(clear_jobs, "BATCH_SIZE", 1)
+    clear_jobs.clear_image_embeddings([ctx], job)
+    assert db.image_embeddings_count(ctx.conn()) == 0
+    assert job.snapshot()["processed"] == job.snapshot()["total"] == 2
+    assert job.snapshot()["errors"] == 0
+
+
+def test_clear_image_embeddings_empty_table_is_noop(postgres_dsn, monkeypatch, tmp_path):
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "one", str(tmp_path))
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    clear_jobs.clear_image_embeddings([ctx], job)
+    assert job.snapshot()["processed"] == 0
+
+
+def test_clear_image_embeddings_failure_reports_via_callback(postgres_dsn, monkeypatch, tmp_path):
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "one", str(tmp_path))
+    db.upsert_image_embedding(ctx.conn(), "sha-a", "model-a", [0.1] * 1024)
+
+    def boom(conn, key):
+        raise RuntimeError("delete failed")
+
+    monkeypatch.setattr(db, "delete_image_embedding", boom)
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    clear_jobs.clear_image_embeddings([ctx], job)
+    assert job.snapshot()["errors"] == 1
+    assert job.snapshot()["processed"] == 1
+
+
 def test_clear_runner_failures_release_admission(monkeypatch):
     job = thumb_rebuild.ThumbnailRebuildJob()
     monkeypatch.setattr(clear_jobs.threading, "Thread", _SyncThread)
@@ -260,6 +301,7 @@ def test_clear_runner_failures_release_admission(monkeypatch):
         ("/index/clear", '{"root":"missing"}', 404),
         ("/index/clear", '{"extra":true}', 400),
         ("/thumbnails/clear", '{"root":"one"}', 400),
+        ("/image-embeddings/clear", '{"root":"one"}', 400),
     ],
 )
 def test_clear_validation(postgres_dsn, monkeypatch, tmp_path, url, payload, status):
@@ -274,6 +316,7 @@ def test_clear_validation(postgres_dsn, monkeypatch, tmp_path, url, payload, sta
         ("/index/clear", '{"root":"one","path":"/"}'),
         ("/index/clear", '{"root":"one","path":"/a"}'),
         ("/thumbnails/clear", "{}"),
+        ("/image-embeddings/clear", "{}"),
     ],
 )
 def test_clear_routes_run_and_report(postgres_dsn, monkeypatch, tmp_path, url, payload):
@@ -283,7 +326,12 @@ def test_clear_routes_run_and_report(postgres_dsn, monkeypatch, tmp_path, url, p
     client = _make_client(ctx)
     response = client.post(url, content=payload)
     assert response.status_code == 202 and response.json() == {"started": True}
-    key = "index_clear" if url == "/index/clear" else "thumbnail_clear"
+    keys = {
+        "/index/clear": "index_clear",
+        "/thumbnails/clear": "thumbnail_clear",
+        "/image-embeddings/clear": "image_embedding_clear",
+    }
+    key = keys[url]
     snapshot = client.get("/stats").json()[key]
     assert snapshot["finished_at"] is not None and not snapshot["running"]
     assert snapshot["errors"] == 0
@@ -292,8 +340,12 @@ def test_clear_routes_run_and_report(postgres_dsn, monkeypatch, tmp_path, url, p
         assert not db.get_manifest(ctx.conn(), ctx.root_id)
 
 
-@pytest.mark.parametrize("active", ["thumbnail_job", "index_clear_job", "thumbnail_clear_job"])
-@pytest.mark.parametrize("url", ["/index/clear", "/thumbnails/clear", "/thumbnails/rebuild"])
+@pytest.mark.parametrize(
+    "active", ["thumbnail_job", "index_clear_job", "thumbnail_clear_job", "image_embed_rebuild_job", "image_embed_clear_job"]
+)
+@pytest.mark.parametrize(
+    "url", ["/index/clear", "/thumbnails/clear", "/thumbnails/rebuild", "/image-embeddings/clear", "/image-embeddings/rebuild"]
+)
 def test_shared_admission(postgres_dsn, monkeypatch, tmp_path, active, url):
     ctx = _make_ctx(postgres_dsn, monkeypatch, "one", str(tmp_path))
     client = _make_client(ctx)

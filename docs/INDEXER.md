@@ -57,6 +57,39 @@ missing sizes are filled in. It runs in a background thread (at most one at a
 time process-wide) and its progress is visible at `GET /stats` under
 `thumbnail_rebuild`.
 
+### Image embeddings (optional)
+
+When `IMAGE_EMBED_URL` is set (the `services/image-embed` sidecar, a SigLIP 2
+CLIP-style model, `google/siglip2-large-patch16-256` by default, 1024
+dimensions), the indexer embeds the **256px thumbnail** it already wrote for
+every image file (never the original) and stores the vector in
+`app.image_embeddings`, keyed by the file's sha256 (`content_key`, the same
+key `app.thumbnails` uses) so two copies of one photo are embedded once.
+Absent `IMAGE_EMBED_URL`, this is entirely off: no error, `GET /stats`
+reports `image_embeddings: 0`, matching how OCR degrades without its own
+sidecar.
+
+The pass hangs off the same per-file step as thumbnail generation
+(`indexer.py`'s `embed_thumbnail`, called right after a thumbnail is
+written): before writing anything, it checks the sidecar's `GET /health`
+against the column's fixed dimension (1024) and an `"ok"` status; on a
+mismatch it logs an error naming both numbers and skips embedding for that
+file without writing (never truncating, padding, or otherwise coercing the
+vector). A file already embedded by the currently configured model is
+skipped; one embedded by a different (stale) model is always re-embedded, so
+a model change self-heals as files are next touched.
+
+`POST /image-embeddings/rebuild` (`image_embed_rebuild.py`) is the bulk
+backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ root?,
+path?, force? }`, batched against the sidecar at `IMAGE_EMBED_BATCH_SIZE`
+requests per call. Without `force`, only images with no row at all are
+filled in; a row from a different model is left alone. With `force`, a
+stale-model row is also re-embedded and overwritten — the deliberate "replace
+the old model's rows" pass. A row already matching the configured model is
+never redundantly recomputed either way. Progress is visible at `GET /stats`
+under `image_embedding_rebuild`, and it shares the thumbnail-rebuild
+admission lock (only one heavy background pass runs at a time).
+
 ## `text_status` values
 
 | Status | Meaning |
@@ -118,10 +151,12 @@ a published port in the non-dev compose file.
 | Endpoint | Method | Body | Returns |
 | --- | --- | --- | --- |
 | `/health` | GET | — | `{ ok, roots, watcher, embed_ok, schema_version }` |
-| `/stats` | GET | — | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, a sample of recent errors, and `thumbnail_rebuild: { running, processed, total, started_at, finished_at, errors }` for the most recent `/thumbnails/rebuild` pass (all zero/`null`/`false` if none has run yet). |
+| `/stats` | GET | — | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, started_at, finished_at, errors }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract` | POST | `{ root, path, offset?, max_chars? }` | Live text extraction for one file (not persisted), sliced by `offset`/`max_chars`. Used for the web app's live text preview. |
 | `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
 | `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is the candidate count computed up front), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
+| `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Reports `image_embeddings: 0` and `total: 0` immediately when `IMAGE_EMBED_URL` is not configured, rather than discovering candidates the pass will never touch. Returns `202 { started: true, total }`, or `409` if a rebuild is already running. |
+| `/image-embeddings/clear` | POST | `{}` or empty | Deletes every row of `app.image_embeddings`; see "Clearing derived data" below. |
 
 ## Compose
 
@@ -222,11 +257,19 @@ traversal. Failed removals retain their manifest rows for retry; missing files
 allow manifest cleanup. Originals and index/text/metadata rows remain. Normal
 indexing or on-demand preview generation can repopulate the cache.
 
-Both routes return `202 { "started": true }` without waiting for discovery or
-deletion to finish.
-Clear passes and explicit thumbnail rebuilds share admission; conflicting requests
-return 409. `/stats` exposes `index_clear` and `thumbnail_clear` records with
-`running`, `processed`, `total`, `started_at`, `finished_at`, and `errors`. Totals
+Internal `POST /image-embeddings/clear` also accepts only an empty body or
+`{}`. It deletes every row of `app.image_embeddings` in keyset-paginated
+batches; there is no cache file to remove, since the table only ever holds
+vectors, never bytes. Original files, thumbnails, and index/text/metadata
+rows remain. Normal indexing (with `IMAGE_EMBED_URL` configured) or
+`/image-embeddings/rebuild` can repopulate it.
+
+All three clear routes return `202 { "started": true }` without waiting for
+discovery or deletion to finish.
+Clear passes and explicit rebuilds (thumbnail and image-embedding) share
+admission; conflicting requests return 409. `/stats` exposes `index_clear`,
+`thumbnail_clear`, and `image_embedding_clear` records with `running`,
+`processed`, `total`, `started_at`, `finished_at`, and `errors`. Totals
 grow as batches are discovered. Top-level failures are counted, and admission is
 released even if thread startup fails. Each background thread gets its own
 thread-local database connection. These actions do not pause normal indexing.

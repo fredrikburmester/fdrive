@@ -43,6 +43,13 @@
       "when": 1788775410372,
       "tag": "0005_add_share_presentation",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788789012033,
+      "tag": "0006_image_embeddings",
+      "breakpoints": true
     }
   ]
 }

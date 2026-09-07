@@ -301,6 +301,49 @@ def test_media_files_empty_root(db_conn: psycopg.Connection) -> None:
     assert db.media_files(db_conn, root_id) == []
 
 
+def test_image_embedding_model_missing_is_none(db_conn: psycopg.Connection) -> None:
+    assert db.image_embedding_model(db_conn, "sha-missing") is None
+
+
+def test_upsert_image_embedding_and_read_back(db_conn: psycopg.Connection) -> None:
+    db.upsert_image_embedding(db_conn, "sha-a", "model-a", [0.1] * 1024)
+    assert db.image_embedding_model(db_conn, "sha-a") == "model-a"
+    assert db.image_embeddings_count(db_conn) == 1
+
+
+def test_upsert_image_embedding_conflict_replaces_model_and_vector(db_conn: psycopg.Connection) -> None:
+    db.upsert_image_embedding(db_conn, "sha-a", "model-a", [0.1] * 1024)
+    db.upsert_image_embedding(db_conn, "sha-a", "model-b", [0.2] * 1024)
+    assert db.image_embedding_model(db_conn, "sha-a") == "model-b"
+    assert db.image_embeddings_count(db_conn) == 1
+
+
+def test_image_embeddings_count_empty(db_conn: psycopg.Connection) -> None:
+    assert db.image_embeddings_count(db_conn) == 0
+
+
+def test_image_embeddings_max_content_key_empty_is_none(db_conn: psycopg.Connection) -> None:
+    assert db.image_embeddings_max_content_key(db_conn) is None
+
+
+def test_image_embeddings_max_content_key_and_page(db_conn: psycopg.Connection) -> None:
+    db.upsert_image_embedding(db_conn, "sha-a", "model-a", [0.1] * 1024)
+    db.upsert_image_embedding(db_conn, "sha-b", "model-a", [0.2] * 1024)
+    db.upsert_image_embedding(db_conn, "sha-c", "model-a", [0.3] * 1024)
+    upper = db.image_embeddings_max_content_key(db_conn)
+    assert upper == "sha-c"
+    page = db.image_embeddings_page(db_conn, "", upper, 2)
+    assert page == ["sha-a", "sha-b"]
+    rest = db.image_embeddings_page(db_conn, page[-1], upper, 2)
+    assert rest == ["sha-c"]
+
+
+def test_delete_image_embedding(db_conn: psycopg.Connection) -> None:
+    db.upsert_image_embedding(db_conn, "sha-a", "model-a", [0.1] * 1024)
+    db.delete_image_embedding(db_conn, "sha-a")
+    assert db.image_embeddings_count(db_conn) == 0
+
+
 def test_root_stats_counts_and_chunks(db_conn: psycopg.Connection) -> None:
     root_id = db.upsert_root(db_conn, "sftpgo")
     f1 = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
