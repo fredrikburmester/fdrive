@@ -21,6 +21,11 @@ services:
       FDRIVE_WOPI_URL: http://api:3001/wopi
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-104857600}
       FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-[]}
+  # Same build-time CSP frame-src requirement as compose.office.yaml.
+  web:
+    build:
+      args:
+        FDRIVE_OFFICE_PUBLIC_URL: https://${FDRIVE_COLLABORA_HOST}
   proxy:
     environment:
       FDRIVE_COLLABORA_HOST: ${FDRIVE_COLLABORA_HOST}

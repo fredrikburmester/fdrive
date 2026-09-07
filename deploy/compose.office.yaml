@@ -13,6 +13,13 @@ services:
       FDRIVE_WOPI_URL: http://api:3001/wopi
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-104857600}
       FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-[]}
+  # The web image bakes FDRIVE_OFFICE_PUBLIC_URL into its Content-Security-Policy
+  # frame-src at build time (apps/web/Dockerfile); it must match the api's value
+  # above or the editor iframe is blocked.
+  web:
+    build:
+      args:
+        FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_PUBLIC_URL}/onlyoffice
   proxy:
     volumes:
       - ./office/Caddyfile.onlyoffice:/etc/caddy/Caddyfile:ro
