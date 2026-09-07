@@ -9,3 +9,19 @@
 **/*.log
 .git
 .DS_Store
+
+# Secrets: never let a real .env reach a build context or image layer.
+# .env.example files are placeholders and stay included.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Worktrees, local dev data, the pnpm store, and perf output never belong in
+# a build context either.
+.worktrees
+deploy/dev/.data
+.pnpm-store
+tools/perf/results

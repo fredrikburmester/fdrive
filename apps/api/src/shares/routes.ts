@@ -173,7 +173,7 @@ export function registerSharesRoutes(
     const id = shareId(c);
     if (
       !deps.limiter.allow(
-        extractClientIp(c),
+        extractClientIp(c, deps.config.fdriveTrustedProxyHops),
         id,
         c.req.method === "POST" && c.req.path.endsWith("/credentials"),
       )

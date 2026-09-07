@@ -49,7 +49,7 @@ export function registerSetupRoutes(
       throw new ApiHttpError("not_found", "setup has already been completed");
     }
 
-    const ip = extractClientIp(c);
+    const ip = extractClientIp(c, deps.config.fdriveTrustedProxyHops);
     const limiterStatus = deps.limiter.check(limiterKeyFor(ip));
     if (!limiterStatus.allowed) {
       throw new ApiHttpError("rate_limited", "too many setup attempts", {
@@ -81,7 +81,7 @@ export function registerSetupRoutes(
       throw new ApiHttpError("not_found", "setup has already been completed");
     }
 
-    const ip = extractClientIp(c);
+    const ip = extractClientIp(c, deps.config.fdriveTrustedProxyHops);
     const limiterStatus = deps.limiter.check(limiterKeyFor(ip));
     if (!limiterStatus.allowed) {
       throw new ApiHttpError("rate_limited", "too many setup attempts", {

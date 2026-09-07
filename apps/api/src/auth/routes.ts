@@ -36,7 +36,7 @@ export function registerAuthRoutes(
       });
     }
 
-    const ip = extractClientIp(c);
+    const ip = extractClientIp(c, deps.config.fdriveTrustedProxyHops);
     const userAgent = c.req.header("user-agent") ?? null;
 
     const result = await deps.service.login({
