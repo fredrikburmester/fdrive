@@ -13,6 +13,8 @@ vi.mock("@/lib/shares/client", () => ({
     shareEntries: calls.entries,
     shareDownloadUrl: (id: string, path = "/") =>
       `/api/v1/public/shares/${id}/download?path=${encodeURIComponent(path)}`,
+    shareThumbUrl: (id: string, path: string, size: number) =>
+      `/api/v1/public/shares/${id}/thumb?path=${encodeURIComponent(path)}&size=${size}`,
     shareArchiveUrl: (id: string) => `/api/v1/public/shares/${id}/archive`,
   }),
 }));
@@ -145,10 +147,13 @@ it("a folder of only images renders a gallery whose lightbox navigates and downl
   expect(screen.getByRole("img", { name: "a.png" }).getAttribute("loading")).toBe("lazy");
   expect(screen.queryByRole("table")).toBeNull();
   fireEvent.click(screen.getByRole("img", { name: "a.png" }));
-  await screen.findByRole("dialog");
+  const lightbox = await screen.findByRole("dialog");
+  expect(lightbox.getAttribute("aria-modal")).toBe("true");
   expect(screen.getAllByRole("link", { name: "Download" })).toHaveLength(1);
+  expect(screen.getByText("1 / 2")).toBeTruthy();
   fireEvent.keyDown(window, { key: "ArrowRight" });
-  await screen.findByText("2 of 2 · b.jpg");
+  await screen.findByText("b.jpg");
+  expect(screen.getByText("2 / 2")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });

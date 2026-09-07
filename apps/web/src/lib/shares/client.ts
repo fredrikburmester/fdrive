@@ -14,6 +14,7 @@ export type PublicShareClient = Pick<
   | "clearSharePassword"
   | "shareEntries"
   | "shareDownloadUrl"
+  | "shareThumbUrl"
   | "shareArchiveUrl"
   | "shareUpload"
 >;
