@@ -144,6 +144,46 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     await expect(page.getByPlaceholder("Search files and content...")).toBeVisible();
   });
 
+  test("the search panel is a full-width sheet with a scrollable, unclipped type filter row and no keyboard footer", async ({
+    page,
+  }) => {
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    await page.goto("/files");
+
+    await page.getByRole("button", { name: "Search" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    // Full width: the panel spans (within a hairline) the whole viewport,
+    // unlike the small centered dialog desktop keeps.
+    await expect
+      .poll(async () => (await dialog.boundingBox())?.width)
+      .toBeGreaterThanOrEqual(MOBILE_VIEWPORT.width - 2);
+
+    // Every type chip is reachable: Playwright scrolls a target into view
+    // before clicking it, so this only succeeds if the row's overflow lets
+    // "Video" (previously clipped) actually scroll into place rather than
+    // staying hidden behind a clipped container.
+    // Ends back on "Any type" so the query below is not left filtered by
+    // whichever chip was clicked last.
+    for (const label of ["Images", "Documents", "Audio", "Video", "Archives", "Any type"]) {
+      await dialog.getByRole("button", { name: label, exact: true }).click();
+    }
+
+    // The keyboard-oriented footer (the Enter-opens preference and its
+    // hints) makes no sense without a keyboard, so it is absent entirely.
+    await expect(dialog.getByText("Enter opens")).toHaveCount(0);
+    await expect(dialog.getByText("reveal", { exact: true })).toHaveCount(0);
+
+    // Typing a query still lists results, and tapping one still opens it
+    // (the reveal action moves to each row's own button instead of Enter).
+    await page.getByPlaceholder("Search files and content...").fill("readme");
+    await expect(dialog.getByText("readme.md").first()).toBeVisible();
+    await dialog.getByText("readme.md").first().click();
+
+    await expect(page).toHaveURL(/\/view\/docs\/readme\.md$/);
+  });
+
   test("navigation orders Files tree, then Shares near the bottom", async ({ page }) => {
     await page.setViewportSize(MOBILE_VIEWPORT);
     await page.goto("/files");

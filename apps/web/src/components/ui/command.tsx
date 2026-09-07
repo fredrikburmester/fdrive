@@ -1,14 +1,18 @@
 "use client";
 
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Command as CommandPrimitive } from "cmdk";
 import { cn } from "cn";
-import { CheckIcon, SearchIcon } from "lucide-react";
+import { CheckIcon, SearchIcon, XIcon } from "lucide-react";
 import type * as React from "react";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
+  DialogOverlay,
+  DialogPortal,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
@@ -32,14 +36,64 @@ function CommandDialog({
   children,
   className,
   showCloseButton = false,
+  mobile = false,
+  initialFocus,
   ...props
 }: Omit<React.ComponentProps<typeof Dialog>, "children"> & {
   title?: string;
   description?: string;
   className?: string;
   showCloseButton?: boolean;
+  /**
+   * Renders a full-screen sheet from the bottom instead of the centered
+   * dialog: full width, safe-area aware, a visible Close control up top.
+   * Used below the `md` breakpoint, where a small centered dialog clips its
+   * contents and keyboard-oriented hints make no sense on a touch device.
+   */
+  mobile?: boolean;
+  /**
+   * Only used when `mobile` is true: the visible Close control comes
+   * before `children` in the DOM so it always reads as the sheet's header,
+   * which would otherwise steal the default "first tabbable element"
+   * initial focus. Pass a ref to the search input to keep it focused on
+   * open instead.
+   */
+  initialFocus?: React.RefObject<HTMLElement | null> | undefined;
   children: React.ReactNode;
 }) {
+  if (mobile) {
+    return (
+      <Dialog {...props}>
+        <DialogPortal>
+          <DialogOverlay />
+          <DialogPrimitive.Popup
+            data-slot="dialog-content"
+            initialFocus={initialFocus}
+            className={cn(
+              "fixed inset-0 z-50 flex flex-col overflow-hidden bg-popover pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-popover-foreground outline-none data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-8 data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-bottom-8",
+              className,
+            )}
+          >
+            <DialogHeader className="sr-only">
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
+            <div className="flex shrink-0 items-center justify-end px-1.5 pt-1.5">
+              <DialogPrimitive.Close
+                data-slot="dialog-close"
+                render={<Button variant="ghost" size="icon" />}
+              >
+                <XIcon />
+                <span className="sr-only">Close</span>
+              </DialogPrimitive.Close>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog {...props}>
       <DialogHeader className="sr-only">
