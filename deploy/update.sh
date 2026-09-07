@@ -28,7 +28,8 @@ cd "$repo/deploy"
 if [[ -f .env ]]; then
   for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES; do
     if [[ -z "${!key:-}" ]]; then
-      value="$(grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')"
+      # `|| true` keeps an absent key from aborting the script under pipefail.
+      value="$({ grep -E "^${key}=" .env || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')"
       [[ -n "$value" ]] && export "$key=$value"
     fi
   done
