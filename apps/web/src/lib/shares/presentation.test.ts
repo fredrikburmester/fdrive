@@ -57,3 +57,26 @@ describe("resolveSingleFilePresentation", () => {
     expect(resolveSingleFilePresentation("auto", null)).toBe("download");
   });
 });
+
+describe("download-limited shares", () => {
+  const images = [
+    { name: "a.jpg", kind: "file" as const },
+    { name: "b.png", kind: "file" as const },
+  ];
+  it("never resolves a listing to gallery when the link has a download limit", () => {
+    expect(resolveEntriesPresentation("auto", images, { downloadLimited: true })).toBe("list");
+    expect(resolveEntriesPresentation("gallery", images, { downloadLimited: true })).toBe("list");
+    expect(resolveEntriesPresentation("download", images, { downloadLimited: true })).toBe(
+      "download",
+    );
+    expect(resolveEntriesPresentation("auto", images, { downloadLimited: false })).toBe("gallery");
+  });
+  it("shows the download card instead of a one-image gallery for a limited single file", () => {
+    expect(resolveSingleFilePresentation("auto", "a.jpg", { downloadLimited: true })).toBe(
+      "download",
+    );
+    expect(resolveSingleFilePresentation("gallery", "a.jpg", { downloadLimited: false })).toBe(
+      "gallery",
+    );
+  });
+});
