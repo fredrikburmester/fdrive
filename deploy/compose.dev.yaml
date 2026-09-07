@@ -138,6 +138,10 @@ services:
       OCR_PORT: "8011"
       STATE_DIR: /state
       OCR_RUN_ON_START: "false"
+      # Let a developer exercise the include/exclude glob feature locally
+      # without editing this file; unset by default (no restriction).
+      OCR_EXCLUDE_GLOBS: ${OCR_EXCLUDE_GLOBS:-}
+      OCR_INCLUDE_GLOBS: ${OCR_INCLUDE_GLOBS:-}
     ports:
       - "${FDRIVE_DEV_OCR_HTTP_PORT:-58011}:8011"
     volumes:

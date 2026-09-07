@@ -18,7 +18,11 @@ DEFAULT_SETTINGS = Settings(
 
 
 def _make_state(
-    postgres_dsn: str, tmp_path: Path, schema_ready: bool = True, targets: list[RootTarget] | None = None
+    postgres_dsn: str,
+    tmp_path: Path,
+    schema_ready: bool = True,
+    targets: list[RootTarget] | None = None,
+    include_globs: tuple[str, ...] = (),
 ) -> server.ServerState:
     root_id = db.upsert_root(db.connect(postgres_dsn), "sftpgo")
     resolved_targets = targets if targets is not None else [RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))]
@@ -33,6 +37,7 @@ def _make_state(
         now=lambda: FIXED_NOW,
         schema_ready=lambda: schema_ready,
         log=lambda _msg: None,
+        include_globs=include_globs,
     )
 
 
@@ -168,6 +173,29 @@ def test_run_starts_a_pass_and_stats_reflects_it(postgres_dsn: str, tmp_path: Pa
     assert body["last_run"] is not None
     assert body["last_run"]["seen"] == 1
     assert body["last_run"]["skipped"] == 1
+
+
+def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) -> None:
+    (tmp_path / "fredrik").mkdir()
+    (tmp_path / "fredrik" / "in-scope.pdf").write_bytes(b"HASTEXT\n")
+    (tmp_path / "alice").mkdir()
+    (tmp_path / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
+    state = _make_state(postgres_dsn, tmp_path, include_globs=("sftpgo/fredrik/**",))
+    client = TestClient(server.create_app(state))
+
+    resp = client.post("/run")
+    assert resp.status_code == 202
+    assert _wait_until(lambda: not state.run_lock.running)
+
+    conn = state.conn_factory()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (state.targets[0].root_id,))
+            statuses = dict(cur.fetchall())
+    finally:
+        conn.close()
+    assert statuses[str(Path("alice") / "out-of-scope.pdf")] == "excluded"
+    assert statuses[str(Path("fredrik") / "in-scope.pdf")] == "has_text"
 
 
 def test_run_returns_409_when_already_running(postgres_dsn: str, tmp_path: Path) -> None:

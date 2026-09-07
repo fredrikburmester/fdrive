@@ -258,4 +258,50 @@ describe("composeApp", () => {
       await composed.close();
     }
   });
+
+  it("logs a startup summary line per subsystem and serves GET /api/v1/health with a matching subsystems field", async () => {
+    const server = createFakeSftpgoServer({
+      users: [...SEED_USERS],
+      folders: [...SEED_FOLDERS],
+      files: { ...SEED_FILES },
+    });
+
+    const config = loadConfig({
+      DATABASE_URL: postgres.connectionString,
+      SFTPGO_URL: "http://sftpgo.internal:8080",
+      FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
+      // Left unconfigured: index, search, ocr, thumbnails, office, trash.
+    });
+
+    const { logger, messages } = createCapturingLogger();
+    const composed = await composeApp(config, logger, () => new Date(), { fetch: server.fetch });
+
+    try {
+      expect(messages).toContain("subsystem=core status=configured");
+      expect(messages).toContain(
+        "subsystem=index status=not configured missing=FDRIVE_INDEX_ROOTS,FDRIVE_INDEXER_URL",
+      );
+      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_EMBED_URL");
+      expect(messages.some((message) => message.startsWith("subsystem=network bind hint"))).toBe(
+        true,
+      );
+
+      const healthRes = await composed.app.request("/api/v1/health");
+      expect(healthRes.status).toBe(200);
+      const body = (await healthRes.json()) as {
+        subsystems: Record<string, { status: string; missing: string[] }>;
+      };
+      expect(body.subsystems.core).toEqual({ status: "configured", missing: [] });
+      expect(body.subsystems.index).toEqual({
+        status: "not_configured",
+        missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+      });
+      expect(body.subsystems.ocr).toEqual({
+        status: "not_configured",
+        missing: ["FDRIVE_OCR_URL"],
+      });
+    } finally {
+      await composed.close();
+    }
+  });
 });
