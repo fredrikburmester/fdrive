@@ -3,7 +3,7 @@ import { ApiError, ManagedShare } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
-import { shareAudioFixture, shareImageFixture } from "./support/share-fixture.js";
+import { shareAudioFixture, shareImageFixture, shareZipFixture } from "./support/share-fixture.js";
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
@@ -402,5 +402,67 @@ test("an image-only folder shows a gallery with lightbox navigation and per-imag
     } finally {
       await context.close().catch(() => {});
     }
+  }
+});
+
+test("a shared ZIP can be peeked without extracting it, hidden on a limited link, and shown beside a single archive file's own download", async ({
+  page,
+  browser,
+}) => {
+  await loginAs(page, "share_owner", "share-owner-test-password");
+  const zip = shareZipFixture({ "a.txt": "hello from inside the zip", "dir/b.txt": "nested" });
+  const directoryUpload = await page.request.put(
+    "/api/v1/fs/upload?path=%2Fzips%2Fbundle.zip&mkdirParents=true",
+    {
+      headers: { "x-requested-with": "fdrive", "content-type": "application/octet-stream" },
+      data: zip,
+    },
+  );
+  expect(directoryUpload.ok()).toBe(true);
+  const singleUpload = await page.request.put("/api/v1/fs/upload?path=%2Fsingle.zip", {
+    headers: { "x-requested-with": "fdrive", "content-type": "application/octet-stream" },
+    data: zip,
+  });
+  expect(singleUpload.ok()).toBe(true);
+  const directory = await createLink(page, ["zips"], "Public zips folder");
+  const single = await createLink(page, ["single.zip"], "Single archive");
+  const create = async (name: string, paths: string[], maxDownloads: number) => {
+    const response = await page.request.post("/api/v1/shares", {
+      headers: { "x-requested-with": "fdrive" },
+      data: { name, paths, scope: "read", expiresAt: null, maxDownloads },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return ManagedShare.parse(await response.json());
+  };
+  const limitedShare = await create("Limit one", ["/single.zip"], 1);
+
+  const context = await browser.newContext();
+  const visitor = await context.newPage();
+  const forbidden = publicRequests(visitor);
+  try {
+    await visitor.goto(directory);
+    const zipRow = visitor.getByRole("row").filter({ hasText: "bundle.zip" });
+    await expect(zipRow).toBeVisible();
+    await zipRow.getByRole("button", { name: "Peek", exact: true }).click();
+    const peekRegion = visitor.getByRole("region", { name: "Archive entries for bundle.zip" });
+    await expect(peekRegion).toBeVisible();
+    await expect(peekRegion.getByText("a.txt")).toBeVisible();
+    await expect(peekRegion.getByText("dir/b.txt")).toBeVisible();
+    await expect(peekRegion.getByRole("link")).toHaveCount(0);
+    await peekRegion.getByRole("button", { name: "Close preview" }).click();
+    await expect(peekRegion).toBeHidden();
+
+    await visitor.goto(single);
+    await expect(visitor.getByRole("button", { name: "Peek", exact: true })).toBeVisible();
+    await visitor.getByRole("button", { name: "Peek", exact: true }).click();
+    const singlePeek = visitor.getByRole("region", { name: "Archive entries for single.zip" });
+    await expect(singlePeek).toBeVisible();
+    await expect(singlePeek.getByText("a.txt")).toBeVisible();
+
+    await visitor.goto(new URL(limitedShare.publicPath, single).href);
+    await expect(visitor.getByRole("button", { name: "Peek", exact: true })).toHaveCount(0);
+    expect(forbidden).toEqual([]);
+  } finally {
+    await context.close().catch(() => {});
   }
 });

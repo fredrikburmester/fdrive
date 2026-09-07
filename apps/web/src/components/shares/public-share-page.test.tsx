@@ -5,12 +5,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PublicSharePage } from "./public-share-page";
 
-const calls = vi.hoisted(() => ({ metadata: vi.fn(), password: vi.fn(), entries: vi.fn() }));
+const calls = vi.hoisted(() => ({
+  metadata: vi.fn(),
+  password: vi.fn(),
+  entries: vi.fn(),
+  archiveEntries: vi.fn(),
+}));
 vi.mock("@/lib/shares/client", () => ({
   publicShareClient: () => ({
     publicShare: calls.metadata,
     setSharePassword: calls.password,
     shareEntries: calls.entries,
+    shareArchiveEntries: calls.archiveEntries,
     shareDownloadUrl: (id: string, path = "/") =>
       `/api/v1/public/shares/${id}/download?path=${encodeURIComponent(path)}`,
     shareThumbUrl: (id: string, path: string, size: number) =>
@@ -46,6 +52,11 @@ beforeEach(() => {
   calls.metadata.mockResolvedValue(metadata);
   calls.password.mockResolvedValue({ ok: true });
   calls.entries.mockResolvedValue({ items: [] });
+  calls.archiveEntries.mockResolvedValue({
+    format: "zip",
+    entries: [{ path: "a.txt", kind: "file", size: 10, modifiedAt: null }],
+    truncated: false,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -162,4 +173,66 @@ it("a single image file resolves to a one-image gallery without a download list"
   setup();
   await screen.findByRole("img", { name: "photo.png" });
   expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
+});
+it("a directory shows Peek beside Download only for archive rows, and peeking opens the shared entries view", async () => {
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    layout: "directory",
+    fileName: null,
+  });
+  calls.entries.mockResolvedValue({
+    items: [
+      { name: "notes.txt", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" },
+      { name: "bundle.zip", kind: "file", size: 100, modifiedAt: "2026-01-01T00:00:00Z" },
+    ],
+  });
+  setup();
+  await screen.findByText("bundle.zip");
+  expect(screen.getAllByRole("button", { name: "Peek" })).toHaveLength(1);
+  const rows = screen.getAllByRole("row");
+  const notesRow = rows.find((row) => row.textContent?.includes("notes.txt"));
+  const bundleRow = rows.find((row) => row.textContent?.includes("bundle.zip"));
+  expect(
+    notesRow
+      ? Array.from(notesRow.querySelectorAll("button")).some((b) => b.textContent === "Peek")
+      : true,
+  ).toBe(false);
+  expect(
+    bundleRow
+      ? Array.from(bundleRow.querySelectorAll("button")).some((b) => b.textContent === "Peek")
+      : false,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Peek" }));
+  await screen.findByRole("region", { name: "Archive entries for bundle.zip" });
+  await screen.findByText("a.txt");
+  expect(calls.archiveEntries).toHaveBeenCalledWith(id, "/bundle.zip");
+});
+it("hides Peek on a download-limited share, even for an archive row or single-file archive share", async () => {
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    layout: "directory",
+    fileName: null,
+    maxDownloads: 1,
+  });
+  calls.entries.mockResolvedValue({
+    items: [{ name: "bundle.zip", kind: "file", size: 100, modifiedAt: "2026-01-01T00:00:00Z" }],
+  });
+  setup();
+  await screen.findByText("bundle.zip");
+  expect(screen.queryByRole("button", { name: "Peek" })).toBeNull();
+});
+it("a single-file archive share shows Peek beside its download button", async () => {
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    layout: "single-file",
+    fileName: "bundle.tar.gz",
+  });
+  setup();
+  await screen.findByRole("button", { name: "Peek" });
+  fireEvent.click(screen.getByRole("button", { name: "Peek" }));
+  await screen.findByRole("region", { name: "Archive entries for bundle.tar.gz" });
+  expect(calls.archiveEntries).toHaveBeenCalledWith(id, "/");
 });
