@@ -40,6 +40,7 @@ const NARROW_SCOPE_CONTEXT: ScopeContext = {
   scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
   rootNameById: new Map([[1, "sftpgo"]]),
   rootIdByName: new Map([["sftpgo", 1]]),
+  trashPath: null,
 };
 
 /** Like `NARROW_SCOPE_CONTEXT`, but with a root name that has no id yet, to exercise the "root not indexed" branch. */
@@ -48,6 +49,7 @@ const UNINDEXED_ROOT_SCOPE_CONTEXT: ScopeContext = {
   scopePrefixes: [],
   rootNameById: new Map(),
   rootIdByName: new Map(),
+  trashPath: null,
 };
 
 function fail(name: string): never {
@@ -142,6 +144,7 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
     indexerClient: null,
     writesEnabled: false,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
+    trashPath: null,
     ...overrides,
   };
 }
@@ -811,6 +814,7 @@ describe("recordMoveIfInScope", () => {
         ["sftpgo", 1],
         ["photos", 2],
       ]),
+      trashPath: null,
     };
 
     await expect(

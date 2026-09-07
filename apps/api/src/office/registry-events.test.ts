@@ -59,6 +59,35 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   vi.spyOn(connection, "current").mockResolvedValue(null);
   await wrapped.onDeleted(identity.id, "/x", false);
 });
+it("passes onTrashed through unchanged: office registrations are untouched, recents are dropped", async () => {
+  const repos = createMemoryRepos();
+  const files = createMemoryOfficeFileRepo();
+  const metadata = createMetadataService(repos);
+  const connection = createConnectionStore({
+    settings: repos.settings,
+    envUrl: "http://sftpgo",
+    defaultHomeTemplate: "sftpgo:/{username}",
+  });
+  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
+  const account = await repos.accounts.create({ displayName: null });
+  const identity = await repos.identities.create({
+    accountId: account.id,
+    providerId: provider.id,
+    externalUsername: "alice",
+  });
+  const wrapped = withOfficeMetadata(metadata, files, repos.identities, connection, () => now);
+  expect(wrapped.onTrashed).toBe(metadata.onTrashed);
+  const file = await files.ensure({
+    providerId: provider.id,
+    rootName: "sftpgo",
+    path: "alice/a.docx",
+  });
+  await repos.recents.touch(identity.id, "/a.docx");
+  await wrapped.onTrashed(identity.id, "/a.docx", false);
+  expect(await files.get(file.id)).not.toBeNull();
+  expect(await metadata.listRecents(identity.id)).toEqual([]);
+});
+
 it("tombstones an old mapping if the configured root changes during move resolution", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();

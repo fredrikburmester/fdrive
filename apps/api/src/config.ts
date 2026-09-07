@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import { normalizePath } from "@fdrive/core";
 import { z } from "zod";
 import { officeConfig } from "./office/config.ts";
 import { type OfficeEditRule, parseOfficeEditRules } from "./office/edit-policy.ts";
@@ -74,6 +75,15 @@ export interface AppConfig {
   readonly fdriveOcrUrl: string | undefined;
   /** Enables the MCP write tools (`create_folder`, `move_path`). Off by default. */
   readonly fdriveMcpWrites: boolean;
+  /**
+   * The storage provider's recycle folder virtual path (for example
+   * `/.trash`), when the operator has set up the SFTPGo Event Manager
+   * recycle-folder rule described in `docs/DEVELOPMENT.md`. `null` means no
+   * trash capability: deletes stay permanent.
+   */
+  readonly fdriveSftpgoTrashPath: string | null;
+  /** Informational retention window shown in the Trash UI. fdrive never enforces it itself. */
+  readonly fdriveSftpgoTrashRetentionHours: number | null;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -153,6 +163,28 @@ export function parseIndexRoots(value: string | undefined): IndexRootConfig[] | 
     throw new Error("must be a non-empty array of { name, sftpgoPath, indexerPath }");
   }
   return result.data;
+}
+
+/**
+ * Parses `FDRIVE_SFTPGO_TRASH_PATH`. Returns `null` for an absent value (no
+ * trash capability); throws a plain `Error` for a present but invalid value
+ * (not absolute, not already normalized, or the root itself), which
+ * `loadConfig` turns into one of its aggregated issues.
+ */
+export function parseTrashPath(value: string | undefined): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  let normalized: string;
+  try {
+    normalized = normalizePath(value);
+  } catch {
+    throw new Error("must be a valid path");
+  }
+  if (normalized !== value || normalized === "/") {
+    throw new Error('must be an absolute, normalized path other than the root, with no ".."');
+  }
+  return normalized;
 }
 
 /**
@@ -323,6 +355,32 @@ const envSchema = z.object({
     (value) => withDefault(value, "false"),
     z.enum(["true", "false"]).transform((value) => value === "true"),
   ),
+  FDRIVE_SFTPGO_TRASH_PATH: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .transform((value, ctx) => {
+        try {
+          return parseTrashPath(value);
+        } catch (error) {
+          ctx.addIssue({
+            code: "custom",
+            message: error instanceof Error ? error.message : "invalid FDRIVE_SFTPGO_TRASH_PATH",
+          });
+          return z.NEVER;
+        }
+      }),
+  ),
+  FDRIVE_SFTPGO_TRASH_RETENTION_HOURS: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .optional()
+      .transform((value) => (value === undefined ? null : Number(value)))
+      .pipe(z.number().int().positive().nullable()),
+  ),
 });
 
 /**
@@ -372,6 +430,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveIndexerUrl: parsed.FDRIVE_INDEXER_URL,
     fdriveOcrUrl: parsed.FDRIVE_OCR_URL,
     fdriveMcpWrites: parsed.FDRIVE_MCP_WRITES,
+    fdriveSftpgoTrashPath: parsed.FDRIVE_SFTPGO_TRASH_PATH,
+    fdriveSftpgoTrashRetentionHours: parsed.FDRIVE_SFTPGO_TRASH_RETENTION_HOURS,
   };
   officeConfig(config);
   return config;

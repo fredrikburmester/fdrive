@@ -64,6 +64,13 @@ export interface FsRoutesDeps {
    * metadata can omit it; `composition.ts` always wires the real service.
    */
   readonly metadata?: MetadataService;
+  /**
+   * The storage provider's recycle folder virtual path, when configured
+   * (see `config.ts`'s `fdriveSftpgoTrashPath`). Used to hide the trash
+   * folder itself from `fs/list` and to route deletes made while a trash
+   * is available through `metadata.onTrashed` instead of `onDeleted`.
+   */
+  readonly trashPath?: string;
 }
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
@@ -174,7 +181,7 @@ async function statViaParentListing(storage: StorageProvider, path: string): Pro
 }
 
 export function publishFsEvent(
-  deps: FsRoutesDeps,
+  deps: Pick<FsRoutesDeps, "bus" | "clock">,
   principal: Principal,
   op: FsEvent["op"],
   paths: string[],
@@ -332,7 +339,11 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    const serialized = entries.map(serializeEntry);
+    const visible =
+      deps.trashPath !== undefined
+        ? entries.filter((entry) => normalizeOrThrow(entry.path) !== deps.trashPath)
+        : entries;
+    const serialized = visible.map(serializeEntry);
     const decorated =
       deps.metadata !== undefined
         ? await deps.metadata.decorate(principal.identityId, serialized)
@@ -488,7 +499,11 @@ export function registerFsRoutes(
         throw error;
       }
       if (deps.metadata !== undefined) {
-        await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
+        if (principal.storage.trash !== undefined) {
+          await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir");
+        } else {
+          await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
+        }
       }
       removed.push(path);
     }

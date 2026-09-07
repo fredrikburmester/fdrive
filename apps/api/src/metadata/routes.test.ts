@@ -349,6 +349,7 @@ describe("tag CRUD: error mapping", () => {
       touchRecent: async () => fail("touchRecent"),
       onMoved: async () => fail("onMoved"),
       onDeleted: async () => fail("onDeleted"),
+      onTrashed: async () => fail("onTrashed"),
       onCopied: () => undefined,
     };
     const app = await buildHarnessWithStubMetadata(metadata);

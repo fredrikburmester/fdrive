@@ -70,6 +70,7 @@ import { registerThumbRoutes } from "./thumbs/routes.js";
 import { createResolveTokenPrincipal } from "./tokens/principal.js";
 import { registerTokenRoutes } from "./tokens/routes.js";
 import { createTokenService } from "./tokens/service.js";
+import { registerTrashRoutes } from "./trash/routes.js";
 
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
@@ -128,7 +129,11 @@ export async function composeApp(
   const limiter = createLoginLimiter({ clock });
   const tokenSource = createTokenSource({ repos, clientForIdentity, master, clock });
 
-  const storageFactory = createIdentityStorageFactory({ clientForIdentity, tokenSource });
+  const storageFactory = createIdentityStorageFactory({
+    clientForIdentity,
+    tokenSource,
+    ...(config.fdriveSftpgoTrashPath === null ? {} : { trashPath: config.fdriveSftpgoTrashPath }),
+  });
   const identityLinks = createIdentityLinksRepo(db);
   const auth = createAuthModule({
     identityLinks,
@@ -160,6 +165,7 @@ export async function composeApp(
     homeTemplate,
     indexRootNames,
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
+    trashPath: config.fdriveSftpgoTrashPath,
     clock,
   });
 
@@ -207,6 +213,7 @@ export async function composeApp(
         homeTemplate: parseHomeTemplate(connection.homeTemplate),
         indexRootNames,
         thumbsEnabled: config.fdriveThumbsDir !== undefined,
+        trashPath: config.fdriveSftpgoTrashPath,
         clock,
       });
       return service.search({
@@ -396,6 +403,16 @@ export async function composeApp(
         tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
         metadata: fsMetadata,
+        ...(config.fdriveSftpgoTrashPath === null
+          ? {}
+          : { trashPath: config.fdriveSftpgoTrashPath }),
+      });
+      registerTrashRoutes(groups, {
+        bus,
+        clock,
+        trashPath: config.fdriveSftpgoTrashPath,
+        retentionHours: config.fdriveSftpgoTrashRetentionHours,
+        metadata: fsMetadata,
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });
@@ -438,6 +455,7 @@ export async function composeApp(
       indexerClient: indexerExtractClient,
       writesEnabled: config.fdriveMcpWrites,
       clock,
+      trashPath: config.fdriveSftpgoTrashPath,
     },
   });
 

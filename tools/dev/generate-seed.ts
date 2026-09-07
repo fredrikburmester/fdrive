@@ -29,6 +29,13 @@ import { encodePng } from "./png.js";
 /** Matches SFTPGO_DATA_DIR used by the testkit and by compose.dev.yaml's sftpgo volume. */
 export const DEV_DATA_DIR = "/srv/sftpgo/data";
 
+/**
+ * The dev environment's trash virtual path: matches `ensure-env.ts`'s
+ * `FDRIVE_SFTPGO_TRASH_PATH` default, so a fresh `pnpm dev:env` gets a
+ * working Trash view without any manual SFTPGo setup.
+ */
+export const DEV_TRASH_PATH = "/.trash";
+
 const BASE64_PREFIX = "BASE64:";
 
 function toBase64Marker(buffer: Buffer): string {
@@ -170,7 +177,10 @@ function main(): void {
 
   const { users, files } = buildDevSeed(SEED_USERS, SEED_FILES, DEV_USER, buildDevSampleFiles());
 
-  const dump = buildSftpgoDump(users, SEED_FOLDERS, { dataDir: DEV_DATA_DIR });
+  const dump = buildSftpgoDump(users, SEED_FOLDERS, {
+    dataDir: DEV_DATA_DIR,
+    trash: { path: DEV_TRASH_PATH },
+  });
   mkdirSync(devDir, { recursive: true });
   writeFileSync(seedJsonPath, `${JSON.stringify(dump, null, 2)}\n`, "utf-8");
 
