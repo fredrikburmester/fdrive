@@ -22,6 +22,7 @@ const SUBSYSTEMS: readonly Subsystem[] = [
   "network",
   "index",
   "search",
+  "imageSearch",
   "thumbnails",
   "ocr",
   "office",
@@ -34,6 +35,7 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
   network: "Network and sessions",
   index: "Indexer",
   search: "Search",
+  imageSearch: "Image search",
   thumbnails: "Thumbnails",
   ocr: "OCR",
   office: "Office editing",
@@ -60,6 +62,7 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_OCR_URL",
   "FDRIVE_INDEXER_URL",
   "FDRIVE_EMBED_URL",
+  "FDRIVE_IMAGE_EMBED_URL",
   "FDRIVE_INDEX_ROOTS",
   "FDRIVE_SETUP_TOKEN",
 ]);
@@ -68,7 +71,7 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
  * `CONFIG_KEYS` entries `deploy/compose.yaml` never reads from `.env` at
  * all, so `deploy/.env.example` (which documents "every environment
  * variable used by the files" in `deploy/`) must not list them either:
- * `PORT` and `DATABASE_URL` are fixed or computed inline, the four sidecar
+ * `PORT` and `DATABASE_URL` are fixed or computed inline, the five sidecar
  * URLs are fixed compose-internal addresses, `FDRIVE_INDEX_ROOTS` is a
  * computed literal (operators use `FDRIVE_INDEX_SFTPGO_PATH` instead, see
  * `DEPLOY_EXTRA_KEYS`), and `FDRIVE_SETUP_TOKEN` is meaningless once
@@ -84,6 +87,7 @@ export const ENV_EXAMPLE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_OCR_URL",
   "FDRIVE_INDEXER_URL",
   "FDRIVE_EMBED_URL",
+  "FDRIVE_IMAGE_EMBED_URL",
   "FDRIVE_INDEX_ROOTS",
   "FDRIVE_SETUP_TOKEN",
 ]);

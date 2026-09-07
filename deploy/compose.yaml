@@ -72,9 +72,10 @@ services:
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
       # compose network. FDRIVE_THUMBS_DIR, FDRIVE_OCR_URL, FDRIVE_INDEXER_URL,
-      # and FDRIVE_EMBED_URL are only actually reachable once the `index`
-      # profile is up; the api treats a connection failure as "unreachable"
-      # (see GET /api/v1/health's subsystems field) rather than an error.
+      # FDRIVE_EMBED_URL, and FDRIVE_IMAGE_EMBED_URL are only actually
+      # reachable once the `index` profile is up; the api treats a
+      # connection failure as "unreachable" (see GET /api/v1/health's
+      # subsystems field) rather than an error.
       FDRIVE_THUMBS_DIR: /thumbs
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       SFTPGO_URL: ${SFTPGO_URL}
@@ -83,6 +84,7 @@ services:
       FDRIVE_OCR_URL: http://ocr:8011
       FDRIVE_INDEXER_URL: http://indexer:8010
       FDRIVE_EMBED_URL: http://embed:80
+      FDRIVE_IMAGE_EMBED_URL: http://image-embed:8012
       # sftpgoPath defaults to the path SFTPGo itself sees
       # FDRIVE_INDEX_SFTPGO_DIR at (FDRIVE_INDEX_SFTPGO_PATH); see
       # deploy/README.md's "Nothing is silent" section. Add more roots by
@@ -189,6 +191,9 @@ services:
       INDEX_ROOTS: sftpgo=/roots/sftpgo
       TIKA_URL: http://tika:9998
       EMBED_URL: http://embed:80
+      # Optional, like OCR: unset means the indexer never embeds
+      # thumbnails and image search reports not_configured.
+      IMAGE_EMBED_URL: http://image-embed:8012
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
     volumes:
@@ -266,5 +271,29 @@ services:
     pids_limit: 512
     logging: *default-logging
 
+  # SigLIP 2 image/text embedding sidecar for image search (see
+  # docs/workflow/P7-IMAGE-SEARCH-BUILD.md), same `index` profile as the
+  # indexer. Talks to the api over FDRIVE_IMAGE_EMBED_URL, and to the indexer
+  # (which embeds each thumbnail as it is generated) over IMAGE_EMBED_URL.
+  # The named volume at /models caches the downloaded model weights across
+  # restarts, matching the indexer's HF_HOME convention. No database
+  # dependency: this service is stateless.
+  image-embed:
+    build:
+      context: ../services/image-embed
+      dockerfile: Dockerfile
+    profiles: [index]
+    environment:
+      IMAGE_EMBED_PORT: "8012"
+    volumes:
+      - fdrive-image-embed-models:/models
+    mem_limit: 6g
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    logging: *default-logging
+
 volumes:
   fdrive-thumbs:
+  fdrive-image-embed-models:

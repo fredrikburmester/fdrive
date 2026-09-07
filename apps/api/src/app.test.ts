@@ -103,6 +103,7 @@ describe("createApp health route", () => {
           missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
         },
         search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
+        imageSearch: { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] },
         thumbnails: { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] },
         ocr: { status: "not_configured", missing: ["FDRIVE_OCR_URL"] },
         office: {

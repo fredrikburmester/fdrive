@@ -106,6 +106,9 @@ export {
   SetIdentityScopeRequest,
 } from "./scopes.ts";
 export {
+  ImageSearchHit,
+  ImageSearchQuery,
+  ImageSearchResponse,
   SearchHighlightRange,
   SearchHit,
   SearchQuery,
@@ -123,6 +126,8 @@ export {
 } from "./setup.ts";
 export * from "./shares.ts";
 export {
+  ImageEmbeddingClearJob,
+  ImageEmbeddingRebuildJob,
   IndexerActionResponse,
   IndexerClearJob,
   IndexerClearRequest,
@@ -151,6 +156,7 @@ export {
   OcrStats,
   SemanticStatus,
   SettingSource,
+  SystemImageSearchResponse,
   SystemIndexerResponse,
   SystemIndexTotals,
   SystemOcrResponse,

@@ -69,6 +69,8 @@ const IndexerStatsRaw = z.object({
   thumbnail_rebuild: IndexerThumbnailRebuildRaw.optional(),
   index_clear: IndexerThumbnailRebuildRaw.optional(),
   thumbnail_clear: IndexerThumbnailRebuildRaw.optional(),
+  image_embedding_rebuild: IndexerThumbnailRebuildRaw.optional(),
+  image_embedding_clear: IndexerThumbnailRebuildRaw.optional(),
 });
 
 const IndexerCountRaw = z.object({ count: z.number().int() });
@@ -140,6 +142,12 @@ function toIndexerStats(raw: z.infer<typeof IndexerStatsRaw>): IndexerStats {
     ...(raw.thumbnail_rebuild !== undefined
       ? { thumbnailRebuild: toIndexerThumbnailRebuildJob(raw.thumbnail_rebuild) }
       : {}),
+    ...(raw.image_embedding_rebuild !== undefined
+      ? { imageEmbeddingRebuild: toIndexerThumbnailRebuildJob(raw.image_embedding_rebuild) }
+      : {}),
+    ...(raw.image_embedding_clear !== undefined
+      ? { imageEmbeddingClear: toIndexerThumbnailRebuildJob(raw.image_embedding_clear) }
+      : {}),
   };
 }
 
@@ -182,6 +190,12 @@ export interface IndexerClient {
   thumbnailsRebuild(
     options?: ThumbnailsRebuildOptions,
   ): Promise<SidecarResult<IndexerThumbnailsRebuildResponse>>;
+  /** Backfills (or, with `force`, replaces stale-model rows for) image-content embeddings. */
+  imageEmbeddingsRebuild(
+    options?: ThumbnailsRebuildOptions,
+  ): Promise<SidecarResult<IndexerThumbnailsRebuildResponse>>;
+  /** Deletes every image-content embedding. */
+  clearImageEmbeddings(): Promise<SidecarResult<IndexerClearResponse>>;
 }
 
 /** Builds an `IndexerClient` calling `deps.baseUrl` with `deps.fetch`. */
@@ -255,6 +269,34 @@ export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
         deps,
       );
       return result;
+    },
+
+    async imageEmbeddingsRebuild(options) {
+      const result = await callSidecar(
+        deps.baseUrl,
+        "/image-embeddings/rebuild",
+        IndexerThumbnailsRebuildRaw,
+        {
+          method: "POST",
+          jsonBody: {
+            ...(options?.root !== undefined ? { root: options.root } : {}),
+            ...(options?.path !== undefined ? { path: options.path } : {}),
+            ...(options?.force !== undefined ? { force: options.force } : {}),
+          },
+        },
+        deps,
+      );
+      return result;
+    },
+
+    async clearImageEmbeddings() {
+      return callSidecar(
+        deps.baseUrl,
+        "/image-embeddings/clear",
+        IndexerClearResponse,
+        { method: "POST", jsonBody: {} },
+        deps,
+      );
     },
   };
 }

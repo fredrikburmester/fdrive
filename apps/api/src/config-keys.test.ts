@@ -29,6 +29,7 @@ function loadFullyConfiguredEnv(): AppConfig {
     ]),
     FDRIVE_INDEXER_URL: "http://indexer:8010",
     FDRIVE_EMBED_URL: "http://embed:80",
+    FDRIVE_IMAGE_EMBED_URL: "http://image-embed:8012",
     FDRIVE_THUMBS_DIR: "/thumbs",
     FDRIVE_OCR_URL: "http://ocr:8011",
     FDRIVE_SFTPGO_TRASH_PATH: "/.trash",
@@ -93,6 +94,10 @@ describe("subsystemsStatus", () => {
       status: "not_configured",
       missing: ["FDRIVE_EMBED_URL"],
     });
+    expect(statuses.imageSearch).toEqual({
+      status: "not_configured",
+      missing: ["FDRIVE_IMAGE_EMBED_URL"],
+    });
     expect(statuses.thumbnails).toEqual({
       status: "not_configured",
       missing: ["FDRIVE_THUMBS_DIR"],
@@ -150,6 +155,7 @@ describe("applyReachability", () => {
     shares: { status: "configured", missing: [] },
     index: { status: "configured", missing: [] },
     search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
+    imageSearch: { status: "configured", missing: [] },
     thumbnails: { status: "configured", missing: [] },
     ocr: { status: "configured", missing: [] },
     office: { status: "configured", missing: [] },

@@ -90,6 +90,8 @@ export interface AppConfig {
   readonly fdriveIndexRoots: readonly IndexRootConfig[] | null;
   /** Base URL of the TEI embeddings service. `undefined` disables semantic search. */
   readonly fdriveEmbedUrl: string | undefined;
+  /** Base URL of the image-embed sidecar. `undefined` disables image-content search. */
+  readonly fdriveImageEmbedUrl: string | undefined;
   /** Directory the indexer writes thumbnails into. `undefined` disables thumbnails. */
   readonly fdriveThumbsDir: string | undefined;
   /** SFTPGo usernames that are always treated as admins, in addition to `accounts.is_admin`. */
@@ -396,6 +398,16 @@ const envSchema = z.object({
         message: "must be an http(s) URL",
       }),
   ),
+  FDRIVE_IMAGE_EMBED_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .min(1)
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
   FDRIVE_THUMBS_DIR: z.preprocess(undefinedWhenEmpty, z.string().min(1).optional()),
   FDRIVE_ADMIN_USERS: z.string().optional(),
   FDRIVE_SETUP_TOKEN: z.preprocess(
@@ -510,6 +522,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveShareUploadMaxBytes: parsed.FDRIVE_SHARE_UPLOAD_MAX_BYTES,
     fdriveIndexRoots: parsed.FDRIVE_INDEX_ROOTS,
     fdriveEmbedUrl: parsed.FDRIVE_EMBED_URL,
+    fdriveImageEmbedUrl: parsed.FDRIVE_IMAGE_EMBED_URL,
     fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,
     fdriveAdminUsers: parseAdminUsers(parsed.FDRIVE_ADMIN_USERS),
     fdriveSetupToken: parsed.FDRIVE_SETUP_TOKEN,

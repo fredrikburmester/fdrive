@@ -52,7 +52,7 @@ import {
   tagRoute,
 } from "./routes.ts";
 import { IdentityScopeResponse, type SetIdentityScopeRequest } from "./scopes.ts";
-import { SearchResponse, SearchStatusResponse } from "./search.ts";
+import { ImageSearchResponse, SearchResponse, SearchStatusResponse } from "./search.ts";
 import {
   ConnectionTestResponse,
   SETUP_TOKEN_HEADER,
@@ -79,6 +79,7 @@ import {
   OcrRunResponse,
   OcrSettingsResponse,
   type OcrSettingsUpdateRequest,
+  SystemImageSearchResponse,
   SystemIndexerResponse,
   SystemOcrResponse,
   SystemReembedResponse,
@@ -151,6 +152,11 @@ export interface ApiClientSearchOptions {
   before?: string;
 }
 
+/** Optional paging for `ApiClient.searchImages`, mirroring `ImageSearchQuery` minus `q`. */
+export interface ApiClientImageSearchOptions {
+  limit?: number;
+}
+
 export interface ApiClient {
   listShares(): Promise<SharesResponse>;
   createShare(input: CreateShareRequest): Promise<ManagedShare>;
@@ -209,6 +215,7 @@ export interface ApiClient {
   about(): Promise<AboutResponse>;
   search(query: string, opts?: ApiClientSearchOptions): Promise<SearchResponse>;
   searchStatus(): Promise<SearchStatusResponse>;
+  searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
   setupStatus(): Promise<SetupStatusResponse>;
   setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse>;
@@ -228,6 +235,11 @@ export interface ApiClient {
   ): Promise<IndexerThumbnailsRebuildResponse>;
   systemSearch(): Promise<SystemSearchResponse>;
   systemReembed(): Promise<SystemReembedResponse>;
+  systemImageSearch(): Promise<SystemImageSearchResponse>;
+  systemImageSearchRebuild(
+    req?: IndexerThumbnailsRebuildRequest,
+  ): Promise<IndexerThumbnailsRebuildResponse>;
+  systemImageSearchClear(): Promise<IndexerClearResponse>;
   systemOcr(): Promise<SystemOcrResponse>;
   systemUpdateOcrSettings(settings: OcrSettingsUpdateRequest): Promise<OcrSettingsResponse>;
   systemRunOcr(): Promise<OcrRunResponse>;
@@ -746,6 +758,21 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return requestJson(ctx, { method: "GET", path: ROUTES.search.status }, SearchStatusResponse);
     },
 
+    searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse> {
+      return requestJson(
+        ctx,
+        {
+          method: "GET",
+          path: ROUTES.search.images,
+          query: {
+            q: query,
+            limit: opts?.limit === undefined ? undefined : String(opts.limit),
+          },
+        },
+        ImageSearchResponse,
+      );
+    },
+
     thumbUrl(path: string, size: ThumbSize): string {
       return buildRequestUrl(ctx.baseUrl, ROUTES.thumb, { path, size: String(size) });
     },
@@ -873,6 +900,32 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "POST", path: ROUTES.system.searchReembed },
         SystemReembedResponse,
+      );
+    },
+
+    systemImageSearch(): Promise<SystemImageSearchResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.system.imageSearch },
+        SystemImageSearchResponse,
+      );
+    },
+
+    systemImageSearchRebuild(
+      req?: IndexerThumbnailsRebuildRequest,
+    ): Promise<IndexerThumbnailsRebuildResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.imageSearchRebuild, jsonBody: req ?? {} },
+        IndexerThumbnailsRebuildResponse,
+      );
+    },
+
+    systemImageSearchClear(): Promise<IndexerClearResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.system.imageSearchClear, jsonBody: {} },
+        IndexerClearResponse,
       );
     },
 
