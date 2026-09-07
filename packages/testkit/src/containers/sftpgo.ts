@@ -28,6 +28,8 @@ export interface StartSftpgoOptions {
   readonly users?: readonly SeedUser[];
   readonly folders?: readonly SeedFolder[];
   readonly files?: Readonly<Record<string, Record<string, string>>>;
+  /** When given, seeds the Event Manager recycle-folder rule at this virtual path. */
+  readonly trash?: { readonly path: string };
 }
 
 export interface SftpgoContainer {
@@ -65,7 +67,10 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
   const files = options.files ?? SEED_FILES;
   const alice = findAliceOrThrow(users);
 
-  const dump = buildSftpgoDump(users, folders, { dataDir: DATA_DIR });
+  const dump = buildSftpgoDump(users, folders, {
+    dataDir: DATA_DIR,
+    ...(options.trash === undefined ? {} : { trash: options.trash }),
+  });
   const seededFiles = seedFileLayout(files, { dataDir: DATA_DIR });
 
   const contentsToCopy: { content: Content; target: string; mode: number }[] = [

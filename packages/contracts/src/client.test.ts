@@ -966,6 +966,84 @@ describe("createApiClient: recents", () => {
   });
 });
 
+describe("createApiClient: trash", () => {
+  const VALID_TRASH_ENTRY = {
+    id: "docs/a.txt/1788761221798866471",
+    originalPath: "/docs/a.txt",
+    name: "a.txt",
+    size: 7,
+    deletedAt: AT,
+  };
+
+  it("gets trash/status", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { available: true, path: "/.trash", retentionHours: null }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.trashStatus()).toEqual({
+      available: true,
+      path: "/.trash",
+      retentionHours: null,
+    });
+    expect(calls[0]?.url).toBe("/api/v1/trash/status");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("gets trash and returns entries and truncated", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { entries: [VALID_TRASH_ENTRY], truncated: false }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.trashList()).toEqual({ entries: [VALID_TRASH_ENTRY], truncated: false });
+    expect(calls[0]?.url).toBe("/api/v1/trash");
+    expect(calls[0]?.init.method).toBe("GET");
+  });
+
+  it("posts trash/restore with the request body", async () => {
+    const VALID_ENTRY_LOCAL = {
+      name: "a.txt",
+      path: "/docs/a.txt",
+      kind: "file",
+      size: 7,
+      modifiedAt: AT,
+      ext: ".txt",
+      mime: null,
+    };
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { restored: [VALID_ENTRY_LOCAL] }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.trashRestore({ ids: ["docs/a.txt/1"] })).toEqual({
+      restored: [VALID_ENTRY_LOCAL],
+    });
+    expect(calls[0]?.url).toBe("/api/v1/trash/restore");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ ids: ["docs/a.txt/1"] }));
+  });
+
+  it("posts trash/purge with the request body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.trashPurge({ ids: ["docs/a.txt/1"] })).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/trash/purge");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ ids: ["docs/a.txt/1"] }));
+  });
+
+  it("posts trash/empty with no body", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.trashEmpty()).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/trash/empty");
+    expect(calls[0]?.init.method).toBe("POST");
+  });
+});
+
 describe("createApiClient: error mapping", () => {
   it("throws ApiClientError with the kind and message from a well-formed ApiError body", async () => {
     const { fetchStub } = createStubFetch([

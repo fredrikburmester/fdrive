@@ -19,9 +19,14 @@ import { parseZipCentralDirectory } from "./zip-parser.js";
 export interface ContractTarget {
   readonly client: SftpgoClient;
   readonly users: readonly SeedUser[];
+  /** The virtual path both targets seed their recycle-folder trash rule at. */
+  readonly trashPath: string;
   teardown(): Promise<void>;
   fetchCallCount?(): number;
 }
+
+/** The recycle-folder trash path both contract targets are seeded with. */
+export const TRASH_PATH = "/.trash";
 
 const HOOK_TIMEOUT_MS = 180_000;
 
@@ -423,6 +428,65 @@ export function defineSftpgoContract(name: string, setup: () => Promise<Contract
         await expect(
           target.client.user(token).deleteFile("/contract/delete-file-missing/does-not-exist.txt"),
         ).rejects.toMatchObject({ kind: "not_found" });
+      });
+    });
+
+    describe("trash", () => {
+      it("deleting a file lands under <trashPath>/<dir>/<name>/<ns>", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/trash/simple");
+        await user.upload("/contract/trash/simple/note.txt", encode("trash me"));
+
+        await user.deleteFile("/contract/trash/simple/note.txt");
+
+        const parentEntries = await user.list("/contract/trash/simple");
+        expect(parentEntries.map((entry) => entry.name)).not.toContain("note.txt");
+
+        const leaves = await user.list(`${target.trashPath}/contract/trash/simple/note.txt`);
+        expect(leaves).toHaveLength(1);
+        expectFileEntry(leaves, leaves[0]?.name ?? "", "trash me");
+        expect(leaves[0]?.name).toMatch(/^[0-9]{1,20}$/);
+      });
+
+      it("deleting a directory moves every nested file individually, including names with a space, Unicode, and a literal %20", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        const dir = "/contract/trash/dir-delete";
+        await ensureDir(user, `${dir}/inner`);
+        await user.upload(`${dir}/sp ace.txt`, encode("space"));
+        await user.upload(`${dir}/inner/Å unicode.txt`, encode("unicode"));
+        await user.upload(`${dir}/literal%20.txt`, encode("literal"));
+
+        await user.deleteDir(dir);
+
+        const parentEntries = await user.list("/contract/trash");
+        expect(parentEntries.map((entry) => entry.name)).not.toContain("dir-delete");
+
+        expect(await user.list(`${target.trashPath}${dir}/sp ace.txt`)).toHaveLength(1);
+        expect(await user.list(`${target.trashPath}${dir}/inner/Å unicode.txt`)).toHaveLength(1);
+        expect(await user.list(`${target.trashPath}${dir}/literal%20.txt`)).toHaveLength(1);
+      });
+
+      it("deleting a file already under the trash path is permanent", async () => {
+        const alice = findUser(target.users, "alice");
+        const token = await loginAs(target.client, alice);
+        const user = target.client.user(token);
+        await ensureDir(user, "/contract/trash/permanent");
+        await user.upload("/contract/trash/permanent/gone.txt", encode("permanent"));
+        await user.deleteFile("/contract/trash/permanent/gone.txt");
+
+        const trashDir = `${target.trashPath}/contract/trash/permanent/gone.txt`;
+        const leaves = await user.list(trashDir);
+        expect(leaves).toHaveLength(1);
+        const leafName = leaves[0]?.name;
+        expect(leafName).toBeDefined();
+
+        await user.deleteFile(`${trashDir}/${leafName}`);
+
+        expect(await user.list(trashDir)).toEqual([]);
       });
     });
 

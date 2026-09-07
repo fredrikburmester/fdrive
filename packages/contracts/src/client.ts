@@ -84,6 +84,13 @@ import {
 } from "./system.ts";
 import type { ThumbSize } from "./thumbs.ts";
 import { ApiTokensResponse, type CreateApiTokenRequest, CreateApiTokenResponse } from "./tokens.ts";
+import {
+  TrashListResponse,
+  type TrashPurgeRequest,
+  type TrashRestoreRequest,
+  TrashRestoreResponse,
+  TrashStatusResponse,
+} from "./trash.ts";
 
 export type { IdentitySummary };
 
@@ -227,6 +234,11 @@ export interface ApiClient {
   removeFavorite(req: FavoriteRequest): Promise<OkResponse>;
   listRecents(): Promise<RecentsResponse>;
   touchRecent(req: RecentTouchRequest): Promise<OkResponse>;
+  trashStatus(): Promise<TrashStatusResponse>;
+  trashList(): Promise<TrashListResponse>;
+  trashRestore(req: TrashRestoreRequest): Promise<TrashRestoreResponse>;
+  trashPurge(req: TrashPurgeRequest): Promise<OkResponse>;
+  trashEmpty(): Promise<OkResponse>;
 }
 
 interface ClientContext {
@@ -935,6 +947,34 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         { method: "POST", path: ROUTES.recents.touch, jsonBody: req },
         OkResponse,
       );
+    },
+
+    trashStatus(): Promise<TrashStatusResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.trash.status }, TrashStatusResponse);
+    },
+
+    trashList(): Promise<TrashListResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.trash.list }, TrashListResponse);
+    },
+
+    trashRestore(req: TrashRestoreRequest): Promise<TrashRestoreResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.trash.restore, jsonBody: req },
+        TrashRestoreResponse,
+      );
+    },
+
+    trashPurge(req: TrashPurgeRequest): Promise<OkResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.trash.purge, jsonBody: req },
+        OkResponse,
+      );
+    },
+
+    trashEmpty(): Promise<OkResponse> {
+      return requestJson(ctx, { method: "POST", path: ROUTES.trash.empty }, OkResponse);
     },
   };
 }
