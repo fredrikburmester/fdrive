@@ -161,6 +161,8 @@ export interface ApiClient {
   setSharePassword(id: string, password: string): Promise<OkResponse>;
   clearSharePassword(id: string): Promise<OkResponse>;
   shareEntries(id: string, path?: string): Promise<ShareEntriesResponse>;
+  /** Lists an archive's entries through a public share, without extracting it. */
+  shareArchiveEntries(id: string, path?: string): Promise<ArchiveEntriesResponse>;
   shareDownloadUrl(id: string, path?: string): string;
   shareArchiveUrl(id: string): string;
   /** A public gallery tile's thumbnail: never counts as a download, unlike `shareDownloadUrl`. */
@@ -462,6 +464,13 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "GET", path: `${publicShareRoute(id)}/entries`, query: { path } },
         ShareEntriesResponse,
+      );
+    },
+    shareArchiveEntries(id, path = "/") {
+      return requestJson(
+        ctx,
+        { method: "GET", path: `${publicShareRoute(id)}/archive-entries`, query: { path } },
+        ArchiveEntriesResponse,
       );
     },
     shareDownloadUrl(id, path = "/") {
