@@ -105,6 +105,10 @@ export interface FileContextMenuProps {
   favorite?: boolean;
   /** Favorites (or unfavorites) every entry in the group. Defaults to a no-op. */
   onToggleFavorite?: (next: boolean) => void;
+  /** Whether the active identity's storage provider exposes a trash: when
+   * true, the last item reads "Move to Trash" instead of "Delete" (the
+   * icon stays the same either way). Defaults to `false`. */
+  trashAvailable?: boolean;
 }
 
 const DEFAULT_TAGS: readonly Tag[] = [];
@@ -128,6 +132,7 @@ export function FileContextMenu({
   onOpenTagsEditor = DEFAULT_NO_OP,
   favorite = false,
   onToggleFavorite = DEFAULT_NO_OP,
+  trashAvailable = false,
 }: FileContextMenuProps) {
   const isMultiSelection = selectionCount > 1;
   const archiveKind = entry.kind !== "dir" ? detectArchiveKind(entry.name) : null;
@@ -245,9 +250,12 @@ export function FileContextMenu({
           {includesFolder ? "Download as zip" : "Download"}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onClick={() => onAction("delete", entry)}>
+        <ContextMenuItem
+          variant={trashAvailable ? "default" : "destructive"}
+          onClick={() => onAction("delete", entry)}
+        >
           <Trash2Icon />
-          Delete
+          {trashAvailable ? "Move to Trash" : "Delete"}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

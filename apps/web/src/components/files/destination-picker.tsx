@@ -23,7 +23,12 @@ import { buildBreadcrumbs } from "@/lib/files/path-url";
 import { useListing } from "@/lib/files/queries";
 import { FileIcon } from "./file-icon";
 
-export type DestinationPickerMode = "move" | "copy" | "compressDestination" | "extractTo";
+export type DestinationPickerMode =
+  | "move"
+  | "copy"
+  | "compressDestination"
+  | "extractTo"
+  | "restoreTo";
 
 interface DestinationPickerLabels {
   readonly title: string;
@@ -35,6 +40,7 @@ const LABELS: Record<DestinationPickerMode, DestinationPickerLabels> = {
   copy: { title: "Copy to...", confirmLabel: "Copy here" },
   compressDestination: { title: "Choose destination", confirmLabel: "Choose" },
   extractTo: { title: "Extract to...", confirmLabel: "Extract here" },
+  restoreTo: { title: "Restore to…", confirmLabel: "Restore here" },
 };
 
 export interface DestinationPickerProps {
