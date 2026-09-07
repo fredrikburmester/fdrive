@@ -201,14 +201,14 @@ export function IndexerPage() {
             disabled={unavailable || busy}
             onClick={() => setClearOpen(true)}
           >
-            Clear index…
+            Clear index
           </Button>
           <Button
             type="button"
             onClick={() => setReindexOpen(true)}
             disabled={rootNames.length === 0 || unavailable || busy}
           >
-            Reindex…
+            Reindex
           </Button>
         </>
       }

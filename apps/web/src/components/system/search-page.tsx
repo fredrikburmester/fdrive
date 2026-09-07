@@ -53,7 +53,7 @@ export function SearchPage() {
           onClick={() => setReembedOpen(true)}
           disabled={data === undefined || !data.configured}
         >
-          Re-embed…
+          Re-embed
         </Button>
       }
     >

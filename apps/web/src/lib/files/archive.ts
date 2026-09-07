@@ -31,7 +31,7 @@ export function defaultArchiveName(paths: readonly string[]): string {
 }
 
 /**
- * The "Extract to…" destination when the user picks `parentFolder` to
+ * The "Extract to" destination when the user picks `parentFolder` to
  * extract `archivePath` under: a new folder inside it, named after the
  * archive with its archive extension stripped, mirroring the API's own
  * default for "Extract here" (a folder beside the archive, same naming)

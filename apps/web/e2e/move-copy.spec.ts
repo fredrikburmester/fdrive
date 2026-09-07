@@ -27,16 +27,16 @@ async function createSandbox(page: Page): Promise<string> {
   return sandbox;
 }
 
-test("Move to... moves a file into the chosen folder", async ({ page }) => {
+test("Move to moves a file into the chosen folder", async ({ page }) => {
   const sandbox = await createSandbox(page);
   const destination = uniqueName("destination");
   await createFolder(page, destination);
   await uploadTextFile(page, "move-me.txt", "please move me");
 
   await listing(page).getByText("move-me.txt", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move to..." }).click();
+  await page.getByRole("menuitem", { name: "Move to" }).click();
 
-  const dialog = page.getByRole("dialog").filter({ hasText: "Move to..." });
+  const dialog = page.getByRole("dialog").filter({ hasText: "Move to" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: destination }).click();
   await dialog.getByRole("button", { name: "Move here" }).click();
@@ -48,16 +48,16 @@ test("Move to... moves a file into the chosen folder", async ({ page }) => {
   await expect(listing(page).getByText("move-me.txt", { exact: true })).toBeVisible();
 });
 
-test("Copy to... leaves the original file in place", async ({ page }) => {
+test("Copy to leaves the original file in place", async ({ page }) => {
   const sandbox = await createSandbox(page);
   const destination = uniqueName("destination");
   await createFolder(page, destination);
   await uploadTextFile(page, "copy-me.txt", "please copy me");
 
   await listing(page).getByText("copy-me.txt", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Copy to..." }).click();
+  await page.getByRole("menuitem", { name: "Copy to" }).click();
 
-  const dialog = page.getByRole("dialog").filter({ hasText: "Copy to..." });
+  const dialog = page.getByRole("dialog").filter({ hasText: "Copy to" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: destination }).click();
   await dialog.getByRole("button", { name: "Copy here" }).click();

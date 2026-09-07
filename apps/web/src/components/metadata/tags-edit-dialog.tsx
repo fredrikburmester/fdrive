@@ -23,7 +23,7 @@ export interface TagsEditDialogProps {
   readonly creating?: boolean;
 }
 
-/** "Edit tags…" from the row context menu: the same `TagPickerContent`
+/** "Edit tags" from the row context menu: the same `TagPickerContent`
  * list, in a dialog instead of a popover so it survives the context menu
  * closing when it was opened. */
 export function TagsEditDialog({

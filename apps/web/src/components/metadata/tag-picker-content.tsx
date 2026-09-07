@@ -35,7 +35,7 @@ export interface TagPickerContentProps {
  * shows indeterminate for a mixed multi-selection), and, once nothing
  * matches the search exactly, a "Create tag '<name>'" option that expands
  * into an inline name + color form. Shared by the Inspector's popover and
- * the row context menu's "Edit tags…" dialog.
+ * the row context menu's "Edit tags" dialog.
  */
 export function TagPickerContent({
   tags,

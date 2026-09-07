@@ -149,7 +149,7 @@ describe("ThumbnailsPage", () => {
     );
     useRebuildIndexerThumbnailsMock.mockReturnValue({ mutate, isPending: false });
     render(<ThumbnailsPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Rebuild…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     await screen.findByRole("heading", { name: "Rebuild thumbnails" });
     expect(screen.getByLabelText("Root").textContent).toContain("All roots");
     expect(screen.getByLabelText("Root").textContent).not.toContain("__all__");
@@ -159,7 +159,7 @@ describe("ThumbnailsPage", () => {
     expect(mutate).toHaveBeenCalledWith({ force: true }, expect.anything());
     expect(successToast).toHaveBeenCalledWith("Rebuilding 6 thumbnails…");
     expect(screen.queryByRole("heading", { name: "Rebuild thumbnails" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Rebuild…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     expect(mutate).toHaveBeenLastCalledWith({}, expect.anything());
   });
@@ -172,12 +172,12 @@ describe("ThumbnailsPage", () => {
     );
     useClearThumbnailsMock.mockReturnValue({ mutate, isPending: false });
     render(<ThumbnailsPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear cache…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
     await screen.findByRole("heading", { name: "Clear thumbnail cache?" });
     expect(screen.getByText(/Removes cached previews for all roots/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mutate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Clear cache…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
     expect(mutate).toHaveBeenCalledWith(undefined, expect.anything());
     expect(successToast).toHaveBeenCalledWith("Thumbnail cache clear started.");
@@ -191,7 +191,7 @@ describe("ThumbnailsPage", () => {
       isPending: false,
     });
     render(<ThumbnailsPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear cache…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
     expect(errorToast).toHaveBeenCalledWith("busy");
     expect(screen.getByRole("heading", { name: "Clear thumbnail cache?" })).toBeTruthy();
@@ -205,7 +205,7 @@ describe("ThumbnailsPage", () => {
     if (state === "pending")
       useClearThumbnailsMock.mockReturnValue({ mutate: vi.fn(), isPending: true });
     render(<ThumbnailsPage />);
-    expect(screen.getByRole("button", { name: "Rebuild…" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "Clear cache…" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Rebuild" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Clear cache" })).toHaveProperty("disabled", true);
   });
 });

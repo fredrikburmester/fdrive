@@ -45,7 +45,7 @@ it("always shows Manage tags, with a muted placeholder when the account has no t
     </QueryClientProvider>,
   );
   expect(await screen.findByText("No tags yet")).toBeDefined();
-  expect(screen.getByText("Manage tags…")).toBeDefined();
+  expect(screen.getByText("Manage tags")).toBeDefined();
 });
 
 it("renders every tag plus Manage tags once loaded", async () => {
@@ -61,6 +61,6 @@ it("renders every tag plus Manage tags once loaded", async () => {
     </QueryClientProvider>,
   );
   expect(await screen.findByText("Invoices")).toBeDefined();
-  expect(screen.getByText("Manage tags…")).toBeDefined();
+  expect(screen.getByText("Manage tags")).toBeDefined();
   expect(screen.queryByText("No tags yet")).toBeNull();
 });

@@ -80,7 +80,9 @@ export function EntryMetadataSection({ entries }: EntryMetadataSectionProps) {
   }
 
   return (
-    <div className="flex flex-col gap-3 p-4">
+    // No horizontal padding of its own: the caller supplies the same inset as the
+    // details list above, so the separators here span the same width.
+    <div className="flex flex-col gap-3 pt-1">
       <Separator />
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium">Tags</span>

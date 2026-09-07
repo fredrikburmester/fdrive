@@ -78,14 +78,14 @@ export interface FileListProps {
   /** Favorites (or unfavorites) every entry in the group a row's context
    * menu action would apply to. Defaults to a no-op. */
   onToggleFavorite?: (paths: readonly string[], next: boolean) => void;
-  /** Hides "Move to..." and "Copy to..." in every row's context menu, for a
+  /** Hides "Move to" and "Copy to" in every row's context menu, for a
    * read-only "virtual listing". Defaults to `false`. */
   hideMoveCopy?: boolean;
   /** Shows "Reveal in folder" in every row's context menu, for a "virtual
    * listing" whose rows are not already inside their own folder. Defaults
    * to `false`. */
   showReveal?: boolean;
-  /** Hides "Compress..." and "Extract..." in every row's context menu, for
+  /** Hides "Compress" and "Extract" in every row's context menu, for
    * a "virtual listing" that does not run the archive jobs. Defaults to
    * `false`. */
   hideArchive?: boolean;

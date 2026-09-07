@@ -471,7 +471,7 @@ export function FilesToolbarActions({
             >
               <FileArchiveIcon />
             </TooltipTrigger>
-            <TooltipContent>Compress...</TooltipContent>
+            <TooltipContent>Compress</TooltipContent>
           </Tooltip>
           <Button
             variant="ghost"
@@ -557,7 +557,7 @@ export function FilesToolbarActions({
             </DropdownMenuItem>
             <DropdownMenuItem disabled={selectedCount === 0} onClick={onCompressSelection}>
               <FileArchiveIcon />
-              Compress...
+              Compress
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onToggleDetails}>
               <PanelRightIcon />

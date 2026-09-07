@@ -50,7 +50,7 @@ test("Compress builds a zip that shows as a job in the Activity panel and appear
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Compress..." }).click();
+  await page.getByRole("menuitem", { name: "Compress" }).click();
 
   const dialog = page.getByRole("dialog").filter({ hasText: "Compress" });
   await expect(dialog).toBeVisible();
@@ -74,7 +74,7 @@ test("Compress also works with the tar.gz format", async ({ page }) => {
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Compress..." }).click();
+  await page.getByRole("menuitem", { name: "Compress" }).click();
 
   const dialog = page.getByRole("dialog").filter({ hasText: "Compress" });
   await expect(dialog).toBeVisible();
@@ -87,7 +87,7 @@ test("Compress also works with the tar.gz format", async ({ page }) => {
   });
 });
 
-test("Extract to... unpacks the archive into a new folder under the chosen destination", async ({
+test("Extract to unpacks the archive into a new folder under the chosen destination", async ({
   page,
 }) => {
   const sandbox = await createSandbox(page);
@@ -100,7 +100,7 @@ test("Extract to... unpacks the archive into a new folder under the chosen desti
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Compress..." }).click();
+  await page.getByRole("menuitem", { name: "Compress" }).click();
   const compressDialog = page.getByRole("dialog").filter({ hasText: "Compress" });
   await compressDialog.getByRole("button", { name: "Compress" }).click();
   await expect(compressDialog).toBeHidden();
@@ -111,9 +111,9 @@ test("Extract to... unpacks the archive into a new folder under the chosen desti
   await createFolder(page, "extracted");
 
   await listing(page).getByText("docs.zip", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Extract to..." }).click();
+  await page.getByRole("menuitem", { name: "Extract to" }).click();
 
-  const extractDialog = page.getByRole("dialog").filter({ hasText: "Extract to..." });
+  const extractDialog = page.getByRole("dialog").filter({ hasText: "Extract to" });
   await expect(extractDialog).toBeVisible();
   await extractDialog.getByRole("button", { name: "extracted" }).click();
   await extractDialog.getByRole("button", { name: "Extract here" }).click();
