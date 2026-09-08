@@ -25,6 +25,7 @@ function buildFakeUnderlyingClient(): SftpgoClient {
   };
   const userApi = {
     list: vi.fn().mockResolvedValue(["entry"]),
+    probeDirectoryRead: vi.fn().mockResolvedValue(undefined),
     statFile: vi.fn().mockResolvedValue({ size: 1 }),
     download: vi.fn().mockResolvedValue({ status: 200 }),
     upload: vi.fn().mockResolvedValue(undefined),
@@ -133,6 +134,9 @@ describe("createLazySftpgoClient", () => {
 
     await user.list("/a");
     expect(underlyingUser.list).toHaveBeenCalledWith("/a");
+
+    await user.probeDirectoryRead("/a");
+    expect(underlyingUser.probeDirectoryRead).toHaveBeenCalledWith("/a");
 
     await user.statFile("/a");
     expect(underlyingUser.statFile).toHaveBeenCalledWith("/a");

@@ -1,0 +1,11 @@
+# ARM64 override for the TEI embedding runtime.
+# Merges on top of compose.dev.yaml or compose.yaml to run native ARM64 TEI
+# instead of the amd64 emulated container on Apple Silicon or other aarch64 hosts.
+services:
+  embed:
+    image: fdrive-tei-arm64:4150561d42c4
+    platform: linux/arm64
+    build:
+      context: https://github.com/huggingface/text-embeddings-inference.git#4150561d42c495fe95f2aebb57fbb602c13ff4e6
+      dockerfile: Dockerfile-arm64
+      target: http

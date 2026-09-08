@@ -108,6 +108,7 @@ export interface SftpgoUserShares {
 
 export interface SftpgoUserApi {
   list(path: string): Promise<SftpgoEntry[]>;
+  probeDirectoryRead(path: string): Promise<void>;
   statFile(path: string): Promise<SftpgoFileStat>;
   download(path: string, options?: DownloadOptions): Promise<DownloadResult>;
   upload(

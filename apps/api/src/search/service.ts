@@ -15,7 +15,11 @@ import {
   toPrefixTsQuery,
 } from "@fdrive/core";
 import type { ContentHit, FilenameHit, IndexedFile, IndexQueries, ScopePrefix } from "@fdrive/db";
-import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type {
+  ReadAuthorizeResult,
+  ReadAuthorizer,
+  ReadAuthorizeTarget,
+} from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
 import { dateFromMtimeNs } from "./scopes.js";
@@ -93,7 +97,7 @@ interface DeriveFoldersInput {
   readonly fileById: ReadonlyMap<number, IndexedFile>;
   /** Resolves an indexed file to its caller-visible virtual path, `null` when it is out of scope. */
   readonly virtualPathFor: (file: IndexedFile) => string | null;
-  readonly authorizer: ReadAuthorizer;
+  readonly authorizer: Pick<ReadAuthorizer, "authorize">;
   /** Called once per candidate folder whose live-read check itself failed (not merely "denied"). */
   readonly onAuthUnavailable: () => void;
 }
@@ -186,24 +190,104 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
       }
 
+      const authMemo = new Map<string, Promise<ReadAuthorizeResult>>();
+
+      function authorizeMemo(target: ReadAuthorizeTarget): Promise<ReadAuthorizeResult> {
+        const key = `${target.kind}:${target.path}`;
+        let promise = authMemo.get(key);
+        if (promise === undefined) {
+          promise = input.authorizer.authorize(target);
+          authMemo.set(key, promise);
+        }
+        return promise;
+      }
+
+      function virtualPathFor(file: IndexedFile): string | null {
+        const rootName = rootNameById.get(file.rootId);
+        if (rootName === undefined) {
+          return null;
+        }
+        const virtualPath = roundTripVirtualPath(input.scopes, rootName, file.path);
+        if (virtualPath === null) {
+          return null;
+        }
+        if (
+          deps.trashPath !== null &&
+          (virtualPath === deps.trashPath || isUnderPath(deps.trashPath, virtualPath))
+        ) {
+          return null;
+        }
+        return virtualPath;
+      }
+
+      let authUnavailable = false;
+
+      async function primeFanout<T extends { fileId: number }>(
+        rowsPromise: Promise<T[]>,
+      ): Promise<T[]> {
+        const rows = await rowsPromise;
+        if (rows.length === 0) {
+          return rows;
+        }
+        try {
+          const fanoutIdSet = new Set(rows.map((r) => r.fileId));
+          const fileIds = Array.from(fanoutIdSet);
+          const files = await deps.indexQueries.filesByIds(fileIds);
+          const filePromises: Promise<unknown>[] = [];
+          for (const file of files) {
+            if (!fanoutIdSet.has(file.id)) {
+              continue;
+            }
+            const virtualPath = virtualPathFor(file);
+            if (virtualPath === null) {
+              continue;
+            }
+            const modifiedAt = dateFromMtimeNs(file.mtimeNs);
+            if (
+              !matchesSearchFilters({ path: virtualPath, ext: file.ext, modifiedAt }, input.filters)
+            ) {
+              continue;
+            }
+            filePromises.push(authorizeMemo({ path: virtualPath, kind: "file" }));
+          }
+          await Promise.allSettled(filePromises);
+        } catch {
+          // If optional early metadata lookup fails, handle it and return unchanged rows so final lookup remains authoritative.
+        }
+        return rows;
+      }
+
       const words = queryWords(input.query);
       const tsquery = toPrefixTsQuery(input.query);
 
-      const embedding =
-        deps.embedClient !== null ? await deps.embedClient.embed(input.query) : null;
-      const degraded = embedding === null;
-
-      const [semanticRows, fulltextRows, filenameRows] = await Promise.all([
-        embedding !== null
-          ? deps.indexQueries.semantic(prefixes, embedding, CONTENT_FANOUT_LIMIT)
-          : Promise.resolve<ContentHit[]>([]),
+      const fulltextPipeline = primeFanout(
         tsquery.length > 0
           ? deps.indexQueries.fulltext(prefixes, tsquery, CONTENT_FANOUT_LIMIT)
           : Promise.resolve<ContentHit[]>([]),
+      );
+      const filenamePromise =
         words.length > 0
           ? deps.indexQueries.filename(prefixes, words, input.query, FILENAME_FANOUT_LIMIT)
-          : Promise.resolve<FilenameHit[]>([]),
+          : Promise.resolve<FilenameHit[]>([]);
+      const embeddingPromise =
+        deps.embedClient !== null
+          ? deps.embedClient.embed(input.query)
+          : Promise.resolve<readonly number[] | null>(null);
+      const semanticPipeline = primeFanout(
+        embeddingPromise.then((embedding) =>
+          embedding !== null
+            ? deps.indexQueries.semantic(prefixes, embedding, CONTENT_FANOUT_LIMIT)
+            : Promise.resolve<ContentHit[]>([]),
+        ),
+      );
+
+      const [embedding, semanticRows, fulltextRows, filenameRows] = await Promise.all([
+        embeddingPromise,
+        semanticPipeline,
+        fulltextPipeline,
+        filenamePromise,
       ]);
+      const degraded = embedding === null;
 
       // The underlying queries are bounded (`LIMIT 60`/`LIMIT 25`); a row
       // count at the cap means there may be more matches this response never
@@ -246,30 +330,25 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       const loadedFiles = await deps.indexQueries.filesByIds(neededIds);
       const fileById = new Map(loadedFiles.map((file) => [file.id, file]));
 
-      function virtualPathFor(file: IndexedFile): string | null {
-        const rootName = rootNameById.get(file.rootId);
-        if (rootName === undefined) {
-          return null;
-        }
-        const virtualPath = roundTripVirtualPath(input.scopes, rootName, file.path);
-        if (virtualPath === null) {
-          return null;
-        }
-        if (
-          deps.trashPath !== null &&
-          (virtualPath === deps.trashPath || isUnderPath(deps.trashPath, virtualPath))
-        ) {
-          return null;
-        }
-        return virtualPath;
-      }
-
-      let authUnavailable = false;
+      // Start folder probes first so the request-local authorization
+      // semaphore does not queue them behind every ranked file probe.
+      const foldersPromise: Promise<FsEntry[]> =
+        input.filters.exts === null
+          ? deriveFolders({
+              filenameRows,
+              fileById,
+              virtualPathFor,
+              authorizer: { authorize: authorizeMemo },
+              onAuthUnavailable: () => {
+                authUnavailable = true;
+              },
+            })
+          : Promise.resolve([]);
 
       // Every ranked candidate (bounded by the fanout above, not by
       // `input.limit`) is round-tripped and live-read checked; the limit is
       // applied only after inaccessible candidates are removed.
-      const resolvedHits = await Promise.all(
+      const resolvedHitsPromise = Promise.all(
         ranked.map(async ([id, score]): Promise<SearchHit | null> => {
           const file = fileById.get(id);
           if (file === undefined) {
@@ -285,7 +364,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           ) {
             return null;
           }
-          const authResult = await input.authorizer.authorize({ path: virtualPath, kind: "file" });
+          const authResult = await authorizeMemo({ path: virtualPath, kind: "file" });
           if (!authResult.allowed) {
             if (authResult.reason === "unavailable") {
               authUnavailable = true;
@@ -312,29 +391,11 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         }),
       );
 
+      const [folders, resolvedHits] = await Promise.all([foldersPromise, resolvedHitsPromise]);
+
       const accessibleHits = resolvedHits.filter((hit): hit is SearchHit => hit !== null);
       const files = accessibleHits.slice(0, input.limit);
       const content = files.filter((hit) => hit.snippets.length > 0).slice(0, MAX_CONTENT_HITS);
-
-      // A type filter (any `ext` other than "any type") is a files-only
-      // filter; the Folders section is derived from matched files' parent
-      // directories, which are not themselves filtered by extension, so it
-      // is suppressed outright whenever a type filter is active rather than
-      // shown with filter-inconsistent contents. This holds for every
-      // caller, including the MCP server, since it lives in the service
-      // rather than any one client.
-      const folders: FsEntry[] =
-        input.filters.exts === null
-          ? await deriveFolders({
-              filenameRows,
-              fileById,
-              virtualPathFor,
-              authorizer: input.authorizer,
-              onAuthUnavailable: () => {
-                authUnavailable = true;
-              },
-            })
-          : [];
 
       return {
         query: input.query,

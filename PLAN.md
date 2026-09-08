@@ -697,6 +697,16 @@ flows pass real storage integration, browser acceptance and required quality gat
     `--add-dir` and never change global settings. Preserve existing ask/deny rules and use scoped
     locked-helper command grants.
 
+18. Phase 5 search latency (2026-09-08): use native TEI on ARM64 with the existing
+    multilingual-e5-small model, pinned upstream source and shared deployment/perf recipe.
+    Directory live-read authorization may stop after a complete first listing entry or a
+    confirmed empty listing; HTTP success headers alone are insufficient. Keep provider/token
+    binding, per-request dedupe, six-probe bound and all file read checks. Providers without
+    the optimized directory probe retain full-list fallback. Candidate read checks may overlap
+    remaining query fanouts, with request-local dedupe keyed by kind and virtual path. Final
+    metadata is round-tripped and filtered again; a changed path requires its own proof.
+    No cross-request positive permission cache.
+
 ## 15. Resolved questions (2026-09-06)
 
 1. Auth: credential mode only, no admin-assisted API keys.

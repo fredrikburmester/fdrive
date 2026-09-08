@@ -1,4 +1,5 @@
 export { createSftpgoClient } from "./client.js";
+export { DEFAULT_PROBE_MAX_BYTES, probeDirectoryStream } from "./directory-probe.js";
 export type { SftpgoErrorKind } from "./errors.js";
 export { mapStatusToKind, SftpgoError } from "./errors.js";
 export type {

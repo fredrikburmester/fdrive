@@ -106,6 +106,11 @@ export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): St
       );
     },
 
+    async probeDirectoryRead(path: string): Promise<void> {
+      const normalized = normalizePath(path);
+      await runStorage(withToken, (token) => client.user(token).probeDirectoryRead(normalized));
+    },
+
     async statFile(path: string) {
       const normalized = normalizePath(path);
       return runStorage(withToken, (token) => client.user(token).statFile(normalized));

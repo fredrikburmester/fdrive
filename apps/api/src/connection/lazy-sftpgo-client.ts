@@ -71,6 +71,9 @@ export function createLazySftpgoClient(deps: CreateLazySftpgoClientDeps): Sftpgo
       async list(path) {
         return (await resolveClient()).user(token).list(path);
       },
+      async probeDirectoryRead(path) {
+        return (await resolveClient()).user(token).probeDirectoryRead(path);
+      },
       async statFile(path) {
         return (await resolveClient()).user(token).statFile(path);
       },

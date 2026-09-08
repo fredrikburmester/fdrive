@@ -21,7 +21,7 @@ export interface ReadAuthorizer {
 }
 
 export interface CreateReadAuthorizerDeps {
-  readonly storage: Pick<StorageProvider, "list" | "download">;
+  readonly storage: Pick<StorageProvider, "list" | "download" | "probeDirectoryRead">;
   /** Maximum number of probes in flight at once. Defaults to `DEFAULT_READ_AUTHORIZE_CONCURRENCY`. */
   readonly concurrency?: number;
 }
@@ -66,7 +66,8 @@ function createSemaphore(limit: number): { acquire: () => Promise<void>; release
  * Builds a bounded, per-request live-read authorizer. For a file it opens
  * `storage.download` and immediately cancels the body without reading any
  * of it, proving read permission without ever buffering content; for a
- * directory it calls `storage.list`. This never calls `storage.statFile`:
+ * directory it calls `storage.probeDirectoryRead` (or falls back to
+ * `storage.list` when omitted). This never calls `storage.statFile`:
  * a successful stat is not proof of read permission.
  *
  * Duplicate targets (same `kind` and `path`) requested through the same
@@ -83,7 +84,11 @@ export function createReadAuthorizer(deps: CreateReadAuthorizerDeps): ReadAuthor
     await semaphore.acquire();
     try {
       if (target.kind === "dir") {
-        await deps.storage.list(target.path);
+        if (typeof deps.storage.probeDirectoryRead === "function") {
+          await deps.storage.probeDirectoryRead(target.path);
+        } else {
+          await deps.storage.list(target.path);
+        }
         return { allowed: true };
       }
       const download = await deps.storage.download(target.path);
