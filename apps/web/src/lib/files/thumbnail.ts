@@ -6,13 +6,16 @@ export interface ThumbnailableEntry extends PreviewableEntry {
 }
 
 /**
- * Whether a grid tile for `entry` should attempt an image thumbnail instead
+ * Whether a row or grid tile for `entry` should attempt an image thumbnail instead
  * of the plain file-kind icon. Only regular files whose extension or mime
  * type the preview logic already classifies as "image" qualify; folders and
  * every other preview kind keep the icon. Reuses `previewKindFor` (shared
  * with the viewer route) rather than duplicating its extension and mime
  * lists here.
  */
-export function wantsGridThumbnail(entry: ThumbnailableEntry): boolean {
+export function wantsThumbnail(entry: ThumbnailableEntry): boolean {
   return entry.kind === "file" && previewKindFor(entry) === "image";
 }
+
+/** Alias for `wantsThumbnail` used by grid tiles. */
+export const wantsGridThumbnail = wantsThumbnail;
