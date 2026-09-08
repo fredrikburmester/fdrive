@@ -4,6 +4,11 @@ Read-only review of the production deployment, requested by the user as the next
 step after trash. Findings are ordered by how much risk they remove; sizes are rough lines
 of change. Items 1–4 should land before connecting a real instance to the internet.
 
+Update 2026-09-08: the user selected direct LAN onboarding as the default. The fixed-HTTPS
+assumption in item 4 and loopback web binding in item 8 are superseded: web listens on all
+interfaces and uses HTTP by default. HTTPS edges set `FDRIVE_PROXY_SCHEME=https`;
+see [current network setup](../../deploy/REFERENCE.md#network-placement--reverse-proxies).
+
 | # | Change | Severity | Where | Size |
 | --- | --- | --- | --- | --- |
 | 1 | Loopback-bind SFTPGo's admin port in the opt-in overlay (`127.0.0.1:…:8080`), comment out the SFTP port, move the host port off the `FDRIVE_HTTP_PORT` default (8090 collides) | High | `deploy/compose.sftpgo.yaml` | 5 |

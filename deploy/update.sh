@@ -8,7 +8,7 @@
 # Run it from anywhere, including through a symlink; it resolves its own real
 # path and changes into the repo's deploy directory itself.
 #
-# Environment (all optional; the first two may also be set in deploy/.env):
+# Environment (optional; selectors and network addresses also read deploy/.env):
 #   FDRIVE_COMPOSE_FILES  extra compose files, space separated, added after compose.yaml
 #                         (for example "compose.sftpgo-network.yaml compose.office.yaml").
 #                         Every file you normally pass with -f must be listed, or the
@@ -47,11 +47,10 @@ git pull --ff-only
 echo "==> after:  $(git log --oneline -1)"
 
 cd "$repo/deploy"
-# The two selectors may also live in deploy/.env next to the other settings, so a
-# host needs no wrapper script. Only these two keys are read; nothing else in the
-# file is exported.
+# Read only stack selectors and network addresses needed for startup output
+# and the health check; never source .env as executable shell code.
 if [[ -f .env ]]; then
-  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES; do
+  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES FDRIVE_HTTP_BIND FDRIVE_HTTP_PORT FDRIVE_PUBLIC_URL; do
     if [[ -z "${!key:-}" ]]; then
       # `|| true` keeps an absent key from aborting the script under pipefail.
       value="$({ grep -E "^${key}=" .env || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')"
@@ -86,8 +85,18 @@ echo
 echo "==> containers"
 docker compose "${args[@]}" ps --format '{{.Name}}\t{{.Status}}'
 echo
-health="${FDRIVE_HEALTH_URL:-http://127.0.0.1:${FDRIVE_HTTP_PORT:-8090}/api/v1/health}"
+health_bind="${FDRIVE_HTTP_BIND:-127.0.0.1}"
+[[ "$health_bind" == "0.0.0.0" ]] && health_bind=127.0.0.1
+health="${FDRIVE_HEALTH_URL:-http://${health_bind}:${FDRIVE_HTTP_PORT:-8090}/api/v1/health}"
 echo -n "==> api health (${health}): "
 # --fail turns a 5xx into a nonzero exit, so a broken deploy fails this script.
 curl -sf --max-time 10 "$health" || { echo "NOT HEALTHY"; exit 1; }
 echo
+
+if [[ -n "${FDRIVE_PUBLIC_URL:-}" ]]; then
+  echo "==> Open ${FDRIVE_PUBLIC_URL} in your browser to complete setup."
+elif [[ "${FDRIVE_HTTP_BIND:-0.0.0.0}" == "0.0.0.0" ]]; then
+  echo "==> From another device on your network, open http://<server-ip>:${FDRIVE_HTTP_PORT:-8090} to complete setup."
+else
+  echo "==> Open http://${FDRIVE_HTTP_BIND}:${FDRIVE_HTTP_PORT:-8090} in your browser to complete setup."
+fi

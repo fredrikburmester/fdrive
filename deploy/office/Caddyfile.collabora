@@ -1,11 +1,6 @@
-# TLS terminates at the operator's edge proxy, routing both hostnames here.
-# The default deployment must never be served directly over plain HTTP with
-# no edge in front: without an accurate X-Forwarded-Proto the session cookie
-# can never become Secure (see FDRIVE_COOKIE_SECURE=auto in
-# deploy/.env.example and the "TLS and network placement" section of
-# deploy/REFERENCE.md). WOPI callbacks never traverse this proxy: the office
-# server reaches the API directly at http://api:3001/wopi over the compose
-# network.
+# Direct LAN HTTP works by default. Behind an HTTPS edge, set
+# FDRIVE_PROXY_SCHEME=https so generated URLs and automatic cookies use HTTPS.
+# The scheme is deployment-controlled; client headers cannot override it.
 :80 {
 	request_body {
 		max_size 0
@@ -14,23 +9,23 @@
 	@office host {$FDRIVE_COLLABORA_HOST}
 	handle @office {
 		reverse_proxy collabora:9980 {
-			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
 		}
 	}
 	handle /api/* {
 		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
 		}
 	}
 	handle /mcp* {
 		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
 		}
 	}
 	handle {
 		encode zstd gzip
 		reverse_proxy web:3000 {
-			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
 		}
 	}
 }

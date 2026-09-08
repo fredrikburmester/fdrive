@@ -51,6 +51,7 @@ KNOWN_FDRIVE_KEYS=(
     "FDRIVE_COMPOSE_FILES"
     "FDRIVE_PROFILES"
     "FDRIVE_HTTP_BIND"
+    "FDRIVE_PROXY_SCHEME"
     "FDRIVE_HTTP_PORT"
     "FDRIVE_INDEX_SFTPGO_DIR"
     "FDRIVE_INDEX_SFTPGO_PATH"
@@ -100,6 +101,12 @@ if [[ -n "$home_template" ]] && [[ ! "$home_template" =~ ^[A-Za-z0-9_-]+:.*\{use
   fail=1
 fi
 
+scheme="$(read_env_value FDRIVE_PROXY_SCHEME)"
+case "${scheme:-http}" in
+  http|https) ;;
+  *) echo "error: FDRIVE_PROXY_SCHEME must be http or https" >&2; fail=1 ;;
+esac
+
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi
@@ -109,7 +116,7 @@ sftpgo_path="${sftpgo_path:-/srv/sftpgo/data}"
 echo "==> FDRIVE_INDEX_ROOTS: [{\"name\":\"sftpgo\",\"sftpgoPath\":\"${sftpgo_path}\",\"indexerPath\":\"/roots/sftpgo\"}]"
 
 bind="$(read_env_value FDRIVE_HTTP_BIND)"
-bind="${bind:-127.0.0.1}"
+bind="${bind:-0.0.0.0}"
 port="$(read_env_value FDRIVE_HTTP_PORT)"
 port="${port:-8090}"
 echo "==> bind address: ${bind}:${port}"

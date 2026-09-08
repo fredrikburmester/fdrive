@@ -2,6 +2,19 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## LAN onboarding defaults (verified)
+
+- User requires access from another device after init-env/update. Default web binding now
+  all interfaces, with server-IP instructions; loopback remains an explicit override.
+- Removed forced HTTPS assumption in core/Office proxies. HTTP default supports LAN cookies;
+  FDRIVE_PROXY_SCHEME=https supports an HTTPS edge without trusting client protocol headers.
+- Startup output directs users to the server IP and honors configured ports/URLs. Preflight
+  validates the browser-facing protocol; init-env still generates only two required secrets.
+- Passed: deploy coverage, deploy TypeScript, workflow, rendered Compose default binding,
+  and real Caddy HTTP/HTTPS forwarding plus automatic cookie checks for core/Office variants.
+  Initial Docker Desktop stale file mount was refreshed; existing workflow mock-start race
+  passed on rerun. No remote Unraid configuration or SFTPGo data changed.
+
 ## Pre-release compatibility cleanup (verified)
 
 - Removed feature upgrade script, environment activation, managed/unmanaged branches,
