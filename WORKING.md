@@ -10,10 +10,12 @@ recipes. Use the tested helpers in `tools/orchestration/`; implementation lesson
 
 | Work | Model | Reasoning |
 | --- | --- | --- |
-| Routine implementation and tests | GPT-5.6 Sol (`gpt-5.6-sol`) | `high` |
-| Complex cross-package or security work | GPT-6 Astra (`gpt-6-astra`) | `high` |
+| Implementation and accompanying tests (`implementer`) | GPT-5.6 Sol (`gpt-5.6-sol`) | `high` |
+| Tests only (`test-writer`) | GPT-5.6 Terra (`gpt-5.6-terra`) | `high` |
+| Complex cross-package or security work outside these named roles | GPT-6 Astra (`gpt-6-astra`) | `high` |
 
-Defaults live in `.codex/config.toml`; role files omit model settings so spawn overrides work.
+Fallback defaults live in `.codex/config.toml`; named role files pin their model and effort,
+which take precedence over spawn overrides.
 Record overrides in the spec, follow explicit user choices, and report unavailable models.
 After config changes, verify role discovery and effective model/effort in a fresh session.
 
