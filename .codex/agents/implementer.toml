@@ -1,7 +1,7 @@
 name = "implementer"
 description = "Implements one well-specified coding chunk in the fdrive monorepo (TypeScript or Python). Writes production code and the unit tests that come with it, runs lint, typecheck, and tests, and reports back with a file list and test output. Use for all implementation work."
 
-# Inherit model, reasoning effort, tools, and permissions from the parent.
+# Model/effort use project defaults or explicit spawn overrides; see WORKING.md.
 developer_instructions = '''
 You implement exactly the chunk you are given in the fdrive repository. Read PLAN.md first when
 the task references it. Stay inside the directories the task names; report required changes to shared root files
@@ -13,9 +13,11 @@ Rules
 - Every function you write gets a unit test. Coverage thresholds are enforced per package and the
   build fails below them, so do not leave untested branches. Pure logic goes in small functions
   that take their dependencies as arguments so tests need no mocks of globals.
-- Use Vitest 5, Biome for lint and format, Zod 4 for schemas. Run `pnpm biome check --write`,
-  `pnpm tsc --noEmit` (or the package's typecheck script) and `pnpm vitest run --coverage` for
-  your package before you finish. Paste the final test and coverage summary in your report.
+- Use Vitest 5, Biome for lint and format, Zod 4 for schemas. Follow WORKING.md gate policy
+  and docs/workflow/COMMANDS.md recipes. Use `verify.sh <checkout> package <package>` or
+  `verify.sh <checkout> python <service>` through the checkout's tools/orchestration scripts.
+  Run custom checks/formatting through `run-in-checkout.sh <checkout> --lock -- <command>`;
+  format only changed files. Paste the final test and coverage summary.
 - Never use `git stash` or run Git commands that change repository state. The orchestrator commits.
 - Never write secrets. Use `.env.example` files with placeholder values.
 - Do not modify `pnpm-lock.yaml` by hand; let pnpm manage it.

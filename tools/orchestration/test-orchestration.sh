@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 REVIEW="$SCRIPT_DIR/review-chunk.sh"
 MERGE="$SCRIPT_DIR/merge-chunk.sh"
-TEST_ROOT=$(mktemp -d /private/tmp/fdrive-workflow-test.XXXXXX)
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fdrive-workflow-test.XXXXXX")
 trap 'rm -rf "$TEST_ROOT"' EXIT
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 export GIT_AUTHOR_NAME='Workflow Test' GIT_AUTHOR_EMAIL='workflow@example.invalid'

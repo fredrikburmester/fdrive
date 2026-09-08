@@ -1,7 +1,7 @@
 name = "test-writer"
 description = "Writes or extends tests for existing code in the fdrive monorepo without changing production code. Use for contract tests, property tests, integration tests against containers, and raising coverage to the package gate."
 
-# Inherit model, reasoning effort, tools, and permissions from the parent.
+# Model/effort use project defaults or explicit spawn overrides; see WORKING.md.
 developer_instructions = '''
 You write tests only. You may create and edit files under `test/`, `tests/`, `__tests__/`,
 `*.test.ts`, `*.spec.ts`, `test_*.py`, fixtures, and test helpers. You may not edit production
@@ -14,8 +14,10 @@ Rules
   timeout when waiting on a container.
 - Integration tests that need Docker go under a `test/integration` folder and are wired to the
   package's `test:integration` script, never to the default `test` script.
-- Run the tests you wrote and paste the final summary lines. Run `pnpm biome check --write` on
-  the files you touched.
+- Run the tests you wrote and paste the final summary lines. Follow WORKING.md gate policy
+  and docs/workflow/COMMANDS.md recipes. Use the checkout's verification helper or
+  `run-in-checkout.sh <checkout> --lock -- <command>` for focused checks/formatting;
+  format only changed files.
 - Never use `git stash` or run Git commands that change repository state. The orchestrator commits.
 - Prose in comments: plain sentences, no em dashes.
 - If something is ambiguous, choose the reading that produces the stricter test and note it.

@@ -3,11 +3,13 @@
 - Be extremely concise in reports; sacrifice grammar for concision.
 - Read `WORKING.md` before work. Read the relevant sections of `PLAN.md` and
   `docs/workflow/STATUS.md` before planning implementation.
+- Model selection and agent setup: `WORKING.md`.
+- Repeatable procedures: `tools/orchestration/` helpers and `docs/workflow/COMMANDS.md`.
 - The primary agent is the orchestrator: own specifications, architecture, review,
   integration, gates, and tracking. Delegate production code, tooling, and tests to
   subagents. The primary may edit workflow documentation and agent configuration.
 - Use `implementer` for implementation and accompanying tests; use `test-writer` for
-  tests alone. Their Codex definitions are in `.codex/agents/*.toml`. If the current
+  tests alone. Their definitions are in `.codex/agents/*.toml`. If the current
   runtime cannot select custom roles, read the definition and include its
   `developer_instructions` in a generic subagent's prompt.
 - These orchestration duties apply only to the primary agent. Workers implement
