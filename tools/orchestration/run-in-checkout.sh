@@ -12,9 +12,12 @@ FDRIVE_LOCK_TOKEN=
 FDRIVE_CHILD_PID=
 FDRIVE_CHILD_GROUP=0
 FDRIVE_SIGNAL_STATUS=0
+FDRIVE_COMMAND_FAILURE_REPORTED=0
 
 usage() {
-  printf 'usage: bash run-in-checkout.sh <checkout> [--lock] -- <command> [args...]\n'
+  printf '%s\n' \
+    'usage: bash run-in-checkout.sh <checkout> [--lock] -- <command> [args...]' \
+    '       FDRIVE_VERBOSE=1 prints full output for locked commands.'
 }
 
 if [[ ${1:-} == --help && $# -eq 1 ]]; then usage; exit 0; fi
@@ -34,15 +37,25 @@ finish() {
   trap - EXIT INT TERM
   fdrive_release_lock
   fdrive_cleanup_runtime
-  printf '%s: end status %s\n' "$FDRIVE_COMMAND_NAME" "$status" >&2
+  if [[ $status -ne 0 && $FDRIVE_COMMAND_FAILURE_REPORTED -eq 0 ]]; then
+    printf '%s: FAIL command (exit %s)\n' "$FDRIVE_COMMAND_NAME" "$status" >&2
+  fi
   exit "$status"
 }
 
 trap finish EXIT
 trap 'fdrive_handle_signal INT 130' INT
 trap 'fdrive_handle_signal TERM 143' TERM
-printf '%s: start checkout %s%s\n' "$FDRIVE_COMMAND_NAME" "$CHECKOUT" "$([[ $USE_LOCK -eq 1 ]] && printf ' locked')" >&2
 fdrive_prepare_runtime "$CHECKOUT"
 if [[ $USE_LOCK -eq 1 ]]; then fdrive_acquire_lock "$CHECKOUT"; fi
 cd "$CHECKOUT"
+if [[ $USE_LOCK -eq 1 ]]; then
+  if fdrive_run_step 'command' "$@"; then
+    exit 0
+  else
+    STATUS=$?
+    FDRIVE_COMMAND_FAILURE_REPORTED=1
+    exit "$STATUS"
+  fi
+fi
 fdrive_run_child "$@"

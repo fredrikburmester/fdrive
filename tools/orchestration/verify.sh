@@ -20,7 +20,8 @@ usage() {
     '       bash verify.sh <checkout> application' \
     '       bash verify.sh <checkout> integration' \
     '       bash verify.sh <checkout> browser [Playwright args...]' \
-    '       bash verify.sh <checkout> python <indexer|ocr|image-embed>'
+    '       bash verify.sh <checkout> python <indexer|ocr|image-embed>' \
+    '       FDRIVE_VERBOSE=1 prints full output for every verification step.'
 }
 
 if [[ ${1:-} == --help && $# -eq 1 ]]; then usage; exit 0; fi
@@ -57,7 +58,6 @@ finish() {
   trap - EXIT INT TERM
   fdrive_release_lock
   fdrive_cleanup_runtime
-  printf '%s: end profile %s status %s\n' "$FDRIVE_COMMAND_NAME" "$PROFILE" "$status" >&2
   exit "$status"
 }
 
@@ -80,11 +80,33 @@ for path in pathlib.Path(".codex").rglob("*.toml"):
 '
 }
 
+workflow_python_syntax() {
+  local script
+  for script in "$CHECKOUT"/tools/orchestration/*.py; do
+    [[ -f $script ]] || continue
+    python3 -c '
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+compile(path.read_text(), str(path), "exec")
+' "$script" || return $?
+  done
+}
+
+workflow_regression_tests() {
+  local script name
+  for script in "$CHECKOUT"/tools/orchestration/test-*.sh; do
+    [[ -f $script ]] || continue
+    name=$(basename "$script")
+    fdrive_run_step "orchestration regression $name" bash "$script" || return $?
+  done
+}
+
 verify_workflow() {
   fdrive_run_step 'orchestration shell syntax' workflow_shell_syntax
   fdrive_run_step 'Codex TOML parsing' workflow_toml
-  fdrive_run_step 'orchestration regression tests' bash tools/orchestration/test-orchestration.sh
-  fdrive_run_step 'command helper regression tests' bash tools/orchestration/test-command-helpers.sh
+  fdrive_run_step 'orchestration Python syntax' workflow_python_syntax
+  workflow_regression_tests
   fdrive_run_step 'lint' pnpm lint
   fdrive_run_step 'diff check' git diff --check
 }
@@ -135,7 +157,6 @@ verify_python() {
 trap finish EXIT
 trap 'fdrive_handle_signal INT 130' INT
 trap 'fdrive_handle_signal TERM 143' TERM
-printf '%s: start profile %s checkout %s\n' "$FDRIVE_COMMAND_NAME" "$PROFILE" "$CHECKOUT" >&2
 if [[ $PROFILE != python ]]; then fdrive_prepare_runtime "$CHECKOUT"; fi
 if [[ $PROFILE == package ]] && ! fdrive_workspace_has_package "$CHECKOUT" "$PACKAGE"; then
   fdrive_die "unknown workspace package: $PACKAGE"

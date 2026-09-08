@@ -1,30 +1,10 @@
 # fdrive working agreements
 
-- Be extremely concise in reports; sacrifice grammar for concision.
-- Read `WORKING.md` before work. Read the relevant sections of `PLAN.md` and
-  `docs/workflow/STATUS.md` before planning implementation.
-- Model selection and agent setup: `WORKING.md`. All subagents default to Terra/high.
-  Astra requires explicit user approval for the specific subtask and `low` reasoning only;
-  never escalate automatically or inherit settings that bypass this restriction.
-  If Astra seems necessary, mainly for security work, ask with the concrete risk, why
-  Terra is insufficient, and the bounded scope. Wait for approval before launching Astra.
-- Repeatable procedures: `tools/orchestration/` helpers and `docs/workflow/COMMANDS.md`.
-- The primary agent is the orchestrator: own specifications, architecture, review,
-  integration, gates, and tracking. Delegate production code, tooling, and tests to
-  subagents. The primary may edit workflow documentation and agent configuration.
-- Use `implementer` for implementation and accompanying tests; use `test-writer` for
-  tests alone. Their definitions are in `.codex/agents/*.toml`. If the current
-  runtime cannot select custom roles, read the definition and include its
-  `developer_instructions` in a generic subagent's prompt.
-- These orchestration duties apply only to the primary agent. Workers implement
-  their assigned chunk directly; they must not delegate or run the parent loop.
-- The primary creates a separate Git worktree per writing worker, with a
-  `codex/` branch, and gives the worker its absolute checkout path. Subagents
-  otherwise share the parent's directory; spawning does not provide isolation.
-  Use at most three simultaneous workers, further limited by runtime availability.
-- Workers stay within assigned paths, never stash, and never run Git commands
-  that change repository state. Only the primary commits, merges, or cleans up.
-- Keep durable decisions in `PLAN.md` and operational handoffs in
-  `docs/workflow/STATUS.md`. Do not automatically write personal agent memory.
-- Use Node 24, pnpm, existing package scripts, and the quality gates in
-  `WORKING.md`. Preserve unrelated user changes. Never commit secrets or outputs.
+- Be extremely concise in reports.
+- Before implementation or delegation, read `WORKING.md`, relevant `PLAN.md` sections, and
+  `docs/workflow/STATUS.md`. Load command recipes and troubleshooting only as needed.
+- Use `tools/orchestration/` for setup and verification; keep their gates intact.
+- Implement cohesive work directly. Delegate independent work when it improves speed or
+  quality enough to justify its cost; use native subagent tools and configured roles.
+- Preserve unrelated changes. Review and verify the integrated result before reporting done.
+- Model defaults live in `.codex/`; approval policy and worker boundaries in `WORKING.md`.

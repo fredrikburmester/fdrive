@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 REVIEW="$SCRIPT_DIR/review-chunk.sh"
 MERGE="$SCRIPT_DIR/merge-chunk.sh"
+TRANSFER_PY="$SCRIPT_DIR/transfer-checkout.py"
+TRANSFER="$SCRIPT_DIR/transfer-checkout.sh"
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fdrive-workflow-test.XXXXXX")
 trap 'rm -rf "$TEST_ROOT"' EXIT
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
@@ -95,6 +97,32 @@ printf 'stash\n' > "$CHUNK/src/file name.txt"
 git -C "$CHUNK" stash push -qm fixture
 expect_failure env ALLOWED='src/' bash "$REVIEW" "$CHUNK"
 pass 'repository stash rejected even with clean checkout'
+
+fixture
+printf 'staged outside\n' > "$CHUNK/outside/original name.txt"
+git -C "$CHUNK" add outside
+printf 'base\n' > "$CHUNK/outside/original name.txt"
+expect_failure env ALLOWED='src/' bash "$REVIEW" "$CHUNK"
+printf 'target preserved\n' > "$TARGET/src/file name.txt"
+expect_failure env ALLOWED='src/' bash "$TRANSFER" "$CHUNK" "$TARGET"
+[[ $(cat "$TARGET/src/file name.txt") == 'target preserved' ]] || fail 'staged scope failure changed target'
+pass 'staged out-of-scope path is rejected even after working tree restoration'
+
+fixture
+expect_success python3 "$TRANSFER_PY" baseline "$TARGET" "$CHUNK"
+printf 'worker delta\n' > "$CHUNK/src/file name.txt"
+expect_success env ALLOWED='src/' bash "$REVIEW" "$CHUNK"
+BEFORE=$(git -C "$CHUNK" rev-parse HEAD)
+expect_failure env ALLOWED='src/' bash "$MERGE" "$CHUNK" 'feat: baseline' "$TARGET"
+[[ $(git -C "$CHUNK" rev-parse HEAD) == "$BEFORE" ]] || fail 'baseline merge committed changes'
+git -C "$CHUNK" diff --cached --quiet || fail 'baseline merge staged changes'
+pass 'baseline review scopes worker delta and merge refuses it before staging'
+
+fixture
+mkdir "$CHUNK/.fdrive-workflow"
+ln -s "$TEST_ROOT/missing-baseline" "$CHUNK/.fdrive-workflow/baseline.json"
+expect_failure env ALLOWED='src/' bash "$MERGE" "$CHUNK" 'feat: unsafe baseline' "$TARGET"
+pass 'merge refuses a symlink baseline state'
 
 fixture
 printf 'chunk\n' > "$CHUNK/src/file name.txt"

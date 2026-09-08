@@ -216,9 +216,78 @@ fdrive_cleanup_runtime() {
   FDRIVE_RUNTIME_DIR=
 }
 
+fdrive_initialize_logs() {
+  local root state_path log_path
+  root=$1
+  state_path="$root/.fdrive-workflow"
+  log_path="$state_path/logs"
+  if [[ -L $state_path ]]; then
+    printf '%s: workflow state directory must not be a symlink: %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$state_path" >&2
+    return 1
+  fi
+  if [[ ! -d $state_path ]]; then
+    if ! mkdir "$state_path" 2>/dev/null && [[ ! -d $state_path || -L $state_path ]]; then
+      printf '%s: cannot create workflow state directory: %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$state_path" >&2
+      return 1
+    fi
+  fi
+  if [[ -L $log_path ]]; then
+    printf '%s: workflow log directory must not be a symlink: %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$log_path" >&2
+    return 1
+  fi
+  if [[ ! -d $log_path ]]; then
+    if ! mkdir "$log_path" 2>/dev/null && [[ ! -d $log_path || -L $log_path ]]; then
+      printf '%s: cannot create workflow log directory: %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$log_path" >&2
+      return 1
+    fi
+  fi
+  FDRIVE_LOG_DIRECTORY=$log_path
+}
+
+fdrive_prepare_step_logs() {
+  local label base
+  label=$1
+  [[ -n ${FDRIVE_LOG_DIRECTORY:-} && -d $FDRIVE_LOG_DIRECTORY && ! -L $FDRIVE_LOG_DIRECTORY ]] || {
+    printf '%s: workflow log directory is unavailable\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" >&2
+    return 1
+  }
+  base=$(mktemp -d "$FDRIVE_LOG_DIRECTORY/step.XXXXXX") || return 1
+  FDRIVE_STEP_LOG_OUT="$base/stdout.log"
+  FDRIVE_STEP_LOG_ERR="$base/stderr.log"
+  printf '%s\n' "$label" > "$base/label.txt" || return 1
+  : > "$FDRIVE_STEP_LOG_OUT" || return 1
+  : > "$FDRIVE_STEP_LOG_ERR" || return 1
+}
+
+fdrive_replay_step_logs() {
+  [[ -s ${FDRIVE_STEP_LOG_OUT:-} ]] && cat "$FDRIVE_STEP_LOG_OUT"
+  [[ -s ${FDRIVE_STEP_LOG_ERR:-} ]] && cat "$FDRIVE_STEP_LOG_ERR" >&2
+  return 0
+}
+
+fdrive_report_step_failure() {
+  local label status
+  label=$1
+  status=$2
+  printf '%s: FAIL %s (exit %s); logs: %s %s\n' \
+    "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$label" "$status" \
+    "$FDRIVE_STEP_LOG_OUT" "$FDRIVE_STEP_LOG_ERR" >&2
+  if [[ -s $FDRIVE_STEP_LOG_OUT ]]; then
+    printf '%s: stdout excerpt (last 4096 bytes)\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" >&2
+    tail -c 4096 "$FDRIVE_STEP_LOG_OUT" >&2
+    printf '\n' >&2
+  fi
+  if [[ -s $FDRIVE_STEP_LOG_ERR ]]; then
+    printf '%s: stderr excerpt (last 4096 bytes)\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" >&2
+    tail -c 4096 "$FDRIVE_STEP_LOG_ERR" >&2
+    printf '\n' >&2
+  fi
+}
+
 fdrive_acquire_lock() {
   local root state_path lock_path owner
   root=$1
+  fdrive_initialize_logs "$root" || return 1
   state_path="$root/.fdrive-workflow"
   lock_path="$state_path/command.lock"
   if [[ -L $state_path ]]; then
@@ -270,13 +339,18 @@ fdrive_run_step() {
   local label status
   label=$1
   shift
-  printf '%s: start %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$label" >&2
-  if fdrive_run_child "$@"; then
+  fdrive_prepare_step_logs "$label" || return 1
+  if fdrive_run_child_logged "$FDRIVE_STEP_LOG_OUT" "$FDRIVE_STEP_LOG_ERR" "$@"; then
     status=0
   else
     status=$?
   fi
-  printf '%s: end %s status %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$label" "$status" >&2
+  if [[ ${FDRIVE_VERBOSE:-0} == 1 ]]; then fdrive_replay_step_logs; fi
+  if [[ $status -eq 0 ]]; then
+    printf '%s: PASS %s\n' "${FDRIVE_COMMAND_NAME:-fdrive-command}" "$label" >&2
+  else
+    fdrive_report_step_failure "$label" "$status"
+  fi
   return "$status"
 }
 
@@ -334,6 +408,22 @@ fdrive_run_child() {
     FDRIVE_CHILD_GROUP=1
   fi
   "$@" <&0 &
+  FDRIVE_CHILD_PID=$!
+  fdrive_wait_for_child
+}
+
+fdrive_run_child_logged() {
+  local stdout_log stderr_log
+  stdout_log=$1
+  stderr_log=$2
+  shift 2
+  [[ ${FDRIVE_SIGNAL_STATUS:-0} -eq 0 ]] || return "$FDRIVE_SIGNAL_STATUS"
+  FDRIVE_CHILD_GROUP=0
+  if [[ ! -t 0 ]]; then
+    set -m
+    FDRIVE_CHILD_GROUP=1
+  fi
+  "$@" <&0 >"$stdout_log" 2>"$stderr_log" &
   FDRIVE_CHILD_PID=$!
   fdrive_wait_for_child
 }
