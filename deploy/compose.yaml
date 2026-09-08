@@ -81,7 +81,6 @@ services:
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
       # Reuse the database secret only inside the private compose network as
       # the worker/API authentication token; no extra operator secret exists.
-      FDRIVE_FEATURES_MANAGED: "true"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       PORT: "3001"
       NODE_ENV: production
@@ -197,7 +196,6 @@ services:
       IMAGE_EMBED_URL: http://image-embed:8012
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
-      FDRIVE_FEATURES_MANAGED: "true"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo:ro
@@ -242,7 +240,6 @@ services:
       # single-user instance; see deploy/.env.example. OCR_EXCLUDE_GLOBS
       # still applies on top. Empty (the default) means no restriction.
       OCR_INCLUDE_GLOBS: ${OCR_INCLUDE_GLOBS:-}
-      FDRIVE_FEATURES_MANAGED: "true"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo
@@ -263,7 +260,6 @@ services:
       context: ..
       dockerfile: deploy/runtime/Dockerfile.tika
     environment:
-      FDRIVE_FEATURES_MANAGED: "true"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       FDRIVE_RUNTIME_FEATURES: textSearch,searchOcr,semanticSearch
       FDRIVE_RUNTIME_PORT: "9997"
@@ -283,7 +279,6 @@ services:
     platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
     command: ["text-embeddings-router", "--model-id", "intfloat/multilingual-e5-small"]
     environment:
-      FDRIVE_FEATURES_MANAGED: "true"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       FDRIVE_RUNTIME_FEATURES: semanticSearch
       FDRIVE_RUNTIME_PORT: "8099"
@@ -314,12 +309,10 @@ services:
       dockerfile: deploy/runtime/Dockerfile.image-embed
     environment:
       IMAGE_EMBED_PORT: "8012"
-      FDRIVE_FEATURES_MANAGED: "true"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       FDRIVE_RUNTIME_FEATURES: imageSearch
       FDRIVE_RUNTIME_PORT: "8013"
       FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:8012/health
-      FDRIVE_RUNTIME_CHILD_UNMANAGED: "true"
     volumes:
       - fdrive-image-embed-models:/models
     mem_limit: 6g

@@ -72,7 +72,7 @@ class FeatureClient:
 
     def fetch(self) -> FeatureSnapshot:
         if not self.token:
-            raise ValueError("FDRIVE_WORKER_TOKEN is required in managed mode")
+            raise ValueError("FDRIVE_WORKER_TOKEN is required by the runtime controller")
         request = urllib.request.Request(self.url, headers={"x-fdrive-worker-token": self.token})
         try:
             opener = urllib.request.build_opener(NoRedirect())
@@ -138,10 +138,7 @@ class WorkerLifecycle:
             return
         self._attempts += 1
         try:
-            env = os.environ.copy()
-            if os.environ.get("FDRIVE_RUNTIME_CHILD_UNMANAGED") == "true":
-                env["FDRIVE_FEATURES_MANAGED"] = "false"
-            self._process = self._popen(self.command, start_new_session=True, env=env)
+            self._process = self._popen(self.command, start_new_session=True)
             self._status = "preparing"
         except OSError as error:
             self._status = "failed"
@@ -244,8 +241,6 @@ def main() -> None:
     # Docker appends CMD after ENTRYPOINT. Treat it verbatim as the child
     # command so model-server flags are never parsed as controller flags.
     command = sys.argv[1:]
-    if os.environ.get("FDRIVE_FEATURES_MANAGED", "").lower() != "true":
-        os.execvp(command[0], command)
     lifecycle = WorkerLifecycle(command, parse_features(os.environ.get("FDRIVE_RUNTIME_FEATURES", "")))
     client = FeatureClient(
         os.environ.get("FDRIVE_FEATURES_URL", DEFAULT_FEATURES_URL),

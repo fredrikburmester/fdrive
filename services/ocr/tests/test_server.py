@@ -5,15 +5,34 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from psycopg.types.json import Json
 from starlette.testclient import TestClient
 
 from fdrive_ocr import db, server
-from fdrive_ocr.features import FeatureConfiguration, FeatureValues
+from fdrive_ocr.features import FEATURES_KEY
 from fdrive_ocr.runner import RootTarget
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
 DEFAULT_SETTINGS = Settings(hour=3, langs="swe+eng", exclude_globs=("Programs/**",), max_mb=200, keep_originals=True)
+
+
+def _set_pdf_ocr(state: server.ServerState) -> None:
+    values = {
+        "thumbnails": False,
+        "textSearch": False,
+        "searchOcr": False,
+        "semanticSearch": False,
+        "imageSearch": False,
+        "pdfOcr": True,
+    }
+    conn = state.conn_factory()
+    with conn.cursor() as cur:
+        cur.execute(
+            'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
+            (FEATURES_KEY, Json({"version": 1, "revision": 1, "values": values})),
+        )
+    conn.close()
 
 
 def _make_state(
@@ -101,10 +120,8 @@ def test_health_reports_running(postgres_dsn: str, tmp_path: Path) -> None:
     assert resp.json()["running"] is True
 
 
-def test_managed_disabled_pdf_ocr_is_acknowledged_and_rejects_manual_run(postgres_dsn: str, tmp_path: Path) -> None:
+def test_missing_feature_selection_is_acknowledged_and_rejects_manual_run(postgres_dsn: str, tmp_path: Path) -> None:
     state = _make_state(postgres_dsn, tmp_path)
-    state.feature_defaults = FeatureConfiguration(0, FeatureValues(True, True, False, True, False, True))
-    state.features_managed = True
     client = TestClient(server.create_app(state))
     assert client.get("/health").json()["features"]["values"]["pdfOcr"] is False
     response = client.post("/run")
@@ -183,6 +200,7 @@ def test_run_starts_a_pass_and_stats_reflects_it(postgres_dsn: str, tmp_path: Pa
 
     (tmp_path / "a.pdf").write_bytes(b"HASTEXT\n")
     state = _make_state(postgres_dsn, tmp_path)
+    _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
     resp = client.post("/run")
@@ -204,6 +222,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
     (tmp_path / "alice").mkdir()
     (tmp_path / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
     state = _make_state(postgres_dsn, tmp_path, include_globs=("sftpgo/fredrik/**",))
+    _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
     resp = client.post("/run")
@@ -223,6 +242,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
 
 def test_run_returns_409_when_already_running(postgres_dsn: str, tmp_path: Path) -> None:
     state = _make_state(postgres_dsn, tmp_path)
+    _set_pdf_ocr(state)
     state.run_lock.try_acquire()
     client = TestClient(server.create_app(state))
     resp = client.post("/run")
@@ -232,6 +252,7 @@ def test_run_returns_409_when_already_running(postgres_dsn: str, tmp_path: Path)
 
 def test_run_releases_lock_and_logs_when_pass_crashes(postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state = _make_state(postgres_dsn, tmp_path)
+    _set_pdf_ocr(state)
     logs: list[str] = []
     state.log = logs.append
 

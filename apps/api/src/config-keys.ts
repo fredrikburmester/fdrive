@@ -48,14 +48,6 @@ export interface ConfigKeyDef {
  */
 export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
-    key: "FDRIVE_FEATURES_MANAGED",
-    description: "Start optional workers inactive until configured through setup.",
-    default: "false",
-    example: "true",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_WORKER_TOKEN",
     description: "Shared internal credential for bundled worker configuration polling.",
     default: null,

@@ -4,14 +4,33 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from psycopg.types.json import Json
 
 from fdrive_ocr import db, main
-from fdrive_ocr.features import FeatureConfiguration, FeatureValues
+from fdrive_ocr.features import FEATURES_KEY
 from fdrive_ocr.server import RunLock
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
 DEFAULT_SETTINGS = Settings(hour=3, langs="swe+eng", exclude_globs=(), max_mb=200, keep_originals=True)
+
+
+def _set_pdf_ocr(postgres_dsn: str, enabled: bool = True) -> None:
+    values = {
+        "thumbnails": False,
+        "textSearch": False,
+        "searchOcr": False,
+        "semanticSearch": False,
+        "imageSearch": False,
+        "pdfOcr": enabled,
+    }
+    conn = db.connect(postgres_dsn)
+    with conn.cursor() as cur:
+        cur.execute(
+            'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
+            (FEATURES_KEY, Json({"version": 1, "revision": 1, "values": values})),
+        )
+    conn.close()
 
 
 class StopLoop(Exception):
@@ -39,6 +58,7 @@ def test_build_targets_upserts_roots(postgres_dsn: str, tmp_path: Path) -> None:
 
 
 def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path: Path) -> None:
+    _set_pdf_ocr(postgres_dsn)
     conn = db.connect(postgres_dsn)
     root_id = db.upsert_root(conn, "sftpgo")
     conn.close()
@@ -59,6 +79,7 @@ def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path:
 
 
 def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> None:
+    _set_pdf_ocr(postgres_dsn)
     conn = db.connect(postgres_dsn)
     root_id = db.upsert_root(conn, "sftpgo")
     conn.close()
@@ -104,7 +125,7 @@ def test_run_once_skips_when_already_running(postgres_dsn: str, tmp_path: Path) 
     lock.release()
 
 
-def test_run_once_does_not_rewrite_when_managed_pdf_ocr_is_disabled(postgres_dsn: str, tmp_path: Path) -> None:
+def test_run_once_does_not_rewrite_without_persisted_feature_selection(postgres_dsn: str, tmp_path: Path) -> None:
     logs: list[str] = []
     assert (
         main.run_once(
@@ -116,8 +137,6 @@ def test_run_once_does_not_rewrite_when_managed_pdf_ocr_is_disabled(postgres_dsn
             30,
             2,
             logs.append,
-            feature_defaults=FeatureConfiguration(0, FeatureValues(True, True, False, True, False, True)),
-            features_managed=True,
         )
         is False
     )
@@ -125,6 +144,7 @@ def test_run_once_does_not_rewrite_when_managed_pdf_ocr_is_disabled(postgres_dsn
 
 
 def test_run_once_logs_and_releases_lock_on_crash(postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_pdf_ocr(postgres_dsn)
     def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("kaboom")
 
@@ -205,6 +225,7 @@ def test_scheduler_loop_skips_initial_run_when_disabled(
 def test_scheduler_loop_re_reads_settings_for_the_hour(
     postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _set_pdf_ocr(postgres_dsn)
     import psycopg.types.json
 
     conn = db.connect(postgres_dsn)

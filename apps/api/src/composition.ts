@@ -586,7 +586,6 @@ export async function composeApp(
         thumbsDir: config.fdriveThumbsDir,
       });
       registerSystemRoutes(groups, {
-        featuresManaged: config.fdriveFeaturesManaged ?? false,
         settings: repos.settings,
         indexQueries,
         thumbnailsRepo,

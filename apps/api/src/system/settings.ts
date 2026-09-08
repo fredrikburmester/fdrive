@@ -28,7 +28,7 @@ export const INDEXER_SETTINGS_DEFAULTS = {
   scanIntervalSeconds: 900,
   workers: 4,
   textExcludeGlobs: [] as readonly string[],
-  ocrImageGlobs: [] as readonly string[],
+  ocrImageGlobs: ["**"] as readonly string[],
   tesseractLangs: "swe+eng",
 };
 
@@ -99,10 +99,7 @@ function parseBool(raw: unknown, fallback: boolean): Resolved<boolean> {
  * missing keys and malformed values, mirroring the indexer's own
  * `settings.py` parsing rules.
  */
-export function resolveIndexerSettings(
-  raw: Record<string, unknown>,
-  managed = false,
-): IndexerSettingsResponse {
+export function resolveIndexerSettings(raw: Record<string, unknown>): IndexerSettingsResponse {
   const scanIntervalSeconds = parseInt_(
     raw[INDEXER_SETTINGS_KEYS.scanIntervalSeconds],
     INDEXER_SETTINGS_DEFAULTS.scanIntervalSeconds,
@@ -114,7 +111,7 @@ export function resolveIndexerSettings(
   );
   const ocrImageGlobs = parseGlobList(
     raw[INDEXER_SETTINGS_KEYS.ocrImageGlobs],
-    managed ? ["**"] : INDEXER_SETTINGS_DEFAULTS.ocrImageGlobs,
+    INDEXER_SETTINGS_DEFAULTS.ocrImageGlobs,
   );
   const tesseractLangs = parseStr(
     raw[INDEXER_SETTINGS_KEYS.tesseractLangs],

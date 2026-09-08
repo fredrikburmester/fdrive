@@ -28,7 +28,6 @@ export interface IndexRootConfig {
 }
 
 export interface AppConfig {
-  readonly fdriveFeaturesManaged?: boolean;
   readonly fdriveWorkerToken?: string | undefined;
   readonly fdriveOfficeEditRules?: readonly OfficeEditRule[];
   readonly fdriveOfficeProduct?: "onlyoffice" | "collabora" | undefined;
@@ -246,10 +245,6 @@ export function parseAdminUsers(value: string | undefined): readonly string[] {
 }
 
 const envSchema = z.object({
-  FDRIVE_FEATURES_MANAGED: z.preprocess(
-    (value) => withDefault(value, "false"),
-    z.enum(["true", "false"]).transform((value) => value === "true"),
-  ),
   FDRIVE_WORKER_TOKEN: z.preprocess(undefinedWhenEmpty, z.string().min(1).optional()),
   FDRIVE_OFFICE_EDIT_RULES: z.preprocess(
     undefinedWhenEmpty,
@@ -503,7 +498,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   const parsed = result.data;
 
   const config: AppConfig = {
-    fdriveFeaturesManaged: parsed.FDRIVE_FEATURES_MANAGED,
     fdriveWorkerToken: parsed.FDRIVE_WORKER_TOKEN,
     fdriveOfficeEditRules: parsed.FDRIVE_OFFICE_EDIT_RULES,
     fdriveOfficeProduct: parsed.FDRIVE_OFFICE_PRODUCT,

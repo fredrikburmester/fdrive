@@ -2,17 +2,30 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## Pre-release compatibility cleanup (verified)
+
+- Removed feature upgrade script, environment activation, managed/unmanaged branches,
+  compatibility UI, and related tests/docs. No existing installations need migration.
+- One persisted feature configuration path; absent settings leave every feature off.
+  Malformed worker settings leave processing off.
+- Reviewed and transferred 22 Python paths from `.worktrees/p8-remove-legacy-workers`;
+  copy retained. Unrelated user `.codex`/WORKING edits preserved.
+- Passed: application lint/types/coverage; full API/DB integration; 12 browser checks against
+  Next dev; dev UI inspection; workflow; Compose config; target runtime/OCR Python; Linux
+  indexer 506 tests at 95.52%; final real SFTP rename/indexer integration recheck.
+- No live owner SFTPGo access or user data migration performed.
+
 ## Setup walkthrough (implemented and verified)
 
 - User requested UI-managed optional features, minimal deployment config, and guided SFTPGo
   connection/user diagnostics. Selected bundled workers, inactive until enabled.
 - Design and acceptance criteria: [P8-SETUP-WALKTHROUGH.md](P8-SETUP-WALKTHROUGH.md).
 - Integrated versioned feature settings/admission, resumable owner claim, SFTPGo diagnostics,
-  walkthrough/System UI, lazy processing/models, minimal deployment, and legacy migration.
+  walkthrough/System UI, lazy processing/models, and minimal deployment.
   Both OCR toggles are in onboarding. Reviewed worker deltas transferred; copies retained.
   Commit/push authorized; unrelated user edits preserved.
 - Review fixes: bounded polling, cancellation without sweeps, durable derivative backfill,
-  scanned-PDF extraction, model lifecycle/readiness, ARM wrapper, Postgres legacy migration,
+  scanned-PDF extraction, model lifecycle/readiness, ARM wrapper,
   thumbnail-dialog completion independent of slow cache-size refresh, isolated Next builds.
 - Passed: final application (1,860 API / 1,528 web tests plus workspace/deploy coverage),
   workflow, runtime/OCR Python (OCR 138 tests, 97.64%), focused regressions, final integration.

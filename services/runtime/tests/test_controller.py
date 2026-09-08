@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from fdrive_runtime import controller
 from fdrive_runtime.controller import FeatureClient, FeatureSnapshot, WorkerLifecycle, parse_feature_snapshot, parse_features
 
 
@@ -71,10 +72,10 @@ def test_lifecycle_rejects_invalid_configuration() -> None:
 
 
 def test_lifecycle_only_starts_for_a_mapped_enabled_feature() -> None:
-    starts: list[tuple[str, ...]] = []
+    starts: list[tuple[tuple[str, ...], dict[str, object]]] = []
 
-    def popen(command: tuple[str, ...], **_kwargs: Any) -> FakeProcess:
-        starts.append(command)
+    def popen(command: tuple[str, ...], **kwargs: Any) -> FakeProcess:
+        starts.append((command, kwargs))
         return FakeProcess()
 
     lifecycle = WorkerLifecycle(("worker",), frozenset({"semanticSearch"}), popen=popen)
@@ -82,7 +83,7 @@ def test_lifecycle_only_starts_for_a_mapped_enabled_feature() -> None:
     assert starts == []
     assert lifecycle.status()["status"] == "off"
     lifecycle.reconcile(snapshot(1, semanticSearch=True))
-    assert starts == [("worker",)]
+    assert starts == [(("worker",), {"start_new_session": True})]
     lifecycle.reconcile(snapshot(1, semanticSearch=True))
     assert len(starts) == 1
 
@@ -165,3 +166,33 @@ def test_lifecycle_ignores_an_already_gone_process_and_kill_errors() -> None:
     lifecycle.reconcile(snapshot(thumbnails=True))
     lifecycle.reconcile(snapshot())
     assert lifecycle.status()["status"] == "off"
+
+
+def test_main_always_starts_the_feature_polling_controller(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(
+        lifecycle: WorkerLifecycle,
+        client: FeatureClient,
+        interval: float,
+        stale_seconds: float,
+        _sleep: object,
+    ) -> None:
+        seen.update(lifecycle=lifecycle, client=client, interval=interval, stale_seconds=stale_seconds)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(controller.sys, "argv", ["controller", "python3", "-m", "worker"])
+    monkeypatch.setenv("FDRIVE_RUNTIME_FEATURES", "imageSearch")
+    monkeypatch.setenv("FDRIVE_WORKER_TOKEN", "token")
+    monkeypatch.setattr(controller, "serve_status", lambda *_args: None)
+    monkeypatch.setattr(controller, "run", fake_run)
+    monkeypatch.setattr(controller.signal, "signal", lambda *_args: None)
+
+    controller.main()
+
+    lifecycle = seen["lifecycle"]
+    assert isinstance(lifecycle, WorkerLifecycle)
+    assert lifecycle.command == ("python3", "-m", "worker")
+    assert lifecycle.features == frozenset({"imageSearch"})
+    assert seen["interval"] == 3
+    assert seen["stale_seconds"] == 9

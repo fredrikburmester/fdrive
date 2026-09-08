@@ -124,9 +124,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.arm64.yaml up -d --build
 When using Compose directly, first run `./deploy/build-arm64-runtime.sh`; the
 normal `./deploy/update.sh` detects `compose.arm64.yaml` automatically.
 
-For upgrades from the former profile-based stack, use `./update.sh` once so it
-records actually running optional services before replacing them. Direct
-`docker compose up` defaults features off until they are selected in System.
+Optional processing starts off until selected in the walkthrough or System > Features.
 
 For local development, replace `deploy/compose.yaml` with `deploy/compose.dev.yaml`.
 This changes the embedding runtime only; existing embeddings remain compatible.

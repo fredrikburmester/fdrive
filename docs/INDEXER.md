@@ -136,7 +136,7 @@ inotify watcher and its own periodic scan, running independently.
 | `indexer.scan_interval_seconds` | integer | `SCAN_INTERVAL_SECONDS` env (default 900) |
 | `indexer.workers` | integer | `INDEX_WORKERS` env (default 4) |
 | `indexer.text_exclude_globs` | list of strings, matched with `fnmatch` against `<root>/<rel path>` | `TEXT_EXCLUDE_GLOBS` env |
-| `indexer.ocr_image_globs` | list of strings, same matching | `OCR_IMAGE_GLOBS` env |
+| `indexer.ocr_image_globs` | list of strings, same matching | `["**"]`; applies only when search OCR is enabled |
 | `indexer.tesseract_langs` | string, e.g. `"eng"` or `"swe+eng"` | `TESSERACT_LANGS` env |
 
 A value change is logged (`settings changed: workers, tesseract_langs`) so an

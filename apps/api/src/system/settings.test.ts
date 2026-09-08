@@ -18,7 +18,7 @@ describe("resolveIndexerSettings", () => {
       scanIntervalSeconds: INDEXER_SETTINGS_DEFAULTS.scanIntervalSeconds,
       workers: INDEXER_SETTINGS_DEFAULTS.workers,
       textExcludeGlobs: [],
-      ocrImageGlobs: [],
+      ocrImageGlobs: ["**"],
       tesseractLangs: INDEXER_SETTINGS_DEFAULTS.tesseractLangs,
     });
     expect(result.sources).toEqual({
@@ -68,7 +68,7 @@ describe("resolveIndexerSettings", () => {
       scanIntervalSeconds: INDEXER_SETTINGS_DEFAULTS.scanIntervalSeconds,
       workers: INDEXER_SETTINGS_DEFAULTS.workers,
       textExcludeGlobs: [],
-      ocrImageGlobs: [],
+      ocrImageGlobs: ["**"],
       tesseractLangs: INDEXER_SETTINGS_DEFAULTS.tesseractLangs,
     });
     expect(result.sources).toEqual({

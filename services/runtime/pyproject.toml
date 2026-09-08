@@ -35,7 +35,6 @@ exclude_lines = [
   "def fetch",
   "class NoRedirect",
   "def _child_ready",
-  "FDRIVE_RUNTIME_CHILD_UNMANAGED",
   "class RuntimeServer",
   "class RuntimeHandler",
   "def serve_status",

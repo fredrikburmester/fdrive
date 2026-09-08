@@ -53,7 +53,7 @@ def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.default_exclude_globs == ("Programs/**", "Photos/**", "Videos/**")
     assert cfg.include_globs == ()
     assert cfg.default_max_mb == 200
-    assert cfg.default_keep_originals is True
+    assert cfg.default_settings().keep_originals is True
 
 
 def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,7 +67,6 @@ def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCR_EXCLUDE_GLOBS", "A/**,B/**")
     monkeypatch.setenv("OCR_INCLUDE_GLOBS", "fredrik/**, alice/**")
     monkeypatch.setenv("OCR_MAX_MB", "50")
-    monkeypatch.setenv("OCR_KEEP_ORIGINALS", "false")
     cfg = Config()
     assert cfg.roots == {"sftpgo": "/roots/sftpgo"}
     assert cfg.ocr_port == 9000
@@ -79,7 +78,6 @@ def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.default_exclude_globs == ("A/**", "B/**")
     assert cfg.include_globs == ("fredrik/**", "alice/**")
     assert cfg.default_max_mb == 50
-    assert cfg.default_keep_originals is False
 
 
 def test_config_default_settings_matches_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,9 +88,4 @@ def test_config_default_settings_matches_env(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.langs == cfg.default_langs
     assert settings.exclude_globs == cfg.default_exclude_globs
     assert settings.max_mb == cfg.default_max_mb
-    assert settings.keep_originals == cfg.default_keep_originals
-
-
-def test_legacy_features_keep_nightly_pdf_ocr_when_startup_pass_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OCR_RUN_ON_START", "false")
-    assert Config().legacy_features().pdf_ocr is True
+    assert settings.keep_originals is True

@@ -62,6 +62,7 @@ def _make_context(cfg: Config, root: str, abs_path: str) -> indexer.RootContext:
         cfg=cfg,
         settings=settings,
         extractor=_StubExtractor(root),  # type: ignore[arg-type]
+        features=FeatureConfiguration(0, FeatureValues(True, True, True, True, True, True)),
     )
     ctx.local.conn = conn
     return ctx

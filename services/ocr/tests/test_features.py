@@ -1,6 +1,4 @@
-from fdrive_ocr.features import FEATURES_KEY, FeatureValues, resolve_features
-
-LEGACY = FeatureValues(True, True, False, True, False, True)
+from fdrive_ocr.features import FEATURES_KEY, resolve_features
 
 
 def _value(**overrides: bool) -> dict[str, object]:
@@ -16,9 +14,8 @@ def _value(**overrides: bool) -> dict[str, object]:
     return {"version": 1, "revision": 4, "values": values}
 
 
-def test_absent_row_preserves_legacy_or_disables_managed_install() -> None:
-    assert resolve_features({}, LEGACY, False).values == LEGACY
-    assert resolve_features({}, LEGACY, True).values.as_json() == {
+def test_absent_row_disables_all_processing() -> None:
+    assert resolve_features({}).values.as_json() == {
         "thumbnails": False,
         "textSearch": False,
         "searchOcr": False,
@@ -29,13 +26,13 @@ def test_absent_row_preserves_legacy_or_disables_managed_install() -> None:
 
 
 def test_valid_contract_accepts_all_toggles_and_revision() -> None:
-    parsed = resolve_features({FEATURES_KEY: _value(searchOcr=True)}, LEGACY, True)
+    parsed = resolve_features({FEATURES_KEY: _value(searchOcr=True)})
     assert parsed.revision == 4
     assert parsed.values.search_ocr is True
     assert parsed.values.pdf_ocr is True
 
 
-def test_invalid_contract_never_enables_managed_pdf_rewrites() -> None:
+def test_invalid_contract_never_enables_pdf_rewrites() -> None:
     for value in (
         None,
         {},
@@ -43,4 +40,4 @@ def test_invalid_contract_never_enables_managed_pdf_rewrites() -> None:
         {"version": 1, "revision": -1, "values": {}},
         {"version": 1, "revision": 1, "values": {"pdfOcr": "true"}},
     ):
-        assert resolve_features({FEATURES_KEY: value}, LEGACY, True).values.pdf_ocr is False
+        assert resolve_features({FEATURES_KEY: value}).values.pdf_ocr is False

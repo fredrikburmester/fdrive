@@ -70,9 +70,6 @@ done
 echo "==> preflight"
 ./preflight.sh
 
-echo "==> feature migration"
-./migrate-feature-settings.sh "${args[@]}"
-
 # The ARM64 override derives the managed runtime controller from a pinned
 # upstream TEI build. Build that base here so ordinary `./update.sh` remains
 # the complete deployment command; no feature selection touches Compose.

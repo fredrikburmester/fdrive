@@ -13,6 +13,7 @@ from fdrive_indexer import thumb_rebuild as thumb_rebuild_module
 from fdrive_indexer.chunking import normalize
 from fdrive_indexer.config import Config
 from fdrive_indexer.extract import Extractor
+from fdrive_indexer.features import FeatureConfiguration, FeatureValues
 from fdrive_indexer.indexer import RootContext
 
 
@@ -53,7 +54,15 @@ def _make_ctx(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, root: str, abs
         tika_url=cfg.tika_url,
         normalize=normalize,
     )
-    ctx = RootContext(name=root, root_id=root_id, abs_path=abs_path, cfg=cfg, settings=settings, extractor=extractor)
+    ctx = RootContext(
+        name=root,
+        root_id=root_id,
+        abs_path=abs_path,
+        cfg=cfg,
+        settings=settings,
+        extractor=extractor,
+        features=FeatureConfiguration(0, FeatureValues(True, True, True, True, True, True)),
+    )
     ctx.local.conn = conn
     return ctx
 

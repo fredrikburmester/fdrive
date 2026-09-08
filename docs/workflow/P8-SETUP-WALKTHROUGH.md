@@ -10,19 +10,6 @@ walkthrough, connects SFTPGo, verifies access, and chooses optional features. Ev
 remains editable under System. Enabling supported features requires no Compose edits or
 environment changes after initial deployment.
 
-## Baseline before this implementation
-
-- `apps/web/src/components/system/setup-wizard.tsx` provides token, connection, home
-  template, and account steps. Setup is considered complete when a connection exists.
-- `apps/api/src/setup/service.ts` persists the connection before testing account login.
-  Failed login can therefore leave setup considered complete without its intended owner.
-- Connection settings persist in `app.settings`; `SFTPGO_URL` currently locks the URL.
-- Indexer/OCR settings partially support runtime updates, but service addresses, roots,
-  and some processing policies come from environment configuration.
-- `deploy/compose.yaml` puts processing services in the `index` profile. Image embeddings
-  load on startup; TEI starts with its model. Removing profiles alone would activate work
-  and consume model resources before the owner chooses features.
-
 ## Walkthrough
 
 1. **Claim this server.** One-time bootstrap token; explain where to obtain it. Persist
@@ -105,9 +92,8 @@ operation and must be explained honestly. Fresh installs without local storage m
 - Re-enable resumes missing/stale work without duplicating jobs or rebuilding everything.
 - Do not start any source-writing OCR job until explicitly selected; retain originals by
   default and explain its storage cost separately from read-only searchable OCR.
-- Migrate existing installations without changing enabled behavior. Preserve current
-  environment overrides initially and label them as deployment-managed; offer an explicit
-  migration path to database ownership. Fresh-install examples contain no feature overrides.
+- fdrive is pre-release. Support one persisted feature configuration path, with all features
+  off until selected. Do not add legacy deployment migrations or environment-based activation.
 
 ## Ownership, connection, and discovery boundaries
 
@@ -133,14 +119,14 @@ operation and must be explained honestly. Fresh installs without local storage m
 ## Delivery slices and acceptance
 
 1. **Configuration foundation and resumable ownership.** Versioned settings/capabilities,
-   migration rules, race-safe claim, retry after failed account verification.
+   all-off defaults, race-safe claim, retry after failed account verification.
 2. **Worker lifecycle and deployment.** Actual enable/disable for every supported feature,
    lazy models, dependency reconciliation, minimal fresh-install Compose/env defaults.
 3. **Connection and storage diagnostics.** Candidate validation, optional read-only user
    discovery, verified roots, actionable missing-mount/access guidance.
 4. **Walkthrough and System UI.** Resumable steps, dependency choices, live progress,
-   edit-after-setup, upgrade entry, accessible desktop/mobile flow.
-5. **Integrated verification.** Fresh install, upgrade, restart mid-setup, concurrent claim,
+   edit-after-setup, accessible desktop/mobile flow.
+5. **Integrated verification.** Fresh install, restart mid-setup, concurrent claim,
    failed login, unavailable SFTPGo, denied admin inventory, missing/read-only roots,
    model failure/retry, disable during jobs, re-enable, and cross-provider isolation.
 

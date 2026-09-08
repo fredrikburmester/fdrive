@@ -294,12 +294,6 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           and cache data.
         </p>
       )}
-      {data.source === "legacy" ? (
-        <p className="rounded-md border p-3 text-sm">
-          These choices reflect your existing deployment configuration. Saving moves feature control
-          into fdrive.
-        </p>
-      ) : null}
       {walkthrough && step === 0 ? (
         <>
           <StorageCheck roots={data.roots} />
