@@ -19,6 +19,21 @@ Updated: 2026-09-08. Owner: primary agent.
 - Hosted CI not run locally; new role text takes effect when the runtime reloads configuration.
   Dev lifecycle tested with fixtures and occupied-port smoke; existing live servers preserved.
 
+## Search startup recovery (2026-09-08)
+
+- User requested automatic recovery after deployment without page reload.
+- Implementer completed search contracts/API/UI/tests in `.worktrees/search-startup-recovery`,
+  branch `codex/search-startup-recovery`; baseline committed HEAD, no copied prerequisites.
+- Add transient scope reason and bounded polling while open; preserve scope authorization.
+- Reviewed scope and production diff; committed as `af0a3d9` after user requested commit/push.
+- Live dev verification: stopped local `fdrive-dev-indexer-1`, observed startup message;
+  restarted indexer and saw text plus visual results for unchanged `readme` query without reload.
+- Workflow, target application (lint/typecheck/coverage), and integration passed.
+- Target search browser suite passed 17/17, including startup message and unchanged-query
+  recovery. Logs: `/tmp/fdrive-startup-{application-final,integration,browser-final}.log`.
+- Complete. Worker checkout removed after exact file comparison and target gates.
+  Unrelated concurrent workflow changes preserved.
+
 ## Product state
 
 - Latest search/file-browser UX merged and verified; no outstanding UX work. Prior target

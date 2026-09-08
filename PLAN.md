@@ -293,6 +293,10 @@ fails.
 
 ## 7. Search, index, MCP
 
+Search startup recovery: retry unavailable queries while the search panel is open,
+stop after recovery, and identify temporary indexer unavailability separately from
+configuration failures. Preserve verified scopes and existing authorization checks.
+
 **Search service in core**: the same hybrid ranking as `mcp_server.search` today (semantic top 60,
 full-text prefix `tsquery` top 60, filename word hits plus trigram similarity, reciprocal rank
 fusion k=60), expressed as three parameterized SQL queries behind an `IndexQueries` port. Scope is
