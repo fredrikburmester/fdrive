@@ -30,7 +30,6 @@ vi.mock("@/lib/api/system-queries", () => ({
   useAdminTestConnection: () => mocks.test,
   useAdminUpdateConnection: () => mocks.update,
 }));
-vi.mock("./setup-users", () => ({ SetupUsers: () => null }));
 const { ConnectionPage } = await import("./connection-page");
 afterEach(() => {
   cleanup();

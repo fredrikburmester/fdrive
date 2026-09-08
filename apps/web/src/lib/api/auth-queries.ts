@@ -51,7 +51,7 @@ export function handleLoginSuccess(
   pinTabIdentity(me.activeIdentityId);
   queryClient.setQueryData(queryKeys.auth.me(), me);
   accountTransition.finish(true);
-  router.push(FILES_ROUTE);
+  router.push(me.isAdmin ? "/setup" : FILES_ROUTE);
 }
 
 /**

@@ -57,8 +57,8 @@ export function useSetupTest() {
 
 /**
  * Completes setup: stores the connection, logs the admin account in, and
- * seeds the `auth.me` cache with the result so the redirect to `/files`
- * lands in an already-authenticated shell.
+ * seeds the `auth.me` cache so protected feature selection can continue
+ * inside the setup screen without entering the application shell.
  */
 export function useSetupComplete() {
   const queryClient = useQueryClient();

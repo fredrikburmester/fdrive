@@ -101,7 +101,6 @@ describe("ROUTES", () => {
 
   it("defines every admin route under /api/v1/admin", () => {
     expect(ROUTES.admin).toEqual({
-      inventory: "/api/v1/admin/connection/users",
       connection: "/api/v1/admin/connection",
       connectionUpdate: "/api/v1/admin/connection",
       connectionTest: "/api/v1/admin/connection/test",

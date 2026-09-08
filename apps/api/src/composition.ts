@@ -66,7 +66,6 @@ import { createImageSearchService } from "./search/image-service.js";
 import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { createSetupClaimStore } from "./setup/claim.js";
-import { registerSetupInventoryRoutes } from "./setup/inventory-routes.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
@@ -530,7 +529,6 @@ export async function composeApp(
         limiter,
         config,
       });
-      registerSetupInventoryRoutes(groups, { connectionStore, fetch: fetchImpl, limiter, config });
       registerAdminRoutes(groups, { connectionStore, fetch: fetchImpl, clock });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`

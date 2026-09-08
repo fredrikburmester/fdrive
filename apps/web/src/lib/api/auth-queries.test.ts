@@ -62,6 +62,12 @@ describe("handleLoginSuccess and handleLogoutSuccess", () => {
     expect(routerPush).toHaveBeenCalledWith("/files");
   });
 
+  it("lets an administrator resume setup before entering the shell", async () => {
+    const { handleLoginSuccess } = await import("./auth-queries.js");
+    handleLoginSuccess(new QueryClient(), { push: routerPush }, { ...ME_RESPONSE, isAdmin: true });
+    expect(routerPush).toHaveBeenCalledWith("/setup");
+  });
+
   it("clears the cache and pushes /login on logout success", async () => {
     const { handleLogoutSuccess } = await import("./auth-queries.js");
     const queryClient = new QueryClient();

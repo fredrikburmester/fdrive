@@ -2,8 +2,8 @@
 
 fdrive starts as a lightweight file browser. On the first visit, the server
 owner completes the setup walkthrough: claim the server, test the SFTPGo
-connection, sign in as the owner, verify available storage, and choose optional
-features. Search, thumbnails, OCR, semantic search, and image search are all
+connection, verify the administrator's file-user account, and choose optional
+features in the same setup screen. Storage access is checked automatically when needed. Search, thumbnails, OCR, semantic search, and image search are all
 enabled there and later changed in **System > Features**. They never require a
 Compose profile or a feature environment variable.
 
@@ -30,7 +30,9 @@ From another device on the same network, open `http://<server-ip>:8090`
 network interfaces; no bind-address or cookie changes are needed. Use the
 one-time claim token printed in the API log. The
 walkthrough tests an SFTPGo URL before saving it and establishes the
-owner through a normal SFTPGo login. Leave `SFTPGO_URL` commented in `.env` to
+owner through a normal SFTPGo WebClient login, not WebAdmin. This account can manage
+fdrive settings; its SFTPGo permissions stay unchanged. Other users sign in with
+their own file accounts and do not repeat setup. Leave `SFTPGO_URL` commented in `.env` to
 do this in the browser.
 
 ## Optional features

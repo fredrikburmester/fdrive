@@ -1,8 +1,7 @@
 import { isHttpUrl } from "@fdrive/contracts";
-import { isPlausibleHomeTemplate } from "./connection";
 
 /** The setup wizard's steps, in order. */
-export const SETUP_STEPS = ["token", "connection", "template", "account"] as const;
+export const SETUP_STEPS = ["token", "connection", "account"] as const;
 
 export type SetupStep = (typeof SETUP_STEPS)[number];
 
@@ -41,11 +40,6 @@ export function canLeaveConnectionStep(
   testedBaseUrl: string | null,
 ): boolean {
   return isHttpUrl(baseUrl) && testResult?.ok === true && testedBaseUrl === baseUrl;
-}
-
-/** True once the home template step has a plausible template. */
-export function canLeaveTemplateStep(homeTemplate: string): boolean {
-  return isPlausibleHomeTemplate(homeTemplate);
 }
 
 /** True once the account step has both a username and a password. */

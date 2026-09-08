@@ -47,36 +47,5 @@ export const SetupCompleteRequest = z.object({
 
 export type SetupCompleteRequest = z.infer<typeof SetupCompleteRequest>;
 
-/** Ephemeral SFTPGo administrator credentials used only to inspect users during setup. */
-export const SetupUserInventoryRequest = z.object({
-  username: z.string().min(1).max(255),
-  password: z.string().min(1).max(4096),
-  otp: z.string().min(1).max(128).optional(),
-  limit: z.number().int().min(1).max(100).default(50),
-  offset: z.number().int().min(0).max(1_000_000).default(0),
-});
-
-export type SetupUserInventoryRequest = z.infer<typeof SetupUserInventoryRequest>;
-
-/** Deliberately narrow projection of the SFTPGo administrative user list. */
-export const SetupInventoryUser = z.object({
-  username: z.string(),
-  status: z.enum(["enabled", "disabled"]),
-});
-
-export type SetupInventoryUser = z.infer<typeof SetupInventoryUser>;
-
-/** Never includes a raw upstream error or user object, which can contain secrets and paths. */
-export const SetupUserInventoryResponse = z.discriminatedUnion("ok", [
-  z.object({
-    ok: z.literal(true),
-    users: z.array(SetupInventoryUser),
-    nextOffset: z.number().int().nullable(),
-  }),
-  z.object({ ok: z.literal(false), reason: z.enum(["denied", "unavailable"]) }),
-]);
-
-export type SetupUserInventoryResponse = z.infer<typeof SetupUserInventoryResponse>;
-
 /** Header carrying the one-time setup token on every `/api/v1/setup/*` request except `status`. */
 export const SETUP_TOKEN_HEADER = "x-setup-token";
