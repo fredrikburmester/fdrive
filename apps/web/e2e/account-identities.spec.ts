@@ -47,7 +47,7 @@ test("links, switches, finds both owners of one path, and unlinks a login", asyn
   await page.getByRole("button", { name: "Search", exact: true }).click();
   const search = page.getByRole("dialog", { name: "Search", exact: true });
   await search.getByRole("button", { name: "All linked logins" }).click();
-  await search.getByPlaceholder("Search files and content...").fill("same");
+  await search.getByPlaceholder("Search files, content, and images...").fill("same");
   const rows = search.getByRole("option").filter({ hasText: "same.txt" });
   await expect(rows).toHaveCount(2);
   await expect(search.locator("img")).toHaveCount(0);
