@@ -1,7 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
+import { shareImageFixture } from "./support/share-fixture.js";
 import { uniqueName } from "./support/unique.js";
-import { uploadFiles } from "./support/upload.js";
+import { fileInputLocator, uploadFiles } from "./support/upload.js";
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -168,7 +169,21 @@ test.describe("file controls ux", () => {
 
   test("view menu Show thumbnails option persists across reload", async ({ page }) => {
     await page.goto("/files");
-    await expect(fileListRow(page, "photo.jpg")).toBeVisible();
+    const name = `${uniqueName("list-thumb")}.png`;
+    // The browser harness uses a fake indexer and never generates thumbnail files.
+    await page.route(
+      (url) => url.pathname.endsWith("/thumb") && url.searchParams.get("path") === `/${name}`,
+      async (route) => {
+        expect(new URL(route.request().url()).searchParams.get("size")).toBe("256");
+        await route.fulfill({ contentType: "image/png", body: shareImageFixture() });
+      },
+    );
+    await fileInputLocator(page).setInputFiles({
+      name,
+      mimeType: "image/png",
+      buffer: shareImageFixture(),
+    });
+    await expect(fileListRow(page, name)).toBeVisible();
 
     // Open View dropdown menu
     await page.getByRole("button", { name: "View" }).click();
@@ -178,15 +193,35 @@ test.describe("file controls ux", () => {
 
     // Enable show thumbnails
     await checkboxItem.click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu", { name: "View" })).toBeHidden();
 
-    // In list view with thumbnails enabled, photo.jpg row renders an img thumbnail
-    const photoRow = page.locator('[data-path="/photo.jpg"]');
+    // Use a decodable image; the seeded photo.jpg intentionally contains fake bytes.
+    const photoRow = page.locator(`[data-path="/${name}"]`);
     await expect(photoRow.locator("img")).toBeVisible();
+    await expect
+      .poll(() =>
+        photoRow
+          .locator("img")
+          .evaluate(
+            (img) => img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0,
+          ),
+      )
+      .toBe(true);
 
     // Reload page to verify persistence
     await page.reload();
-    await expect(fileListRow(page, "photo.jpg")).toBeVisible();
+    await expect(fileListRow(page, name)).toBeVisible();
     await expect(photoRow.locator("img")).toBeVisible();
+    await expect
+      .poll(() =>
+        photoRow
+          .locator("img")
+          .evaluate(
+            (img) => img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0,
+          ),
+      )
+      .toBe(true);
 
     // Open View menu again to verify checkbox state persists
     await page.getByRole("button", { name: "View" }).click();
