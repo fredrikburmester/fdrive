@@ -133,6 +133,7 @@ export function registerSearchRoutes(
       available: status?.status === "available",
       semantic: deps.semanticEnabled,
       images: deps.imageSearchEnabled,
+      ...(status?.status === "unavailable" ? { reason: status.reason } : {}),
     };
     return c.json(body);
   });

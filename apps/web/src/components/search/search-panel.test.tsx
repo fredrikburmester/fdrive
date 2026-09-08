@@ -7,7 +7,7 @@ import type {
   SearchResponse,
 } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
 import { SearchPanel } from "./search-panel";
@@ -86,6 +86,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
@@ -643,6 +644,76 @@ it("shows Search is not available when both text and visual search are unavailab
   fireEvent.change(input, { target: { value: "sunset" } });
 
   await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
+});
+
+it("keeps permanent scope failures unavailable without startup wording", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: false,
+    semantic: false,
+    images: false,
+    reason: "no_roots",
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "ready",
+    sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: true,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "ready" },
+  });
+
+  await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
+  expect(screen.queryByText("Search is starting… Retrying automatically.")).toBeNull();
+});
+
+it("starts visual search when transient status recovery enables images", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: false,
+    semantic: false,
+    images: false,
+    reason: "indexer_unreachable",
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: true,
+    tookMs: 1,
+  });
+  const searchImages = vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [],
+    unavailable: false,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  client.setQueryData(["search", "status"], {
+    available: false,
+    semantic: false,
+    images: false,
+    reason: "indexer_unreachable",
+  });
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "sunset" },
+  });
+  await waitFor(() => expect(apiClient.search).toHaveBeenCalled());
+  expect(searchImages).not.toHaveBeenCalled();
+
+  await act(async () => {
+    client.setQueryData(["search", "status"], { available: true, semantic: true, images: true });
+  });
+  await waitFor(() => expect(searchImages).toHaveBeenCalledWith("sunset", { limit: 24 }));
 });
 
 it("renders partial results notice even when visual hits count is zero", async () => {
