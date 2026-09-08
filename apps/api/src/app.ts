@@ -83,6 +83,7 @@ const SETUP_EXEMPT_PREFIXES = [
   "/api/v1/about",
   "/api/v1/setup/",
   "/api/v1/internal/features",
+  "/api/v1/internal/office",
 ];
 
 /** True when `path` is one of the routes that must work while setup is required. */

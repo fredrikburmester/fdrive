@@ -106,15 +106,7 @@ describe("createApp health route", () => {
         imageSearch: { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] },
         thumbnails: { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] },
         ocr: { status: "not_configured", missing: ["FDRIVE_OCR_URL"] },
-        office: {
-          status: "not_configured",
-          missing: [
-            "FDRIVE_OFFICE_PRODUCT",
-            "FDRIVE_OFFICE_URL",
-            "FDRIVE_OFFICE_PUBLIC_URL",
-            "FDRIVE_WOPI_URL",
-          ],
-        },
+        office: { status: "configured", missing: [] },
         trash: { status: "configured", missing: [] },
       },
     });
@@ -300,6 +292,7 @@ describe("isSetupExempt", () => {
     expect(isSetupExempt("/api/v1/about")).toBe(true);
     expect(isSetupExempt("/api/v1/setup/status")).toBe(true);
     expect(isSetupExempt("/api/v1/setup/test")).toBe(true);
+    expect(isSetupExempt("/api/v1/internal/office")).toBe(true);
   });
 
   it("does not exempt other routes", () => {

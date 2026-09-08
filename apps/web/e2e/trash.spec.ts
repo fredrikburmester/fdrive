@@ -36,6 +36,7 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
   await expect(page.getByRole("button", { name: "Save and continue" })).toBeDisabled();
   await page.getByRole("checkbox", { name: /I configured and tested/ }).check();
   await page.getByRole("button", { name: "Save and continue" }).click();
+  await page.getByRole("button", { name: "Skip ONLYOFFICE" }).click();
   await page.getByRole("button", { name: "Finish setup" }).click();
   await page.waitForURL("**/files");
   await page.getByRole("button", { name: "New" }).waitFor();

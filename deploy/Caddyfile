@@ -11,6 +11,15 @@
 		-Server
 	}
 
+	# Bundled ONLYOFFICE stays on fdrive's own origin, so onboarding can
+	# enable it without rebuilding the web app's Content-Security-Policy.
+	handle_path /onlyoffice/* {
+		reverse_proxy onlyoffice:80 {
+			header_up X-Forwarded-Host {http.request.hostport}/onlyoffice
+			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
+		}
+	}
+
 	# File downloads (and MCP payloads) must pass through untouched so Range
 	# and Content-Length survive: compression is scoped to the web handle
 	# below, never applied here. WOPI callbacks never traverse this proxy:

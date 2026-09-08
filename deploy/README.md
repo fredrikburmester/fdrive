@@ -149,7 +149,10 @@ Verify both layers:
    and retains originals according to its retention settings.
 5. **Trash:** enable or skip the SFTPGo recycle-bin integration. Configure and test
    [the SFTPGo rule](../docs/TRASH.md) before enabling it; no processing mount is needed.
-6. **Finish:** review choices, then enter the file browser. Until Finish, the UI stays
+6. **ONLYOFFICE:** enable or skip browser document viewing/editing. Confirm the fdrive
+   browser address; editing requires an explicit SFTPGo username list. The bundled editor
+   starts automatically, without a storage mount. See [Office setup](../docs/OFFICE.md).
+7. **Finish:** review choices, then enter the file browser. Until Finish, the UI stays
    on `/setup`. Reload resumes saved choices. Other users simply sign in with their own
    SFTPGo file accounts; they do not repeat the owner walkthrough.
 

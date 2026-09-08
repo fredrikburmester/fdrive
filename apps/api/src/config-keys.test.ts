@@ -102,15 +102,7 @@ describe("subsystemsStatus", () => {
       missing: ["FDRIVE_THUMBS_DIR"],
     });
     expect(statuses.ocr).toEqual({ status: "not_configured", missing: ["FDRIVE_OCR_URL"] });
-    expect(statuses.office).toEqual({
-      status: "not_configured",
-      missing: [
-        "FDRIVE_OFFICE_PRODUCT",
-        "FDRIVE_OFFICE_URL",
-        "FDRIVE_OFFICE_PUBLIC_URL",
-        "FDRIVE_WOPI_URL",
-      ],
-    });
+    expect(statuses.office).toEqual({ status: "configured", missing: [] });
     expect(statuses.trash).toEqual({ status: "configured", missing: [] });
   });
 

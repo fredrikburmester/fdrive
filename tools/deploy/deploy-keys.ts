@@ -30,18 +30,18 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_COMPOSE_FILES",
     description:
-      "Extra compose files update.sh should pass with -f, space separated (for example compose.sftpgo-network.yaml compose.office.yaml).",
+      "Extra compose files update.sh should pass with -f, space separated (for example compose.sftpgo-network.yaml).",
     default: null,
-    example: "compose.sftpgo-network.yaml compose.office.yaml",
+    example: "compose.sftpgo-network.yaml",
     secret: false,
     subsystem: "core",
   },
   {
     key: "FDRIVE_PROFILES",
     description:
-      "Compose profiles update.sh should pass with --profile, space separated (for example index office).",
+      "Optional-overlay profiles update.sh should pass with --profile, space separated (for example collabora).",
     default: null,
-    example: "index office",
+    example: "collabora",
     secret: false,
     subsystem: "core",
   },
@@ -159,15 +159,6 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     example: "0.0.0.0",
     secret: false,
     subsystem: "network",
-  },
-  {
-    key: "ONLYOFFICE_JWT_SECRET",
-    description:
-      "Shared secret between the api and ONLYOFFICE (compose.office.yaml): at least 32 letters, digits, underscores or hyphens, e.g. from `openssl rand -hex 32`. Treat as a secret. Required with that overlay, ignored otherwise.",
-    default: null,
-    example: "output-of-openssl-rand-hex-32",
-    secret: false,
-    subsystem: "office",
   },
   {
     key: "FDRIVE_COLLABORA_HOST",

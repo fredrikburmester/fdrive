@@ -28,6 +28,7 @@ apps/web-e2e-shadow-*
 # Worktrees, local dev data, the pnpm store, and perf output never belong in
 # a build context either.
 .worktrees
+.claude/worktrees
 .fdrive-workflow
 deploy/dev/.data
 deploy/data

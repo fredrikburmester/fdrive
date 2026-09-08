@@ -10,10 +10,10 @@
 #
 # Environment (optional; selectors and network addresses also read deploy/.env):
 #   FDRIVE_COMPOSE_FILES  extra compose files, space separated, added after compose.yaml
-#                         (for example "compose.sftpgo-network.yaml compose.office.yaml").
+#                         (for example "compose.sftpgo-network.yaml").
 #                         Every file you normally pass with -f must be listed, or the
 #                         services it defines are silently detached or left on old images.
-#   FDRIVE_PROFILES       compose profiles, space separated (for example "index office").
+#   FDRIVE_PROFILES       optional-overlay profiles, space separated (for example "collabora").
 #   FDRIVE_HEALTH_URL     health URL to check afterwards; default derives from
 #                         FDRIVE_HTTP_PORT (8090) on localhost.
 set -euo pipefail

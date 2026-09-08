@@ -1,3 +1,4 @@
+import { dirname, resolve } from "node:path";
 export type OfficeProduct = "onlyoffice" | "collabora";
 export function parseProduct(value: string | undefined): OfficeProduct {
   if (value === undefined || value === "onlyoffice") return "onlyoffice";
@@ -10,6 +11,7 @@ export function fixtureCompose(
   officePort: number,
   apiPort: number,
   webPort: number,
+  workerToken: string,
 ) {
   const common = {
     extends: { file: sharedServicesPath, service: product },
@@ -17,8 +19,28 @@ export function fixtureCompose(
     extra_hosts: ["host.docker.internal:host-gateway"],
   };
   const onlyoffice = {
-    ...common,
+    init: true,
+    build: {
+      context: resolve(dirname(sharedServicesPath), "../.."),
+      dockerfile: "deploy/office/Dockerfile.onlyoffice",
+    },
+    restart: "no",
+    stop_grace_period: "65s",
+    extra_hosts: ["host.docker.internal:host-gateway"],
+    volumes: ["office_onlyoffice_data:/var/www/onlyoffice/Data"],
+    healthcheck: {
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8099/health"],
+      interval: "3s",
+      timeout: "2s",
+      retries: 30,
+    },
     environment: {
+      WOPI_ENABLED: "true",
+      JWT_ENABLED: "true",
+      ALLOW_PRIVATE_IP_ADDRESS: "true",
+      ALLOW_META_IP_ADDRESS: "false",
+      FDRIVE_WORKER_TOKEN: workerToken,
+      FDRIVE_OFFICE_SETTINGS_URL: `http://host.docker.internal:${apiPort}/api/v1/internal/office`,
       NODE_CONFIG:
         '{"wopi":{"wopiZone":"external-http"},"services":{"CoAuthoring":{"request-filtering-agent":{"allowMetaIPAddress":false}}}}',
     },

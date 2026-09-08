@@ -29,6 +29,33 @@ describe("feature client", () => {
   });
 });
 
+describe("Office settings client", () => {
+  it("reads and updates owner-controlled Office settings", async () => {
+    const response = {
+      configuration: {
+        revision: 0,
+        enabled: false,
+        appUrl: null,
+        editingEnabled: false,
+        editingProviderId: null,
+        editorUsernames: [],
+      },
+      product: "onlyoffice" as const,
+      status: "off" as const,
+      activeProviderId: "123e4567-e89b-42d3-a456-426614174000",
+    };
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(response));
+    const client = createApiClient({ fetch: fetchMock });
+    expect(await client.systemOffice()).toEqual(response);
+    expect(await client.systemUpdateOffice(response.configuration)).toEqual(response);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "PUT"]);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/v1/system/office",
+      "/api/v1/system/office",
+    ]);
+  });
+});
+
 describe("Trash settings client", () => {
   it("reads and updates provider-bound settings", async () => {
     const settings = {

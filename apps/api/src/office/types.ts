@@ -43,6 +43,10 @@ export interface OfficeDeps {
   readonly canEdit?: ((actor: OfficeActor, virtualPath: string) => Promise<boolean>) | undefined;
   readonly config: OfficeConfig | null;
   readonly discovery: DiscoveryCache | null;
+  /** Resolves one coherent settings/config/discovery snapshot for each operation. */
+  readonly resolveRuntime?:
+    | (() => Promise<{ config: OfficeConfig; discovery: DiscoveryCache } | null>)
+    | undefined;
   readonly tokens: OfficeTokenCodec;
   readonly repos: Pick<Repos, "sessions" | "identities" | "accounts">;
   readonly files: OfficeFileRepo;

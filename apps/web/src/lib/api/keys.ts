@@ -23,6 +23,7 @@ export const queryKeys = {
     connection: () => ["admin", "connection"] as const,
   },
   system: {
+    office: () => ["system", "office"] as const,
     trash: () => ["system", "trash"] as const,
     features: () => ["system", "features"] as const,
     indexer: () => ["system", "indexer"] as const,

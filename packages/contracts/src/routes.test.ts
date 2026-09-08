@@ -110,6 +110,7 @@ describe("ROUTES", () => {
   it("defines every system route under /api/v1/system", () => {
     expect(ROUTES.system).toEqual({
       features: "/api/v1/system/features",
+      office: "/api/v1/system/office",
       trash: "/api/v1/system/trash",
       indexer: "/api/v1/system/indexer",
       indexerSettings: "/api/v1/system/indexer/settings",

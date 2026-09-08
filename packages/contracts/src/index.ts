@@ -99,7 +99,11 @@ export {
   OfficeMode,
   OfficeOpenRequest,
   OfficeOpenResponse,
+  OfficeRuntimeConfiguration,
+  OfficeSettings,
+  OfficeSettingsUpdateRequest,
   OfficeStatusResponse,
+  SystemOfficeResponse,
 } from "./office.ts";
 export type { Routes } from "./routes.ts";
 export {

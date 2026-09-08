@@ -332,3 +332,30 @@ it("returns router-compatible folder and explicit edit links from view mode", as
   const nonactive = (await (await h.callback(opened)).json()) as Record<string, unknown>;
   expect(nonactive.CloseUrl).toBe(`${h.config.appUrl}/files`);
 });
+
+it("applies runtime activation changes to status, opens and existing callbacks", async () => {
+  const h = await officeHarness();
+  let enabled = true;
+  const service = createOfficeService({
+    ...h.deps,
+    config: null,
+    discovery: null,
+    resolveRuntime: async () => (enabled ? { config: h.config, discovery: h.cache } : null),
+  });
+  const actor = { principal: h.alice.principal, sessionId: h.alice.sessionId };
+  expect((await service.status()).available).toBe(true);
+  const opened = await service.open(actor, { path: "/a.docx", mode: "view" });
+  const callback = () => h.signedRequest(opened.fileId, opened.formFields.access_token ?? "");
+  expect((await service.callback(callback(), opened.fileId, false)).status).toBe(200);
+  enabled = false;
+  expect((await service.status()).available).toBe(false);
+  await expect(service.open(actor, { path: "/a.docx", mode: "view" })).rejects.toMatchObject({
+    status: 503,
+  });
+  await expect(service.create(actor, { parent: "/", name: "Disabled.docx" })).rejects.toMatchObject(
+    { status: 503 },
+  );
+  expect((await service.callback(callback(), opened.fileId, false)).status).toBe(503);
+  enabled = true;
+  expect((await service.status()).available).toBe(true);
+});

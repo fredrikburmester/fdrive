@@ -22,9 +22,14 @@ it("extends pinned deployment with isolated port and callback settings", () => {
     59490,
     39421,
     39422,
+    "fixture-worker-token",
   );
   expect(onlyoffice.services.onlyoffice).toMatchObject({
-    extends: { service: "onlyoffice" },
+    build: { context: "/fixture", dockerfile: "deploy/office/Dockerfile.onlyoffice" },
+    environment: {
+      FDRIVE_WORKER_TOKEN: "fixture-worker-token",
+      FDRIVE_OFFICE_SETTINGS_URL: "http://host.docker.internal:39421/api/v1/internal/office",
+    },
     restart: "no",
     ports: ["127.0.0.1:59490:80"],
   });
@@ -35,6 +40,7 @@ it("extends pinned deployment with isolated port and callback settings", () => {
     59491,
     39421,
     39422,
+    "fixture-worker-token",
   );
   expect(collabora.services.collabora?.command).toContain(
     "--o:storage.wopi.alias_groups.group[0].host=http://host.docker.internal:39421",

@@ -287,8 +287,8 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_OFFICE_PRODUCT",
     description:
-      "onlyoffice or collabora. Required, alongside the other FDRIVE_OFFICE_* and FDRIVE_WOPI_URL variables, to enable Office editing.",
-    default: null,
+      "Advanced Office provider override. Activation and the browser origin are controlled in fdrive settings.",
+    default: "onlyoffice",
     example: "onlyoffice",
     secret: false,
     subsystem: "office",
@@ -296,8 +296,8 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_OFFICE_URL",
     description:
-      "Base URL of the Office/WOPI host server, reachable from the API over the compose network.",
-    default: null,
+      "Advanced internal Office server override, reachable from the API over the compose network.",
+    default: "http://onlyoffice",
     example: "http://onlyoffice",
     secret: false,
     subsystem: "office",
@@ -305,7 +305,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_OFFICE_PUBLIC_URL",
     description:
-      "The externally reachable URL of the Office server, used by the browser to load its editor.",
+      "Advanced external Office server override. Bundled ONLYOFFICE uses the saved fdrive origin plus /onlyoffice.",
     default: null,
     example: "https://office.example.com",
     secret: false,
@@ -313,8 +313,8 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   },
   {
     key: "FDRIVE_WOPI_URL",
-    description: "The API's own WOPI base URL the Office server calls back to; must end in /wopi.",
-    default: null,
+    description: "Advanced API WOPI callback override; must end in /wopi.",
+    default: "http://api:3001/wopi",
     example: "http://api:3001/wopi",
     secret: false,
     subsystem: "office",
@@ -330,7 +330,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_OFFICE_EDIT_RULES",
     description:
-      "JSON array of bounded per-identity Office edit permission overrides. Empty/unset means the built-in default policy applies.",
+      "Advanced per-identity path restrictions, applied in addition to the saved editor username list. Empty/unset adds no further restriction.",
     default: null,
     example: "[]",
     secret: false,
@@ -356,12 +356,6 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
   if (config.fdriveIndexRoots === null) indexMissing.push("FDRIVE_INDEX_ROOTS");
   if (config.fdriveIndexerUrl === undefined) indexMissing.push("FDRIVE_INDEXER_URL");
 
-  const officeMissing: string[] = [];
-  if (config.fdriveOfficeProduct === undefined) officeMissing.push("FDRIVE_OFFICE_PRODUCT");
-  if (config.fdriveOfficeUrl === undefined) officeMissing.push("FDRIVE_OFFICE_URL");
-  if (config.fdriveOfficePublicUrl === undefined) officeMissing.push("FDRIVE_OFFICE_PUBLIC_URL");
-  if (config.fdriveWopiUrl === undefined) officeMissing.push("FDRIVE_WOPI_URL");
-
   return {
     core: { status: "configured", missing: [] },
     network: { status: "configured", missing: [] },
@@ -386,10 +380,7 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
       config.fdriveOcrUrl === undefined
         ? { status: "not_configured", missing: ["FDRIVE_OCR_URL"] }
         : { status: "configured", missing: [] },
-    office:
-      officeMissing.length === 0
-        ? { status: "configured", missing: [] }
-        : { status: "not_configured", missing: officeMissing },
+    office: { status: "configured", missing: [] },
     trash: { status: "configured", missing: [] },
   };
 }

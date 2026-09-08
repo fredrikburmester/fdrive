@@ -41,7 +41,9 @@ import {
   OfficeCreateDocumentResponse,
   type OfficeOpenRequest,
   OfficeOpenResponse,
+  type OfficeSettingsUpdateRequest,
   OfficeStatusResponse,
+  SystemOfficeResponse,
 } from "./office.ts";
 import {
   accountTokenRoute,
@@ -167,6 +169,8 @@ export interface ApiClientImageSearchOptions {
 export interface ApiClient {
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
+  systemOffice(): Promise<SystemOfficeResponse>;
+  systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse>;
   systemTrash(): Promise<TrashSettings>;
   systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
   listShares(): Promise<SharesResponse>;
@@ -872,6 +876,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "PUT", path: ROUTES.system.features, jsonBody: input },
         SystemFeaturesResponse,
+      );
+    },
+    systemOffice(): Promise<SystemOfficeResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.system.office }, SystemOfficeResponse);
+    },
+    systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.office, jsonBody: input },
+        SystemOfficeResponse,
       );
     },
     systemTrash(): Promise<TrashSettings> {

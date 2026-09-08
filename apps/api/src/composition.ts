@@ -46,13 +46,15 @@ import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
 import { createMetadataService } from "./metadata/service.js";
-import { officeConfig } from "./office/config.ts";
+import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { allowsOfficeEdit } from "./office/edit-policy.ts";
 import { WopiError } from "./office/errors.ts";
 import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
 import { applyOfficeStorageEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
 import { createOfficeService } from "./office/service.ts";
+import { createOfficeSettingsService, probeOnlyOfficeRuntime } from "./office/settings.ts";
+import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
@@ -312,7 +314,48 @@ export async function composeApp(
     scopeResolver.configuredMappings,
     clock,
   );
-  const officeSettings = officeConfig(config);
+  const officeProduct = configuredOfficeProduct(config);
+  const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
+  const officeRuntimeFor = async (configuration: {
+    enabled: boolean;
+    appUrl: string | null;
+  }): Promise<{
+    config: ReturnType<typeof officeConfig>;
+    discovery: ReturnType<typeof createDiscoveryCache>;
+  } | null> => {
+    if (!configuration.enabled || configuration.appUrl === null) return null;
+    const resolved = officeConfig(config, configuration.appUrl);
+    let discovery = officeDiscoveries.get(resolved.serverUrl);
+    if (discovery === undefined) {
+      discovery = createDiscoveryCache({ serverUrl: resolved.serverUrl, fetch: fetchImpl });
+      officeDiscoveries.set(resolved.serverUrl, discovery);
+    }
+    return { config: resolved, discovery };
+  };
+  const officeSettings = createOfficeSettingsService({
+    settings: repos.settings,
+    product: officeProduct,
+    probeStatus: async (configuration) => {
+      const runtime = await officeRuntimeFor(configuration);
+      if (runtime === null) return "unavailable";
+      const server = new URL(runtime.config.serverUrl);
+      const bundledController =
+        runtime.config.product === "onlyoffice" &&
+        server.protocol === "http:" &&
+        server.hostname === "onlyoffice" &&
+        (server.port === "" || server.port === "80");
+      if (!bundledController) {
+        await createDiscoveryCache({
+          serverUrl: runtime.config.serverUrl,
+          fetch: fetchImpl,
+          timeoutMs: 2000,
+        }).refresh();
+        return "ready";
+      }
+      return probeOnlyOfficeRuntime(runtime.config.serverUrl, configuration.revision, fetchImpl);
+    },
+  });
+  const resolveOfficeRuntime = async () => officeRuntimeFor(await officeSettings.configuration());
   const officeLocation: OfficeDeps["location"] = async (identity) => {
     const configured = await scopeResolver.configuredMappings(identity);
     return configured.available
@@ -326,19 +369,23 @@ export async function composeApp(
     const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: connection.baseUrl });
     return provider.id;
   };
-  // Shared with `subsystemReachability` below (the `/health` route's office
-  // liveness probe), so office discovery is only ever cached once.
-  const officeDiscovery =
-    officeSettings === null
-      ? null
-      : createDiscoveryCache({ serverUrl: officeSettings.serverUrl, fetch: fetchImpl });
   const officeService = createOfficeService({
-    canEdit:
-      deps.officeCanEdit ??
-      (async (actor, path) =>
-        allowsOfficeEdit(config.fdriveOfficeEditRules ?? [], actor.identity, path)),
-    config: officeSettings,
-    discovery: officeDiscovery,
+    canEdit: async (actor, path) => {
+      const settings = await officeSettings.configuration();
+      if (!settings.enabled || !settings.editingEnabled) return false;
+      if (
+        settings.editingProviderId !== actor.identity.providerId ||
+        !settings.editorUsernames.includes(actor.identity.externalUsername)
+      )
+        return false;
+      if (deps.officeCanEdit !== undefined && !(await deps.officeCanEdit(actor, path)))
+        return false;
+      const rules = config.fdriveOfficeEditRules ?? [];
+      return rules.length === 0 || allowsOfficeEdit(rules, actor.identity, path);
+    },
+    config: null,
+    discovery: null,
+    resolveRuntime: resolveOfficeRuntime,
     tokens: createOfficeTokenCodec(master),
     repos,
     files: officeFiles,
@@ -455,12 +502,14 @@ export async function composeApp(
           : fetchEmbedStatus({ baseUrl: forConfig.fdriveEmbedUrl, fetch: fetchImpl }),
         imageEmbedClient === null ? Promise.resolve(null) : imageEmbedClient.health(),
         ocrClient === null ? Promise.resolve(null) : ocrClient.health(),
-        officeDiscovery === null
-          ? Promise.resolve(null)
-          : officeDiscovery.get().then(
-              () => true,
-              () => false,
-            ),
+        resolveOfficeRuntime().then((runtime) =>
+          runtime === null
+            ? null
+            : runtime.discovery.get().then(
+                () => true,
+                () => false,
+              ),
+        ),
       ]);
     return {
       ...(indexResult === null ? {} : { index: indexResult.ok }),
@@ -574,6 +623,11 @@ export async function composeApp(
       registerTrashSettingsRoutes(groups, {
         service: trashSettings,
         identities: repos.identities,
+      });
+      registerOfficeSettingsRoutes(groups, {
+        service: officeSettings,
+        workerToken: config.fdriveWorkerToken,
+        activeProviderId: currentOfficeProviderId,
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });

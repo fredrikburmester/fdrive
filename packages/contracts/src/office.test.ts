@@ -6,7 +6,10 @@ import {
   OfficeCreateDocumentResponse,
   OfficeOpenRequest,
   OfficeOpenResponse,
+  OfficeSettings,
+  OfficeSettingsUpdateRequest,
   OfficeStatusResponse,
+  SystemOfficeResponse,
 } from "./office.ts";
 
 describe("office contracts", () => {
@@ -71,5 +74,47 @@ describe("office contracts", () => {
         expiresAt: "2026-09-06T00:00:00.000Z",
       }).mode,
     ).toBe("view");
+  });
+  it("normalizes safe Office origins and requires an explicit bound editor allowlist", () => {
+    const providerId = "123e4567-e89b-42d3-a456-426614174000";
+    const settings = OfficeSettingsUpdateRequest.parse({
+      revision: 0,
+      enabled: true,
+      appUrl: "https://drive.example/",
+      editingEnabled: true,
+      editingProviderId: providerId,
+      editorUsernames: ["alice"],
+    });
+    expect(settings.appUrl).toBe("https://drive.example");
+    expect(
+      SystemOfficeResponse.parse({
+        configuration: settings,
+        product: "onlyoffice",
+        status: "starting",
+        activeProviderId: providerId,
+      }).status,
+    ).toBe("starting");
+    expect(OfficeSettings.safeParse({ ...settings, editingProviderId: null }).success).toBe(false);
+    expect(OfficeSettings.safeParse({ ...settings, editorUsernames: [] }).success).toBe(false);
+  });
+  it.each([
+    "invalid",
+    "",
+    "ftp://drive.example",
+    "https://user:secret@drive.example",
+    "https://drive.example/path",
+    "https://drive.example?token=secret",
+    "https://drive.example#fragment",
+  ])("rejects unsafe Office app URL %s", (appUrl) => {
+    expect(
+      OfficeSettings.safeParse({
+        revision: 0,
+        enabled: true,
+        appUrl,
+        editingEnabled: false,
+        editingProviderId: null,
+        editorUsernames: [],
+      }).success,
+    ).toBe(false);
   });
 });

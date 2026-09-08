@@ -17,6 +17,7 @@
       "!**/*.gen.ts",
       "!**/pnpm-lock.yaml",
       "!.worktrees",
+      "!.claude/worktrees",
       "!apps/web-e2e-shadow-*",
       "!**/.fdrive-workflow",
       "!**/.venv",

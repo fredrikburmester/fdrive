@@ -1,4 +1,4 @@
-# Production Collabora alternative. Use this overlay instead of compose.office.yaml.
+# Advanced Collabora alternative to bundled ONLYOFFICE. Enable Office in the UI.
 services:
   collabora-keys:
     extends:
@@ -21,7 +21,7 @@ services:
       FDRIVE_WOPI_URL: http://api:3001/wopi
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-104857600}
       FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-[]}
-  # Same build-time CSP frame-src requirement as compose.office.yaml.
+  # The separate Collabora origin must be allowed by the browser CSP.
   web:
     build:
       args:

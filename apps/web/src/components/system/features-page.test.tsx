@@ -15,6 +15,14 @@ vi.mock("@/lib/api/system-queries", () => ({
   useSystemFeatures: () => mocks.query(),
   useUpdateFeatures: () => mocks.update(),
 }));
+vi.mock("./office-settings-card", () => ({
+  OfficeSettingsCard: ({ onContinue }: { onContinue?: () => void }) => (
+    <button type="button" onClick={onContinue}>
+      Office settings
+    </button>
+  ),
+  OfficeReview: () => <span>Office review</span>,
+}));
 vi.mock("./trash-settings-card", () => ({
   TrashSettingsCard: ({ onContinue }: { onContinue?: () => void }) => (
     <button type="button" onClick={onContinue}>
@@ -99,7 +107,7 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
     view.unmount();
-    mount(7);
+    mount(8);
     mocks.mutate.mockImplementationOnce((_input: unknown, options: { onSuccess: () => void }) =>
       options.onSuccess(),
     );
@@ -114,7 +122,7 @@ describe("feature walkthrough", () => {
   it("resumes the saved feature step and persists its required dependency", () => {
     mount(2);
 
-    expect(screen.getByText("Step 6 of 11 · Search OCR")).toBeTruthy();
+    expect(screen.getByText("Step 6 of 12 · Search OCR")).toBeTruthy();
     fireEvent.click(screen.getByRole("switch", { name: "Enable search ocr" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
 
@@ -137,10 +145,19 @@ describe("feature walkthrough", () => {
   });
   it("includes Trash before review without changing processing settings", () => {
     mount(6);
-    expect(screen.getByText("Step 10 of 11 · Trash")).toBeTruthy();
+    expect(screen.getByText("Step 10 of 12 · Trash")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Trash settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 7, values: off }),
+      expect.anything(),
+    );
+  });
+  it("includes ONLYOFFICE after Trash and before review", () => {
+    mount(7);
+    expect(screen.getByText("Step 11 of 12 · ONLYOFFICE")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Office settings" }));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ walkthroughStep: 8, values: off }),
       expect.anything(),
     );
   });

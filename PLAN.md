@@ -403,20 +403,11 @@ force save, save-as, rename, PDF forms, and conversion of legacy formats.
 
 **Compose**
 
-```yaml
-onlyoffice:
-  image: onlyoffice/documentserver:9.4.0.1
-  profiles: [office]
-  environment:
-    WOPI_ENABLED: "true"
-    JWT_ENABLED: "true"
-    JWT_SECRET: ${ONLYOFFICE_JWT_SECRET}
-    ALLOW_PRIVATE_IP_ADDRESS: "true"
-    ALLOW_META_IP_ADDRESS: "false"
-  volumes:
-    - office_onlyoffice_data:/var/www/onlyoffice/Data
-  healthcheck: { test: ["CMD", "curl", "-fs", "http://localhost/hosting/discovery"] }
-```
+The standard stack builds a controller image from pinned ONLYOFFICE Document Server
+9.4.0.1. It polls the API's authenticated persisted desired state; the engine is idle
+until enabled. The controller health endpoint remains available while off. JWT secrets
+are generated locally and persisted alongside proof keys in `office_onlyoffice_data`.
+No profile or operator-supplied Office secret is required.
 
 The proxy exposes Document Server under `/onlyoffice/` on the same origin with
 `X-Forwarded-Proto`. Document Server reaches the API at `http://api:3001/wopi/...` inside the
@@ -498,13 +489,18 @@ acceptance criteria are in [P8-SETUP-WALKTHROUGH.md](docs/workflow/P8-SETUP-WALK
 The owner selected bundled workers whose models and processing remain inactive until
 enabled through the UI. Versioned persisted settings control all six features, including
 separate search OCR and PDF conversion choices in onboarding. Resumable ownership and automatic storage diagnostics are implemented. Claiming, file-user
-verification, six processing choices, Trash, and review stay in one shell-free setup flow.
+verification, six processing choices, Trash, ONLYOFFICE, and review stay in one shell-free setup flow.
 Trash uses separate provider-bound persisted settings, requires explicit confirmation of a
 tested SFTPGo recycle-bin rule, and applies without restart; no environment fallback. The chosen file
 user manages fdrive settings without gaining SFTPGo admin privileges. User inspection remains
 in SFTPGo; fdrive never requests WebAdmin credentials. Final verification is recorded
 in STATUS.md. fdrive is pre-release: no legacy feature migrations or activation fallbacks;
 all optional processing starts off and is controlled by persisted UI selections.
+ONLYOFFICE is bundled in the default stack, with its engine inactive until enabled in
+onboarding or System settings. Persist activation, browser origin, and a provider-bound
+editor username allowlist; default view-only. Runtime callbacks recheck admission.
+No environment activation fallback or migration is needed for this unreleased product.
+
 Fresh deployments expose onboarding at `http://<server-ip>:8090` from another LAN
 device by default; loopback binding is an explicit deployment choice.
 
@@ -574,7 +570,6 @@ fdrive/
     ocr/                 OCRmyPDF nightly job (unchanged)
   deploy/
     compose.yaml         core stack, expects external SFTPGo
-    compose.office.yaml  adds ONLYOFFICE
     compose.sftpgo.yaml  opt-in, only for people without an SFTPGo
     Caddyfile
     .env.example
@@ -594,13 +589,13 @@ Tooling: pnpm workspaces, Turborepo, Node 24, TypeScript 5.x strict, Biome, Chan
 |---|---|---|
 | `proxy` | Caddy | Single origin, TLS optional (behind your NPM it stays HTTP). Large bodies, websockets for ONLYOFFICE. |
 | `web` | fdrive-web | Next standalone output. |
-| `api` | fdrive-api | Node 24, non-root. Env: SFTPGo URL, master key, DB URL, roots, home template, ONLYOFFICE URL + secret. |
+| `api` | fdrive-api | Node 24, non-root. Env: SFTPGo URL, master key, DB URL, roots, home template, fixed internal Office endpoints. |
 | `db` | pgvector/pgvector:pg17 | App and index schemas. Own volume. Never SFTPGo's DB. |
 | `indexer` | fdrive-indexer | Roots bind-mounted read-only at `/roots/<name>`; thumbnail volume read-write. |
 | `ocr` | fdrive-ocr | Roots read-write, nightly. Optional profile `ocr`. |
 | `tika` | apache/tika | Internal. |
 | `embed` | TEI CPU, `intfloat/multilingual-e5-small` | Internal. Same model, so the existing index migrates without re-embedding. |
-| `onlyoffice` | onlyoffice/documentserver:9.4.0.1 | Profile `office`. WOPI enabled, own proof keys, private IPs allowed. See §8. |
+| `onlyoffice` | onlyoffice/documentserver:9.4.0.1 | Bundled controller; engine enabled through UI. WOPI and persisted proof keys. See §8. |
 | `sftpgo` | drakkan/sftpgo | **Not in the main compose file.** A separate `compose.sftpgo.yaml` exists for people starting from nothing, used with `-f`. |
 
 On your Unraid: same rsync and compose.manager flow as filesai, project name `fdrive`, appdata at
