@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import type { ImageSearchHit, MeResponse, SearchHit } from "@fdrive/contracts";
+import type {
+  ImageSearchHit,
+  ImageSearchResponse,
+  MeResponse,
+  SearchHit,
+  SearchResponse,
+} from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,7 +13,11 @@ import { apiClient } from "@/lib/api/client";
 import { SearchPanel } from "./search-panel";
 
 const push = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }), usePathname: () => "/files" }));
+const pathnameMock = vi.fn(() => "/files");
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
+  usePathname: () => pathnameMock(),
+}));
 
 /**
  * `SearchPanel` calls `useIsMobile`, which reads `window.matchMedia` (jsdom
@@ -69,6 +79,8 @@ beforeEach(() => {
     semantic: true,
     images: false,
   });
+  pathnameMock.mockReturnValue("/files");
+  push.mockReset();
   window.sessionStorage.clear();
 });
 
@@ -114,7 +126,7 @@ it("defaults to current login, labels account duplicates and partial failures wi
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
     target: { value: "same" },
   });
   await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(1));
@@ -157,7 +169,7 @@ it("hides the Enter-opens footer and keyboard hints on mobile, keeping the revea
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
     target: { value: "same" },
   });
   await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(1));
@@ -198,7 +210,7 @@ it("truncates a hit row's name and path to one line each, clamps a long snippet 
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
     target: { value: "fourier" },
   });
   await waitFor(() => expect(screen.getByText(longHit.name)).toBeDefined());
@@ -222,7 +234,7 @@ it("never renders the Folders heading when the response's folders section is emp
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
     target: { value: "same" },
   });
   await waitFor(() => expect(screen.getByText("same.txt")).toBeDefined());
@@ -240,8 +252,13 @@ const imageHit: ImageSearchHit = {
   score: 0.9,
 };
 
-it("hides the Images toggle when image search is not configured", async () => {
+it("never renders a manual Images mode toggle, keeping filters visible", async () => {
   stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
   vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "",
     sections: { folders: [], files: [], content: [] },
@@ -255,23 +272,26 @@ it("hides the Images toggle when image search is not configured", async () => {
 
   await waitFor(() => expect(apiClient.searchStatus).toHaveBeenCalled());
   expect(screen.queryByRole("button", { name: "Search images" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Any type" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Images" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "This folder only" })).toBeDefined();
 });
 
-it("shows the Images toggle and switches to a thumbnail grid when configured", async () => {
+it("runs text and visual search concurrently and displays both sections", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
     semantic: true,
     images: true,
   });
-  vi.spyOn(apiClient, "search").mockResolvedValue({
-    query: "",
-    sections: { folders: [], files: [], content: [] },
+  const searchMock = vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [hit], content: [] },
     degraded: false,
     unavailable: false,
     tookMs: 1,
   });
-  const searchImages = vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+  const searchImagesMock = vi.spyOn(apiClient, "searchImages").mockResolvedValue({
     query: "sunset",
     hits: [imageHit],
     unavailable: false,
@@ -281,19 +301,20 @@ it("shows the Images toggle and switches to a thumbnail grid when configured", a
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  const toggle = await screen.findByRole("button", { name: "Search images" });
-  fireEvent.click(toggle);
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
     target: { value: "sunset" },
   });
 
-  await waitFor(() => expect(searchImages).toHaveBeenCalledWith("sunset", { limit: 24 }));
+  await waitFor(() => expect(searchMock).toHaveBeenCalledWith("sunset", expect.any(Object)));
+  await waitFor(() => expect(searchImagesMock).toHaveBeenCalledWith("sunset", { limit: 24 }));
+
+  expect(await screen.findByText("same.txt")).toBeDefined();
   expect(await screen.findByText("sunset.jpg")).toBeDefined();
-  expect(screen.queryByText("Any type")).toBeNull();
-  expect(screen.queryByText("This folder only")).toBeNull();
+  expect(screen.getByText("Files")).toBeDefined();
+  expect(screen.getByText("Visual matches")).toBeDefined();
 });
 
-it("opens the selected image hit on Enter", async () => {
+it("renders text results without waiting for images and leaves text usable on image failure", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
@@ -301,7 +322,202 @@ it("opens the selected image hit on Enter", async () => {
     images: true,
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
-    query: "",
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockRejectedValue(new Error("Visual sidecar offline"));
+
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "same" },
+  });
+
+  await waitFor(() => expect(screen.getByText("same.txt")).toBeDefined());
+  expect(screen.getByText("Files")).toBeDefined();
+  expect(screen.queryByText("Visual matches")).toBeNull();
+});
+
+it("deduplicates visual hits matching path and active identity already shown in Files", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  const textImageHit: SearchHit = {
+    ...hit,
+    name: "sunset.jpg",
+    path: "/photos/sunset.jpg",
+    ext: ".jpg",
+  };
+  const otherImageHit: ImageSearchHit = {
+    ...imageHit,
+    name: "beach.jpg",
+    path: "/photos/beach.jpg",
+  };
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [textImageHit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [imageHit, otherImageHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "sunset" },
+  });
+
+  await waitFor(() => expect(screen.getByText("beach.jpg")).toBeDefined());
+  expect(screen.getAllByText("sunset.jpg")).toHaveLength(1);
+});
+
+it("truthfully labels visual matches scope when all linked logins is selected", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  vi.spyOn(apiClient, "accountSearch").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [{ ...hit, identityId: "two" }], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+    unavailableIdentityIds: [],
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [imageHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.click(screen.getByRole("button", { name: "All linked logins" }));
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "sunset" },
+  });
+
+  await waitFor(() => expect(screen.getByText("Visual matches (ada · Main only)")).toBeDefined());
+});
+
+it("applies boundary-aware folder filtering and acknowledges limited candidates", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  pathnameMock.mockReturnValue("/files/photos");
+  const insideHit: ImageSearchHit = {
+    ...imageHit,
+    name: "inside.jpg",
+    path: "/photos/inside.jpg",
+  };
+  const prefixBoundaryMismatch: ImageSearchHit = {
+    ...imageHit,
+    name: "mismatch.jpg",
+    path: "/photosextra/mismatch.jpg",
+  };
+  const outsideHit: ImageSearchHit = {
+    ...imageHit,
+    name: "outside.jpg",
+    path: "/other/outside.jpg",
+  };
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "pic",
+    sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "pic",
+    hits: [insideHit, prefixBoundaryMismatch, outsideHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.click(screen.getByRole("button", { name: "This folder only" }));
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "pic" },
+  });
+
+  await waitFor(() => expect(screen.getByText("inside.jpg")).toBeDefined());
+  expect(screen.queryByText("mismatch.jpg")).toBeNull();
+  expect(screen.queryByText("outside.jpg")).toBeNull();
+  expect(
+    screen.getByText("Visual search checks top matches; more images may exist in this folder."),
+  ).toBeDefined();
+});
+
+it("skips visual request for non-image file type filters", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  const searchMock = vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "doc",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const searchImagesMock = vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "doc",
+    hits: [imageHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.click(screen.getByRole("button", { name: "Documents" }));
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "doc" },
+  });
+
+  await waitFor(() => expect(searchMock).toHaveBeenCalled());
+  expect(searchImagesMock).not.toHaveBeenCalled();
+});
+
+it("supports keyboard navigation, Enter open, and reveal actions on visual matches", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
     sections: { folders: [], files: [], content: [] },
     degraded: false,
     unavailable: false,
@@ -313,20 +529,27 @@ it("opens the selected image hit on Enter", async () => {
     unavailable: false,
     tookMs: 1,
   });
+
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Search images" }));
-  const input = screen.getByPlaceholderText("Search files and content...");
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
   fireEvent.change(input, { target: { value: "sunset" } });
-  await screen.findByText("sunset.jpg");
-  fireEvent.keyDown(input, { key: "Enter" });
 
-  await waitFor(() => expect(push).toHaveBeenCalled());
+  await screen.findByText("sunset.jpg");
+
+  // Enter to open
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/view/photos/sunset.jpg"));
+
+  // Reveal button click
+  const revealBtn = screen.getByRole("button", { name: "Reveal in folder" });
+  fireEvent.click(revealBtn);
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/files/photos?select=sunset.jpg"));
 });
 
-it("shows the unavailable and partial states for image search", async () => {
+it("renders visual matches and truthful status notice when text search is unavailable", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
@@ -334,8 +557,41 @@ it("shows the unavailable and partial states for image search", async () => {
     images: true,
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
-    query: "",
+    query: "sunset",
     sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: true,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [imageHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "sunset" } });
+
+  await waitFor(() => expect(screen.getByText("sunset.jpg")).toBeDefined());
+  await waitFor(() => expect(screen.getByText("Text search is unavailable.")).toBeDefined());
+  expect(screen.queryByText("Search is not available.")).toBeNull();
+});
+
+it("renders text matches and truthful status notice when visual search is unavailable", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [hit], content: [] },
     degraded: false,
     unavailable: false,
     tookMs: 1,
@@ -346,19 +602,19 @@ it("shows the unavailable and partial states for image search", async () => {
     unavailable: true,
     tookMs: 1,
   });
+
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Search images" }));
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
-    target: { value: "sunset" },
-  });
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "sunset" } });
 
-  expect(await screen.findByText("Image search is not available.")).toBeDefined();
+  await waitFor(() => expect(screen.getByText("same.txt")).toBeDefined());
+  expect(screen.getByText("Visual search is unavailable.")).toBeDefined();
 });
 
-it("shows an empty state and a partial hint for image search", async () => {
+it("shows Search is not available when both text and visual search are unavailable", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
@@ -366,40 +622,168 @@ it("shows an empty state and a partial hint for image search", async () => {
     images: true,
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
-    query: "",
+    query: "sunset",
     sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: true,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [],
+    unavailable: true,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "sunset" } });
+
+  await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
+});
+
+it("renders partial results notice even when visual hits count is zero", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [hit], content: [] },
     degraded: false,
     unavailable: false,
     tookMs: 1,
   });
-  const searchImages = vi
-    .spyOn(apiClient, "searchImages")
-    .mockResolvedValueOnce({ query: "nothing", hits: [], unavailable: false, tookMs: 1 })
-    .mockResolvedValueOnce({
-      query: "partial",
-      hits: [imageHit],
-      unavailable: false,
-      partial: true,
-      tookMs: 1,
-    });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [],
+    partial: true,
+    unavailable: false,
+    tookMs: 1,
+  });
+
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
   renderPanel(client);
 
-  fireEvent.click(await screen.findByRole("button", { name: "Search images" }));
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
-    target: { value: "nothing" },
-  });
-  expect(await screen.findByText("No matching images")).toBeDefined();
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "sunset" } });
 
-  fireEvent.change(screen.getByPlaceholderText("Search files and content..."), {
-    target: { value: "partial" },
-  });
-  await waitFor(() => expect(searchImages).toHaveBeenCalledTimes(2));
-  expect(await screen.findByText("Some results omitted.")).toBeDefined();
+  await waitFor(() => expect(screen.getByText("Some results omitted.")).toBeDefined());
+  expect(screen.getByText("same.txt")).toBeDefined();
 });
 
-it("remembers the Images mode for the session via sessionStorage", async () => {
+it("renders generic folder notice and never claims outside when all in-folder visual hits are deduplicated", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  pathnameMock.mockReturnValue("/files/photos");
+  const inFolderHit: ImageSearchHit = {
+    ...imageHit,
+    name: "sunset.jpg",
+    path: "/photos/sunset.jpg",
+  };
+  const textHit: SearchHit = {
+    ...hit,
+    name: "sunset.jpg",
+    path: "/photos/sunset.jpg",
+    ext: ".jpg",
+  };
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [textHit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [inFolderHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.click(screen.getByRole("button", { name: "This folder only" }));
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "sunset" } });
+
+  await waitFor(() =>
+    expect(
+      screen.getByText("Visual search checks top matches; more images may exist in this folder."),
+    ).toBeDefined(),
+  );
+  expect(screen.queryByText(/outside this folder/i)).toBeNull();
+  expect(screen.getAllByText("sunset.jpg")).toHaveLength(1);
+});
+
+it("renders restrained independent loading status while searches are in flight", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  let resolveSearch!: (value: SearchResponse) => void;
+  let resolveImages!: (value: ImageSearchResponse) => void;
+  vi.spyOn(apiClient, "search").mockImplementation(
+    () =>
+      new Promise<SearchResponse>((resolve) => {
+        resolveSearch = resolve;
+      }),
+  );
+  vi.spyOn(apiClient, "searchImages").mockImplementation(
+    () =>
+      new Promise<ImageSearchResponse>((resolve) => {
+        resolveImages = resolve;
+      }),
+  );
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "sunset" } });
+
+  // While both are in flight and 0 results so far: Searching... in list
+  await waitFor(() => expect(screen.getByText("Searching...")).toBeDefined());
+  expect(screen.queryByText(/no results/i)).toBeNull();
+
+  // Resolve text search with results while images still in flight
+  resolveSearch({
+    query: "sunset",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  await waitFor(() => expect(screen.getByText("same.txt")).toBeDefined());
+  expect(screen.getByText("Searching visual matches...")).toBeDefined();
+
+  // Resolve images
+  resolveImages({
+    query: "sunset",
+    hits: [imageHit],
+    unavailable: false,
+    tookMs: 1,
+  });
+  await waitFor(() => expect(screen.getByText("sunset.jpg")).toBeDefined());
+  expect(screen.queryByText("Searching visual matches...")).toBeNull();
+});
+
+it("uses qualified no-results wording when visual search is unavailable", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
@@ -407,32 +791,70 @@ it("remembers the Images mode for the session via sessionStorage", async () => {
     images: true,
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
-    query: "",
+    query: "nomatch",
     sections: { folders: [], files: [], content: [] },
     degraded: false,
     unavailable: false,
     tookMs: 1,
   });
   vi.spyOn(apiClient, "searchImages").mockResolvedValue({
-    query: "",
+    query: "nomatch",
     hits: [],
+    unavailable: true,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "nomatch" } });
+
+  await waitFor(() => expect(screen.getByText('No text results for "nomatch".')).toBeDefined());
+  expect(screen.getByText("Visual search is unavailable.")).toBeDefined();
+});
+
+it("uses qualified no-results wording when visual results are partial", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "nomatch",
+    sections: { folders: [], files: [], content: [] },
+    degraded: false,
     unavailable: false,
     tookMs: 1,
   });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "nomatch",
+    hits: [],
+    partial: true,
+    unavailable: false,
+    tookMs: 1,
+  });
+
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
-  const { unmount } = renderPanel(client);
-
-  fireEvent.click(await screen.findByRole("button", { name: "Search images" }));
-  await waitFor(() =>
-    expect(window.sessionStorage.getItem("fdrive.search.imageMode")).toBe("true"),
-  );
-  unmount();
-
   renderPanel(client);
+
+  const input = screen.getByPlaceholderText("Search files, content, and images...");
+  fireEvent.change(input, { target: { value: "nomatch" } });
+
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Search images" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    ),
+    expect(screen.getByText('No results found in checked candidates for "nomatch".')).toBeDefined(),
   );
+  expect(screen.getByText("Some results omitted.")).toBeDefined();
+});
+
+it("renders visible File type label in the filter bar", async () => {
+  stubMatchMedia(false);
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  expect(screen.getByText("File type:")).toBeDefined();
 });

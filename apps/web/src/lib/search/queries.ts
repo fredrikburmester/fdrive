@@ -16,9 +16,9 @@ export function searchStatusQueryKey() {
   return ["search", "status"] as const;
 }
 
-/** TanStack Query key for `useImageSearchResults`, stable across the same query text. */
-export function imageSearchQueryKey(query: string) {
-  return ["search", "images", query] as const;
+/** TanStack Query key for `useImageSearchResults`, stable across the same query text and active identity. */
+export function imageSearchQueryKey(query: string, identityId?: string) {
+  return ["search", "images", query, identityId ?? null] as const;
 }
 
 export interface UseSearchResultsOptions {
@@ -58,21 +58,21 @@ export function useSearchResults(
 }
 
 export interface UseImageSearchResultsOptions {
-  /** Skips fetching while `false`, for a closed panel, an empty query, or image mode being off. Defaults to `true`. */
-  readonly enabled?: boolean;
+  /** Skips fetching while `false`, for a closed panel, an empty query, or non-image types. Defaults to `true`. */
+  readonly enabled?: boolean | undefined;
+  readonly identityId?: string | undefined;
 }
 
 /**
  * Runs image-content search for `query` (matching a thumbnail's embedding
  * to the query text), only while `options.enabled` is true and `query` is
- * non-blank. This is a distinct mode from `useSearchResults`: it ignores
- * every text-search filter chip.
+ * non-blank.
  */
 export function useImageSearchResults(query: string, options: UseImageSearchResultsOptions = {}) {
   const trimmed = query.trim();
 
   return useQuery<ImageSearchResponse>({
-    queryKey: imageSearchQueryKey(query),
+    queryKey: imageSearchQueryKey(query, options.identityId),
     queryFn: () => apiClient.searchImages(query, { limit: 24 }),
     enabled: (options.enabled ?? true) && trimmed.length > 0,
   });
