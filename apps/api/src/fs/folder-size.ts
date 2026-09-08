@@ -30,7 +30,7 @@ export interface FolderSizeRoutesDeps {
    * is answered as `{ indexed: false }`, mirroring how `fs/routes.ts` hides
    * it from listings and `search/service.ts` excludes it from hits.
    */
-  readonly trashPath?: string;
+  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
   /** Overridable for tests; defaults to `createReadAuthorizer`. */
   readonly createAuthorizer?: (
     storage: Pick<StorageProvider, "list" | "download">,
@@ -86,14 +86,10 @@ export function registerFolderSizeRoutes(
 
     const notIndexed = (): Response => c.json(FolderSizeResponse.parse({ path, ...NOT_INDEXED }));
 
-    if (
-      deps.trashPath !== undefined &&
-      (path === deps.trashPath || isUnderPath(deps.trashPath, path))
-    ) {
-      return notIndexed();
-    }
-
     const principal = c.get("principal");
+    const trashPath = deps.trashPathForStorage?.(principal.storage);
+    if (trashPath != null && (path === trashPath || isUnderPath(trashPath, path)))
+      return notIndexed();
     const identity = await deps.identities.get(principal.identityId);
     if (identity === null) {
       return notIndexed();

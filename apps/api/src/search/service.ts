@@ -50,11 +50,13 @@ export interface SearchServiceDeps {
    * as unmapped (as if it were out of scope), so trashed files never
    * appear in search hits, folder grouping, or counts.
    */
-  readonly trashPath: string | null;
+  /** Optional test/default value; production passes a request snapshot in SearchServiceInput. */
+  readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
 
 export interface SearchServiceInput {
+  readonly trashPath?: string | null;
   /**
    * The identity's verified index scopes, resolved once at the request
    * boundary (`ScopeResolver.verifiedIndexScopes`). Empty means index-backed
@@ -171,6 +173,7 @@ async function deriveFolders(input: DeriveFoldersInput): Promise<FsEntry[]> {
 export function createSearchService(deps: SearchServiceDeps): SearchService {
   return {
     async search(input: SearchServiceInput): Promise<SearchResponse> {
+      const trashPath = input.trashPath ?? deps.trashPath ?? null;
       const startedAt = deps.clock();
       const tookMs = () => elapsedMs(deps.clock, startedAt);
       const features = await deps.features?.();
@@ -218,8 +221,8 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           return null;
         }
         if (
-          deps.trashPath !== null &&
-          (virtualPath === deps.trashPath || isUnderPath(deps.trashPath, virtualPath))
+          trashPath !== null &&
+          (virtualPath === trashPath || isUnderPath(trashPath, virtualPath))
         ) {
           return null;
         }

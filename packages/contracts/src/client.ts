@@ -98,6 +98,8 @@ import {
   type TrashPurgeRequest,
   type TrashRestoreRequest,
   TrashRestoreResponse,
+  TrashSettings,
+  type TrashSettingsUpdateRequest,
   TrashStatusResponse,
 } from "./trash.ts";
 
@@ -165,6 +167,8 @@ export interface ApiClientImageSearchOptions {
 export interface ApiClient {
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
+  systemTrash(): Promise<TrashSettings>;
+  systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
   listShares(): Promise<SharesResponse>;
   createShare(input: CreateShareRequest): Promise<ManagedShare>;
   getShare(id: string): Promise<ManagedShare>;
@@ -868,6 +872,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "PUT", path: ROUTES.system.features, jsonBody: input },
         SystemFeaturesResponse,
+      );
+    },
+    systemTrash(): Promise<TrashSettings> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.system.trash }, TrashSettings);
+    },
+    systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.trash, jsonBody: input },
+        TrashSettings,
       );
     },
     systemIndexer(): Promise<SystemIndexerResponse> {

@@ -115,7 +115,7 @@ describe("createApp health route", () => {
             "FDRIVE_WOPI_URL",
           ],
         },
-        trash: { status: "not_configured", missing: ["FDRIVE_SFTPGO_TRASH_PATH"] },
+        trash: { status: "configured", missing: [] },
       },
     });
   });

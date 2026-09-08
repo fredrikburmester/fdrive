@@ -7,31 +7,8 @@ import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
-/**
- * `trash.spec.ts` needs an API process with `FDRIVE_SFTPGO_TRASH_PATH` set
- * and an SFTPGo container seeded with the recycle-folder Event Manager
- * rule, unlike every other e2e spec, which shares the one plain environment
- * `global-setup.ts` starts for the whole run (see `support/environment.ts`).
- * Rather than make trash the default for that shared environment (which
- * would silently change the delete dialog's copy and the context menu's
- * last item for every other spec), this file starts its own, independent
- * second environment in `test.beforeAll`, on its own free ports, and talks
- * to it with absolute URLs (`page.goto(`${webBaseUrl}/...`)`) instead of
- * relying on Playwright's configured `baseURL`. `skipStatePersist: true`
- * keeps it from overwriting the shared environment's own teardown state.
- *
- * The one test below intentionally stays a single, sequential scenario:
- * Playwright's `beforeAll` runs once per *worker process* a describe
- * block's tests land on, so splitting this into several `test()`s risks
- * two workers each booting a whole extra Postgres, SFTPGo, API, and
- * production Next.js build. A single test keeps that cost to exactly one
- * extra environment for the whole run.
- *
- * This spec can only pass once the `trash-api` chunk (API config, storage
- * factory, trash routes, fs delete/list changes) is merged; until then
- * `/api/v1/trash/status` and friends 404 and every assertion below fails
- * predictably at "appears on the Trash page" or earlier.
- */
+// Isolated SFTPGo fixture with recycle rules. Enable fdrive Trash through onboarding.
+// One sequential scenario avoids starting additional Docker stacks per worker.
 const TRASH_PATH = "/.trash";
 
 function trashRow(page: Page, name: string): Locator {
@@ -43,6 +20,23 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
   await page.getByLabel("Username").fill("alice");
   await page.getByLabel("Password").fill("alice-password");
   await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL("**/setup");
+  for (const label of [
+    "Enable thumbnails",
+    "Enable full-text search",
+    "Enable search ocr",
+    "Enable semantic search",
+    "Enable image search",
+    "Enable searchable pdfs",
+  ]) {
+    await expect(page.getByRole("switch", { name: label })).toBeVisible();
+    await page.getByRole("button", { name: "Skip this feature" }).click();
+  }
+  await page.getByRole("switch", { name: "Enable Trash" }).click();
+  await expect(page.getByRole("button", { name: "Save and continue" })).toBeDisabled();
+  await page.getByRole("checkbox", { name: /I configured and tested/ }).check();
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await page.getByRole("button", { name: "Finish setup" }).click();
   await page.waitForURL("**/files");
   await page.getByRole("button", { name: "New" }).waitFor();
 }
@@ -71,7 +65,6 @@ test.describe("trash available", () => {
       webPort,
       skipStatePersist: true,
       sftpgoOptions: { users: SEED_USERS, files: SEED_FILES, trash: { path: TRASH_PATH } },
-      extraApiEnv: { FDRIVE_SFTPGO_TRASH_PATH: TRASH_PATH },
     });
     webBaseUrl = environment.webBaseUrl;
   });
@@ -160,6 +153,16 @@ test.describe("trash available", () => {
     await page.getByRole("alertdialog").getByRole("button", { name: "Empty Trash" }).click();
     await expect(page.getByText(/Trash emptied\./)).toBeVisible();
     await expect(secondRow).toBeHidden();
+
+    // Settings apply live: disabling removes Trash without restarting the API.
+    await page.goto(`${webBaseUrl}/system/features`);
+    await page.getByRole("switch", { name: "Enable Trash" }).click();
+    await page.getByRole("button", { name: "Save Trash settings" }).click();
+    await expect(
+      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash" }),
+    ).toBeHidden();
+    await page.reload();
+    await expect(page.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
   });
 });
 

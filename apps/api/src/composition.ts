@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSearchFilters } from "@fdrive/core";
+import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
   createIdentityLinksRepo,
@@ -29,7 +29,7 @@ import {
   parseMasterKey,
 } from "./auth/index.js";
 import { createIdentityClientResolver } from "./auth/provider-client.ts";
-import { createIdentityStorageFactory } from "./auth/storage-factory.ts";
+import { createIdentityStorageFactory, trashSettingsForStorage } from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, startupSummaryLines } from "./config-keys.js";
 import { createConnectionStore } from "./connection/store.js";
@@ -84,6 +84,8 @@ import { createResolveTokenPrincipal } from "./tokens/principal.js";
 import { registerTokenRoutes } from "./tokens/routes.js";
 import { createTokenService } from "./tokens/service.js";
 import { registerTrashRoutes } from "./trash/routes.js";
+import { createTrashSettingsService } from "./trash/settings.js";
+import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
 
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
@@ -158,10 +160,15 @@ export async function composeApp(
   const limiter = createLoginLimiter({ clock });
   const tokenSource = createTokenSource({ repos, clientForIdentity, master, clock });
 
+  const trashSettings = createTrashSettingsService({
+    settings: repos.settings,
+    identities: repos.identities,
+  });
+
   const storageFactory = createIdentityStorageFactory({
     clientForIdentity,
     tokenSource,
-    ...(config.fdriveSftpgoTrashPath === null ? {} : { trashPath: config.fdriveSftpgoTrashPath }),
+    resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
   });
   const identityLinks = createIdentityLinksRepo(db);
   const auth = createAuthModule({
@@ -230,7 +237,6 @@ export async function composeApp(
     indexQueries,
     embedClient,
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
-    trashPath: config.fdriveSftpgoTrashPath,
     clock,
   });
   // The sidecar's own health (model id + dim) is cached for 15s so it is not
@@ -245,7 +251,6 @@ export async function composeApp(
     indexQueries,
     imageEmbedClient,
     resolveHealth: resolveImageEmbedHealth,
-    trashPath: config.fdriveSftpgoTrashPath,
     clock,
   });
 
@@ -282,6 +287,7 @@ export async function composeApp(
       const verified = await scopeResolver.verifiedIndexScopes(identity);
       const storage = await identityStorageForAccount(identity);
       return searchService.search({
+        trashPath: await trashSettings.pathForIdentity(identity.id),
         scopes: verified.available ? verified.scopes : [],
         authorizer: createReadAuthorizer({ storage }),
         query: query.q,
@@ -544,25 +550,30 @@ export async function composeApp(
         archivePeekMaxBytes: config.fdriveArchivePeekMaxBytes,
         jsonMaxBytes: config.fdriveJsonMaxBytes,
         metadata: fsMetadata,
-        ...(config.fdriveSftpgoTrashPath === null
-          ? {}
-          : { trashPath: config.fdriveSftpgoTrashPath }),
+        trashPathForStorage: (storage: StorageProvider) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
         folderSize: {
           indexQueries,
           resolver: scopeResolver,
           identities: repos.identities,
-          ...(config.fdriveSftpgoTrashPath === null
-            ? {}
-            : { trashPath: config.fdriveSftpgoTrashPath }),
+          trashPathForStorage: (storage: StorageProvider) => {
+            const settings = trashSettingsForStorage(storage);
+            return settings?.enabled === true ? settings.path : null;
+          },
         },
       };
       registerFsRoutes(groups, fsRoutesDeps);
       registerTrashRoutes(groups, {
         bus,
         clock,
-        trashPath: config.fdriveSftpgoTrashPath,
-        retentionHours: config.fdriveSftpgoTrashRetentionHours,
+        settingsForStorage: trashSettingsForStorage,
         metadata: fsMetadata,
+      });
+      registerTrashSettingsRoutes(groups, {
+        service: trashSettings,
+        identities: repos.identities,
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });
@@ -575,6 +586,10 @@ export async function composeApp(
         identities: repos.identities,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
       });
       registerThumbRoutes(groups, {
         enabled: () => featureService.enabled("thumbnails"),
@@ -615,7 +630,10 @@ export async function composeApp(
       indexerClient: indexerExtractClient,
       writesEnabled: config.fdriveMcpWrites,
       clock,
-      trashPath: config.fdriveSftpgoTrashPath,
+      trashPathForStorage: (storage) => {
+        const settings = trashSettingsForStorage(storage);
+        return settings?.enabled === true ? settings.path : null;
+      },
     },
   });
 

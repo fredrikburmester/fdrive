@@ -28,7 +28,7 @@ export const FeatureConfiguration = z.object({
   revision: z.number().int().nonnegative(),
   values: FeatureValues,
   walkthroughComplete: z.boolean(),
-  walkthroughStep: z.number().int().min(0).max(6).optional(),
+  walkthroughStep: z.number().int().min(0).max(7).optional(),
 });
 export type FeatureConfiguration = z.infer<typeof FeatureConfiguration>;
 
@@ -37,7 +37,7 @@ export const FeaturesUpdateRequest = z
     revision: z.number().int().nonnegative(),
     values: FeatureValues,
     walkthroughComplete: z.boolean(),
-    walkthroughStep: z.number().int().min(0).max(6).optional(),
+    walkthroughStep: z.number().int().min(0).max(7).optional(),
   })
   .strict()
   .refine(

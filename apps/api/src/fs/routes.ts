@@ -68,11 +68,11 @@ export interface FsRoutesDeps {
   readonly metadata?: MetadataService;
   /**
    * The storage provider's recycle folder virtual path, when configured
-   * (see `config.ts`'s `fdriveSftpgoTrashPath`). Used to hide the trash
-   * folder itself from `fs/list` and to route deletes made while a trash
+   * Used to hide the provider-bound trash folder itself from `fs/list` and
+   * to route deletes made while a trash
    * is available through `metadata.onTrashed` instead of `onDeleted`.
    */
-  readonly trashPath?: string;
+  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
   /**
    * Cap on a JSON request body's bytes, passed to `parseBody` for every
    * route this function registers (zip, mkdir, move, copy, rename,
@@ -426,9 +426,10 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
+    const trashPath = deps.trashPathForStorage?.(principal.storage);
     const visible =
-      deps.trashPath !== undefined
-        ? entries.filter((entry) => normalizeOrThrow(entry.path) !== deps.trashPath)
+      trashPath != null
+        ? entries.filter((entry) => normalizeOrThrow(entry.path) !== trashPath)
         : entries;
     const serialized = visible.map(serializeEntry);
     const decorated =

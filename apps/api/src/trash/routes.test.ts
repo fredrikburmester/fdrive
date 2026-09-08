@@ -30,6 +30,18 @@ const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 const TRASH_PATH = "/.trash";
+const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
+
+function trashSettings(path: string | null, retentionHours: number | null = null) {
+  return {
+    providerId: PROVIDER_ID,
+    revision: 1,
+    enabled: path !== null,
+    path: path ?? TRASH_PATH,
+    retentionHours,
+    rulesConfirmed: path !== null,
+  } as const;
+}
 
 function createTestLogger(): Logger {
   const logger = {
@@ -119,13 +131,15 @@ async function buildHarness(
   const deps: TrashRoutesDeps = {
     bus,
     clock,
-    trashPath:
-      opts.trashPathOverride === undefined
-        ? withTrash
-          ? TRASH_PATH
-          : null
-        : opts.trashPathOverride,
-    retentionHours: opts.retentionHours ?? null,
+    settingsForStorage: () =>
+      trashSettings(
+        opts.trashPathOverride === undefined
+          ? withTrash
+            ? TRASH_PATH
+            : null
+          : opts.trashPathOverride,
+        opts.retentionHours ?? null,
+      ),
     metadata,
   };
 
@@ -372,8 +386,7 @@ describe("POST /trash/restore", () => {
     const deps: TrashRoutesDeps = {
       bus: createEventBus(),
       clock,
-      trashPath: TRASH_PATH,
-      retentionHours: null,
+      settingsForStorage: () => trashSettings(TRASH_PATH),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -431,8 +444,7 @@ describe("POST /trash/restore", () => {
     const deps: TrashRoutesDeps = {
       bus: createEventBus(),
       clock,
-      trashPath: TRASH_PATH,
-      retentionHours: null,
+      settingsForStorage: () => trashSettings(TRASH_PATH),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -476,8 +488,7 @@ describe("POST /trash/restore", () => {
     const deps: TrashRoutesDeps = {
       bus: createEventBus(),
       clock,
-      trashPath: TRASH_PATH,
-      retentionHours: null,
+      settingsForStorage: () => trashSettings(TRASH_PATH),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),

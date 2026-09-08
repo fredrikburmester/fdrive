@@ -27,7 +27,7 @@ test("an owner resumes and finishes setup without entering the application shell
   expect(started.ok()).toBe(true);
   try {
     await page.goto("/setup");
-    await expect(page.getByText("Step 4 of 10 · Thumbnails")).toBeVisible();
+    await expect(page.getByText("Step 4 of 11 · Thumbnails")).toBeVisible();
     await expect(page.getByText("Inspect SFTPGo users")).toHaveCount(0);
     await expect(page.getByText("Check your storage")).toHaveCount(0);
     await expect(page.getByText("Advanced storage settings")).toHaveCount(0);
@@ -51,6 +51,10 @@ test("an owner resumes and finishes setup without entering the application shell
       }
     }
 
+    await expect(page.getByText("Step 10 of 11 · Trash")).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("switch", { name: "Enable Trash" })).toBeVisible();
+    await page.getByRole("button", { name: "Skip Trash" }).click();
     await expect(page.getByText("Ready to use fdrive", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Finish setup" }).click();
     await expect(page).toHaveURL(/\/files$/);

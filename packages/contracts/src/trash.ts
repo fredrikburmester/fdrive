@@ -19,6 +19,30 @@ export function isValidPath(path: string): boolean {
     .every((segment) => isValidEntryName(segment));
 }
 
+const TrashPath = z.string().refine((value) => value !== "/" && isValidPath(value), {
+  message: "path must be a normalized absolute directory other than the root",
+});
+
+/** Provider-bound configuration for fdrive's existing SFTPGo recycle-folder integration. */
+export const TrashSettings = z
+  .object({
+    providerId: z.uuid(),
+    revision: z.number().int().nonnegative(),
+    enabled: z.boolean(),
+    path: TrashPath,
+    retentionHours: z.number().int().positive().nullable(),
+    rulesConfirmed: z.boolean(),
+  })
+  .strict()
+  .refine((value) => !value.enabled || value.rulesConfirmed, {
+    message: "SFTPGo trash rules must be confirmed before Trash can be enabled",
+    path: ["rulesConfirmed"],
+  });
+export type TrashSettings = z.infer<typeof TrashSettings>;
+
+export const TrashSettingsUpdateRequest = TrashSettings;
+export type TrashSettingsUpdateRequest = z.infer<typeof TrashSettingsUpdateRequest>;
+
 /** Whether the active identity's storage provider exposes a trash, and its configuration. */
 export const TrashStatusResponse = z.object({
   available: z.boolean(),

@@ -15,6 +15,14 @@ vi.mock("@/lib/api/system-queries", () => ({
   useSystemFeatures: () => mocks.query(),
   useUpdateFeatures: () => mocks.update(),
 }));
+vi.mock("./trash-settings-card", () => ({
+  TrashSettingsCard: ({ onContinue }: { onContinue?: () => void }) => (
+    <button type="button" onClick={onContinue}>
+      Trash settings
+    </button>
+  ),
+  TrashReview: () => <span>Trash review</span>,
+}));
 vi.mock("./system-page", () => ({
   SystemPage: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
@@ -91,7 +99,7 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
     view.unmount();
-    mount(6);
+    mount(7);
     mocks.mutate.mockImplementationOnce((_input: unknown, options: { onSuccess: () => void }) =>
       options.onSuccess(),
     );
@@ -106,7 +114,7 @@ describe("feature walkthrough", () => {
   it("resumes the saved feature step and persists its required dependency", () => {
     mount(2);
 
-    expect(screen.getByText("Step 6 of 10 · Search OCR")).toBeTruthy();
+    expect(screen.getByText("Step 6 of 11 · Search OCR")).toBeTruthy();
     fireEvent.click(screen.getByRole("switch", { name: "Enable search ocr" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
 
@@ -124,6 +132,15 @@ describe("feature walkthrough", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run walkthrough" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 0, walkthroughComplete: false }),
+      expect.anything(),
+    );
+  });
+  it("includes Trash before review without changing processing settings", () => {
+    mount(6);
+    expect(screen.getByText("Step 10 of 11 · Trash")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Trash settings" }));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ walkthroughStep: 7, values: off }),
       expect.anything(),
     );
   });

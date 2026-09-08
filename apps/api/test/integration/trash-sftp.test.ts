@@ -8,11 +8,13 @@ import {
   TrashRestoreResponse,
   TrashStatusResponse,
 } from "@fdrive/contracts";
+import { createDb, createRepos } from "@fdrive/db";
 import { startPostgres, startSftpgo } from "@fdrive/testkit";
 import type { Logger } from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { trashSettingsKey } from "../../src/trash/settings.js";
 
 const TRASH_PATH = "/.trash";
 
@@ -24,12 +26,13 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
  * seeded with the Event Manager recycle-folder rule described in
  * `docs/DEVELOPMENT.md`. Follows `accounts-sftp.test.ts`'s composition
  * pattern: one shared Postgres and SFTPGo container, one composed app with
- * `FDRIVE_SFTPGO_TRASH_PATH` set, and plain `app.request` calls per user.
+ * provider-bound Trash settings persisted, and plain `app.request` calls per user.
  */
 describe("trash against real PostgreSQL and SFTPGo", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
   let sftp: Awaited<ReturnType<typeof startSftpgo>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
+  let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
     [postgres, sftp] = await Promise.all([
@@ -49,16 +52,26 @@ describe("trash against real PostgreSQL and SFTPGo", () => {
       DATABASE_URL: postgres.connectionString,
       SFTPGO_URL: sftp.baseUrl,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
-      FDRIVE_SFTPGO_TRASH_PATH: TRASH_PATH,
-      FDRIVE_SFTPGO_TRASH_RETENTION_HOURS: "72",
     });
     const noop = () => undefined;
     const logger = { info: noop, warn: noop, error: noop } as unknown as Logger;
     composed = await composeApp(config, logger);
+    database = createDb(postgres.connectionString);
+    const repos = createRepos(database.db);
+    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: sftp.baseUrl });
+    await repos.settings.set(trashSettingsKey(provider.id), {
+      providerId: provider.id,
+      revision: 1,
+      enabled: true,
+      path: TRASH_PATH,
+      retentionHours: 72,
+      rulesConfirmed: true,
+    });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
+    await database?.close();
     await sftp?.stop();
     await postgres?.stop();
   }, 180000);

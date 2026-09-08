@@ -198,5 +198,7 @@ export {
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
+  TrashSettings,
+  TrashSettingsUpdateRequest,
   TrashStatusResponse,
 } from "./trash.ts";

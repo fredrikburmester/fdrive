@@ -6,10 +6,51 @@ import {
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
+  TrashSettings,
+  TrashSettingsUpdateRequest,
   TrashStatusResponse,
 } from "./trash";
 
 const AT = "2026-01-01T00:00:00.000Z";
+const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
+
+describe("Trash settings", () => {
+  const disabled = {
+    providerId: PROVIDER_ID,
+    revision: 0,
+    enabled: false,
+    path: "/.trash",
+    retentionHours: null,
+    rulesConfirmed: false,
+  };
+
+  it("accepts disabled defaults and confirmed enabled settings", () => {
+    expect(TrashSettings.safeParse(disabled).success).toBe(true);
+    expect(
+      TrashSettingsUpdateRequest.safeParse({
+        ...disabled,
+        enabled: true,
+        retentionHours: 720,
+        rulesConfirmed: true,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects enabling before rules are confirmed", () => {
+    expect(TrashSettingsUpdateRequest.safeParse({ ...disabled, enabled: true }).success).toBe(
+      false,
+    );
+  });
+
+  it.each(["/", "relative", "/.trash/", "/a//b", "/a/../b"])("rejects invalid path %s", (path) => {
+    expect(TrashSettings.safeParse({ ...disabled, path }).success).toBe(false);
+  });
+
+  it("rejects nonpositive retention and unknown fields", () => {
+    expect(TrashSettings.safeParse({ ...disabled, retentionHours: 0 }).success).toBe(false);
+    expect(TrashSettings.safeParse({ ...disabled, extra: true }).success).toBe(false);
+  });
+});
 
 describe("isValidPath", () => {
   it("accepts the root", () => {

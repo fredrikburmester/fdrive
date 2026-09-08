@@ -28,6 +28,29 @@ describe("feature client", () => {
     expect(fetchMock.mock.calls).toHaveLength(2);
   });
 });
+
+describe("Trash settings client", () => {
+  it("reads and updates provider-bound settings", async () => {
+    const settings = {
+      providerId: "123e4567-e89b-42d3-a456-426614174000",
+      revision: 0,
+      enabled: false,
+      path: "/.trash",
+      retentionHours: null,
+      rulesConfirmed: false,
+    };
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(settings));
+    const client = createApiClient({ fetch: fetchMock });
+
+    expect(await client.systemTrash()).toEqual(settings);
+    expect(await client.systemUpdateTrash(settings)).toEqual(settings);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "PUT"]);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/v1/system/trash",
+      "/api/v1/system/trash",
+    ]);
+  });
+});
 const AT = "2026-01-01T00:00:00.000Z";
 
 const VALID_ME = {

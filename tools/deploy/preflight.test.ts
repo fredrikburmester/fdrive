@@ -103,7 +103,6 @@ describe("deploy/preflight.sh", () => {
         "FDRIVE_HOME_TEMPLATE=sftpgo:/{username}",
         "FDRIVE_TRUSTED_PROXY_HOPS=2",
         "FDRIVE_ADMIN_USERS=alice,bob",
-        "FDRIVE_SFTPGO_TRASH_PATH=/.trash",
       ].join("\n"),
     );
     expect(result.code).toBe(0);

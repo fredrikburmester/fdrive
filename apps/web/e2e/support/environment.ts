@@ -68,9 +68,8 @@ export interface StartEnvironmentOptions {
    * Overrides the API/web ports this run binds, instead of the shared
    * run's `getApiPort()`/`getWebPort()`. For a spec that needs a second,
    * independently configured stack alongside the shared one started by
-   * `global-setup.ts` (see `trash.spec.ts`, which needs an API process with
-   * `FDRIVE_SFTPGO_TRASH_PATH` set, unlike every other spec's shared
-   * environment). Pass two ports from `support/ports.ts#getFreePort` so the
+   * `global-setup.ts` (see `trash.spec.ts`, which needs SFTPGo recycle-bin
+   * rules seeded before enabling Trash through onboarding). Pass two ports from `support/ports.ts#getFreePort` so the
    * second stack never collides with the shared run's own ports.
    */
   readonly apiPort?: number;
