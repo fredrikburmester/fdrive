@@ -7,4 +7,4 @@
 - Implement cohesive work directly. Delegate independent work when it improves speed or
   quality enough to justify its cost; use native subagent tools and configured roles.
 - Preserve unrelated changes. Review and verify the integrated result before reporting done.
-- Model defaults live in `.codex/`; approval policy and worker boundaries in `WORKING.md`.
+- Agent roles live in `.claude/agents/`; model policy and worker boundaries in `WORKING.md`.

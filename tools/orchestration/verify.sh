@@ -68,15 +68,32 @@ workflow_shell_syntax() {
   done < <(find "$CHECKOUT/tools/orchestration" -maxdepth 1 -type f -name '*.sh' -print0)
 }
 
-workflow_toml() {
+workflow_agents() {
   python3 -c '
 import pathlib
+import re
 import sys
-if sys.version_info < (3, 11):
-    raise SystemExit("Python 3.11 or newer is required for tomllib")
-import tomllib
-for path in pathlib.Path(".codex").rglob("*.toml"):
-    tomllib.loads(path.read_text())
+required = ("name", "description")
+for path in sorted(pathlib.Path(".claude/agents").glob("*.md")):
+    text = path.read_text()
+    match = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    if not match:
+        raise SystemExit(f"{path}: missing YAML frontmatter")
+    fields = {}
+    for line in match.group(1).splitlines():
+        if not line.strip() or line.startswith(" "):
+            continue
+        key, sep, value = line.partition(":")
+        if not sep:
+            raise SystemExit(f"{path}: invalid frontmatter line {line!r}")
+        fields[key.strip()] = value.strip()
+    missing = [key for key in required if not fields.get(key)]
+    if missing:
+        raise SystemExit(f"{path}: missing frontmatter {missing}")
+    if fields["name"] != path.stem:
+        raise SystemExit(f"{path}: name {fields['name']!r} must match file name")
+    if not text[match.end():].strip():
+        raise SystemExit(f"{path}: empty agent instructions")
 '
 }
 
@@ -104,7 +121,7 @@ workflow_regression_tests() {
 
 verify_workflow() {
   fdrive_run_step 'orchestration shell syntax' workflow_shell_syntax
-  fdrive_run_step 'Codex TOML parsing' workflow_toml
+  fdrive_run_step 'Claude agent definitions' workflow_agents
   fdrive_run_step 'orchestration Python syntax' workflow_python_syntax
   workflow_regression_tests
   fdrive_run_step 'lint' pnpm lint
