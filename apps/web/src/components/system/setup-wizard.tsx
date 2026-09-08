@@ -145,7 +145,7 @@ export function SetupWizard() {
                   }}
                 />
               </Field>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -154,14 +154,17 @@ export function SetupWizard() {
                 >
                   {setupTest.isPending ? "Testing..." : "Test connection"}
                 </Button>
-                {testResult && testedBaseUrl === baseUrl ? (
-                  <Badge variant={testResult.ok ? "default" : "destructive"}>
-                    {testResult.ok ? "Reachable" : testResult.detail}
-                  </Badge>
-                ) : null}
+                {testResult?.ok && testedBaseUrl === baseUrl ? <Badge>Reachable</Badge> : null}
               </div>
+              {testResult && !testResult.ok && testedBaseUrl === baseUrl ? (
+                <FieldError className="min-w-0 [overflow-wrap:anywhere]">
+                  {testResult.detail}
+                </FieldError>
+              ) : null}
               {setupTest.isError ? (
-                <FieldError>{describeApiError(setupTest.error)}</FieldError>
+                <FieldError className="min-w-0 [overflow-wrap:anywhere]">
+                  {describeApiError(setupTest.error)}
+                </FieldError>
               ) : null}
               <div className="flex justify-between">
                 <Button type="button" variant="ghost" onClick={goBack}>
