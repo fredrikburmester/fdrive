@@ -99,7 +99,7 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 
 ---
 
-## 2-Minute Quickstart (Home Server / LAN)
+## Quickstart (Home Server / LAN)
 
 If you already have Docker and SFTPGo running on your home server:
 
@@ -108,18 +108,28 @@ If you already have Docker and SFTPGo running on your home server:
 git clone https://github.com/fredrikburmester/fdrive-web.git /path/to/fdrive
 cd /path/to/fdrive/deploy
 ./init-env.sh
-./update.sh
 ```
 
 `init-env.sh` creates a private `.env` containing two generated secrets. It never overwrites an existing file.
 
-### 2. Complete the setup walkthrough
+### 2. Prepare storage and start
 
-From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`** (for example, `http://192.168.1.105:8090`). No port-binding or cookie settings are needed. Use the claim token printed in the API log, test your SFTPGo connection, and verify a normal SFTPGo WebClient account. That account becomes the fdrive administrator; its SFTPGo permissions stay unchanged. Choose optional features in the same setup screen, then finish into your files. Storage checks run automatically for enabled features.
+For processing features, first point the workers at the existing SFTPGo file directory.
+Follow [installation step 3](deploy/README.md#3-prepare-file-access-before-offering-processing-features)
+before startup. Browsing-only installations can skip the mount and leave features off.
+The default `deploy/data/roots/sftpgo` directory is not automatically connected to SFTPGo.
+
+```sh
+./update.sh
+```
+
+### 3. Complete the setup walkthrough
+
+From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`**. No port-binding or cookie settings are needed. Use the claim token printed in the API log, test your SFTPGo connection, and verify a normal SFTPGo WebClient account. That account becomes the fdrive administrator; its SFTPGo permissions stay unchanged. Choose optional features in the same setup screen, then finish into your files. Storage checks run automatically for enabled features.
 
 Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
 
-Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers; the walkthrough checks storage access. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts and remote access.
+Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers during deployment. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts and remote access.
 
 ---
 

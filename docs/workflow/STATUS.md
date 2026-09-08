@@ -2,6 +2,16 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## Generic installation documentation
+
+- Canonical runbook: deploy/README.md. Generic host/path/account examples; existing versus
+  new SFTPGo, deployment inputs before startup, mount verification, one web flow, updates,
+  and failure diagnosis. Advanced reference covers named volumes, networks and permissions.
+- Work in this task is repository-only. Host deployment is performed by its local operator
+  or agent using the runbook; there is no pending remote-operation approval request here.
+- Documentation checked against shipped Compose/scripts. Workflow verification recorded
+  in the task result; no deployment operations performed for this documentation change.
+
 ## Continuous onboarding (verified)
 
 - One shell-free `/setup` flow: claim → connection → administrator → six features → review.
@@ -12,10 +22,6 @@ Updated: 2026-09-08. Owner: primary agent.
   only for enabled features. Storage/mapping controls have been removed from onboarding;
   per-account corrections remain in Account settings. Directory 400/403/404 responses are
   mapping failures, not proof of an unreachable indexer; access still fails closed.
-- Live read-only diagnosis confirmed a healthy indexer with a 404 for the account directory: the
-  worker uses the default deployment directory rather than the existing SFTPGo data mount.
-  Remote mount correction was not executed: automatic review requires explicit authorization
-  to grant the indexer access to that data. Local UI/diagnostic fixes remain independently valid.
 - Reviewed/transferred inventory worktree; copy retained. Preserved unrelated user edits.
   Fixed transient feature-load resume bypass and unavailable probes remaining “Checking”.
 - Passed final application lint/types/coverage, API/DB integration, and real-backend browser
