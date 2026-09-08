@@ -30,6 +30,7 @@ test("an owner resumes and finishes setup without entering the application shell
     await expect(page.getByText("Step 4 of 10 · Thumbnails")).toBeVisible();
     await expect(page.getByText("Inspect SFTPGo users")).toHaveCount(0);
     await expect(page.getByText("Check your storage")).toHaveCount(0);
+    await expect(page.getByText("Advanced storage settings")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Toggle Sidebar" })).toHaveCount(0);
 
     for (const label of [

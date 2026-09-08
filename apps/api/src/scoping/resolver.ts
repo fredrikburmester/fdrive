@@ -185,7 +185,11 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
 
         const indexResult = await deps.indexer.directory(scope.rootName, scope.fsPrefix);
         if (!indexResult.ok) {
-          failure ??= "indexer_unreachable";
+          // An HTTP response about this directory is not a service outage.
+          // Missing or inaccessible mappings still fail closed.
+          failure ??= [400, 403, 404].includes(indexResult.status ?? 0)
+            ? "mismatch"
+            : "indexer_unreachable";
           return;
         }
 
