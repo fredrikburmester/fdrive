@@ -3,7 +3,7 @@ import { loginAs } from "./support/login.js";
 import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 
-const SEARCH_INPUT_PLACEHOLDER = "Search files and content...";
+const SEARCH_INPUT_PLACEHOLDER = "Search files, content, and images...";
 
 test("Cmd+K opens the panel and a filename query lists readme.md under Files", async ({ page }) => {
   await page.goto("/files");
@@ -200,6 +200,192 @@ test("a long folder name and file path in a result row never spill past the sear
   const confirmDialog = page.getByRole("alertdialog");
   await confirmDialog.getByRole("button", { name: "Delete" }).click();
   await expect(confirmDialog).toBeHidden();
+});
+
+test("search dialog on desktop is roughly 800px wide and bounded in viewport height", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  if (box !== null) {
+    expect(box.width).toBeGreaterThanOrEqual(750);
+    expect(box.width).toBeLessThanOrEqual(810);
+    expect(box.height).toBeLessThan(800);
+  }
+});
+
+test("search panel presents unified filters with no manual Images mode toggle", async ({
+  page,
+}) => {
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  await expect(dialog.getByRole("button", { name: "Search images" })).toBeHidden();
+  await expect(dialog.getByRole("button", { name: "Images", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "This folder only" })).toBeVisible();
+});
+
+test("search dialog stays bounded with accessible footer on a short 800x600 display", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  if (box !== null) {
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(600);
+  }
+
+  const footer = dialog.getByText("Enter opens:");
+  await expect(footer).toBeVisible();
+  const footerBox = await footer.boundingBox();
+  expect(footerBox).not.toBeNull();
+  if (footerBox !== null) {
+    expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(600);
+  }
+});
+
+test("search panel renders as full-screen sheet on 700px mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 800 });
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  if (box !== null) {
+    expect(box.x).toBe(0);
+    expect(box.width).toBe(700);
+    expect(box.height).toBeCloseTo(800, 2);
+  }
+
+  await expect(dialog.getByRole("button", { name: "Close" })).toBeVisible();
+  await expect(dialog.getByText("Enter opens:")).toBeHidden();
+});
+
+test("search panel presents visible File type label in filter bar", async ({ page }) => {
+  await page.goto("/files");
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  await expect(dialog.getByText("File type:")).toBeVisible();
+});
+
+test("concurrent search displays text and visual matches without manual toggle, and image failure leaves text visible", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/search/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ available: true, semantic: true, images: true }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/search(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        query: "landscape",
+        sections: {
+          folders: [],
+          files: [
+            {
+              name: "landscape-notes.txt",
+              path: "/docs/landscape-notes.txt",
+              kind: "file",
+              ext: ".txt",
+              mime: "text/plain",
+              size: 100,
+              modifiedAt: "2026-01-01T00:00:00Z",
+              score: 1,
+              snippets: [],
+              hasThumbnail: false,
+            },
+          ],
+          content: [],
+        },
+        degraded: false,
+        unavailable: false,
+        tookMs: 5,
+      }),
+    });
+  });
+
+  let failImages = false;
+  await page.route("**/api/v1/search/images*", async (route) => {
+    if (failImages) {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "Image search service unavailable" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        query: "landscape",
+        hits: [
+          {
+            name: "landscape.jpg",
+            path: "/photos/landscape.jpg",
+            ext: ".jpg",
+            mime: "image/jpeg",
+            size: 4096,
+            modifiedAt: "2026-01-01T00:00:00Z",
+            score: 0.98,
+          },
+        ],
+        unavailable: false,
+        tookMs: 8,
+      }),
+    });
+  });
+
+  await page.goto("/files");
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+
+  // Search "landscape" without touching any Images toggle
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("landscape");
+
+  // Assert both text file and visual match are visible concurrently
+  await expect(dialog.getByText("landscape-notes.txt", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Visual matches")).toBeVisible();
+  await expect(dialog.getByText("landscape.jpg")).toBeVisible();
+
+  // Now trigger image failure for a new search term
+  failImages = true;
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("landscape2");
+
+  // Text results remain visible and visual search unavailable notice shows
+  await expect(dialog.getByText("landscape-notes.txt", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Visual search is unavailable.")).toBeVisible();
+  await expect(dialog.getByText("Visual matches")).toBeHidden();
 });
 
 test.describe("scoping", () => {

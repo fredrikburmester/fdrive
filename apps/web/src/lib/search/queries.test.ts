@@ -9,12 +9,14 @@ import { DEFAULT_SEARCH_CHIPS } from "./filters";
 const accountSearchMock = vi.fn();
 const searchMock = vi.fn();
 const searchStatusMock = vi.fn();
+const searchImagesMock = vi.fn();
 
 vi.mock("./deps.js", () => ({
   apiClient: {
     accountSearch: (...args: unknown[]) => accountSearchMock(...args),
     search: (...args: unknown[]) => searchMock(...args),
     searchStatus: (...args: unknown[]) => searchStatusMock(...args),
+    searchImages: (...args: unknown[]) => searchImagesMock(...args),
   },
 }));
 
@@ -35,6 +37,30 @@ function createWrapper(queryClient: QueryClient) {
 beforeEach(() => {
   searchMock.mockReset();
   searchStatusMock.mockReset();
+  searchImagesMock.mockReset();
+});
+
+describe("imageSearchQueryKey", () => {
+  it("varies with query text", async () => {
+    const { imageSearchQueryKey } = await import("./queries.js");
+    const a = imageSearchQueryKey("dog", "id-1");
+    const b = imageSearchQueryKey("cat", "id-1");
+    expect(a).not.toEqual(b);
+  });
+
+  it("varies with identity id", async () => {
+    const { imageSearchQueryKey } = await import("./queries.js");
+    const a = imageSearchQueryKey("sunset", "id-1");
+    const b = imageSearchQueryKey("sunset", "id-2");
+    const c = imageSearchQueryKey("sunset");
+    expect(a).not.toEqual(b);
+    expect(a).not.toEqual(c);
+  });
+
+  it("is stable for same inputs", async () => {
+    const { imageSearchQueryKey } = await import("./queries.js");
+    expect(imageSearchQueryKey("sunset", "id-1")).toEqual(imageSearchQueryKey("sunset", "id-1"));
+  });
 });
 
 describe("searchQueryKey", () => {
@@ -132,6 +158,38 @@ describe("useSearchStatus", () => {
     const { result } = renderHook(() => useSearchStatus(), { wrapper: createWrapper(queryClient) });
 
     await waitFor(() => expect(result.current.data).toEqual(status));
+  });
+});
+
+describe("useImageSearchResults", () => {
+  it("fetches image results for non-empty query", async () => {
+    const imageResponse = { query: "sunset", hits: [], unavailable: false, tookMs: 1 };
+    searchImagesMock.mockResolvedValue(imageResponse);
+    const { useImageSearchResults } = await import("./queries.js");
+    const client = new QueryClient();
+
+    const { result } = renderHook(() => useImageSearchResults("sunset", { identityId: "id-1" }), {
+      wrapper: createWrapper(client),
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(imageResponse));
+    expect(searchImagesMock).toHaveBeenCalledWith("sunset", { limit: 24 });
+  });
+
+  it("does not fetch when query is empty or disabled", async () => {
+    const { useImageSearchResults } = await import("./queries.js");
+    const client = new QueryClient();
+
+    const { result } = renderHook(() => useImageSearchResults("   ", { identityId: "id-1" }), {
+      wrapper: createWrapper(client),
+    });
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(searchImagesMock).not.toHaveBeenCalled();
+
+    renderHook(() => useImageSearchResults("sunset", { enabled: false, identityId: "id-1" }), {
+      wrapper: createWrapper(client),
+    });
+    expect(searchImagesMock).not.toHaveBeenCalled();
   });
 });
 
