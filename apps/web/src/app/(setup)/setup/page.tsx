@@ -1,5 +1,7 @@
 import type { Route } from "next";
 import { redirect } from "next/navigation";
+import { MeHydration } from "@/components/shell/me-hydration";
+import { SetupFeatures } from "@/components/system/features-page";
 import { SetupWizard } from "@/components/system/setup-wizard";
 import { serverApiClient } from "@/lib/api/server";
 
@@ -31,16 +33,25 @@ export async function shouldRedirectToFiles(
 
 export default async function SetupPage() {
   if (await shouldRedirectToFiles()) {
-    let destination = FILES_ROUTE;
+    let resume = null;
     try {
       const client = await serverApiClient();
       const me = await client.me();
-      if (me.isAdmin && !(await client.systemFeatures()).configuration.walkthroughComplete)
-        destination = "/system/features" as Route;
+      if (me.isAdmin) {
+        resume = me;
+        if ((await client.systemFeatures()).configuration.walkthroughComplete) resume = null;
+      }
     } catch {
-      // The shell handles sign-in when an owner resumes without their session.
+      // Keep an authenticated owner in setup when feature loading fails.
+      // Without a session, the shell handles sign-in.
     }
-    redirect(destination);
+    if (resume)
+      return (
+        <MeHydration me={resume}>
+          <SetupFeatures />
+        </MeHydration>
+      );
+    redirect(FILES_ROUTE);
   }
   return <SetupWizard />;
 }

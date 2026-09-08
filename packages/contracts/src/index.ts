@@ -139,11 +139,8 @@ export {
   ConnectionTestResponse,
   SETUP_TOKEN_HEADER,
   SetupCompleteRequest,
-  SetupInventoryUser,
   SetupStatusResponse,
   SetupTestRequest,
-  SetupUserInventoryRequest,
-  SetupUserInventoryResponse,
 } from "./setup.ts";
 export * from "./shares.ts";
 export {

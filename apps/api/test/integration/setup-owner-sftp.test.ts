@@ -51,7 +51,7 @@ describe("setup owner against SFTPGo v2.7.5", () => {
     await postgres?.stop();
   }, 180_000);
 
-  it("keeps a failed owner login resumable, binds the real candidate, and reads a redacted admin inventory", async () => {
+  it("keeps a failed owner login resumable and binds the real candidate", async () => {
     if (postgres === undefined || sftpgo === undefined)
       throw new Error("test fixtures did not start");
     const { logger, messages } = capturingLogger();
@@ -95,25 +95,7 @@ describe("setup owner against SFTPGo v2.7.5", () => {
       expect(claimed.status).toBe(200);
       const cookie = claimed.headers.get("set-cookie")?.split(";")[0];
       if (cookie === undefined) throw new Error("expected owner session cookie");
-
-      const inventory = await composed.app.request("/api/v1/admin/connection/users", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-requested-with": "fdrive", cookie },
-        body: JSON.stringify({
-          username: "admin",
-          password: "admin-password-for-tests",
-          limit: 10,
-        }),
-      });
-      expect(inventory.status).toBe(200);
-      expect(await inventory.json()).toEqual({
-        ok: true,
-        users: [
-          { username: "alice", status: "enabled" },
-          { username: "bob", status: "enabled" },
-        ],
-        nextOffset: null,
-      });
+      expect(cookie).toContain("fdrive_session=");
     } finally {
       await composed.close();
     }

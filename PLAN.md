@@ -497,10 +497,10 @@ the hybrid search service, results scoped per identity.
 acceptance criteria are in [P8-SETUP-WALKTHROUGH.md](docs/workflow/P8-SETUP-WALKTHROUGH.md).
 The owner selected bundled workers whose models and processing remain inactive until
 enabled through the UI. Versioned persisted settings control all six features, including
-separate search OCR and PDF conversion choices in onboarding. Resumable ownership, storage
-diagnostics, and optional read-only SFTPGo administrative user discovery are implemented.
-Discovery is a narrow exception to the credential-only decision below: admin credentials
-are ephemeral and normal file access remains user-scoped. Final verification is recorded
+separate search OCR and PDF conversion choices in onboarding. Resumable ownership and automatic storage diagnostics are implemented. Claiming, file-user
+verification, and all six feature choices stay in one shell-free setup flow. The chosen file
+user manages fdrive settings without gaining SFTPGo admin privileges. User inspection remains
+in SFTPGo; fdrive never requests WebAdmin credentials. Final verification is recorded
 in STATUS.md. fdrive is pre-release: no legacy feature migrations or activation fallbacks;
 all optional processing starts off and is controlled by persisted UI selections.
 Fresh deployments expose onboarding at `http://<server-ip>:8090` from another LAN

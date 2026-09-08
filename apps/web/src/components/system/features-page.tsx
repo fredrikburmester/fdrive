@@ -12,7 +12,6 @@ import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useShellMe } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,16 +25,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useMe } from "@/lib/api/auth-queries";
 import { apiClient } from "@/lib/api/client";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
 import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
-import { SetupUsers } from "./setup-users";
+import { SetupFrame } from "./setup-frame";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 
-function StorageCheck({ roots }: Pick<SystemFeaturesResponse, "roots">) {
-  const { data: me } = useShellMe();
+function StorageCheck({
+  roots,
+  values,
+}: Pick<SystemFeaturesResponse, "roots"> & { values: FeatureValues }) {
+  const { data: me } = useMe();
+  const indexNeeded = FEATURE_IDS.some((id) => id !== "pdfOcr" && values[id]);
   const identityId = me?.activeIdentityId;
   const [mapping, setMapping] = useState<{ rootName: string; fsPrefix: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -43,7 +47,7 @@ function StorageCheck({ roots }: Pick<SystemFeaturesResponse, "roots">) {
   const scope = useQuery({
     queryKey: ["setup", "storage", identityId],
     queryFn: () => apiClient.identityScope(identityId ?? ""),
-    enabled: !!identityId,
+    enabled: !!identityId && indexNeeded,
     refetchInterval: 5000,
   });
   const home = scope.data?.isAdmin
@@ -72,115 +76,141 @@ function StorageCheck({ roots }: Pick<SystemFeaturesResponse, "roots">) {
       setSaving(false);
     }
   }
+  const mountProblem =
+    roots.length === 0 ||
+    roots.some(
+      (root) =>
+        (indexNeeded && root.processing?.indexReadable !== true) ||
+        (values.pdfOcr &&
+          (root.processing?.pdfReadable !== true || root.processing?.pdfWritable !== true)),
+    );
+  const scopeProblem =
+    indexNeeded && (scope.isError || (scope.data && scope.data.status !== "available"));
+  const checking = indexNeeded && !scope.data;
+  if (!mountProblem && !scopeProblem)
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        {checking
+          ? "Checking storage access automatically… You can continue while features prepare."
+          : "Storage access checked. Features are preparing or ready."}
+      </p>
+    );
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Check your storage</CardTitle>
+        <CardTitle>Processing needs storage access</CardTitle>
         <CardDescription>
-          Signed in as{" "}
-          {me?.identities.find((identity) => identity.id === identityId)?.username ??
-            "your SFTPGo user"}
-          . Local processing needs access to the same files.
+          Your selected features need access to the files behind SFTPGo. You can finish setup and
+          browse files while this is resolved.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {roots.length === 0 ? (
-          <p className="text-sm">
-            No processing roots are configured. You can finish setup and browse files; indexing
-            needs a storage mount.
-          </p>
-        ) : (
-          roots.map((root) => (
-            <div key={root.name} className="rounded-md border p-3 text-sm break-all">
-              <strong>{root.name}</strong>
-              <p className="text-muted-foreground">SFTPGo: {root.sftpgoPath}</p>
-              <p className="text-muted-foreground">Worker: {root.indexerPath}</p>
-              <p>
-                Indexing:{" "}
-                {root.processing?.indexReadable === true
-                  ? "readable"
-                  : root.processing?.indexReadable === false
-                    ? "not readable — check mount permissions"
-                    : "worker check unavailable"}
-                .
+        <details>
+          <summary className="cursor-pointer text-sm">Advanced storage settings</summary>
+          <div className="mt-3 space-y-4">
+            {roots.length === 0 ? (
+              <p className="text-sm">
+                No processing roots are configured. You can finish setup and browse files; indexing
+                needs a storage mount.
               </p>
-              <p>
-                PDF conversion:{" "}
-                {root.processing?.pdfReadable === true && root.processing.pdfWritable === true
-                  ? "readable and writable"
-                  : root.processing?.pdfReadable === false || root.processing?.pdfWritable === false
-                    ? "needs readable and writable storage"
-                    : "worker check unavailable"}
-                .
-              </p>
-            </div>
-          ))
-        )}
-        <div role="status" className="text-sm">
-          {scope.data
-            ? scope.data.status === "available"
-              ? "Storage mapping verified for your account."
-              : `Storage mapping needs attention: ${scope.data.reason.replaceAll("_", " ")}.`
-            : scope.isError
-              ? describeApiError(scope.error)
-              : "Checking storage mapping…"}
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Folder mappings must stay within storage mounted during deployment. A remote SFTPGo
-          connection supports browsing even without a local mount.
-        </p>
-        {scope.data?.isAdmin && roots.length > 0 ? (
-          <div className="space-y-3 rounded-md border p-3">
-            <p className="text-sm font-medium">Map your account's home folder</p>
-            <Field>
-              <FieldLabel htmlFor="setup-root">Mounted root</FieldLabel>
-              <Select
-                value={draft.rootName}
-                onValueChange={(value) => {
-                  if (value) setMapping({ ...draft, rootName: value });
-                }}
-              >
-                <SelectTrigger id="setup-root">
-                  <SelectValue>{draft.rootName}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {roots.map((root) => (
-                    <SelectItem key={root.name} value={root.name}>
-                      {root.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="setup-root-folder">Home folder inside this root</FieldLabel>
-              <Input
-                id="setup-root-folder"
-                value={draft.fsPrefix}
-                onChange={(event) => setMapping({ ...draft, fsPrefix: event.target.value })}
-              />
-              <FieldDescription>
-                For example, /alice. Choose the folder that corresponds to this user's SFTPGo home;
-                fdrive checks its directory listing.
-              </FieldDescription>
-            </Field>
-            {mappingError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {mappingError}
-              </p>
+            ) : (
+              roots.map((root) => (
+                <div key={root.name} className="rounded-md border p-3 text-sm break-all">
+                  <strong>{root.name}</strong>
+                  <p className="text-muted-foreground">SFTPGo: {root.sftpgoPath}</p>
+                  <p className="text-muted-foreground">Worker: {root.indexerPath}</p>
+                  <p>
+                    Indexing:{" "}
+                    {root.processing?.indexReadable === true
+                      ? "readable"
+                      : root.processing?.indexReadable === false
+                        ? "not readable — check mount permissions"
+                        : "worker check unavailable"}
+                    .
+                  </p>
+                  <p>
+                    PDF conversion:{" "}
+                    {root.processing?.pdfReadable === true && root.processing.pdfWritable === true
+                      ? "readable and writable"
+                      : root.processing?.pdfReadable === false ||
+                          root.processing?.pdfWritable === false
+                        ? "needs readable and writable storage"
+                        : "worker check unavailable"}
+                    .
+                  </p>
+                </div>
+              ))
+            )}
+            {indexNeeded ? (
+              <div role="status" className="text-sm">
+                {scope.data
+                  ? scope.data.status === "available"
+                    ? "Storage mapping verified for your account."
+                    : `Storage mapping needs attention: ${scope.data.reason.replaceAll("_", " ")}.`
+                  : scope.isError
+                    ? describeApiError(scope.error)
+                    : "Checking storage mapping…"}
+              </div>
             ) : null}
-            <Button
-              variant="outline"
-              disabled={mapping === null || saving}
-              onClick={() => void saveMapping()}
-            >
-              {saving ? "Checking…" : "Save and verify mapping"}
-            </Button>
+            <p className="text-sm text-muted-foreground">
+              Folder mappings must stay within storage mounted during deployment. A remote SFTPGo
+              connection supports browsing even without a local mount.
+            </p>
+            {indexNeeded && scope.data?.isAdmin && roots.length > 0 ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="text-sm font-medium">Map your account's home folder</p>
+                <Field>
+                  <FieldLabel htmlFor="setup-root">Mounted root</FieldLabel>
+                  <Select
+                    value={draft.rootName}
+                    onValueChange={(value) => {
+                      if (value) setMapping({ ...draft, rootName: value });
+                    }}
+                  >
+                    <SelectTrigger id="setup-root">
+                      <SelectValue>{draft.rootName}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roots.map((root) => (
+                        <SelectItem key={root.name} value={root.name}>
+                          {root.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="setup-root-folder">Home folder inside this root</FieldLabel>
+                  <Input
+                    id="setup-root-folder"
+                    value={draft.fsPrefix}
+                    onChange={(event) => setMapping({ ...draft, fsPrefix: event.target.value })}
+                  />
+                  <FieldDescription>
+                    For example, /alice. Choose the folder that corresponds to this user's SFTPGo
+                    home; fdrive checks its directory listing.
+                  </FieldDescription>
+                </Field>
+                {mappingError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {mappingError}
+                  </p>
+                ) : null}
+                <Button
+                  variant="outline"
+                  disabled={mapping === null || saving}
+                  onClick={() => void saveMapping()}
+                >
+                  {saving ? "Checking…" : "Save and verify mapping"}
+                </Button>
+              </div>
+            ) : null}
+            <p className="text-sm text-muted-foreground">
+              Connection defaults and per-account mappings remain editable in System and Account
+              settings after setup. Each user's file permissions still apply.
+            </p>
           </div>
-        ) : null}
-        <Link href={"/system/connection" as Route} className="text-sm underline">
-          Review connection and home mapping
-        </Link>
+        </details>
       </CardContent>
     </Card>
   );
@@ -240,7 +270,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const values = draft?.values ?? configuration.values;
   const step = localStep ?? configuration.walkthroughStep ?? 0;
   const walkthrough = !configuration.walkthroughComplete;
-  const id = FEATURE_IDS[step - 1];
+  const id = FEATURE_IDS[step];
   function change(id: FeatureId, enabled: boolean) {
     setDraft({
       values: changeFeature(values, id, enabled),
@@ -264,6 +294,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           setDraft(null);
           setLocalStep(null);
           if (patch.walkthroughComplete === true) router.replace("/files" as Route);
+          else if (patch.walkthroughComplete === false) router.replace("/setup" as Route);
         },
       },
     );
@@ -275,14 +306,8 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         <div>
           <h2 className="font-medium">fdrive setup walkthrough</h2>
           <p className="text-sm text-muted-foreground">
-            Step {step + 1} of 8 ·{" "}
-            {step === 0
-              ? "Storage"
-              : step === 7
-                ? "Review"
-                : id
-                  ? FEATURE_DESCRIPTIONS[id].title
-                  : "Features"}
+            Step {step + 4} of 10 ·{" "}
+            {step === 6 ? "Review" : id ? FEATURE_DESCRIPTIONS[id].title : "Features"}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             Choose each optional feature. Your progress is saved when you continue.
@@ -294,12 +319,6 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           and cache data.
         </p>
       )}
-      {walkthrough && step === 0 ? (
-        <>
-          <StorageCheck roots={data.roots} />
-          <SetupUsers />
-        </>
-      ) : null}
       {cards.map((featureId) => (
         <FeatureCard
           key={featureId}
@@ -310,12 +329,16 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           status={data.statuses.find((status) => status.id === featureId)}
         />
       ))}
-      {walkthrough && step === 7 ? (
+      {Object.values(configuration.values).some(Boolean) ? (
+        <StorageCheck roots={data.roots} values={configuration.values} />
+      ) : null}
+      {walkthrough && step === 6 ? (
         <Card>
           <CardHeader>
             <CardTitle>Ready to use fdrive</CardTitle>
             <CardDescription>
-              You can finish while optional features prepare. Everything stays editable here.
+              You can finish while optional features prepare. You can change your choices later in
+              System → Features.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -381,10 +404,10 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
               <Button
                 disabled={update.isPending}
                 onClick={() =>
-                  save(step === 7 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
+                  save(step === 6 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
                 }
               >
-                {update.isPending ? "Saving…" : step === 7 ? "Finish setup" : "Save and continue"}
+                {update.isPending ? "Saving…" : step === 6 ? "Finish setup" : "Save and continue"}
               </Button>
             </div>
           </>
@@ -428,5 +451,23 @@ export function FeaturesPage() {
         <p role="status">Loading features…</p>
       )}
     </SystemPage>
+  );
+}
+
+/** Keeps feature selection in the same shell-free screen as server claiming. */
+export function SetupFeatures() {
+  const query = useSystemFeatures();
+  return (
+    <SetupFrame description="Choose optional features">
+      {query.isError ? (
+        <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
+      ) : query.data?.configuration.walkthroughComplete ? (
+        <p role="status">Opening your files…</p>
+      ) : query.data ? (
+        <FeatureEditor data={query.data} />
+      ) : (
+        <p role="status">Loading your setup…</p>
+      )}
+    </SetupFrame>
   );
 }

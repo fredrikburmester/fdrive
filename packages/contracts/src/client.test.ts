@@ -1507,19 +1507,3 @@ it("calls account identity and cross-identity view routes with typed responses",
   expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
   expect(calls[5]?.url).toContain("limit=5");
 });
-
-it("sends ephemeral SFTPGo inventory credentials with CSRF protection", async () => {
-  const response = {
-    ok: true,
-    users: [{ username: "alice", status: "enabled" }],
-    nextOffset: null,
-  };
-  const { fetchStub, calls } = createStubFetch([jsonResponse(200, response)]);
-  const client = createApiClient({ fetch: fetchStub });
-  const input = { username: "admin", password: "secret", otp: "123456", limit: 50, offset: 0 };
-  expect(await client.setupUserInventory(input)).toEqual(response);
-  expect(calls[0]?.url).toBe("/api/v1/admin/connection/users");
-  expect(calls[0]?.init.method).toBe("POST");
-  expect(calls[0]?.init.body).toBe(JSON.stringify(input));
-  expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
-});

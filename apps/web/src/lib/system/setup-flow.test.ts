@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   canCompleteAccountStep,
   canLeaveConnectionStep,
-  canLeaveTemplateStep,
   canLeaveTokenStep,
   nextSetupStep,
   previousSetupStep,
@@ -10,16 +9,15 @@ import {
 } from "./setup-flow";
 
 describe("SETUP_STEPS", () => {
-  it("is token, connection, template, account in order", () => {
-    expect(SETUP_STEPS).toEqual(["token", "connection", "template", "account"]);
+  it("is token, connection, account in order", () => {
+    expect(SETUP_STEPS).toEqual(["token", "connection", "account"]);
   });
 });
 
 describe("nextSetupStep", () => {
   it("advances through every step", () => {
     expect(nextSetupStep("token")).toBe("connection");
-    expect(nextSetupStep("connection")).toBe("template");
-    expect(nextSetupStep("template")).toBe("account");
+    expect(nextSetupStep("connection")).toBe("account");
   });
 
   it("returns null after the last step", () => {
@@ -34,8 +32,7 @@ describe("previousSetupStep", () => {
 
   it("goes back through every step", () => {
     expect(previousSetupStep("connection")).toBe("token");
-    expect(previousSetupStep("template")).toBe("connection");
-    expect(previousSetupStep("account")).toBe("template");
+    expect(previousSetupStep("account")).toBe("connection");
   });
 });
 
@@ -85,16 +82,6 @@ describe("canLeaveConnectionStep", () => {
         "http://sftpgo:8080",
       ),
     ).toBe(true);
-  });
-});
-
-describe("canLeaveTemplateStep", () => {
-  it("is true for a plausible template", () => {
-    expect(canLeaveTemplateStep("sftpgo:/{username}")).toBe(true);
-  });
-
-  it("is false for an implausible template", () => {
-    expect(canLeaveTemplateStep("not-a-template")).toBe(false);
   });
 });
 

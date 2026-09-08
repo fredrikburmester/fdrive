@@ -126,7 +126,6 @@ export const ROUTES = {
     connectionUpdate: "/api/v1/admin/connection",
     /** POST, admin only: probe the active or a candidate connection -> `ConnectionTestResponse`. */
     connectionTest: "/api/v1/admin/connection/test",
-    inventory: "/api/v1/admin/connection/users",
   },
   system: {
     features: "/api/v1/system/features",

@@ -16,22 +16,23 @@ environment changes after initial deployment.
    setup progress independently of provider existence. No public user list or diagnostics.
 2. **Connect SFTPGo.** URL, server-side reachability and API checks, clear DNS/TLS/auth
    diagnostics. Test candidate configuration without replacing the active provider.
-3. **Choose the owner and inspect users.** Authenticate a normal SFTPGo user, including
-   its existing OTP flow, to establish the fdrive owner. Optional SFTPGo administrative
-   credentials enable a paginated, read-only user inventory. Explain that SFTPGo admin
-   and file-user accounts differ. Without administrative access, show the verified user
-   and explain the inventory limitation; do not imply all users were discovered.
-4. **Verify storage.** Show browsing access separately from local indexing access. Map
-   SFTPGo paths to approved mounted roots, validate permissions and scope correspondence,
-   and show which features each root supports. Remote/unmounted storage can still browse.
-5. **Choose features.** Present one step/card per feature, with Enable/Skip, dependencies,
-   expected processing/storage cost, and a short description. Allow skipping all extras.
-6. **Review and finish.** Show selected features and unresolved prerequisites. Finish into
-   the file browser while selected background preparation continues. Provide progress,
-   retry, and a link to System > Features. Optional failures never prevent browsing.
+3. **Choose the fdrive administrator.** Authenticate a normal SFTPGo WebClient/file user,
+   including OTP. This grants settings access in fdrive only; SFTPGo permissions remain
+   unchanged. No SFTPGo WebAdmin credentials or user inventory belong in fdrive.
+4. **Choose features.** Remain on the same shell-free `/setup` screen after account validation.
+   Establish the authenticated session internally so feature changes remain administrator-only.
+   Present six separate Enable/Skip choices, including both OCR modes, then review and finish.
+   Only Finish enters the file browser. Reload resumes the saved choice; an expired session
+   requires sign-in with the same file account before resuming. Other users sign in normally.
+5. **Automatic prerequisites.** Use the default username home mapping without a separate Home
+   or storage step. Check access automatically for saved, enabled features. Healthy checks need
+   no input. Unavailable storage gets a contextual notice and collapsed advanced settings;
+   retain per-account mapping corrections without guessing paths or broadening permissions.
+   PDF-only processing checks its own read/write access, independently of the indexer.
+   Every feature can be skipped and storage failures never block finishing or browsing.
 
-Returning installations get an administrator-only walkthrough entry; existing users are
-not redirected through fresh-install claiming. System uses the same configuration API.
+Selected features and progress remain editable under System. An administrator can restart
+this same shell-free walkthrough from Features. No legacy step migrations are needed.
 
 ## Features and dependencies
 
@@ -95,7 +96,7 @@ operation and must be explained honestly. Fresh installs without local storage m
 - fdrive is pre-release. Support one persisted feature configuration path, with all features
   off until selected. Do not add legacy deployment migrations or environment-based activation.
 
-## Ownership, connection, and discovery boundaries
+## Ownership and connection boundaries
 
 - Make bootstrap claim and owner assignment concurrency-safe. A failed login or restart
   leaves setup resumable; two requests cannot both claim the server. Invalidate bootstrap
@@ -104,12 +105,6 @@ operation and must be explained honestly. Fresh installs without local storage m
   Finalize provider binding/owner state together, or use an explicit recoverable pending
   state when external authentication cannot share the database transaction.
 - Normal file access continues to use each user's credentials and live scope authorization.
-  Optional directory discovery never grants file access or imports user credentials.
-- Administrative inventory is an explicit narrow exception to PLAN's current prohibition
-  on SFTPGo admin access. Use only read endpoints and version-appropriate permissions;
-  display only username/status and necessary mapping information, never raw user payloads.
-  Keep secrets server-side, redact logs/responses, and discard discovery credentials after
-  setup by default. Persist only if the owner elects ongoing discovery, encrypted at rest.
 - User creation, password changes, quotas, and rules stay in SFTPGo WebAdmin.
 - Provider replacement must preserve immutable provider/identity isolation: never forward
   old passwords, cached tokens, queued jobs, or indexed scopes to a new server URL.
@@ -122,12 +117,12 @@ operation and must be explained honestly. Fresh installs without local storage m
    all-off defaults, race-safe claim, retry after failed account verification.
 2. **Worker lifecycle and deployment.** Actual enable/disable for every supported feature,
    lazy models, dependency reconciliation, minimal fresh-install Compose/env defaults.
-3. **Connection and storage diagnostics.** Candidate validation, optional read-only user
-   discovery, verified roots, actionable missing-mount/access guidance.
+3. **Connection and storage diagnostics.** Candidate validation, automatic storage
+   checks, verified roots, actionable missing-mount/access guidance.
 4. **Walkthrough and System UI.** Resumable steps, dependency choices, live progress,
    edit-after-setup, accessible desktop/mobile flow.
 5. **Integrated verification.** Fresh install, restart mid-setup, concurrent claim,
-   failed login, unavailable SFTPGo, denied admin inventory, missing/read-only roots,
+   failed login, unavailable SFTPGo, missing/read-only roots,
    model failure/retry, disable during jobs, re-enable, and cross-provider isolation.
 
 Required gates: workflow; application; integration; Python for affected services; affected
@@ -140,5 +135,4 @@ connection is needed for implementation; use isolated fixtures.
 - [Docker Compose profiles](https://docs.docker.com/compose/how-tos/profiles/): deployment
   service selection, distinct from runtime feature configuration.
 - [SFTPGo REST API](https://docs.sftpgo.com/enterprise/rest-api/): separate user/admin
-  authentication. Validate discovery endpoints/permissions against the deployed community
-  version's pinned OpenAPI before implementing; enterprise docs are not that contract.
+  authentication; only file-user credentials are used by fdrive.

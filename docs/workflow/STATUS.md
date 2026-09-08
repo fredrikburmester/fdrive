@@ -2,6 +2,22 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## Continuous onboarding (verified)
+
+- One shell-free `/setup` flow: claim → connection → administrator → six features → review.
+  File-user verification establishes a session internally; only Finish enters the file browser.
+  Reload resumes saved choices; other users skip the owner walkthrough.
+- Explained WebClient file-user versus WebAdmin accounts and fdrive-only administrator rights.
+  Removed SFTPGo inventory API/contracts/UI. Default home mapping; automatic storage checks
+  only for enabled features, with collapsed correction settings when access needs attention.
+- Reviewed/transferred inventory worktree; copy retained. Preserved unrelated user edits.
+  Fixed transient feature-load resume bypass and unavailable probes remaining “Checking”.
+- Passed final application lint/types/coverage, API/DB integration, and real-backend browser
+  resume/skip-all/finish regression. Live dev: fresh claim, account, enable, automatic missing-
+  mount notice, reload, both OCR choices, finish into files despite optional processing blocked.
+  Disposable dev fixtures cleaned up; no live owner SFTPGo access or compatibility migration.
+- Workflow helper regressions passed; final formatting fixed and documentation gate rechecked.
+
 ## LAN onboarding defaults (verified)
 
 - User requires access from another device after init-env/update. Default web binding now

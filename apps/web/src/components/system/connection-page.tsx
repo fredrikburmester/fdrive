@@ -21,7 +21,6 @@ import {
   homeTemplatePreview,
   isPlausibleHomeTemplate,
 } from "@/lib/system/connection";
-import { SetupUsers } from "./setup-users";
 
 /** Admin page: `System > Connection`. Shows the active SFTPGo connection and lets an admin edit the home template. */
 export function ConnectionPage() {
@@ -179,9 +178,6 @@ export function ConnectionPage() {
             </FieldGroup>
           </CardContent>
         </Card>
-        <div className="w-full max-w-lg">
-          <SetupUsers />
-        </div>
       </div>
     </>
   );

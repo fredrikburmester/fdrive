@@ -63,8 +63,6 @@ import {
   SETUP_TOKEN_HEADER,
   type SetupCompleteRequest,
   SetupStatusResponse,
-  type SetupUserInventoryRequest,
-  SetupUserInventoryResponse,
 } from "./setup.ts";
 import {
   type CreateShareRequest,
@@ -165,7 +163,6 @@ export interface ApiClientImageSearchOptions {
 }
 
 export interface ApiClient {
-  setupUserInventory(input: SetupUserInventoryRequest): Promise<SetupUserInventoryResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
   listShares(): Promise<SharesResponse>;
@@ -859,13 +856,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       );
     },
 
-    setupUserInventory(input: SetupUserInventoryRequest): Promise<SetupUserInventoryResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.admin.inventory, jsonBody: input },
-        SetupUserInventoryResponse,
-      );
-    },
     systemFeatures(): Promise<SystemFeaturesResponse> {
       return requestJson(
         ctx,

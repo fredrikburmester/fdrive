@@ -39,12 +39,15 @@ describe("feature contracts", () => {
       revision: 0,
       values,
       walkthroughComplete: false,
-      walkthroughStep: 7,
+      walkthroughStep: 6,
     };
     expect(FeatureConfiguration.safeParse(input).success).toBe(true);
     expect(FeatureConfiguration.safeParse({ ...input, version: 2 }).success).toBe(false);
     expect(FeatureConfiguration.safeParse({ ...input, revision: -1 }).success).toBe(false);
-    expect(FeatureConfiguration.safeParse({ ...input, walkthroughStep: 8 }).success).toBe(false);
+    expect(FeatureConfiguration.safeParse({ ...input, walkthroughStep: 7 }).success).toBe(false);
+    const update = { revision: 0, values, walkthroughComplete: false, walkthroughStep: 6 };
+    expect(FeaturesUpdateRequest.safeParse(update).success).toBe(true);
+    expect(FeaturesUpdateRequest.safeParse({ ...update, walkthroughStep: 7 }).success).toBe(false);
     expect(
       FeatureConfiguration.safeParse({ ...input, values: { ...values, pdfOcr: "true" } }).success,
     ).toBe(false);
