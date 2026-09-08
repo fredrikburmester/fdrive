@@ -10,11 +10,13 @@ recipes. Recovery: [TROUBLESHOOTING.md](docs/workflow/TROUBLESHOOTING.md). Produ
 - Choose the simplest effective workflow. Implement cohesive changes directly; delegate
   independent work when beneficial. Use native subagent tools, no custom spawning framework.
 - Model defaults are configured in `.codex/`. Astra subagents require explicit user approval
-  for the specific scope and `low` reasoning only. Explain the risk and why Terra is
+  for the specific scope and `low` reasoning only. Explain the risk and why Sol is
   insufficient; never escalate automatically or bypass this through inheritance.
 - For delegated writes, use `implementer` (code/tests) or `test-writer` (tests only), separate
   prepared `codex/` worktrees, absolute paths, and disjoint ownership. Respect runtime limits.
   Workers preserve others' changes, stay in scope, never delegate, stash, or mutate Git state.
+- Agree on shared interfaces before parallel work: state the settings/API shape and each
+  worker's file ownership. Notify affected workers when either changes.
 - State goal, acceptance criteria, and required checks; use a formal spec for substantial or
   cross-interface work. Resolve architecture against PLAN; record durable decisions there.
 - Review actual diffs, including new files and sensitive boundaries. Transfer reviewed worker
@@ -40,6 +42,11 @@ is for read-only commands and dev servers. Separate concurrent browser runs by c
 | Python service | `python <service>`; indexer includes Docker inotify |
 | Docs/agent config/orchestration | `workflow` |
 | Worker package | `package <name>` plus applicable checks above |
+
+Verify one complete path early. Before expanding across features, test one feature through
+UI, API, worker, and observed result, where those layers apply.
+Run one heavy Docker build or container test suite at a time across worktrees; lightweight
+checks can run concurrently. Coordinate heavy checks through the primary agent.
 
 During iteration, run focused checks. Run required target profiles after integration; repeat
 only after relevant changes/failures. A skipped, interrupted, or failed check is not a pass.

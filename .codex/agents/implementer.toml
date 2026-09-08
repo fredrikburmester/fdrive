@@ -1,6 +1,6 @@
 name = "implementer"
 description = "Implements an assigned fdrive chunk and its behavior tests."
-model = "gpt-5.6-terra"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 
 developer_instructions = '''
@@ -12,6 +12,8 @@ Use the assigned absolute checkout and file scope. You are not alone: preserve o
 Never delegate, stash, or run Git mutations. Report necessary out-of-scope changes.
 Use verification helpers and locked custom checks; format only changed files.
 Resolve routine ambiguity reasonably, state assumptions, and continue.
+Report "ready for review" only with passed checks and explicit remaining gaps.
+Distinguish mocked tests from real runtime verification.
 Return a concise summary: changed files, checks/pass or fail, log paths for failures,
 remaining issues, checkout and branch.
 '''
