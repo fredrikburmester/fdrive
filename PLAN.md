@@ -689,9 +689,14 @@ flows pass real storage integration, browser acceptance and required quality gat
     `tools/orchestration/`. Helpers select Node 24 and pinned pnpm, prepare isolated checkouts,
     and run named verification profiles under per-checkout locks. Implementation lessons live in
     `docs/workflow/PITFALLS.md`. Use one set of agent instructions. Worker model and effort
-    defaults are explicit in project configuration; role files do not duplicate them.
-    User-selected default: `gpt-5.6-sol` with high reasoning for routine implementation/tests;
-    `gpt-6-astra` with high reasoning for complex work.
+    defaults are explicit in project configuration and pinned in named role files.
+    User-selected default: `gpt-5.6-terra` with high reasoning for implementation, tests,
+    and other subagent work, including complex/security tasks. No automatic Astra escalation.
+    `gpt-6-astra` requires explicit user approval for a specific bounded subtask and must
+    use `low` reasoning (light), never higher; record approval and scope before launch.
+    When Astra seems necessary, mainly for security work, request approval with the
+    concrete risk, why Terra is insufficient, and the bounded subtask. Wait for approval;
+    continue independent Terra work. Security scope alone does not authorize escalation.
 
 18. Phase 5 search latency (2026-09-08): use native TEI on ARM64 with the existing
     multilingual-e5-small model, pinned upstream source and shared deployment/perf recipe.

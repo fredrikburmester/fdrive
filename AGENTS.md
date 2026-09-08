@@ -3,7 +3,11 @@
 - Be extremely concise in reports; sacrifice grammar for concision.
 - Read `WORKING.md` before work. Read the relevant sections of `PLAN.md` and
   `docs/workflow/STATUS.md` before planning implementation.
-- Model selection and agent setup: `WORKING.md`.
+- Model selection and agent setup: `WORKING.md`. All subagents default to Terra/high.
+  Astra requires explicit user approval for the specific subtask and `low` reasoning only;
+  never escalate automatically or inherit settings that bypass this restriction.
+  If Astra seems necessary, mainly for security work, ask with the concrete risk, why
+  Terra is insufficient, and the bounded scope. Wait for approval before launching Astra.
 - Repeatable procedures: `tools/orchestration/` helpers and `docs/workflow/COMMANDS.md`.
 - The primary agent is the orchestrator: own specifications, architecture, review,
   integration, gates, and tracking. Delegate production code, tooling, and tests to

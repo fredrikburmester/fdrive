@@ -10,13 +10,24 @@ recipes. Use the tested helpers in `tools/orchestration/`; implementation lesson
 
 | Work | Model | Reasoning |
 | --- | --- | --- |
-| Implementation and accompanying tests (`implementer`) | GPT-5.6 Sol (`gpt-5.6-sol`) | `high` |
+| Implementation and accompanying tests (`implementer`) | GPT-5.6 Terra (`gpt-5.6-terra`) | `high` |
 | Tests only (`test-writer`) | GPT-5.6 Terra (`gpt-5.6-terra`) | `high` |
-| Complex cross-package or security work outside these named roles | GPT-6 Astra (`gpt-6-astra`) | `high` |
+| Explicitly user-approved, narrowly scoped exception only | GPT-6 Astra (`gpt-6-astra`) | `low` |
 
 Fallback defaults live in `.codex/config.toml`; named role files pin their model and effort,
 which take precedence over spawn overrides.
-Record overrides in the spec, follow explicit user choices, and report unavailable models.
+Use Terra/high for all subagent work by default, including complex and security work.
+Never escalate automatically to Astra for difficulty, failed tests, retries, review, or
+model unavailability. If the agent judges Astra necessary, mainly for security-sensitive
+work, it must ask the user for approval: explain the concrete risk, why Terra is
+insufficient, and the narrow proposed subtask at `low` reasoning. Wait for approval
+before launching Astra; continue independent Terra work while waiting. Security work
+alone is not automatic justification for escalation.
+Astra requires explicit user approval for the specific subtask;
+this policy is not approval to launch it. Record that approval and the bounded scope
+in the spec before launch. Astra reasoning must be `low` ("light"), never higher.
+Do not use inherited model settings that could bypass these restrictions.
+Record overrides in the spec and report unavailable models.
 After config changes, verify role discovery and effective model/effort in a fresh session.
 
 - **Primary:** owns specs, architecture, review, integration, gates, and tracking. Delegate
