@@ -1,3 +1,4 @@
+import { probeDirectoryStream } from "./directory-probe.js";
 import { type RawSftpgoEntry, toEntry } from "./entries.js";
 import { SftpgoError, toSftpgoError } from "./errors.js";
 import {
@@ -143,6 +144,20 @@ function createUserApi(ctx: ClientContext, token: string): SftpgoUserApi {
       });
       const raw = await readJson<RawSftpgoEntry[]>(response);
       return raw.map(toEntry);
+    },
+
+    async probeDirectoryRead(path: string): Promise<void> {
+      assertValidPath(path);
+      const url = buildUrl(ctx.baseUrl, "/api/v2/user/dirs", { path });
+      const response = await fetchChecked(ctx.fetchImpl, url, {
+        method: "GET",
+        headers: authHeaders(ctx, authorization),
+        signal: timeoutSignal(),
+      });
+      if (!response.body) {
+        throw new SftpgoError("Missing response body for directory probe", "server", null, null);
+      }
+      await probeDirectoryStream(response.body);
     },
 
     async statFile(path: string): Promise<SftpgoFileStat> {

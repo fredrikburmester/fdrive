@@ -9,6 +9,7 @@ This document provides architectural and operational details for advanced deploy
 | File | Purpose |
 | :--- | :--- |
 | `compose.yaml` | **Core stack**: Reverse proxy (Caddy), web UI (Next.js), API backend (Hono), and database (Postgres + pgvector). This is the default stack. |
+| `compose.arm64.yaml` | **Native ARM64 embeddings**: Builds pinned upstream TEI source with the same multilingual-e5-small model; layer over core or dev Compose on ARM64 hosts. |
 | `compose.sftpgo.yaml` | **Optional SFTPGo**: Boots an SFTPGo container alongside fdrive for users who don't already have one. |
 | `compose.office.yaml` | **Optional ONLYOFFICE**: Adds ONLYOFFICE Document Server as a WOPI host for collaborative document editing. |
 | `compose.office.collabora.yaml` | **Optional Collabora**: Adds Collabora Online instead of ONLYOFFICE. |
@@ -108,3 +109,17 @@ All services are hardened following security best practices:
 - **Read-Only Root Filesystems**: Front-facing containers run with read-only root filesystems and isolated temporary `tmpfs` mounts.
 - **Log Rotation**: Built-in JSON log rotation (`max-size: 10m`, `max-file: 3`) prevents disk exhaustion.
 - **Pinned Image Digests**: All base images and third-party containers are pinned with exact `@sha256:` immutable digests in compose files to ensure reproducible builds.
+
+## Native ARM64 embeddings
+
+On Apple Silicon or other ARM64 hosts, use the native TEI override to avoid amd64
+emulation. It retains the configured model, volumes and service limits, and builds
+the pinned upstream source. First build requires network access and several minutes.
+
+```bash
+docker compose -f deploy/compose.yaml -f deploy/compose.arm64.yaml --profile index up -d --build embed
+```
+
+For local development, replace `deploy/compose.yaml` with `deploy/compose.dev.yaml`.
+This changes the embedding runtime only; existing embeddings remain compatible.
+The performance harness selects this same runtime automatically on ARM64 hosts.

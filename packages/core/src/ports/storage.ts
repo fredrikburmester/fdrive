@@ -47,6 +47,13 @@ export interface TrashProvider {
 export interface StorageProvider {
   list(path: string): Promise<FileEntry[]>;
 
+  /**
+   * Live read proof for the directory at `path`. Confirms that the caller can
+   * read the directory without loading its full listing. This is not stat or
+   * cached permission: it performs a live authenticated read.
+   */
+  probeDirectoryRead?(path: string): Promise<void>;
+
   statFile(path: string): Promise<{
     size: number;
     modifiedAt: Date | null;

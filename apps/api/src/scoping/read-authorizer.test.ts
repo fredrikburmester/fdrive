@@ -104,16 +104,50 @@ describe("createReadAuthorizer: files", () => {
 });
 
 describe("createReadAuthorizer: directories", () => {
-  it("allows a directory it can list, never calling download", async () => {
+  it("prefers probeDirectoryRead over list when available", async () => {
+    const probeDirectoryRead = vi.fn(async () => undefined);
     const list = vi.fn(async () => []);
     const download = vi.fn();
     const authorizer = createReadAuthorizer({
-      storage: { list, download } as unknown as Pick<StorageProvider, "list" | "download">,
+      storage: { probeDirectoryRead, list, download },
     });
 
     expect(await authorizer.authorize({ kind: "dir", path: "/folder" })).toEqual({
       allowed: true,
     });
+    expect(probeDirectoryRead).toHaveBeenCalledWith("/folder");
+    expect(list).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to list when probeDirectoryRead rejects", async () => {
+    const probeDirectoryRead = vi.fn(async () => {
+      throw new StorageError("forbidden", "permission denied");
+    });
+    const list = vi.fn(async () => []);
+    const authorizer = createReadAuthorizer({
+      storage: { probeDirectoryRead, list, download: vi.fn() },
+    });
+
+    expect(await authorizer.authorize({ kind: "dir", path: "/folder" })).toEqual({
+      allowed: false,
+      reason: "denied",
+    });
+    expect(probeDirectoryRead).toHaveBeenCalledWith("/folder");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("falls back to list when probeDirectoryRead is undefined", async () => {
+    const list = vi.fn(async () => []);
+    const download = vi.fn();
+    const authorizer = createReadAuthorizer({
+      storage: { list, download },
+    });
+
+    expect(await authorizer.authorize({ kind: "dir", path: "/folder" })).toEqual({
+      allowed: true,
+    });
+    expect(list).toHaveBeenCalledWith("/folder");
     expect(download).not.toHaveBeenCalled();
   });
 
@@ -122,7 +156,7 @@ describe("createReadAuthorizer: directories", () => {
       throw new StorageError("forbidden", "no");
     });
     const authorizer = createReadAuthorizer({
-      storage: { list, download: vi.fn() } as unknown as Pick<StorageProvider, "list" | "download">,
+      storage: { list, download: vi.fn() },
     });
     expect(await authorizer.authorize({ kind: "dir", path: "/folder" })).toEqual({
       allowed: false,

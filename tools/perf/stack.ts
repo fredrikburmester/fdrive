@@ -21,6 +21,7 @@ import { command, container, ready } from "./runtime.js";
 import { SEARCH_FILE_COUNT, searchDocument, TOPICS, validateVector } from "./search-fixture.js";
 import { PERF_USER } from "./seed-plan.js";
 import { buildStackEnv } from "./stack-env.js";
+import { ensureTeiImage, selectTeiRuntime, type TeiRuntimeConfig } from "./tei-runtime.js";
 export const BIG_FILE_BYTES = 512 * 1024 * 1024;
 export interface PerfStack {
   readonly apiBaseUrl: string;
@@ -29,6 +30,7 @@ export interface PerfStack {
   readonly sftpgoToken: string;
   readonly forbiddenCookie: string;
   readonly embedUrl: string;
+  readonly teiRuntime: TeiRuntimeConfig;
   readonly dataDir: string;
   readonly rootDir: string;
   stop(): Promise<void>;
@@ -156,14 +158,14 @@ export async function startPerfStack(): Promise<PerfStack> {
       "/srv/sftpgo/data/perf/burst",
       "/srv/sftpgo/data/perf/flat-10k/00000.bin",
     ]);
+    console.log(`[perf] volume directory/file mode:uid:gid ${volumeModes.replaceAll("\n", " ")}`);
     if (
       volumeModes
         .split("\n")
         .map((line) => line.split(":")[0])
         .join(",") !== "777,777,644"
     )
-      throw Error("Fixture volume permissions differ");
-    console.log(`[perf] volume directory/file mode:uid:gid ${volumeModes.replaceAll("\n", " ")}`);
+      throw Error(`Fixture volume permissions differ: ${volumeModes.replaceAll("\n", " ")}`);
     const postgres = await startPostgres();
     cleanup.add(() => postgres.stop());
     const db = createDb(postgres.connectionString);
@@ -176,16 +178,18 @@ export async function startPerfStack(): Promise<PerfStack> {
       await Promise.all(ended);
     });
     await migrate(db.db);
+    const teiRuntime = selectTeiRuntime();
+    await ensureTeiImage(teiRuntime, command);
     const embedUrl = await container(
       cleanup,
       [
         "--platform",
-        "linux/amd64",
+        teiRuntime.platform,
         "--volume",
         "fdrive-perf-models:/data",
-        "ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+        teiRuntime.image,
         "--model-id",
-        "intfloat/multilingual-e5-small",
+        teiRuntime.model,
       ],
       80,
     );
@@ -306,6 +310,7 @@ export async function startPerfStack(): Promise<PerfStack> {
       forbiddenCookie,
       sftpgoToken: token.accessToken,
       embedUrl,
+      teiRuntime,
       dataDir,
       rootDir,
       stop: () => cleanup.close(),

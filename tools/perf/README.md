@@ -27,8 +27,12 @@ templates are embedded through the actual configured
 matching documents. This measures the real query embedding call, database hybrid
 search, response processing and identity scoping. It is not a claim that 25,000
 independent documents were embedded. The fixture runs `ANALYZE` before measurement.
-The existing amd64 CPU TEI image runs under emulation on Apple Silicon; this is
-recorded in results and can materially affect latency.
+On ARM64 hosts the harness builds native TEI from the pinned upstream source
+using `Dockerfile-arm64`; other hosts retain the upstream amd64 CPU image.
+Results record the selected image, platform and source revision. The model stays
+`intfloat/multilingual-e5-small`. The same ARM runtime is available to dev and
+production stacks through `deploy/compose.arm64.yaml`; first build needs network
+access and takes several minutes, subsequent builds use Docker cache.
 
 Measurements:
 

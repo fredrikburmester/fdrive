@@ -9,7 +9,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: [
-        "tools/perf/{args,budgets,results,format,byte-generator,concurrency,cookie,seed-plan,stack-env,lifecycle,measure,search-fixture,browser-output}.ts",
+        "tools/perf/{args,budgets,results,format,byte-generator,concurrency,cookie,seed-plan,stack-env,lifecycle,measure,search-fixture,browser-output,tei-runtime}.ts",
       ],
       reporter: ["text", "json-summary"],
       thresholds: { lines: 99, functions: 100, branches: 95, statements: 99 },

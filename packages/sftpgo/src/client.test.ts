@@ -145,6 +145,67 @@ describe("createSftpgoClient - list", () => {
   });
 });
 
+describe("createSftpgoClient - probeDirectoryRead", () => {
+  it("probes an existing directory containing files", async () => {
+    const { client } = setup({
+      users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
+      files: { alice: { "/docs/a.txt": "hello" } },
+    });
+    const token = await loginAsAlice(client);
+    await expect(client.user(token).probeDirectoryRead("/docs")).resolves.toBeUndefined();
+  });
+
+  it("probes an empty directory successfully", async () => {
+    const { client } = setup(ALICE_SEED);
+    const token = await loginAsAlice(client);
+    await client.user(token).mkdir("/empty");
+    await expect(client.user(token).probeDirectoryRead("/empty")).resolves.toBeUndefined();
+  });
+
+  it("validates path before request", async () => {
+    const { client } = setup(ALICE_SEED);
+    const token = await loginAsAlice(client);
+    await expect(client.user(token).probeDirectoryRead("relative")).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    await expect(client.user(token).probeDirectoryRead("/a\0b")).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+  });
+
+  it("returns not_found for a missing directory", async () => {
+    const { client } = setup(ALICE_SEED);
+    const token = await loginAsAlice(client);
+    await expect(client.user(token).probeDirectoryRead("/missing")).rejects.toMatchObject({
+      kind: "not_found",
+    });
+  });
+
+  it("returns forbidden when user lacks list permission", async () => {
+    const { client } = setup({
+      users: [{ username: "alice", password: "secret", permissions: { "/": ["download"] } }],
+    });
+    const token = await loginAsAlice(client);
+    await expect(client.user(token).probeDirectoryRead("/")).rejects.toMatchObject({
+      kind: "forbidden",
+      status: 403,
+    });
+  });
+
+  it("rejects when response body is null", async () => {
+    const fakeFetch: typeof fetch = async () =>
+      new Response(null, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: fakeFetch });
+    await expect(client.user("token").probeDirectoryRead("/")).rejects.toMatchObject({
+      kind: "server",
+      message: "Missing response body for directory probe",
+    });
+  });
+});
+
 describe("createSftpgoClient - statFile and download", () => {
   const seed: FakeSeed = {
     users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],

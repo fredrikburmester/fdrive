@@ -67,6 +67,14 @@ describe("createSftpgoStorageProvider - happy paths against the fake server", ()
     expect(entries.map((e) => e.path)).toEqual(["/hello.txt"]);
   });
 
+  it("probes a directory for read permission and normalizes path", async () => {
+    const { client } = setup(ALICE_SEED);
+    const withToken = await withTokenFor(client, "alice", "secret");
+    const provider = createSftpgoStorageProvider({ client, withToken });
+
+    await expect(provider.probeDirectoryRead?.("//./")).resolves.toBeUndefined();
+  });
+
   it("stats a file", async () => {
     const { client } = setup(ALICE_SEED);
     const withToken = await withTokenFor(client, "alice", "secret");
@@ -256,6 +264,7 @@ describe("createSftpgoStorageProvider - forbidden mapping (bob has no access)", 
     const provider = createSftpgoStorageProvider({ client, withToken });
 
     await expect(provider.list("/")).rejects.toMatchObject({ kind: "forbidden" });
+    await expect(provider.probeDirectoryRead?.("/")).rejects.toMatchObject({ kind: "forbidden" });
   });
 });
 
@@ -266,6 +275,9 @@ describe("createSftpgoStorageProvider - not_found mapping", () => {
     const provider = createSftpgoStorageProvider({ client, withToken });
 
     await expect(provider.statFile("/missing.txt")).rejects.toMatchObject({ kind: "not_found" });
+    await expect(provider.probeDirectoryRead?.("/missing")).rejects.toMatchObject({
+      kind: "not_found",
+    });
   });
 
   it("preserves the upstream detail string in details", async () => {
