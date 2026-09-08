@@ -206,7 +206,16 @@ export async function startEnvironment(
 
     const sftpgo = await startSftpgo(
       options.sftpgoOptions ?? {
-        users: [...SEED_USERS, ...ACCOUNT_USERS, ...SHARE_USERS],
+        users: [
+          ...SEED_USERS,
+          ...ACCOUNT_USERS,
+          ...SHARE_USERS,
+          {
+            username: "folder_views",
+            password: "folder-views-test-password",
+            permissions: { "/": ["*"] },
+          },
+        ],
         files: { ...SEED_FILES, ...ACCOUNT_FILES, ...SHARE_FILES },
       },
     );

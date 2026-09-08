@@ -84,6 +84,7 @@ describe("keysToInvalidate", () => {
       ["favorites", "list"],
       ["recents", "list"],
       ["tags", "files"],
+      ["folder-views"],
       ["trash", "list"],
       ["fs", "archiveEntries", "/a/b.txt"],
       ["fs", "archiveEntries", "/c/d.txt"],
@@ -95,6 +96,7 @@ describe("keysToInvalidate", () => {
       ["favorites", "list"],
       ["recents", "list"],
       ["tags", "files"],
+      ["folder-views"],
       ["trash", "list"],
       ["fs", "archiveEntries", "/a/b.txt"],
     ]);

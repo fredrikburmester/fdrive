@@ -35,6 +35,7 @@ defineReposSuite("drizzle", async () => {
       app.credentials,
       app.file_tags,
       app.favorites,
+      app.folder_views,
       app.recents,
       app.tags,
       app.identities,

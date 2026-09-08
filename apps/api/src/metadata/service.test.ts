@@ -109,6 +109,53 @@ describe("createMetadataService: favorites", () => {
   });
 });
 
+describe("createMetadataService: folder views", () => {
+  it("sets, reads, and removes a view pin", async () => {
+    const { service } = buildService();
+    await service.setFolderView(IDENTITY_ID, "/photos", "grid");
+    expect(await service.getFolderView(IDENTITY_ID, "/photos")).toMatchObject({
+      path: "/photos",
+      mode: "grid",
+      sort: null,
+    });
+    await service.removeFolderView(IDENTITY_ID, "/photos");
+    expect(await service.getFolderView(IDENTITY_ID, "/photos")).toBeNull();
+  });
+
+  it("resets views across every linked identity without touching another account", async () => {
+    const { repos, service } = buildService();
+    const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
+    const account = await repos.accounts.create({ displayName: "Alice" });
+    const otherAccount = await repos.accounts.create({ displayName: "Bob" });
+    const first = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "alice-1",
+    });
+    const second = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "alice-2",
+    });
+    const other = await repos.identities.create({
+      accountId: otherAccount.id,
+      providerId: provider.id,
+      externalUsername: "bob",
+    });
+    await Promise.all([
+      service.setFolderView(first.id, "/one", "list"),
+      service.setFolderView(second.id, "/two", "grid"),
+      service.setFolderView(other.id, "/keep", "tree"),
+    ]);
+
+    await service.resetFolderViews(account.id);
+
+    await expect(service.getFolderView(first.id, "/one")).resolves.toBeNull();
+    await expect(service.getFolderView(second.id, "/two")).resolves.toBeNull();
+    await expect(service.getFolderView(other.id, "/keep")).resolves.toMatchObject({ mode: "tree" });
+  });
+});
+
 describe("createMetadataService: recents", () => {
   it("touches a path and lists it back", async () => {
     const { service } = buildService();
@@ -185,6 +232,22 @@ describe("createMetadataService: onMoved", () => {
 
     expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/moved/a.txt"]);
   });
+
+  it("rewrites a folder pin and its subtree", async () => {
+    const { service } = buildService();
+    await service.setFolderView(IDENTITY_ID, "/dir", "grid");
+    await service.setFolderView(IDENTITY_ID, "/dir/nested", "tree");
+
+    await service.onMoved(IDENTITY_ID, "/dir", "/moved", true);
+
+    await expect(service.getFolderView(IDENTITY_ID, "/dir")).resolves.toBeNull();
+    await expect(service.getFolderView(IDENTITY_ID, "/moved")).resolves.toMatchObject({
+      mode: "grid",
+    });
+    await expect(service.getFolderView(IDENTITY_ID, "/moved/nested")).resolves.toMatchObject({
+      mode: "tree",
+    });
+  });
 });
 
 describe("createMetadataService: onDeleted", () => {
@@ -208,6 +271,17 @@ describe("createMetadataService: onDeleted", () => {
     await expect(
       service.onDeleted(IDENTITY_ID, "/never-existed.txt", false),
     ).resolves.toBeUndefined();
+  });
+
+  it("drops folder pins under a deleted directory", async () => {
+    const { service } = buildService();
+    await service.setFolderView(IDENTITY_ID, "/dir", "grid");
+    await service.setFolderView(IDENTITY_ID, "/dir/nested", "tree");
+
+    await service.onDeleted(IDENTITY_ID, "/dir", true);
+
+    await expect(service.getFolderView(IDENTITY_ID, "/dir")).resolves.toBeNull();
+    await expect(service.getFolderView(IDENTITY_ID, "/dir/nested")).resolves.toBeNull();
   });
 });
 

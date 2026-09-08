@@ -155,6 +155,21 @@ export const favorites = appSchema.table(
   (table) => [primaryKey({ columns: [table.identityId, table.path] })],
 );
 
+/** Per-identity view pins for real directories. */
+export const folderViews = appSchema.table(
+  "folder_views",
+  {
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    mode: text("mode").notNull(),
+    sort: jsonb("sort"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.identityId, table.path] })],
+);
+
 export const recents = appSchema.table(
   "recents",
   {

@@ -2,11 +2,14 @@ import {
   CreateTagRequest,
   FavoriteRequest,
   type FavoritesResponse,
+  type FolderViewResponse,
   type OkResponse,
   type RecentsResponse,
   RecentTouchRequest,
+  RemoveFolderViewRequest,
   ROUTES,
   SetFileTagsRequest,
+  SetFolderViewRequest,
   type Tag,
   type TagFilesResponse,
   type TagsResponse,
@@ -142,6 +145,55 @@ export function registerMetadataRoutes(
     const input = await parseBody(FavoriteRequest, c);
     const path = normalizeOrThrow(input.path);
     await metadata.removeFavorite(principal.identityId, path);
+    const body: OkResponse = { ok: true };
+    return c.json(body);
+  });
+
+  authed.get(routePath(ROUTES.folderViews.base), async (c) => {
+    const principal = c.get("principal");
+    const path = normalizeOrThrow(c.req.query("path") ?? "");
+    const view = await metadata.getFolderView(principal.identityId, path);
+    if (view === null) {
+      const body: FolderViewResponse = { view: null };
+      return c.json(body);
+    }
+    try {
+      const entry = await statEntry(principal.storage, path);
+      if (entry.kind === "dir") {
+        const body: FolderViewResponse = { view };
+        return c.json(body);
+      }
+    } catch (error) {
+      if (!(error instanceof ApiHttpError) || error.kind !== "not_found") throw error;
+    }
+    await metadata.removeFolderView(principal.identityId, path);
+    const body: FolderViewResponse = { view: null };
+    return c.json(body);
+  });
+
+  authed.put(routePath(ROUTES.folderViews.base), async (c) => {
+    const principal = c.get("principal");
+    const input = await parseBody(SetFolderViewRequest, c);
+    const path = normalizeOrThrow(input.path);
+    const entry = await statEntry(principal.storage, path);
+    if (entry.kind !== "dir") throw new ApiHttpError("bad_request", "path must be a directory");
+    await metadata.setFolderView(principal.identityId, path, input.mode);
+    const body: OkResponse = { ok: true };
+    return c.json(body);
+  });
+
+  authed.delete(routePath(ROUTES.folderViews.all), async (c) => {
+    const principal = c.get("principal");
+    await metadata.resetFolderViews(principal.accountId);
+    const body: OkResponse = { ok: true };
+    return c.json(body);
+  });
+
+  authed.delete(routePath(ROUTES.folderViews.base), async (c) => {
+    const principal = c.get("principal");
+    const input = await parseBody(RemoveFolderViewRequest, c);
+    const path = normalizeOrThrow(input.path);
+    await metadata.removeFolderView(principal.identityId, path);
     const body: OkResponse = { ok: true };
     return c.json(body);
   });

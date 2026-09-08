@@ -1080,6 +1080,32 @@ describe("createApiClient: favorites", () => {
   });
 });
 
+describe("createApiClient: folder views", () => {
+  it("gets, saves, removes, and resets pins", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { view: { path: "/photos", mode: "grid", sort: null } }),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    await expect(client.getFolderView("/photos")).resolves.toEqual({
+      view: { path: "/photos", mode: "grid", sort: null },
+    });
+    await client.setFolderView({ path: "/photos", mode: "grid" });
+    await client.removeFolderView({ path: "/photos" });
+    await client.resetFolderViews();
+
+    expect(calls.map((call) => [call.url, call.init.method, call.init.body])).toEqual([
+      ["/api/v1/folder-views?path=%2Fphotos", "GET", undefined],
+      ["/api/v1/folder-views", "PUT", JSON.stringify({ path: "/photos", mode: "grid" })],
+      ["/api/v1/folder-views", "DELETE", JSON.stringify({ path: "/photos" })],
+      ["/api/v1/folder-views/all", "DELETE", undefined],
+    ]);
+  });
+});
+
 describe("createApiClient: identityScope", () => {
   const NONADMIN_STATUS = {
     status: "available",

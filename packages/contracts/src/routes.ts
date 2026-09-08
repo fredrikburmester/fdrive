@@ -73,6 +73,12 @@ export const ROUTES = {
      */
     base: "/api/v1/favorites",
   },
+  folderViews: {
+    /** GET one folder pin (`?path=`), PUT a mode, DELETE one pin (`{ path }`). */
+    base: "/api/v1/folder-views",
+    /** DELETE: reset every folder pin across the caller's linked identities. */
+    all: "/api/v1/folder-views/all",
+  },
   recents: {
     /** GET: the caller's recently opened paths -> `RecentsResponse`. */
     list: "/api/v1/recents",

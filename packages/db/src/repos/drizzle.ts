@@ -6,6 +6,7 @@ import {
   credentials,
   favorites,
   fileTags,
+  folderViews,
   identities,
   providers,
   recents,
@@ -25,6 +26,10 @@ import type {
   FavoriteKind,
   FavoriteRepo,
   FileTagRepo,
+  FolderView,
+  FolderViewMode,
+  FolderViewRepo,
+  FolderViewSort,
   Identity,
   IdentityRepo,
   Provider,
@@ -563,6 +568,85 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
   };
 }
 
+function toFolderView(row: typeof folderViews.$inferSelect): FolderView {
+  return {
+    identityId: row.identityId,
+    path: row.path,
+    mode: row.mode as FolderViewMode,
+    sort: row.sort as FolderViewSort | null,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function createFolderViewRepo(db: Db): FolderViewRepo {
+  return {
+    async get(identityId, path) {
+      const [row] = await db
+        .select()
+        .from(folderViews)
+        .where(and(eq(folderViews.identityId, identityId), eq(folderViews.path, path)));
+      return row === undefined ? null : toFolderView(row);
+    },
+    async set(identityId, path, mode, sort) {
+      const updatedAt = new Date();
+      await db
+        .insert(folderViews)
+        .values({ identityId, path, mode, sort: sort ?? null, updatedAt })
+        .onConflictDoUpdate({
+          target: [folderViews.identityId, folderViews.path],
+          set: { mode, ...(sort === undefined ? {} : { sort }), updatedAt },
+        });
+    },
+    async remove(identityId, path) {
+      await db
+        .delete(folderViews)
+        .where(and(eq(folderViews.identityId, identityId), eq(folderViews.path, path)));
+    },
+    async clear(identityId) {
+      await db.delete(folderViews).where(eq(folderViews.identityId, identityId));
+    },
+    async has(identityId, path) {
+      const [row] = await db
+        .select({ path: folderViews.path })
+        .from(folderViews)
+        .where(and(eq(folderViews.identityId, identityId), eq(folderViews.path, path)));
+      return row !== undefined;
+    },
+    async movePrefix(identityId, oldPath, newPath, isDir) {
+      const oldPrefix = `${oldPath}/`;
+      const newPrefix = `${newPath}/`;
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          delete from "app"."folder_views" f
+          using "app"."folder_views" s
+          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+            and f.path <> s.path
+            and (
+              (s.path = ${oldPath} and f.path = ${newPath})
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
+            )
+        `);
+        await tx.execute(sql`
+          update "app"."folder_views"
+          set path = case when path = ${oldPath} then ${newPath}
+                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end,
+              updated_at = now()
+          where identity_id = ${identityId}
+            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
+        `);
+      });
+    },
+    async deletePrefix(identityId, path, isDir) {
+      const prefix = `${path}/`;
+      await db.execute(sql`
+        delete from "app"."folder_views"
+        where identity_id = ${identityId}
+          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
+      `);
+    },
+  };
+}
+
 function toRecent(row: typeof recents.$inferSelect): Recent {
   return { identityId: row.identityId, path: row.path, openedAt: row.openedAt };
 }
@@ -647,6 +731,7 @@ export function createRepos(db: Db): Repos {
     tags: createTagRepo(db),
     fileTags: createFileTagRepo(db),
     favorites: createFavoriteRepo(db),
+    folderViews: createFolderViewRepo(db),
     recents: createRecentRepo(db),
   };
 }

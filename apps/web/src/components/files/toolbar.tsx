@@ -223,10 +223,20 @@ function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
   );
 }
 
+export interface FolderViewActions {
+  pinned: boolean;
+  disabled: boolean;
+  error: boolean;
+  retry: () => void;
+  useDefault: () => void;
+  makeDefault: () => void;
+}
+
 export interface FilesToolbarActionsProps {
   onNewOfficeDocument?: ((kind: OfficeDocumentKind) => void) | undefined;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  folderView?: FolderViewActions | undefined;
   sortSpec: SortSpec;
   onSortSpecChange: (spec: SortSpec) => void;
   onNewFolder: () => void;
@@ -253,6 +263,7 @@ export interface FilesToolbarActionsProps {
 interface ViewSortMenuItemsProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  folderView?: FolderViewActions | undefined;
   sortSpec: SortSpec;
   onSortSpecChange: (spec: SortSpec) => void;
   showThumbnails: boolean;
@@ -265,6 +276,7 @@ interface ViewSortMenuItemsProps {
 function ViewSortMenuItems({
   viewMode,
   onViewModeChange,
+  folderView,
   sortSpec,
   onSortSpecChange,
   showThumbnails,
@@ -272,26 +284,67 @@ function ViewSortMenuItems({
 }: ViewSortMenuItemsProps) {
   return (
     <>
+      {folderView && (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>
+            {folderView.pinned ? "Saved for this folder" : "Using default view"}
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
+      )}
       <DropdownMenuRadioGroup
         value={viewMode}
         onValueChange={(mode) => onViewModeChange(mode as ViewMode)}
       >
-        <DropdownMenuRadioItem value="list" closeOnClick className="whitespace-nowrap">
+        <DropdownMenuRadioItem
+          disabled={folderView?.disabled}
+          value="list"
+          closeOnClick
+          className="whitespace-nowrap"
+        >
           <ListIcon />
           List
           <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="grid" closeOnClick className="whitespace-nowrap">
+        <DropdownMenuRadioItem
+          disabled={folderView?.disabled}
+          value="grid"
+          closeOnClick
+          className="whitespace-nowrap"
+        >
           <LayoutGridIcon />
           Grid
           <DropdownMenuShortcut>⌘2</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="tree" closeOnClick className="whitespace-nowrap">
+        <DropdownMenuRadioItem
+          disabled={folderView?.disabled}
+          value="tree"
+          closeOnClick
+          className="whitespace-nowrap"
+        >
           <ListTreeIcon />
           Tree
           <DropdownMenuShortcut>⌘3</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
+      {folderView && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={folderView.disabled} onClick={folderView.makeDefault}>
+            Use as default for all folders
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={folderView.disabled || !folderView.pinned}
+            onClick={folderView.useDefault}
+          >
+            Use default view
+          </DropdownMenuItem>
+          {folderView.error && (
+            <DropdownMenuItem onClick={folderView.retry}>
+              Retry loading folder view
+            </DropdownMenuItem>
+          )}
+        </>
+      )}
       <DropdownMenuSeparator />
       <DropdownMenuGroup>
         <DropdownMenuCheckboxItem
@@ -374,6 +427,7 @@ const MOBILE_TAP_TARGET = "max-md:size-11 max-md:justify-center max-md:px-0";
 export function FilesToolbarActions({
   viewMode,
   onViewModeChange,
+  folderView,
   sortSpec,
   onSortSpecChange,
   onNewFolder,
@@ -410,6 +464,7 @@ export function FilesToolbarActions({
             <ViewSortMenuItems
               viewMode={viewMode}
               onViewModeChange={onViewModeChange}
+              folderView={folderView}
               sortSpec={sortSpec}
               onSortSpecChange={onSortSpecChange}
               showThumbnails={showThumbnails}
@@ -583,6 +638,7 @@ export function FilesToolbarActions({
                 <ViewSortMenuItems
                   viewMode={viewMode}
                   onViewModeChange={onViewModeChange}
+                  folderView={folderView}
                   sortSpec={sortSpec}
                   onSortSpecChange={onSortSpecChange}
                   showThumbnails={showThumbnails}

@@ -716,6 +716,15 @@ flows pass real storage integration, browser acceptance and required quality gat
     item through virtualization. Selection toolbar includes Download; list thumbnails are
     an optional persisted view preference. App sidebar navigation uses tighter vertical spacing.
 
+20. Per-folder views (2026-09-08): Plan A from `docs/workflow/P7-FOLDER-VIEW.md`.
+    Toolbar mode changes save only the current folder, per identity in `app.folder_views`;
+    no inheritance. Records reserve nullable sort state; only mode ships. The existing
+    browser `fdrive.view` remains the global fallback. Explicit menu actions set that
+    default or remove the current pin; virtual listings use only the default. Account
+    preferences can clear all pins across linked identities. Metadata tracks folder moves
+    and deletes; confirmed missing folders lose stale pins, transient/permission failures
+    retain them.
+
 ## 15. Resolved questions (2026-09-06)
 
 1. Auth: credential mode only, no admin-assisted API keys.

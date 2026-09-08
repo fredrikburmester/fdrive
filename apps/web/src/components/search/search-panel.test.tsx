@@ -81,6 +81,7 @@ beforeEach(() => {
   });
   pathnameMock.mockReturnValue("/files");
   push.mockReset();
+  window.localStorage.clear();
   window.sessionStorage.clear();
 });
 
@@ -138,6 +139,29 @@ it("defaults to current login, labels account duplicates and partial failures wi
   expect(screen.getByText("bob · Other")).toBeDefined();
   expect(screen.getByRole("status").textContent).toContain("Search unavailable for bob · Other");
   expect(document.querySelector("img")).toBeNull();
+});
+
+it("uses the global grid default while preserving reveal actions", async () => {
+  window.localStorage.setItem("fdrive.view", JSON.stringify("grid"));
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "same" },
+  });
+
+  await screen.findByText("same.txt");
+  expect(document.querySelector('[data-slot="search-grid"]')).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Reveal in folder" }));
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/files?select=same.txt"));
 });
 
 it("shows the Enter-opens footer and keyboard hints on desktop", async () => {

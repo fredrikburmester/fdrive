@@ -30,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { describeFsError } from "@/lib/files/queries";
+import { useDefaultView } from "@/lib/files/use-default-view";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   emptiedToastMessage,
@@ -59,6 +60,7 @@ type ConfirmAction =
 /** The trash listing at `/trash`: restore, restore-to-a-different-folder,
  * permanent delete, and empty, plus loading/empty/error states. */
 export function TrashPage() {
+  const [viewMode] = useDefaultView();
   const status = useTrashStatus();
   const trash = useTrash();
   const restore = useTrashRestore();
@@ -259,53 +261,95 @@ export function TrashPage() {
           />
         ) : (
           <>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={allSelected}
-                      indeterminate={someSelected}
-                      onCheckedChange={toggleSelectAll}
-                      aria-label={allSelected ? "Deselect all" : "Select all"}
-                    />
-                  </TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Original folder</TableHead>
-                  <TableHead className="text-right">Size</TableHead>
-                  <TableHead>Deleted</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {entries.map((entry) => {
-                  const deletedAt = new Date(entry.deletedAt);
-                  return (
-                    <TableRow key={entry.id}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selected.has(entry.id)}
-                          onCheckedChange={(checked) => toggleOne(entry.id, checked)}
-                          aria-label={`Select ${entry.name}`}
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium">{entry.name}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {originalFolderLabel(entry.originalPath)}
-                      </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        {formatBytes(entry.size)}
-                      </TableCell>
-                      <TableCell
-                        className="text-muted-foreground"
-                        title={deletedAt.toLocaleString()}
-                      >
-                        {formatDate(deletedAt)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            {viewMode === "grid" ? (
+              <>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={allSelected}
+                    indeterminate={someSelected}
+                    onCheckedChange={toggleSelectAll}
+                    aria-label={allSelected ? "Deselect all" : "Select all"}
+                  />
+                  <span>{selected.size > 0 ? `${selected.size} selected` : "Select all"}</span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-slot="trash-grid">
+                  {entries.map((entry) => {
+                    const deletedAt = new Date(entry.deletedAt);
+                    return (
+                      <div key={entry.id} className="min-w-0 rounded-lg border p-3">
+                        <div className="flex items-start gap-2">
+                          <Checkbox
+                            checked={selected.has(entry.id)}
+                            onCheckedChange={(checked) => toggleOne(entry.id, checked)}
+                            aria-label={`Select ${entry.name}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium">{entry.name}</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              {originalFolderLabel(entry.originalPath)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex justify-between gap-2 text-xs text-muted-foreground">
+                          <span>{formatBytes(entry.size)}</span>
+                          <span title={deletedAt.toLocaleString()}>{formatDate(deletedAt)}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              // Trash has no live directory paths to resolve. Tree therefore intentionally
+              // uses the same flat rows as list, while the shared global default still selects it.
+              <Table data-slot={viewMode === "tree" ? "trash-tree" : "trash-list"}>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        onCheckedChange={toggleSelectAll}
+                        aria-label={allSelected ? "Deselect all" : "Select all"}
+                      />
+                    </TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Original folder</TableHead>
+                    <TableHead className="text-right">Size</TableHead>
+                    <TableHead>Deleted</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {entries.map((entry) => {
+                    const deletedAt = new Date(entry.deletedAt);
+                    return (
+                      <TableRow key={entry.id}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selected.has(entry.id)}
+                            onCheckedChange={(checked) => toggleOne(entry.id, checked)}
+                            aria-label={`Select ${entry.name}`}
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{entry.name}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {originalFolderLabel(entry.originalPath)}
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {formatBytes(entry.size)}
+                        </TableCell>
+                        <TableCell
+                          className="text-muted-foreground"
+                          title={deletedAt.toLocaleString()}
+                        >
+                          {formatDate(deletedAt)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
             {trash.data?.truncated === true && (
               <p className="text-xs text-muted-foreground">
                 Showing the first {entries.length} items.

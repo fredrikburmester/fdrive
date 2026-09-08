@@ -34,6 +34,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { identityLabel, navigateAccountItem } from "@/lib/account/identities";
 import { useIdentityActions } from "@/lib/account/use-identities";
 import { describeApiError } from "@/lib/api/errors";
+import { useDefaultView } from "@/lib/files/use-default-view";
 import { createDebouncer, type Debounced } from "@/lib/search/debounce";
 import {
   apiClient,
@@ -307,6 +308,7 @@ function RecentRow({ item }: { item: RecentItem }) {
  * component's `open` state.
  */
 export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
+  const [viewMode] = useDefaultView();
   const router = useRouter();
   const pathname = usePathname();
   const { data: me } = useShellMe();
@@ -551,6 +553,13 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     : isPartial
       ? `No results found in checked candidates for "${trimmedQuery}".`
       : `No results for "${trimmedQuery}".`;
+  // Search is a command palette, so tree intentionally keeps its keyboard-friendly
+  // flat rows; results can span identities and have no safe shared hierarchy.
+  const gridResults = viewMode === "grid";
+  const resultGridClass = gridResults ? "grid grid-cols-1 gap-2 p-2 sm:grid-cols-2" : undefined;
+  const resultItemClass = gridResults
+    ? "group/command-item min-h-20 items-start rounded-md border p-3"
+    : undefined;
 
   return (
     <CommandDialog
@@ -712,15 +721,21 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               <CommandEmpty>Type to search files and content.</CommandEmpty>
             ) : (
               <CommandGroup heading="Recent">
-                {recent.map((item) => (
-                  <CommandItem
-                    key={item.path}
-                    value={makeItemValue("recent", item.path)}
-                    onSelect={handleSelect}
-                  >
-                    <RecentRow item={item} />
-                  </CommandItem>
-                ))}
+                <div
+                  className={resultGridClass}
+                  data-slot={gridResults ? "search-grid" : undefined}
+                >
+                  {recent.map((item) => (
+                    <CommandItem
+                      key={item.path}
+                      value={makeItemValue("recent", item.path)}
+                      onSelect={handleSelect}
+                      className={resultItemClass}
+                    >
+                      <RecentRow item={item} />
+                    </CommandItem>
+                  ))}
+                </div>
               </CommandGroup>
             )
           ) : unavailable && !hasVisualResults && !waitingForImages ? (
@@ -736,15 +751,21 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               {sections !== undefined && sections.folders.length > 0 ? (
                 <>
                   <CommandGroup heading="Folders">
-                    {sections.folders.map((folder) => (
-                      <CommandItem
-                        key={makeItemValue("folder", folder.path, folder.identityId)}
-                        value={makeItemValue("folder", folder.path, folder.identityId)}
-                        onSelect={handleSelect}
-                      >
-                        <FolderRow folder={folder} label={labelFor(folder.identityId)} />
-                      </CommandItem>
-                    ))}
+                    <div
+                      className={resultGridClass}
+                      data-slot={gridResults ? "search-grid" : undefined}
+                    >
+                      {sections.folders.map((folder) => (
+                        <CommandItem
+                          key={makeItemValue("folder", folder.path, folder.identityId)}
+                          value={makeItemValue("folder", folder.path, folder.identityId)}
+                          onSelect={handleSelect}
+                          className={resultItemClass}
+                        >
+                          <FolderRow folder={folder} label={labelFor(folder.identityId)} />
+                        </CommandItem>
+                      ))}
+                    </div>
                   </CommandGroup>
                   <CommandSeparator />
                 </>
@@ -752,20 +773,30 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               {sections !== undefined && sections.files.length > 0 ? (
                 <>
                   <CommandGroup heading="Files">
-                    {sections.files.map((hit) => (
-                      <CommandItem
-                        key={makeItemValue("file", hit.path, hit.identityId)}
-                        value={makeItemValue("file", hit.path, hit.identityId)}
-                        onSelect={handleSelect}
-                      >
-                        <HitRow hit={hit} iconsOnly={allLogins} label={labelFor(hit.identityId)} />
-                        <RevealButton
-                          path={hit.path}
-                          onReveal={(path) => revealItem(path, hit.identityId)}
-                          mobile={mobileLayout}
-                        />
-                      </CommandItem>
-                    ))}
+                    <div
+                      className={resultGridClass}
+                      data-slot={gridResults ? "search-grid" : undefined}
+                    >
+                      {sections.files.map((hit) => (
+                        <CommandItem
+                          key={makeItemValue("file", hit.path, hit.identityId)}
+                          value={makeItemValue("file", hit.path, hit.identityId)}
+                          onSelect={handleSelect}
+                          className={resultItemClass}
+                        >
+                          <HitRow
+                            hit={hit}
+                            iconsOnly={allLogins}
+                            label={labelFor(hit.identityId)}
+                          />
+                          <RevealButton
+                            path={hit.path}
+                            onReveal={(path) => revealItem(path, hit.identityId)}
+                            mobile={mobileLayout}
+                          />
+                        </CommandItem>
+                      ))}
+                    </div>
                   </CommandGroup>
                   {sections.content.length > 0 || hasVisualResults ? <CommandSeparator /> : null}
                 </>
@@ -773,20 +804,30 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               {sections !== undefined && sections.content.length > 0 ? (
                 <>
                   <CommandGroup heading="Content matches">
-                    {sections.content.map((hit) => (
-                      <CommandItem
-                        key={makeItemValue("content", hit.path, hit.identityId)}
-                        value={makeItemValue("content", hit.path, hit.identityId)}
-                        onSelect={handleSelect}
-                      >
-                        <HitRow hit={hit} iconsOnly={allLogins} label={labelFor(hit.identityId)} />
-                        <RevealButton
-                          path={hit.path}
-                          onReveal={(path) => revealItem(path, hit.identityId)}
-                          mobile={mobileLayout}
-                        />
-                      </CommandItem>
-                    ))}
+                    <div
+                      className={resultGridClass}
+                      data-slot={gridResults ? "search-grid" : undefined}
+                    >
+                      {sections.content.map((hit) => (
+                        <CommandItem
+                          key={makeItemValue("content", hit.path, hit.identityId)}
+                          value={makeItemValue("content", hit.path, hit.identityId)}
+                          onSelect={handleSelect}
+                          className={resultItemClass}
+                        >
+                          <HitRow
+                            hit={hit}
+                            iconsOnly={allLogins}
+                            label={labelFor(hit.identityId)}
+                          />
+                          <RevealButton
+                            path={hit.path}
+                            onReveal={(path) => revealItem(path, hit.identityId)}
+                            mobile={mobileLayout}
+                          />
+                        </CommandItem>
+                      ))}
+                    </div>
                   </CommandGroup>
                   {hasVisualResults ? <CommandSeparator /> : null}
                 </>

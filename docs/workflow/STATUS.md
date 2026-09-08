@@ -2,6 +2,26 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## README screenshots (2026-09-08)
+
+- Added all 13 user-provided PNGs under `docs/screenshots/`, with a README overview
+  and five expandable feature galleries. Original filenames and image bytes preserved.
+- Image links, alt text, gallery markup, and scoped diff check verified; workflow gate
+  passed. Included in the user-requested commit of all current changes.
+
+## P7 folder views (in progress)
+
+- User selected Plan A and remaining recommendations: server pins per identity/path,
+  exact-folder resolution, nullable future sort state, global-only virtual listings,
+  rename/delete tracking, account reset across linked identities.
+- Primary owns web hooks, toolbar/account controls, docs and target verification.
+- Backend and virtual-view implementers integrated after diff review and scoped transfer.
+  Copies retained in `.worktrees/p7-folder-view-backend` and `.worktrees/p7-virtual-views`.
+- Global default retains `fdrive.view` in this browser. Folder pins sync across devices.
+- Workflow passed. New focused tests and backend DB integration passed; target application
+  retrying after fixing coverage gaps and using permitted socket access for server tests.
+- Next: finish target application/integration/browser gates and isolated dev smoke (3004/3005).
+
 ## Workflow simplification (complete)
 
 - Requested changes integrated and verified; baseline `e791fd5`. Three workflow worktrees

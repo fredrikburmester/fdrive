@@ -68,6 +68,12 @@ export interface FileGridProps {
   /** Favorites (or unfavorites) every entry in the group a tile's context
    * menu action would apply to. Defaults to a no-op. */
   onToggleFavorite?: (paths: readonly string[], next: boolean) => void;
+  /** Hides "Move to" and "Copy to" for a virtual listing. */
+  hideMoveCopy?: boolean;
+  /** Shows "Reveal in folder" for a virtual listing. */
+  showReveal?: boolean;
+  /** Hides archive actions for a virtual listing. */
+  hideArchive?: boolean;
   /** Whether the active identity's storage provider exposes a trash, for
    * every tile's context menu (see `FileContextMenu`). Defaults to `false`. */
   trashAvailable?: boolean;
@@ -146,6 +152,9 @@ export function FileGrid({
   onToggleTag = NO_OP_TOGGLE_TAG,
   onOpenTagsEditor = NO_OP_OPEN_TAGS_EDITOR,
   onToggleFavorite = NO_OP_TOGGLE_FAVORITE,
+  hideMoveCopy = false,
+  showReveal = false,
+  hideArchive = false,
   trashAvailable = false,
   scrollRequest = null,
   onScrollConsumed,
@@ -336,6 +345,9 @@ export function FileGrid({
                         onAction={onContextAction}
                         selectionCount={contextSelectionCount(entry.path, selected)}
                         includesFolder={group.some((candidate) => candidate.kind === "dir")}
+                        hideMoveCopy={hideMoveCopy}
+                        showReveal={showReveal}
+                        hideArchive={hideArchive}
                         tags={tags}
                         tagCheckState={(tagId) =>
                           computeTagCheckState(

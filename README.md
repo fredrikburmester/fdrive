@@ -4,6 +4,10 @@
 
 Think of it like Google Drive or iCloud Drive, but running completely on your own hardware, right over your existing files.
 
+![fdrive file browser in dark mode, with folders, favorites, tags, and file details](docs/screenshots/files-list-only-overview.png)
+
+[Explore the screenshots](#screenshots) · [Get started](#2-minute-quickstart-home-server--lan)
+
 ---
 
 ## Highlights
@@ -15,6 +19,83 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 - **Share with family & friends**: Create password-protected links with expiration dates, download limits, and beautiful photo galleries.
 - **Built-in Trash**: Safely restore accidentally deleted files.
 - **Modular power-ups**: Keep it featherlight (< 300 MB RAM) for basic browsing, or switch on full-text search, AI image search, OCR, and browser office editing whenever you want.
+
+---
+
+## Screenshots
+
+<details>
+<summary><strong>Browse and organize files</strong> — file actions, thumbnails, and light mode</summary>
+
+**File actions and tags**
+
+![File browser with context menus for sharing, renaming, moving, tagging, and downloading files](docs/screenshots/files-overview-with-dropdowns.png)
+
+**Thumbnails and view options**
+
+![Tree view with inline image thumbnails and the view and sorting menu open](docs/screenshots/files-thumbnails.png)
+
+**Light mode**
+
+![Photo folder in light mode with image thumbnails and the information sidebar](docs/screenshots/lightmode.png)
+
+</details>
+
+<details>
+<summary><strong>Search</strong> — file contents and AI image search</summary>
+
+**File search**
+
+![Search results for budget, with file type filters and matching document contents](docs/screenshots/search-files.png)
+
+**AI image search**
+
+![Image search for car showing a visual match, with image and folder filters](docs/screenshots/image-search.png)
+
+</details>
+
+<details>
+<summary><strong>Preview and work with files</strong> — images, code, and Office documents</summary>
+
+**Image lightbox**
+
+![Flower photo in the image lightbox with navigation controls, file information, tags, and favorites](docs/screenshots/image-lightbox-view.png)
+
+**Code viewer and editing controls**
+
+![TypeScript file with syntax highlighting, line numbers, and an edit action](docs/screenshots/code-edit.png)
+
+**Office documents with ONLYOFFICE**
+
+![Word document open inside fdrive through the ONLYOFFICE integration](docs/screenshots/office-edit-view.png)
+
+</details>
+
+<details>
+<summary><strong>Share and upload</strong> — shared links and upload status</summary>
+
+**Shared links**
+
+![Shares page showing password protection, gallery presentation, download counts, expiration, and link actions](docs/screenshots/shares.png)
+
+**Upload status**
+
+![Upload status window showing two completed file uploads](docs/screenshots/current-upload-window.png)
+
+</details>
+
+<details>
+<summary><strong>Sign in and administer</strong> — login and image search settings</summary>
+
+**Sign in**
+
+![SFTPGo sign-in form with username, password, and one-time code option](docs/screenshots/login.png)
+
+**Image search administration**
+
+![Image search administration showing service status, embedding model, thumbnail count, and rebuild controls](docs/screenshots/image-search-advanced-settings-view-admin.png)
+
+</details>
 
 ---
 

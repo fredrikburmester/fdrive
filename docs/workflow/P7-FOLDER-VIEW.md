@@ -1,8 +1,15 @@
-# Scoping: per-folder view setting (requested 2026-09-07)
+# Per-folder view setting (Plan A selected 2026-09-08)
 
 Asked: "per folder view setting. I don't know where this setting would go, if the user has a global
 setting but then changing the view in the top bar saves it per folder? unclear. please scope it
-out." No code in this pass — this is the design and the open decisions.
+out." Design below retained for context. Implementation uses A and the recommendations.
+
+Selected: server-backed identity/path pins; no inheritance; nullable sort state reserved, mode
+only in the UI; virtual listings follow the browser global default; folder moves/deletes carry
+metadata; confirmed missing paths are pruned (never transient failures); reset on the account
+page clears pins for all linked identities. Existing `fdrive.view` remains the browser default.
+Virtual file lists expand real folders in Tree mode. Search, Trash, and account-wide Favorites
+remain flat in Tree mode because those results do not share a browsable folder hierarchy.
 
 ## Where the setting lives today
 

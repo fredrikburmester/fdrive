@@ -1,3 +1,4 @@
+import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
@@ -310,16 +311,105 @@ describe("recents", () => {
   });
 });
 
+describe("folder views", () => {
+  it("pins an existing directory, returns it, and removes it idempotently", async () => {
+    const { app } = await buildHarness();
+    const put = await app.request(
+      "/api/v1/folder-views",
+      requestedWith({
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/dir/.", mode: "grid" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+
+    const get = await app.request("/api/v1/folder-views?path=/dir");
+    expect(await get.json()).toEqual({ view: { path: "/dir", mode: "grid", sort: null } });
+
+    const remove = await app.request(
+      "/api/v1/folder-views",
+      requestedWith({
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/dir" }),
+      }),
+    );
+    expect(await remove.json()).toEqual({ ok: true });
+    expect(await (await app.request("/api/v1/folder-views?path=/dir")).json()).toEqual({
+      view: null,
+    });
+  });
+
+  it("rejects file pins and prunes only a confirmed missing pin", async () => {
+    const { app, metadata } = await buildHarness();
+    const file = await app.request(
+      "/api/v1/folder-views",
+      requestedWith({
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", mode: "list" }),
+      }),
+    );
+    expect(file.status).toBe(400);
+    const invalidMode = await app.request(
+      "/api/v1/folder-views",
+      requestedWith({
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/dir", mode: "columns" }),
+      }),
+    );
+    expect(invalidMode.status).toBe(400);
+
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/gone", "tree");
+    expect(await (await app.request("/api/v1/folder-views?path=/gone")).json()).toEqual({
+      view: null,
+    });
+    expect(await metadata.getFolderView(ALICE_IDENTITY_ID, "/gone")).toBeNull();
+  });
+
+  it("resets pins across every identity linked to the calling account", async () => {
+    const { app, repos, metadata } = await buildHarness();
+    const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
+    const first = await repos.identities.create({
+      accountId: ACCOUNT_ID,
+      providerId: provider.id,
+      externalUsername: "alice-linked-1",
+    });
+    const second = await repos.identities.create({
+      accountId: ACCOUNT_ID,
+      providerId: provider.id,
+      externalUsername: "alice-linked-2",
+    });
+    await Promise.all([
+      metadata.setFolderView(first.id, "/one", "grid"),
+      metadata.setFolderView(second.id, "/two", "tree"),
+    ]);
+
+    const reset = await app.request(
+      "/api/v1/folder-views/all",
+      requestedWith({ method: "DELETE" }),
+    );
+    expect(await reset.json()).toEqual({ ok: true });
+    await expect(metadata.getFolderView(first.id, "/one")).resolves.toBeNull();
+    await expect(metadata.getFolderView(second.id, "/two")).resolves.toBeNull();
+  });
+});
+
 describe("tag CRUD: error mapping", () => {
   function fail(name: string): never {
     throw new Error(`unexpected call to ${name} in this test`);
   }
 
-  async function buildHarnessWithStubMetadata(metadata: MetadataService) {
+  async function buildHarnessWithStubMetadata(
+    metadata: MetadataService,
+    storageOverride?: StorageProvider,
+  ) {
     const server = createFakeSftpgoServer(SEED);
     const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
     const withToken = await withTokenFor(client, "alice", "secret");
-    const storage = createSftpgoStorageProvider({ client, withToken });
+    const storage = storageOverride ?? createSftpgoStorageProvider({ client, withToken });
     const principal: Principal = {
       accountId: ACCOUNT_ID,
       identityId: ALICE_IDENTITY_ID,
@@ -355,6 +445,10 @@ describe("tag CRUD: error mapping", () => {
       listFavorites: async () => fail("listFavorites"),
       addFavorite: async () => fail("addFavorite"),
       removeFavorite: async () => fail("removeFavorite"),
+      getFolderView: async () => fail("getFolderView"),
+      setFolderView: async () => fail("setFolderView"),
+      removeFolderView: async () => fail("removeFolderView"),
+      resetFolderViews: async () => fail("resetFolderViews"),
       listRecents: async () => fail("listRecents"),
       touchRecent: async () => fail("touchRecent"),
       onMoved: async () => fail("onMoved"),
@@ -374,6 +468,27 @@ describe("tag CRUD: error mapping", () => {
     );
 
     expect(res.status).toBe(500);
+  });
+
+  it.each([
+    ["forbidden", 403],
+    ["upstream_unavailable", 502],
+  ] as const)("keeps a pin when a %s folder stat cannot be confirmed", async (kind, status) => {
+    const repos = createMemoryRepos();
+    const metadata = createMetadataService(repos);
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", "grid");
+    const storage = {
+      statFile: async () => {
+        throw new StorageError(kind, "unavailable");
+      },
+    } as unknown as StorageProvider;
+    const app = await buildHarnessWithStubMetadata(metadata, storage);
+
+    const response = await app.request("/api/v1/folder-views?path=/dir");
+    expect(response.status).toBe(status);
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/dir")).resolves.toMatchObject({
+      mode: "grid",
+    });
   });
 });
 

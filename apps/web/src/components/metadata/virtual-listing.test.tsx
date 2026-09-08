@@ -68,6 +68,24 @@ vi.mock("@/lib/metadata/deps", async (importOriginal) => ({
     </>
   ),
 }));
+vi.mock("@/components/files/virtual-file-listing", () => ({
+  VirtualFileListing: ({
+    entries,
+    onContextAction,
+  }: {
+    entries: FsEntry[];
+    onContextAction: (action: "share", entry: FsEntry, context: readonly FsEntry[]) => void;
+  }) => {
+    const first = entries[0];
+    if (first === undefined) return null;
+    return (
+      <>
+        <Button onClick={() => onContextAction("share", first, [first])}>Share selection</Button>
+        <Button onClick={() => onContextAction("share", first, entries)}>Share both</Button>
+      </>
+    );
+  },
+}));
 vi.mock("@/components/shares/share-dialog", () => ({
   ShareDialog: ({ entries, onClose }: { entries: FsEntry[]; onClose: () => void }) => (
     <section aria-label="Share selection">
@@ -94,8 +112,7 @@ it("opens Share with canonical context selection and discards dialog state on cl
   );
   fireEvent.click(screen.getByRole("button", { name: "Close share" }));
   expect(screen.queryByRole("region", { name: "Share selection" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Select both" }));
-  fireEvent.click(screen.getByRole("button", { name: "Share selection" }));
+  fireEvent.click(screen.getByRole("button", { name: "Share both" }));
   expect(screen.getByRole("region", { name: "Share selection" }).textContent).toContain(
     "/other/b.txt",
   );
