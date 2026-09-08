@@ -34,6 +34,11 @@ const MAX_FOLDERS = 5;
 const MAX_CONTENT_HITS = 10;
 
 export interface SearchServiceDeps {
+  readonly features?: () => Promise<{
+    textSearch: boolean;
+    semanticSearch: boolean;
+    thumbnails: boolean;
+  }>;
   readonly indexQueries: IndexQueries;
   /** `null` when `FDRIVE_EMBED_URL` is not configured; semantic search never runs then. */
   readonly embedClient: EmbedClient | null;
@@ -168,8 +173,9 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
     async search(input: SearchServiceInput): Promise<SearchResponse> {
       const startedAt = deps.clock();
       const tookMs = () => elapsedMs(deps.clock, startedAt);
+      const features = await deps.features?.();
 
-      if (input.scopes.length === 0) {
+      if (input.scopes.length === 0 || features?.textSearch === false) {
         return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
       }
 
@@ -270,7 +276,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           ? deps.indexQueries.filename(prefixes, words, input.query, FILENAME_FANOUT_LIMIT)
           : Promise.resolve<FilenameHit[]>([]);
       const embeddingPromise =
-        deps.embedClient !== null
+        deps.embedClient !== null && features?.semanticSearch !== false
           ? deps.embedClient.embed(input.query)
           : Promise.resolve<readonly number[] | null>(null);
       const semanticPipeline = primeFanout(
@@ -287,7 +293,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         fulltextPipeline,
         filenamePromise,
       ]);
-      const degraded = embedding === null;
+      const degraded = features?.semanticSearch !== false && embedding === null;
 
       // The underlying queries are bounded (`LIMIT 60`/`LIMIT 25`); a row
       // count at the cap means there may be more matches this response never
@@ -373,7 +379,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           }
           const snippets = snippetsById.get(id) ?? [];
           const hasThumbnail =
-            deps.thumbsEnabled && file.sha256 !== null
+            deps.thumbsEnabled && features?.thumbnails !== false && file.sha256 !== null
               ? (await deps.indexQueries.thumbnail(file.sha256, 256)) !== null
               : false;
           return {

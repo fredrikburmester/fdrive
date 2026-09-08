@@ -48,14 +48,14 @@ export const OCR_SETTINGS_KEYS = {
  * Assumed env-derived defaults for the OCR service, since it ships no
  * documented default table yet: a nightly run at 03:00, the same language
  * pack as the indexer's OCR fallback, no folders excluded, a 200 MB cap per
- * file, and originals discarded after a successful pass.
+ * file, and originals retained after a successful pass.
  */
 export const OCR_SETTINGS_DEFAULTS = {
   hour: 3,
   langs: "swe+eng",
   excludeGlobs: [] as readonly string[],
   maxMb: 200,
-  keepOriginals: false,
+  keepOriginals: true,
 };
 
 /** One resolved value plus where it came from, for building a `*SettingsResponse`. */
@@ -99,7 +99,10 @@ function parseBool(raw: unknown, fallback: boolean): Resolved<boolean> {
  * missing keys and malformed values, mirroring the indexer's own
  * `settings.py` parsing rules.
  */
-export function resolveIndexerSettings(raw: Record<string, unknown>): IndexerSettingsResponse {
+export function resolveIndexerSettings(
+  raw: Record<string, unknown>,
+  managed = false,
+): IndexerSettingsResponse {
   const scanIntervalSeconds = parseInt_(
     raw[INDEXER_SETTINGS_KEYS.scanIntervalSeconds],
     INDEXER_SETTINGS_DEFAULTS.scanIntervalSeconds,
@@ -111,7 +114,7 @@ export function resolveIndexerSettings(raw: Record<string, unknown>): IndexerSet
   );
   const ocrImageGlobs = parseGlobList(
     raw[INDEXER_SETTINGS_KEYS.ocrImageGlobs],
-    INDEXER_SETTINGS_DEFAULTS.ocrImageGlobs,
+    managed ? ["**"] : INDEXER_SETTINGS_DEFAULTS.ocrImageGlobs,
   );
   const tesseractLangs = parseStr(
     raw[INDEXER_SETTINGS_KEYS.tesseractLangs],

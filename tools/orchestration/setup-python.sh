@@ -13,7 +13,7 @@ FDRIVE_CHILD_GROUP=0
 FDRIVE_SIGNAL_STATUS=0
 
 usage() {
-  printf 'usage: bash setup-python.sh <checkout> <indexer|ocr|image-embed>\n'
+  printf 'usage: bash setup-python.sh <checkout> <indexer|ocr|image-embed|runtime>\n'
 }
 
 python_version() {
@@ -73,7 +73,7 @@ if [[ ${1:-} == --help && $# -eq 1 ]]; then usage; exit 0; fi
 [[ $# -eq 2 ]] || { usage >&2; exit 1; }
 CHECKOUT=$(fdrive_resolve_checkout "$1") || exit $?
 SERVICE=$2
-case "$SERVICE" in indexer|ocr|image-embed) ;; *) usage >&2; exit 1 ;; esac
+case "$SERVICE" in indexer|ocr|image-embed|runtime) ;; *) usage >&2; exit 1 ;; esac
 SERVICE_DIR="$CHECKOUT/services/$SERVICE"
 [[ -d $SERVICE_DIR ]] || fdrive_die "service directory is missing: $SERVICE_DIR"
 [[ ! -L "$CHECKOUT/services" && ! -L $SERVICE_DIR ]] || fdrive_die "service directory must not be a symlink: $SERVICE_DIR"

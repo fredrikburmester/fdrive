@@ -3,7 +3,7 @@ import type { Repos } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
-import { verifyAccountCredentials } from "../accounts/credentials.ts";
+import { verifyAccountCredentials, verifyCandidateCredentials } from "../accounts/credentials.ts";
 import { accountRepositoryCall } from "../accounts/errors.ts";
 import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppConfig } from "../config.js";
@@ -36,6 +36,8 @@ export interface LoginResult {
 
 export interface AuthService {
   login(input: LoginInput): Promise<LoginResult>;
+  /** Verifies and creates a session bound to a setup candidate without activating it. */
+  loginCandidate(input: LoginInput, baseUrl: string): Promise<LoginResult>;
   resolvePrincipal(c: Context): Promise<Principal | null>;
   me(accountId: string, activeIdentityId: string): Promise<MeResponse>;
   logout(sessionId: string): Promise<void>;
@@ -99,12 +101,16 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     };
   }
 
-  async function login(input: LoginInput): Promise<LoginResult> {
-    const { provider, token } = await verifyAccountCredentials(deps, input);
+  async function loginAt(input: LoginInput, candidateBaseUrl: string | null): Promise<LoginResult> {
+    const { provider, token } =
+      candidateBaseUrl === null
+        ? await verifyAccountCredentials(deps, input)
+        : await verifyCandidateCredentials(deps, input, candidateBaseUrl);
     const rawSessionId = generateSessionId();
     const idHash = hashSessionId(rawSessionId);
     const at = deps.clock();
-    await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
+    if (candidateBaseUrl === null)
+      await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
     const result = await accountRepositoryCall(() =>
       deps.identityLinks.loginVerified({
         providerId: provider.id,
@@ -127,7 +133,8 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       }),
     );
     try {
-      await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
+      if (candidateBaseUrl === null)
+        await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
       await deps.tokenSource.prime(result.identity.id, token);
     } catch (error) {
       await deps.repos.sessions.delete(idHash);
@@ -148,6 +155,10 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       await deps.repos.sessions.delete(idHash);
       throw error;
     }
+  }
+
+  async function login(input: LoginInput): Promise<LoginResult> {
+    return loginAt(input, null);
   }
 
   async function resolvePrincipal(c: Context): Promise<Principal | null> {
@@ -226,6 +237,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
 
   return {
     login: (input) => accountRepositoryCall(() => login(input)),
+    loginCandidate: (input, baseUrl) => accountRepositoryCall(() => loginAt(input, baseUrl)),
     resolvePrincipal,
     me,
     logout,

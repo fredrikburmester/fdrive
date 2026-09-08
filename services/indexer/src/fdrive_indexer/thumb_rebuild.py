@@ -102,7 +102,12 @@ def rebuild_thumbnails(
     conn = root.conn()
     rows = db.media_files(conn, root.root_id)
     candidates = select_candidates(rows, normalize_scope(path))
+    processed = 0
     for rel_path, ext, sha256, size in candidates:
+        root.maybe_refresh_features()
+        if not root.feature_configuration().values.internal_thumbnails:
+            log("thumbnail rebuild stopped: feature disabled")
+            break
         abs_path = os.path.join(root.abs_path, rel_path)
         ok = True
         try:
@@ -116,7 +121,8 @@ def rebuild_thumbnails(
             ok = False
         if on_file is not None:
             on_file(ok)
-    return len(candidates)
+        processed += 1
+    return processed
 
 
 def count_candidates(contexts: Sequence[RootContext], path: str | None) -> int:
@@ -149,6 +155,8 @@ def start_rebuild(
     def run() -> None:
         try:
             for ctx in contexts:
+                if not ctx.feature_configuration().values.internal_thumbnails:
+                    continue
                 rebuild_thumbnails(ctx, path, force, on_file=job.advance)
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()

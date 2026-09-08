@@ -6,6 +6,7 @@ prevents a manual `/run` from racing the scheduled pass.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,10 +19,28 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import db
+from .features import FeatureConfiguration, FeatureValues, resolve_features
 from .runner import RootTarget, originals_stats, run_pass
 from .schedule import next_run_at
 from .settings import Settings, resolve_settings
 from .stats import shape_health, shape_stats
+
+LEGACY_FEATURES = FeatureValues(True, True, False, True, False, True)
+
+
+def storage_diagnostics(targets: list[RootTarget]) -> dict[str, dict[str, bool]]:
+    """Bounded, non-mutating mount probe. OCR needs a writable mounted root."""
+    result: dict[str, dict[str, bool]] = {}
+    for target in targets:
+        readable = False
+        try:
+            with os.scandir(target.abs_path) as entries:
+                next(entries, None)
+            readable = os.access(target.abs_path, os.R_OK)
+        except OSError:
+            pass
+        result[target.name] = {"readable": readable, "writable": os.access(target.abs_path, os.W_OK)}
+    return result
 
 
 class RunLock:
@@ -62,11 +81,30 @@ class ServerState:
     log: Callable[[str], None]
     # Env-only (OCR_INCLUDE_GLOBS), not part of app.settings; see rules.is_excluded.
     include_globs: tuple[str, ...] = ()
+    feature_defaults: FeatureConfiguration | None = None
+    features_managed: bool = False
+
+    def features(self, raw: dict[str, object]) -> FeatureConfiguration:
+        if self.feature_defaults is None:
+            # Existing direct callers preserve historical OCR admission.
+            return FeatureConfiguration(0, LEGACY_FEATURES)
+        return resolve_features(raw, self.feature_defaults.values, self.features_managed)
 
 
 async def health(request: Request) -> JSONResponse:
     state: ServerState = request.app.state.server_state
-    return JSONResponse(shape_health(state.schema_ready(), state.run_lock.running))
+    conn = state.conn_factory()
+    try:
+        features = state.features(db.read_settings(conn))
+    finally:
+        conn.close()
+    body = shape_health(
+        state.schema_ready(),
+        state.run_lock.running,
+        {"revision": features.revision, "values": features.values.as_json()},
+    )
+    body["storage"] = storage_diagnostics(state.targets)
+    return JSONResponse(body)
 
 
 async def stats(request: Request) -> JSONResponse:
@@ -75,6 +113,7 @@ async def stats(request: Request) -> JSONResponse:
     try:
         raw = db.read_settings(conn)
         settings = resolve_settings(raw, state.default_settings)
+        features = state.features(raw)
         last = db.last_run(conn)
     finally:
         conn.close()
@@ -91,12 +130,19 @@ async def stats(request: Request) -> JSONResponse:
         originals_count,
         originals_bytes,
         state.run_lock.running,
+        {"revision": features.revision, "values": features.values.as_json()},
     )
     return JSONResponse(body)
 
 
 async def trigger_run(request: Request) -> JSONResponse:
     state: ServerState = request.app.state.server_state
+    conn = state.conn_factory()
+    try:
+        if not state.features(db.read_settings(conn)).values.pdf_ocr:
+            return JSONResponse({"error": "PDF OCR disabled"}, status_code=409)
+    finally:
+        conn.close()
     if not state.run_lock.try_acquire():
         return JSONResponse({"error": "already running"}, status_code=409)
 
@@ -104,6 +150,9 @@ async def trigger_run(request: Request) -> JSONResponse:
         conn = state.conn_factory()
         try:
             raw = db.read_settings(conn)
+            if not state.features(raw).values.pdf_ocr:
+                state.log("OCR run stopped: PDF OCR disabled")
+                return
             settings = resolve_settings(raw, state.default_settings)
             run_pass(
                 conn,
@@ -114,6 +163,7 @@ async def trigger_run(request: Request) -> JSONResponse:
                 state.jobs,
                 state.log,
                 state.include_globs,
+                is_enabled=lambda: state.features(db.read_settings(conn)).values.pdf_ocr,
             )
         except Exception as e:  # noqa: BLE001
             state.log(f"OCR pass crashed: {type(e).__name__}: {e}")

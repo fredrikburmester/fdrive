@@ -1,0 +1,12 @@
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS controller
+WORKDIR /runtime
+COPY services/runtime/pyproject.toml ./
+COPY services/runtime/src ./src
+RUN pip install --no-cache-dir .
+
+FROM apache/tika:3.2.1.0@sha256:df12b41af58c9833e60bdc231ffc4b59f5b7a83bfe2d63e3dc7aab7da923abba
+COPY --from=controller /usr/local /usr/local
+# The upstream image puts its whole server invocation in ENTRYPOINT rather
+# than CMD, so spell it out as this controller's child command.
+ENTRYPOINT ["python3", "-m", "fdrive_runtime.controller"]
+CMD ["/bin/sh", "-c", "exec java -cp \"/tika-server-standard-${TIKA_VERSION}.jar:/tika-extras/*\" org.apache.tika.server.core.TikaServerCli -h 0.0.0.0"]

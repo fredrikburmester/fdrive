@@ -8,6 +8,7 @@ import {
 import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./admin.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
+import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
 import {
   ArchiveEntriesResponse,
   type CompressRequest,
@@ -62,6 +63,8 @@ import {
   SETUP_TOKEN_HEADER,
   type SetupCompleteRequest,
   SetupStatusResponse,
+  type SetupUserInventoryRequest,
+  SetupUserInventoryResponse,
 } from "./setup.ts";
 import {
   type CreateShareRequest,
@@ -162,6 +165,9 @@ export interface ApiClientImageSearchOptions {
 }
 
 export interface ApiClient {
+  setupUserInventory(input: SetupUserInventoryRequest): Promise<SetupUserInventoryResponse>;
+  systemFeatures(): Promise<SystemFeaturesResponse>;
+  systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
   listShares(): Promise<SharesResponse>;
   createShare(input: CreateShareRequest): Promise<ManagedShare>;
   getShare(id: string): Promise<ManagedShare>;
@@ -853,6 +859,27 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       );
     },
 
+    setupUserInventory(input: SetupUserInventoryRequest): Promise<SetupUserInventoryResponse> {
+      return requestJson(
+        ctx,
+        { method: "POST", path: ROUTES.admin.inventory, jsonBody: input },
+        SetupUserInventoryResponse,
+      );
+    },
+    systemFeatures(): Promise<SystemFeaturesResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.system.features },
+        SystemFeaturesResponse,
+      );
+    },
+    systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.features, jsonBody: input },
+        SystemFeaturesResponse,
+      );
+    },
     systemIndexer(): Promise<SystemIndexerResponse> {
       return requestJson(
         ctx,

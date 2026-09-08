@@ -684,6 +684,37 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.settings.get("k")).toEqual({ a: 2 });
       });
 
+      it("compareAndSet creates only one concurrent absent-key claim", async () => {
+        const [first, second] = await Promise.all([
+          repos.settings.compareAndSet("setup.owner.v1", null, { accountId: "alice" }),
+          repos.settings.compareAndSet("setup.owner.v1", null, { accountId: "bob" }),
+        ]);
+
+        expect([first, second].filter(Boolean)).toHaveLength(1);
+        expect(await repos.settings.get("setup.owner.v1")).toMatchObject({
+          accountId: expect.any(String),
+        });
+      });
+
+      it("compareAndSet uses structural JSON equality and refuses stale values", async () => {
+        await repos.settings.set("setup.owner.v1", { state: "claiming", version: 1 });
+
+        expect(
+          await repos.settings.compareAndSet(
+            "setup.owner.v1",
+            { version: 1, state: "claiming" },
+            { version: 1, state: "complete" },
+          ),
+        ).toBe(true);
+        expect(
+          await repos.settings.compareAndSet(
+            "setup.owner.v1",
+            { state: "claiming", version: 1 },
+            { version: 1, state: "complete", accountId: "wrong" },
+          ),
+        ).toBe(false);
+      });
+
       it("lists every setting keyed by its key", async () => {
         await repos.settings.set("a", 1);
         await repos.settings.set("b", "two");

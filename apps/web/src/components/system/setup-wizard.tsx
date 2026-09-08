@@ -1,5 +1,6 @@
 "use client";
 
+import { ApiClientError } from "@fdrive/contracts";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
@@ -33,7 +34,7 @@ const STEP_LABELS: Record<SetupStep, string> = {
 const DEFAULT_HOME_TEMPLATE = "sftpgo:/{username}";
 
 /** Same escape hatch as `lib/api/auth-queries.ts`: `/files` is not a statically-typed route. */
-const FILES_ROUTE = "/files" as unknown as Route;
+const FILES_ROUTE = "/system/features" as Route;
 
 export function SetupWizard() {
   const router = useRouter();
@@ -116,6 +117,7 @@ export function SetupWizard() {
                 </FieldDescription>
                 <Input
                   id="setup-token"
+                  type="password"
                   autoFocus
                   value={token}
                   onChange={(event) => setToken(event.target.value)}
@@ -206,7 +208,10 @@ export function SetupWizard() {
             <form onSubmit={handleComplete}>
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="setup-username">Admin username</FieldLabel>
+                  <FieldLabel htmlFor="setup-username">Owner's SFTPGo username</FieldLabel>
+                  <FieldDescription>
+                    Sign in with a file user account. This user becomes the fdrive administrator.
+                  </FieldDescription>
                   <Input
                     id="setup-username"
                     autoComplete="username"
@@ -246,7 +251,12 @@ export function SetupWizard() {
                   </Button>
                 )}
                 {setupComplete.isError ? (
-                  <FieldError>{describeApiError(setupComplete.error)}</FieldError>
+                  <FieldError>
+                    {setupComplete.error instanceof ApiClientError &&
+                    setupComplete.error.kind === "unauthorized"
+                      ? "Sign-in failed. Check the setup token, file-user credentials, and any one-time code."
+                      : describeApiError(setupComplete.error)}
+                  </FieldError>
                 ) : null}
                 <div className="flex justify-between">
                   <Button type="button" variant="ghost" onClick={goBack}>
@@ -258,7 +268,7 @@ export function SetupWizard() {
                       !canCompleteAccountStep(username, password) || setupComplete.isPending
                     }
                   >
-                    {setupComplete.isPending ? "Completing..." : "Complete setup"}
+                    {setupComplete.isPending ? "Verifying…" : "Continue setup"}
                   </Button>
                 </div>
               </FieldGroup>

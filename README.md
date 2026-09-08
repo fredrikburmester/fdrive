@@ -103,46 +103,23 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 
 If you already have Docker and SFTPGo running on your home server:
 
-### 1. Download fdrive
+### 1. Download and initialize
 ```bash
 git clone https://github.com/fredrikburmester/fdrive-web.git /path/to/fdrive
 cd /path/to/fdrive/deploy
-cp .env.example .env
-```
-
-### 2. Generate two secret keys
-```bash
-openssl rand -base64 32
-openssl rand -base64 32
-```
-
-### 3. Edit `.env`
-Open `.env` in your favorite editor. For a simple home server on your local network (LAN), you only need to set these lines:
-
-```dotenv
-# Paste the two keys you generated above:
-FDRIVE_MASTER_KEY=<first-openssl-key>
-POSTGRES_PASSWORD=<second-openssl-key>
-
-# Address of your SFTPGo server:
-SFTPGO_URL=http://127.0.0.1:8080
-
-# The folder on this machine where SFTPGo keeps user files:
-FDRIVE_INDEX_SFTPGO_DIR=/srv/sftpgo/data
-
-# Your SFTPGo username (makes you an admin in fdrive):
-FDRIVE_ADMIN_USERS=myusername
-
-# Allow plain HTTP login on your home Wi-Fi:
-FDRIVE_COOKIE_SECURE=false
-```
-
-### 4. Start it up
-```bash
+./init-env.sh
 ./update.sh
 ```
 
-Now open your browser to **`http://<your-server-ip>:8090`** and log in with your normal SFTPGo username and password!
+`init-env.sh` creates a private `.env` containing two generated secrets. It never overwrites an existing file.
+
+### 2. Complete the setup walkthrough
+
+Open **`http://localhost:8090`** on the server, or use your configured tunnel/reverse proxy. Use the claim token printed in the API log, test your SFTPGo connection, and sign in as the server owner. Optional SFTPGo admin credentials let you inspect available users.
+
+Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
+
+Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers; the walkthrough checks storage access. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts, remote access, and existing deployments.
 
 ---
 

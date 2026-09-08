@@ -16,6 +16,7 @@ import uvicorn
 
 from . import db
 from .config import Config
+from .features import FeatureConfiguration, resolve_features
 from .runner import RootTarget, run_pass
 from .schedule import next_run_at, resolve_timezone, seconds_until
 from .server import RunLock, ServerState, create_app
@@ -42,6 +43,8 @@ def run_once(
     jobs: int,
     log_fn: Callable[[str], None],
     include_globs: tuple[str, ...] = (),
+    feature_defaults: FeatureConfiguration | None = None,
+    features_managed: bool = False,
 ) -> bool:
     """Attempts one pass. Returns whether it actually ran: `False` means a run
     was already in progress and this cycle was skipped."""
@@ -51,8 +54,32 @@ def run_once(
     conn = conn_factory()
     try:
         raw = db.read_settings(conn)
+        feature_config = resolve_features(
+            raw,
+            feature_defaults.values if feature_defaults else Config().legacy_features(),
+            features_managed,
+        )
+        if not feature_config.values.pdf_ocr:
+            log_fn("OCR pass skipped: PDF OCR disabled")
+            return False
         settings = resolve_settings(raw, default_settings)
-        run_pass(conn, targets, settings, state_dir, timeout_seconds, jobs, log_fn, include_globs)
+        run_pass(
+            conn,
+            targets,
+            settings,
+            state_dir,
+            timeout_seconds,
+            jobs,
+            log_fn,
+            include_globs,
+            is_enabled=lambda: (
+                resolve_features(
+                    db.read_settings(conn),
+                    feature_defaults.values if feature_defaults else Config().legacy_features(),
+                    features_managed,
+                ).values.pdf_ocr
+            ),
+        )
     except Exception as e:  # noqa: BLE001
         log_fn(f"OCR pass crashed: {type(e).__name__}: {e}")
     finally:
@@ -74,38 +101,72 @@ def scheduler_loop(
     now: Callable[[], datetime],
     sleep: Callable[[float], None] = time.sleep,
     include_globs: tuple[str, ...] = (),
+    feature_defaults: FeatureConfiguration | None = None,
+    features_managed: bool = False,
+    settings_refresh_seconds: int = 5,
 ) -> None:
     """Runs forever: re-reads settings each cycle (an admin edit to `ocr.hour`
     takes effect on the next wakeup), computes the next scheduled hour, sleeps
     until then, runs a pass, repeats."""
     if run_on_start:
         run_once(
-            run_lock, conn_factory, targets, default_settings, state_dir, timeout_seconds, jobs, log_fn, include_globs
+            run_lock,
+            conn_factory,
+            targets,
+            default_settings,
+            state_dir,
+            timeout_seconds,
+            jobs,
+            log_fn,
+            include_globs,
+            feature_defaults,
+            features_managed,
         )
 
     while True:
         conn = conn_factory()
         try:
             raw = db.read_settings(conn)
+            features = resolve_features(
+                raw,
+                feature_defaults.values if feature_defaults else Config().legacy_features(),
+                features_managed,
+            )
             hour = resolve_settings(raw, default_settings).hour
         finally:
             conn.close()
         current = now()
-        target = next_run_at(current, hour)
-        wait_s = seconds_until(current, target)
+        if not features.values.pdf_ocr:
+            target = current
+            wait_s: float = settings_refresh_seconds
+        else:
+            target = next_run_at(current, hour)
+            wait_s = min(seconds_until(current, target), settings_refresh_seconds)
         log_fn(f"next OCR pass at {target.isoformat()}")
         sleep(wait_s)
+        if not features.values.pdf_ocr:
+            continue
+        # Short waits are only for configuration polling. Do not turn a nightly
+        # schedule into a five-second rewrite loop while PDF OCR is enabled.
+        if now() < target:
+            continue
         run_once(
-            run_lock, conn_factory, targets, default_settings, state_dir, timeout_seconds, jobs, log_fn, include_globs
+            run_lock,
+            conn_factory,
+            targets,
+            default_settings,
+            state_dir,
+            timeout_seconds,
+            jobs,
+            log_fn,
+            include_globs,
+            feature_defaults,
+            features_managed,
         )
 
 
 def main() -> None:
     cfg = Config()
-    if not cfg.roots:
-        log("no INDEX_ROOTS configured; nothing to do")
-        sys.exit(1)
-
     bootstrap_conn = db.connect(cfg.database_url)
     log(f"waiting for idx.schema_version = {EXPECTED_SCHEMA_VERSION} (timeout {cfg.schema_wait_seconds}s)")
     version = db.wait_for_schema_version(bootstrap_conn, EXPECTED_SCHEMA_VERSION, cfg.schema_wait_seconds, log)
@@ -135,7 +196,12 @@ def main() -> None:
             log,
             lambda: datetime.now(tz),
         ),
-        kwargs={"include_globs": cfg.include_globs},
+        kwargs={
+            "include_globs": cfg.include_globs,
+            "feature_defaults": FeatureConfiguration(0, cfg.legacy_features()),
+            "features_managed": cfg.features_managed,
+            "settings_refresh_seconds": cfg.settings_refresh_seconds,
+        },
         daemon=True,
         name="ocr-scheduler",
     )
@@ -153,6 +219,8 @@ def main() -> None:
         schema_ready=lambda: db.read_schema_version(bootstrap_conn) is not None,
         log=log,
         include_globs=cfg.include_globs,
+        feature_defaults=FeatureConfiguration(0, cfg.legacy_features()),
+        features_managed=cfg.features_managed,
     )
     app = create_app(state)
     log(f"ocr up. roots={list(cfg.roots)} port={cfg.ocr_port}")

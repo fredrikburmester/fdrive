@@ -34,6 +34,33 @@ def extract_pdf(abs_path: str, max_pages: int, normalize: Normalizer) -> tuple[s
     return text, "indexed"
 
 
+def extract_pdf_ocr(abs_path: str, max_pages: int, langs: str, normalize: Normalizer) -> tuple[str | None, str]:
+    """Read scanned PDF pages through a bounded Tesseract call, preserving bytes."""
+    import pymupdf
+    import pytesseract
+    from PIL import Image
+
+    parts: list[str] = []
+    with pymupdf.open(abs_path) as doc:
+        if doc.needs_pass:
+            return None, "error:encrypted"
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            native = page.get_text("text")
+            if len(normalize(native)) >= 40:
+                parts.append(native)
+                continue
+            # MuPDF's in-process OCR has no timeout. Rendering a single page then
+            # using pytesseract gives the same non-rewriting behavior while making
+            # each potentially expensive page call bounded.
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(200 / 72, 200 / 72), alpha=False)
+            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            parts.append(pytesseract.image_to_string(image, lang=langs, timeout=180))
+    text = normalize("\n\n".join(parts))
+    return (text, "indexed") if len(text) >= 40 else (None, "no_text")
+
+
 def extract_image(abs_path: str, langs: str, normalize: Normalizer) -> tuple[str | None, str]:
     import pytesseract
     from PIL import Image, ImageOps
@@ -109,11 +136,13 @@ class Extractor:
         self.tika_url = tika_url
         self.normalize = normalize
 
-    def extract(self, abs_path: str, rel_path: str, ext: str, size: int) -> tuple[str | None, str]:
+    def extract(self, abs_path: str, rel_path: str, ext: str, size: int, *, search_ocr: bool = False) -> tuple[str | None, str]:
         try:
             if is_pdf(ext):
                 if size > self.text_max_bytes:
                     return None, "excluded:too_big"
+                if search_ocr:
+                    return extract_pdf_ocr(abs_path, self.max_pdf_pages, self.tesseract_langs, self.normalize)
                 return extract_pdf(abs_path, self.max_pdf_pages, self.normalize)
             if is_image(ext):
                 if not is_ocr_image_dir(self.root, rel_path, self.ocr_image_globs):
@@ -157,8 +186,8 @@ def _embed(inputs: list[str], embed_url: str, batch_size: int) -> list[list[floa
     return out
 
 
-def embed_health(embed_url: str) -> bool:
+def embed_health(embed_url: str, timeout: float = 5) -> bool:
     try:
-        return httpx.get(f"{embed_url}/health", timeout=5).status_code == 200
+        return httpx.get(f"{embed_url}/health", timeout=timeout).status_code == 200
     except Exception:  # noqa: BLE001
         return False

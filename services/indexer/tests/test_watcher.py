@@ -143,6 +143,19 @@ def test_watcher_init_raises_when_inotify_init_fails(monkeypatch: pytest.MonkeyP
         watcher_module.Watcher(".", lambda m: None, lambda *a: "indexed", lambda *a: 0, lambda *a: 0)
 
 
+def test_watcher_stop_joins_idle_reader_and_dispatcher(tmp_path: Path, watcher_module: object) -> None:
+    rec = Recorder()
+    w = watcher_module.Watcher(str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename)
+    w.start()
+    assert w._reader_thread is not None and w._dispatcher_thread is not None
+    assert w._reader_thread.is_alive() and w._dispatcher_thread.is_alive()
+
+    w.stop()
+
+    assert not w._reader_thread.is_alive()
+    assert not w._dispatcher_thread.is_alive()
+
+
 def test_watcher_reader_recovers_from_read_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, watcher_module: object) -> None:
     rec = Recorder()
     w = watcher_module.Watcher(str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename, debounce=0.2)

@@ -21,6 +21,7 @@ import {
   homeTemplatePreview,
   isPlausibleHomeTemplate,
 } from "@/lib/system/connection";
+import { SetupUsers } from "./setup-users";
 
 /** Admin page: `System > Connection`. Shows the active SFTPGo connection and lets an admin edit the home template. */
 export function ConnectionPage() {
@@ -28,11 +29,13 @@ export function ConnectionPage() {
   const { data: connection, isLoading } = useAdminConnection();
   const testConnection = useAdminTestConnection();
   const updateConnection = useAdminUpdateConnection();
+  const [urlDraft, setUrlDraft] = useState("");
   const [homeTemplateDraft, setHomeTemplateDraft] = useState("");
 
   useEffect(() => {
     if (connection) {
       setHomeTemplateDraft(connection.homeTemplate);
+      setUrlDraft(connection.baseUrl);
     }
   }, [connection]);
 
@@ -59,6 +62,44 @@ export function ConnectionPage() {
                   <span className="text-muted-foreground">Host</span>
                   <span className="font-medium">{connection.host}</span>
                 </div>
+                <Field>
+                  <FieldLabel htmlFor="connection-url">Server URL</FieldLabel>
+                  <Input
+                    id="connection-url"
+                    value={urlDraft}
+                    disabled={connection.source === "env" || updateConnection.isPending}
+                    onChange={(event) => {
+                      setUrlDraft(event.target.value);
+                      testConnection.reset();
+                    }}
+                  />
+                  <FieldDescription>
+                    {connection.source === "env"
+                      ? "Set by the deployment. Remove SFTPGO_URL to manage the connection here."
+                      : "Changing servers requires users to sign in to the new server. Existing identities remain bound to their original server."}
+                  </FieldDescription>
+                </Field>
+                {connection.source === "settings" && urlDraft !== connection.baseUrl ? (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      disabled={testConnection.isPending}
+                      onClick={() => testConnection.mutate(urlDraft)}
+                    >
+                      Test new URL
+                    </Button>
+                    <Button
+                      disabled={
+                        !testConnection.data?.ok ||
+                        testConnection.variables !== urlDraft ||
+                        updateConnection.isPending
+                      }
+                      onClick={() => updateConnection.mutate({ baseUrl: urlDraft })}
+                    >
+                      Save connection
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Source</span>
                   <Badge variant={connection.source === "env" ? "outline" : "secondary"}>
@@ -76,7 +117,7 @@ export function ConnectionPage() {
                       variant="outline"
                       size="sm"
                       disabled={testConnection.isPending}
-                      onClick={() => testConnection.mutate(undefined)}
+                      onClick={() => testConnection.mutate(urlDraft || undefined)}
                     >
                       <RefreshCw className={testConnection.isPending ? "animate-spin" : ""} />
                       Test
@@ -138,6 +179,9 @@ export function ConnectionPage() {
             </FieldGroup>
           </CardContent>
         </Card>
+        <div className="w-full max-w-lg">
+          <SetupUsers />
+        </div>
       </div>
     </>
   );

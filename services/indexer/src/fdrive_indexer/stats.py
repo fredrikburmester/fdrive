@@ -22,14 +22,18 @@ def shape_health(
     watcher: dict[str, bool],
     embed_ok: bool,
     schema_version: int | None,
+    features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    body = {
         "ok": schema_version is not None,
         "roots": list(roots),
         "watcher": dict(watcher),
         "embed_ok": embed_ok,
         "schema_version": schema_version,
     }
+    if features is not None:
+        body["features"] = features
+    return body
 
 
 def shape_stats(
@@ -40,9 +44,10 @@ def shape_stats(
     thumbnail_rebuild: dict[str, Any] | None = None,
     image_embeddings_count: int = 0,
     image_embedding_rebuild: dict[str, Any] | None = None,
+    features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors_sample = errors_sample if errors_sample is not None else []
-    return {
+    body = {
         "roots": [
             {
                 "root": r.root,
@@ -60,3 +65,6 @@ def shape_stats(
         "thumbnail_rebuild": thumbnail_rebuild,
         "image_embedding_rebuild": image_embedding_rebuild,
     }
+    if features is not None:
+        body["features"] = features
+    return body

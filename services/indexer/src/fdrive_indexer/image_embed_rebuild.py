@@ -92,6 +92,10 @@ def rebuild_image_embeddings(
 
     batch_size = max(1, root.cfg.image_embed_batch_size)
     for _rel_path, _ext, sha256, _size in candidates:
+        root.maybe_refresh_features()
+        if not root.feature_configuration().values.image_search:
+            log("image embedding rebuild stopped: feature disabled")
+            break
         existing_model = db.image_embedding_model(conn, sha256)
         if not rebuild_needs_embedding(existing_model, configured_model, force):
             continue
@@ -140,6 +144,8 @@ def start_image_embed_rebuild(
         try:
             if configured:
                 for ctx in contexts:
+                    if not ctx.feature_configuration().values.image_search:
+                        continue
                     rebuild_image_embeddings(ctx, path, force, on_file=job.advance)
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()

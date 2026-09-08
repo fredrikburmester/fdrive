@@ -358,6 +358,25 @@ function createSettingsRepo(db: Db): SettingsRepo {
           set: { value, updatedAt: new Date() },
         });
     },
+    async compareAndSet(key, expected, value) {
+      if (expected === null) {
+        const rows = await db
+          .insert(settings)
+          .values({ key, value })
+          .onConflictDoNothing({ target: settings.key })
+          .returning({ key: settings.key });
+        return rows.length === 1;
+      }
+
+      const rows = await db
+        .update(settings)
+        .set({ value, updatedAt: new Date() })
+        .where(
+          and(eq(settings.key, key), sql`${settings.value} = ${JSON.stringify(expected)}::jsonb`),
+        )
+        .returning({ key: settings.key });
+      return rows.length === 1;
+    },
     async all() {
       const rows = await db.select().from(settings);
       const result: Record<string, unknown> = {};

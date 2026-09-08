@@ -23,6 +23,11 @@ function routePath(fullPath: string): string {
 }
 
 export interface SearchRoutesDeps {
+  readonly features?: () => Promise<{
+    textSearch: boolean;
+    semanticSearch: boolean;
+    imageSearch: boolean;
+  }>;
   readonly searchService: SearchService;
   readonly imageSearchService: ImageSearchService;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes" | "status">;
@@ -105,6 +110,7 @@ export function registerSearchRoutes(
     }
     const principal = c.get("principal");
     const limit = parseSearchLimit(result.data.limit);
+    const features = await deps.features?.();
 
     const identity = await deps.identities.get(principal.identityId);
     const verified =
@@ -114,7 +120,7 @@ export function registerSearchRoutes(
     const authorizer = createReadAuthorizer({ storage: principal.storage });
 
     const response = await deps.imageSearchService.search({
-      scopes: verified.available ? verified.scopes : [],
+      scopes: verified.available && features?.imageSearch !== false ? verified.scopes : [],
       authorizer,
       query: result.data.q,
       limit,
@@ -125,14 +131,17 @@ export function registerSearchRoutes(
   });
 
   authed.get(routePath(ROUTES.search.status), async (c) => {
+    const features = await deps.features?.();
     const principal = c.get("principal");
     const identity = await deps.identities.get(principal.identityId);
     const status =
       identity === null ? null : await deps.resolver.status(identity, principal.isAdmin);
     const body: SearchStatusResponse = {
-      available: status?.status === "available",
-      semantic: deps.semanticEnabled,
-      images: deps.imageSearchEnabled,
+      available:
+        status?.status === "available" &&
+        (features === undefined || features.textSearch || features.imageSearch),
+      semantic: deps.semanticEnabled && features?.semanticSearch !== false,
+      images: deps.imageSearchEnabled && features?.imageSearch !== false,
       ...(status?.status === "unavailable" ? { reason: status.reason } : {}),
     };
     return c.json(body);

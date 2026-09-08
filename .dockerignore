@@ -6,6 +6,13 @@
 **/playwright-report
 **/test-results
 **/*.log
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.egg-info
+apps/web-e2e-shadow-*
 .git
 .DS_Store
 
@@ -23,5 +30,6 @@
 .worktrees
 .fdrive-workflow
 deploy/dev/.data
+deploy/data
 .pnpm-store
 tools/perf/results

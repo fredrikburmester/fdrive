@@ -51,6 +51,7 @@ export function selectImageHits<T extends { readonly score: number }>(
 }
 
 export interface ImageSearchServiceDeps {
+  readonly enabled?: () => Promise<boolean>;
   readonly indexQueries: Pick<IndexQueries, "searchImages" | "rootIdsByName">;
   /** `null` when `FDRIVE_IMAGE_EMBED_URL` is not configured; image search never runs then. */
   readonly imageEmbedClient: ImageEmbedClient | null;
@@ -109,6 +110,8 @@ function unavailableResponse(
 export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSearchService {
   return {
     async search(input: ImageSearchServiceInput): Promise<ImageSearchResponse> {
+      if (deps.enabled !== undefined && !(await deps.enabled()))
+        return unavailableResponse(input.query, 0);
       const startedAt = deps.clock();
       const tookMs = () => elapsedMs(deps.clock, startedAt);
 

@@ -24,6 +24,7 @@ from .chunking import is_textual
 from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
 from .directory_listing import directory_query, list_directory
 from .extract import embed_health
+from .features import FeatureConfiguration
 from .image_embed_rebuild import start_image_embed_rebuild
 from .indexer import RootContext
 from .paths import ext_of, reindex_scope
@@ -38,6 +39,7 @@ class ServerState:
     wake_events: dict[str, threading.Event]
     conn_factory: Callable[[], psycopg.Connection]
     schema_version: Callable[[], int | None]
+    feature_configuration: Callable[[], FeatureConfiguration] | None = None
     thumbnail_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     index_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     thumbnail_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
@@ -60,6 +62,21 @@ def _safe_abs_path(ctx: RootContext, rel_path: str) -> str | None:
     return candidate
 
 
+def storage_diagnostics(contexts: dict[str, RootContext]) -> dict[str, dict[str, bool]]:
+    """Bounded, non-mutating mount probe for setup and worker readiness."""
+    result: dict[str, dict[str, bool]] = {}
+    for name, ctx in contexts.items():
+        readable = False
+        try:
+            with os.scandir(ctx.abs_path) as entries:
+                next(entries, None)
+            readable = os.access(ctx.abs_path, os.R_OK)
+        except OSError:
+            pass
+        result[name] = {"readable": readable, "writable": os.access(ctx.abs_path, os.W_OK)}
+    return result
+
+
 async def directory(request: Request) -> JSONResponse:
     state: ServerState = request.app.state.server_state
     try:
@@ -73,7 +90,11 @@ async def directory(request: Request) -> JSONResponse:
         result = await run_in_threadpool(list_directory, ctx.abs_path, path)
     except OSError as error:
         statuses: dict[int | None, int] = {
-            errno.ENOENT: 404, errno.ENOTDIR: 400, errno.ELOOP: 400, errno.EACCES: 403, errno.EPERM: 403
+            errno.ENOENT: 404,
+            errno.ENOTDIR: 400,
+            errno.ELOOP: 400,
+            errno.EACCES: 403,
+            errno.EPERM: 403,
         }
         status = statuses.get(error.errno, 503)
         return JSONResponse({"error": "directory unavailable"}, status_code=status)
@@ -84,9 +105,18 @@ async def health(request: Request) -> JSONResponse:
     state: ServerState = request.app.state.server_state
     roots = list(state.contexts)
     watcher_status = {name: state.watchers.get(name) is not None for name in roots}
+    features = state.feature_configuration() if state.feature_configuration else None
     embed_url = next(iter(state.contexts.values())).cfg.embed_url if state.contexts else ""
-    embed_ok = embed_health(embed_url) if embed_url else False
-    body = shape_health(roots, watcher_status, embed_ok, state.schema_version())
+    # An unavailable optional embedding service must not delay setup health.
+    embed_ok = bool(features and features.values.semantic_search and embed_url and embed_health(embed_url, timeout=1))
+    body = shape_health(
+        roots,
+        watcher_status,
+        embed_ok,
+        state.schema_version(),
+        {"revision": features.revision, "values": features.values.as_json()} if features else None,
+    )
+    body["storage"] = storage_diagnostics(state.contexts)
     return JSONResponse(body)
 
 
@@ -101,6 +131,7 @@ async def stats(request: Request) -> JSONResponse:
         errors.extend(db.errors_sample(conn, ctx.root_id))
         manifest = db.get_manifest(conn, ctx.root_id)
         queue_depth += sum(1 for row in manifest.values() if row[2] == "pending")
+    features = state.feature_configuration() if state.feature_configuration else None
     body = shape_stats(
         per_root,
         db.thumbnails_count(conn),
@@ -109,6 +140,7 @@ async def stats(request: Request) -> JSONResponse:
         state.thumbnail_job.snapshot(),
         db.image_embeddings_count(conn),
         state.image_embed_rebuild_job.snapshot(),
+        {"revision": features.revision, "values": features.values.as_json()} if features else None,
     )
     body["index_clear"] = state.index_clear_job.snapshot()
     body["thumbnail_clear"] = state.thumbnail_clear_job.snapshot()
@@ -126,16 +158,23 @@ async def extract_text(request: Request) -> JSONResponse:
     ctx = state.contexts.get(root_name)
     if ctx is None:
         return JSONResponse({"error": f"unknown root: {root_name}"}, status_code=404)
+    features = ctx.feature_configuration().values
+    if not features.text_search:
+        return JSONResponse({"text": None, "status": "disabled"})
     abs_path = _safe_abs_path(ctx, path)
     if abs_path is None:
         return JSONResponse({"error": "path escapes root"}, status_code=400)
     if not os.path.isfile(abs_path):
         return JSONResponse({"error": "not found"}, status_code=404)
     ext = ext_of(os.path.basename(path))
+    from .chunking import is_image
+
+    if is_image(ext) and not features.search_ocr:
+        return JSONResponse({"text": None, "status": "disabled"})
     if not is_textual(ext):
         return JSONResponse({"text": None, "status": "none"})
     size = os.path.getsize(abs_path)
-    text, status = ctx.extractor.extract(abs_path, path, ext, size)
+    text, status = ctx.extractor.extract(abs_path, path, ext, size, search_ocr=ctx.feature_configuration().values.search_ocr)
     if text is None:
         return JSONResponse({"text": None, "status": status})
     offset = int(payload.get("offset") or 0)
@@ -154,13 +193,16 @@ async def reindex(request: Request) -> JSONResponse:
     ctx = state.contexts.get(root_name)
     if ctx is None:
         return JSONResponse({"error": f"unknown root: {root_name}"}, status_code=404)
+    features = ctx.feature_configuration().values
+    if not features.indexer_enabled:
+        return JSONResponse({"error": "feature processing disabled"}, status_code=409)
     scoped_path = path if isinstance(path, str) else None
     exact, prefix = reindex_scope(scoped_path)
     count = db.mark_pending(ctx.conn(), ctx.root_id, exact, prefix)
     event = state.wake_events.get(root_name)
     if event is not None:
         event.set()
-    if payload.get("thumbnails") is True:
+    if payload.get("thumbnails") is True and features.internal_thumbnails:
         # Best effort: if a rebuild is already running this just does not queue a
         # second one. The next reindex or manual rebuild will still cover it.
         start_rebuild(state.thumbnail_job, [ctx], scoped_path, force=False)
@@ -183,6 +225,8 @@ async def thumbnails_rebuild(request: Request) -> JSONResponse:
         return JSONResponse({"error": "path must be a string"}, status_code=400)
     names = [root_name] if isinstance(root_name, str) else list(state.contexts)
     contexts = [state.contexts[name] for name in names if name in state.contexts]
+    if contexts and not any(ctx.feature_configuration().values.internal_thumbnails for ctx in contexts):
+        return JSONResponse({"error": "thumbnail processing disabled"}, status_code=409)
     total = start_rebuild(state.thumbnail_job, contexts, path, force)
     if total is None:
         return JSONResponse({"error": "a thumbnail rebuild is already running"}, status_code=409)
@@ -263,6 +307,8 @@ async def image_embeddings_rebuild(request: Request) -> JSONResponse:
         return JSONResponse({"error": "path must be a string"}, status_code=400)
     names = [root_name] if isinstance(root_name, str) else list(state.contexts)
     contexts = [state.contexts[name] for name in names if name in state.contexts]
+    if contexts and not any(ctx.feature_configuration().values.image_search for ctx in contexts):
+        return JSONResponse({"error": "image search disabled"}, status_code=409)
     total = start_image_embed_rebuild(state.image_embed_rebuild_job, contexts, path, force)
     if total is None:
         return JSONResponse({"error": "an image-embedding rebuild is already running"}, status_code=409)

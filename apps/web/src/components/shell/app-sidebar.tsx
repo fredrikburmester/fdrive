@@ -93,6 +93,7 @@ const SYSTEM_IMAGE_SEARCH_ROUTE = "/system/image-search" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
 
 const SYSTEM_NAV_ITEMS = [
+  { href: "/system/features" as Route, label: "Features", Icon: Settings2 },
   { href: SYSTEM_CONNECTION_ROUTE, label: "Connection", Icon: Settings2 },
   { href: SYSTEM_INDEXER_ROUTE, label: "Indexer", Icon: Database },
   { href: SYSTEM_SEARCH_ROUTE, label: "Search", Icon: Search },

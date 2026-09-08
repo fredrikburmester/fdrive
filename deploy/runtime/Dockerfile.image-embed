@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN useradd --uid 1000 --create-home app
+WORKDIR /app-src
+COPY services/image-embed/pyproject.toml ./image-embed-pyproject.toml
+COPY services/image-embed/src ./image-src
+COPY services/runtime/pyproject.toml ./runtime-pyproject.toml
+COPY services/runtime/src ./runtime-src
+RUN mkdir image runtime \
+ && mv image-embed-pyproject.toml image/pyproject.toml && mv image-src image/src \
+ && mv runtime-pyproject.toml runtime/pyproject.toml && mv runtime-src runtime/src \
+ && python3 -m venv /opt/fdrive-venv \
+ && /opt/fdrive-venv/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/fdrive-venv/bin/pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -e "image[runtime]" -e runtime
+RUN mkdir -p /models && chown -R app:app /app-src /models
+ENV PATH="/opt/fdrive-venv/bin:${PATH}" PYTHONUNBUFFERED=1 HF_HOME=/models
+EXPOSE 8012 8013
+USER app
+ENTRYPOINT ["python3", "-m", "fdrive_runtime.controller"]
+CMD ["python3", "-m", "fdrive_image_embed.main"]

@@ -37,6 +37,9 @@ import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
 import { registerEventRoutes } from "./events/routes.js";
+import { registerFeatureAdmission } from "./features/admission.js";
+import { registerFeatureRoutes } from "./features/routes.js";
+import { createFeatureService } from "./features/service.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
@@ -62,6 +65,8 @@ import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
 import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
+import { createSetupClaimStore } from "./setup/claim.js";
+import { registerSetupInventoryRoutes } from "./setup/inventory-routes.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
@@ -135,6 +140,12 @@ export async function composeApp(
   });
 
   const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const featureService = createFeatureService({
+    settings: repos.settings,
+    config,
+    fetch: fetchImpl,
+  });
+  const featureValues = async () => (await featureService.configuration()).values;
   const clientForBaseUrl = (baseUrl: string) => createSftpgoClient({ baseUrl, fetch: fetchImpl });
   const clientForIdentity = createIdentityClientResolver({
     identities: repos.identities,
@@ -216,6 +227,7 @@ export async function composeApp(
       ? null
       : createImageEmbedClient({ baseUrl: config.fdriveImageEmbedUrl, fetch: fetchImpl });
   const searchService = createSearchService({
+    features: featureValues,
     indexQueries,
     embedClient,
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
@@ -230,6 +242,7 @@ export async function composeApp(
     { ttlMs: HEALTH_PROBE_TTL_MS, clock: () => clock().getTime() },
   );
   const imageSearchService = createImageSearchService({
+    enabled: () => featureService.enabled("imageSearch"),
     indexQueries,
     imageEmbedClient,
     resolveHealth: resolveImageEmbedHealth,
@@ -403,11 +416,12 @@ export async function composeApp(
     connectionStore,
     authService: auth.service,
     accounts: repos.accounts,
+    claims: createSetupClaimStore(repos.settings),
     fetch: fetchImpl,
     hasEnvUrl: config.sftpgoUrl !== undefined,
   });
 
-  if ((await connectionStore.current()) === null) {
+  if ((await setupService.status()).required) {
     // One-time credential: the guard invalidates it after setup, and setup cannot be
     // re-run, but the line still lands in log storage. Operators rotate logs afterwards.
     logger.warn(`setup token: ${setupToken}`);
@@ -471,14 +485,21 @@ export async function composeApp(
     subsystemReachability,
     principalResolver: auth.principalResolver,
     connectionStatus: async () => {
+      const setup = await setupService.status();
       const connection = await connectionStore.current();
-      return connection === null
+      return setup.required || connection === null
         ? { required: true, host: null }
         : { required: false, host: new URL(connection.baseUrl).host };
     },
     registerRoutes: (groups) => {
+      registerFeatureAdmission(groups.authed, featureService);
+      registerFeatureRoutes(groups, {
+        service: featureService,
+        workerToken: config.fdriveWorkerToken,
+      });
       auth.registerRoutes(groups);
       registerSharesRoutes(groups, {
+        thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({
           repos,
           shares: createShareRepo(db),
@@ -509,6 +530,7 @@ export async function composeApp(
         limiter,
         config,
       });
+      registerSetupInventoryRoutes(groups, { connectionStore, fetch: fetchImpl, limiter, config });
       registerAdminRoutes(groups, { connectionStore, fetch: fetchImpl, clock });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
@@ -548,6 +570,7 @@ export async function composeApp(
       registerMetadataRoutes(groups, { metadata: metadataService });
       registerEventRoutes(groups, { bus, clock });
       registerSearchRoutes(groups, {
+        features: featureValues,
         searchService,
         imageSearchService,
         resolver: scopeResolver,
@@ -556,12 +579,14 @@ export async function composeApp(
         imageSearchEnabled: imageEmbedClient !== null,
       });
       registerThumbRoutes(groups, {
+        enabled: () => featureService.enabled("thumbnails"),
         indexQueries,
         resolver: scopeResolver,
         identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
       });
       registerSystemRoutes(groups, {
+        featuresManaged: config.fdriveFeaturesManaged ?? false,
         settings: repos.settings,
         indexQueries,
         thumbnailsRepo,

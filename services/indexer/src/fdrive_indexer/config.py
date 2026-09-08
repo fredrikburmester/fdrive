@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 
+from .features import FeatureValues
 from .rules import split_prefixes
 from .settings import Settings
 
@@ -63,12 +64,29 @@ class Config:
         self.indexer_port = int(os.environ.get("INDEXER_PORT", "8010"))
         self.schema_wait_seconds = int(os.environ.get("SCHEMA_WAIT_SECONDS", "300"))
         self.events_retention_days = int(os.environ.get("EVENTS_RETENTION_DAYS", "7"))
+        self.features_managed = _bool("FDRIVE_FEATURES_MANAGED", False)
+        self.settings_refresh_seconds = max(1, int(os.environ.get("SETTINGS_REFRESH_SECONDS", "5")))
 
     def default_settings(self) -> Settings:
+        # A fresh managed installation starts with feature processing disabled;
+        # when its owner enables search OCR, the persisted setup default allows
+        # every mounted path. Legacy empty env settings still mean no image OCR.
+        ocr_image_globs = tuple(self.ocr_image_globs or ["**"]) if self.features_managed else tuple(self.ocr_image_globs)
         return Settings(
             scan_interval_seconds=self.scan_interval,
             workers=self.workers,
             text_exclude_globs=tuple(self.text_exclude_globs),
-            ocr_image_globs=tuple(self.ocr_image_globs),
+            ocr_image_globs=ocr_image_globs,
             tesseract_langs=self.tesseract_langs,
+        )
+
+    def legacy_features(self) -> FeatureValues:
+        """The old service behaviour, retained until an installation saves UI settings."""
+        return FeatureValues(
+            thumbnails=True,
+            text_search=True,
+            search_ocr=bool(self.ocr_image_globs),
+            semantic_search=bool(self.embed_url),
+            image_search=bool(self.image_embed_url),
+            pdf_ocr=False,
         )

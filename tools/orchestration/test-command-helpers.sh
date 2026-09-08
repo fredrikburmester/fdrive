@@ -56,6 +56,11 @@ PNPM_COMMAND_LOG="$TEST_ROOT/pnpm-command.log"
 TOOL_LOG="$TEST_ROOT/tool.log"
 FAKE_STORE_PATH="$TEST_ROOT/fake pnpm store"
 export PNPM_LOG PNPM_COMMAND_LOG TOOL_LOG FAKE_STORE_PATH
+FAKE_UNAME_LINUX="$TEST_ROOT/uname-linux"
+FAKE_UNAME_DARWIN="$TEST_ROOT/uname-darwin"
+printf '#!/bin/bash\nprintf "Linux\\n"\n' > "$FAKE_UNAME_LINUX"
+printf '#!/bin/bash\nprintf "Darwin\\n"\n' > "$FAKE_UNAME_DARWIN"
+chmod +x "$FAKE_UNAME_LINUX" "$FAKE_UNAME_DARWIN"
 unset CI
 
 FAKE_PNPM="$RUNTIME_DIR/pnpm fake"
@@ -863,7 +868,7 @@ pass 'browser profile preserves explicit ports and leaves omitted ports to Playw
 
 # Python dispatch uses service-local tools, optional scripts, coverage module, and indexer Docker check.
 new_repo
-for SERVICE in indexer ocr image-embed; do
+for SERVICE in indexer ocr image-embed runtime; do
   mkdir -p "$ROOT/services/$SERVICE/.venv/bin" "$ROOT/services/$SERVICE/src" "$ROOT/services/$SERVICE/tests"
   make_tool "$ROOT/services/$SERVICE/.venv/bin/ruff"
   make_tool "$ROOT/services/$SERVICE/.venv/bin/mypy"
@@ -872,11 +877,19 @@ done
 mkdir -p "$ROOT/services/indexer/scripts"
 make_tool "$ROOT/services/indexer/scripts/test-in-docker.sh"
 mkdir -p "$ROOT/services/image-embed/scripts"
-expect_success runtime_env bash "$VERIFY" "$ROOT" python indexer
+expect_success env FDRIVE_UNAME="$FAKE_UNAME_LINUX" FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
+  bash "$VERIFY" "$ROOT" python indexer
 assert_contains "$TOOL_LOG" "ruff <check> <src> <tests> <scripts> PWD=<$ROOT/services/indexer>"
 assert_contains "$TOOL_LOG" "mypy <src> <scripts> PWD=<$ROOT/services/indexer>"
 assert_contains "$TOOL_LOG" 'pytest <-q> <--cov=fdrive_indexer> <--cov-report=term-missing> <--cov-fail-under=95>'
 assert_contains "$TOOL_LOG" "test-in-docker.sh PWD=<$ROOT/services/indexer>"
+: > "$TOOL_LOG"
+expect_success env FDRIVE_UNAME="$FAKE_UNAME_DARWIN" FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
+  bash "$VERIFY" "$ROOT" python indexer
+assert_contains "$TOOL_LOG" "ruff <check> <src> <tests> <scripts> PWD=<$ROOT/services/indexer>"
+assert_contains "$TOOL_LOG" "mypy <src> <scripts> PWD=<$ROOT/services/indexer>"
+assert_contains "$TOOL_LOG" "test-in-docker.sh PWD=<$ROOT/services/indexer>"
+assert_not_contains "$TOOL_LOG" 'pytest <-q>'
 : > "$TOOL_LOG"
 expect_success runtime_env bash "$VERIFY" "$ROOT" python ocr
 assert_contains "$TOOL_LOG" 'pytest <-q> <--cov=fdrive_ocr>'
@@ -886,6 +899,9 @@ assert_not_contains "$TOOL_LOG" 'test-in-docker.sh'
 expect_success runtime_env bash "$VERIFY" "$ROOT" python image-embed
 assert_contains "$TOOL_LOG" 'pytest <-q> <--cov=fdrive_image_embed>'
 assert_contains "$TOOL_LOG" 'ruff <check> <src> <tests> <scripts>'
+: > "$TOOL_LOG"
+expect_success runtime_env bash "$VERIFY" "$ROOT" python runtime
+assert_contains "$TOOL_LOG" 'pytest <-q> <--cov=fdrive_runtime>'
 : > "$TOOL_LOG"
 expect_failure runtime_env bash "$VERIFY" "$ROOT" python unknown
 [[ ! -s $TOOL_LOG ]] || fail 'unknown Python service started tools'

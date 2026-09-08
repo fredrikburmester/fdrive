@@ -69,10 +69,11 @@ assert_missing() { [[ ! -e $1 ]] || { printf 'unexpected path: %s\n' "$1" >&2; e
 
 write_repo() {
   ROOT="$TEST_ROOT/repo-$1"
-  mkdir -p "$ROOT/services/indexer" "$ROOT/services/ocr" "$ROOT/services/image-embed"
+  mkdir -p "$ROOT/services/indexer" "$ROOT/services/ocr" "$ROOT/services/image-embed" "$ROOT/services/runtime"
   printf '[project]\nname = "fixture"\n' > "$ROOT/services/indexer/pyproject.toml"
   printf '[project]\nname = "fixture"\n' > "$ROOT/services/ocr/pyproject.toml"
   printf '[project]\nname = "fixture"\n' > "$ROOT/services/image-embed/pyproject.toml"
+  printf '[project]\nname = "fixture"\n' > "$ROOT/services/runtime/pyproject.toml"
   printf '{"name":"fixture","private":true,"packageManager":"pnpm@10.11.0"}\n' > "$ROOT/package.json"
   git init -q "$ROOT"
   git -C "$ROOT" checkout -qb fixture

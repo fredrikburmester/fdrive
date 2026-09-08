@@ -39,6 +39,7 @@ source = ["src/fdrive_indexer"]
 branch = true
 
 [tool.coverage.report]
+precision = 2
 exclude_lines = [
   "pragma: no cover",
   "if __name__ == .__main__.:",

@@ -328,6 +328,17 @@ def image_embedding_model(conn: psycopg.Connection, content_key: str) -> str | N
         return row[0] if row else None
 
 
+def file_content_key(conn: psycopg.Connection, root_id: int, path: str) -> str | None:
+    """Content key for a live manifest row, used to inspect missing derivatives."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT sha256 FROM "idx"."files" WHERE root_id = %s AND path = %s AND deleted_at IS NULL',
+            (root_id, path),
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row else None
+
+
 def upsert_image_embedding(conn: psycopg.Connection, content_key: str, model: str, embedding: Any) -> None:
     with conn.cursor() as cur:
         cur.execute(

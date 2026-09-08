@@ -493,6 +493,16 @@ terms), Recent, and Tags; thumbnails for images and PDFs, icons otherwise; keybo
 Enter opens, Cmd+Enter reveals in folder; filters as chips (folder, type, date, tag). Powered by
 the hybrid search service, results scoped per identity.
 
+**Setup walkthrough expansion (implemented, 2026-09-08).** The requested next setup flow and
+acceptance criteria are in [P8-SETUP-WALKTHROUGH.md](docs/workflow/P8-SETUP-WALKTHROUGH.md).
+The owner selected bundled workers whose models and processing remain inactive until
+enabled through the UI. Versioned persisted settings control all six features, including
+separate search OCR and PDF conversion choices in onboarding. Resumable ownership, storage
+diagnostics, and optional read-only SFTPGo administrative user discovery are implemented.
+Discovery is a narrow exception to the credential-only decision below: admin credentials
+are ephemeral and normal file access remains user-scoped. Final verification is recorded
+in STATUS.md.
+
 **Setup and administration (phase 2).** The SFTPGo connection is configured either by
 environment (`SFTPGO_URL`, `FDRIVE_HOME_TEMPLATE`) or through a first-run `/setup` page shown
 while no provider exists: it asks for the SFTPGo URL, tests the connection, sets the home

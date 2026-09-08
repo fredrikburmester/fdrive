@@ -8,13 +8,12 @@ import pytest
 from starlette.testclient import TestClient
 
 from fdrive_ocr import db, server
+from fdrive_ocr.features import FeatureConfiguration, FeatureValues
 from fdrive_ocr.runner import RootTarget
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
-DEFAULT_SETTINGS = Settings(
-    hour=3, langs="swe+eng", exclude_globs=("Programs/**",), max_mb=200, keep_originals=True
-)
+DEFAULT_SETTINGS = Settings(hour=3, langs="swe+eng", exclude_globs=("Programs/**",), max_mb=200, keep_originals=True)
 
 
 def _make_state(
@@ -71,7 +70,9 @@ def test_health_ok_and_not_running(postgres_dsn: str, tmp_path: Path) -> None:
     client = TestClient(server.create_app(state))
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "running": False}
+    assert resp.json()["ok"] is True
+    assert resp.json()["running"] is False
+    assert resp.json()["features"]["revision"] == 0
 
 
 def test_health_not_ok_when_schema_not_ready(postgres_dsn: str, tmp_path: Path) -> None:
@@ -81,12 +82,34 @@ def test_health_not_ok_when_schema_not_ready(postgres_dsn: str, tmp_path: Path) 
     assert resp.json()["ok"] is False
 
 
+def test_storage_diagnostics_reports_missing_or_readable_roots(tmp_path: Path) -> None:
+    diagnostics = server.storage_diagnostics(
+        [
+            RootTarget(name="mounted", root_id=1, abs_path=str(tmp_path)),
+            RootTarget(name="missing", root_id=2, abs_path=str(tmp_path / "missing")),
+        ]
+    )
+    assert diagnostics["mounted"]["readable"] is True
+    assert diagnostics["missing"] == {"readable": False, "writable": False}
+
+
 def test_health_reports_running(postgres_dsn: str, tmp_path: Path) -> None:
     state = _make_state(postgres_dsn, tmp_path)
     state.run_lock.try_acquire()
     client = TestClient(server.create_app(state))
     resp = client.get("/health")
     assert resp.json()["running"] is True
+
+
+def test_managed_disabled_pdf_ocr_is_acknowledged_and_rejects_manual_run(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    state.feature_defaults = FeatureConfiguration(0, FeatureValues(True, True, False, True, False, True))
+    state.features_managed = True
+    client = TestClient(server.create_app(state))
+    assert client.get("/health").json()["features"]["values"]["pdfOcr"] is False
+    response = client.post("/run")
+    assert response.status_code == 409
+    assert response.json() == {"error": "PDF OCR disabled"}
 
 
 # -- /stats -----------------------------------------------------------------------
@@ -207,9 +230,7 @@ def test_run_returns_409_when_already_running(postgres_dsn: str, tmp_path: Path)
     assert resp.json() == {"error": "already running"}
 
 
-def test_run_releases_lock_and_logs_when_pass_crashes(
-    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_releases_lock_and_logs_when_pass_crashes(postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state = _make_state(postgres_dsn, tmp_path)
     logs: list[str] = []
     state.log = logs.append

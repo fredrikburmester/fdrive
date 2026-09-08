@@ -20,7 +20,7 @@ usage() {
     '       bash verify.sh <checkout> application' \
     '       bash verify.sh <checkout> integration' \
     '       bash verify.sh <checkout> browser [Playwright args...]' \
-    '       bash verify.sh <checkout> python <indexer|ocr|image-embed>' \
+    '       bash verify.sh <checkout> python <indexer|ocr|image-embed|runtime>' \
     '       FDRIVE_VERBOSE=1 prints full output for every verification step.'
 }
 
@@ -43,7 +43,7 @@ case "$PROFILE" in
   python)
     [[ $# -eq 1 ]] || { usage >&2; exit 1; }
     SERVICE=$1
-    case "$SERVICE" in indexer|ocr|image-embed) ;; *) usage >&2; exit 1 ;; esac
+    case "$SERVICE" in indexer|ocr|image-embed|runtime) ;; *) usage >&2; exit 1 ;; esac
     ;;
   *)
     usage >&2
@@ -132,13 +132,14 @@ verify_browser() {
 }
 
 verify_python() {
-  local service_dir module
+  local service_dir module host_os
   local -a source_paths
   service_dir="$CHECKOUT/services/$SERVICE"
   case "$SERVICE" in
     indexer) module=fdrive_indexer ;;
     ocr) module=fdrive_ocr ;;
     image-embed) module=fdrive_image_embed ;;
+    runtime) module=fdrive_runtime ;;
   esac
   [[ -d $service_dir ]] || fdrive_die "service directory is missing: $service_dir"
   source_paths=(src tests)
@@ -148,10 +149,19 @@ verify_python() {
   source_paths=(src)
   [[ -d scripts ]] && source_paths+=(scripts)
   fdrive_run_step "$SERVICE mypy" .venv/bin/mypy "${source_paths[@]}"
-  fdrive_run_step "$SERVICE coverage" .venv/bin/pytest -q "--cov=$module" --cov-report=term-missing --cov-fail-under=95
   if [[ $SERVICE == indexer ]]; then
+    host_os=$("${FDRIVE_UNAME:-uname}" -s)
+    if [[ $host_os != Linux ]]; then
+      # The host suite skips Linux-only watcher tests and cannot meet its
+      # coverage threshold. The service image runs the full equivalent suite.
+      fdrive_run_step 'indexer Docker coverage and inotify tests' bash scripts/test-in-docker.sh
+      return
+    fi
+    fdrive_run_step "$SERVICE coverage" .venv/bin/pytest -q "--cov=$module" --cov-report=term-missing --cov-fail-under=95
     fdrive_run_step 'indexer Linux inotify tests' bash scripts/test-in-docker.sh
+    return
   fi
+  fdrive_run_step "$SERVICE coverage" .venv/bin/pytest -q "--cov=$module" --cov-report=term-missing --cov-fail-under=95
 }
 
 trap finish EXIT

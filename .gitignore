@@ -21,3 +21,4 @@ __pycache__
 apps/web/AGENTS.md
 .pnpm-store/
 .fdrive-workflow/
+apps/web-e2e-shadow-*/

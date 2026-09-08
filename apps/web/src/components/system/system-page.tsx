@@ -1,7 +1,10 @@
 "use client";
 
+import type { FeatureId } from "@fdrive/contracts";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
+import { useSystemFeatures } from "@/lib/api/system-queries";
 import { formatRelativeTime } from "@/lib/system/format";
 
 export interface SystemPageProps {
@@ -28,6 +31,20 @@ export function SystemPage({
   actions,
   children,
 }: SystemPageProps) {
+  const features = useSystemFeatures();
+  const pageFeatures: Record<string, FeatureId[]> = {
+    Indexer: ["thumbnails", "textSearch", "imageSearch"],
+    OCR: ["pdfOcr"],
+    Search: ["semanticSearch"],
+    "Image search": ["imageSearch"],
+    Thumbnails: ["thumbnails"],
+  };
+  const ids = pageFeatures[title];
+  const disabled =
+    ids !== undefined &&
+    features.data !== undefined &&
+    features.data.source !== "legacy" &&
+    ids.every((id) => !features.data.configuration.values[id]);
   return (
     <>
       <PageHeader breadcrumbs={<span className="text-sm font-medium">System / {title}</span>} />
@@ -43,10 +60,22 @@ export function SystemPage({
                 Last updated {formatRelativeTime(lastUpdated, new Date())}
               </span>
             ) : null}
-            {actions}
+            {disabled ? null : actions}
           </div>
         </div>
-        {children}
+        {disabled ? (
+          <div className="rounded-lg border p-5 text-sm space-y-2">
+            <p className="font-medium">{title} is off</p>
+            <p className="text-muted-foreground">
+              Processing is inactive. Existing index and cache data are retained.
+            </p>
+            <Link href="/system/features" className="underline">
+              Manage features
+            </Link>
+          </div>
+        ) : (
+          children
+        )}
       </div>
     </>
   );

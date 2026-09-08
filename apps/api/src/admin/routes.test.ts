@@ -267,7 +267,10 @@ describe("admin routes: POST /admin/connection/test", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, detail: "SFTPGo is reachable" });
-    expect(fetchImpl).toHaveBeenCalledWith("http://sftpgo:8080/healthz");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://sftpgo:8080/healthz",
+      expect.objectContaining({ redirect: "error" }),
+    );
   });
 
   it("probes a given candidate baseUrl", async () => {
@@ -280,7 +283,10 @@ describe("admin routes: POST /admin/connection/test", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(fetchImpl).toHaveBeenCalledWith("http://other:8080/healthz");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://other:8080/healthz",
+      expect.objectContaining({ redirect: "error" }),
+    );
   });
 
   it("responds setup_required when no connection exists and no baseUrl is given", async () => {

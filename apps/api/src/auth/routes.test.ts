@@ -193,6 +193,46 @@ describe("auth routes: POST /auth/login", () => {
     expect(res.status).toBe(503);
   });
 
+  it("binds a setup candidate login to its supplied provider without changing the active connection", async () => {
+    const server = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
+      now: clockCtl.clock,
+    });
+    const sftpgo = createSftpgoClient({ baseUrl: "http://candidate:8080", fetch: server.fetch });
+    const repos = createMemoryRepos();
+    const config = loadConfig(REQUIRED_ENV);
+    const connectionStore = createConnectionStore({
+      settings: repos.settings,
+      envUrl: "http://active:8080",
+      defaultHomeTemplate: config.fdriveHomeTemplate,
+      clock: clockCtl.clock,
+    });
+    const clientForBaseUrl = vi.fn(() => sftpgo);
+    const auth = createAuthModule({
+      identityLinks: memoryIdentityOperations(repos),
+      repos,
+      clientForBaseUrl,
+      clientForIdentity: async () => sftpgo,
+      master: parseMasterKey(config.fdriveMasterKey),
+      clock: clockCtl.clock,
+      config,
+      storageFactory: async () => FAKE_STORAGE,
+      connectionStore,
+    });
+
+    const result = await auth.service.loginCandidate(
+      { username: "alice", password: "wonderland", userAgent: null, ip: "127.0.0.1" },
+      "http://candidate:8080",
+    );
+    const identity = await repos.identities.get(result.me.activeIdentityId);
+    if (identity === null) throw new Error("expected candidate identity");
+    const provider = await repos.providers.get(identity.providerId);
+
+    expect(clientForBaseUrl).toHaveBeenCalledWith("http://candidate:8080");
+    expect(provider?.baseUrl).toBe("http://candidate:8080");
+    expect((await connectionStore.current())?.baseUrl).toBe("http://active:8080");
+  });
+
   it("succeeds with correct credentials, returns MeResponse, and sets a non-Secure cookie over plain http", async () => {
     const { app, server } = buildTestApp({ clockCtl });
 

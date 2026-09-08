@@ -1,0 +1,167 @@
+from __future__ import annotations
+
+import signal
+import subprocess
+from typing import Any
+
+import pytest
+
+from fdrive_runtime.controller import FeatureClient, FeatureSnapshot, WorkerLifecycle, parse_feature_snapshot, parse_features
+
+
+class FakeProcess:
+    def __init__(self, exit_code: int | None = None) -> None:
+        self.pid = 42
+        self.exit_code = exit_code
+        self.wait_calls: list[float | None] = []
+
+    def poll(self) -> int | None:
+        return self.exit_code
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls.append(timeout)
+        self.exit_code = 0
+        return 0
+
+
+def snapshot(revision: int = 1, **enabled: bool) -> FeatureSnapshot:
+    values = {key: False for key in ("thumbnails", "textSearch", "searchOcr", "semanticSearch", "imageSearch", "pdfOcr")}
+    values.update(enabled)
+    return FeatureSnapshot(revision, values)
+
+
+def test_parse_feature_snapshot_requires_every_known_boolean() -> None:
+    assert parse_feature_snapshot({"version": 1, "revision": 2, "values": snapshot().values}).revision == 2
+    with pytest.raises(ValueError, match="must be boolean"):
+        parse_feature_snapshot({"version": 1, "revision": 2, "values": {}})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {"version": 2, "revision": 1, "values": {}},
+        {"version": 1, "revision": -1, "values": {}},
+        {"version": 1, "revision": True, "values": {}},
+        {"version": 1, "revision": 1, "values": []},
+    ],
+)
+def test_parse_feature_snapshot_rejects_malformed_documents(body: object) -> None:
+    with pytest.raises(ValueError):
+        parse_feature_snapshot(body)
+
+
+@pytest.mark.parametrize("raw", ["", "unknown", "textSearch,unknown"])
+def test_parse_features_rejects_empty_or_unknown_values(raw: str) -> None:
+    with pytest.raises(ValueError):
+        parse_features(raw)
+
+
+def test_feature_client_requires_a_token_before_requesting_the_api() -> None:
+    with pytest.raises(ValueError, match="WORKER_TOKEN"):
+        FeatureClient("http://api", "").fetch()
+
+
+def test_lifecycle_rejects_invalid_configuration() -> None:
+    with pytest.raises(ValueError, match="command"):
+        WorkerLifecycle((), frozenset({"thumbnails"}))
+    with pytest.raises(ValueError, match="known features"):
+        WorkerLifecycle(("worker",), frozenset({"unknown"}))
+    assert parse_features("thumbnails,textSearch") == frozenset({"thumbnails", "textSearch"})
+
+
+def test_lifecycle_only_starts_for_a_mapped_enabled_feature() -> None:
+    starts: list[tuple[str, ...]] = []
+
+    def popen(command: tuple[str, ...], **_kwargs: Any) -> FakeProcess:
+        starts.append(command)
+        return FakeProcess()
+
+    lifecycle = WorkerLifecycle(("worker",), frozenset({"semanticSearch"}), popen=popen)
+    lifecycle.reconcile(snapshot())
+    assert starts == []
+    assert lifecycle.status()["status"] == "off"
+    lifecycle.reconcile(snapshot(1, semanticSearch=True))
+    assert starts == [("worker",)]
+    lifecycle.reconcile(snapshot(1, semanticSearch=True))
+    assert len(starts) == 1
+
+
+def test_lifecycle_stops_the_process_group_on_disable_and_on_stale_document() -> None:
+    process = FakeProcess()
+    signals: list[tuple[int, signal.Signals]] = []
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"textSearch"}),
+        popen=lambda *_args, **_kwargs: process,
+        killpg=lambda pid, sig: signals.append((pid, sig)),
+    )
+    lifecycle.reconcile(snapshot(textSearch=True))
+    lifecycle.reconcile(snapshot(2))
+    assert signals == [(42, signal.SIGTERM)]
+    assert lifecycle.status()["status"] == "off"
+    lifecycle.reconcile(None)
+    assert lifecycle.status()["error"] == "feature document unavailable"
+
+
+def test_lifecycle_bounds_failed_starts_until_a_new_revision() -> None:
+    attempts = 0
+
+    def broken(*_args: object, **_kwargs: object) -> FakeProcess:
+        nonlocal attempts
+        attempts += 1
+        raise OSError("no executable")
+
+    lifecycle = WorkerLifecycle(("worker",), frozenset({"pdfOcr"}), popen=broken, max_attempts=2)
+    lifecycle.reconcile(snapshot(1, pdfOcr=True))
+    lifecycle.reconcile(snapshot(1, pdfOcr=True))
+    lifecycle.reconcile(snapshot(1, pdfOcr=True))
+    assert attempts == 2
+    assert lifecycle.status()["status"] == "failed"
+    lifecycle.reconcile(snapshot(2, pdfOcr=True))
+    assert attempts == 3
+
+
+def test_lifecycle_retries_an_exited_child_and_escalates_to_kill_on_timeout() -> None:
+    processes = [FakeProcess(exit_code=1), FakeProcess()]
+    signals: list[signal.Signals] = []
+
+    class SlowProcess(FakeProcess):
+        def wait(self, timeout: float | None = None) -> int:
+            self.wait_calls.append(timeout)
+            raise subprocess.TimeoutExpired("worker", timeout)
+
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"thumbnails"}),
+        popen=lambda *_args, **_kwargs: processes.pop(0),
+        killpg=lambda _pid, sig: signals.append(sig),
+    )
+    lifecycle.reconcile(snapshot(thumbnails=True))
+    lifecycle.reconcile(snapshot(thumbnails=True))
+    assert lifecycle.status()["child"] is True
+
+    slow = SlowProcess()
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"thumbnails"}),
+        popen=lambda *_args, **_kwargs: slow,
+        killpg=lambda _pid, sig: signals.append(sig),
+    )
+    lifecycle.reconcile(snapshot(thumbnails=True))
+    lifecycle.reconcile(snapshot())
+    assert signals[-2:] == [signal.SIGTERM, signal.SIGKILL]
+    assert slow.wait_calls == [10, 5]
+
+
+def test_lifecycle_ignores_an_already_gone_process_and_kill_errors() -> None:
+    gone = FakeProcess(exit_code=1)
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"thumbnails"}),
+        popen=lambda *_args, **_kwargs: gone,
+        killpg=lambda _pid, _signal: (_ for _ in ()).throw(OSError("gone")),
+    )
+    lifecycle.reconcile(snapshot(thumbnails=True))
+    lifecycle.reconcile(snapshot())
+    assert lifecycle.status()["status"] == "off"

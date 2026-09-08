@@ -44,6 +44,12 @@ def test_config_default_settings_matches_env(monkeypatch) -> None:
     assert settings.scan_interval_seconds == cfg.scan_interval
 
 
+def test_managed_default_settings_allow_image_ocr_when_feature_is_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("FDRIVE_FEATURES_MANAGED", "true")
+    monkeypatch.delenv("OCR_IMAGE_GLOBS", raising=False)
+    assert Config().default_settings().ocr_image_globs == ("**",)
+
+
 def test_config_image_embed_defaults_to_unconfigured(monkeypatch) -> None:
     monkeypatch.delenv("IMAGE_EMBED_URL", raising=False)
     cfg = Config()

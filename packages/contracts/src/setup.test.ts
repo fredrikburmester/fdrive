@@ -4,6 +4,8 @@ import {
   SetupCompleteRequest,
   SetupStatusResponse,
   SetupTestRequest,
+  SetupUserInventoryRequest,
+  SetupUserInventoryResponse,
 } from "./setup";
 
 describe("SetupStatusResponse", () => {
@@ -16,6 +18,36 @@ describe("SetupStatusResponse", () => {
 
   it("rejects a missing field", () => {
     expect(SetupStatusResponse.safeParse({ required: true }).success).toBe(false);
+  });
+});
+
+describe("Setup user inventory contracts", () => {
+  it("bounds pagination and only exposes username/status", () => {
+    expect(
+      SetupUserInventoryRequest.parse({ username: "admin", password: "secret" }),
+    ).toMatchObject({
+      limit: 50,
+      offset: 0,
+    });
+    expect(
+      SetupUserInventoryResponse.parse({
+        ok: true,
+        users: [{ username: "alice", status: "enabled" }],
+        nextOffset: null,
+      }),
+    ).toEqual({ ok: true, users: [{ username: "alice", status: "enabled" }], nextOffset: null });
+  });
+
+  it("rejects unbounded pagination and raw upstream fields", () => {
+    expect(
+      SetupUserInventoryRequest.safeParse({ username: "admin", password: "x", limit: 101 }).success,
+    ).toBe(false);
+    expect(
+      SetupUserInventoryResponse.safeParse({
+        ok: true,
+        users: [{ username: "a", home_dir: "/secret" }],
+      }).success,
+    ).toBe(false);
   });
 });
 

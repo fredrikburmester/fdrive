@@ -91,3 +91,8 @@ def test_config_default_settings_matches_env(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.exclude_globs == cfg.default_exclude_globs
     assert settings.max_mb == cfg.default_max_mb
     assert settings.keep_originals == cfg.default_keep_originals
+
+
+def test_legacy_features_keep_nightly_pdf_ocr_when_startup_pass_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCR_RUN_ON_START", "false")
+    assert Config().legacy_features().pdf_ocr is True

@@ -23,6 +23,7 @@ function routePath(fullPath: string): string {
 }
 
 export interface ThumbRoutesDeps {
+  readonly enabled?: () => Promise<boolean>;
   readonly indexQueries: IndexQueries;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly identities: Pick<IdentityRepo, "get">;
@@ -58,7 +59,7 @@ export function registerThumbRoutes(
   const buildAuthorizer = deps.createAuthorizer ?? ((storage) => createReadAuthorizer({ storage }));
 
   authed.get(routePath(ROUTES.thumb), async (c) => {
-    if (deps.thumbsDir === undefined) {
+    if (deps.thumbsDir === undefined || (deps.enabled !== undefined && !(await deps.enabled()))) {
       throw THUMB_NOT_FOUND();
     }
 

@@ -78,7 +78,12 @@ const REQUEST_ID_HEADER = "X-Request-Id";
 const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
 
 /** Path prefixes reachable even while `ConnectionStatus.required` is true. */
-const SETUP_EXEMPT_PREFIXES = ["/api/v1/health", "/api/v1/about", "/api/v1/setup/"];
+const SETUP_EXEMPT_PREFIXES = [
+  "/api/v1/health",
+  "/api/v1/about",
+  "/api/v1/setup/",
+  "/api/v1/internal/features",
+];
 
 /** True when `path` is one of the routes that must work while setup is required. */
 export function isSetupExempt(path: string): boolean {
