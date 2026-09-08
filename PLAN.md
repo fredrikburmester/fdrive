@@ -503,6 +503,8 @@ Discovery is a narrow exception to the credential-only decision below: admin cre
 are ephemeral and normal file access remains user-scoped. Final verification is recorded
 in STATUS.md. fdrive is pre-release: no legacy feature migrations or activation fallbacks;
 all optional processing starts off and is controlled by persisted UI selections.
+Fresh deployments expose onboarding at `http://<server-ip>:8090` from another LAN
+device by default; loopback binding is an explicit deployment choice.
 
 **Setup and administration (phase 2).** The SFTPGo connection is configured either by
 environment (`SFTPGO_URL`, `FDRIVE_HOME_TEMPLATE`) or through a first-run `/setup` page shown

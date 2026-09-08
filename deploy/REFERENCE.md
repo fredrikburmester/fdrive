@@ -54,7 +54,22 @@ This document provides architectural and operational details for advanced deploy
 
 ## Network Placement & Reverse Proxies
 
-fdrive publishes its port on `127.0.0.1:8090` by default. When placing a reverse proxy (Nginx, Caddy, Traefik, NPM) in front of fdrive:
+fdrive publishes port `8090` on all interfaces (`0.0.0.0`) by default. Open
+`http://<server-ip>:8090` from another device on your network. `0.0.0.0` is a
+listen address, not a browser URL. Override `FDRIVE_HTTP_PORT` to change the port.
+For local-only access, explicitly set `FDRIVE_HTTP_BIND=127.0.0.1`.
+
+When placing an HTTPS reverse proxy (Nginx, Caddy, Traefik, NPM) in front of fdrive,
+set these in `deploy/.env`, then run `./update.sh`:
+
+```dotenv
+FDRIVE_PUBLIC_URL=https://drive.example.com
+FDRIVE_PROXY_SCHEME=https
+```
+
+Leave `FDRIVE_COOKIE_SECURE` at its `auto` default: direct LAN HTTP works with the
+HTTP default, and the HTTPS proxy setting makes sessions use Secure cookies.
+Keep direct LAN HTTP behind your home network firewall; use HTTPS for internet access.
 
 ### Proxy Requirements
 1. **WebSocket Support**: Ensure WebSocket forwarding is enabled (required for ONLYOFFICE live collaboration).

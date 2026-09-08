@@ -17,11 +17,11 @@ services:
   proxy:
     image: caddy:2@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
     ports:
-      # Loopback-bound by default: an operator's own edge (with TLS) is
-      # expected to sit in front and forward to this port. Set
-      # FDRIVE_HTTP_BIND=0.0.0.0 only when that edge runs on another host
-      # and must reach this port over the network.
-      - "${FDRIVE_HTTP_BIND:-127.0.0.1}:${FDRIVE_HTTP_PORT:-8090}:80"
+      # Reach onboarding from another device using the server's IP address.
+      # Set FDRIVE_HTTP_BIND=127.0.0.1 for an explicitly local-only deployment.
+      - "${FDRIVE_HTTP_BIND:-0.0.0.0}:${FDRIVE_HTTP_PORT:-8090}:80"
+    environment:
+      FDRIVE_PROXY_SCHEME: ${FDRIVE_PROXY_SCHEME:-http}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:

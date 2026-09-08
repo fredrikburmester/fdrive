@@ -48,9 +48,18 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_HTTP_BIND",
     description:
-      "Host address the proxy's published port binds to. Edge proxies that run as containers (Nginx Proxy Manager, Traefik, a dockerised Caddy) cannot reach 127.0.0.1 on the host; set 0.0.0.0 or the host's LAN address for them.",
-    default: "127.0.0.1",
+      "Host address for the web interface. Defaults to all interfaces for access from another device; set 127.0.0.1 for local-only access.",
+    default: "0.0.0.0",
     example: "0.0.0.0",
+    secret: false,
+    subsystem: "network",
+  },
+  {
+    key: "FDRIVE_PROXY_SCHEME",
+    description:
+      "Browser-facing protocol: http for direct LAN access; https when an HTTPS reverse proxy fronts fdrive. Keeps forwarded URLs and automatic session cookies aligned.",
+    default: "http",
+    example: "https",
     secret: false,
     subsystem: "network",
   },

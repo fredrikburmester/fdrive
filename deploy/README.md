@@ -25,8 +25,10 @@ Start it:
 ./update.sh
 ```
 
-Open `http://localhost:8090` on the server, or use your configured tunnel or
-reverse proxy. Use the one-time claim token printed in the API log. The
+From another device on the same network, open `http://<server-ip>:8090`
+(for example, `http://192.168.1.105:8090`). The default listens on the server’s
+network interfaces; no bind-address or cookie changes are needed. Use the
+one-time claim token printed in the API log. The
 walkthrough tests an SFTPGo URL before saving it and establishes the
 owner through a normal SFTPGo login. Leave `SFTPGO_URL` commented in `.env` to
 do this in the browser.

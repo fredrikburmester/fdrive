@@ -165,7 +165,7 @@ describe("deploy/preflight.sh", () => {
 
   it("prints the default bind address and port when unset", () => {
     const result = runPreflight(["POSTGRES_PASSWORD=real", "FDRIVE_MASTER_KEY=abc"].join("\n"));
-    expect(result.output).toContain("bind address: 127.0.0.1:8090");
+    expect(result.output).toContain("bind address: 0.0.0.0:8090");
   });
 
   it("prints an overridden bind address and port", () => {
@@ -173,11 +173,25 @@ describe("deploy/preflight.sh", () => {
       [
         "POSTGRES_PASSWORD=real",
         "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_HTTP_BIND=0.0.0.0",
+        "FDRIVE_HTTP_BIND=127.0.0.1",
         "FDRIVE_HTTP_PORT=9090",
       ].join("\n"),
     );
-    expect(result.output).toContain("bind address: 0.0.0.0:9090");
+    expect(result.output).toContain("bind address: 127.0.0.1:9090");
+  });
+
+  it("accepts HTTPS edge configuration", () => {
+    expect(
+      runPreflight("POSTGRES_PASSWORD=real\nFDRIVE_MASTER_KEY=abc\nFDRIVE_PROXY_SCHEME=https").code,
+    ).toBe(0);
+  });
+
+  it("rejects an invalid proxy scheme", () => {
+    const result = runPreflight(
+      "POSTGRES_PASSWORD=real\nFDRIVE_MASTER_KEY=abc\nFDRIVE_PROXY_SCHEME=ftp",
+    );
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("FDRIVE_PROXY_SCHEME must be http or https");
   });
 
   it("reports every failure together (both change-me and an unknown key) before exiting", () => {

@@ -115,7 +115,7 @@ cd /path/to/fdrive/deploy
 
 ### 2. Complete the setup walkthrough
 
-Open **`http://localhost:8090`** on the server, or use your configured tunnel/reverse proxy. Use the claim token printed in the API log, test your SFTPGo connection, and sign in as the server owner. Optional SFTPGo admin credentials let you inspect available users.
+From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`** (for example, `http://192.168.1.105:8090`). No port-binding or cookie settings are needed. Use the claim token printed in the API log, test your SFTPGo connection, and sign in as the server owner. Optional SFTPGo admin credentials let you inspect available users.
 
 Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
 
