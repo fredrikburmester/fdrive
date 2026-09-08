@@ -118,7 +118,7 @@ export function AppSidebar() {
           <span className="text-base font-semibold tracking-tight">fdrive</span>
         </div>
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent className="gap-0 [&_[data-sidebar=group]]:py-1 [&_[data-sidebar=group-label]]:h-7 [&_[data-sidebar=menu]]:gap-0">
         <SidebarGroup>
           <SidebarGroupLabel>Locations</SidebarGroupLabel>
           <SidebarGroupContent>

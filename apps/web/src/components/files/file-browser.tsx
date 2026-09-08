@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useReducer,
@@ -46,6 +47,11 @@ import {
 } from "@/lib/files/download";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
+import {
+  DEFAULT_SHOW_THUMBNAILS,
+  readShowThumbnails,
+  writeShowThumbnails,
+} from "@/lib/files/list-thumbnails";
 import { movablePaths } from "@/lib/files/move-guard";
 import { pathToHref, viewHref } from "@/lib/files/path-url";
 import { detectPlatform } from "@/lib/files/platform";
@@ -60,7 +66,12 @@ import {
   useRename,
   useTreeChildren,
 } from "@/lib/files/queries";
-import { parseSelectParam } from "@/lib/files/reveal";
+import {
+  cleanupSelectParam,
+  parseSelectParam,
+  type ScrollRequest,
+  shouldPerformReveal,
+} from "@/lib/files/reveal";
 import {
   contextEntries,
   EMPTY_SELECTION,
@@ -213,10 +224,16 @@ export function FileBrowser({
 
   const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
   const [viewMode, setViewModeState] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  const [showThumbnails, setShowThumbnailsState] = useState<boolean>(() =>
+    typeof window === "undefined"
+      ? DEFAULT_SHOW_THUMBNAILS
+      : readShowThumbnails(window.localStorage),
+  );
   const [treeState, setTreeStateRaw] = useState<TreeState>(EMPTY_TREE_STATE);
   useEffect(() => {
     setSortSpecState(readSortSpec(window.localStorage));
     setViewModeState(readViewMode(window.localStorage));
+    setShowThumbnailsState(readShowThumbnails(window.localStorage));
     setTreeStateRaw(readTreeState(window.localStorage));
   }, []);
 
@@ -227,6 +244,10 @@ export function FileBrowser({
   function setViewMode(mode: ViewMode) {
     setViewModeState(mode);
     writeViewMode(window.localStorage, mode);
+  }
+  function setShowThumbnails(show: boolean) {
+    setShowThumbnailsState(show);
+    writeShowThumbnails(window.localStorage, show);
   }
   function updateTreeState(updater: (prev: TreeState) => TreeState) {
     setTreeStateRaw((prev) => {
@@ -324,26 +345,54 @@ export function FileBrowser({
     uploadFiles(files, path, existingNames);
   });
 
+  const [scrollRequest, setScrollRequest] = useState<ScrollRequest | null>(null);
+  const scrollTokenRef = useRef(0);
+  const lastRevealedRef = useRef<string | null>(null);
+
+  const handleScrollConsumed = useCallback((token: number) => {
+    setScrollRequest((current) => (current?.token === token ? null : current));
+  }, []);
+
   // "Reveal in folder" (from the search panel): once this folder's listing
   // has loaded and contains the named item, select it, scroll it into
-  // view, and drop the `select` param so a reload does not re-select it.
+  // view with the virtualizer, and clean up the `select` param so a reload
+  // does not re-select it while retaining the selection in state.
   useEffect(() => {
-    if (selectName === null || isLoading) {
+    if (selectName === null) {
+      lastRevealedRef.current = null;
+      return;
+    }
+    if (isLoading) {
       return;
     }
     const targetPath = joinPath(path, selectName);
-    if (!orderedPaths.includes(targetPath)) {
+    if (!shouldPerformReveal(targetPath, orderedPaths, lastRevealedRef.current)) {
       return;
     }
+    lastRevealedRef.current = targetPath;
     dispatchSelection({ type: "set", paths: [targetPath] });
-    const row = listingRef.current
-      ? Array.from(listingRef.current.querySelectorAll<HTMLElement>("[data-path]")).find(
-          (element) => element.dataset.path === targetPath,
-        )
-      : undefined;
-    row?.scrollIntoView({ block: "nearest" });
-    router.replace(toRoute(pathToHref(path)));
-  }, [selectName, isLoading, orderedPaths, path, router]);
+    scrollTokenRef.current += 1;
+    setScrollRequest({ path: targetPath, token: scrollTokenRef.current });
+    const cleanSearch = cleanupSelectParam(searchParams.toString());
+    const cleanHref = `${pathToHref(path)}${cleanSearch}`;
+    router.replace(toRoute(cleanHref));
+  }, [selectName, isLoading, orderedPaths, path, searchParams, router]);
+
+  function handleDownloadSelection() {
+    if (selectedEntries.length === 0) {
+      return;
+    }
+    const deps = buildDownloadDeps(getAnchorDownloader());
+    const first = selectedEntries[0];
+    const paths = selectedEntries.map((selectedEntry) => selectedEntry.path);
+    if (!needsZipDownload(selectedEntries) && first !== undefined) {
+      downloadSingle(first.path, deps);
+    } else {
+      downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`).catch(() =>
+        toast.error("Could not download the selection."),
+      );
+    }
+  }
 
   function getAnchorDownloader(): AnchorDownloader {
     if (anchorRef.current === null) {
@@ -788,19 +837,7 @@ export function FileBrowser({
         break;
       }
       case "download": {
-        if (selectedEntries.length === 0) {
-          break;
-        }
-        const deps = buildDownloadDeps(getAnchorDownloader());
-        const first = selectedEntries[0];
-        const paths = selectedEntries.map((selectedEntry) => selectedEntry.path);
-        if (!needsZipDownload(selectedEntries) && first !== undefined) {
-          downloadSingle(first.path, deps);
-        } else {
-          downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`).catch(() =>
-            toast.error("Could not download the selection."),
-          );
-        }
+        handleDownloadSelection();
         break;
       }
       case "newFolder":
@@ -843,6 +880,9 @@ export function FileBrowser({
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
+            onDownloadSelection={handleDownloadSelection}
+            showThumbnails={showThumbnails}
+            onShowThumbnailsChange={setShowThumbnails}
           />
         }
       />
@@ -910,6 +950,9 @@ export function FileBrowser({
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
                 trashAvailable={trashAvailable}
+                scrollRequest={scrollRequest}
+                onScrollConsumed={handleScrollConsumed}
+                showThumbnails={showThumbnails}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -929,6 +972,8 @@ export function FileBrowser({
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
                 trashAvailable={trashAvailable}
+                scrollRequest={scrollRequest}
+                onScrollConsumed={handleScrollConsumed}
               />
             ) : (
               <FileList
@@ -951,6 +996,9 @@ export function FileBrowser({
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
                 trashAvailable={trashAvailable}
+                scrollRequest={scrollRequest}
+                onScrollConsumed={handleScrollConsumed}
+                showThumbnails={showThumbnails}
               />
             )}
           </div>
