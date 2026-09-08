@@ -291,6 +291,81 @@ test("search panel presents visible File type label in filter bar", async ({ pag
   await expect(dialog.getByText("File type:")).toBeVisible();
 });
 
+test("a startup-unavailable query recovers without reloading the page", async ({ page }) => {
+  let statusCalls = 0;
+  let searchCalls = 0;
+  await page.route("**/api/v1/search/status", async (route) => {
+    statusCalls += 1;
+    const starting = statusCalls === 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        starting
+          ? {
+              available: false,
+              semantic: false,
+              images: false,
+              reason: "indexer_unreachable",
+            }
+          : { available: true, semantic: true, images: false },
+      ),
+    });
+  });
+  await page.route(/\/api\/v1\/search(?:\?.*)?$/, async (route) => {
+    searchCalls += 1;
+    const starting = searchCalls === 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        starting
+          ? {
+              query: "recovered",
+              sections: { folders: [], files: [], content: [] },
+              degraded: false,
+              unavailable: true,
+              tookMs: 1,
+            }
+          : {
+              query: "recovered",
+              sections: {
+                folders: [],
+                files: [
+                  {
+                    name: "recovered.md",
+                    path: "/docs/recovered.md",
+                    kind: "file",
+                    ext: ".md",
+                    mime: "text/markdown",
+                    size: 1,
+                    modifiedAt: "2026-01-01T00:00:00Z",
+                    score: 1,
+                    snippets: [],
+                    hasThumbnail: false,
+                  },
+                ],
+                content: [],
+              },
+              degraded: false,
+              unavailable: false,
+              tookMs: 1,
+            },
+      ),
+    });
+  });
+
+  await page.goto("/files");
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("recovered");
+
+  await expect(dialog.getByText("Search is starting… Retrying automatically.")).toBeVisible();
+  await expect(dialog.getByText("recovered.md", { exact: true })).toBeVisible({ timeout: 8_000 });
+  expect(statusCalls).toBeGreaterThanOrEqual(2);
+  expect(searchCalls).toBeGreaterThanOrEqual(2);
+});
+
 test("concurrent search displays text and visual matches without manual toggle, and image failure leaves text visible", async ({
   page,
 }) => {

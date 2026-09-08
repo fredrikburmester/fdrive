@@ -58,7 +58,13 @@ import {
 import { splitSnippetSegments } from "@/lib/search/highlight";
 import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
 import { searchPanelLayout } from "@/lib/search/panel-layout";
-import { useImageSearchResults, useSearchResults, useSearchStatus } from "@/lib/search/queries";
+import {
+  isPermanentSearchStatus,
+  searchUnavailableMessage,
+  useImageSearchResults,
+  useSearchResults,
+  useSearchStatus,
+} from "@/lib/search/queries";
 import { pushRecent, type RecentItem, readRecent } from "@/lib/search/recent";
 import { revealHref } from "@/lib/search/reveal";
 import {
@@ -318,7 +324,9 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const [selectedValue, setSelectedValue] = useState("");
   const [enterAction, setEnterActionState] = useState<EnterAction>(DEFAULT_ENTER_ACTION);
-  const { data: searchStatus } = useSearchStatus();
+  const trimmedQuery = committedQuery.trim();
+  const statusRetryActive = open && trimmedQuery.length > 0;
+  const { data: searchStatus } = useSearchStatus({ retryUnavailable: statusRetryActive });
   const imagesAvailable = searchStatus?.images === true;
 
   const debouncerRef = useRef<Debounced<string> | null>(null);
@@ -359,7 +367,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     writeEnterAction(window.localStorage, action);
   }, []);
 
-  const trimmedQuery = committedQuery.trim();
   const queryVisualMatches =
     open &&
     trimmedQuery.length > 0 &&
@@ -372,6 +379,8 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     error: searchError,
   } = useSearchResults(committedQuery, chips, currentFolder, {
     enabled: open && trimmedQuery.length > 0 && me !== undefined,
+    retryUnavailable: statusRetryActive && (allLogins || !isPermanentSearchStatus(searchStatus)),
+    status: searchStatus,
     ...(me
       ? { scope: { accountId: me.account.id, identityId: me.activeIdentityId, all: allLogins } }
       : {}),
@@ -384,6 +393,8 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   } = useImageSearchResults(committedQuery, {
     enabled: queryVisualMatches,
     identityId: me?.activeIdentityId,
+    retryUnavailable: statusRetryActive && !isPermanentSearchStatus(searchStatus),
+    status: searchStatus,
   });
 
   const navigateItem = useCallback(
@@ -521,6 +532,16 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     queryVisualMatches &&
     !isImageFetching &&
     (Boolean(imageError) || imageResponse?.unavailable === true);
+  const showVisualUnavailableNotice =
+    visualUnavailable && !(unavailable && !hasVisualResults && !waitingForImages);
+  const unavailableMessage = searchUnavailableMessage(searchStatus);
+  const searchIsStarting = unavailableMessage !== "Search is not available.";
+  const textUnavailableMessage = searchIsStarting
+    ? unavailableMessage
+    : "Text search is unavailable.";
+  const visualUnavailableMessage = searchIsStarting
+    ? unavailableMessage
+    : "Visual search is unavailable.";
   const visualFolderNotice = queryVisualMatches && chips.folderOnly && !isImageFetching;
   const isPartial = queryVisualMatches && Boolean(imageResponse?.partial);
   const showNoResults =
@@ -644,15 +665,15 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            Text search is unavailable.
+            {textUnavailableMessage}
           </p>
         ) : null}
-        {visualUnavailable ? (
+        {showVisualUnavailableNotice ? (
           <p
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            Visual search is unavailable.
+            {visualUnavailableMessage}
           </p>
         ) : null}
         {visualFolderNotice ? (
@@ -703,7 +724,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               </CommandGroup>
             )
           ) : unavailable && !hasVisualResults && !waitingForImages ? (
-            <CommandEmpty>Search is not available.</CommandEmpty>
+            <CommandEmpty>{unavailableMessage}</CommandEmpty>
           ) : (isFetching || waitingForImages) && !hasResults ? (
             <div role="status" className="py-6 text-center text-xs text-muted-foreground">
               Searching...

@@ -377,7 +377,28 @@ describe("GET /api/v1/search/status", () => {
     const res = await app.request("/api/v1/search/status");
     const body = await res.json();
 
-    expect(body).toEqual({ available: false, semantic: false, images: false });
+    expect(body).toEqual({ available: false, semantic: false, images: false, reason: "no_roots" });
+  });
+
+  it("reports a transient indexer outage reason", async () => {
+    const app = buildApp(fakeSearchService(), {
+      resolver: fakeResolver({
+        status: async () => ({
+          ...AVAILABLE_STATUS,
+          status: "unavailable",
+          reason: "indexer_unreachable",
+        }),
+      }),
+    });
+
+    const res = await app.request("/api/v1/search/status");
+
+    expect(await res.json()).toEqual({
+      available: false,
+      semantic: false,
+      images: false,
+      reason: "indexer_unreachable",
+    });
   });
 
   it("reports unavailable when the caller's identity no longer exists", async () => {

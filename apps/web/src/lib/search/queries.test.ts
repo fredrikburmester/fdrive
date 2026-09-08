@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import type { SearchResponse, SearchStatusResponse } from "@fdrive/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import type {
+  AccountSearchResponse,
+  SearchResponse,
+  SearchStatusResponse,
+} from "@fdrive/contracts";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SEARCH_CHIPS } from "./filters";
 
 const accountSearchMock = vi.fn();
@@ -35,9 +39,16 @@ function createWrapper(queryClient: QueryClient) {
 }
 
 beforeEach(() => {
+  accountSearchMock.mockReset();
   searchMock.mockReset();
   searchStatusMock.mockReset();
   searchImagesMock.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+  focusManager.setFocused(undefined);
+  vi.useRealTimers();
 });
 
 describe("imageSearchQueryKey", () => {
@@ -90,6 +101,79 @@ describe("searchQueryKey", () => {
     expect(searchQueryKey("q", DEFAULT_SEARCH_CHIPS, "/")).toEqual(
       searchQueryKey("q", DEFAULT_SEARCH_CHIPS, "/"),
     );
+  });
+});
+
+describe("search startup retry decisions", () => {
+  it("retries a legacy unavailable status and an indexer startup outage", async () => {
+    const { shouldRetrySearchStatus } = await import("./queries.js");
+
+    expect(shouldRetrySearchStatus({ available: false, semantic: false })).toBe(true);
+    expect(
+      shouldRetrySearchStatus({
+        available: false,
+        semantic: false,
+        reason: "indexer_unreachable",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry a permanent scope status", async () => {
+    const { isPermanentSearchStatus, shouldRetrySearchStatus } = await import("./queries.js");
+    const status: SearchStatusResponse = {
+      available: false,
+      semantic: false,
+      reason: "no_roots",
+    };
+
+    expect(isPermanentSearchStatus(status)).toBe(true);
+    expect(shouldRetrySearchStatus(status)).toBe(false);
+  });
+
+  it("uses startup wording only for an indexer outage", async () => {
+    const { searchUnavailableMessage } = await import("./queries.js");
+
+    expect(
+      searchUnavailableMessage({
+        available: false,
+        semantic: false,
+        reason: "indexer_unreachable",
+      }),
+    ).toBe("Search is starting… Retrying automatically.");
+    expect(
+      searchUnavailableMessage({ available: false, semantic: false, reason: "no_roots" }),
+    ).toBe("Search is not available.");
+    expect(searchUnavailableMessage({ available: false, semantic: false })).toBe(
+      "Search is not available.",
+    );
+  });
+
+  it("retries unavailable results after a healthy status but not a permanent status", async () => {
+    const { shouldRetryUnavailableResult } = await import("./queries.js");
+    const unavailable = { unavailable: true };
+
+    expect(shouldRetryUnavailableResult(unavailable, { available: true, semantic: false })).toBe(
+      true,
+    );
+    expect(
+      shouldRetryUnavailableResult(unavailable, {
+        available: false,
+        semantic: false,
+        reason: "mismatch",
+      }),
+    ).toBe(false);
+    expect(shouldRetryUnavailableResult({ unavailable: false }, undefined)).toBe(false);
+  });
+
+  it("retries an account-wide response with unavailable identities", async () => {
+    const { shouldRetryUnavailableResult } = await import("./queries.js");
+
+    expect(
+      shouldRetryUnavailableResult(
+        { unavailable: false, unavailableIdentityIds: ["identity-2"] },
+        undefined,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -146,6 +230,64 @@ describe("useSearchResults", () => {
       folder: "/docs",
     });
   });
+
+  it("retries an unavailable result until the unchanged query becomes healthy, then stops", async () => {
+    focusManager.setFocused(true);
+    const unavailable = { ...EMPTY_RESPONSE, unavailable: true };
+    searchMock.mockResolvedValueOnce(unavailable).mockResolvedValue(EMPTY_RESPONSE);
+    const { SEARCH_STARTUP_RETRY_MS, useSearchResults } = await import("./queries.js");
+    const queryClient = new QueryClient();
+
+    const { result } = renderHook(
+      () =>
+        useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", {
+          retryUnavailable: true,
+          status: { available: true, semantic: false },
+        }),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await waitFor(() => expect(result.current.data).toEqual(unavailable));
+    await waitFor(() => expect(result.current.data).toEqual(EMPTY_RESPONSE), { timeout: 7_000 });
+    expect(searchMock).toHaveBeenCalledTimes(2);
+
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, SEARCH_STARTUP_RETRY_MS + 250);
+    });
+    expect(searchMock).toHaveBeenCalledTimes(2);
+  }, 13_000);
+
+  it.each([
+    ["disabled", { query: "readme", enabled: false }],
+    ["blank", { query: "   ", enabled: true }],
+  ])(
+    "stops retrying when the query becomes %s",
+    async (_name, next) => {
+      focusManager.setFocused(true);
+      const unavailable = { ...EMPTY_RESPONSE, unavailable: true };
+      searchMock.mockResolvedValue(unavailable);
+      const { SEARCH_STARTUP_RETRY_MS, useSearchResults } = await import("./queries.js");
+      const client = new QueryClient();
+      const { result, rerender } = renderHook(
+        ({ query, enabled }: { query: string; enabled: boolean }) =>
+          useSearchResults(query, DEFAULT_SEARCH_CHIPS, "/", {
+            enabled,
+            retryUnavailable: true,
+            status: { available: true, semantic: false },
+          }),
+        { initialProps: { query: "readme", enabled: true }, wrapper: createWrapper(client) },
+      );
+
+      await waitFor(() => expect(result.current.data).toEqual(unavailable));
+      rerender(next);
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, SEARCH_STARTUP_RETRY_MS + 250);
+      });
+
+      expect(searchMock).toHaveBeenCalledTimes(1);
+    },
+    7_000,
+  );
 });
 
 describe("useSearchStatus", () => {
@@ -159,6 +301,27 @@ describe("useSearchStatus", () => {
 
     await waitFor(() => expect(result.current.data).toEqual(status));
   });
+
+  it("retries a transient startup status until it is healthy, then stops", async () => {
+    focusManager.setFocused(true);
+    const starting: SearchStatusResponse = {
+      available: false,
+      semantic: false,
+      reason: "indexer_unreachable",
+    };
+    const healthy: SearchStatusResponse = { available: true, semantic: true, images: true };
+    searchStatusMock.mockResolvedValueOnce(starting).mockResolvedValue(healthy);
+    const { SEARCH_STARTUP_RETRY_MS, useSearchStatus } = await import("./queries.js");
+    const queryClient = new QueryClient();
+
+    const { result } = renderHook(() => useSearchStatus({ retryUnavailable: true }), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(starting));
+    await waitFor(() => expect(result.current.data).toEqual(healthy), { timeout: 7_000 });
+    expect(searchStatusMock).toHaveBeenCalledTimes(2);
+  }, 8_000);
 });
 
 describe("useImageSearchResults", () => {
@@ -209,3 +372,33 @@ it("uses account search only for all-logins scope and isolates its cache", async
   expect(searchMock).not.toHaveBeenCalled();
   expect(client.getQueryCache().getAll()[0]?.queryKey).toContainEqual(scope);
 });
+
+it("retries all-logins partial results despite the active identity's permanent status", async () => {
+  focusManager.setFocused(true);
+  const partial: AccountSearchResponse = {
+    ...EMPTY_RESPONSE,
+    sections: { folders: [], files: [], content: [] },
+    unavailableIdentityIds: ["other"],
+  };
+  const healthy: AccountSearchResponse = {
+    ...EMPTY_RESPONSE,
+    sections: { folders: [], files: [], content: [] },
+    unavailableIdentityIds: [],
+  };
+  accountSearchMock.mockResolvedValueOnce(partial).mockResolvedValue(healthy);
+  const { useSearchResults } = await import("./queries");
+  const client = new QueryClient();
+  const { result } = renderHook(
+    () =>
+      useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", {
+        retryUnavailable: true,
+        status: { available: false, semantic: false, reason: "no_roots" },
+        scope: { accountId: "a", identityId: "i", all: true },
+      }),
+    { wrapper: createWrapper(client) },
+  );
+
+  await waitFor(() => expect(result.current.data).toEqual(partial));
+  await waitFor(() => expect(result.current.data).toEqual(healthy), { timeout: 7_000 });
+  expect(accountSearchMock).toHaveBeenCalledTimes(2);
+}, 8_000);

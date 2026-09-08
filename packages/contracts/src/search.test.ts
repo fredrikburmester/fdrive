@@ -141,8 +141,23 @@ describe("SearchStatusResponse", () => {
 
   it("parses an unavailable status", () => {
     expect(
-      SearchStatusResponse.safeParse({ available: false, semantic: false, images: false }).success,
+      SearchStatusResponse.safeParse({
+        available: false,
+        semantic: false,
+        images: false,
+        reason: "indexer_unreachable",
+      }).success,
     ).toBe(true);
+  });
+
+  it("rejects an unknown unavailable reason", () => {
+    expect(
+      SearchStatusResponse.safeParse({
+        available: false,
+        semantic: false,
+        reason: "not-a-reason",
+      }).success,
+    ).toBe(false);
   });
 
   it("parses a missing images field (an older API without image search)", () => {
