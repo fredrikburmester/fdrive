@@ -215,6 +215,7 @@ def run_pass(
     jobs: int,
     log: Callable[[str], None],
     include_globs: tuple[str, ...] = (),
+    is_enabled: Callable[[], bool] | None = None,
 ) -> RunTotals:
     totals = RunTotals()
     run_id = db.start_run(conn)
@@ -223,6 +224,9 @@ def run_pass(
         for target in targets:
             done = db.done_keys(conn, target.root_id)
             for abs_path in iter_candidate_pdfs(target.abs_path):
+                if is_enabled is not None and not is_enabled():
+                    log("OCR pass stopped: PDF OCR disabled")
+                    return totals
                 status, rewrite = process_file(
                     conn, target, abs_path, settings, state_dir, timeout_seconds, jobs, done, log, include_globs
                 )

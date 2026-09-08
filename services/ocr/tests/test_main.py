@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from fdrive_ocr import db, main
+from fdrive_ocr.features import FeatureConfiguration, FeatureValues
 from fdrive_ocr.server import RunLock
 from fdrive_ocr.settings import Settings
 
@@ -103,6 +104,26 @@ def test_run_once_skips_when_already_running(postgres_dsn: str, tmp_path: Path) 
     lock.release()
 
 
+def test_run_once_does_not_rewrite_when_managed_pdf_ocr_is_disabled(postgres_dsn: str, tmp_path: Path) -> None:
+    logs: list[str] = []
+    assert (
+        main.run_once(
+            RunLock(),
+            lambda: db.connect(postgres_dsn),
+            [],
+            DEFAULT_SETTINGS,
+            str(tmp_path),
+            30,
+            2,
+            logs.append,
+            feature_defaults=FeatureConfiguration(0, FeatureValues(True, True, False, True, False, True)),
+            features_managed=True,
+        )
+        is False
+    )
+    assert any("PDF OCR disabled" in line for line in logs)
+
+
 def test_run_once_logs_and_releases_lock_on_crash(postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("kaboom")
@@ -151,8 +172,8 @@ def test_scheduler_loop_runs_on_start_then_reschedules(
             now=lambda: FIXED_NOW,
             sleep=fake_sleep,
         )
-    # one run from run_on_start, plus one per loop iteration before StopLoop
-    assert len(run_calls) == 2
+    # Polling before the nightly target must not start another source-writing pass.
+    assert len(run_calls) == 1
 
 
 def test_scheduler_loop_skips_initial_run_when_disabled(
@@ -226,11 +247,22 @@ def test_scheduler_loop_re_reads_settings_for_the_hour(
 # -- main -----------------------------------------------------------------------
 
 
-def test_main_exits_when_no_roots_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_stays_live_when_no_roots_configured(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
     monkeypatch.delenv("INDEX_ROOTS", raising=False)
-    with pytest.raises(SystemExit) as exc_info:
-        main.main()
-    assert exc_info.value.code == 1
+
+    class NoopThread:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    served: dict[str, object] = {}
+    monkeypatch.setattr(main.threading, "Thread", NoopThread)
+    monkeypatch.setattr(main.uvicorn, "run", lambda app, **_kwargs: served.setdefault("app", app))
+    main.main()
+    assert served["app"].state.server_state.targets == []  # type: ignore[attr-defined]
 
 
 def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

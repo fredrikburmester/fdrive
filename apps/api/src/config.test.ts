@@ -127,6 +127,8 @@ describe("loadConfig", () => {
     const config = loadConfig(REQUIRED_ENV);
 
     expect(config).toEqual({
+      fdriveFeaturesManaged: false,
+      fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
       fdriveOfficePublicUrl: undefined,
@@ -214,6 +216,8 @@ describe("loadConfig", () => {
     });
 
     expect(config).toEqual({
+      fdriveFeaturesManaged: false,
+      fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
       fdriveOfficePublicUrl: undefined,
@@ -600,4 +604,17 @@ describe("Office operator edit policy", () => {
         "FDRIVE_OFFICE_EDIT_RULES",
       );
   });
+});
+
+it("parses managed feature configuration and rejects malformed activation", () => {
+  expect(
+    loadConfig({
+      ...REQUIRED_ENV,
+      FDRIVE_FEATURES_MANAGED: "true",
+      FDRIVE_WORKER_TOKEN: "worker-secret",
+    }),
+  ).toMatchObject({ fdriveFeaturesManaged: true, fdriveWorkerToken: "worker-secret" });
+  expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_FEATURES_MANAGED: "maybe" })).toThrow(
+    /FDRIVE_FEATURES_MANAGED/,
+  );
 });

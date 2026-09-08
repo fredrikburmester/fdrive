@@ -121,6 +121,12 @@ export interface SettingsRepo {
   get<T>(key: string): Promise<T | null>;
   /** Upserts the value stored at `key`. */
   set(key: string, value: unknown): Promise<void>;
+  /**
+   * Atomically replaces a setting only when its current value is `expected`.
+   * Pass `null` to create a previously absent key. JSON values are compared
+   * structurally by the database, so this is safe for cross-process claims.
+   */
+  compareAndSet(key: string, expected: unknown | null, value: unknown): Promise<boolean>;
   /** Returns every setting as a plain object keyed by its setting key. */
   all(): Promise<Record<string, unknown>>;
 }

@@ -18,8 +18,11 @@ class RunSummary:
     failed: int
 
 
-def shape_health(ok: bool, running: bool) -> dict[str, Any]:
-    return {"ok": ok, "running": running}
+def shape_health(ok: bool, running: bool, features: dict[str, Any] | None = None) -> dict[str, Any]:
+    body: dict[str, Any] = {"ok": ok, "running": running}
+    if features is not None:
+        body["features"] = features
+    return body
 
 
 def shape_stats(
@@ -33,8 +36,9 @@ def shape_stats(
     originals_count: int,
     originals_bytes: int,
     running: bool,
+    features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    body = {
         "last_run": (
             {
                 "started_at": last_run.started_at,
@@ -57,3 +61,6 @@ def shape_stats(
         "originals_bytes": originals_bytes,
         "running": running,
     }
+    if features is not None:
+        body["features"] = features
+    return body

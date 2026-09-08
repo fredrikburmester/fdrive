@@ -2,6 +2,7 @@
 
 import type {
   AdminConnectionUpdateRequest,
+  FeaturesUpdateRequest,
   IndexerClearRequest,
   IndexerReindexRequest,
   IndexerSettingsUpdateRequest,
@@ -17,6 +18,26 @@ import { queryKeys } from "./keys";
 /** How often the System pages re-poll their sidecar status while mounted. */
 const SYSTEM_REFETCH_INTERVAL_MS = 5000;
 const MAINTENANCE_KEY = ["system", "maintenance"];
+
+export function useSystemFeatures() {
+  return useQuery({
+    queryKey: queryKeys.system.features(),
+    queryFn: () => apiClient.systemFeatures(),
+    refetchInterval: SYSTEM_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function useUpdateFeatures() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: FeaturesUpdateRequest) => apiClient.systemUpdateFeatures(input),
+    onSuccess: (data) => {
+      client.setQueryData(queryKeys.system.features(), data);
+      void client.invalidateQueries({ queryKey: ["search"] });
+      void client.invalidateQueries({ queryKey: ["system"] });
+    },
+  });
+}
 
 /** Whether setup is required and whether `SFTPGO_URL` is set by environment. Powers `/setup`. */
 export function useSetupStatus() {
@@ -120,11 +141,11 @@ export function useRebuildIndexerThumbnails() {
     mutationKey: MAINTENANCE_KEY,
     mutationFn: (req?: IndexerThumbnailsRebuildRequest) =>
       apiClient.systemRebuildIndexerThumbnails(req),
-    onSettled: () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() }),
-      ]),
+    onSettled: () => {
+      // The accepted job can close its dialog while cache-size queries refresh.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() });
+    },
   });
 }
 

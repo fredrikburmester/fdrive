@@ -31,7 +31,16 @@ export async function shouldRedirectToFiles(
 
 export default async function SetupPage() {
   if (await shouldRedirectToFiles()) {
-    redirect(FILES_ROUTE);
+    let destination = FILES_ROUTE;
+    try {
+      const client = await serverApiClient();
+      const me = await client.me();
+      if (me.isAdmin && !(await client.systemFeatures()).configuration.walkthroughComplete)
+        destination = "/system/features" as Route;
+    } catch {
+      // The shell handles sign-in when an owner resumes without their session.
+    }
+    redirect(destination);
   }
   return <SetupWizard />;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from starlette.testclient import TestClient
@@ -89,6 +90,17 @@ def test_health_no_contexts(postgres_dsn: str) -> None:
     body = resp.json()
     assert body["ok"] is False
     assert body["embed_ok"] is False
+
+
+def test_storage_diagnostics_reports_missing_or_readable_roots(tmp_path: Path) -> None:
+    diagnostics = server.storage_diagnostics(
+        {
+            "mounted": SimpleNamespace(abs_path=str(tmp_path)),
+            "missing": SimpleNamespace(abs_path=str(tmp_path / "missing")),
+        }  # type: ignore[arg-type]
+    )
+    assert diagnostics["mounted"]["readable"] is True
+    assert diagnostics["missing"] == {"readable": False, "writable": False}
 
 
 def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -385,18 +397,14 @@ def test_thumbnails_rebuild_returns_409_when_already_running(
     assert resp.status_code == 409
 
 
-def test_thumbnails_rebuild_invalid_root_type_is_400(
-    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_thumbnails_rebuild_invalid_root_type_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": 123})
     assert resp.status_code == 400
 
 
-def test_thumbnails_rebuild_invalid_path_type_is_400(
-    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_thumbnails_rebuild_invalid_path_type_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": 123})
@@ -455,9 +463,7 @@ def test_image_embeddings_rebuild_returns_409_when_already_running(
     assert resp.status_code == 409
 
 
-def test_image_embeddings_rebuild_runs_end_to_end(
-    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_image_embeddings_rebuild_runs_end_to_end(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from fdrive_indexer import image_embed_rebuild
     from fdrive_indexer.image_embed import ImageEmbedHealth
 
@@ -474,9 +480,7 @@ def test_image_embeddings_rebuild_runs_end_to_end(
     (thumb_dir / "sha1.256.webp").write_bytes(b"fake webp")
     health = ImageEmbedHealth(status="ok", model="model-a", dim=1024, device="cpu")
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: health)
-    monkeypatch.setattr(
-        image_embed_rebuild, "embed_images", lambda data, url, batch: ([[0.1] * 1024 for _ in data], "model-a")
-    )
+    monkeypatch.setattr(image_embed_rebuild, "embed_images", lambda data, url, batch: ([[0.1] * 1024 for _ in data], "model-a"))
     client = _make_client(ctx)
     resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
     assert resp.status_code == 202

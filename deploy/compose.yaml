@@ -72,28 +72,29 @@ services:
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
       # compose network. FDRIVE_THUMBS_DIR, FDRIVE_OCR_URL, FDRIVE_INDEXER_URL,
-      # FDRIVE_EMBED_URL, and FDRIVE_IMAGE_EMBED_URL are only actually
-      # reachable once the `index` profile is up; the api treats a
-      # connection failure as "unreachable" (see GET /api/v1/health's
-      # subsystems field) rather than an error.
+      # FDRIVE_EMBED_URL, and FDRIVE_IMAGE_EMBED_URL point to
+      # managed worker processes are always present but start no processing
+      # or model loading until the owner enables a feature in the walkthrough.
       FDRIVE_THUMBS_DIR: /thumbs
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      SFTPGO_URL: ${SFTPGO_URL}
+      SFTPGO_URL: ${SFTPGO_URL:-}
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
+      # Reuse the database secret only inside the private compose network as
+      # the worker/API authentication token; no extra operator secret exists.
+      FDRIVE_FEATURES_MANAGED: "true"
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       PORT: "3001"
+      NODE_ENV: production
       FDRIVE_OCR_URL: http://ocr:8011
       FDRIVE_INDEXER_URL: http://indexer:8010
       FDRIVE_EMBED_URL: http://embed:80
       FDRIVE_IMAGE_EMBED_URL: http://image-embed:8012
-      # sftpgoPath defaults to the path SFTPGo itself sees
-      # FDRIVE_INDEX_SFTPGO_DIR at (FDRIVE_INDEX_SFTPGO_PATH); see
-      # deploy/REFERENCE.md's "Nothing is silent" section. Add more roots by
-      # editing this JSON array alongside the indexer's own INDEX_ROOTS below.
+      # The conventional shipped mount remains fixed. The walkthrough may
+      # choose scopes below it, but cannot add arbitrary host mounts at runtime.
       FDRIVE_INDEX_ROOTS: '[{"name":"sftpgo","sftpgoPath":"${FDRIVE_INDEX_SFTPGO_PATH:-/srv/sftpgo/data}","indexerPath":"/roots/sftpgo"}]'
       # BEGIN GENERATED CONFIG KEYS (tools/deploy/generate-env-example.ts)
       HOST: ${HOST:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      NODE_ENV: ${NODE_ENV:-}
       FDRIVE_HOME_TEMPLATE: ${FDRIVE_HOME_TEMPLATE:-}
       FDRIVE_SESSION_TTL_DAYS: ${FDRIVE_SESSION_TTL_DAYS:-}
       FDRIVE_COOKIE_SECURE: ${FDRIVE_COOKIE_SECURE:-}
@@ -153,12 +154,11 @@ services:
     pids_limit: 512
     logging: *default-logging
 
-  # -- index profile: indexer, tika, embed --------------------------------------
-  # Opt in with `--profile index` (see README.md). The indexer walks and watches
-  # `FDRIVE_INDEX_SFTPGO_DIR` (a read-only bind mount of the same directory
-  # SFTPGo serves), extracts text, embeds it, and generates thumbnails. Add more
-  # roots by copying the `indexer` service's volume line and `INDEX_ROOTS` entry
-  # for each additional `name=/roots/<name>` pair.
+  # -- bundled optional workers -------------------------------------------------
+  # Every controller/worker is included in the fixed stack. They are inert by
+  # default and reconcile the owner's persisted feature choices at runtime;
+  # No Docker socket or compose profile is needed to enable a feature later.
+  # Models download on first activation and remain cached for reuse. Host mounts remain a deployment concern.
   #
   # `fdrive-thumbs` (below) is a named volume, not a host bind mount: Docker
   # always creates a bind-mounted host directory owned by root, which the
@@ -172,7 +172,6 @@ services:
   # would otherwise want from a host-visible directory.
   thumbs-init:
     image: alpine:3.20
-    profiles: [index]
     volumes:
       - fdrive-thumbs:/thumbs
     command: ["chown", "-R", "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}", "/thumbs"]
@@ -185,9 +184,11 @@ services:
       args:
         INDEXER_UID: ${FDRIVE_INDEX_UID:-1000}
         INDEXER_GID: ${FDRIVE_INDEX_UID:-1000}
-    profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
+      # Legacy operator mounts keep their conventional root. Managed mode
+      # suppresses all scans until a feature is selected; the fallback mount
+      # below makes a fresh no-storage install safe.
       INDEX_ROOTS: sftpgo=/roots/sftpgo
       TIKA_URL: http://tika:9998
       EMBED_URL: http://embed:80
@@ -196,8 +197,10 @@ services:
       IMAGE_EMBED_URL: http://image-embed:8012
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
+      FDRIVE_FEATURES_MANAGED: "true"
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
     volumes:
-      - ${FDRIVE_INDEX_SFTPGO_DIR}:/roots/sftpgo:ro
+      - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo:ro
       - fdrive-thumbs:/thumbs
     depends_on:
       db:
@@ -210,7 +213,17 @@ services:
     pids_limit: 512
     logging: *default-logging
 
-  # Nightly OCR pass over the same roots the indexer reads, filling in text
+  # Initialize the backup directory's ownership before the non-root OCR worker
+  # needs to retain an original. Never change ownership of the source files.
+  ocr-state-init:
+    image: alpine:3.20
+    volumes:
+      - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
+    command: ["chown", "1000:1000", "/state"]
+    logging: *default-logging
+
+  # PDF-rewriting OCR is independently controlled by its explicit pdfOcr
+  # setting. It stays alive for diagnostics while disabled.
   # layers for scanned PDFs (see docs/OCR.md). Needs read-write access to the
   # roots (the indexer only needs read-only) and its own state directory for
   # kept originals; the API's System page talks to it over `FDRIVE_OCR_URL`.
@@ -218,7 +231,6 @@ services:
     build:
       context: ../services/ocr
       dockerfile: Dockerfile
-    profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       INDEX_ROOTS: sftpgo=/roots/sftpgo
@@ -230,12 +242,16 @@ services:
       # single-user instance; see deploy/.env.example. OCR_EXCLUDE_GLOBS
       # still applies on top. Empty (the default) means no restriction.
       OCR_INCLUDE_GLOBS: ${OCR_INCLUDE_GLOBS:-}
+      FDRIVE_FEATURES_MANAGED: "true"
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
     volumes:
-      - ${FDRIVE_INDEX_SFTPGO_DIR}:/roots/sftpgo
+      - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
     depends_on:
       db:
         condition: service_healthy
+      ocr-state-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -243,8 +259,15 @@ services:
     logging: *default-logging
 
   tika:
-    image: apache/tika:3.2.1.0@sha256:df12b41af58c9833e60bdc231ffc4b59f5b7a83bfe2d63e3dc7aab7da923abba
-    profiles: [index]
+    build:
+      context: ..
+      dockerfile: deploy/runtime/Dockerfile.tika
+    environment:
+      FDRIVE_FEATURES_MANAGED: "true"
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
+      FDRIVE_RUNTIME_FEATURES: textSearch,searchOcr,semanticSearch
+      FDRIVE_RUNTIME_PORT: "9997"
+      FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:9998/version
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -254,10 +277,17 @@ services:
   embed:
     # Pinned to an explicit version (not :cpu-latest) plus digest, see
     # deploy/REFERENCE.md's pins table.
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.2@sha256:16230cd8f679ae5f8a51d585033628b1c0d45cd70c2bc9b0d208170d71218fdb
+    build:
+      context: ..
+      dockerfile: deploy/runtime/Dockerfile.tei
     platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
-    profiles: [index]
-    command: ["--model-id", "intfloat/multilingual-e5-small"]
+    command: ["text-embeddings-router", "--model-id", "intfloat/multilingual-e5-small"]
+    environment:
+      FDRIVE_FEATURES_MANAGED: "true"
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
+      FDRIVE_RUNTIME_FEATURES: semanticSearch
+      FDRIVE_RUNTIME_PORT: "8099"
+      FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:80/health
     volumes:
       - ${FDRIVE_DATA_DIR:-./data}/models:/data
     mem_limit: 4g
@@ -280,11 +310,16 @@ services:
   # dependency: this service is stateless.
   image-embed:
     build:
-      context: ../services/image-embed
-      dockerfile: Dockerfile
-    profiles: [index]
+      context: ..
+      dockerfile: deploy/runtime/Dockerfile.image-embed
     environment:
       IMAGE_EMBED_PORT: "8012"
+      FDRIVE_FEATURES_MANAGED: "true"
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
+      FDRIVE_RUNTIME_FEATURES: imageSearch
+      FDRIVE_RUNTIME_PORT: "8013"
+      FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:8012/health
+      FDRIVE_RUNTIME_CHILD_UNMANAGED: "true"
     volumes:
       - fdrive-image-embed-models:/models
     mem_limit: 6g

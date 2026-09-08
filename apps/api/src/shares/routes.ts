@@ -231,6 +231,7 @@ export function registerSharesRoutes(
   groups: { public: AppHono; authed: AuthedHono },
   deps: {
     service: SharesService;
+    thumbnailsEnabled?: () => Promise<boolean>;
     codec: ShareCredentialCodec;
     limiter: ShareLimiter;
     config: AppConfig;
@@ -426,7 +427,11 @@ export function registerSharesRoutes(
   // path fails to resolve, or whether the file is not indexed, this route
   // must never become an oracle for which of those it was.
   groups.public.get(`${pub}/thumb`, async (c) => {
-    if (deps.thumbsDir === undefined) throw THUMB_NOT_FOUND();
+    if (
+      deps.thumbsDir === undefined ||
+      (deps.thumbnailsEnabled !== undefined && !(await deps.thumbnailsEnabled()))
+    )
+      throw THUMB_NOT_FOUND();
 
     const query = publicThumbQuery(c);
     if (query === null) throw THUMB_NOT_FOUND();

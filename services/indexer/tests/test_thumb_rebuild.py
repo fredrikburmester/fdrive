@@ -16,6 +16,7 @@ import pytest
 
 from fdrive_indexer import db, thumb_rebuild
 from fdrive_indexer.config import Config
+from fdrive_indexer.features import FeatureConfiguration, FeatureValues
 from fdrive_indexer.indexer import RootContext
 
 
@@ -221,6 +222,27 @@ def test_rebuild_thumbnails_reports_progress_via_callback(
     calls: list[bool] = []
     thumb_rebuild.rebuild_thumbnails(ctx, on_file=calls.append)
     assert calls == [True]
+
+
+def test_rebuild_stops_admitting_files_when_thumbnails_are_disabled(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    for name, sha in (("a.png", "sha-a"), ("b.png", "sha-b")):
+        path = tmp_path / name
+        _write_png(path)
+        _upsert_media_file(ctx, name, ".png", path, sha)
+    generated: list[str] = []
+
+    def stop_after_first(*_args: object, **_kwargs: object) -> list[object]:
+        generated.append("one")
+        ctx.set_features(FeatureConfiguration(2, FeatureValues(False, True, False, False, False, False)))
+        return []
+
+    monkeypatch.setattr(thumb_rebuild, "generate_thumbnails", stop_after_first)
+    assert thumb_rebuild.rebuild_thumbnails(ctx) == 1
+    assert generated == ["one"]
 
 
 def test_rebuild_thumbnails_db_failure_reports_via_callback(

@@ -13,7 +13,7 @@ import type { ConfigKeyDef } from "../../apps/api/src/config-keys.ts";
 export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "POSTGRES_PASSWORD",
-    description: "Password for the bundled Postgres database's fdrive user.",
+    description: "Hex password for the bundled Postgres database's fdrive user.",
     default: null,
     example: "change-me",
     secret: true,

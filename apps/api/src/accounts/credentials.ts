@@ -11,7 +11,28 @@ export async function verifyAccountCredentials(
   const connection = await deps.connectionStore.current();
   if (connection === null)
     throw new ApiHttpError("setup_required", "no SFTPGo connection is configured yet");
-  const baseUrl = connection.baseUrl;
+  return verifyCredentialsAt(deps, input, connection.baseUrl, true);
+}
+
+/**
+ * Verifies a setup candidate without consulting or changing the active
+ * connection. The resulting provider remains permanently bound to this URL.
+ */
+export async function verifyCandidateCredentials(
+  deps: Pick<VerifiedCredentialDeps, "repos" | "clientForBaseUrl" | "limiter">,
+  input: { username: string; password: string; otp?: string | undefined; ip: string },
+  baseUrl: string,
+) {
+  return verifyCredentialsAt(deps, input, baseUrl, false);
+}
+
+async function verifyCredentialsAt(
+  deps: Pick<VerifiedCredentialDeps, "repos" | "clientForBaseUrl" | "limiter"> &
+    Partial<Pick<VerifiedCredentialDeps, "connectionStore">>,
+  input: { username: string; password: string; otp?: string | undefined; ip: string },
+  baseUrl: string,
+  requireActiveConnection: boolean,
+) {
   const client = deps.clientForBaseUrl(baseUrl);
   const key = `${input.ip}|${input.username}`;
   const status = deps.limiter.check(key);
@@ -37,14 +58,18 @@ export async function verifyAccountCredentials(
     }
     throw new ApiHttpError("upstream_unavailable", "SFTPGo is unavailable");
   }
-  const current = await deps.connectionStore.current();
-  if (current?.baseUrl !== baseUrl)
-    throw new ApiHttpError("unauthorized", "storage connection changed; sign in again");
+  if (requireActiveConnection) {
+    const current = await deps.connectionStore?.current();
+    if (current?.baseUrl !== baseUrl)
+      throw new ApiHttpError("unauthorized", "storage connection changed; sign in again");
+  }
   deps.limiter.recordSuccess(key);
   const provider = await deps.repos.providers.ensure({
     type: "sftpgo",
     baseUrl,
   });
-  await requireCurrentConnection(deps.connectionStore, baseUrl);
+  if (requireActiveConnection && deps.connectionStore !== undefined) {
+    await requireCurrentConnection(deps.connectionStore, baseUrl);
+  }
   return { provider, token };
 }

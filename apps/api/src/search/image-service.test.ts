@@ -22,6 +22,11 @@ const HOME_SCOPES: readonly Scope[] = [
   { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 const NOW = new Date("2026-03-01T00:00:00.000Z");
+
+it("stops image search immediately when disabled", async () => {
+  const service = createImageSearchService(buildDeps({ enabled: async () => false }));
+  expect(await service.search(buildInput())).toMatchObject({ unavailable: true });
+});
 const HEALTHY: ImageEmbedHealthInfo = {
   status: "ok",
   model: "google/siglip2-large-patch16-256",

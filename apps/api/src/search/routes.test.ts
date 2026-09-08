@@ -77,6 +77,7 @@ function fakeResolver(overrides: Partial<SearchRoutesDeps["resolver"]> = {}) {
 function buildApp(
   searchService: SearchService,
   overrides: {
+    readonly features?: SearchRoutesDeps["features"];
     readonly resolver?: SearchRoutesDeps["resolver"];
     readonly identity?: Identity | null;
     readonly semanticEnabled?: boolean;
@@ -104,6 +105,7 @@ function buildApp(
     principalResolver: async () => principal,
     registerRoutes: (groups) =>
       registerSearchRoutes(groups, {
+        ...(overrides.features === undefined ? {} : { features: overrides.features }),
         searchService,
         imageSearchService: overrides.imageSearchService ?? fakeImageSearchService(),
         resolver: overrides.resolver ?? fakeResolver(),
@@ -154,6 +156,18 @@ describe("parseSearchLimit", () => {
 });
 
 describe("GET /api/v1/search", () => {
+  it("reports disabled feature choices even when the storage scope is available", async () => {
+    const app = buildApp(fakeSearchService(), {
+      semanticEnabled: true,
+      imageSearchEnabled: true,
+      features: async () => ({ textSearch: false, semanticSearch: false, imageSearch: false }),
+    });
+    expect(await (await app.request("/api/v1/search/status")).json()).toMatchObject({
+      available: false,
+      semantic: false,
+      images: false,
+    });
+  });
   it("returns 400 for an empty q", async () => {
     const app = buildApp(fakeSearchService());
 

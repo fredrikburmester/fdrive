@@ -52,14 +52,14 @@ test("alice (admin) sees the Search embedding server and OCR as not configured i
   await page.goto("/files");
 
   for (const label of ["Indexer", "Search", "OCR", "Thumbnails"]) {
-    await expect(page.getByRole("link", { name: label })).toBeVisible();
+    await expect(page.getByRole("link", { name: label, exact: true })).toBeVisible();
   }
 
   // No embedding server or OCR sidecar runs in the e2e stack (unlike the
   // indexer, which `global-setup.ts` fakes; see the "configured and
   // reachable" tests below), so their own "not configured" state should
   // render rather than an error, naming exactly which variable to set.
-  await page.getByRole("link", { name: "Search" }).click();
+  await page.getByRole("link", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
   await expect(page.getByText("Not configured: set FDRIVE_EMBED_URL.")).toBeVisible();
@@ -140,12 +140,18 @@ test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with 
       request.url().endsWith("/api/v1/system/indexer/thumbnails/rebuild") &&
       request.method() === "POST",
   );
+  const response = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/v1/system/indexer/thumbnails/rebuild") &&
+      response.request().method() === "POST",
+  );
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
   expect((await request).postDataJSON()).toEqual({
     root: "sftpgo",
     path: "alice/docs",
     force: true,
   });
+  expect((await response).status()).toBe(202);
   await expect(dialog).toBeHidden();
   await expect(
     page.locator("[data-sonner-toast]").filter({ hasText: "Rebuilding 6 thumbnails…" }),
@@ -170,8 +176,14 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
   await page.getByRole("button", { name: "Rebuild" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
+  const response = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/v1/system/indexer/thumbnails/rebuild") &&
+      response.request().method() === "POST",
+  );
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
 
+  expect((await response).status()).toBe(202);
   await expect(dialog).toBeHidden();
   await expect(
     page.locator("[data-sonner-toast]").filter({ hasText: "Rebuilding 6 thumbnails…" }),
@@ -218,7 +230,7 @@ test.describe("bob (not admin)", () => {
     await expect(page.getByText("System")).toBeHidden();
     await expect(page.getByRole("link", { name: "Connection" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Indexer" })).toBeHidden();
-    await expect(page.getByRole("link", { name: "Search" })).toBeHidden();
+    await expect(page.getByRole("link", { name: "Search", exact: true })).toBeHidden();
     await expect(page.getByRole("link", { name: "OCR" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Thumbnails" })).toBeHidden();
 

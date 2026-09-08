@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { validateIdentityLinkId } from "../repos/identity-links-types.js";
 import type {
   Account,
@@ -285,6 +286,14 @@ function createMemorySettingsRepo(): SettingsRepo {
     },
     async set(key, value) {
       byKey.set(key, value);
+    },
+    async compareAndSet(key, expected, value) {
+      const current = byKey.has(key) ? byKey.get(key) : null;
+      if (!isDeepStrictEqual(current, expected)) {
+        return false;
+      }
+      byKey.set(key, value);
+      return true;
     },
     async all() {
       return Object.fromEntries(byKey.entries());

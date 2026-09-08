@@ -209,6 +209,25 @@ def test_extractor_pdf_too_big(tmp_path: Path) -> None:
     assert text is None
 
 
+def test_extractor_uses_non_rewriting_pdf_ocr_only_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"original-pdf-bytes")
+    extractor_instance = _make_extractor(tmp_path)
+    monkeypatch.setattr(extract, "extract_pdf", lambda *_a: (None, "no_text"))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        extract,
+        "extract_pdf_ocr",
+        lambda *_a: calls.append("ocr") or ("recognized scan text that is long enough to index safely", "indexed"),
+    )
+    assert extractor_instance.extract(str(pdf), "scan.pdf", ".pdf", pdf.stat().st_size, search_ocr=False)[1] == "no_text"
+    text, status = extractor_instance.extract(str(pdf), "scan.pdf", ".pdf", pdf.stat().st_size, search_ocr=True)
+    assert status == "indexed"
+    assert text is not None
+    assert calls == ["ocr"]
+    assert pdf.read_bytes() == b"original-pdf-bytes"
+
+
 def test_extractor_image_outside_ocr_dirs_excluded(tmp_path: Path) -> None:
     p = tmp_path / "photo.png"
     p.write_bytes(b"x")
@@ -216,6 +235,53 @@ def test_extractor_image_outside_ocr_dirs_excluded(tmp_path: Path) -> None:
     text, status = extractor.extract(str(p), "Photos/photo.png", ".png", 10)
     assert status == "excluded:image_dir"
     assert text is None
+
+
+def test_extractor_empty_image_globs_exclude_image_ocr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = tmp_path / "photo.png"
+    p.write_bytes(b"x")
+    extractor = _make_extractor(tmp_path, ocr_image_globs=[])
+    monkeypatch.setattr(extract, "extract_image", lambda *_a: ("recognised image text long enough", "indexed"))
+
+    text, status = extractor.extract(str(p), "Photos/photo.png", ".png", 10, search_ocr=True)
+
+    assert status == "excluded:image_dir"
+    assert text is None
+
+
+def test_extractor_managed_image_glob_allows_image_ocr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = tmp_path / "photo.png"
+    p.write_bytes(b"x")
+    extractor = _make_extractor(tmp_path, ocr_image_globs=["**"])
+    monkeypatch.setattr(extract, "extract_image", lambda *_a: ("recognised image text long enough", "indexed"))
+
+    text, status = extractor.extract(str(p), "Photos/photo.png", ".png", 10, search_ocr=True)
+
+    assert status == "indexed"
+    assert text == "recognised image text long enough"
+
+
+def test_extract_pdf_ocr_keeps_native_pages_and_reads_scanned_pages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import pymupdf
+    import pytesseract
+
+    pdf = tmp_path / "mixed.pdf"
+    doc = pymupdf.open()
+    first = doc.new_page()
+    first.insert_text((72, 72), "Native page text is long enough to remain part of the indexed document.")
+    doc.new_page()
+    doc.save(str(pdf))
+    doc.close()
+    original = pdf.read_bytes()
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda *_a, **_k: "Recognised scan text from the second page.")
+
+    text, status = extract.extract_pdf_ocr(str(pdf), 10, "eng", normalize)
+
+    assert status == "indexed"
+    assert text is not None
+    assert "Native page text" in text
+    assert "Recognised scan text" in text
+    assert pdf.read_bytes() == original
 
 
 def test_extractor_image_too_big(tmp_path: Path) -> None:

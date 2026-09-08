@@ -14,8 +14,8 @@ import {
   applyPreflightKnownKeysBlock,
   knownFdriveKeys,
   renderComposePassthroughLines,
-  renderEnvExample,
   renderKnownFdriveKeysBashArray,
+  renderQuickstartEnvExample,
 } from "./generate-env-example.ts";
 
 function main(): void {
@@ -25,7 +25,7 @@ function main(): void {
   const composePath = join(deployDir, "compose.yaml");
   const preflightPath = join(deployDir, "preflight.sh");
 
-  writeFileSync(envExamplePath, renderEnvExample(), "utf-8");
+  writeFileSync(envExamplePath, renderQuickstartEnvExample(), "utf-8");
   console.log(`Wrote ${envExamplePath}`);
 
   const composeSource = readFileSync(composePath, "utf-8");

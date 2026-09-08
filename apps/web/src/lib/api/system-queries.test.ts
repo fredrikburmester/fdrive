@@ -6,6 +6,8 @@ import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const setupStatusMock = vi.fn();
+const systemFeaturesMock = vi.fn();
+const systemUpdateFeaturesMock = vi.fn();
 const setupTestMock = vi.fn();
 const setupCompleteMock = vi.fn();
 const adminConnectionMock = vi.fn();
@@ -30,6 +32,8 @@ const systemImageSearchClearMock = vi.fn();
 
 vi.mock("./client.js", () => ({
   apiClient: {
+    systemFeatures: (...args: unknown[]) => systemFeaturesMock(...args),
+    systemUpdateFeatures: (...args: unknown[]) => systemUpdateFeaturesMock(...args),
     setupStatus: (...args: unknown[]) => setupStatusMock(...args),
     setupTest: (...args: unknown[]) => setupTestMock(...args),
     setupComplete: (...args: unknown[]) => setupCompleteMock(...args),
@@ -69,6 +73,41 @@ const ME_RESPONSE: MeResponse = {
   activeIdentityId: "00000000-0000-0000-0000-000000000001",
   isAdmin: true,
 };
+
+describe("feature queries", () => {
+  it("fetches choices and updates caches after saving a revision", async () => {
+    const values = {
+      thumbnails: false,
+      textSearch: false,
+      searchOcr: false,
+      semanticSearch: false,
+      imageSearch: false,
+      pdfOcr: false,
+    };
+    const data = {
+      configuration: { version: 1, revision: 0, values, walkthroughComplete: false },
+      source: "default",
+      statuses: [],
+      roots: [],
+    };
+    const saved = { ...data, configuration: { ...data.configuration, revision: 1 } };
+    systemFeaturesMock.mockResolvedValue(data);
+    systemUpdateFeaturesMock.mockResolvedValue(saved);
+    const client = new QueryClient();
+    const { useSystemFeatures, useUpdateFeatures } = await import("./system-queries.js");
+    const wrapper = createWrapper(client);
+    const query = renderHook(() => useSystemFeatures(), { wrapper });
+    await waitFor(() => expect(query.result.current.data).toEqual(data));
+    const mutation = renderHook(() => useUpdateFeatures(), { wrapper });
+    await mutation.result.current.mutateAsync({ revision: 0, values, walkthroughComplete: false });
+    expect(systemUpdateFeaturesMock).toHaveBeenCalledWith({
+      revision: 0,
+      values,
+      walkthroughComplete: false,
+    });
+    expect(systemFeaturesMock).toHaveBeenCalled();
+  });
+});
 
 const CONNECTION_RESPONSE: AdminConnectionResponse = {
   baseUrl: "http://sftpgo:8080",

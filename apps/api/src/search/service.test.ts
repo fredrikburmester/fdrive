@@ -99,6 +99,18 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
 
 const NO_FILTERS = { exts: null, folder: null, after: null, before: null };
 
+it("stops text search immediately when its runtime feature is disabled", async () => {
+  const service = createSearchService(
+    buildDeps({
+      features: async () => ({ textSearch: false, semanticSearch: false, thumbnails: false }),
+    }),
+  );
+  expect(await service.search(baseInput())).toMatchObject({
+    unavailable: true,
+    sections: { files: [], folders: [], content: [] },
+  });
+});
+
 function baseInput(overrides: Partial<SearchServiceInput> = {}): SearchServiceInput {
   return {
     scopes: HOME_SCOPES,
@@ -145,6 +157,18 @@ describe("createSearchService: search - degraded", () => {
     });
     return buildDeps({ indexQueries, ...overrides });
   }
+
+  it("does not warn or call embeddings when semantic search is intentionally off", async () => {
+    const embed = vi.fn(async () => null);
+    const service = createSearchService(
+      depsWithNoMatches({
+        embedClient: { embed },
+        features: async () => ({ textSearch: true, semanticSearch: false, thumbnails: false }),
+      }),
+    );
+    expect((await service.search(baseInput())).degraded).toBe(false);
+    expect(embed).not.toHaveBeenCalled();
+  });
 
   it("is degraded when no embed client is configured", async () => {
     const service = createSearchService(depsWithNoMatches());

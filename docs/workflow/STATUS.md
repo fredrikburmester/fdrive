@@ -2,6 +2,33 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## Setup walkthrough (implemented and verified)
+
+- User requested UI-managed optional features, minimal deployment config, and guided SFTPGo
+  connection/user diagnostics. Selected bundled workers, inactive until enabled.
+- Design and acceptance criteria: [P8-SETUP-WALKTHROUGH.md](P8-SETUP-WALKTHROUGH.md).
+- Integrated versioned feature settings/admission, resumable owner claim, SFTPGo diagnostics,
+  walkthrough/System UI, lazy processing/models, minimal deployment, and legacy migration.
+  Both OCR toggles are in onboarding. Reviewed worker deltas transferred; copies retained.
+  Commit/push authorized; unrelated user edits preserved.
+- Review fixes: bounded polling, cancellation without sweeps, durable derivative backfill,
+  scanned-PDF extraction, model lifecycle/readiness, ARM wrapper, Postgres legacy migration,
+  thumbnail-dialog completion independent of slow cache-size refresh, isolated Next builds.
+- Passed: final application (1,860 API / 1,528 web tests plus workspace/deploy coverage),
+  workflow, runtime/OCR Python (OCR 138 tests, 97.64%), focused regressions, final integration.
+- Real dev UI passed: claim, connection, failed login/retry, admin user inventory, saved-step
+  resume, all six choices, skip-all and finish into files. Fixture servers stopped.
+- Actual production Compose passed: fresh all-off boot, idle model controllers, owner auth,
+  writable OCR backup state, UI thumbnail enable -> generated 256/1024 previews -> authorized
+  WebP 200; UI disable -> workers off, models stopped, thumbnail 404, cache retained.
+  Production fixture containers/volumes removed; unused task images removed for disk space.
+- Final Linux indexer passed 505 tests at 95.61% coverage with strict precision, including
+  inotify. Final affected browser suite passed 12/12, including both rebuild dialogs.
+  Docker Desktop stale-file/disk failures resolved without changing application data.
+- All required profiles, including final documentation/workflow checks, passed. No live
+  owner SFTPGo connection performed. Host mount changes still require deployment configuration,
+  as explained in the walkthrough and deployment guide.
+
 ## README screenshots (2026-09-08)
 
 - Added all 13 user-provided PNGs under `docs/screenshots/`, with a README overview

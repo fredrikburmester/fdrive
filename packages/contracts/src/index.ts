@@ -24,6 +24,17 @@ export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from 
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
 export { FsEvent, JobEvent, PingEvent, SseEvent } from "./events.ts";
 export {
+  FEATURE_IDS,
+  FEATURES_SETTINGS_KEY,
+  FeatureConfiguration,
+  FeatureId,
+  FeatureStatus,
+  FeaturesUpdateRequest,
+  FeatureValues,
+  SystemFeaturesResponse,
+  WORKER_TOKEN_HEADER,
+} from "./features.ts";
+export {
   ArchiveEntriesFormat,
   ArchiveEntriesResponse,
   ArchiveEntry,
@@ -128,8 +139,11 @@ export {
   ConnectionTestResponse,
   SETUP_TOKEN_HEADER,
   SetupCompleteRequest,
+  SetupInventoryUser,
   SetupStatusResponse,
   SetupTestRequest,
+  SetupUserInventoryRequest,
+  SetupUserInventoryResponse,
 } from "./setup.ts";
 export * from "./shares.ts";
 export {

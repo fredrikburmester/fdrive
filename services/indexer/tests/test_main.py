@@ -97,6 +97,27 @@ def test_run_root_loops_scanning_until_woken(postgres_dsn: str, monkeypatch: pyt
     assert _wait_until(lambda: calls["n"] >= 2)
 
 
+def test_run_root_does_not_rescan_at_feature_refresh_cadence(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
+    cfg = Config()
+    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx.settings = Settings(60, ctx.settings.workers, (), (), "eng")
+    calls = {"n": 0}
+    monkeypatch.setattr(main, "scan_once", lambda _ctx: calls.__setitem__("n", calls["n"] + 1) or {})
+    monkeypatch.setattr(main, "refresh_settings", lambda _ctx: None)
+    monkeypatch.setattr(main, "start_watcher", lambda *a, **k: None)
+
+    watchers: dict[str, object | None] = {}
+    wake_events: dict[str, threading.Event] = {}
+    threading.Thread(target=main.run_root, args=(ctx, watchers, wake_events), daemon=True).start()
+    assert _wait_until(lambda: calls["n"] == 1)
+    time.sleep(0.2)
+    assert calls["n"] == 1
+
+
 def test_run_root_survives_scan_crash(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
@@ -157,11 +178,13 @@ def test_run_root_wakes_on_watcher_overflow(postgres_dsn: str, monkeypatch: pyte
     assert _wait_until(lambda: calls["n"] >= 20, timeout=5)
 
 
-def test_main_exits_when_no_roots_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_stays_live_when_no_roots_configured(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
     monkeypatch.delenv("INDEX_ROOTS", raising=False)
-    with pytest.raises(SystemExit) as exc_info:
-        main.main()
-    assert exc_info.value.code == 1
+    served: dict[str, object] = {}
+    monkeypatch.setattr(main.uvicorn, "run", lambda app, **_kwargs: served.setdefault("app", app))
+    main.main()
+    assert served["app"].state.server_state.contexts == {}  # type: ignore[attr-defined]
 
 
 def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -179,7 +202,6 @@ def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     monkeypatch.setenv("INDEXER_PORT", "0")
 
-    monkeypatch.setattr(main, "wait_for_embed", lambda url: True)
     monkeypatch.setattr(main, "scan_once", lambda ctx: {"seen": 0, "changed": 0, "deleted": 0, "errors": 0})
 
     served: dict[str, object] = {}

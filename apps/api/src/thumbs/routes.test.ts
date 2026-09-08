@@ -158,6 +158,10 @@ function buildApp(deps: BuildAppOptions = {}, username = "alice") {
 }
 
 describe("GET /api/v1/thumb: real file reader", () => {
+  it("blocks cached previews when presentation thumbnails are disabled", async () => {
+    const app = buildApp({ enabled: async () => false });
+    expect((await app.request("/api/v1/thumb?path=/photo.jpg&size=256")).status).toBe(404);
+  });
   let dir: string | undefined;
 
   afterEach(async () => {

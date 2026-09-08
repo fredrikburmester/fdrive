@@ -67,7 +67,10 @@ class Watcher:
         self.workers, self.debounce = workers, debounce
         self.skip_names, self.skip_dirs = skip_names, skip_dirs
         self.wake = threading.Event()
-        self.fd = _libc.inotify_init1(os.O_CLOEXEC)
+        # Nonblocking reads let stop() terminate the reader deterministically;
+        # closing a blocking inotify fd from another Python thread is not a
+        # portable wakeup and can retain reader threads across feature toggles.
+        self.fd = _libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
         if self.fd < 0:
             raise OSError(ctypes.get_errno(), "inotify_init1 failed")
         self._maps = threading.Lock()
@@ -77,6 +80,23 @@ class Watcher:
         self._renames: list[tuple[str, str, bool, float]] = []
         self._move_from: dict[int, tuple[str, bool, float]] = {}
         self._rebuild = False
+        self._stopped = threading.Event()
+        self._reader_thread: threading.Thread | None = None
+        self._dispatcher_thread: threading.Thread | None = None
+
+    def stop(self) -> None:
+        """Release inotify resources when every processing feature is disabled."""
+        if self._stopped.is_set():
+            return
+        self._stopped.set()
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        current = threading.current_thread()
+        for thread in (self._reader_thread, self._dispatcher_thread):
+            if thread is not None and thread is not current:
+                thread.join(timeout=1)
 
     def _add_watch(self, path: str) -> bool:
         wd = _libc.inotify_add_watch(self.fd, os.fsencode(path), MASK)
@@ -141,14 +161,21 @@ class Watcher:
 
     def start(self) -> None:
         self.add_tree(self.root)
-        threading.Thread(target=self._reader, name="inotify-reader", daemon=True).start()
-        threading.Thread(target=self._dispatcher, name="inotify-dispatch", daemon=True).start()
+        self._reader_thread = threading.Thread(target=self._reader, name="inotify-reader", daemon=True)
+        self._dispatcher_thread = threading.Thread(target=self._dispatcher, name="inotify-dispatch", daemon=True)
+        self._reader_thread.start()
+        self._dispatcher_thread.start()
 
     def _reader(self) -> None:
-        while True:
+        while not self._stopped.is_set():
             try:
                 buf = os.read(self.fd, 256 * 1024)
             except OSError as e:
+                if self._stopped.is_set():
+                    break
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    time.sleep(0.05)
+                    continue
                 self.log(f"watch: read failed: {e}")
                 time.sleep(1)
                 continue
@@ -225,12 +252,13 @@ class Watcher:
 
     def _dispatcher(self) -> None:
         pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="inotify-index")
-        while True:
+        while not self._stopped.is_set():
             time.sleep(0.5)
             try:
                 self._flush(pool)
             except Exception as e:  # noqa: BLE001
                 self.log(f"watch: flush failed: {type(e).__name__}: {e}")
+        pool.shutdown(wait=False, cancel_futures=True)
 
     def _flush(self, pool: ThreadPoolExecutor) -> None:
         if self._rebuild:

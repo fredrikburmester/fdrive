@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,7 +139,12 @@ async function createBuildShadow(apiPort: number, webPort: number): Promise<stri
   await rm(shadowDir, { recursive: true, force: true });
   await mkdir(shadowDir, { recursive: true });
   for (const entry of BUILD_SHADOW_ENTRIES) {
-    await symlink(join(webDir, entry), join(shadowDir, entry));
+    if (entry === "src") {
+      // Turbopack dev route discovery needs a real app source directory.
+      await cp(join(webDir, entry), join(shadowDir, entry), { recursive: true });
+    } else {
+      await symlink(join(webDir, entry), join(shadowDir, entry));
+    }
   }
   return shadowDir;
 }
@@ -278,11 +283,14 @@ export async function startEnvironment(
 
     let webChild: ChildProcess;
     if (isDevServerMode()) {
+      // Keep Next's dev lock/cache separate from the owner's running dev app.
+      const devShadowDir = await createBuildShadow(apiPort, webPort);
+      stopFns.push(() => rm(devShadowDir, { recursive: true, force: true }));
       webChild = spawn(
         join(webDir, "node_modules", ".bin", "next"),
         ["dev", "-p", String(webPort), "-H", E2E_HOST],
         {
-          cwd: webDir,
+          cwd: devShadowDir,
           env: webEnv,
           stdio: ["ignore", "pipe", "pipe"],
         },

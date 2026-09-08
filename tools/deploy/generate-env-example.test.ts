@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ConfigKeyDef, Subsystem } from "../../apps/api/src/config-keys.ts";
-import { DEPLOY_EXTRA_KEYS } from "./deploy-keys.ts";
 import {
   applyComposePassthroughBlock,
   applyPreflightKnownKeysBlock,
@@ -15,6 +14,7 @@ import {
   renderEnvExample,
   renderEnvExampleEntry,
   renderKnownFdriveKeysBashArray,
+  renderQuickstartEnvExample,
 } from "./generate-env-example.ts";
 
 const CONFIGURED: ConfigKeyDef = {
@@ -86,11 +86,12 @@ describe("renderEnvExample", () => {
     expect(rendered).not.toContain("FDRIVE_TEST_KEY");
   });
 
-  it("includes every deploy-only key", () => {
-    const rendered = renderEnvExample();
-    for (const entry of DEPLOY_EXTRA_KEYS) {
-      expect(rendered).toContain(entry.key);
-    }
+  it("keeps quick-start to secrets and an optional connection", () => {
+    const rendered = renderQuickstartEnvExample();
+    expect(rendered).toContain("FDRIVE_MASTER_KEY");
+    expect(rendered).toContain("POSTGRES_PASSWORD");
+    expect(rendered).toContain("SFTPGO_URL");
+    expect(rendered).not.toContain("FDRIVE_PROFILES");
   });
 
   it("ends with a trailing newline", () => {
@@ -246,9 +247,9 @@ describe("COMPOSE_PASSTHROUGH_EXCLUDED_KEYS and ENV_EXAMPLE_EXCLUDED_KEYS", () =
 });
 
 describe("generated file diff", () => {
-  it("deploy/.env.example matches what renderEnvExample() produces right now", () => {
+  it("deploy/.env.example matches the quick-start render right now", () => {
     const committed = readFileSync(join(deployDir, ".env.example"), "utf-8");
-    expect(committed).toBe(renderEnvExample());
+    expect(committed).toBe(renderQuickstartEnvExample());
   });
 
   it("deploy/compose.yaml's generated block matches renderComposePassthroughLines() right now", () => {

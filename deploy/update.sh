@@ -70,6 +70,19 @@ done
 echo "==> preflight"
 ./preflight.sh
 
+echo "==> feature migration"
+./migrate-feature-settings.sh "${args[@]}"
+
+# The ARM64 override derives the managed runtime controller from a pinned
+# upstream TEI build. Build that base here so ordinary `./update.sh` remains
+# the complete deployment command; no feature selection touches Compose.
+for file in ${FDRIVE_COMPOSE_FILES:-}; do
+  [[ $file == "compose.arm64.yaml" ]] || continue
+  echo "==> native ARM64 TEI base"
+  ./build-arm64-runtime.sh
+  break
+done
+
 docker compose "${args[@]}" up -d --build --remove-orphans
 
 echo

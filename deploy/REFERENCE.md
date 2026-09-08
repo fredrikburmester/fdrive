@@ -8,13 +8,14 @@ This document provides architectural and operational details for advanced deploy
 
 | File | Purpose |
 | :--- | :--- |
-| `compose.yaml` | **Core stack**: Reverse proxy (Caddy), web UI (Next.js), API backend (Hono), and database (Postgres + pgvector). This is the default stack. |
-| `compose.arm64.yaml` | **Native ARM64 embeddings**: Builds pinned upstream TEI source with the same multilingual-e5-small model; layer over core or dev Compose on ARM64 hosts. |
+| `compose.yaml` | **Fixed fdrive stack**: Proxy, web, API, database, and idle optional-worker controllers. Models and processing stay off until selected in the UI. |
+| `compose.arm64.yaml` | **Native ARM64 embeddings**: Builds pinned upstream TEI source with the same multilingual-e5-small model; layer over the fixed stack on ARM64 hosts. |
 | `compose.sftpgo.yaml` | **Optional SFTPGo**: Boots an SFTPGo container alongside fdrive for users who don't already have one. |
 | `compose.office.yaml` | **Optional ONLYOFFICE**: Adds ONLYOFFICE Document Server as a WOPI host for collaborative document editing. |
 | `compose.office.collabora.yaml` | **Optional Collabora**: Adds Collabora Online instead of ONLYOFFICE. |
 | `compose.sftpgo-network.example.yaml` | Template showing how to attach the fdrive stack to an existing Docker bridge network containing your SFTPGo container. |
-| `.env.example` | Complete catalog of all supported environment variables. |
+| `.env.example` | Minimal secrets-only quick start; configure SFTPGo and features in the walkthrough. |
+| `init-env.sh` | Creates `deploy/.env` with one-time private bootstrap secrets; refuses to overwrite it. |
 | `preflight.sh` | Sanity-checks `.env` syntax, keys, and values before Docker starts. |
 | `update.sh` | Pulls updates, rebuilds images, runs preflight, and safely restarts containers. |
 
@@ -117,8 +118,15 @@ emulation. It retains the configured model, volumes and service limits, and buil
 the pinned upstream source. First build requires network access and several minutes.
 
 ```bash
-docker compose -f deploy/compose.yaml -f deploy/compose.arm64.yaml --profile index up -d --build embed
+docker compose -f deploy/compose.yaml -f deploy/compose.arm64.yaml up -d --build embed
 ```
+
+When using Compose directly, first run `./deploy/build-arm64-runtime.sh`; the
+normal `./deploy/update.sh` detects `compose.arm64.yaml` automatically.
+
+For upgrades from the former profile-based stack, use `./update.sh` once so it
+records actually running optional services before replacing them. Direct
+`docker compose up` defaults features off until they are selected in System.
 
 For local development, replace `deploy/compose.yaml` with `deploy/compose.dev.yaml`.
 This changes the embedding runtime only; existing embeddings remain compatible.

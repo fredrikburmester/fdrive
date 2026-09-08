@@ -2,6 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from "./client";
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
+
+describe("feature client", () => {
+  it("reads and updates versioned feature settings", async () => {
+    const values = {
+      thumbnails: false,
+      textSearch: false,
+      searchOcr: false,
+      semanticSearch: false,
+      imageSearch: false,
+      pdfOcr: false,
+    };
+    const response = {
+      configuration: { version: 1, revision: 0, values, walkthroughComplete: false },
+      source: "default",
+      statuses: [],
+      roots: [],
+    };
+    const fetchMock = vi.fn(async () => Response.json(response));
+    const client = createApiClient({ fetch: fetchMock });
+    expect(await client.systemFeatures()).toEqual(response);
+    expect(
+      await client.systemUpdateFeatures({ revision: 0, values, walkthroughComplete: false }),
+    ).toEqual(response);
+    expect(fetchMock.mock.calls).toHaveLength(2);
+  });
+});
 const AT = "2026-01-01T00:00:00.000Z";
 
 const VALID_ME = {
@@ -1480,4 +1506,20 @@ it("calls account identity and cross-identity view routes with typed responses",
   expect(calls[2]?.init.body).toBe(JSON.stringify({ identityId: VALID_UUID }));
   expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
   expect(calls[5]?.url).toContain("limit=5");
+});
+
+it("sends ephemeral SFTPGo inventory credentials with CSRF protection", async () => {
+  const response = {
+    ok: true,
+    users: [{ username: "alice", status: "enabled" }],
+    nextOffset: null,
+  };
+  const { fetchStub, calls } = createStubFetch([jsonResponse(200, response)]);
+  const client = createApiClient({ fetch: fetchStub });
+  const input = { username: "admin", password: "secret", otp: "123456", limit: 50, offset: 0 };
+  expect(await client.setupUserInventory(input)).toEqual(response);
+  expect(calls[0]?.url).toBe("/api/v1/admin/connection/users");
+  expect(calls[0]?.init.method).toBe("POST");
+  expect(calls[0]?.init.body).toBe(JSON.stringify(input));
+  expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
 });

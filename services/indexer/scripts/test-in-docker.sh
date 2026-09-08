@@ -3,6 +3,8 @@
 # inside the service's own Docker image, on a development machine that is not
 # Linux (macOS, Windows). The container gets the host's Docker socket so
 # testcontainers can start its own Postgres containers from inside.
+# Docker Desktop's socket belongs to group 0; override FDRIVE_TEST_DOCKER_GID
+# for a different Linux socket group. The tests still run as the indexer user.
 #
 # Usage: services/indexer/scripts/test-in-docker.sh [pytest args...]
 set -euo pipefail
@@ -14,6 +16,7 @@ IMAGE_TAG="fdrive-indexer-test:local"
 docker build -t "$IMAGE_TAG" .
 
 docker run --rm \
+  --group-add "${FDRIVE_TEST_DOCKER_GID:-0}" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd)/tests:/app/tests:ro" \
   -v "$(pwd)/scripts:/app/scripts:ro" \
