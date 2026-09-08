@@ -688,14 +688,10 @@ flows pass real storage integration, browser acceptance and required quality gat
     repeatable recipes in `docs/workflow/COMMANDS.md`, backed by tested shell helpers in
     `tools/orchestration/`. Helpers select Node 24 and pinned pnpm, prepare isolated checkouts,
     and run named verification profiles under per-checkout locks. Implementation lessons live in
-    `docs/workflow/PITFALLS.md`. Codex orchestrates; all new implementation/test workers run
-    through `tools/orchestration/worker.sh` and headless `agy`, pinned to Gemini 3.8 Flash
-    (`gemini-3.8-flash-high`) and high reasoning. No native GPT worker fallback. Reuse role instructions from
-    `.codex/agents/`, ignoring native model fields. Preserve existing workers until finished.
-    Process success requires independent diff/test review before integration. Worktree permissions
-    are configured through explicit `worker.sh setup`; start/followup register the checkout with
-    `--add-dir` and never change global settings. Preserve existing ask/deny rules and use scoped
-    locked-helper command grants.
+    `docs/workflow/PITFALLS.md`. Use one set of agent instructions. Worker model and effort
+    defaults are explicit in project configuration; role files do not duplicate them.
+    User-selected default: `gpt-5.6-sol` with high reasoning for routine implementation/tests;
+    `gpt-6-astra` with high reasoning for complex work.
 
 18. Phase 5 search latency (2026-09-08): use native TEI on ARM64 with the existing
     multilingual-e5-small model, pinned upstream source and shared deployment/perf recipe.
