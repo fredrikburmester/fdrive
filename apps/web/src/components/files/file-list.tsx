@@ -9,9 +9,16 @@ import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
-import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
+import {
+  apiClient,
+  INTERNAL_DND_TYPE,
+  readDraggedPaths,
+  writeDraggedPaths,
+} from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
+import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
+import { wantsThumbnail } from "@/lib/files/thumbnail";
 import { formatBytes, formatDate } from "@/lib/format";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
@@ -23,6 +30,41 @@ export const FILE_ROW_HEIGHT = 36;
 
 /** Indent, in pixels, added per tree depth level in tree view. */
 export const TREE_INDENT_PX = 20;
+
+const LIST_THUMBNAIL_SIZE = 256;
+
+/**
+ * A list row's icon slot: a 24px image thumbnail when `showThumbnail` is true
+ * and `wantsThumbnail` accepts the file, falling back to a 24px container holding
+ * `FileIcon` if the image fails to load or for non-image entries to preserve layout.
+ */
+function ListRowIcon({ entry, showThumbnail }: { entry: FsEntry; showThumbnail: boolean }) {
+  const [errored, setErrored] = useState(false);
+
+  if (!showThumbnail) {
+    return <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />;
+  }
+
+  if (errored || !wantsThumbnail(entry)) {
+    return (
+      <div className="flex size-6 shrink-0 items-center justify-center">
+        <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />
+      </div>
+    );
+  }
+
+  return (
+    // biome-ignore lint/performance/noImgElement: a thumbnail from the API, not a static asset next/image can optimize
+    <img
+      src={apiClient.thumbUrl(entry.path, LIST_THUMBNAIL_SIZE)}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="size-6 shrink-0 rounded-xs object-cover"
+      onError={() => setErrored(true)}
+    />
+  );
+}
 
 export interface ClickModifierKeys {
   shift: boolean;
@@ -79,6 +121,12 @@ export interface FileListProps {
   /** Whether the active identity's storage provider exposes a trash, for
    * every row's context menu (see `FileContextMenu`). Defaults to `false`. */
   trashAvailable?: boolean;
+  /** A request to scroll a specific entry into view, identified by unique token. */
+  scrollRequest?: ScrollRequest | null;
+  /** Callback fired after the virtualizer has scrolled to the requested entry. */
+  onScrollConsumed?: (token: number) => void;
+  /** Whether to show image thumbnails in place of generic file icons. Defaults to false. */
+  showThumbnails?: boolean;
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
@@ -122,8 +170,12 @@ export function FileList({
   showReveal = false,
   hideArchive = false,
   trashAvailable = false,
+  scrollRequest = null,
+  onScrollConsumed,
+  showThumbnails = false,
 }: FileListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const lastConsumedTokenRef = useRef<number | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
   const allSelected = entries.length > 0 && selectedCount === entries.length;
@@ -135,6 +187,18 @@ export function FileList({
     estimateSize: () => FILE_ROW_HEIGHT,
     overscan: 10,
   });
+
+  useEffect(() => {
+    if (!scrollRequest || lastConsumedTokenRef.current === scrollRequest.token) {
+      return;
+    }
+    const index = findRevealIndex(entries, scrollRequest.path);
+    if (index >= 0) {
+      lastConsumedTokenRef.current = scrollRequest.token;
+      virtualizer.scrollToIndex(index, { align: "auto" });
+      onScrollConsumed?.(scrollRequest.token);
+    }
+  }, [scrollRequest, entries, virtualizer, onScrollConsumed]);
 
   const onClearSelectionRef = useRef(onClearSelection);
   onClearSelectionRef.current = onClearSelection;
@@ -337,7 +401,7 @@ export function FileList({
                     onCheckedChange={() => onEntryClick(entry, { shift: false, meta: true })}
                     aria-label={`Select ${entry.name}`}
                   />
-                  <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />
+                  <ListRowIcon key={entry.path} entry={entry} showThumbnail={showThumbnails} />
                   <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                   <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
                   <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">

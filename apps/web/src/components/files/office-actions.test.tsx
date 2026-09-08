@@ -90,6 +90,9 @@ it("adds Document, Spreadsheet and Presentation only when office creation is ava
     onClearSelection: vi.fn(),
     onDuplicateSelection: vi.fn(),
     onCompressSelection: vi.fn(),
+    onDownloadSelection: vi.fn(),
+    showThumbnails: false,
+    onShowThumbnailsChange: vi.fn(),
   };
   render(<FilesToolbarActions {...props} />);
   fireEvent.click(screen.getByTitle("New"));
@@ -103,4 +106,59 @@ it("adds Document, Spreadsheet and Presentation only when office creation is ava
     expect(create).toHaveBeenLastCalledWith(kind.toLowerCase());
     cleanup();
   }
+});
+
+it("renders download action in toolbar selection pill and calls onDownloadSelection", () => {
+  const onDownloadSelection = vi.fn();
+  const props: FilesToolbarActionsProps = {
+    viewMode: "list",
+    onViewModeChange: vi.fn(),
+    sortSpec: { key: "name", direction: "asc" },
+    onSortSpecChange: vi.fn(),
+    onNewFolder: vi.fn(),
+    onNewFile: vi.fn(),
+    onUploadFiles: vi.fn(),
+    onUploadFolder: vi.fn(),
+    detailsOpen: false,
+    onToggleDetails: vi.fn(),
+    selectedCount: 2,
+    onClearSelection: vi.fn(),
+    onDuplicateSelection: vi.fn(),
+    onCompressSelection: vi.fn(),
+    onDownloadSelection,
+    showThumbnails: false,
+    onShowThumbnailsChange: vi.fn(),
+  };
+  render(<FilesToolbarActions {...props} />);
+  const downloadButton = screen.getByLabelText("Download");
+  fireEvent.click(downloadButton);
+  expect(onDownloadSelection).toHaveBeenCalledTimes(1);
+});
+
+it("renders Show thumbnails option in View menu and toggles it", async () => {
+  const onShowThumbnailsChange = vi.fn();
+  const props: FilesToolbarActionsProps = {
+    viewMode: "list",
+    onViewModeChange: vi.fn(),
+    sortSpec: { key: "name", direction: "asc" },
+    onSortSpecChange: vi.fn(),
+    onNewFolder: vi.fn(),
+    onNewFile: vi.fn(),
+    onUploadFiles: vi.fn(),
+    onUploadFolder: vi.fn(),
+    detailsOpen: false,
+    onToggleDetails: vi.fn(),
+    selectedCount: 0,
+    onClearSelection: vi.fn(),
+    onDuplicateSelection: vi.fn(),
+    onCompressSelection: vi.fn(),
+    onDownloadSelection: vi.fn(),
+    showThumbnails: false,
+    onShowThumbnailsChange,
+  };
+  render(<FilesToolbarActions {...props} />);
+  fireEvent.click(screen.getByTitle("View"));
+  const item = await screen.findByRole("menuitemcheckbox", { name: /Show thumbnails/ });
+  fireEvent.click(item);
+  expect(onShowThumbnailsChange).toHaveBeenCalledWith(true);
 });

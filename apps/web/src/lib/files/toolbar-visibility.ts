@@ -7,6 +7,7 @@ export type ToolbarActionId =
   | "upload"
   | "duplicate"
   | "compress"
+  | "download"
   | "details"
   | "clearSelection";
 
@@ -22,6 +23,7 @@ const ALL_TOOLBAR_ACTIONS: readonly ToolbarActionId[] = [
   "upload",
   "duplicate",
   "compress",
+  "download",
   "details",
   "clearSelection",
 ];

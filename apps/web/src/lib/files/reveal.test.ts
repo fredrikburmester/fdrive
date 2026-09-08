@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseSelectParam, revealTarget } from "./reveal";
+import {
+  cleanupSelectParam,
+  findRevealIndex,
+  gridRowForIndex,
+  parseSelectParam,
+  revealTarget,
+  shouldPerformReveal,
+} from "./reveal";
 
 describe("revealTarget", () => {
   it("appends a select query parameter to a bare href", () => {
@@ -42,5 +49,75 @@ describe("parseSelectParam", () => {
 
   it("returns null for an empty select value", () => {
     expect(parseSelectParam("?select=")).toBeNull();
+  });
+});
+
+describe("findRevealIndex", () => {
+  const entries = [{ path: "/docs/a.txt" }, { path: "/docs/b.txt" }, { path: "/docs/c.txt" }];
+
+  it("returns -1 for null target", () => {
+    expect(findRevealIndex(entries, null)).toBe(-1);
+  });
+
+  it("returns matching index", () => {
+    expect(findRevealIndex(entries, "/docs/b.txt")).toBe(1);
+  });
+
+  it("returns -1 for missing target", () => {
+    expect(findRevealIndex(entries, "/docs/missing.txt")).toBe(-1);
+  });
+});
+
+describe("gridRowForIndex", () => {
+  it("returns -1 for negative index", () => {
+    expect(gridRowForIndex(-1, 4)).toBe(-1);
+  });
+
+  it("calculates row correctly", () => {
+    expect(gridRowForIndex(0, 4)).toBe(0);
+    expect(gridRowForIndex(3, 4)).toBe(0);
+    expect(gridRowForIndex(4, 4)).toBe(1);
+    expect(gridRowForIndex(9, 4)).toBe(2);
+  });
+
+  it("handles 0 or negative columns gracefully", () => {
+    expect(gridRowForIndex(5, 0)).toBe(5);
+  });
+});
+
+describe("shouldPerformReveal", () => {
+  const paths = ["/docs/a.txt", "/docs/b.txt"];
+
+  it("returns true when target is present and not last revealed", () => {
+    expect(shouldPerformReveal("/docs/a.txt", paths, null)).toBe(true);
+    expect(shouldPerformReveal("/docs/a.txt", paths, "/docs/b.txt")).toBe(true);
+  });
+
+  it("returns false when target is null", () => {
+    expect(shouldPerformReveal(null, paths, null)).toBe(false);
+  });
+
+  it("returns false when target is not in ordered paths", () => {
+    expect(shouldPerformReveal("/docs/c.txt", paths, null)).toBe(false);
+  });
+
+  it("returns false when target matches last revealed", () => {
+    expect(shouldPerformReveal("/docs/a.txt", paths, "/docs/a.txt")).toBe(false);
+  });
+});
+
+describe("cleanupSelectParam", () => {
+  it("returns empty string when select is the only parameter", () => {
+    expect(cleanupSelectParam("?select=readme.md")).toBe("");
+    expect(cleanupSelectParam("select=readme.md")).toBe("");
+  });
+
+  it("preserves other parameters", () => {
+    expect(cleanupSelectParam("?select=readme.md&sort=name")).toBe("?sort=name");
+    expect(cleanupSelectParam("?view=grid&select=readme.md")).toBe("?view=grid");
+  });
+
+  it("returns empty string for empty search", () => {
+    expect(cleanupSelectParam("")).toBe("");
   });
 });
