@@ -87,7 +87,7 @@ Updated: 2026-09-08. Owner: primary agent.
 - One persisted feature configuration path; absent settings leave every feature off.
   Malformed worker settings leave processing off.
 - Reviewed and transferred 22 Python paths from `.worktrees/p8-remove-legacy-workers`;
-  copy retained. Unrelated user `.codex`/WORKING edits preserved.
+  copy retained. Unrelated user agent-config/WORKING edits preserved.
 - Passed: application lint/types/coverage; full API/DB integration; 12 browser checks against
   Next dev; dev UI inspection; workflow; Compose config; target runtime/OCR Python; Linux
   indexer 506 tests at 95.52%; final real SFTP rename/indexer integration recheck.
@@ -152,7 +152,7 @@ Updated: 2026-09-08. Owner: primary agent.
 - Requested changes integrated and verified; baseline `e791fd5`. Three workflow worktrees
   reviewed, byte/mode-verified against target, then removed. Other task worktrees preserved.
 - Native optional delegation; compact shared docs/roles; recovery and history loaded on demand.
-  Terra/high configuration and explicit Astra/low approval policy preserved.
+  Opus worker defaults and explicit Fable-worker approval policy now live in `.claude/agents/` and WORKING.
 - Helpers: compact PASS/FAIL with retained logs; Python venv/dev readiness setup; working-tree
   baselines before setup; scoped conflict-safe uncommitted transfer with diff/check modes.
   CI shares setup/verification commands and uploads only helper logs on failure.
@@ -168,7 +168,7 @@ Updated: 2026-09-08. Owner: primary agent.
 
 - User requested automatic recovery after deployment without page reload.
 - Implementer completed search contracts/API/UI/tests in `.worktrees/search-startup-recovery`,
-  branch `codex/search-startup-recovery`; baseline committed HEAD, no copied prerequisites.
+  branch `claude/search-startup-recovery`; baseline committed HEAD, no copied prerequisites.
 - Add transient scope reason and bounded polling while open; preserve scope authorization.
 - Reviewed scope and production diff; committed as `af0a3d9` after user requested commit/push.
 - Live dev verification: stopped local `fdrive-dev-indexer-1`, observed startup message;

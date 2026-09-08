@@ -22,7 +22,7 @@ if [[ ${1:-} == --help && $# -eq 1 ]]; then usage; exit 0; fi
 SOURCE=$(fdrive_resolve_checkout "$1") || exit $?
 CHUNK=$2
 [[ $CHUNK =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fdrive_die 'chunk must match [a-z0-9][a-z0-9_-]*'
-BRANCH="codex/$CHUNK"
+BRANCH="claude/$CHUNK"
 WORKING_TREE=0
 DESTINATION=
 shift 2
