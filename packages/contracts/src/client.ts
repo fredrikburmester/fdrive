@@ -24,9 +24,12 @@ import {
   type CreateTagRequest,
   type FavoriteRequest,
   FavoritesResponse,
+  FolderViewResponse,
   RecentsResponse,
   type RecentTouchRequest,
+  type RemoveFolderViewRequest,
   type SetFileTagsRequest,
+  type SetFolderViewRequest,
   Tag,
   TagFilesResponse,
   TagsResponse,
@@ -260,6 +263,10 @@ export interface ApiClient {
   listFavorites(): Promise<FavoritesResponse>;
   addFavorite(req: FavoriteRequest): Promise<OkResponse>;
   removeFavorite(req: FavoriteRequest): Promise<OkResponse>;
+  getFolderView(path: string): Promise<FolderViewResponse>;
+  setFolderView(req: SetFolderViewRequest): Promise<OkResponse>;
+  removeFolderView(req: RemoveFolderViewRequest): Promise<OkResponse>;
+  resetFolderViews(): Promise<OkResponse>;
   listRecents(): Promise<RecentsResponse>;
   touchRecent(req: RecentTouchRequest): Promise<OkResponse>;
   trashStatus(): Promise<TrashStatusResponse>;
@@ -1047,6 +1054,34 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         { method: "DELETE", path: ROUTES.favorites.base, jsonBody: req },
         OkResponse,
       );
+    },
+
+    getFolderView(path: string): Promise<FolderViewResponse> {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.folderViews.base, query: { path } },
+        FolderViewResponse,
+      );
+    },
+
+    setFolderView(req: SetFolderViewRequest): Promise<OkResponse> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.folderViews.base, jsonBody: req },
+        OkResponse,
+      );
+    },
+
+    removeFolderView(req: RemoveFolderViewRequest): Promise<OkResponse> {
+      return requestJson(
+        ctx,
+        { method: "DELETE", path: ROUTES.folderViews.base, jsonBody: req },
+        OkResponse,
+      );
+    },
+
+    resetFolderViews(): Promise<OkResponse> {
+      return requestJson(ctx, { method: "DELETE", path: ROUTES.folderViews.all }, OkResponse);
     },
 
     listRecents(): Promise<RecentsResponse> {

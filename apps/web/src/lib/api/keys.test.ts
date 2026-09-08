@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { queryKeys } from "./keys.ts";
 
 describe("queryKeys", () => {
+  it("folder view keys isolate identities and paths with a shared reset prefix", () => {
+    expect(queryKeys.folderViews.all()).toEqual(["folder-views"]);
+    expect(queryKeys.folderViews.path("alice", "/photos")).toEqual([
+      "folder-views",
+      "alice",
+      "/photos",
+    ]);
+  });
   it("auth.me() builds a stable key", () => {
     expect(queryKeys.auth.me()).toEqual(["auth", "me"]);
   });

@@ -17,6 +17,7 @@ const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: 
   { schema: "app", table: "tags" },
   { schema: "app", table: "file_tags" },
   { schema: "app", table: "favorites" },
+  { schema: "app", table: "folder_views" },
   { schema: "app", table: "recents" },
   { schema: "app", table: "thumbnails" },
   { schema: "app", table: "image_embeddings" },

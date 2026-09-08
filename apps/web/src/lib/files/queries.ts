@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { accountTransition } from "@/lib/account/transition";
+import { queryKeys as apiQueryKeys } from "@/lib/api/keys";
 import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
 import { shouldShowSkeleton } from "./tree";
 import { reachableExpandedDirs } from "./tree-rows";
@@ -161,6 +162,9 @@ export function useDelayedFlag(active: boolean, delayMs: number): boolean {
 function useInvalidateAffected() {
   const queryClient = useQueryClient();
   return (input: AffectedListKeysInput) => {
+    if (input.op === "move" || input.op === "rename" || input.op === "delete") {
+      void refreshIdentityQuery(queryClient, apiQueryKeys.folderViews.all());
+    }
     for (const key of affectedListKeys(input)) {
       void refreshIdentityQuery(queryClient, key);
     }

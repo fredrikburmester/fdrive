@@ -5,26 +5,21 @@ import { baseName, parentPath } from "@fdrive/core";
 import { XIcon } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useMemo, useReducer, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { VirtualFileListing } from "@/components/files/virtual-file-listing";
 import { ShareDialog } from "@/components/shares/share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   apiClient,
-  contextEntries,
   DeleteDialog,
   describeFsError,
-  EMPTY_SELECTION,
-  FileList,
   PageHeader,
   pathToHref,
   RenameDialog,
   type RowContextAction,
-  type SelectionAction,
-  type SelectionState,
-  selectionReducer,
   useDelete,
   useDuplicate,
   useRename,
@@ -55,8 +50,8 @@ export interface VirtualListingProps {
 
 /**
  * A read-only listing fed by a list of paths rather than one real folder:
- * backs `/favorites`, `/recents`, and `/tags/[id]`. Reuses the ordinary
- * `FileList` (list view only) for rows that still resolve; rows that no
+ * backs `/favorites`, `/recents`, and `/tags/[id]`. It follows the global
+ * default view for rows that still resolve; rows that no
  * longer exist show muted, with a hint and a remove action instead. Rows
  * open (folders navigate, files preview), support "Reveal in folder", and
  * get the same context menu as the file browser minus move, copy,
@@ -80,20 +75,9 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     [resolved],
   );
   const missing = useMemo(() => resolved.filter((item) => item.entry === null), [resolved]);
-  const orderedPaths = useMemo(() => liveEntries.map((entry) => entry.path), [liveEntries]);
-
-  const [selection, dispatchSelection] = useReducer(
-    (state: SelectionState, action: SelectionAction) =>
-      selectionReducer(state, action, orderedPaths),
-    EMPTY_SELECTION,
-  );
   const [sharing, setSharing] = useState<FsEntry[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
-
-  function currentTagIds(path: string): readonly string[] {
-    return liveEntries.find((candidate) => candidate.path === path)?.meta?.tagIds ?? [];
-  }
 
   function handleOpen(entry: FsEntry) {
     router.push(toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path)));
@@ -109,10 +93,14 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     anchor.remove();
   }
 
-  function handleContextAction(action: RowContextAction, entry: FsEntry) {
+  function handleContextAction(
+    action: RowContextAction,
+    entry: FsEntry,
+    context: readonly FsEntry[],
+  ) {
     switch (action) {
       case "share":
-        setSharing(contextEntries(entry, liveEntries, selection.selected));
+        setSharing([...context]);
         break;
       case "open":
         handleOpen(entry);
@@ -127,7 +115,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         setRenameTarget(entry);
         break;
       case "delete":
-        setDeleteTargets(contextEntries(entry, liveEntries, selection.selected));
+        setDeleteTargets([...context]);
         break;
       case "duplicate":
         duplicate.mutate(entry.path, {
@@ -139,9 +127,12 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     }
   }
 
-  function handleToggleTag(paths2: readonly string[], tagId: string, checked: boolean) {
+  function handleToggleTag(entries: readonly FsEntry[], tagId: string, checked: boolean) {
     setFileTags.mutate(
-      paths2.map((path) => ({ path, tagIds: toggleTagId(currentTagIds(path), tagId, checked) })),
+      entries.map((entry) => ({
+        path: entry.path,
+        tagIds: toggleTagId(entry.meta?.tagIds ?? [], tagId, checked),
+      })),
     );
   }
 
@@ -197,21 +188,10 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
               </div>
             ) : (
               <div className="min-h-0 flex-1">
-                <FileList
+                <VirtualFileListing
                   entries={liveEntries}
-                  selected={selection.selected}
-                  focusedPath={selection.focus}
-                  onEntryClick={(entry, modifiers) =>
-                    dispatchSelection({ type: "click", path: entry.path, modifiers })
-                  }
-                  onEntryDoubleClick={handleOpen}
+                  onOpen={handleOpen}
                   onContextAction={handleContextAction}
-                  getDragPaths={(entry) => [entry.path]}
-                  onInternalDrop={() => {}}
-                  onToggleSelectAll={() =>
-                    dispatchSelection({ type: "toggleAll", visiblePaths: orderedPaths })
-                  }
-                  onClearSelection={() => dispatchSelection({ type: "clear" })}
                   tags={tags}
                   onToggleTag={handleToggleTag}
                   onToggleFavorite={handleToggleFavorite}

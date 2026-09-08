@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
+import { createViewFolder } from "./support/view-folder.js";
 
 /** The `data-path` values of every currently-rendered listing row, in DOM order. */
 async function visibleRowPaths(page: Page): Promise<string[]> {
@@ -70,7 +71,7 @@ test("clicking the Home breadcrumb returns to root", async ({ page }) => {
 });
 
 test("the view menu switches to grid and back, and persists across reload", async ({ page }) => {
-  await page.goto("/files");
+  const path = await createViewFolder(page, true);
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
   await expect(page.locator('[data-slot="file-list"]')).toBeVisible();
 
@@ -78,6 +79,12 @@ test("the view menu switches to grid and back, and persists across reload", asyn
   await page.getByRole("menuitemradio", { name: "Grid" }).click();
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
 
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get(`/api/v1/folder-views?path=${path}`)).json()).view?.mode,
+    )
+    .toBe("grid");
   await page.reload();
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
 

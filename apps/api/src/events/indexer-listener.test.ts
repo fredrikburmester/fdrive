@@ -107,6 +107,10 @@ function fakeMetadataService(): { metadata: MetadataService; calls: MetadataCall
     listFavorites: async (): Promise<MetadataFavoriteItem[]> => fail("listFavorites"),
     addFavorite: async () => fail("addFavorite"),
     removeFavorite: async () => fail("removeFavorite"),
+    getFolderView: async () => fail("getFolderView"),
+    setFolderView: async () => fail("setFolderView"),
+    removeFolderView: async () => fail("removeFolderView"),
+    resetFolderViews: async () => fail("resetFolderViews"),
     listRecents: async (): Promise<MetadataRecentItem[]> => fail("listRecents"),
     touchRecent: async () => fail("touchRecent"),
     async onMoved(identityId, oldPath, newPath, isDir) {

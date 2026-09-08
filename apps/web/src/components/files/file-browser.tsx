@@ -45,6 +45,7 @@ import {
   downloadSingle,
   needsZipDownload,
 } from "@/lib/files/download";
+import { useFolderView } from "@/lib/files/folder-view-queries";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
 import {
@@ -102,12 +103,6 @@ import {
   type TypeAheadBuffer,
   typeAheadMatch,
 } from "@/lib/files/type-ahead";
-import {
-  DEFAULT_VIEW_MODE,
-  readViewMode,
-  type ViewMode,
-  writeViewMode,
-} from "@/lib/files/view-mode";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
 import type { JobRequest } from "@/lib/jobs/types";
@@ -223,7 +218,9 @@ export function FileBrowser({
   const trashAvailable = trashStatus?.available === true;
 
   const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
-  const [viewMode, setViewModeState] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  const folderView = useFolderView(path, me?.activeIdentityId);
+  const viewMode = folderView.mode;
+  const setViewMode = folderView.setMode;
   const [showThumbnails, setShowThumbnailsState] = useState<boolean>(() =>
     typeof window === "undefined"
       ? DEFAULT_SHOW_THUMBNAILS
@@ -232,7 +229,6 @@ export function FileBrowser({
   const [treeState, setTreeStateRaw] = useState<TreeState>(EMPTY_TREE_STATE);
   useEffect(() => {
     setSortSpecState(readSortSpec(window.localStorage));
-    setViewModeState(readViewMode(window.localStorage));
     setShowThumbnailsState(readShowThumbnails(window.localStorage));
     setTreeStateRaw(readTreeState(window.localStorage));
   }, []);
@@ -240,10 +236,6 @@ export function FileBrowser({
   function setSortSpec(spec: SortSpec) {
     setSortSpecState(spec);
     writeSortSpec(window.localStorage, spec);
-  }
-  function setViewMode(mode: ViewMode) {
-    setViewModeState(mode);
-    writeViewMode(window.localStorage, mode);
   }
   function setShowThumbnails(show: boolean) {
     setShowThumbnailsState(show);
@@ -860,6 +852,7 @@ export function FileBrowser({
           <FilesToolbarActions
             viewMode={viewMode}
             onViewModeChange={setViewMode}
+            folderView={folderView}
             sortSpec={sortSpec}
             onSortSpecChange={setSortSpec}
             onNewFolder={() => setNewFolderOpen(true)}
@@ -917,7 +910,7 @@ export function FileBrowser({
             onKeyDown={handleKeyDown}
             className="h-full outline-none"
           >
-            {isLoading ? (
+            {isLoading || folderView.loading ? (
               <ListingSkeleton variant={viewMode === "grid" ? "grid" : "list"} />
             ) : isError ? (
               <ErrorState

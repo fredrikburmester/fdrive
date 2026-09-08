@@ -5,10 +5,16 @@ import {
   FavoriteKind,
   FavoriteRequest,
   FavoritesResponse,
+  FolderViewMode,
+  FolderViewResponse,
+  FolderViewSort,
+  FolderViewState,
   RecentItem,
   RecentsResponse,
   RecentTouchRequest,
+  RemoveFolderViewRequest,
   SetFileTagsRequest,
+  SetFolderViewRequest,
   Tag,
   TagFilesResponse,
   TagsResponse,
@@ -127,6 +133,28 @@ describe("FavoriteRequest", () => {
 
   it("rejects a missing path", () => {
     expect(FavoriteRequest.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("folder views", () => {
+  it("accepts a pin with the existing browser SortSpec shape", () => {
+    expect(
+      FolderViewState.safeParse({
+        path: "/photos",
+        mode: "grid",
+        sort: { key: "modifiedAt", direction: "desc" },
+      }).success,
+    ).toBe(true);
+    expect(FolderViewSort.safeParse({ key: "modified", direction: "desc" }).success).toBe(false);
+  });
+
+  it("accepts an absent pin and rejects invalid save/remove bodies", () => {
+    expect(FolderViewResponse.parse({ view: null })).toEqual({ view: null });
+    expect(FolderViewMode.safeParse("columns").success).toBe(false);
+    expect(
+      SetFolderViewRequest.safeParse({ path: "/photos", mode: "grid", sort: null }).success,
+    ).toBe(false);
+    expect(RemoveFolderViewRequest.safeParse({}).success).toBe(false);
   });
 });
 

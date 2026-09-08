@@ -59,6 +59,7 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
   return [
     ...[...parents].map((parent) => queryKeys.fs.list(parent)),
     ...metadataKeysToInvalidate(event),
+    ...(event.op === "move" || event.op === "delete" ? [queryKeys.folderViews.all()] : []),
     ...trashKeysToInvalidate(event),
     ...archiveKeysToInvalidate(event),
   ];

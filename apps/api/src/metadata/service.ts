@@ -4,6 +4,10 @@ import type {
   FavoriteKind,
   FavoriteRepo,
   FileTagRepo,
+  FolderViewMode,
+  FolderViewRepo,
+  FolderViewSort,
+  IdentityRepo,
   RecentRepo,
   TagRepo,
 } from "@fdrive/db";
@@ -26,10 +30,18 @@ export interface MetadataRecentItem {
   readonly openedAt: Date;
 }
 
+export interface MetadataFolderView {
+  readonly path: string;
+  readonly mode: FolderViewMode;
+  readonly sort: FolderViewSort | null;
+}
+
 export interface MetadataServiceDeps {
   readonly tags: TagRepo;
   readonly fileTags: FileTagRepo;
   readonly favorites: FavoriteRepo;
+  readonly folderViews: FolderViewRepo;
+  readonly identities: Pick<IdentityRepo, "listByAccount">;
   readonly recents: RecentRepo;
 }
 
@@ -46,7 +58,7 @@ function toMetadataTag(tag: DbTag): MetadataTag {
 /**
  * The metadata use cases shared by the tags, favorites, and recents routes,
  * plus the hooks `fs/routes.ts` calls after a move or delete so tag and
- * favorite metadata survives renames made through fdrive itself. Renames and
+ * favorite and folder-view metadata survives renames made through fdrive itself. Renames and
  * deletes seen via the indexer (SFTP, WebDAV, other clients) reach the same
  * hooks through `events/indexer-listener.ts`.
  */
@@ -69,6 +81,11 @@ export interface MetadataService {
   listFavorites(identityId: string): Promise<MetadataFavoriteItem[]>;
   addFavorite(identityId: string, path: string, kind: FavoriteKind): Promise<void>;
   removeFavorite(identityId: string, path: string): Promise<void>;
+  getFolderView(identityId: string, path: string): Promise<MetadataFolderView | null>;
+  setFolderView(identityId: string, path: string, mode: FolderViewMode): Promise<void>;
+  removeFolderView(identityId: string, path: string): Promise<void>;
+  /** Resets every folder pin owned through every identity linked to `accountId`. */
+  resetFolderViews(accountId: string): Promise<void>;
   listRecents(identityId: string, limit?: number): Promise<MetadataRecentItem[]>;
   touchRecent(identityId: string, path: string): Promise<void>;
   /** Rewrites tag, favorite, and recent paths after a move or rename made through fdrive or seen on disk. */
@@ -99,15 +116,17 @@ export interface MetadataService {
  * that was actually tracked is worth reconciling when it disappears.
  */
 export async function hasTrackedMetadata(
-  deps: Pick<MetadataServiceDeps, "fileTags" | "favorites">,
+  deps: Pick<MetadataServiceDeps, "fileTags" | "favorites"> &
+    Partial<Pick<MetadataServiceDeps, "folderViews">>,
   identityId: string,
   path: string,
 ): Promise<boolean> {
-  const [tagsByPath, favoritedPaths] = await Promise.all([
+  const [tagsByPath, favoritedPaths, hasFolderView] = await Promise.all([
     deps.fileTags.tagsForPaths(identityId, [path]),
     deps.favorites.has(identityId, [path]),
+    deps.folderViews?.has(identityId, path) ?? false,
   ]);
-  return (tagsByPath.get(path)?.length ?? 0) > 0 || favoritedPaths.has(path);
+  return (tagsByPath.get(path)?.length ?? 0) > 0 || favoritedPaths.has(path) || hasFolderView;
 }
 
 export function createMetadataService(deps: MetadataServiceDeps): MetadataService {
@@ -171,6 +190,24 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       return deps.favorites.remove(identityId, path);
     },
 
+    async getFolderView(identityId, path) {
+      const view = await deps.folderViews.get(identityId, path);
+      return view === null ? null : { path: view.path, mode: view.mode, sort: view.sort };
+    },
+
+    setFolderView(identityId, path, mode) {
+      return deps.folderViews.set(identityId, path, mode);
+    },
+
+    removeFolderView(identityId, path) {
+      return deps.folderViews.remove(identityId, path);
+    },
+
+    async resetFolderViews(accountId) {
+      const identities = await deps.identities.listByAccount(accountId);
+      await Promise.all(identities.map((identity) => deps.folderViews.clear(identity.id)));
+    },
+
     async listRecents(identityId, limit = DEFAULT_RECENTS_LIMIT) {
       const recents = await deps.recents.list(identityId, limit);
       return recents.map((recent) => ({ path: recent.path, openedAt: recent.openedAt }));
@@ -185,6 +222,7 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       await Promise.all([
         deps.fileTags.movePrefix(identityId, oldPath, newPath, isDir),
         deps.favorites.movePrefix(identityId, oldPath, newPath, isDir),
+        deps.folderViews.movePrefix(identityId, oldPath, newPath, isDir),
         deps.recents.movePrefix(identityId, oldPath, newPath, isDir),
       ]);
     },
@@ -193,6 +231,7 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       await Promise.all([
         deps.fileTags.deletePrefix(identityId, path, isDir),
         deps.favorites.deletePrefix(identityId, path, isDir),
+        deps.folderViews.deletePrefix(identityId, path, isDir),
         deps.recents.deletePrefix(identityId, path, isDir),
       ]);
     },

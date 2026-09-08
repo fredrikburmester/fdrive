@@ -50,6 +50,13 @@ describe("ROUTES", () => {
     expect(ROUTES.favorites).toEqual({ base: "/api/v1/favorites" });
   });
 
+  it("defines folder-view routes", () => {
+    expect(ROUTES.folderViews).toEqual({
+      base: "/api/v1/folder-views",
+      all: "/api/v1/folder-views/all",
+    });
+  });
+
   it("defines every recents route under /api/v1/recents", () => {
     expect(ROUTES.recents).toEqual({
       list: "/api/v1/recents",

@@ -44,6 +44,31 @@ it("renders both duplicate paths with ownership, partial errors, and explicit na
   expect(onNavigate).toHaveBeenCalledWith("one", "/same.txt", "reveal");
   expect(document.querySelector("img")).toBeNull();
 });
+it("keeps duplicate identity paths distinct in the global grid view", () => {
+  window.localStorage.setItem("fdrive.view", JSON.stringify("grid"));
+  const onNavigate = vi.fn();
+  render(
+    <AccountFavoritesList
+      me={me}
+      pending={false}
+      onNavigate={onNavigate}
+      response={{
+        items: [
+          { identityId: "one", path: "/same.txt", kind: "file", addedAt: "2026-01-01T00:00:00Z" },
+          { identityId: "two", path: "/same.txt", kind: "dir", addedAt: "2026-01-01T00:00:00Z" },
+        ],
+        unavailableIdentityIds: [],
+      }}
+    />,
+  );
+  expect(document.querySelector('[data-slot="account-favorites-grid"]')).not.toBeNull();
+  const rows = screen.getAllByRole("button", { name: "same.txt" });
+  expect(rows).toHaveLength(2);
+  const second = rows[1];
+  if (!second) throw new Error("missing second grid item");
+  fireEvent.click(second);
+  expect(onNavigate).toHaveBeenCalledWith("two", "/same.txt", "dir");
+});
 it("shows an empty state without removing inaccessible favorites", () => {
   render(
     <AccountFavoritesList

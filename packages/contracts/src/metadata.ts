@@ -72,6 +72,39 @@ export const FavoriteRequest = z.object({
 
 export type FavoriteRequest = z.infer<typeof FavoriteRequest>;
 
+/** A folder-specific display mode, persisted per identity. */
+export const FolderViewMode = z.enum(["list", "grid", "tree"]);
+export type FolderViewMode = z.infer<typeof FolderViewMode>;
+
+/** Mirrors the browser's existing `SortSpec` shape for future folder-local sorting. */
+export const FolderViewSort = z.strictObject({
+  key: z.enum(["name", "size", "modifiedAt", "ext"]),
+  direction: z.enum(["asc", "desc"]),
+});
+export type FolderViewSort = z.infer<typeof FolderViewSort>;
+
+/** A pinned display state for one real directory. `sort` is reserved for a later UI. */
+export const FolderViewState = z.strictObject({
+  path: z.string(),
+  mode: FolderViewMode,
+  sort: FolderViewSort.nullable().optional(),
+});
+export type FolderViewState = z.infer<typeof FolderViewState>;
+
+export const FolderViewResponse = z.strictObject({ view: FolderViewState.nullable() });
+export type FolderViewResponse = z.infer<typeof FolderViewResponse>;
+
+/** Saves a folder's mode. Sort is intentionally not set until sort UI ships. */
+export const SetFolderViewRequest = z.strictObject({
+  path: z.string(),
+  mode: FolderViewMode,
+});
+export type SetFolderViewRequest = z.infer<typeof SetFolderViewRequest>;
+
+/** Removes one folder pin. */
+export const RemoveFolderViewRequest = z.strictObject({ path: z.string() });
+export type RemoveFolderViewRequest = z.infer<typeof RemoveFolderViewRequest>;
+
 export const RecentItem = z.object({
   path: z.string(),
   openedAt: z.iso.datetime(),

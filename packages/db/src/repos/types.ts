@@ -235,6 +235,38 @@ export interface FavoriteRepo {
   deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
 }
 
+export type FolderViewMode = "list" | "grid" | "tree";
+export type FolderViewSortKey = "name" | "size" | "modifiedAt" | "ext";
+export type FolderViewSortDirection = "asc" | "desc";
+export interface FolderViewSort {
+  readonly key: FolderViewSortKey;
+  readonly direction: FolderViewSortDirection;
+}
+export interface FolderView {
+  readonly identityId: string;
+  readonly path: string;
+  readonly mode: FolderViewMode;
+  readonly sort: FolderViewSort | null;
+  readonly updatedAt: Date;
+}
+export interface FolderViewRepo {
+  get(identityId: string, path: string): Promise<FolderView | null>;
+  set(
+    identityId: string,
+    path: string,
+    mode: FolderViewMode,
+    sort?: FolderViewSort | null,
+  ): Promise<void>;
+  /** A no-op when `path` is not pinned. */
+  remove(identityId: string, path: string): Promise<void>;
+  /** Removes every pin for one identity. */
+  clear(identityId: string): Promise<void>;
+  /** Whether the exact path is pinned for this identity. */
+  has(identityId: string, path: string): Promise<boolean>;
+  movePrefix(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
+}
+
 export interface Recent {
   readonly identityId: string;
   readonly path: string;
@@ -264,5 +296,6 @@ export interface Repos {
   readonly tags: TagRepo;
   readonly fileTags: FileTagRepo;
   readonly favorites: FavoriteRepo;
+  readonly folderViews: FolderViewRepo;
   readonly recents: RecentRepo;
 }
