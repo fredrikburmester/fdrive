@@ -9,7 +9,7 @@ Updated: 2026-09-08. Owner: primary agent.
 - Image links, alt text, gallery markup, and scoped diff check verified; workflow gate
   passed. Included in the user-requested commit of all current changes.
 
-## P7 folder views (in progress)
+## P7 folder views (complete)
 
 - User selected Plan A and remaining recommendations: server pins per identity/path,
   exact-folder resolution, nullable future sort state, global-only virtual listings,
@@ -18,9 +18,16 @@ Updated: 2026-09-08. Owner: primary agent.
 - Backend and virtual-view implementers integrated after diff review and scoped transfer.
   Copies retained in `.worktrees/p7-folder-view-backend` and `.worktrees/p7-virtual-views`.
 - Global default retains `fdrive.view` in this browser. Folder pins sync across devices.
-- Workflow passed. New focused tests and backend DB integration passed; target application
-  retrying after fixing coverage gaps and using permitted socket access for server tests.
-- Next: finish target application/integration/browser gates and isolated dev smoke (3004/3005).
+- Target workflow, application (lint/typecheck/coverage), and integration passed. Application
+  used `TURBO_CONCURRENCY=1` and permitted socket access; no gates weakened.
+- Live dev smoke on isolated ports 3004/3005 verified saved Grid on `/photos`, default List
+  on `/docs`, persistence, unpin, and account controls. Restored the temporary pin; stopped
+  owned servers, preserved existing dev processes.
+- Browser: five new feature scenarios passed, including another browser, mobile, rollback,
+  rename/reset, and virtual listings. Corrected ambiguous existing View selectors; thumbnail
+  harness uses an explicit image fixture because its fake indexer generates no thumbnails.
+- All 54 affected browser scenarios passed across the initial run and corrected spec reruns.
+  Backend/virtual worker copies remain retained. Logs: `.fdrive-workflow/logs/` (ignored).
 
 ## Workflow simplification (complete)
 

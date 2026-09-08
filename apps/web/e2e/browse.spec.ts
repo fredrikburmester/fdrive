@@ -40,7 +40,7 @@ test("folders sort first even when sorting by name descending", async ({ page })
   await page.goto("/files");
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Descending" }).click();
 
   const paths = await visibleRowPaths(page);
@@ -75,7 +75,7 @@ test("the view menu switches to grid and back, and persists across reload", asyn
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
   await expect(page.locator('[data-slot="file-list"]')).toBeVisible();
 
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Grid" }).click();
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
 
@@ -88,7 +88,7 @@ test("the view menu switches to grid and back, and persists across reload", asyn
   await page.reload();
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
 
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "List" }).click();
   await expect(page.locator('[data-slot="file-list"]')).toBeVisible();
 });
@@ -100,7 +100,7 @@ test("sorting by size flips the order of docs' contents", async ({ page }) => {
   const byName = await visibleRowPaths(page);
   expect(byName.indexOf("/docs/readme.md")).toBeLessThan(byName.indexOf("/docs/report.pdf"));
 
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Size" }).click();
 
   const bySize = await visibleRowPaths(page);

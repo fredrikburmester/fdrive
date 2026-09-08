@@ -8,7 +8,7 @@ test("switching to tree view and expanding a folder row shows its children inlin
   const path = await createViewFolder(page, true);
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Tree" }).click();
 
   const docsRow = listing(page).locator(`[data-path="${path}/docs"]`);
@@ -24,7 +24,7 @@ test("switching to tree view and expanding a folder row shows its children inlin
 test("tree view expansion persists across reload", async ({ page }) => {
   const path = await createViewFolder(page, true);
 
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Tree" }).click();
   const docsRow = listing(page).locator(`[data-path="${path}/docs"]`);
   await expect(docsRow).toBeVisible();
@@ -44,7 +44,7 @@ test("double-clicking the disclosure chevron toggles the row without navigating 
   page,
 }) => {
   const path = await createViewFolder(page, true);
-  await page.getByRole("button", { name: "View" }).click();
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Tree" }).click();
 
   const docsRow = listing(page).locator(`[data-path="${path}/docs"]`);
