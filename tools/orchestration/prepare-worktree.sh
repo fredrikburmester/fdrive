@@ -14,20 +14,29 @@ FDRIVE_CHILD_GROUP=0
 FDRIVE_SIGNAL_STATUS=0
 
 usage() {
-  printf 'usage: bash prepare-worktree.sh <source-checkout> <chunk> [destination]\n'
+  printf 'usage: bash prepare-worktree.sh <source-checkout> <chunk> [destination] [--working-tree]\n'
 }
 
 if [[ ${1:-} == --help && $# -eq 1 ]]; then usage; exit 0; fi
-[[ $# -eq 2 || $# -eq 3 ]] || { usage >&2; exit 1; }
+[[ $# -ge 2 && $# -le 4 ]] || { usage >&2; exit 1; }
 SOURCE=$(fdrive_resolve_checkout "$1") || exit $?
 CHUNK=$2
 [[ $CHUNK =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fdrive_die 'chunk must match [a-z0-9][a-z0-9_-]*'
 BRANCH="codex/$CHUNK"
-if [[ $# -eq 3 ]]; then
-  if [[ $3 == /* ]]; then DESTINATION=$3; else DESTINATION="$PWD/$3"; fi
-else
-  DESTINATION="$SOURCE/.worktrees/$CHUNK"
-fi
+WORKING_TREE=0
+DESTINATION=
+shift 2
+for ARG in "$@"; do
+  if [[ $ARG == --working-tree ]]; then
+    [[ $WORKING_TREE -eq 0 ]] || fdrive_die '--working-tree may appear once'
+    WORKING_TREE=1
+  elif [[ -z $DESTINATION ]]; then
+    if [[ $ARG == /* ]]; then DESTINATION=$ARG; else DESTINATION="$PWD/$ARG"; fi
+  else
+    fdrive_die 'only one destination is allowed'
+  fi
+done
+if [[ -z $DESTINATION ]]; then DESTINATION="$SOURCE/.worktrees/$CHUNK"; fi
 [[ ! -e $DESTINATION && ! -L $DESTINATION ]] || fdrive_die "destination already exists: $DESTINATION"
 git -C "$SOURCE" show-ref --verify --quiet "refs/heads/$BRANCH" && fdrive_die "branch already exists: $BRANCH"
 
@@ -50,6 +59,16 @@ fdrive_run_step 'worktree creation' git -C "$SOURCE" worktree add -b "$BRANCH" "
 DESTINATION=$(fdrive_resolve_checkout "$DESTINATION")
 fdrive_release_lock
 fdrive_cleanup_runtime
+
+if [[ $WORKING_TREE -eq 1 ]]; then
+  if fdrive_run_child python3 "$SCRIPT_DIR/transfer-checkout.py" baseline "$SOURCE" "$DESTINATION" >&2; then
+    :
+  else
+    STATUS=$?
+    printf '%s: baseline copy failed; retained checkout %s and branch %s\n' "$FDRIVE_COMMAND_NAME" "$DESTINATION" "$BRANCH" >&2
+    exit "$STATUS"
+  fi
+fi
 
 if fdrive_run_child bash "$SCRIPT_DIR/setup-checkout.sh" "$DESTINATION" >&2; then
   printf '%s\n' "$DESTINATION"

@@ -94,6 +94,16 @@ if [[ -n ${FAKE_PNPM_BLOCK:-} && $JOINED == "$FAKE_PNPM_BLOCK" ]]; then
   while [[ ! -e $BLOCK_RELEASE ]]; do :; done
   if [[ $SIGNALLED -eq 1 ]]; then exit "${BLOCK_EXIT_CODE:-53}"; fi
 fi
+if [[ -n ${FAKE_PNPM_OUTPUT:-} && $JOINED == "$FAKE_PNPM_OUTPUT" ]]; then
+  printf 'fake stdout %s\n' "$FAKE_PNPM_OUTPUT"
+  if [[ -z ${FAKE_PNPM_NO_STDERR:-} ]]; then
+    printf 'fake stderr %s\n' "$FAKE_PNPM_OUTPUT" >&2
+  fi
+fi
+if [[ -n ${FAKE_PNPM_OUTPUT_BYTES:-} && $JOINED == "${FAKE_PNPM_OUTPUT_COMMAND:-}" ]]; then
+  PADDING=$(printf "%${FAKE_PNPM_OUTPUT_BYTES}s" '')
+  printf 'BEGIN-%s-END\n' "${PADDING// /x}"
+fi
 if [[ -n ${FAKE_PNPM_FAIL:-} && $JOINED == "$FAKE_PNPM_FAIL" ]]; then
   exit "${FAKE_PNPM_FAIL_CODE:-23}"
 fi
@@ -253,7 +263,8 @@ new_repo() {
   : > "$PNPM_LOG"
   : > "$PNPM_COMMAND_LOG"
   : > "$TOOL_LOG"
-  unset FAKE_PNPM_VERSION FAKE_PNPM_FAIL FAKE_PNPM_FAIL_CODE FAKE_SKIP_BUILD FAKE_SKIP_SHIM
+  unset FAKE_PNPM_VERSION FAKE_PNPM_FAIL FAKE_PNPM_FAIL_CODE FAKE_PNPM_OUTPUT \
+    FAKE_PNPM_NO_STDERR FAKE_PNPM_OUTPUT_BYTES FAKE_PNPM_OUTPUT_COMMAND FAKE_SKIP_BUILD FAKE_SKIP_SHIM
   export MIGRATION_MARKER="$TEST_ROOT/migration-marker-$N"
 }
 
@@ -311,6 +322,8 @@ NODE_WRAPPER
 for HELPER in "$RUN" "$SETUP" "$PREPARE" "$VERIFY"; do
   expect_success env FDRIVE_NODE="$BAD_NODE" FDRIVE_PNPM=/missing bash "$HELPER" --help
 done
+expect_success bash "$VERIFY" --help
+assert_contains "$OUT" 'FDRIVE_VERBOSE=1'
 new_repo
 HEAD_BEFORE=$(git -C "$ROOT" rev-parse HEAD)
 expect_failure runtime_env bash "$RUN" "$ROOT"
@@ -359,6 +372,60 @@ expect_status 37 from_outside env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM"
   CHILD_EXIT=37 bash "$RUN" "$ROOT" -- bash "$INSPECT"
 assert_contains "$ERR" '37'
 pass 'run wrapper preserves cwd, argv, environment, runtime, redaction, and exit status'
+
+# Locked custom commands use the compact step contract; unlocked commands keep direct stdout.
+new_repo
+expect_success runtime_env bash "$RUN" "$ROOT" --lock -- bash -c 'printf "locked command output\\n"'
+assert_eq "$(cat "$OUT")" ''
+assert_contains "$ERR" 'run-in-checkout: PASS command'
+LOCKED_LOG_OUT=$(find "$ROOT/.fdrive-workflow/logs" -name stdout.log -type f -print | tail -n 1)
+LOCKED_LOG_LABEL=$(dirname "$LOCKED_LOG_OUT")/label.txt
+assert_contains "$LOCKED_LOG_OUT" 'locked command output'
+assert_eq "$(cat "$LOCKED_LOG_LABEL")" 'command'
+expect_success env FDRIVE_VERBOSE=1 FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
+  bash "$RUN" "$ROOT" --lock -- bash -c 'printf "locked command output\\n"'
+assert_contains "$OUT" 'locked command output'
+pass 'locked commands are compact by default with labeled retained logs and verbose replay'
+
+# Named verification steps are quiet by default, retain both streams, and replay them when requested.
+new_repo
+expect_success env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FAKE_PNPM_OUTPUT='test:integration' \
+  bash "$VERIFY" "$ROOT" integration
+assert_eq "$(cat "$OUT")" ''
+assert_not_contains "$ERR" 'fake stdout test:integration'
+assert_contains "$ERR" 'verify: PASS integration tests'
+QUIET_LOG_OUT=$(find "$ROOT/.fdrive-workflow/logs" -name stdout.log -type f -print | tail -n 1)
+QUIET_LOG_ERR=$(find "$ROOT/.fdrive-workflow/logs" -name stderr.log -type f -print | tail -n 1)
+assert_file "$QUIET_LOG_OUT"
+assert_file "$QUIET_LOG_ERR"
+assert_contains "$QUIET_LOG_OUT" 'fake stdout test:integration'
+assert_contains "$QUIET_LOG_ERR" 'fake stderr test:integration'
+expect_success env FDRIVE_VERBOSE=1 FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FAKE_PNPM_NO_STDERR=1 \
+  FAKE_PNPM_OUTPUT='test:integration' bash "$VERIFY" "$ROOT" integration
+assert_contains "$OUT" 'fake stdout test:integration'
+assert_not_contains "$ERR" 'fake stderr test:integration'
+pass 'verification defaults to compact statuses, keeps logs, and supports verbose replay'
+
+expect_status 54 env FDRIVE_VERBOSE=1 FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
+  FAKE_PNPM_OUTPUT='test:integration' FAKE_PNPM_FAIL='test:integration' FAKE_PNPM_FAIL_CODE=54 \
+  bash "$VERIFY" "$ROOT" integration
+assert_contains "$OUT" 'fake stdout test:integration'
+assert_contains "$ERR" 'verify: FAIL integration tests (exit 54); logs:'
+pass 'verbose verification preserves failed child exit status'
+
+# Failure output has the child's first status, log locations, and bounded excerpts.
+new_repo
+expect_status 52 env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
+  FAKE_PNPM_OUTPUT_BYTES=5000 FAKE_PNPM_OUTPUT_COMMAND='test:integration' \
+  FAKE_PNPM_FAIL='test:integration' FAKE_PNPM_FAIL_CODE=52 bash "$VERIFY" "$ROOT" integration
+assert_contains "$ERR" 'verify: FAIL integration tests (exit 52); logs:'
+assert_contains "$ERR" 'stdout excerpt (last 4096 bytes)'
+assert_contains "$ERR" 'END'
+assert_not_contains "$ERR" 'BEGIN-'
+[[ $(wc -c < "$ERR") -lt 6000 ]] || fail 'failure excerpt was not bounded'
+FAIL_LOG_OUT=$(find "$ROOT/.fdrive-workflow/logs" -name stdout.log -type f -print | tail -n 1)
+assert_contains "$FAIL_LOG_OUT" 'BEGIN-'
+pass 'verification failures retain complete logs with bounded excerpts and exact status'
 
 # Background execution preserves the wrapper's original standard input.
 STDIN_FILE="$TEST_ROOT/command stdin"
@@ -596,6 +663,8 @@ exercise_locked_helper_signal() {
   BACKGROUND_PIDS=''
   [[ $STATUS -eq $EXPECTED_STATUS ]] || fail "$LABEL signal status: expected $EXPECTED_STATUS, got $STATUS"
   assert_no_file "$HELD_LOCK"
+  HELPER_LOG_OUT=$(find "$ROOT/.fdrive-workflow/logs" -name stdout.log -type f -print | tail -n 1)
+  assert_file "$HELPER_LOG_OUT"
 }
 
 # Setup and verify also forward termination and keep their lock until the gate exits.
@@ -668,7 +737,7 @@ new_repo
 printf 'dirty source\n' > "$ROOT/uncommitted-source.txt"
 SOURCE_HEAD=$(git -C "$ROOT" rev-parse HEAD)
 DESTINATION="$TEST_ROOT/prepared checkout with spaces"
-expect_success from_outside env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
+expect_success from_outside env FDRIVE_VERBOSE=1 FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
   bash "$PREPARE" "$ROOT" helper_chunk "$DESTINATION"
 assert_eq "$(cat "$OUT")" "$(cd "$DESTINATION" && pwd -P)"
 assert_eq "$(git -C "$DESTINATION" branch --show-current)" 'codex/helper_chunk'
@@ -729,14 +798,23 @@ assert_file "$PREPARED_SIGNAL_DEST/.git"
 assert_eq "$(git -C "$PREPARED_SIGNAL_DEST" branch --show-current)" 'codex/signal_setup'
 pass 'prepare forwards signals through setup and retains interrupted checkout'
 
-# Verify workflow runs syntax, TOML, both regressions, lint, and diff check without recursion.
+# Verify workflow runs syntax, TOML, Python syntax, every regression script, lint, and diff check without recursion.
 new_repo
+cat > "$ROOT/tools/orchestration/test-discovered.sh" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+printf '%s PWD=<%s>\n' "$(basename "$0")" "$PWD" >> "$TOOL_LOG"
+STUB
+chmod +x "$ROOT/tools/orchestration/test-discovered.sh"
+printf 'value = 1\n' > "$ROOT/tools/orchestration/helper.py"
 expect_success runtime_env bash "$VERIFY" "$ROOT" workflow
 assert_contains "$TOOL_LOG" 'python3 <-c>'
 assert_contains "$TOOL_LOG" "test-orchestration.sh PWD=<$ROOT>"
 assert_contains "$TOOL_LOG" "test-command-helpers.sh PWD=<$ROOT>"
+assert_contains "$TOOL_LOG" "test-discovered.sh PWD=<$ROOT>"
+assert_no_file "$ROOT/tools/orchestration/__pycache__"
 [[ $(grep -c '^CALL <lint>' "$PNPM_LOG") -eq 1 ]] || fail 'workflow lint missing or duplicated'
-pass 'workflow profile sequence uses fixture regression scripts once'
+pass 'workflow profile checks Python syntax and discovers fixture regression scripts once'
 
 # Package validation is exact; successful package verification runs the expected sequence.
 new_repo

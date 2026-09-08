@@ -37,6 +37,10 @@ STATUS=$(mktemp)
 trap 'rm -f "$STATUS"' EXIT
 git -C "$TARGET" status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none > "$STATUS"
 [[ ! -s $STATUS ]] || fail 'target checkout must be clean'
+BASELINE_STATE="$WT/.fdrive-workflow"
+if [[ -L $BASELINE_STATE || -L $BASELINE_STATE/baseline.json || -e $BASELINE_STATE/baseline.json ]]; then
+  fail 'baseline checkout must use transfer-checkout.sh; merge only accepts a HEAD baseline'
+fi
 command -v pnpm >/dev/null || fail 'pnpm is required'
 bash "$SCRIPT_DIR/review-chunk.sh" "$WT"
 MSG=$2

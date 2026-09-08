@@ -684,19 +684,15 @@ flows pass real storage integration, browser acceptance and required quality gat
     index cache and never consume a share's download budget, because they never pass through
     SFTPGo's share download.
 
-17. Agent workflow (2026-09-08): keep shared rules and model selection in `WORKING.md`;
-    repeatable recipes in `docs/workflow/COMMANDS.md`, backed by tested shell helpers in
-    `tools/orchestration/`. Helpers select Node 24 and pinned pnpm, prepare isolated checkouts,
-    and run named verification profiles under per-checkout locks. Implementation lessons live in
-    `docs/workflow/PITFALLS.md`. Use one set of agent instructions. Worker model and effort
-    defaults are explicit in project configuration and pinned in named role files.
-    User-selected default: `gpt-5.6-terra` with high reasoning for implementation, tests,
-    and other subagent work, including complex/security tasks. No automatic Astra escalation.
-    `gpt-6-astra` requires explicit user approval for a specific bounded subtask and must
-    use `low` reasoning (light), never higher; record approval and scope before launch.
-    When Astra seems necessary, mainly for security work, request approval with the
-    concrete risk, why Terra is insufficient, and the bounded subtask. Wait for approval;
-    continue independent Terra work. Security scope alone does not authorize escalation.
+17. Agent workflow (2026-09-08): keep a small AGENTS entry point and shared boundaries in
+    `WORKING.md`; load `docs/workflow/COMMANDS.md` and troubleshooting on demand. Native
+    agents choose decomposition; delegate independent work when worthwhile, allow direct
+    cohesive edits. Deterministic helpers own pinned runtimes, setup, worktree baselines,
+    conflict-safe uncommitted transfer, locks, and verification shared with CI. Keep compact
+    status output and full local logs. Current handoffs live in STATUS; history in its archive.
+    Executable model defaults live in `.codex/`; WORKING holds the Astra approval restriction.
+    Assess workflow changes by task correctness, retries, total tokens, and elapsed time;
+    re-evaluate optional orchestration when changing models without lowering quality gates.
 
 18. Phase 5 search latency (2026-09-08): use native TEI on ARM64 with the existing
     multilingual-e5-small model, pinned upstream source and shared deployment/perf recipe.

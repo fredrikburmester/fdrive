@@ -1,105 +1,53 @@
 # Working on fdrive
 
-Read this, the relevant [PLAN.md](PLAN.md) sections, and the latest
-[STATUS.md](docs/workflow/STATUS.md) handoff before implementation.
-[COMMANDS.md](docs/workflow/COMMANDS.md) holds setup, worktree, test, dev-server, and integration
-recipes. Use the tested helpers in `tools/orchestration/`; implementation lessons live in
+Read relevant [PLAN.md](PLAN.md) decisions and current [STATUS.md](docs/workflow/STATUS.md)
+before implementation. Commands: [COMMANDS.md](docs/workflow/COMMANDS.md); load only relevant
+recipes. Recovery: [TROUBLESHOOTING.md](docs/workflow/TROUBLESHOOTING.md). Product lessons:
 [PITFALLS.md](docs/workflow/PITFALLS.md).
 
-## Models and roles
+## Approach and boundaries
 
-| Work | Model | Reasoning |
-| --- | --- | --- |
-| Implementation and accompanying tests (`implementer`) | GPT-5.6 Terra (`gpt-5.6-terra`) | `high` |
-| Tests only (`test-writer`) | GPT-5.6 Terra (`gpt-5.6-terra`) | `high` |
-| Explicitly user-approved, narrowly scoped exception only | GPT-6 Astra (`gpt-6-astra`) | `low` |
+- Choose the simplest effective workflow. Implement cohesive changes directly; delegate
+  independent work when beneficial. Use native subagent tools, no custom spawning framework.
+- Model defaults are configured in `.codex/`. Astra subagents require explicit user approval
+  for the specific scope and `low` reasoning only. Explain the risk and why Terra is
+  insufficient; never escalate automatically or bypass this through inheritance.
+- For delegated writes, use `implementer` (code/tests) or `test-writer` (tests only), separate
+  prepared `codex/` worktrees, absolute paths, and disjoint ownership. Respect runtime limits.
+  Workers preserve others' changes, stay in scope, never delegate, stash, or mutate Git state.
+- State goal, acceptance criteria, and required checks; use a formal spec for substantial or
+  cross-interface work. Resolve architecture against PLAN; record durable decisions there.
+- Review actual diffs, including new files and sensitive boundaries. Transfer reviewed worker
+  deltas with `transfer-checkout.sh`; commit/merge only when requested. Verify in the target.
+  Keep the worker copy until transfer and verification succeed; never discard unreviewed work.
+- Maintain a short STATUS at meaningful handoffs: current work, ownership, evidence, blockers,
+  and next steps. Move completed history to the linked archive; avoid duplicating tool logs.
+- Preserve user changes, hooks, and quality gates. Never hand-edit lockfiles, commit secrets
+  or generated outputs, publish private agent session links, or write personal memory unasked.
+  Connecting to live user SFTPGo requires the user's decision; attribution only when requested.
 
-Fallback defaults live in `.codex/config.toml`; named role files pin their model and effort,
-which take precedence over spawn overrides.
-Use Terra/high for all subagent work by default, including complex and security work.
-Never escalate automatically to Astra for difficulty, failed tests, retries, review, or
-model unavailability. If the agent judges Astra necessary, mainly for security-sensitive
-work, it must ask the user for approval: explain the concrete risk, why Terra is
-insufficient, and the narrow proposed subtask at `low` reasoning. Wait for approval
-before launching Astra; continue independent Terra work while waiting. Security work
-alone is not automatic justification for escalation.
-Astra requires explicit user approval for the specific subtask;
-this policy is not approval to launch it. Record that approval and the bounded scope
-in the spec before launch. Astra reasoning must be `low` ("light"), never higher.
-Do not use inherited model settings that could bypass these restrictions.
-Record overrides in the spec and report unavailable models.
-After config changes, verify role discovery and effective model/effort in a fresh session.
+## Verification
 
-- **Primary:** owns specs, architecture, review, integration, gates, and tracking. Delegate
-  production code, tooling, and tests; edit workflow docs and agent configuration directly.
-- **Workers:** `implementer` for code plus tests, `test-writer` for tests only. Work directly
-  in the assigned absolute checkout and file scope. Never delegate, stash, or mutate Git state.
-  Report necessary out-of-scope changes to the primary.
-- Use runtime subagent tools. If a custom role is unavailable, include its
-  `.codex/agents/` instructions in a generic worker prompt. Spawning does not isolate files.
-  Explicit model overrides require a supported history mode; include the full spec when
-  omitting history (`fork_turns="none"` in the collaboration API).
-- One worktree per writing worker, `codex/` branches, at most three workers or the runtime's
-  lower limit. Parallelize disjoint paths; queue overlapping files. Preserve others' changes.
+Use `verify.sh <checkout> <profile>`; runtime selection and checkout locking are automatic.
+Use `run-in-checkout.sh <checkout> --lock -- <argv>` for custom installs/checks; unlocked mode
+is for read-only commands and dev servers. Separate concurrent browser runs by checkout/ports.
 
-## Workflow
-
-1. **Specify:** goal, plan reference, absolute checkout, owned paths, fixed interfaces,
-   acceptance criteria, tests, and verification profile. The primary pins decisions about
-   auth, storage interfaces, API contracts, share scoping, and schema.
-2. **Prepare:** use `prepare-worktree.sh` before launching a writing worker. It starts at
-   committed HEAD; explicitly copy any needed uncommitted specs/prerequisites and record
-   that baseline. Workers must never assume the parent's changes exist in their checkout.
-3. **Review:** scope-check with `review-chunk.sh`, inspect tracked and new files, and read
-   security-sensitive changes yourself. Missing/truncated gate output is not a pass.
-4. **Integrate:** use `merge-chunk.sh` only when commits are requested, with a finished worker
-   and explicit clean target on the intended branch. Otherwise transfer the reviewed diff
-   and new files as uncommitted changes, preserving target edits. Keep the worker checkout
-   until its complete transfer is verified.
-5. **Verify:** run the required profiles in the target after each integration. For visible
-   changes, also exercise the real dev app; restart after env/dependency changes. Browser
-   tests alone can miss dev wiring failures.
-6. **Record and clean up:** update STATUS with results, validation, ownership, and remaining
-   work. Remove only fully integrated worktrees; never force-remove unreviewed changes.
-
-Worker prompts must state: never delegate, never use `git stash`, never run Git mutations,
-use only the assigned checkout/paths, and preserve other workers' changes. Reports include
-changed files, commands and final summary lines, assumptions, unfinished work, branch, and
-checkout root. Be extremely concise.
-
-## Verification policy
-
-Run profiles through `verify.sh`; it selects the pinned runtime, locks the checkout, and
-stops on the first failed gate. See COMMANDS for exact invocations and prerequisites.
-
-| Change | Profiles / checks |
+| Change | Required checks |
 | --- | --- |
-| Application integration | `application`: lint, typecheck, coverage |
-| API/schema/storage integration | Also `integration` |
+| Application integration | `application` (lint, typecheck, coverage) |
+| API/schema/storage | Also `integration` |
 | Visible UI/flows | Also affected `browser` tests and real dev app verification |
-| Python service | `python <service>`; indexer includes Docker inotify tests |
-| Docs/agent config/orchestration | `workflow`; no application stack needed |
-| Worker package scope | `package <name>` plus applicable integration/browser/service checks |
+| Python service | `python <service>`; indexer includes Docker inotify |
+| Docs/agent config/orchestration | `workflow` |
+| Worker package | `package <name>` plus applicable checks above |
 
-Setup and verification share an exclusive checkout lock. Use `run-in-checkout.sh --lock`
-(as shown in COMMANDS) for custom installs/tests. Unlocked runs are for dev servers and
-read-only commands. Raw commands bypass this protection: never overlap installs or run
-Turbo during Playwright in one checkout. Concurrent browser runs use separate checkouts
-and distinct free ports.
+During iteration, run focused checks. Run required target profiles after integration; repeat
+only after relevant changes/failures. A skipped, interrupted, or failed check is not a pass.
+Report compact helper summaries and remaining limitations; full logs stay on disk.
 
-## Code and tracking rules
+## Implementation
 
-- Node 24 and the exact pnpm version in `package.json`. Helpers select installed runtimes;
-  setup installs frozen dependencies and builds the declared migration binary without
-  running migrations. Never hand-edit the lockfile or bypass hooks.
-- Strict TypeScript, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; no `any` or
-  non-null assertions. Zero Biome diagnostics. Small pure functions with injected dependencies.
-- Preserve coverage gates: TypeScript functions/lines 99%, branches 95%, core functions 100%;
-  Python at least 95%, pure modules 100%. Test behavior and edge cases; never lower gates to pass.
-- Frontend primitives come from shadcn/ui via its CLI. Use `globals.css` color tokens,
-  Apple-like design, and a one-line description for every settings field.
-- PLAN holds durable scope/architecture decisions; STATUS holds operational handoffs.
-  Update on launch/integration; keep handoff edits outside a clean merge target until integrated.
-- Never commit secrets, env files, worktrees, or test output. Never publish private agent
-  session links. Use attribution only when explicitly required. Personal memory writes need
-  an explicit user request. Connecting to the user's live SFTPGo is the user's decision.
+Follow existing architecture and configured lint/type/coverage rules; never weaken gates.
+Test observable behavior and edge cases. Prefer small pure functions with injected dependencies.
+Frontend: use shadcn/ui CLI primitives, `globals.css` tokens, quiet Apple-like design, lucide
+icons, and one-line descriptions for settings fields. Restart dev after env/dependency changes.
