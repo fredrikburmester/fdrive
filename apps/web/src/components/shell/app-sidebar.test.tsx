@@ -99,3 +99,12 @@ it("hides Trash when the provider has none", async () => {
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
 });
+
+it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
+  const { container } = renderSidebar();
+  const content = container.querySelector('[data-slot="sidebar-content"]');
+  expect(content?.className).toContain("gap-0");
+  expect(content?.className).toContain("[&_[data-sidebar=group]]:py-1");
+  expect(content?.className).toContain("[&_[data-sidebar=group-label]]:h-7");
+  expect(content?.className).toContain("[&_[data-sidebar=menu]]:gap-0");
+});

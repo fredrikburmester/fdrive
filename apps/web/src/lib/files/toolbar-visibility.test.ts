@@ -6,6 +6,7 @@ const ALL_ACTIONS: ToolbarActionId[] = [
   "upload",
   "duplicate",
   "compress",
+  "download",
   "details",
   "clearSelection",
 ];

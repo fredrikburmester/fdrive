@@ -4,7 +4,29 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileList } from "./file-list";
 
-function makeEntry(name: string): FsEntry {
+const mockScrollToIndex = vi.fn();
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
+      const virtualizer = actual.useVirtualizer(options);
+      return {
+        ...virtualizer,
+        scrollToIndex: (
+          index: number,
+          scrollOptions?: Parameters<typeof virtualizer.scrollToIndex>[1],
+        ) => {
+          mockScrollToIndex(index, scrollOptions);
+          return virtualizer.scrollToIndex(index, scrollOptions);
+        },
+      };
+    },
+  };
+});
+
+function makeEntry(name: string, overrides: Partial<FsEntry> = {}): FsEntry {
   return {
     path: `/${name}`,
     name,
@@ -13,6 +35,7 @@ function makeEntry(name: string): FsEntry {
     modifiedAt: "2024-01-01T00:00:00.000Z",
     ext: "",
     mime: null,
+    ...overrides,
   };
 }
 
@@ -39,12 +62,10 @@ function renderList(overrides: Partial<React.ComponentProps<typeof FileList>> = 
 }
 
 describe("FileList", () => {
-  // jsdom never runs real layout, so `offsetHeight` is always 0; the
-  // virtualizer treats that as "nothing fits" and renders no rows at all.
-  // Stubbing it to a plausible viewport size lets rows actually render.
   let offsetHeight: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    mockScrollToIndex.mockClear();
     offsetHeight = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
   });
 
@@ -140,5 +161,114 @@ describe("FileList", () => {
     fireEvent.click(getByLabelText("Select all"));
 
     expect(onClearSelection).not.toHaveBeenCalled();
+  });
+
+  it("scrolls to requested entry index and calls onScrollConsumed", () => {
+    const onScrollConsumed = vi.fn();
+
+    renderList({
+      scrollRequest: { path: "/file-3.txt", token: 1 },
+      onScrollConsumed,
+    });
+
+    expect(mockScrollToIndex).toHaveBeenCalledWith(3, { align: "auto" });
+    expect(onScrollConsumed).toHaveBeenCalledWith(1);
+  });
+
+  it("reveals the same file twice when a new token request is dispatched", () => {
+    const onScrollConsumed = vi.fn();
+
+    const { rerender } = renderList({
+      scrollRequest: { path: "/file-3.txt", token: 1 },
+      onScrollConsumed,
+    });
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(1);
+    expect(mockScrollToIndex).toHaveBeenCalledWith(3, { align: "auto" });
+    expect(onScrollConsumed).toHaveBeenCalledWith(1);
+
+    // After scroll consumed, parent clears request
+    rerender(
+      <FileList
+        entries={ENTRIES}
+        selected={new Set()}
+        focusedPath={null}
+        onEntryClick={noop}
+        onEntryDoubleClick={noop}
+        onContextAction={noop}
+        getDragPaths={() => []}
+        onInternalDrop={noop}
+        onToggleSelectAll={noop}
+        onClearSelection={noop}
+        scrollRequest={null}
+        onScrollConsumed={onScrollConsumed}
+      />,
+    );
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(1);
+
+    // Revealing the SAME file again with a new token retriggers scrollToIndex
+    rerender(
+      <FileList
+        entries={ENTRIES}
+        selected={new Set()}
+        focusedPath={null}
+        onEntryClick={noop}
+        onEntryDoubleClick={noop}
+        onContextAction={noop}
+        getDragPaths={() => []}
+        onInternalDrop={noop}
+        onToggleSelectAll={noop}
+        onClearSelection={noop}
+        scrollRequest={{ path: "/file-3.txt", token: 2 }}
+        onScrollConsumed={onScrollConsumed}
+      />,
+    );
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(2);
+    expect(mockScrollToIndex).toHaveBeenLastCalledWith(3, { align: "auto" });
+    expect(onScrollConsumed).toHaveBeenCalledWith(2);
+  });
+
+  it("renders a 24px thumbnail img for image files when showThumbnails is true", () => {
+    const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
+    const { container } = renderList({ entries, showThumbnails: true });
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img?.className).toContain("size-6");
+    expect(img?.getAttribute("src")).toContain("pic.png");
+  });
+
+  it("falls back to FileIcon in a matching 24px container when an image thumbnail fails to load", () => {
+    const entries = [makeEntry("broken.png", { ext: ".png", mime: "image/png" })];
+    const { container } = renderList({ entries, showThumbnails: true });
+
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    if (img !== null) {
+      fireEvent.error(img);
+    }
+
+    expect(container.querySelector("img")).toBeNull();
+    const iconContainer = container.querySelector(".size-6");
+    expect(iconContainer).not.toBeNull();
+    expect(iconContainer?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("renders a matching 24px fallback container for non-image entries when showThumbnails is true", () => {
+    const entries = [makeEntry("notes.txt", { ext: ".txt", mime: "text/plain" })];
+    const { container } = renderList({ entries, showThumbnails: true });
+
+    expect(container.querySelector("img")).toBeNull();
+    const iconContainer = container.querySelector(".size-6");
+    expect(iconContainer).not.toBeNull();
+    expect(iconContainer?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("renders standard FileIcon directly when showThumbnails is false", () => {
+    const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
+    const { container } = renderList({ entries, showThumbnails: false });
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".size-6")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
   });
 });

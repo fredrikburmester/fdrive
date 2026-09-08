@@ -12,6 +12,7 @@ import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
+import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
@@ -70,6 +71,10 @@ export interface FileGridProps {
   /** Whether the active identity's storage provider exposes a trash, for
    * every tile's context menu (see `FileContextMenu`). Defaults to `false`. */
   trashAvailable?: boolean;
+  /** A request to scroll a specific entry into view, identified by unique token. */
+  scrollRequest?: ScrollRequest | null;
+  /** Callback fired after the virtualizer has scrolled to the requested entry. */
+  onScrollConsumed?: (token: number) => void;
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
@@ -142,8 +147,11 @@ export function FileGrid({
   onOpenTagsEditor = NO_OP_OPEN_TAGS_EDITOR,
   onToggleFavorite = NO_OP_TOGGLE_FAVORITE,
   trashAvailable = false,
+  scrollRequest = null,
+  onScrollConsumed,
 }: FileGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const lastConsumedTokenRef = useRef<number | null>(null);
   // Seeded from the last container width this grid measured, persisted
   // across mounts (view-mode switches, folder navigations, reloads) so a
   // fresh mount already knows roughly how wide it will be, before it has
@@ -194,6 +202,19 @@ export function FileGrid({
     estimateSize: () => TILE_HEIGHT,
     overscan: 4,
   });
+
+  useEffect(() => {
+    if (!scrollRequest || lastConsumedTokenRef.current === scrollRequest.token) {
+      return;
+    }
+    const index = findRevealIndex(entries, scrollRequest.path);
+    if (index >= 0) {
+      lastConsumedTokenRef.current = scrollRequest.token;
+      const rowIndex = gridRowForIndex(index, columns);
+      virtualizer.scrollToIndex(rowIndex, { align: "auto" });
+      onScrollConsumed?.(scrollRequest.token);
+    }
+  }, [scrollRequest, entries, columns, virtualizer, onScrollConsumed]);
 
   const onClearSelectionRef = useRef(onClearSelection);
   onClearSelectionRef.current = onClearSelection;

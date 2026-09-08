@@ -5,6 +5,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GRID_WIDTH_STORAGE_KEY } from "@/lib/files/grid-layout";
 import { FileGrid } from "./file-grid";
 
+const mockScrollToIndex = vi.fn();
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
+      const virtualizer = actual.useVirtualizer(options);
+      return {
+        ...virtualizer,
+        scrollToIndex: (
+          index: number,
+          scrollOptions?: Parameters<typeof virtualizer.scrollToIndex>[1],
+        ) => {
+          mockScrollToIndex(index, scrollOptions);
+          return virtualizer.scrollToIndex(index, scrollOptions);
+        },
+      };
+    },
+  };
+});
+
 /** A no-op `ResizeObserver`: jsdom does not implement the real thing, and
  * these tests only need the grid's construction of one not to throw. */
 class FakeResizeObserver {
@@ -65,6 +87,7 @@ describe("FileGrid", () => {
   let offsetHeight: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    mockScrollToIndex.mockClear();
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     offsetHeight = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
     window.localStorage.clear();
@@ -207,5 +230,69 @@ describe("FileGrid", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("svg")).not.toBeNull();
+  });
+
+  it("scrolls to requested entry row and calls onScrollConsumed", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const onScrollConsumed = vi.fn();
+
+    renderGrid({
+      scrollRequest: { path: "/file-5.txt", token: 1 },
+      onScrollConsumed,
+    });
+
+    expect(mockScrollToIndex).toHaveBeenCalled();
+    expect(onScrollConsumed).toHaveBeenCalledWith(1);
+  });
+
+  it("reveals the same file twice in grid view when a new token request is dispatched", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const onScrollConsumed = vi.fn();
+
+    const { rerender } = renderGrid({
+      scrollRequest: { path: "/file-5.txt", token: 1 },
+      onScrollConsumed,
+    });
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(1);
+    expect(onScrollConsumed).toHaveBeenCalledWith(1);
+
+    // Reset request
+    rerender(
+      <FileGrid
+        entries={ENTRIES}
+        selected={new Set()}
+        focusedPath={null}
+        onEntryClick={noop}
+        onEntryDoubleClick={noop}
+        onContextAction={noop}
+        getDragPaths={() => []}
+        onInternalDrop={noop}
+        onToggleSelectAll={noop}
+        onClearSelection={noop}
+        scrollRequest={null}
+        onScrollConsumed={onScrollConsumed}
+      />,
+    );
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(1);
+
+    // Reveal same file again with token 2
+    rerender(
+      <FileGrid
+        entries={ENTRIES}
+        selected={new Set()}
+        focusedPath={null}
+        onEntryClick={noop}
+        onEntryDoubleClick={noop}
+        onContextAction={noop}
+        getDragPaths={() => []}
+        onInternalDrop={noop}
+        onToggleSelectAll={noop}
+        onClearSelection={noop}
+        scrollRequest={{ path: "/file-5.txt", token: 2 }}
+        onScrollConsumed={onScrollConsumed}
+      />,
+    );
+    expect(mockScrollToIndex).toHaveBeenCalledTimes(2);
+    expect(onScrollConsumed).toHaveBeenCalledWith(2);
   });
 });

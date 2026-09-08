@@ -4,6 +4,7 @@ import type { SortDirection, SortKey } from "@fdrive/core";
 import {
   ChevronDownIcon,
   CopyIcon,
+  DownloadIcon,
   FileArchiveIcon,
   FileCodeIcon,
   FilePlusIcon,
@@ -36,6 +37,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -240,6 +242,12 @@ export interface FilesToolbarActionsProps {
   onDuplicateSelection: () => void;
   /** Opens the compress dialog for the current selection (any size). */
   onCompressSelection: () => void;
+  /** Downloads the currently selected entries (single direct download or zip). */
+  onDownloadSelection: () => void;
+  /** Whether image thumbnails are shown in list view. */
+  showThumbnails: boolean;
+  /** Toggles the show-thumbnails preference for list view. */
+  onShowThumbnailsChange: (show: boolean) => void;
 }
 
 interface ViewSortMenuItemsProps {
@@ -247,6 +255,8 @@ interface ViewSortMenuItemsProps {
   onViewModeChange: (mode: ViewMode) => void;
   sortSpec: SortSpec;
   onSortSpecChange: (spec: SortSpec) => void;
+  showThumbnails: boolean;
+  onShowThumbnailsChange: (show: boolean) => void;
 }
 
 /** The view mode, sort key, and sort direction radio groups: the "View"
@@ -257,6 +267,8 @@ function ViewSortMenuItems({
   onViewModeChange,
   sortSpec,
   onSortSpecChange,
+  showThumbnails,
+  onShowThumbnailsChange,
 }: ViewSortMenuItemsProps) {
   return (
     <>
@@ -280,6 +292,19 @@ function ViewSortMenuItems({
           <DropdownMenuShortcut>⌘3</DropdownMenuShortcut>
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator />
+      <DropdownMenuGroup>
+        <DropdownMenuCheckboxItem
+          checked={showThumbnails}
+          onCheckedChange={(checked) => onShowThumbnailsChange(checked)}
+          className="flex flex-col items-start gap-0.5"
+        >
+          <span>Show thumbnails</span>
+          <span className="font-normal text-muted-foreground text-xs">
+            Preview images directly inside the list row
+          </span>
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuGroup>
       <DropdownMenuSeparator />
       <DropdownMenuGroup>
         <DropdownMenuLabel>Sort by</DropdownMenuLabel>
@@ -362,9 +387,12 @@ export function FilesToolbarActions({
   onClearSelection,
   onDuplicateSelection,
   onCompressSelection,
+  onDownloadSelection,
+  showThumbnails,
+  onShowThumbnailsChange,
 }: FilesToolbarActionsProps) {
   const isMobile = useIsMobile();
-  const { overflow } = toolbarVisibility(isMobile);
+  const { inline, overflow } = toolbarVisibility(isMobile);
   const inOverflow = overflow.length > 0;
   const ViewIcon = VIEW_MODE_ICONS[viewMode];
   const detailsLabel = detailsOpen ? "Hide details" : "Show details";
@@ -384,6 +412,8 @@ export function FilesToolbarActions({
               onViewModeChange={onViewModeChange}
               sortSpec={sortSpec}
               onSortSpecChange={onSortSpecChange}
+              showThumbnails={showThumbnails}
+              onShowThumbnailsChange={onShowThumbnailsChange}
             />
           </DropdownMenuContent>
         </DropdownMenu>
@@ -473,6 +503,23 @@ export function FilesToolbarActions({
             </TooltipTrigger>
             <TooltipContent>Compress</TooltipContent>
           </Tooltip>
+          {inline.includes("download") && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Download"
+                    onClick={onDownloadSelection}
+                  />
+                }
+              >
+                <DownloadIcon />
+              </TooltipTrigger>
+              <TooltipContent>Download</TooltipContent>
+            </Tooltip>
+          )}
           <Button
             variant="ghost"
             size="icon-xs"
@@ -538,6 +585,8 @@ export function FilesToolbarActions({
                   onViewModeChange={onViewModeChange}
                   sortSpec={sortSpec}
                   onSortSpecChange={onSortSpecChange}
+                  showThumbnails={showThumbnails}
+                  onShowThumbnailsChange={onShowThumbnailsChange}
                 />
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -559,6 +608,12 @@ export function FilesToolbarActions({
               <FileArchiveIcon />
               Compress
             </DropdownMenuItem>
+            {overflow.includes("download") && (
+              <DropdownMenuItem disabled={selectedCount === 0} onClick={onDownloadSelection}>
+                <DownloadIcon />
+                Download
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onToggleDetails}>
               <PanelRightIcon />
               {detailsLabel}
