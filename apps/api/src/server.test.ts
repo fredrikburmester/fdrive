@@ -44,8 +44,6 @@ function buildConfig(): AppConfig {
     fdriveIndexerUrl: undefined,
     fdriveOcrUrl: undefined,
     fdriveMcpWrites: false,
-    fdriveSftpgoTrashPath: null,
-    fdriveSftpgoTrashRetentionHours: null,
   };
 }
 

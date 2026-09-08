@@ -7,12 +7,14 @@ import {
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
+  type TrashSettings,
   TrashStatusResponse,
 } from "@fdrive/contracts";
 import {
   type FileEntry,
   isStorageError,
   parseTrashLeaf,
+  type StorageProvider,
   type TrashEntry,
   type TrashProvider,
   trashLeafPath,
@@ -41,14 +43,8 @@ function routePath(fullPath: string): string {
 export interface TrashRoutesDeps {
   readonly bus: EventBus;
   readonly clock: () => Date;
-  /**
-   * The storage provider's recycle folder virtual path, when configured
-   * (`config.ts`'s `fdriveSftpgoTrashPath`). `null` means no operator has
-   * set up a trash: every route but `status` answers 404.
-   */
-  readonly trashPath: string | null;
-  /** Informational only; surfaced verbatim in `TrashStatusResponse`. */
-  readonly retentionHours: number | null;
+  /** Reads the provider/path revision captured with the request's storage. */
+  readonly settingsForStorage: (storage: StorageProvider) => TrashSettings | null;
   /**
    * Rewrites tag/favorite/recent metadata after a restore, keyed at the
    * restored path. Optional so route tests that do not exercise metadata
@@ -70,10 +66,11 @@ function requireTrash(
 ): { trash: TrashProvider; trashPath: string } {
   const principal = c.get("principal");
   const trash = principal.storage.trash;
-  if (trash === undefined || deps.trashPath === null) {
+  const settings = deps.settingsForStorage(principal.storage);
+  if (trash === undefined || settings?.enabled !== true) {
     throw new ApiHttpError("not_found", "trash is not configured");
   }
-  return { trash, trashPath: deps.trashPath };
+  return { trash, trashPath: settings.path };
 }
 
 /**
@@ -137,10 +134,12 @@ export function registerTrashRoutes(
 
   authed.get(routePath(ROUTES.trash.status), (c) => {
     const principal = c.get("principal");
+    const settings = deps.settingsForStorage(principal.storage);
+    const available = principal.storage.trash !== undefined && settings?.enabled === true;
     const body: TrashStatusResponse = TrashStatusResponse.parse({
-      available: principal.storage.trash !== undefined,
-      path: deps.trashPath,
-      retentionHours: deps.retentionHours,
+      available,
+      path: available ? settings.path : null,
+      retentionHours: available ? settings.retentionHours : null,
     });
     return c.json(body);
   });

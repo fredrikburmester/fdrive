@@ -147,7 +147,9 @@ Verify both layers:
 4. **Features:** enable or skip each of the six choices. Search OCR extracts text without
    rewriting files; searchable PDF conversion is a separate choice that modifies PDFs
    and retains originals according to its retention settings.
-5. **Finish:** review choices, then enter the file browser. Until Finish, the UI stays
+5. **Trash:** enable or skip the SFTPGo recycle-bin integration. Configure and test
+   [the SFTPGo rule](../docs/TRASH.md) before enabling it; no processing mount is needed.
+6. **Finish:** review choices, then enter the file browser. Until Finish, the UI stays
    on `/setup`. Reload resumes saved choices. Other users simply sign in with their own
    SFTPGo file accounts; they do not repeat the owner walkthrough.
 

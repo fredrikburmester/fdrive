@@ -498,7 +498,9 @@ acceptance criteria are in [P8-SETUP-WALKTHROUGH.md](docs/workflow/P8-SETUP-WALK
 The owner selected bundled workers whose models and processing remain inactive until
 enabled through the UI. Versioned persisted settings control all six features, including
 separate search OCR and PDF conversion choices in onboarding. Resumable ownership and automatic storage diagnostics are implemented. Claiming, file-user
-verification, and all six feature choices stay in one shell-free setup flow. The chosen file
+verification, six processing choices, Trash, and review stay in one shell-free setup flow.
+Trash uses separate provider-bound persisted settings, requires explicit confirmation of a
+tested SFTPGo recycle-bin rule, and applies without restart; no environment fallback. The chosen file
 user manages fdrive settings without gaining SFTPGo admin privileges. User inspection remains
 in SFTPGo; fdrive never requests WebAdmin credentials. Final verification is recorded
 in STATUS.md. fdrive is pre-release: no legacy feature migrations or activation fallbacks;

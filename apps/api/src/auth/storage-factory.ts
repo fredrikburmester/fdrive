@@ -1,9 +1,17 @@
+import type { TrashSettings } from "@fdrive/contracts";
 import { createRecycleFolderTrash, isStorageError, type StorageProvider } from "@fdrive/core";
 import { createSftpgoStorageProvider } from "../storage/sftpgo-provider.js";
 import type { ClientForIdentity } from "./provider-client.ts";
 import type { TokenSource } from "./token-source.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
+
+const trashSettingsByStorage = new WeakMap<StorageProvider, TrashSettings>();
+
+/** Returns the provider-bound Trash revision captured with this request's storage. */
+export function trashSettingsForStorage(storage: StorageProvider): TrashSettings | null {
+  return trashSettingsByStorage.get(storage) ?? null;
+}
 
 /**
  * True when `statFile(path)` reports `bad_request`, the convention this
@@ -65,15 +73,13 @@ export function withRecycleFolderTrash(
 
 /**
  * Delayed jobs retain this client; token validation can deny execution but
- * cannot retarget it. When `trashPath` is set, every identity's storage
- * provider is extended with a `trash` capability (see
- * `withRecycleFolderTrash`); otherwise `storage.trash` stays undefined and
- * deletes remain permanent.
+ * cannot retarget it. Trash settings are resolved once while constructing
+ * each request's provider snapshot, so runtime changes apply without restart.
  */
 export function createIdentityStorageFactory(deps: {
   clientForIdentity: ClientForIdentity;
   tokenSource: Pick<TokenSource, "withToken">;
-  trashPath?: string;
+  resolveTrashSettings?: (identityId: string) => Promise<TrashSettings>;
 }): IdentityStorageFactory {
   return async (identityId) => {
     const client = await deps.clientForIdentity(identityId);
@@ -81,6 +87,10 @@ export function createIdentityStorageFactory(deps: {
       client,
       withToken: (fn) => deps.tokenSource.withToken(identityId, fn),
     });
-    return deps.trashPath === undefined ? storage : withRecycleFolderTrash(storage, deps.trashPath);
+    const settings = await deps.resolveTrashSettings?.(identityId);
+    const result =
+      settings?.enabled === true ? withRecycleFolderTrash(storage, settings.path) : storage;
+    if (settings !== undefined) trashSettingsByStorage.set(result, settings);
+    return result;
   };
 }

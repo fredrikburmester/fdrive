@@ -218,7 +218,9 @@ async function buildHarnessWithStorage(
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
-        ...(opts.trashPath === undefined ? {} : { trashPath: opts.trashPath }),
+        ...(opts.trashPath === undefined
+          ? {}
+          : { trashPathForStorage: () => opts.trashPath ?? null }),
         ...(opts.jsonMaxBytes === undefined ? {} : { jsonMaxBytes: opts.jsonMaxBytes }),
       }),
   });

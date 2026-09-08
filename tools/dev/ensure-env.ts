@@ -7,8 +7,7 @@
  *
  * It also upserts the keys search, OCR, and thumbnails need
  * (`FDRIVE_INDEX_ROOTS`, `FDRIVE_EMBED_URL`, `FDRIVE_THUMBS_DIR`,
- * `FDRIVE_INDEXER_URL`, `FDRIVE_OCR_URL`, `FDRIVE_ADMIN_USERS`,
- * `FDRIVE_SFTPGO_TRASH_PATH`) into `apps/api/.env.dev`, whether that file
+ * `FDRIVE_INDEXER_URL`, `FDRIVE_OCR_URL`, `FDRIVE_ADMIN_USERS`) into `apps/api/.env.dev`, whether that file
  * is freshly created or already existed, without touching any key already
  * present. This lets `pnpm dev:env` grow the file's contents across
  * versions of this script instead of only ever writing it once.
@@ -63,9 +62,8 @@ export function buildWebEnvLocal(): string {
  * and bind-mounted thumbnails directory: 127.0.0.1:58081, 127.0.0.1:58010,
  * 127.0.0.1:58011, the image-embed sidecar at 127.0.0.1:58012, and `deploy/dev/.data/thumbs` under `repoRoot`
  * respectively. `dev` is granted admin in the dev environment so the System
- * pages are reachable without extra setup. `FDRIVE_SFTPGO_TRASH_PATH`
- * matches the recycle-folder rule `tools/dev/generate-seed.ts` seeds into
- * the dev SFTPGo container, so the dev Trash view works out of the box.
+ * pages are reachable without extra setup. Trash is enabled through onboarding;
+ * `tools/dev/generate-seed.ts` seeds its prerequisite SFTPGo recycle rule.
  */
 export function buildDevSearchEnv(repoRoot: string): Record<string, string> {
   return {
@@ -78,7 +76,6 @@ export function buildDevSearchEnv(repoRoot: string): Record<string, string> {
     FDRIVE_OCR_URL: "http://127.0.0.1:58011",
     FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:58012",
     FDRIVE_ADMIN_USERS: "dev",
-    FDRIVE_SFTPGO_TRASH_PATH: "/.trash",
   };
 }
 

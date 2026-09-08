@@ -21,7 +21,7 @@ environment changes after initial deployment.
    unchanged. No SFTPGo WebAdmin credentials or user inventory belong in fdrive.
 4. **Choose features.** Remain on the same shell-free `/setup` screen after account validation.
    Establish the authenticated session internally so feature changes remain administrator-only.
-   Present six separate Enable/Skip choices, including both OCR modes, then review and finish.
+   Present six processing Enable/Skip choices, including both OCR modes, followed by Trash, then review and finish. See [Trash onboarding](TRASH-ONBOARDING.md) for its separate provider-bound integration settings.
    Only Finish enters the file browser. Reload resumes the saved choice; an expired session
    requires sign-in with the same file account before resuming. Other users sign in normally.
 5. **Automatic prerequisites.** Use the default username home mapping without a separate Home

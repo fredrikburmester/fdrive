@@ -64,11 +64,13 @@ export interface ImageSearchServiceDeps {
    */
   readonly resolveHealth: () => Promise<SidecarResult<ImageEmbedHealthInfo> | null>;
   /** Same trash-exclusion rule as `SearchServiceDeps.trashPath`. */
-  readonly trashPath: string | null;
+  /** Optional test/default value; production passes a request snapshot. */
+  readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
 
 export interface ImageSearchServiceInput {
+  readonly trashPath?: string | null;
   readonly scopes: readonly Scope[];
   readonly authorizer: ReadAuthorizer;
   readonly query: string;
@@ -110,6 +112,7 @@ function unavailableResponse(
 export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSearchService {
   return {
     async search(input: ImageSearchServiceInput): Promise<ImageSearchResponse> {
+      const trashPath = input.trashPath ?? deps.trashPath ?? null;
       if (deps.enabled !== undefined && !(await deps.enabled()))
         return unavailableResponse(input.query, 0);
       const startedAt = deps.clock();
@@ -170,8 +173,8 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
           return null;
         }
         if (
-          deps.trashPath !== null &&
-          (virtualPath === deps.trashPath || isUnderPath(deps.trashPath, virtualPath))
+          trashPath !== null &&
+          (virtualPath === trashPath || isUnderPath(trashPath, virtualPath))
         ) {
           return null;
         }

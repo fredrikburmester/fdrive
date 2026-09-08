@@ -129,6 +129,8 @@ export const ROUTES = {
   },
   system: {
     features: "/api/v1/system/features",
+    /** GET/PUT, admin only: provider-bound Trash configuration. */
+    trash: "/api/v1/system/trash",
     /** GET, admin only: indexer health, stats, and settings -> `SystemIndexerResponse`. */
     indexer: "/api/v1/system/indexer",
     /** PUT, admin only: update the indexer's settings -> `IndexerSettingsResponse`. */

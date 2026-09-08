@@ -206,6 +206,22 @@ async function aliceScopeContext(indexQueries: Pick<IndexQueries, "rootIdsByName
 }
 
 describe("runSearch", () => {
+  it("passes the request storage's Trash path into search", async () => {
+    const search = vi.fn(async (input: Parameters<SearchService["search"]>[0]) => ({
+      query: input.query,
+      sections: { folders: [], files: [], content: [] },
+      degraded: false,
+      unavailable: false,
+      tookMs: 0,
+    }));
+    const deps = baseDeps({
+      searchService: { search },
+      trashPathForStorage: () => "/deleted",
+    });
+    await runSearch(deps, fakePrincipal(), { query: "invoice" });
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ trashPath: "/deleted" }));
+  });
+
   it("maps results with fdrive URLs", async () => {
     const deps = baseDeps({
       searchService: fakeSearchService({

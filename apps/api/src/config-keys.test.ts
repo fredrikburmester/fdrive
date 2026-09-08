@@ -32,7 +32,6 @@ function loadFullyConfiguredEnv(): AppConfig {
     FDRIVE_IMAGE_EMBED_URL: "http://image-embed:8012",
     FDRIVE_THUMBS_DIR: "/thumbs",
     FDRIVE_OCR_URL: "http://ocr:8011",
-    FDRIVE_SFTPGO_TRASH_PATH: "/.trash",
     FDRIVE_OFFICE_PRODUCT: "onlyoffice",
     FDRIVE_OFFICE_URL: "http://onlyoffice",
     FDRIVE_OFFICE_PUBLIC_URL: "https://office.example.com",
@@ -112,10 +111,7 @@ describe("subsystemsStatus", () => {
         "FDRIVE_WOPI_URL",
       ],
     });
-    expect(statuses.trash).toEqual({
-      status: "not_configured",
-      missing: ["FDRIVE_SFTPGO_TRASH_PATH"],
-    });
+    expect(statuses.trash).toEqual({ status: "configured", missing: [] });
   });
 
   it("reports index as configured only once both FDRIVE_INDEX_ROOTS and FDRIVE_INDEXER_URL are set", () => {

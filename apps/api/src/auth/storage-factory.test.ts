@@ -5,6 +5,7 @@ import { createMemoryStorage } from "../../test/fixtures/memory-storage.ts";
 import { ApiHttpError } from "../errors.js";
 import {
   createIdentityStorageFactory,
+  trashSettingsForStorage,
   withIdempotentMkdir,
   withRecycleFolderTrash,
 } from "./storage-factory.ts";
@@ -104,10 +105,46 @@ it("extends storage with a recycle-folder trash when trashPath is configured", a
   const factory = createIdentityStorageFactory({
     clientForIdentity: async () => fixed,
     tokenSource: { withToken: async (_id, fn) => fn("a-token") },
-    trashPath: "/.trash",
+    resolveTrashSettings: async () => ({
+      providerId: "123e4567-e89b-42d3-a456-426614174000",
+      revision: 1,
+      enabled: true,
+      path: "/.trash",
+      retentionHours: null,
+      rulesConfirmed: true,
+    }),
   });
   const storage = await factory("identity-a");
   expect(storage.trash).toBeDefined();
+});
+
+it("keeps a coherent Trash revision per storage while new requests see updates", async () => {
+  const fixed = createSftpgoClient({
+    baseUrl: "http://a.test",
+    fetch: async () => Response.json([]),
+  });
+  let settings = {
+    providerId: "123e4567-e89b-42d3-a456-426614174000",
+    revision: 1,
+    enabled: true,
+    path: "/.trash",
+    retentionHours: null,
+    rulesConfirmed: true,
+  };
+  const factory = createIdentityStorageFactory({
+    clientForIdentity: async () => fixed,
+    tokenSource: { withToken: async (_id, fn) => fn("a-token") },
+    resolveTrashSettings: async () => settings,
+  });
+
+  const first = await factory("identity-a");
+  settings = { ...settings, revision: 2, path: "/deleted" };
+  const second = await factory("identity-a");
+
+  expect(trashSettingsForStorage(first)).toMatchObject({ revision: 1, path: "/.trash" });
+  expect(trashSettingsForStorage(second)).toMatchObject({ revision: 2, path: "/deleted" });
+  expect(first.trash).toBeDefined();
+  expect(second.trash).toBeDefined();
 });
 
 it("withRecycleFolderTrash spreads the original provider and adds trash without mutating it", () => {

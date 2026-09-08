@@ -62,7 +62,8 @@ export interface McpToolDeps {
    * Threaded into every `resolveScopeContext` call so `virtualPathFor`
    * excludes trashed files from every tool's results.
    */
-  readonly trashPath: string | null;
+  readonly trashPath?: string | null;
+  readonly trashPathForStorage?: (storage: Principal["storage"]) => string | null;
 }
 
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
@@ -98,12 +99,17 @@ async function requireScope(deps: McpToolDeps, principal: Principal): Promise<Sc
     throw new McpToolError(indexUnavailableMessage(verified.reason));
   }
 
-  const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, deps.trashPath);
+  const trashPath = currentTrashPath(deps, principal);
+  const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, trashPath);
   if (ctx === null) {
     throw new McpToolError(indexUnavailableMessage("no_roots"));
   }
 
   return { ctx, authorizer: createReadAuthorizer({ storage: principal.storage }) };
+}
+
+function currentTrashPath(deps: McpToolDeps, principal: Principal): string | null {
+  return deps.trashPathForStorage?.(principal.storage) ?? deps.trashPath ?? null;
 }
 
 /** The common shape every MCP tool returns for one file, before tool-specific extra fields are added. */
@@ -211,6 +217,7 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
       ? { available: false as const }
       : await deps.scopeResolver.verifiedIndexScopes(identity);
   const response = await deps.searchService.search({
+    trashPath: currentTrashPath(deps, principal),
     scopes: verified.available ? verified.scopes : [],
     authorizer: createReadAuthorizer({ storage: principal.storage }),
     query: args.query,
@@ -951,7 +958,11 @@ export async function runMovePath(deps: McpToolDeps, principal: Principal, args:
       ? { available: false as const }
       : await deps.scopeResolver.verifiedIndexScopes(identity);
   if (verified.available) {
-    const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, deps.trashPath);
+    const ctx = await resolveScopeContext(
+      deps.indexQueries,
+      verified.scopes,
+      currentTrashPath(deps, principal),
+    );
     if (ctx !== null) {
       await recordMoveIfInScope(deps, ctx, args);
     }
@@ -1042,7 +1053,11 @@ export async function runRecentMoves(
   if (!verified.available) {
     return { moves: [] };
   }
-  const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, deps.trashPath);
+  const ctx = await resolveScopeContext(
+    deps.indexQueries,
+    verified.scopes,
+    currentTrashPath(deps, principal),
+  );
   if (ctx === null) {
     return { moves: [] };
   }

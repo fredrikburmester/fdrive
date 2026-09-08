@@ -22,6 +22,7 @@ import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
 import { SetupFrame } from "./setup-frame";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+import { TrashReview, TrashSettingsCard } from "./trash-settings-card";
 
 function FeatureCard({
   id,
@@ -113,8 +114,14 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         <div>
           <h2 className="font-medium">fdrive setup walkthrough</h2>
           <p className="text-sm text-muted-foreground">
-            Step {step + 4} of 10 ·{" "}
-            {step === 6 ? "Review" : id ? FEATURE_DESCRIPTIONS[id].title : "Features"}
+            Step {step + 4} of 11 ·{" "}
+            {step === 6
+              ? "Trash"
+              : step === 7
+                ? "Review"
+                : id
+                  ? FEATURE_DESCRIPTIONS[id].title
+                  : "Features"}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             Choose each optional feature. Your progress is saved when you continue.
@@ -136,7 +143,13 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           status={data.statuses.find((status) => status.id === featureId)}
         />
       ))}
-      {walkthrough && step === 6 ? (
+      {!walkthrough || step === 6 ? (
+        <TrashSettingsCard
+          disabled={update.isPending}
+          {...(walkthrough ? { onContinue: () => save({ walkthroughStep: 7 }) } : {})}
+        />
+      ) : null}
+      {walkthrough && step === 7 ? (
         <Card>
           <CardHeader>
             <CardTitle>Ready to use fdrive</CardTitle>
@@ -156,6 +169,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
                 </span>
               </div>
             ))}
+            <TrashReview />
           </CardContent>
         </Card>
       ) : null}
@@ -193,27 +207,29 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
             >
               Back
             </Button>
-            <div className="flex gap-2">
-              {id ? (
+            {step !== 6 ? (
+              <div className="flex gap-2">
+                {id ? (
+                  <Button
+                    variant="outline"
+                    disabled={update.isPending}
+                    onClick={() =>
+                      save({ walkthroughStep: step + 1 }, changeFeature(values, id, false))
+                    }
+                  >
+                    Skip this feature
+                  </Button>
+                ) : null}
                 <Button
-                  variant="outline"
                   disabled={update.isPending}
                   onClick={() =>
-                    save({ walkthroughStep: step + 1 }, changeFeature(values, id, false))
+                    save(step === 7 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
                   }
                 >
-                  Skip this feature
+                  {update.isPending ? "Saving…" : step === 7 ? "Finish setup" : "Save and continue"}
                 </Button>
-              ) : null}
-              <Button
-                disabled={update.isPending}
-                onClick={() =>
-                  save(step === 6 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
-                }
-              >
-                {update.isPending ? "Saving…" : step === 6 ? "Finish setup" : "Save and continue"}
-              </Button>
-            </div>
+              </div>
+            ) : null}
           </>
         ) : (
           <>
@@ -244,7 +260,7 @@ export function FeaturesPage() {
   return (
     <SystemPage
       title="Features"
-      description="Set up optional processing and monitor its readiness."
+      description="Manage optional features and the SFTPGo Trash integration."
       lastUpdated={query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null}
     >
       {query.isError ? (

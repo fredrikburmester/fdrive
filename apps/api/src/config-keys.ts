@@ -285,24 +285,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "ocr",
   },
   {
-    key: "FDRIVE_SFTPGO_TRASH_PATH",
-    description:
-      "The SFTPGo recycle-folder virtual path (see docs/DEVELOPMENT.md's Event Manager rule). Unset means deletes are permanent.",
-    default: null,
-    example: "/.trash",
-    secret: false,
-    subsystem: "trash",
-  },
-  {
-    key: "FDRIVE_SFTPGO_TRASH_RETENTION_HOURS",
-    description:
-      "Informational retention window shown in the Trash UI. fdrive never enforces it itself.",
-    default: null,
-    example: "720",
-    secret: false,
-    subsystem: "trash",
-  },
-  {
     key: "FDRIVE_OFFICE_PRODUCT",
     description:
       "onlyoffice or collabora. Required, alongside the other FDRIVE_OFFICE_* and FDRIVE_WOPI_URL variables, to enable Office editing.",
@@ -408,10 +390,7 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
       officeMissing.length === 0
         ? { status: "configured", missing: [] }
         : { status: "not_configured", missing: officeMissing },
-    trash:
-      config.fdriveSftpgoTrashPath === null
-        ? { status: "not_configured", missing: ["FDRIVE_SFTPGO_TRASH_PATH"] }
-        : { status: "configured", missing: [] },
+    trash: { status: "configured", missing: [] },
   };
 }
 

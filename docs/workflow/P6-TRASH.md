@@ -30,14 +30,11 @@ and the UI says so. Nothing in fdrive moves files into a trash folder itself.
 
 ## Configuration
 
-- `FDRIVE_SFTPGO_TRASH_PATH`: optional virtual path of the recycle folder, for example
-  `/.trash`. Must be absolute, normalized, not `/`. Unset means no trash capability.
-- `FDRIVE_SFTPGO_TRASH_RETENTION_HOURS`: optional positive integer, informational only.
-- Both are documented in `deploy/.env.example` and `docs/DEVELOPMENT.md` with the exact
-  Event Manager rule the operator must create (also as a JSON snippet for the admin API).
-- Dev and test seeds ship the rule in the load dump so `pnpm dev:env` and the testkit
-  container have a working trash at `/.trash`. `tools/dev/ensure-env.ts` writes
-  `FDRIVE_SFTPGO_TRASH_PATH=/.trash` into `apps/api/.env.dev` when absent.
+Provider-bound settings are persisted through onboarding and System > Features.
+See [Trash onboarding](TRASH-ONBOARDING.md) for the admin contract and live updates,
+and [Trash setup](../TRASH.md) for the SFTPGo rule and operator verification.
+No environment activation keys remain. Dev seeds include the prerequisite recycle rule;
+select Trash through the UI after verifying the fixture.
 
 ## Core contract (packages/core)
 
@@ -95,8 +92,8 @@ export interface StorageProvider { /* existing */ readonly trash?: TrashProvider
 
 ## API (apps/api)
 
-- `config.ts`: `fdriveSftpgoTrashPath: string | null`, `fdriveSftpgoTrashRetentionHours:
-  number | null`, validated as above.
+- `trash/settings.ts`: provider-bound persisted configuration with revision conflict checks.
+  Admin GET/PUT `/api/v1/system/trash` changes settings without restart.
 - `auth/storage-factory.ts` (or a decorator applied there): when the trash path is set, the
   identity storage provider gets `trash = createRecycleFolderTrash({ storage, trashPath })`.
 - New `trash/routes.ts` on `authed`: status always answers; list, restore, purge and empty

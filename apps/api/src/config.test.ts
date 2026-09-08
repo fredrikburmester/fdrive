@@ -10,7 +10,6 @@ import {
   loadConfig,
   parseAdminUsers,
   parseIndexRoots,
-  parseTrashPath,
   undefinedWhenEmpty,
   withDefault,
 } from "./config";
@@ -160,8 +159,6 @@ describe("loadConfig", () => {
       fdriveIndexerUrl: undefined,
       fdriveOcrUrl: undefined,
       fdriveMcpWrites: false,
-      fdriveSftpgoTrashPath: null,
-      fdriveSftpgoTrashRetentionHours: null,
     });
   });
 
@@ -210,8 +207,6 @@ describe("loadConfig", () => {
       FDRIVE_INDEXER_URL: "http://indexer:8010",
       FDRIVE_OCR_URL: "http://ocr:8020",
       FDRIVE_MCP_WRITES: "true",
-      FDRIVE_SFTPGO_TRASH_PATH: "/.trash",
-      FDRIVE_SFTPGO_TRASH_RETENTION_HOURS: "72",
     });
 
     expect(config).toEqual({
@@ -250,8 +245,6 @@ describe("loadConfig", () => {
       fdriveIndexerUrl: "http://indexer:8010",
       fdriveOcrUrl: "http://ocr:8020",
       fdriveMcpWrites: true,
-      fdriveSftpgoTrashPath: "/.trash",
-      fdriveSftpgoTrashRetentionHours: 72,
     });
   });
 
@@ -278,35 +271,6 @@ describe("loadConfig", () => {
   it("rejects a non-http FDRIVE_OCR_URL", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_OCR_URL: "not a url" })).toThrow(
       /FDRIVE_OCR_URL/,
-    );
-  });
-
-  it("defaults FDRIVE_SFTPGO_TRASH_PATH and FDRIVE_SFTPGO_TRASH_RETENTION_HOURS to null", () => {
-    const config = loadConfig(REQUIRED_ENV);
-    expect(config.fdriveSftpgoTrashPath).toBeNull();
-    expect(config.fdriveSftpgoTrashRetentionHours).toBeNull();
-  });
-
-  it("treats an empty FDRIVE_SFTPGO_TRASH_PATH the same as unset", () => {
-    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_SFTPGO_TRASH_PATH: "" });
-    expect(config.fdriveSftpgoTrashPath).toBeNull();
-  });
-
-  it("rejects an invalid FDRIVE_SFTPGO_TRASH_PATH", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SFTPGO_TRASH_PATH: "/" })).toThrow(
-      /FDRIVE_SFTPGO_TRASH_PATH/,
-    );
-  });
-
-  it("rejects a non-integer FDRIVE_SFTPGO_TRASH_RETENTION_HOURS", () => {
-    expect(() =>
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_SFTPGO_TRASH_RETENTION_HOURS: "not a number" }),
-    ).toThrow(/FDRIVE_SFTPGO_TRASH_RETENTION_HOURS/);
-  });
-
-  it("rejects a zero FDRIVE_SFTPGO_TRASH_RETENTION_HOURS", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SFTPGO_TRASH_RETENTION_HOURS: "0" })).toThrow(
-      /FDRIVE_SFTPGO_TRASH_RETENTION_HOURS/,
     );
   });
 
@@ -524,36 +488,6 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ ...REQUIRED_ENV, FDRIVE_SETUP_TOKEN: "" }).fdriveSetupToken,
     ).toBeUndefined();
-  });
-});
-
-describe("parseTrashPath", () => {
-  it("returns null for undefined", () => {
-    expect(parseTrashPath(undefined)).toBeNull();
-  });
-
-  it("returns a valid normalized absolute path unchanged", () => {
-    expect(parseTrashPath("/.trash")).toBe("/.trash");
-  });
-
-  it("rejects the root", () => {
-    expect(() => parseTrashPath("/")).toThrow(/root/);
-  });
-
-  it("rejects a path with a trailing slash (not already normalized)", () => {
-    expect(() => parseTrashPath("/.trash/")).toThrow(/normalized/);
-  });
-
-  it('rejects a path containing ".."', () => {
-    expect(() => parseTrashPath("/.trash/../etc")).toThrow(/normalized/);
-  });
-
-  it("rejects a relative path", () => {
-    expect(() => parseTrashPath(".trash")).toThrow(/normalized/);
-  });
-
-  it("rejects a path normalizePath itself refuses", () => {
-    expect(() => parseTrashPath("/\0bad")).toThrow(/valid path/);
   });
 });
 

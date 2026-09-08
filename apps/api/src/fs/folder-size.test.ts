@@ -206,7 +206,7 @@ describe("GET /api/v1/fs/folder-size", () => {
   });
 
   it("answers indexed: false for the trash folder itself", async () => {
-    const app = buildApp({ trashPath: "/trash" });
+    const app = buildApp({ trashPathForStorage: () => "/trash" });
 
     const res = await app.request("/api/v1/fs/folder-size?path=/trash");
 
@@ -215,7 +215,7 @@ describe("GET /api/v1/fs/folder-size", () => {
   });
 
   it("answers indexed: false for a folder nested under trash", async () => {
-    const app = buildApp({ trashPath: "/trash" });
+    const app = buildApp({ trashPathForStorage: () => "/trash" });
 
     const res = await app.request("/api/v1/fs/folder-size?path=/trash/old");
 

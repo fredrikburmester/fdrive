@@ -2,6 +2,22 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## Trash onboarding (verified)
+
+- Seventh optional choice after six processing features; review is step 11. Saved through
+  provider-bound admin settings with revision checks. SFTPGo recycle rules require explicit
+  operator confirmation; no WebAdmin credentials, automatic rule creation, or remote access.
+- Backend reviewed and transferred; copy retained in `.worktrees/onboarding-trash-backend`.
+  Each request captures a consistent configuration. Account-wide and MCP search included.
+- Removed deployment/dev environment activation keys. Preflight/dev-env and focused UI
+  tests pass. Application lint/types/coverage pass with `VITEST_MAX_WORKERS=2`; default
+  concurrency hit unrelated 5s archive-fixture timeouts. API/DB integration and affected
+  browser tests pass (onboarding resume/skip, enable, restore/conflict/purge, live disable).
+- Fresh local dev UI verified: claim → connection → file-user → six processing choices →
+  Trash → review → files, with Trash navigation available. Invalid hidden drafts cannot
+  block disabling. Final frontend lint/typecheck/coverage passed after that form fix.
+  Workflow gate passed; no remote server access or compatibility migrations.
+
 ## Generic installation documentation
 
 - Canonical runbook: deploy/README.md. Generic host/path/account examples; existing versus
@@ -14,7 +30,7 @@ Updated: 2026-09-08. Owner: primary agent.
 
 ## Continuous onboarding (verified)
 
-- One shell-free `/setup` flow: claim → connection → administrator → six features → review.
+- One shell-free `/setup` flow: claim → connection → administrator → six processing features → Trash → review.
   File-user verification establishes a session internally; only Finish enters the file browser.
   Reload resumes saved choices; other users skip the owner walkthrough.
 - Explained WebClient file-user versus WebAdmin accounts and fdrive-only administrator rights.
