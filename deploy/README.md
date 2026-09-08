@@ -29,8 +29,7 @@ Open `http://localhost:8090` on the server, or use your configured tunnel or
 reverse proxy. Use the one-time claim token printed in the API log. The
 walkthrough tests an SFTPGo URL before saving it and establishes the
 owner through a normal SFTPGo login. Leave `SFTPGO_URL` commented in `.env` to
-do this in the browser. Existing deployments may keep it as a deployment
-override while they migrate to the walkthrough.
+do this in the browser.
 
 ## Optional features
 
@@ -74,4 +73,4 @@ cd /path/to/fdrive/deploy && ./update.sh
 ```
 
 See [REFERENCE.md](REFERENCE.md) for reverse proxies, host mounts, bundled
-SFTPGo, Office, ARM64, and legacy deployment overrides.
+SFTPGo, Office, and ARM64.

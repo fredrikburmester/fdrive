@@ -119,7 +119,7 @@ Open **`http://localhost:8090`** on the server, or use your configured tunnel/re
 
 Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
 
-Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers; the walkthrough checks storage access. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts, remote access, and existing deployments.
+Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers; the walkthrough checks storage access. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts and remote access.
 
 ---
 

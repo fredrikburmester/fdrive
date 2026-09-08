@@ -32,19 +32,6 @@ export interface FeatureService {
   enabled(feature: FeatureId): Promise<boolean>;
 }
 
-/** Existing deployments retain their configured capabilities until the owner saves choices. */
-export function legacyFeatures(config: AppConfig): FeatureValues {
-  const index = config.fdriveIndexerUrl !== undefined && (config.fdriveIndexRoots?.length ?? 0) > 0;
-  return {
-    thumbnails: config.fdriveThumbsDir !== undefined && index,
-    textSearch: index,
-    searchOcr: false,
-    semanticSearch: index && config.fdriveEmbedUrl !== undefined,
-    imageSearch: index && config.fdriveImageEmbedUrl !== undefined,
-    pdfOcr: index && config.fdriveOcrUrl !== undefined,
-  };
-}
-
 interface Probe {
   ok: boolean;
   status?: string;
@@ -108,26 +95,13 @@ export function createFeatureService(deps: {
   const defaults: FeatureConfiguration = {
     version: 1,
     revision: 0,
-    values: config.fdriveFeaturesManaged ? DISABLED_FEATURES : legacyFeatures(config),
-    walkthroughComplete: !config.fdriveFeaturesManaged,
+    values: DISABLED_FEATURES,
+    walkthroughComplete: false,
   };
 
   async function read(): Promise<{ raw: unknown | null; configuration: FeatureConfiguration }> {
     const raw = await settings.get<unknown>(FEATURES_SETTINGS_KEY);
-    if (raw === null) {
-      if (config.fdriveFeaturesManaged) return { raw, configuration: defaults };
-      const globs = await settings.get<unknown>("indexer.ocr_image_globs");
-      return {
-        raw,
-        configuration: {
-          ...defaults,
-          values: {
-            ...defaults.values,
-            searchOcr: defaults.values.textSearch && Array.isArray(globs) && globs.length > 0,
-          },
-        },
-      };
-    }
+    if (raw === null) return { raw, configuration: defaults };
     const parsed = FeatureConfiguration.safeParse(raw);
     if (!parsed.success)
       throw new ApiHttpError("internal", "Stored feature configuration is invalid.");
@@ -170,7 +144,7 @@ export function createFeatureService(deps: {
       const roots = config.fdriveIndexRoots ?? [];
       const checkStorage = roots.length > 0;
       const needsIndex = values.thumbnails || values.textSearch || values.imageSearch;
-      const observeDisabled = !!config.fdriveFeaturesManaged && raw !== null;
+      const observeDisabled = raw !== null;
       const [indexer, ocr, embed, image, tika] = await Promise.all([
         needsIndex || observeDisabled || checkStorage
           ? probe(config.fdriveIndexerUrl, deps.fetch)
@@ -179,22 +153,12 @@ export function createFeatureService(deps: {
           ? probe(config.fdriveOcrUrl, deps.fetch)
           : null,
         values.semanticSearch || observeDisabled
-          ? probe(
-              config.fdriveEmbedUrl,
-              deps.fetch,
-              config.fdriveFeaturesManaged ? "8099" : undefined,
-            )
+          ? probe(config.fdriveEmbedUrl, deps.fetch, "8099")
           : null,
         values.imageSearch || observeDisabled
-          ? probe(
-              config.fdriveImageEmbedUrl,
-              deps.fetch,
-              config.fdriveFeaturesManaged ? "8013" : undefined,
-            )
+          ? probe(config.fdriveImageEmbedUrl, deps.fetch, "8013")
           : null,
-        values.textSearch && config.fdriveFeaturesManaged
-          ? probe("http://tika", deps.fetch, "9997")
-          : null,
+        values.textSearch ? probe("http://tika", deps.fetch, "9997") : null,
       ]);
       const statuses = FEATURE_IDS.map((id): FeatureStatus => {
         if (!values[id]) {
@@ -273,7 +237,7 @@ export function createFeatureService(deps: {
               (["loading", "preparing", "starting", "off", "stopping"].includes(
                 worker.status ?? "",
               ) ||
-                (config.fdriveFeaturesManaged && worker.revision !== configuration.revision)),
+                worker.revision !== configuration.revision),
           )
         ) {
           return {
@@ -290,7 +254,7 @@ export function createFeatureService(deps: {
       });
       return {
         configuration,
-        source: raw === null ? (config.fdriveFeaturesManaged ? "default" : "legacy") : "settings",
+        source: raw === null ? "default" : "settings",
         statuses,
         roots: roots.map((root) => {
           const indexStorage = record(indexer?.storage?.[root.name]);

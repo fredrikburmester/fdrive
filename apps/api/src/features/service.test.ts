@@ -1,17 +1,11 @@
 import { FEATURES_SETTINGS_KEY, type FeatureConfiguration } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { type AppConfig, loadConfig } from "../config.js";
-import {
-  createFeatureService,
-  DISABLED_FEATURES,
-  type FeatureSettingsStore,
-  legacyFeatures,
-} from "./service.js";
+import { createFeatureService, DISABLED_FEATURES, type FeatureSettingsStore } from "./service.js";
 
 const base = loadConfig({
   DATABASE_URL: "postgres://localhost/fdrive",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-  FDRIVE_FEATURES_MANAGED: "true",
 });
 const full: AppConfig = {
   ...base,
@@ -39,18 +33,11 @@ const config: FeatureConfiguration = {
 };
 
 function fixture(
-  options: {
-    config?: AppConfig;
-    raw?: unknown;
-    fetch?: typeof fetch;
-    rejectCas?: boolean;
-    ocrGlobs?: unknown;
-  } = {},
+  options: { config?: AppConfig; raw?: unknown; fetch?: typeof fetch; rejectCas?: boolean } = {},
 ) {
   let raw: unknown | null = options.raw ?? null;
   const settings: FeatureSettingsStore = {
     get: async <T>(key: string) => {
-      if (key === "indexer.ocr_image_globs") return (options.ocrGlobs ?? null) as T | null;
       expect(key).toBe(FEATURES_SETTINGS_KEY);
       return raw as T | null;
     },
@@ -72,7 +59,7 @@ function fixture(
 }
 
 describe("feature configuration", () => {
-  it("starts managed installs off and only checks configured storage workers", async () => {
+  it("starts unconfigured installations off and only checks configured storage workers", async () => {
     const { service, fetchImpl } = fixture();
     expect(await service.configuration()).toMatchObject({
       revision: 0,
@@ -85,19 +72,6 @@ describe("feature configuration", () => {
       "http://indexer/health",
       "http://ocr/health",
     ]);
-  });
-  it("retains legacy capabilities until saved", async () => {
-    const { service } = fixture({ config: { ...full, fdriveFeaturesManaged: false } });
-    expect((await service.configuration()).values).toEqual({ ...enabled, searchOcr: false });
-    expect((await service.status()).source).toBe("legacy");
-    expect(legacyFeatures({ ...base, fdriveFeaturesManaged: false })).toEqual(DISABLED_FEATURES);
-  });
-  it("preserves explicitly configured legacy image OCR scope", async () => {
-    const { service } = fixture({
-      config: { ...full, fdriveFeaturesManaged: false },
-      ocrGlobs: ["alice/scans/**"],
-    });
-    expect((await service.configuration()).values.searchOcr).toBe(true);
   });
   it("persists progress and rejects racing/stale writes", async () => {
     const { service } = fixture();
@@ -191,13 +165,12 @@ describe("observed feature status", () => {
       expect(JSON.stringify(result)).not.toContain("private upstream detail");
     }
   });
-  it("accepts legacy liveness without managed acknowledgment", async () => {
+  it("does not accept liveness without configuration acknowledgment", async () => {
     const result = await fixture({
-      config: { ...full, fdriveFeaturesManaged: false },
       raw: config,
       fetch: async () => Response.json(null),
     }).service.status();
-    expect(result.statuses.every((s) => s.state === "ready")).toBe(true);
+    expect(result.statuses.every((s) => s.state === "preparing")).toBe(true);
   });
   it("reports stopping until a running OCR pass finishes", async () => {
     const result = await fixture({

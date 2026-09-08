@@ -58,7 +58,7 @@ export type FeatureStatus = z.infer<typeof FeatureStatus>;
 
 export const SystemFeaturesResponse = z.object({
   configuration: FeatureConfiguration,
-  source: z.enum(["default", "legacy", "settings"]),
+  source: z.enum(["default", "settings"]),
   statuses: z.array(FeatureStatus),
   roots: z.array(
     z.object({

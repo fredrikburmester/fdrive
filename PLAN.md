@@ -501,7 +501,8 @@ separate search OCR and PDF conversion choices in onboarding. Resumable ownershi
 diagnostics, and optional read-only SFTPGo administrative user discovery are implemented.
 Discovery is a narrow exception to the credential-only decision below: admin credentials
 are ephemeral and normal file access remains user-scoped. Final verification is recorded
-in STATUS.md.
+in STATUS.md. fdrive is pre-release: no legacy feature migrations or activation fallbacks;
+all optional processing starts off and is controlled by persisted UI selections.
 
 **Setup and administration (phase 2).** The SFTPGo connection is configured either by
 environment (`SFTPGO_URL`, `FDRIVE_HOME_TEMPLATE`) or through a first-run `/setup` page shown

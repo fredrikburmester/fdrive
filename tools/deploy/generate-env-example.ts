@@ -55,7 +55,6 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
  */
 export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "NODE_ENV",
-  "FDRIVE_FEATURES_MANAGED",
   "FDRIVE_WORKER_TOKEN",
   "PORT",
   "DATABASE_URL",
@@ -85,7 +84,6 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
  */
 export const ENV_EXAMPLE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "NODE_ENV",
-  "FDRIVE_FEATURES_MANAGED",
   "FDRIVE_WORKER_TOKEN",
   "PORT",
   "DATABASE_URL",
@@ -179,7 +177,7 @@ export function renderQuickstartEnvExample(): string {
     "# Copy to .env, then fill in every uncommented change-me value:",
     "#   cp .env.example .env && chmod 600 .env",
     "# Leave SFTPGO_URL unset to configure and test it in the first-run walkthrough.",
-    "# Advanced host mounts, networking, Office, and legacy environment overrides: REFERENCE.md.",
+    "# Advanced host mounts, networking, and Office: REFERENCE.md.",
   ].join("\n");
   const sections = groupBySubsystem([...configKeys, ...deployKeys]).map(
     ({ subsystem, entries }) => {

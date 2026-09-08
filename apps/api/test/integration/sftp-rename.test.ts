@@ -27,6 +27,19 @@ describe("external SFTP directory rename through the real indexer", () => {
     await stack.startDatabaseAndStorage();
     connection = createDb(stack.connectionString);
     await migrate(connection.db);
+    await createRepos(connection.db).settings.set("features.configuration", {
+      version: 1,
+      revision: 1,
+      walkthroughComplete: true,
+      values: {
+        thumbnails: true,
+        textSearch: true,
+        searchOcr: false,
+        semanticSearch: true,
+        imageSearch: false,
+        pdfOcr: false,
+      },
+    });
     await stack.startIndexer();
   }, 720_000);
 

@@ -66,15 +66,6 @@ describe("SystemPage feature admission", () => {
     expect(screen.queryByRole("button", { name: "Page action" })).toBeNull();
   });
 
-  it("keeps legacy configuration pages visible so an upgrade retains current behavior", () => {
-    useSystemFeatures.mockReturnValue({ data: features("legacy") });
-    mount("OCR");
-
-    expect(screen.getByText("Sidecar content")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Page action" })).toBeTruthy();
-    expect(screen.queryByText("OCR is off")).toBeNull();
-  });
-
   it("keeps a processing page visible when one of its managed features is enabled", () => {
     useSystemFeatures.mockReturnValue({
       data: features("settings", { ...off, thumbnails: true }),

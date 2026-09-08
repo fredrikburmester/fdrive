@@ -48,6 +48,23 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
+    // These processing-page fixtures explicitly enable the features they exercise.
+    await client.query("insert into app.settings (key, value) values ($1, $2)", [
+      "features.configuration",
+      JSON.stringify({
+        version: 1,
+        revision: 1,
+        walkthroughComplete: true,
+        values: {
+          thumbnails: true,
+          textSearch: true,
+          searchOcr: false,
+          semanticSearch: true,
+          imageSearch: true,
+          pdfOcr: true,
+        },
+      }),
+    ]);
     const rootResult = await client.query<{ id: number }>(
       `insert into idx.roots (name) values ($1)
        on conflict (name) do update set name = excluded.name

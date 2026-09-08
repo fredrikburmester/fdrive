@@ -7,7 +7,7 @@ or unavailable row must never cause background processing to start unexpectedly.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 FEATURES_KEY = "features.configuration"
 FEATURE_NAMES = ("thumbnails", "textSearch", "searchOcr", "semanticSearch", "imageSearch", "pdfOcr")
@@ -60,27 +60,19 @@ def _decode(value: object) -> object:
     return value
 
 
-def resolve_features(raw: dict[str, object], legacy: FeatureValues, managed: bool) -> FeatureConfiguration:
-    """Resolve the persisted contract, falling back safely for an absent/bad row.
-
-    Existing installations retain their environment-derived behaviour until the
-    first valid save. Fresh managed installs intentionally start with no work.
-    """
-    if not managed and "indexer.ocr_image_globs" in raw:
-        globs = _decode(raw["indexer.ocr_image_globs"])
-        legacy = replace(legacy, search_ocr=isinstance(globs, list) and bool(globs))
-    fallback = disabled() if managed else legacy
+def resolve_features(raw: dict[str, object]) -> FeatureConfiguration:
+    """Resolve the persisted contract; absent or malformed state is all-off."""
     value = _decode(raw.get(FEATURES_KEY))
     if not isinstance(value, dict) or value.get("version") != 1:
-        return FeatureConfiguration(0, fallback)
+        return FeatureConfiguration(0, disabled())
     revision = value.get("revision")
     values = value.get("values")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0 or not isinstance(values, dict):
-        return FeatureConfiguration(0, fallback)
+        return FeatureConfiguration(0, disabled())
     parsed: list[bool] = []
     for name in FEATURE_NAMES:
         enabled = values.get(name)
         if not isinstance(enabled, bool):
-            return FeatureConfiguration(0, fallback)
+            return FeatureConfiguration(0, disabled())
         parsed.append(enabled)
     return FeatureConfiguration(revision, FeatureValues(*parsed))

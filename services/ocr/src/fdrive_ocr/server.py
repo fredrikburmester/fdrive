@@ -19,13 +19,11 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import db
-from .features import FeatureConfiguration, FeatureValues, resolve_features
+from .features import FeatureConfiguration, resolve_features
 from .runner import RootTarget, originals_stats, run_pass
 from .schedule import next_run_at
 from .settings import Settings, resolve_settings
 from .stats import shape_health, shape_stats
-
-LEGACY_FEATURES = FeatureValues(True, True, False, True, False, True)
 
 
 def storage_diagnostics(targets: list[RootTarget]) -> dict[str, dict[str, bool]]:
@@ -81,14 +79,9 @@ class ServerState:
     log: Callable[[str], None]
     # Env-only (OCR_INCLUDE_GLOBS), not part of app.settings; see rules.is_excluded.
     include_globs: tuple[str, ...] = ()
-    feature_defaults: FeatureConfiguration | None = None
-    features_managed: bool = False
 
     def features(self, raw: dict[str, object]) -> FeatureConfiguration:
-        if self.feature_defaults is None:
-            # Existing direct callers preserve historical OCR admission.
-            return FeatureConfiguration(0, LEGACY_FEATURES)
-        return resolve_features(raw, self.feature_defaults.values, self.features_managed)
+        return resolve_features(raw)
 
 
 async def health(request: Request) -> JSONResponse:

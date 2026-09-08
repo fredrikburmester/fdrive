@@ -48,7 +48,6 @@ export const THUMBNAILS_WALK_MAX_FILES = 200_000;
 const TEXT_STATUSES_WITH_TEXT = new Set(["indexed", "partial"]);
 
 export interface SystemRoutesDeps {
-  readonly featuresManaged?: boolean;
   readonly settings: SettingsRepo;
   readonly indexQueries: IndexQueries;
   readonly thumbnailsRepo: ThumbnailsRepo;
@@ -128,7 +127,7 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
   authed.get(withoutApiV1Prefix(ROUTES.system.indexer), requireAdmin, async (c) => {
     const settingsAll = await deps.settings.all();
-    const settings = resolveIndexerSettings(settingsAll, deps.featuresManaged);
+    const settings = resolveIndexerSettings(settingsAll);
 
     if (deps.indexerClient === null) {
       const body: SystemIndexerResponse = { configured: false, reachable: false, settings };
@@ -164,7 +163,7 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     }
 
     const settingsAll = await deps.settings.all();
-    const body: IndexerSettingsResponse = resolveIndexerSettings(settingsAll, deps.featuresManaged);
+    const body: IndexerSettingsResponse = resolveIndexerSettings(settingsAll);
     return c.json(body);
   });
 

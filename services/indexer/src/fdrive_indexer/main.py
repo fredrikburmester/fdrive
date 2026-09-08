@@ -16,7 +16,7 @@ from . import db
 from .chunking import normalize as normalize_text
 from .config import Config
 from .extract import Extractor
-from .features import FeatureConfiguration, resolve_features
+from .features import FeatureConfiguration, disabled, resolve_features
 from .indexer import RootContext, log, scan_once, start_watcher
 from .server import ServerState, create_app
 from .settings import diff_changed, resolve_settings
@@ -46,7 +46,7 @@ def build_context(cfg: Config, conn_dsn: str, name: str, abs_path: str) -> RootC
         cfg=cfg,
         settings=settings,
         extractor=extractor,
-        features=FeatureConfiguration(0, cfg.legacy_features()),
+        features=FeatureConfiguration(0, disabled()),
     )
     ctx.feature_refresh_seconds = cfg.settings_refresh_seconds
     ctx.feature_refresher = refresh_features
@@ -56,7 +56,7 @@ def build_context(cfg: Config, conn_dsn: str, name: str, abs_path: str) -> RootC
 
 def refresh_features(ctx: RootContext, raw: dict[str, object] | None = None) -> bool:
     raw = raw if raw is not None else db.read_settings(ctx.conn())
-    return ctx.set_features(resolve_features(raw, ctx.cfg.legacy_features(), ctx.cfg.features_managed))
+    return ctx.set_features(resolve_features(raw))
 
 
 def refresh_settings(ctx: RootContext) -> bool:
@@ -155,7 +155,7 @@ def main() -> None:
         feature_configuration=lambda: (
             next(iter(contexts.values())).feature_configuration()
             if contexts
-            else resolve_features(db.read_settings(bootstrap_conn), cfg.legacy_features(), cfg.features_managed)
+            else resolve_features(db.read_settings(bootstrap_conn))
         ),
     )
     app = create_app(state)

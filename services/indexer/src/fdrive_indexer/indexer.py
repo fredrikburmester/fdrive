@@ -22,7 +22,7 @@ from .chunking import chunk, max_chunks_for
 from .config import Config
 from .events import build_event
 from .extract import Extractor, embed_passages
-from .features import FeatureConfiguration, FeatureValues
+from .features import FeatureConfiguration, FeatureValues, disabled
 from .image_embed import dimension_guard, embed_images, image_embed_health, is_image_candidate, needs_embedding
 from .paths import ext_of
 from .rules import is_text_excluded, should_index_name, should_walk_dir
@@ -126,11 +126,7 @@ class RootContext:
     cfg: Config
     settings: Settings
     extractor: Extractor
-    # Direct construction is used by existing integrations; keep its historical
-    # all-processing admission while Config supplies deployment-aware defaults.
-    features: FeatureConfiguration = field(
-        default_factory=lambda: FeatureConfiguration(0, FeatureValues(True, True, True, True, True, True))
-    )
+    features: FeatureConfiguration = field(default_factory=lambda: FeatureConfiguration(0, disabled()))
     feature_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     feature_refresher: Callable[[RootContext], object] | None = field(default=None, repr=False)
     feature_refresh_seconds: float = 5.0

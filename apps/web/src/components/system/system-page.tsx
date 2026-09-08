@@ -43,7 +43,6 @@ export function SystemPage({
   const disabled =
     ids !== undefined &&
     features.data !== undefined &&
-    features.data.source !== "legacy" &&
     ids.every((id) => !features.data.configuration.values[id]);
   return (
     <>

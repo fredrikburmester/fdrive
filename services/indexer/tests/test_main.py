@@ -5,9 +5,11 @@ import time
 from pathlib import Path
 
 import pytest
+from psycopg.types.json import Json
 
 from fdrive_indexer import db, main
 from fdrive_indexer.config import Config
+from fdrive_indexer.features import FEATURES_KEY
 from fdrive_indexer.settings import Settings
 
 
@@ -31,6 +33,32 @@ def test_build_context_upserts_root_and_wires_extractor(
     assert ctx.root_id > 0
     assert ctx.abs_path == str(tmp_path)
     assert ctx.extractor.root == "sftpgo"
+    assert ctx.feature_configuration().values.indexer_enabled is False
+
+
+def test_refresh_features_requires_explicit_persisted_selection(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    cfg = Config()
+    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    values = {
+        "thumbnails": False,
+        "textSearch": True,
+        "searchOcr": False,
+        "semanticSearch": False,
+        "imageSearch": False,
+        "pdfOcr": False,
+    }
+    with ctx.conn().cursor() as cur:
+        cur.execute(
+            'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
+            (FEATURES_KEY, Json({"version": 1, "revision": 2, "values": values})),
+        )
+
+    assert main.refresh_features(ctx) is True
+    assert ctx.feature_configuration().revision == 2
+    assert ctx.feature_configuration().values.text_search is True
 
 
 def test_refresh_settings_updates_ctx_and_logs_changes(
