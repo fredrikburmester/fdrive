@@ -1,0 +1,42 @@
+# Implementation pitfalls
+
+Reference for affected code; shared workflow and commands live in [WORKING.md](../../WORKING.md).
+
+## pnpm launcher
+
+The system pnpm launcher may try to download/verify another manager version and fail in a
+restricted environment. Use the [command helpers](COMMANDS.md#setup-and-runtime): they select
+an already-installed pinned pnpm. Set `FDRIVE_NODE` / `FDRIVE_PNPM` to explicit matching
+binaries if discovery fails; never disable signature checks or use the wrong manager version.
+
+## Code and integration
+
+- Agents sometimes stash, edit outside their scope, or report gates they did not run; the review
+  step exists for that. Scope-check with the review script and read the gate lines.
+- Two parallel chunks editing one shared file (`composition.ts`, `config.ts`, `client.ts`,
+  `app-sidebar.tsx`) always conflict; serialize them or plan for the conflict-resolution agent.
+- e2e-only assumptions hide dev-only failures: the e2e stack has fakes that differ from the dev
+  wiring (lazy SFTPGo client, host-run API). Click through the pane after merging anything that
+  touches jobs, SSE, or the connection store.
+- Turbopack cannot resolve `./x.js` specifiers to `.ts` sources; workspace packages use `.ts`
+  import specifiers with `rewriteRelativeImportExtensions`. Production images build workspace
+  packages first (`pnpm --filter <app>... run build`).
+- Next bakes `API_INTERNAL_URL` into the build; the compose proxy owns `/api`, and the web image is
+  built with the compose value.
+- Never run `pnpm test:coverage` (or any turbo task) while a Playwright run is active in the same
+  checkout: the e2e harness creates `apps/web-e2e-shadow-<ports>/`, which turbo rejects as a
+  duplicate workspace. Run them one after the other.
+- Sidebar Favorites, Recents, and Tags sections always render once their query resolves (a muted
+  one-line placeholder replaces the list while empty); only a still-loading query renders nothing.
+  A fresh dev database shows all three sections with their empty-state copy, not their absence.
+- Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
+  file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
+  first, list only after it reports `bad_request`.
+- Zod 4's `z.iso.datetime()` rejects `+00:00` offsets unless `{ offset: true }`; Python emits
+  offsets.
+- Base UI: `DropdownMenuLabel` must sit inside a group; never nest a `ToggleGroup` in a menu; pass
+  `nativeButton={false}` when a `Button` renders a link; React events bubble through portals, so
+  listen on the DOM node when a container must ignore its portalled children.
+- Base UI Select: use `null` for an empty controlled value, not `undefined`; switching from
+  undefined to a root name causes an uncontrolled-to-controlled warning. Give sentinel values
+  explicit `SelectValue` display text so users see "All roots" instead of `__all__`.

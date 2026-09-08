@@ -5,7 +5,6 @@
 **/.turbo
 **/playwright-report
 **/test-results
-**/.claude
 **/*.log
 .git
 .DS_Store
@@ -22,6 +21,7 @@
 # Worktrees, local dev data, the pnpm store, and perf output never belong in
 # a build context either.
 .worktrees
+.fdrive-workflow
 deploy/dev/.data
 .pnpm-store
 tools/perf/results

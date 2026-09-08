@@ -684,6 +684,15 @@ flows pass real storage integration, browser acceptance and required quality gat
     index cache and never consume a share's download budget, because they never pass through
     SFTPGo's share download.
 
+17. Agent workflow (2026-09-08): keep shared rules and model selection in `WORKING.md`;
+    repeatable recipes in `docs/workflow/COMMANDS.md`, backed by tested shell helpers in
+    `tools/orchestration/`. Helpers select Node 24 and pinned pnpm, prepare isolated checkouts,
+    and run named verification profiles under per-checkout locks. Implementation lessons live in
+    `docs/workflow/PITFALLS.md`. Use one set of agent instructions. Worker model and effort
+    defaults are explicit in project configuration; role files do not duplicate them.
+    User-selected default: `gpt-5.6-sol` with high reasoning for routine implementation/tests;
+    `gpt-6-astra` with high reasoning for complex work.
+
 ## 15. Resolved questions (2026-09-06)
 
 1. Auth: credential mode only, no admin-assisted API keys.

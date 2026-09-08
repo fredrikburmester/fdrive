@@ -1,8 +1,47 @@
 # Workflow handoff
 
-Updated: 2026-09-07. Owner: primary agent.
+Updated: 2026-09-08. Owner: primary agent.
 
-## Current state
+## Latest handoff: command helpers (2026-09-08)
+
+- Implemented `command-lib.sh`, `run-in-checkout.sh`, `setup-checkout.sh`,
+  `prepare-worktree.sh`, `verify.sh`, and `test-command-helpers.sh`. Existing review/merge
+  interfaces preserved; existing regression harness now uses portable temporary directories.
+- WORKING is policy/models (813 words); COMMANDS holds recipes, profile choices, requirements,
+  and troubleshooting. Agent instructions reference helpers. Runtime state is ignored by
+  Git/Biome/Docker. Product MCP UI/docs, source, manifests, and lockfile unchanged.
+- Runtime: newest installed stable Node 24 from PATH/nvm, exact installed pinned pnpm;
+  explicit overrides supported. Setup refuses incompatible existing dependency stores,
+  installs noninteractively with frozen lockfile, builds/links but never runs migrations.
+  Setup/gates share per-checkout locks; interruption/failure paths have regression coverage.
+- Integrated `verify.sh <root> workflow` passed: 28 helper regression groups, 16 existing
+  orchestration groups, shell/TOML parsing, lint (1,043 files), diff check. Doc links/recipe
+  syntax passed. Default runtime smoke selected Node 24.20.0 and pnpm 10.11.0.
+- Real setup passed with Node 24.20.0 and permissions for the existing pnpm store: both frozen
+  installs, DB build, declared binary/link verification. No migrations run. Real core profile:
+  lint/typecheck + 292 tests; functions/lines 100%, branches 99.64%.
+- Both workers integrated as reviewed uncommitted changes; complete transfer verified and
+  temporary checkouts/branches removed. No workers active. Changes uncommitted on main at
+  `98234ec`. Application-wide/Docker/browser suites not run for this tooling-only change.
+
+## Earlier handoff: workflow docs (2026-09-08)
+
+- `WORKING.md` shortened from 1,986 to 1,375 words; shared rules and copyable setup,
+  worktree, review/merge, tests, Python, and dev-server recipes; technical lessons retained
+  in `PITFALLS.md`. Follow-up: consolidated model/agent setup in WORKING, removed the
+  obsolete runtime guides, duplicate agent definitions, and legacy launcher.
+- User-confirmed worker default: `gpt-5.6-sol`, high reasoning; complex-work override
+  `gpt-6-astra`, high.
+  Project config uses explicit defaults; role instructions use package scripts.
+- Validation: 16 workflow regression groups; shell/TOML parsing; local links and Bash recipe
+  syntax; lint checked 1,043 files, clean; `git diff --check` passed. Homebrew pnpm's version
+  switch failed registry verification; installed pnpm 10.11.0 ran lint under Node 24.20.0.
+- Docs/config only; application suites not run. Fresh-session role/model loading remains
+  unverified. One worker removed obsolete ignore entries; reviewed diff transferred without
+  commits, temporary worktree removed. Development instructions/config contain no legacy
+  agent references; product MCP UI/docs unchanged. Changes uncommitted on main at `98234ec`.
+
+## Historical state (2026-09-07)
 
 - Main remains at `1fe7388`; changes are uncommitted. Existing Codex migration
   edits preserved, with P2-CLEAR-JOBS added in this session.
@@ -119,7 +158,7 @@ Updated: 2026-09-07. Owner: primary agent.
 ## Preserved Codex migration
 
 Root instructions, implementer/test-writer roles, three-worker cap, worktree rules,
-tracking, Claude role parity and orchestration script hardening remain uncommitted
+tracking, role consistency and orchestration script hardening remain uncommitted
 for review. Previous validation: 16 orchestration regression groups; shell syntax,
 TOML parsing, role parity and lint. This fresh session confirmed named roles are
 available and followed the project instructions.
@@ -165,7 +204,7 @@ available and followed the project instructions.
 - Share selected-option labels2files reviewed/transferred from provider worker; root lint/typecheck/eight coverage packages plus Office helpers passed (session99330). Main pane verified Read and download label, dialog cancelled. Temporary verification link679a4c82-343c-4030-97f5-b511c87e93e6 revoked and removed; original test DOCX preserved.
 - Controlled production PPTX1/1 passed after Alice exits stale title edit and selects separate body placeholder following Bob's persisted save. Strict all-three-markers/sameUUID/reopen retained. Full production Office7 rerun underway; no host failure proven.
 
-## Handover 2026-09-07 07:20-07:45 (Claude, after the overnight session stopped)
+## Handover 2026-09-07 07:20-07:45 (after the overnight session stopped)
 
 - Found four `codex/*` worktrees at `1fe7388` with uncommitted work and no running
   workers. Computed each worktree's delta against main and verified main's copy of
@@ -210,8 +249,8 @@ available and followed the project instructions.
 - Live pane (dev/dev on 3002): `/view/OfficeRenamed.docx` shows the office card with
   "View in office", which opened the real ONLYOFFICE viewer; `/system/indexer` scrolls
   inside the bounded shell with no horizontal overflow. The web dev server had hung at
-  100% CPU after the dependency change and was restarted; the API is launched through
-  `.claude/launch.json` with both `.env.dev` and `.env.office.onlyoffice.dev`.
+  100% CPU after the dependency change and was restarted; the API was launched through
+  the former dev-server launcher with both `.env.dev` and `.env.office.onlyoffice.dev`.
 - Not done: worktree removal (`.worktrees/p4-editor-e2e`, `p5-performance`,
   `p5-provider-binding`, `p5-scope-engine`) was blocked by the session's permission
   policy; every delta is byte-verified in main, so they can be removed with
@@ -468,7 +507,7 @@ available and followed the project instructions.
   unreachable), `GET/POST /system/image-search{,/rebuild,/clear}`, compose `image-embed` service
   and generated env lines. `SearchStatusResponse.images` is optional so the web fixtures stayed
   valid. Primary follow-up (0dfe843): `tools/dev/ensure-env.ts` seeds `FDRIVE_IMAGE_EMBED_URL`
-  (58012); dev API restarted through `.claude/launch.json`, health shows `imageSearch` configured.
+  (58012); dev API restarted through the former dev-server launcher, health shows `imageSearch` configured.
   Live: "a blue ocean" ocean.png 0.091, "a green forest" forest.png 0.068, "a warm orange sunset"
   sunset.png 0.110, "en rosa cirkel" rose.png 0.149; cold text tower 3.3 s, warm 0.25 to 0.6 s.
   Gates: lint 1034, typecheck 13, contracts 573, api 1757 (integration in progress).
@@ -500,4 +539,3 @@ available and followed the project instructions.
   docs/DEVELOPMENT.md, docs/CONTRIBUTING.md, and apps/web/README.md; added dedicated simplified guides
   docs/TRASH.md and docs/SEARCH-AND-AI.md; added navigation banners to technical docs docs/INDEXER.md
   and docs/OCR.md. Zero Biome diagnostics across 1044 files; 16 workflow regression groups passed.
-

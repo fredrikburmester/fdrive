@@ -18,7 +18,6 @@ __pycache__
 .coverage
 *.egg-info
 .worktrees/
-.claude/worktrees/
 apps/web/AGENTS.md
-apps/web/CLAUDE.md
 .pnpm-store/
+.fdrive-workflow/
