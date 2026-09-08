@@ -85,7 +85,6 @@ verify_workflow() {
   fdrive_run_step 'Codex TOML parsing' workflow_toml
   fdrive_run_step 'orchestration regression tests' bash tools/orchestration/test-orchestration.sh
   fdrive_run_step 'command helper regression tests' bash tools/orchestration/test-command-helpers.sh
-  fdrive_run_step 'agy worker regression tests' python3 tools/orchestration/test_agy_worker.py
   fdrive_run_step 'lint' pnpm lint
   fdrive_run_step 'diff check' git diff --check
 }

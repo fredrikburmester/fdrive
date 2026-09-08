@@ -10,28 +10,26 @@ recipes. Use the tested helpers in `tools/orchestration/`; implementation lesson
 
 | Work | Model | Reasoning |
 | --- | --- | --- |
-| Implementation and accompanying tests (`implementer`) | Gemini 3.8 Flash (`gemini-3.8-flash-high`) | `high` |
-| Tests only (`test-writer`) | Gemini 3.8 Flash (`gemini-3.8-flash-high`) | `high` |
+| Implementation and accompanying tests (`implementer`) | GPT-5.6 Sol (`gpt-5.6-sol`) | `high` |
+| Tests only (`test-writer`) | GPT-5.6 Terra (`gpt-5.6-terra`) | `high` |
+| Complex cross-package or security work outside these named roles | GPT-6 Astra (`gpt-6-astra`) | `high` |
 
-Codex remains the orchestrator. All new workers run through `tools/orchestration/worker.sh`
-using the installed Antigravity CLI (`agy`), never native Codex subagent tools. Select an
-available Gemini model explicitly when overriding the user-selected pin in
-`tools/orchestration/agy-worker-defaults.json`; record model and effort in the spec. There is
-no GPT fallback. The runner injects role `developer_instructions` from `.codex/agents/`;
-legacy native model fields there are ignored by this workflow. Existing workers may finish
-unchanged. Do not start replacements while they still own their paths.
+Fallback defaults live in `.codex/config.toml`; named role files pin their model and effort,
+which take precedence over spawn overrides.
+Record overrides in the spec, follow explicit user choices, and report unavailable models.
+After config changes, verify role discovery and effective model/effort in a fresh session.
 
 - **Primary:** owns specs, architecture, review, integration, gates, and tracking. Delegate
   production code, tooling, and tests; edit workflow docs and agent configuration directly.
 - **Workers:** `implementer` for code plus tests, `test-writer` for tests only. Work directly
   in the assigned absolute checkout and file scope. Never delegate, stash, or mutate Git state.
   Report necessary out-of-scope changes to the primary.
-- Run the agy runner's explicit `setup --checkout ABS` once per prepared worktree, then use
-  `start`, `status`, `followup`, and `stop` commands. Pass the complete
-  spec, an explicit model, and the absolute checkout. Follow-ups use the stored conversation
-  ID, never the most recent conversation. If startup or permissions fail, report it.
-- One worktree per writing worker, `codex/` branches, at most three workers including earlier
-  native workers. Parallelize disjoint paths; queue overlaps. Preserve others' changes.
+- Use runtime subagent tools. If a custom role is unavailable, include its
+  `.codex/agents/` instructions in a generic worker prompt. Spawning does not isolate files.
+  Explicit model overrides require a supported history mode; include the full spec when
+  omitting history (`fork_turns="none"` in the collaboration API).
+- One worktree per writing worker, `codex/` branches, at most three workers or the runtime's
+  lower limit. Parallelize disjoint paths; queue overlapping files. Preserve others' changes.
 
 ## Workflow
 
@@ -43,9 +41,6 @@ unchanged. Do not start replacements while they still own their paths.
    that baseline. Workers must never assume the parent's changes exist in their checkout.
 3. **Review:** scope-check with `review-chunk.sh`, inspect tracked and new files, and read
    security-sensitive changes yourself. Missing/truncated gate output is not a pass.
-   Runner `needs_review` means only that agy returned a valid successful result. Check the
-   saved stderr/events for denied tools, inspect the actual diff, and independently verify
-   required tests. `needs_attention`, `failed`, `timed_out`, and `supervisor_lost` are not passes.
 4. **Integrate:** use `merge-chunk.sh` only when commits are requested, with a finished worker
    and explicit clean target on the intended branch. Otherwise transfer the reviewed diff
    and new files as uncommitted changes, preserving target edits. Keep the worker checkout
