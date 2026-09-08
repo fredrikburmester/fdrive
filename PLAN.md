@@ -709,7 +709,8 @@ flows pass real storage integration, browser acceptance and required quality gat
     cohesive edits. Deterministic helpers own pinned runtimes, setup, worktree baselines,
     conflict-safe uncommitted transfer, locks, and verification shared with CI. Keep compact
     status output and full local logs. Current handoffs live in STATUS; history in its archive.
-    Executable model defaults live in `.codex/`; WORKING holds the Astra approval restriction.
+    Executable agent roles live in `.claude/agents/`; WORKING holds the model policy (Opus
+    workers by default, Fable workers only with explicit approval).
     Assess workflow changes by task correctness, retries, total tokens, and elapsed time;
     re-evaluate optional orchestration when changing models without lowering quality gates.
 
