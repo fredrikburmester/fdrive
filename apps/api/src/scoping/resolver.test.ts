@@ -206,6 +206,43 @@ describe("verifiedIndexScopes", () => {
     });
   });
 
+  it.each([400, 403, 404])(
+    "treats directory HTTP %s as a mapping failure, not a down indexer",
+    async (status) => {
+      const { resolver, identity } = await setup({
+        indexer: {
+          directory: async () => ({
+            ok: false,
+            reason: "unreachable",
+            detail: `status ${status}`,
+            status,
+          }),
+        },
+      });
+      expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+        available: false,
+        reason: "mismatch",
+      });
+    },
+  );
+
+  it("keeps service failures unavailable without granting an index scope", async () => {
+    const { resolver, identity } = await setup({
+      indexer: {
+        directory: async () => ({
+          ok: false,
+          reason: "unreachable",
+          detail: "status 503",
+          status: 503,
+        }),
+      },
+    });
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: false,
+      reason: "indexer_unreachable",
+    });
+  });
+
   it("is unavailable with mismatch when the live SFTP listing itself fails", async () => {
     const { resolver, identity } = await setup({
       storageForIdentity: async () =>

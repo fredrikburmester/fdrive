@@ -25,9 +25,9 @@ environment changes after initial deployment.
    Only Finish enters the file browser. Reload resumes the saved choice; an expired session
    requires sign-in with the same file account before resuming. Other users sign in normally.
 5. **Automatic prerequisites.** Use the default username home mapping without a separate Home
-   or storage step. Check access automatically for saved, enabled features. Healthy checks need
-   no input. Unavailable storage gets a contextual notice and collapsed advanced settings;
-   retain per-account mapping corrections without guessing paths or broadening permissions.
+   or storage step. Check access automatically for saved, enabled features. Onboarding contains no storage panel or mapping form; readiness stays on the feature
+   cards. Per-account mapping corrections remain under Account settings, without guessing
+   paths or broadening permissions.
    PDF-only processing checks its own read/write access, independently of the indexer.
    Every feature can be skipped and storage failures never block finishing or browsing.
 
