@@ -18,7 +18,7 @@ Primary runs dedicated quiet final gate and reviews results. If throughput fails
 
 ## Launch specification (2026-09-07)
 
-Assigned checkout `.worktrees/p5-performance`, branch `codex/p5-performance`.
+Assigned checkout `.worktrees/p5-performance`, branch `claude/p5-performance`.
 Ownership: tools/perf/**; new apps/web/perf/** (production browser measurement helpers only), .github/workflows/performance.yml. Root/apps/web package manifests and lockfile are held by office worker: propose needed script/dependency additions, wait for parent refresh before editing those files. No API production/auth/scope/composition edits. No testkit modifications without scope extension. Existing fixture utilities may be imported. Parent owns integration and final quiet measurement; worker must run a diagnostic full harness to prove execution, report contention honestly, then final parent gate after other heavy jobs stop.
 
 Search fixture decision: full gate measures the configured default hybrid path with real multilingual-e5-small TEI CPU, real Postgres384-dimensional vectors and actual authenticated API. At least25,000 indexed files/chunks in the measured identity scope, plus separate forbidden identity records as leakage sentinels. Deterministic mixed names/content; prepare embeddings from repeated content templates through actual TEI and replicate those vectors across fixture documents (report repetition). Queries must exercise filename, FTS and semantic signals; validate expected hits and forbidden absence. No fake embedding responses. Model assets may be cached outside committed output; use existing project's TEI image/model, no unsolicited model migration. Full gate cannot silently degrade/disable semantic search. Report keyword diagnostic separately if useful.

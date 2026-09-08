@@ -27,7 +27,7 @@ Run `bash "$T/verify.sh" "$PWD" <profile> [args]` in the checkout being verified
 
 | Profile | Checks / prerequisites |
 | --- | --- |
-| `workflow` | Shell/Python/TOML syntax, helper regressions, lint, diff check; Python 3.11+ |
+| `workflow` | Shell/Python syntax, `.claude/agents` definitions, helper regressions, lint, diff check |
 | `package @fdrive/core` | Repository lint, named package typecheck/coverage |
 | `application` | Repository lint, typecheck, coverage |
 | `integration` | Container integration tests; Docker |

@@ -220,7 +220,7 @@ wait_for_file() {
 
 write_repo_files() {
   mkdir -p "$ROOT/packages/db" "$ROOT/packages/core" "$ROOT/apps/api" \
-    "$ROOT/tools/orchestration" "$ROOT/.codex/agents"
+    "$ROOT/tools/orchestration" "$ROOT/.claude/agents"
   cat > "$ROOT/package.json" <<'JSON'
 {
   "name": "fixture",
@@ -234,10 +234,14 @@ JSON
   cat > "$ROOT/packages/core/package.json" <<'JSON'
 {"name":"@fdrive/core","private":true,"scripts":{"typecheck":"fixture","test:coverage":"fixture"}}
 JSON
-  cat > "$ROOT/.codex/config.toml" <<'TOML'
-[agents]
-max_threads = 3
-TOML
+  cat > "$ROOT/.claude/agents/implementer.md" <<'AGENT'
+---
+name: implementer
+description: fixture
+---
+
+Fixture instructions.
+AGENT
   for NAME in command-lib run-in-checkout setup-checkout prepare-worktree verify; do
     cat > "$ROOT/tools/orchestration/$NAME.sh" <<'STUB'
 #!/bin/bash
@@ -737,7 +741,7 @@ expect_success env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FAKE_STORE_PAT
 assert_contains "$PNPM_COMMAND_LOG" 'install --frozen-lockfile'
 pass 'setup accepts quoted and symlink-equivalent pnpm store paths'
 
-# Prepare creates codex/<chunk> from committed HEAD at a space-containing destination.
+# Prepare creates claude/<chunk> from committed HEAD at a space-containing destination.
 new_repo
 printf 'dirty source\n' > "$ROOT/uncommitted-source.txt"
 SOURCE_HEAD=$(git -C "$ROOT" rev-parse HEAD)
@@ -745,7 +749,7 @@ DESTINATION="$TEST_ROOT/prepared checkout with spaces"
 expect_success from_outside env FDRIVE_VERBOSE=1 FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
   bash "$PREPARE" "$ROOT" helper_chunk "$DESTINATION"
 assert_eq "$(cat "$OUT")" "$(cd "$DESTINATION" && pwd -P)"
-assert_eq "$(git -C "$DESTINATION" branch --show-current)" 'codex/helper_chunk'
+assert_eq "$(git -C "$DESTINATION" branch --show-current)" 'claude/helper_chunk'
 assert_eq "$(git -C "$DESTINATION" rev-parse HEAD)" "$SOURCE_HEAD"
 assert_no_file "$DESTINATION/uncommitted-source.txt"
 assert_contains "$PNPM_LOG" "PWD=<$DESTINATION>"
@@ -757,13 +761,13 @@ REJECTED_DEST="$TEST_ROOT/rejected destination"
 expect_failure env FDRIVE_NODE="$BAD_NODE" FDRIVE_PNPM="$FAKE_PNPM" \
   bash "$PREPARE" "$ROOT" runtime_check "$REJECTED_DEST"
 assert_no_file "$REJECTED_DEST"
-git -C "$ROOT" show-ref --verify --quiet refs/heads/codex/runtime_check && fail 'branch created before runtime validation'
+git -C "$ROOT" show-ref --verify --quiet refs/heads/claude/runtime_check && fail 'branch created before runtime validation'
 FAILED_DEST="$TEST_ROOT/retained failed checkout"
 expect_status 31 env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
   FAKE_PNPM_FAIL='install --frozen-lockfile' FAKE_PNPM_FAIL_CODE=31 \
   bash "$PREPARE" "$ROOT" retained_failure "$FAILED_DEST"
 assert_file "$FAILED_DEST/.git"
-git -C "$ROOT" show-ref --verify --quiet refs/heads/codex/retained_failure || fail 'failed branch was removed'
+git -C "$ROOT" show-ref --verify --quiet refs/heads/claude/retained_failure || fail 'failed branch was removed'
 assert_contains "$ERR" "$FAILED_DEST"
 pass 'prepare validates runtime first and retains failed setup for recovery'
 
@@ -800,10 +804,10 @@ BACKGROUND_PIDS=''
 [[ $STATUS -eq 53 ]] || fail "prepare lost nested setup status: $STATUS"
 assert_no_file "$PREPARED_LOCK"
 assert_file "$PREPARED_SIGNAL_DEST/.git"
-assert_eq "$(git -C "$PREPARED_SIGNAL_DEST" branch --show-current)" 'codex/signal_setup'
+assert_eq "$(git -C "$PREPARED_SIGNAL_DEST" branch --show-current)" 'claude/signal_setup'
 pass 'prepare forwards signals through setup and retains interrupted checkout'
 
-# Verify workflow runs syntax, TOML, Python syntax, every regression script, lint, and diff check without recursion.
+# Verify workflow runs syntax, agent definitions, Python syntax, every regression script, lint, and diff check without recursion.
 new_repo
 cat > "$ROOT/tools/orchestration/test-discovered.sh" <<'STUB'
 #!/bin/bash
