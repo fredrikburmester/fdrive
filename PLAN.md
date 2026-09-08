@@ -707,6 +707,14 @@ flows pass real storage integration, browser acceptance and required quality gat
     metadata is round-tripped and filtered again; a changed path requires its own proof.
     No cross-request positive permission cache.
 
+19. Search and browser UX (2026-09-08): one query runs filename/content/semantic and
+    available visual image matching together, without a mode switch. File type remains a
+    filter; active-identity visual scope is explicit for account-wide text queries. Keep
+    independent loading/failure states and avoid duplicate visual hits. Desktop search is
+    moderately larger; mobile stays viewport-bound. Reveal selects and scrolls the actual
+    item through virtualization. Selection toolbar includes Download; list thumbnails are
+    an optional persisted view preference. App sidebar navigation uses tighter vertical spacing.
+
 ## 15. Resolved questions (2026-09-06)
 
 1. Auth: credential mode only, no admin-assisted API keys.
