@@ -2,9 +2,30 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## ONLYOFFICE onboarding (verified)
+
+- Bundled pinned engine; off until enabled in onboarding/System settings. View-only
+  by default; editing requires an explicit provider-bound SFTPGo username list.
+- Reviewed/transferred backend and deployment worktrees; copies retained. No migrations
+  or environment activation fallback. Removed obsolete production Office overlay.
+- Real controller: off → discovery-ready → off; no leftover editor, PostgreSQL,
+  RabbitMQ, or Redis daemons. Proxy preserves browser host:port. Generated secrets and
+  proof keys persist privately. Python lint/types/coverage and Compose variants pass.
+- Application lint/types/coverage, API/DB integration, and all five affected browser
+  tests pass. Live dev UI verified validation, editor selection, review, and Finish.
+  Added invalid-URL and runtime toggle/callback regressions after integration findings.
+  Editor menus refresh automatically after startup; editing the user list preserves its
+  original revision during polling. Final frontend and workflow checks pass.
+- Real bundled ONLYOFFICE suite: 7/7 passed (Word/Excel/PowerPoint coediting, saved-byte
+  verification, rename/copy, external changes, read-only isolation). Collabora: 4/4 passed.
+  Fixed the separate-origin editor fixture CSP; production stays on the fdrive origin.
+- Work is repository/local fixtures only; no owner server access. Other agents' worktrees
+  excluded from lint/build contexts without changing their content. Disposable fixtures
+  cleaned up.
+
 ## Trash onboarding (verified)
 
-- Seventh optional choice after six processing features; review is step 11. Saved through
+- Seventh optional choice after six processing features; followed by ONLYOFFICE and review. Saved through
   provider-bound admin settings with revision checks. SFTPGo recycle rules require explicit
   operator confirmation; no WebAdmin credentials, automatic rule creation, or remote access.
 - Backend reviewed and transferred; copy retained in `.worktrees/onboarding-trash-backend`.
@@ -30,7 +51,7 @@ Updated: 2026-09-08. Owner: primary agent.
 
 ## Continuous onboarding (verified)
 
-- One shell-free `/setup` flow: claim → connection → administrator → six processing features → Trash → review.
+- One shell-free `/setup` flow: claim → connection → administrator → six processing features → Trash → ONLYOFFICE → review.
   File-user verification establishes a session internally; only Finish enters the file browser.
   Reload resumes saved choices; other users skip the owner walkthrough.
 - Explained WebClient file-user versus WebAdmin accounts and fdrive-only administrator rights.

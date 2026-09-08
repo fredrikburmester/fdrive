@@ -1,5 +1,10 @@
 # P4 edit admission: fail closed
 
+Update 2026-09-08: Office activation and its provider-bound editor username allowlist
+are now persisted through onboarding/System settings. The path rules below remain an
+advanced restriction in addition to that allowlist; they no longer activate editing alone.
+See [current Office setup](../OFFICE.md).
+
 Real ONLYOFFICE read-only coeditor can inject changes persisted by another writer. Explicit browser edit intent is NOT authority. Preserve credential-only authentication: production editing requires an explicit operator-maintained policy; default denies all editing. This is a second trusted authorization configuration, like index-root mapping, not automatic SFTPGo permission discovery. Operators must grant only a subset of current SFTPGo overwrite rights and close existing office sessions when changing rights. Document this limitation prominently and precisely.
 
 ## Fixed seam and policy, pending implementation

@@ -88,6 +88,12 @@ services:
       FDRIVE_INDEXER_URL: http://indexer:8010
       FDRIVE_EMBED_URL: http://embed:80
       FDRIVE_IMAGE_EMBED_URL: http://image-embed:8012
+      # ONLYOFFICE is bundled in this stack. The owner enables it and chooses
+      # the browser-facing origin in onboarding; these internal addresses do
+      # not vary with that choice.
+      FDRIVE_OFFICE_PRODUCT: onlyoffice
+      FDRIVE_OFFICE_URL: http://onlyoffice
+      FDRIVE_WOPI_URL: http://api:3001/wopi
       # The conventional shipped mount remains fixed. The walkthrough may
       # choose scopes below it, but cannot add arbitrary host mounts at runtime.
       FDRIVE_INDEX_ROOTS: '[{"name":"sftpgo","sftpgoPath":"${FDRIVE_INDEX_SFTPGO_PATH:-/srv/sftpgo/data}","indexerPath":"/roots/sftpgo"}]'
@@ -107,10 +113,6 @@ services:
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: ${FDRIVE_SHARE_UPLOAD_MAX_BYTES:-}
       FDRIVE_ADMIN_USERS: ${FDRIVE_ADMIN_USERS:-}
       FDRIVE_MCP_WRITES: ${FDRIVE_MCP_WRITES:-}
-      FDRIVE_OFFICE_PRODUCT: ${FDRIVE_OFFICE_PRODUCT:-}
-      FDRIVE_OFFICE_URL: ${FDRIVE_OFFICE_URL:-}
-      FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}
-      FDRIVE_WOPI_URL: ${FDRIVE_WOPI_URL:-}
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-}
       FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-}
       # END GENERATED CONFIG KEYS
@@ -320,6 +322,39 @@ services:
     pids_limit: 512
     logging: *default-logging
 
+  # Document Server is included in the normal stack, but its small controller
+  # leaves every editor daemon stopped until the owner enables ONLYOFFICE in
+  # onboarding. Disabling it stops nginx, supervisor, and the editor workers;
+  # no Docker socket or Compose profile is involved.
+  onlyoffice:
+    init: true
+    build:
+      context: ..
+      dockerfile: deploy/office/Dockerfile.onlyoffice
+    environment:
+      WOPI_ENABLED: "true"
+      JWT_ENABLED: "true"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      ALLOW_META_IP_ADDRESS: "false"
+      NODE_CONFIG: '{"wopi":{"wopiZone":"external-https"},"services":{"CoAuthoring":{"request-filtering-agent":{"allowMetaIPAddress":false}}}}'
+      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
+      FDRIVE_RUNTIME_PORT: "8099"
+      FDRIVE_OFFICE_SETTINGS_URL: http://api:3001/api/v1/internal/office
+      FDRIVE_OFFICE_READY_URL: http://127.0.0.1/hosting/discovery
+    volumes:
+      - office_onlyoffice_data:/var/www/onlyoffice/Data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8099/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 65s
+    restart: unless-stopped
+    pids_limit: 512
+    logging: *default-logging
+
 volumes:
   fdrive-thumbs:
   fdrive-image-embed-models:
+  office_onlyoffice_data:

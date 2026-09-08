@@ -185,7 +185,15 @@ async function getContents(
   return new Response(boundedStream(result.body, max, signal), { headers });
 }
 export function createOfficeService(deps: OfficeDeps) {
-  function configured(): { config: OfficeConfig; discovery: NonNullable<OfficeDeps["discovery"]> } {
+  async function configured(): Promise<{
+    config: OfficeConfig;
+    discovery: NonNullable<OfficeDeps["discovery"]>;
+  }> {
+    if (deps.resolveRuntime !== undefined) {
+      const runtime = await deps.resolveRuntime();
+      if (runtime === null) throw new WopiError(503);
+      return runtime;
+    }
     if (deps.config === null || deps.discovery === null) throw new WopiError(503);
     return { config: deps.config, discovery: deps.discovery };
   }
@@ -197,7 +205,7 @@ export function createOfficeService(deps: OfficeDeps) {
         extensions: { view: [], edit: [], convert: [] },
       };
       try {
-        const { config, discovery } = configured();
+        const { config, discovery } = await configured();
         const doc = await discovery.get();
         const extensions = { view: [] as string[], edit: [] as string[], convert: [] as string[] };
         for (const action of doc.actions) {
@@ -217,7 +225,7 @@ export function createOfficeService(deps: OfficeDeps) {
       }
     },
     async open(input: BrowserOfficeInput, request: OfficeOpenRequest): Promise<OfficeOpenResponse> {
-      const { config, discovery } = configured();
+      const { config, discovery } = await configured();
       const actor = await browserActor(deps, input);
       if (request.mode !== "view") await requireOfficeEdit(deps, actor, request.path);
       const doc = await discovery.get();
@@ -248,7 +256,7 @@ export function createOfficeService(deps: OfficeDeps) {
       input: BrowserOfficeInput,
       request: OfficeCreateDocumentRequest,
     ): Promise<OfficeCreateDocumentResponse> {
-      const { config } = configured();
+      const { config } = await configured();
       const actor = await browserActor(deps, input);
       const path = joinPath(request.parent, request.name);
       const location = officeLocation(actor, path);
@@ -274,7 +282,7 @@ export function createOfficeService(deps: OfficeDeps) {
     },
     async callback(request: Request, fileId: string, contents: boolean): Promise<Response> {
       try {
-        const { config, discovery } = configured();
+        const { config, discovery } = await configured();
         const query = new URL(request.url).searchParams;
         const allTokens = query.getAll("access_token");
         if (allTokens.length !== 1) throw new WopiError(401);

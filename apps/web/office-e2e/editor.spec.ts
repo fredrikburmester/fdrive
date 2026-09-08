@@ -137,7 +137,10 @@ for (const [kind, filename] of [
           inaccessible: await frame
             .getByText("The file cannot be accessed right now.", { exact: false })
             .isVisible(),
-          saveEnabled: await frame.locator("#id-toolbar-btn-save").isEnabled(),
+          saveEnabled: await frame
+            .locator("#id-toolbar-btn-save")
+            .isEnabled({ timeout: 1000 })
+            .catch(() => false),
         });
       }
       console.log("Editor failure summary", await editorDiagnostics(state));

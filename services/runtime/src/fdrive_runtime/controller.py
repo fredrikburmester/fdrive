@@ -45,6 +45,10 @@ class Process(Protocol):
     def wait(self, timeout: float | None = None) -> int: ...
 
 
+class StatusLifecycle(Protocol):
+    def status(self) -> Mapping[str, object]: ...
+
+
 def parse_feature_snapshot(body: object) -> FeatureSnapshot:
     """Validate the worker contract strictly; callers must fail closed on errors."""
     if not isinstance(body, dict) or body.get("version") != 1:
@@ -185,7 +189,7 @@ class WorkerLifecycle:
 
 
 class RuntimeServer(ThreadingHTTPServer):
-    lifecycle: WorkerLifecycle
+    lifecycle: StatusLifecycle
 
 
 class RuntimeHandler(BaseHTTPRequestHandler):
@@ -204,7 +208,7 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         return
 
 
-def serve_status(lifecycle: WorkerLifecycle, port: int) -> RuntimeServer:
+def serve_status(lifecycle: StatusLifecycle, port: int) -> RuntimeServer:
     server = RuntimeServer(("0.0.0.0", port), RuntimeHandler)  # noqa: S104 - compose network only
     server.lifecycle = lifecycle
     threading.Thread(target=server.serve_forever, daemon=True, name="runtime-status").start()

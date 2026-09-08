@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { officeFixtureUsers } from "../../api/test/fixtures/office/seeded-users";
 import { type RunningEnvironment, startEnvironment } from "../e2e/support/environment";
 import { removeStateDirPointer, writeStateDirPointer } from "../e2e/support/paths";
+import { waitForHttpOk } from "../e2e/support/wait";
 import { fixtureCompose, parsePort, parseProduct } from "./fixture-config";
 import { run } from "./process";
 import type { OfficeFixtureState } from "./state";
@@ -72,6 +73,7 @@ export default async function setup(): Promise<() => Promise<void>> {
   writeStateDirPointer(process.pid, directory);
   const project = `fdrive-office-e2e-${randomBytes(5).toString("hex")}`;
   const composeFile = join(directory, "compose.json");
+  const workerToken = randomBytes(32).toString("hex");
   await writeFile(
     composeFile,
     JSON.stringify(
@@ -81,13 +83,15 @@ export default async function setup(): Promise<() => Promise<void>> {
         officePort,
         apiPort,
         webPort,
+        workerToken,
       ),
     ),
     { mode: 0o600 },
   );
   const composeArgs = ["compose", "-p", project, "-f", composeFile];
-  const composeEnv = { ...process.env, ONLYOFFICE_JWT_SECRET: randomBytes(32).toString("hex") };
+  const composeEnv = { ...process.env };
   let environment: RunningEnvironment | undefined;
+  const previousOfficePublicUrl = process.env.FDRIVE_OFFICE_PUBLIC_URL;
   const cleanup = async () => {
     try {
       await environment?.stop();
@@ -99,6 +103,8 @@ export default async function setup(): Promise<() => Promise<void>> {
       } finally {
         await rm(directory, { recursive: true, force: true });
         removeStateDirPointer(process.pid);
+        if (previousOfficePublicUrl === undefined) delete process.env.FDRIVE_OFFICE_PUBLIC_URL;
+        else process.env.FDRIVE_OFFICE_PUBLIC_URL = previousOfficePublicUrl;
       }
     }
   };
@@ -109,6 +115,8 @@ export default async function setup(): Promise<() => Promise<void>> {
     });
     const officeUrl = `http://127.0.0.1:${officePort}`;
     const webUrl = `http://127.0.0.1:${webPort}`;
+    // This isolated fixture uses a separate editor port; production uses same-origin /onlyoffice.
+    process.env.FDRIVE_OFFICE_PUBLIC_URL = officeUrl;
     let sftpgoContainer = "";
     environment = await startEnvironment({
       apiEntrypoint: "test/fixtures/office/e2e-server.ts",
@@ -122,6 +130,7 @@ export default async function setup(): Promise<() => Promise<void>> {
       },
       extraApiEnv: {
         HOST: "0.0.0.0",
+        FDRIVE_WORKER_TOKEN: workerToken,
         FDRIVE_PUBLIC_URL: webUrl,
         FDRIVE_OFFICE_PRODUCT: product,
         FDRIVE_OFFICE_URL: officeUrl,
@@ -133,6 +142,7 @@ export default async function setup(): Promise<() => Promise<void>> {
         ]),
       },
     });
+    await waitForHttpOk(`${officeUrl}/hosting/discovery`, 360_000, 1000);
     const state: OfficeFixtureState = {
       product,
       webUrl,

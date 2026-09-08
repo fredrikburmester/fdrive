@@ -97,3 +97,7 @@ fill and Enter can race the editor's own focus callback and restore the old name
 View tests dismiss the editor's normal read-only warning before using its visible
 Find control. ONLYOFFICE readiness comes from an actual trusted Document_Loaded postMessage,
 with both source and origin checked, never a synthetic editor callback.
+
+The ONLYOFFICE fixture now uses the bundled controller image and polls the real fixture
+API for persisted Office activation. Its API seeds an explicit alice/bob editor list;
+startup waits for discovery after activation. Collabora retains its dedicated fixture.

@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 import { z } from "zod";
-import { officeConfig } from "./office/config.ts";
+import { validateOfficeInfrastructure } from "./office/config.ts";
 import { type OfficeEditRule, parseOfficeEditRules } from "./office/edit-policy.ts";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
@@ -475,6 +475,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveOcrUrl: parsed.FDRIVE_OCR_URL,
     fdriveMcpWrites: parsed.FDRIVE_MCP_WRITES,
   };
-  officeConfig(config);
+  validateOfficeInfrastructure(config);
   return config;
 }

@@ -3,6 +3,7 @@ import { createDb, createRepos, migrate } from "@fdrive/db";
 import pino from "pino";
 import { composeApp } from "../../../src/composition.ts";
 import { loadConfig } from "../../../src/config.ts";
+import { OFFICE_SETTINGS_KEY } from "../../../src/office/settings.ts";
 import { startServer } from "../../../src/server.ts";
 import { fixtureOfficeAuthorizer } from "./seeded-permissions.ts";
 
@@ -12,11 +13,33 @@ const { db, pool } = createDb(config.databaseUrl);
 let providerId: string;
 try {
   await migrate(db);
-  const provider = await createRepos(db).providers.ensure({
+  const repos = createRepos(db);
+  const provider = await repos.providers.ensure({
     type: "sftpgo",
     baseUrl: config.sftpgoUrl,
   });
   providerId = provider.id;
+  await repos.settings.set("features.configuration", {
+    version: 1,
+    revision: 1,
+    values: {
+      thumbnails: false,
+      textSearch: false,
+      searchOcr: false,
+      semanticSearch: false,
+      imageSearch: false,
+      pdfOcr: false,
+    },
+    walkthroughComplete: true,
+  });
+  await repos.settings.set(OFFICE_SETTINGS_KEY, {
+    revision: 1,
+    enabled: true,
+    appUrl: new URL(config.fdrivePublicUrl ?? "http://127.0.0.1:3000").origin,
+    editingEnabled: true,
+    editingProviderId: provider.id,
+    editorUsernames: ["alice", "bob"],
+  });
 } finally {
   await pool.end();
 }

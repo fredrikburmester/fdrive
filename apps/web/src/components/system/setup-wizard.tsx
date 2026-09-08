@@ -100,7 +100,7 @@ export function SetupWizard() {
       }
     >
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-muted-foreground">Step {SETUP_STEPS.indexOf(step) + 1} of 11</p>
+        <p className="text-sm text-muted-foreground">Step {SETUP_STEPS.indexOf(step) + 1} of 12</p>
         <Tabs value={step}>
           <TabsList className="w-full">
             {SETUP_STEPS.map((s) => (

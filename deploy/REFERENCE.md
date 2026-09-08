@@ -11,7 +11,6 @@ This document provides architectural and operational details for advanced deploy
 | `compose.yaml` | **Fixed fdrive stack**: Proxy, web, API, database, and idle optional-worker controllers. Models and processing stay off until selected in the UI. |
 | `compose.arm64.yaml` | **Native ARM64 embeddings**: Builds pinned upstream TEI source with the same multilingual-e5-small model; layer over the fixed stack on ARM64 hosts. |
 | `compose.sftpgo.yaml` | **Optional SFTPGo**: Boots an SFTPGo container alongside fdrive for users who don't already have one. |
-| `compose.office.yaml` | **Optional ONLYOFFICE**: Adds ONLYOFFICE Document Server as a WOPI host for collaborative document editing. |
 | `compose.office.collabora.yaml` | **Optional Collabora**: Adds Collabora Online instead of ONLYOFFICE. |
 | `compose.sftpgo-network.example.yaml` | Template showing how to attach the fdrive stack to an existing Docker bridge network containing your SFTPGo container. |
 | `.env.example` | Minimal secrets-only quick start; configure SFTPGo and features in the walkthrough. |
@@ -111,6 +110,7 @@ server {
 fdrive actively monitors its internal subsystems on startup and exposes diagnostic endpoints:
 
 - **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`, `trash`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
+- **ONLYOFFICE:** the bundled controller is healthy while disabled. Enable in **System > Features**; the document engine starts on demand. Readiness is shown in those settings. See [Office setup](../docs/OFFICE.md).
 - **Trash:** startup health means its integration is available, not enabled. The saved choice is in **System > Features > Trash**; user capability is reported by `/api/v1/trash/status`.
 - **Health Check Endpoint**: `GET /api/v1/health` is an unauthenticated JSON endpoint returning status (`configured`, `not_configured`, `unreachable`) for all services.
 - **Web UI Diagnostics**: Administrators can view real-time health, queue depths, and error logs for all components in the **System** section of the sidebar.

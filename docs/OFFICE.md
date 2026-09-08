@@ -1,99 +1,73 @@
-# Office Documents & Editing
+# Office documents and editing
 
-fdrive allows you to view and collaboratively edit **Microsoft Office** (`.docx`, `.xlsx`, `.pptx`) and **OpenDocument** (`.odt`, `.ods`, `.odp`) files directly in your web browser.
+ONLYOFFICE is bundled with the standard fdrive stack. Enable it during onboarding,
+or later in **System > Features > ONLYOFFICE**. No additional Compose file,
+activation environment variable, or processing storage mount is needed.
 
-It connects to an office document server (either **ONLYOFFICE** or **Collabora Online**) running securely within your own Docker setup.
+## Enable the editor
 
----
+1. Turn on **Enable ONLYOFFICE**.
+2. Check **fdrive browser address**. It is filled from your current browser address;
+   use the HTTP(S) origin everyone uses to reach fdrive, including any port.
+3. Leave editing off for viewing only, or enable **Allow document editing** and enter
+   the SFTPGo usernames allowed to edit, one per line.
+4. Save. The bundled Document Server starts automatically. You may finish onboarding
+   while it starts; System settings show its readiness.
 
-## 1. Quick Setup (ONLYOFFICE)
+Open a Word, Excel, PowerPoint, or OpenDocument file from fdrive. Files remain in
+SFTPGo; fdrive transfers document contents through WOPI. Search and OCR are independent.
 
-Office editing is an optional power-up. To turn it on:
+The container keeps a small controller running when disabled. The document engine
+starts only when enabled and uses additional memory. Secrets are generated automatically;
+its volume preserves proof keys across restarts. Close open documents before disabling
+ONLYOFFICE so that unsaved work is not interrupted.
 
-### Step 1: Generate a secret key
-Run this in your terminal:
-```bash
-openssl rand -hex 32
-```
+## Editing permissions
 
-### Step 2: Add to `.env`
-In `/path/to/fdrive/deploy/.env`, add:
+Editing defaults off. The allowed-user list belongs to the configured SFTPGo provider;
+changing providers does not grant editing to matching usernames on the new server.
+These are ordinary SFTPGo file users, not SFTPGo administrators.
 
-```dotenv
-ONLYOFFICE_JWT_SECRET=<your 32-character hex key from above>
-FDRIVE_COMPOSE_FILES="compose.office.yaml"
-FDRIVE_PROFILES="office"
-```
-*(If you also have Search enabled, combine the profiles: `FDRIVE_PROFILES="index office"`).*
+Only add users who should participate in editing sessions. A shared editing session can
+save one participant's changes through another participant, so upload permissions alone
+are insufficient to decide who may enter it. fdrive checks the explicit editor list
+when opening documents and handling callbacks; SFTPGo still enforces the saving user's
+file permissions. Advanced path-specific admission rules can further restrict access.
 
-### Step 3: Start ONLYOFFICE
-```bash
-./update.sh
-```
+## Connection requirements and diagnosis
 
-Now when you click any Word, Excel, or PowerPoint file in fdrive, it will open directly in the browser!
+The browser reaches the editor through `/onlyoffice` on the same fdrive address.
+The standard private Docker network connects fdrive's API and Document Server; callbacks
+use the internal API address. An external reverse proxy must forward WebSockets and
+preserve the `/onlyoffice` path. See the [deployment reference](../deploy/REFERENCE.md).
 
----
+- **Starting:** allow startup time and check the ONLYOFFICE container's logs.
+- **Unavailable:** check the container, its connection to the API, and discovery endpoint.
+- **Editor fails to load:** verify the saved browser address and reverse proxy forwarding.
+- **Viewing works but editing is unavailable:** check the editing toggle and exact SFTPGo
+  username in the allowed-user list.
 
-## 2. Enabling Edit Mode (Permissions)
+Do not reset the database or delete volumes to troubleshoot an editor connection.
 
-By default, all documents open in **view-only mode**. This ensures that family members or shared users cannot accidentally overwrite important files.
+## Alternate document server
 
-To allow specific users to edit files:
-
-### Step 1: Find your Provider ID
-Run this command on your server to see your user's provider ID:
-
-```bash
-docker compose -f compose.yaml exec db psql -U fdrive -d fdrive -c \
-  "SELECT p.id AS provider_id, i.external_username FROM app.identities i JOIN app.providers p ON p.id = i.provider_id;"
-```
-
-You will see output like:
-```
-             provider_id              | external_username 
---------------------------------------+-------------------
- 04bb0ded-55f9-446b-baaf-207beacef70b | alice
-```
-
-### Step 2: Add an Edit Rule in `.env`
-Add `FDRIVE_OFFICE_EDIT_RULES` to your `.env` file. For example, to let `alice` edit all files in her drive:
+Collabora remains an advanced deployment option through `compose.office.collabora.yaml`.
+Configure these deployment inputs for a dedicated HTTPS Collabora hostname:
 
 ```dotenv
-FDRIVE_OFFICE_EDIT_RULES='[{"providerId":"04bb0ded-55f9-446b-baaf-207beacef70b","username":"alice","path":"/","recursive":true,"allow":true}]'
+FDRIVE_COMPOSE_FILES="compose.office.collabora.yaml"
+FDRIVE_PROFILES="collabora"
+FDRIVE_COLLABORA_HOST=office.example.com
 ```
 
-- **`providerId`**: The UUID from Step 1.
-- **`username`**: The SFTPGo username.
-- **`path`**: The folder they can edit (`/` means their entire home directory, or use a subfolder like `/Documents`).
-- **`recursive`**: `true` allows editing in all subfolders too.
-- **`allow`**: `true` grants edit permission; `false` keeps it read-only.
+Route that hostname to the fdrive proxy, then run `./update.sh`. Enable and configure
+Office through the same System settings. The advanced overlay supplies its network
+endpoints and browser CSP origin. Environment variables do not activate
+Office. The standard bundled ONLYOFFICE engine stays idle when Collabora is selected.
 
-### Step 3: Apply the Rule
-```bash
-./update.sh
-```
+## Architecture and verification
 
-Now when that user opens a document, full editing tools will be available, and changes will be automatically saved back to your files!
-
----
-
-## 3. Using Collabora Online Instead of ONLYOFFICE
-
-If you prefer Collabora Online (LibreOffice in the browser):
-
-1. In `.env`, configure:
-   ```dotenv
-   FDRIVE_COMPOSE_FILES="compose.office.collabora.yaml"
-   FDRIVE_PROFILES="collabora"
-   ```
-2. Run `./update.sh`.
-
----
-
-## 4. Technical Architecture (For Developers)
-
-- **Protocol**: fdrive acts as a [WOPI host](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/) (Web Application Open Platform Interface). The document server runs as an isolated companion container and communicates with fdrive's API over the private Docker bridge network.
-- **Security**: WOPI proof-key verification (RSA-SHA256) is always enforced. The document server validates that every callback genuinely originates from the trusted host.
-- **Locking & Co-editing**: Concurrent edits are coordinated via file locks in Postgres. Multiple users can co-edit the same document simultaneously, with autosave streaming changes back to SFTPGo.
-- For testing and integration verification details, see [docs/OFFICE-TESTS.md](OFFICE-TESTS.md).
+fdrive is the WOPI host. It verifies signed Document Server callbacks using discovery
+proof keys, binds sessions to identities and providers, and coordinates locks in Postgres.
+Saves return to SFTPGo. Real editor tests verify saved document bytes and read-only
+admission; see [Office tests](OFFICE-TESTS.md).

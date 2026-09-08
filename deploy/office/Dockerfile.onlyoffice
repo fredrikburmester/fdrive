@@ -1,0 +1,10 @@
+FROM onlyoffice/documentserver:9.4.0.1@sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212
+
+COPY services/runtime/src/fdrive_runtime /opt/fdrive-runtime/fdrive_runtime
+COPY deploy/office/onlyoffice-entrypoint.sh /fdrive/onlyoffice-entrypoint.sh
+COPY deploy/office/onlyoffice-stop.sh /fdrive/onlyoffice-stop.sh
+RUN chmod 755 /fdrive/onlyoffice-entrypoint.sh /fdrive/onlyoffice-stop.sh
+
+ENV PYTHONPATH=/opt/fdrive-runtime
+ENTRYPOINT ["python3", "-m", "fdrive_runtime.office_controller"]
+CMD ["/bin/bash", "/fdrive/onlyoffice-entrypoint.sh"]

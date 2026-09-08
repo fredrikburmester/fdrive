@@ -8,7 +8,9 @@ export function officeStatusQueryOptions() {
   return {
     queryKey: ["office", "status"],
     queryFn: () => apiClient.officeStatus(),
-    staleTime: 5 * 60 * 1000,
+    // Discover newly started editors after onboarding, and reflect live disablement.
+    staleTime: 10_000,
+    refetchInterval: 10_000,
     retry: false,
   };
 }
