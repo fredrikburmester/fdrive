@@ -141,7 +141,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
 
     await search.click();
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByPlaceholder("Search files and content...")).toBeVisible();
+    await expect(page.getByPlaceholder("Search files, content, and images...")).toBeVisible();
   });
 
   test("the search panel is a full-width sheet with a scrollable, unclipped type filter row and no keyboard footer", async ({
@@ -177,7 +177,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
 
     // Typing a query still lists results, and tapping one still opens it
     // (the reveal action moves to each row's own button instead of Enter).
-    await page.getByPlaceholder("Search files and content...").fill("readme");
+    await page.getByPlaceholder("Search files, content, and images...").fill("readme");
     await expect(dialog.getByText("readme.md").first()).toBeVisible();
     await dialog.getByText("readme.md").first().click();
 

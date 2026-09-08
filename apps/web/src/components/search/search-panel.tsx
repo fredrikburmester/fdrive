@@ -2,7 +2,7 @@
 
 import type { FsEntry, ImageSearchHit, SearchHit, SearchSnippet } from "@fdrive/contracts";
 import { baseName } from "@fdrive/core";
-import { FolderIcon, FolderOpenIcon, ImagesIcon } from "lucide-react";
+import { FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -56,12 +56,16 @@ import {
   type SearchTypeFilter,
 } from "@/lib/search/filters";
 import { splitSnippetSegments } from "@/lib/search/highlight";
-import { readImageMode, writeImageMode } from "@/lib/search/image-mode";
 import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
 import { searchPanelLayout } from "@/lib/search/panel-layout";
 import { useImageSearchResults, useSearchResults, useSearchStatus } from "@/lib/search/queries";
 import { pushRecent, type RecentItem, readRecent } from "@/lib/search/recent";
 import { revealHref } from "@/lib/search/reveal";
+import {
+  filterVisualHits,
+  shouldQueryVisualMatches,
+  visualMatchesHeading,
+} from "@/lib/search/visual-matches";
 
 const DEBOUNCE_MS = 150;
 
@@ -102,11 +106,19 @@ function HitThumbnail({ hit }: { hit: SearchHit }) {
  * present, since the row only exists because a thumbnail was embedded) and
  * its name below, truncated to one line.
  */
-function ImageHitTile({ hit }: { hit: ImageSearchHit }) {
+function ImageHitTile({
+  hit,
+  onReveal,
+  mobile = false,
+}: {
+  hit: ImageSearchHit;
+  onReveal?: ((path: string) => void) | undefined;
+  mobile?: boolean | undefined;
+}) {
   const [errored, setErrored] = useState(false);
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <div className="aspect-square w-full overflow-hidden rounded-md ring-1 ring-border">
+      <div className="relative aspect-square w-full overflow-hidden rounded-md ring-1 ring-border">
         {errored ? (
           <div className="flex size-full items-center justify-center bg-muted">
             <FileIcon kind="file" ext={hit.ext} mime={hit.mime} />
@@ -120,6 +132,34 @@ function ImageHitTile({ hit }: { hit: ImageSearchHit }) {
             onError={() => setErrored(true)}
           />
         )}
+        {onReveal ? (
+          <div className="absolute top-1 right-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="secondary"
+                    size={mobile ? "icon-sm" : "icon-xs"}
+                    aria-label="Reveal in folder"
+                    className={
+                      mobile
+                        ? "size-7 shrink-0 shadow-xs"
+                        : "size-6 shrink-0 opacity-0 shadow-xs focus-visible:opacity-100 group-hover/command-item:opacity-100 group-focus-within/command-item:opacity-100"
+                    }
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onReveal(hit.path);
+                    }}
+                  />
+                }
+              >
+                <FolderOpenIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipContent>Reveal in folder</TooltipContent>
+            </Tooltip>
+          </div>
+        ) : null}
       </div>
       <p className="truncate text-xs text-muted-foreground">{hit.name}</p>
     </div>
@@ -278,7 +318,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [recent, setRecent] = useState<RecentItem[]>([]);
   const [selectedValue, setSelectedValue] = useState("");
   const [enterAction, setEnterActionState] = useState<EnterAction>(DEFAULT_ENTER_ACTION);
-  const [imageMode, setImageModeState] = useState(false);
   const { data: searchStatus } = useSearchStatus();
   const imagesAvailable = searchStatus?.images === true;
 
@@ -308,7 +347,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
         : [],
     );
     setEnterActionState(readEnterAction(window.localStorage));
-    setImageModeState(readImageMode(window.sessionStorage));
   }, [open, me]);
 
   const handleInputChange = useCallback((value: string) => {
@@ -321,19 +359,19 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     writeEnterAction(window.localStorage, action);
   }, []);
 
-  const handleImageModeChange = useCallback((next: boolean) => {
-    setImageModeState(next);
-    writeImageMode(window.sessionStorage, next);
-  }, []);
-
   const trimmedQuery = committedQuery.trim();
-  const imageSearchActive = imageMode && imagesAvailable;
+  const queryVisualMatches =
+    open &&
+    trimmedQuery.length > 0 &&
+    me !== undefined &&
+    shouldQueryVisualMatches(chips, imagesAvailable);
+
   const {
     data: response,
     isFetching,
     error: searchError,
   } = useSearchResults(committedQuery, chips, currentFolder, {
-    enabled: open && trimmedQuery.length > 0 && me !== undefined && !imageSearchActive,
+    enabled: open && trimmedQuery.length > 0 && me !== undefined,
     ...(me
       ? { scope: { accountId: me.account.id, identityId: me.activeIdentityId, all: allLogins } }
       : {}),
@@ -342,9 +380,10 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const {
     data: imageResponse,
     isFetching: isImageFetching,
-    error: imageSearchError,
+    error: imageError,
   } = useImageSearchResults(committedQuery, {
-    enabled: open && imageSearchActive,
+    enabled: queryVisualMatches,
+    identityId: me?.activeIdentityId,
   });
 
   const navigateItem = useCallback(
@@ -438,26 +477,72 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     allLogins && id && me ? identityLabel(me.identities, id) : undefined;
   const degraded = response?.degraded ?? false;
   const unavailable = response?.unavailable ?? false;
-  const noResults =
-    !showRecent &&
-    !isFetching &&
+
+  const shownItems = useMemo(() => {
+    const items: { path: string; identityId?: string | undefined }[] = [];
+    if (sections?.files) {
+      for (const file of sections.files) {
+        items.push({ path: file.path, identityId: file.identityId });
+      }
+    }
+    if (sections?.content) {
+      for (const item of sections.content) {
+        items.push({ path: item.path, identityId: item.identityId });
+      }
+    }
+    return items;
+  }, [sections?.files, sections?.content]);
+
+  const rawImageHits = imageResponse?.hits ?? [];
+  const visualHits = useMemo(() => {
+    if (!queryVisualMatches || rawImageHits.length === 0) {
+      return [];
+    }
+    return filterVisualHits(rawImageHits, {
+      chips,
+      currentFolder,
+      shownItems,
+      activeIdentityId: me?.activeIdentityId,
+    });
+  }, [queryVisualMatches, rawImageHits, chips, currentFolder, shownItems, me?.activeIdentityId]);
+
+  const activeIdentity = me?.identities.find((i) => i.id === me.activeIdentityId);
+  const activeLabel =
+    me && activeIdentity ? identityLabel(me.identities, activeIdentity.id) : undefined;
+  const visualHeading = visualMatchesHeading(allLogins, activeLabel);
+
+  const hasTextResults =
     sections !== undefined &&
-    sections.folders.length === 0 &&
-    sections.files.length === 0 &&
-    sections.content.length === 0;
-  const imageHits = imageResponse?.hits ?? [];
-  const imageUnavailable = imageResponse?.unavailable ?? false;
-  const imagePartial = imageResponse?.partial ?? false;
-  const imageNoResults =
-    !showRecent && !isImageFetching && imageResponse !== undefined && imageHits.length === 0;
+    (sections.folders.length > 0 || sections.files.length > 0 || sections.content.length > 0);
+  const hasVisualResults = visualHits.length > 0;
+  const hasResults = hasTextResults || hasVisualResults;
+  const waitingForImages = queryVisualMatches && isImageFetching;
+  const visualUnavailable =
+    queryVisualMatches &&
+    !isImageFetching &&
+    (Boolean(imageError) || imageResponse?.unavailable === true);
+  const visualFolderNotice = queryVisualMatches && chips.folderOnly && !isImageFetching;
+  const isPartial = queryVisualMatches && Boolean(imageResponse?.partial);
+  const showNoResults =
+    !showRecent && !isFetching && !waitingForImages && !hasResults && !unavailable && !searchError;
+  const noResultsMessage = visualUnavailable
+    ? `No text results for "${trimmedQuery}".`
+    : isPartial
+      ? `No results found in checked candidates for "${trimmedQuery}".`
+      : `No results for "${trimmedQuery}".`;
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
       title="Search"
-      description="Search files by name or content"
-      className="sm:max-w-xl"
+      description="Search files by name, content, or visual images"
+      {...(mobileLayout
+        ? {}
+        : {
+            className:
+              "max-w-[800px] sm:max-w-[800px] top-1/2 -translate-y-1/2 max-h-[calc(100dvh-2rem)] flex flex-col",
+          })}
       mobile={mobileLayout}
       initialFocus={mobileLayout ? (inputRef as RefObject<HTMLElement | null>) : undefined}
     >
@@ -472,9 +557,9 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
           value={inputValue}
           onValueChange={handleInputChange}
           onKeyDownCapture={handleInputKeyDownCapture}
-          placeholder="Search files and content..."
+          placeholder="Search files, content, and images..."
         />
-        {me && me.identities.length > 1 && !imageSearchActive ? (
+        {me && me.identities.length > 1 ? (
           <ToggleGroup
             aria-label="Search scope"
             className="justify-start px-2 pt-2"
@@ -495,80 +580,112 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               : "flex flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5"
           }
         >
-          {imageSearchActive ? null : (
-            <>
-              <ToggleGroup
-                value={[chips.type]}
-                onValueChange={(values) =>
-                  setChips((current) => ({
-                    ...current,
-                    type: (values[0] as SearchTypeFilter | undefined) ?? "any",
-                  }))
-                }
-                size="sm"
-                className={mobileLayout ? "shrink-0" : undefined}
-              >
-                {SEARCH_TYPE_FILTERS.map((type) => (
-                  <ToggleGroupItem key={type} value={type} aria-label={SEARCH_TYPE_LABELS[type]}>
-                    {SEARCH_TYPE_LABELS[type]}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-              <Toggle
-                size="sm"
-                variant="outline"
-                pressed={chips.folderOnly}
-                onPressedChange={(pressed) =>
-                  setChips((current) => ({ ...current, folderOnly: pressed }))
-                }
-                className={mobileLayout ? "shrink-0" : undefined}
-              >
-                This folder only
-              </Toggle>
-            </>
-          )}
-          {imagesAvailable ? (
-            <Toggle
-              size="sm"
-              variant="outline"
-              pressed={imageMode}
-              onPressedChange={handleImageModeChange}
-              aria-label="Search images"
-              className={mobileLayout ? "ml-auto shrink-0" : "ml-auto"}
-            >
-              <ImagesIcon />
-              Images
-            </Toggle>
-          ) : null}
+          <span className="shrink-0 text-xs text-muted-foreground">File type:</span>
+          <ToggleGroup
+            value={[chips.type]}
+            onValueChange={(values) =>
+              setChips((current) => ({
+                ...current,
+                type: (values[0] as SearchTypeFilter | undefined) ?? "any",
+              }))
+            }
+            size="sm"
+            aria-label="File type"
+            className={mobileLayout ? "shrink-0" : undefined}
+          >
+            {SEARCH_TYPE_FILTERS.map((type) => (
+              <ToggleGroupItem key={type} value={type} aria-label={SEARCH_TYPE_LABELS[type]}>
+                {SEARCH_TYPE_LABELS[type]}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <Toggle
+            size="sm"
+            variant="outline"
+            pressed={chips.folderOnly}
+            onPressedChange={(pressed) =>
+              setChips((current) => ({ ...current, folderOnly: pressed }))
+            }
+            className={mobileLayout ? "shrink-0" : undefined}
+          >
+            This folder only
+          </Toggle>
         </div>
-        {actions.error ||
-        navigationError ||
-        searchError ||
-        (imageSearchActive && imageSearchError) ? (
+        {actions.error || navigationError || searchError ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">
-            {actions.error ??
-              navigationError ??
-              describeApiError(imageSearchActive ? imageSearchError : searchError)}
+            {actions.error ?? navigationError ?? describeApiError(searchError)}
           </p>
         ) : null}
-        {!imageSearchActive && unavailableIds.length > 0 && me ? (
+        {unavailableIds.length > 0 && me ? (
           <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
             Search unavailable for{" "}
             {unavailableIds.map((id) => identityLabel(me.identities, id)).join(", ")}. Other results
             remain available.
           </p>
         ) : null}
-        {imageSearchActive && imagePartial ? (
-          <p className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+        {hasTextResults && waitingForImages ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            Searching visual matches...
+          </p>
+        ) : null}
+        {hasVisualResults && isFetching ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            Searching files and content...
+          </p>
+        ) : null}
+        {unavailable && hasVisualResults ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            Text search is unavailable.
+          </p>
+        ) : null}
+        {visualUnavailable ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            Visual search is unavailable.
+          </p>
+        ) : null}
+        {visualFolderNotice ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            Visual search checks top matches; more images may exist in this folder.
+          </p>
+        ) : null}
+        {isPartial ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
             Some results omitted.
           </p>
         ) : null}
-        {!imageSearchActive && degraded ? (
-          <p className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+        {degraded ? (
+          <p
+            role="status"
+            className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+          >
             Semantic search unavailable, showing keyword matches.
           </p>
         ) : null}
-        <CommandList className={mobileLayout ? "max-h-none min-h-0 flex-1" : undefined}>
+        <CommandList
+          className={
+            mobileLayout
+              ? "max-h-none min-h-0 flex-1"
+              : "min-h-0 flex-1 max-h-[min(36rem,calc(100dvh-12rem))]"
+          }
+        >
           {showRecent ? (
             allLogins || recent.length === 0 ? (
               <CommandEmpty>Type to search files and content.</CommandEmpty>
@@ -585,31 +702,14 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                 ))}
               </CommandGroup>
             )
-          ) : imageSearchActive ? (
-            imageUnavailable ? (
-              <CommandEmpty>Image search is not available.</CommandEmpty>
-            ) : imageNoResults ? (
-              <CommandEmpty>No matching images</CommandEmpty>
-            ) : (
-              <CommandGroup heading="Images">
-                <div className="grid grid-cols-3 gap-2 p-1 sm:grid-cols-4">
-                  {imageHits.map((hit) => (
-                    <CommandItem
-                      key={makeItemValue("file", hit.path)}
-                      value={makeItemValue("file", hit.path)}
-                      onSelect={handleSelect}
-                      className="flex-col items-stretch gap-1"
-                    >
-                      <ImageHitTile hit={hit} />
-                    </CommandItem>
-                  ))}
-                </div>
-              </CommandGroup>
-            )
-          ) : unavailable ? (
+          ) : unavailable && !hasVisualResults && !waitingForImages ? (
             <CommandEmpty>Search is not available.</CommandEmpty>
-          ) : noResults ? (
-            <CommandEmpty>No results for "{trimmedQuery}".</CommandEmpty>
+          ) : (isFetching || waitingForImages) && !hasResults ? (
+            <div role="status" className="py-6 text-center text-xs text-muted-foreground">
+              Searching...
+            </div>
+          ) : showNoResults ? (
+            <CommandEmpty>{noResultsMessage}</CommandEmpty>
           ) : (
             <>
               {sections !== undefined && sections.folders.length > 0 ? (
@@ -646,32 +746,55 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
                       </CommandItem>
                     ))}
                   </CommandGroup>
-                  {sections.content.length > 0 ? <CommandSeparator /> : null}
+                  {sections.content.length > 0 || hasVisualResults ? <CommandSeparator /> : null}
                 </>
               ) : null}
               {sections !== undefined && sections.content.length > 0 ? (
-                <CommandGroup heading="Content matches">
-                  {sections.content.map((hit) => (
-                    <CommandItem
-                      key={makeItemValue("content", hit.path, hit.identityId)}
-                      value={makeItemValue("content", hit.path, hit.identityId)}
-                      onSelect={handleSelect}
-                    >
-                      <HitRow hit={hit} iconsOnly={allLogins} label={labelFor(hit.identityId)} />
-                      <RevealButton
-                        path={hit.path}
-                        onReveal={(path) => revealItem(path, hit.identityId)}
-                        mobile={mobileLayout}
-                      />
-                    </CommandItem>
-                  ))}
+                <>
+                  <CommandGroup heading="Content matches">
+                    {sections.content.map((hit) => (
+                      <CommandItem
+                        key={makeItemValue("content", hit.path, hit.identityId)}
+                        value={makeItemValue("content", hit.path, hit.identityId)}
+                        onSelect={handleSelect}
+                      >
+                        <HitRow hit={hit} iconsOnly={allLogins} label={labelFor(hit.identityId)} />
+                        <RevealButton
+                          path={hit.path}
+                          onReveal={(path) => revealItem(path, hit.identityId)}
+                          mobile={mobileLayout}
+                        />
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                  {hasVisualResults ? <CommandSeparator /> : null}
+                </>
+              ) : null}
+              {hasVisualResults ? (
+                <CommandGroup heading={visualHeading}>
+                  <div className="grid grid-cols-3 gap-2 p-1 sm:grid-cols-4 md:grid-cols-6">
+                    {visualHits.map((hit) => (
+                      <CommandItem
+                        key={makeItemValue("file", hit.path, me?.activeIdentityId)}
+                        value={makeItemValue("file", hit.path, me?.activeIdentityId)}
+                        onSelect={handleSelect}
+                        className="group/command-item flex-col items-stretch gap-1"
+                      >
+                        <ImageHitTile
+                          hit={hit}
+                          onReveal={(path) => revealItem(path, me?.activeIdentityId)}
+                          mobile={mobileLayout}
+                        />
+                      </CommandItem>
+                    ))}
+                  </div>
                 </CommandGroup>
               ) : null}
             </>
           )}
         </CommandList>
         {mobileLayout ? null : (
-          <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
             <div className="flex items-center gap-1.5">
               <span>Enter opens:</span>
               <ToggleGroup
