@@ -15,6 +15,7 @@ import {
   tags,
 } from "../schema/app.js";
 import { validateIdentityLinkId } from "./identity-links-types.js";
+import { createSystemEventRepo } from "./system-events.js";
 import type {
   Account,
   AccountRepo,
@@ -752,5 +753,6 @@ export function createRepos(db: Db): Repos {
     favorites: createFavoriteRepo(db),
     folderViews: createFolderViewRepo(db),
     recents: createRecentRepo(db),
+    systemEvents: createSystemEventRepo(db),
   };
 }

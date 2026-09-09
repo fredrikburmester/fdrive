@@ -7,6 +7,7 @@ import {
   OcrSettingsResponse,
   SystemImageSearchResponse,
   SystemIndexerResponse,
+  SystemLogsResponse,
   SystemOcrResponse,
   SystemReembedResponse,
   SystemSearchResponse,
@@ -20,7 +21,7 @@ import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import type { IndexerClient } from "./indexer-client.js";
 import type { OcrClient } from "./ocr-client.js";
-import { registerSystemRoutes, type SystemRoutesDeps } from "./routes.js";
+import { changedSettingKeys, registerSystemRoutes, type SystemRoutesDeps } from "./routes.js";
 import type { ThumbnailsRepo } from "./thumbnails-repo.js";
 
 const REQUIRED_ENV = {
@@ -96,11 +97,26 @@ function fakeOcrClient(overrides: Partial<OcrClient> = {}): OcrClient {
   };
 }
 
+interface RecordedEvent {
+  subsystem: string;
+  level: string;
+  message: string;
+  data: unknown;
+}
+
 function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> }) {
   const config = loadConfig(REQUIRED_ENV);
-  const settings = createMemoryRepos().settings;
+  const repos = createMemoryRepos();
+  const settings = repos.settings;
+  const recorded: RecordedEvent[] = [];
   const deps: SystemRoutesDeps = {
     settings,
+    systemEvents: repos.systemEvents,
+    eventLog: {
+      record: (subsystem, level, message, data) => {
+        recorded.push({ subsystem, level, message, data });
+      },
+    },
     indexQueries: fakeIndexQueries(),
     thumbnailsRepo: fakeThumbnailsRepo(),
     indexerClient: null,
@@ -152,7 +168,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     },
   });
 
-  return { app, settings, deps };
+  return { app, settings, deps, recorded, systemEvents: repos.systemEvents };
 }
 
 describe("system routes: admin gate", () => {
@@ -1238,5 +1254,265 @@ describe("clear scoping", () => {
     });
     const res = await app.request("/api/v1/system/indexer");
     expect(SystemIndexerResponse.parse(await res.json()).stats).toEqual(stats);
+  });
+});
+
+describe("GET /system/:subsystem/logs", () => {
+  async function seed(
+    events: { subsystem: string; level: "info" | "warn" | "error"; message: string }[],
+  ) {
+    const built = buildApp({});
+    for (const event of events) {
+      await built.systemEvents.append(event);
+      // The in-memory log stamps `at` from the clock, so entries need
+      // distinct instants for the `before` cursor to be meaningful.
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    return built;
+  }
+
+  it("403s for a non-admin", async () => {
+    const { app } = buildApp({ isAdmin: false });
+    const res = await app.request("/api/v1/system/indexer/logs");
+    expect(res.status).toBe(403);
+  });
+
+  it("400s for a subsystem that has no log", async () => {
+    const { app } = buildApp({});
+    const res = await app.request("/api/v1/system/trash/logs");
+    expect(res.status).toBe(400);
+  });
+
+  it("400s for an invalid query", async () => {
+    const { app } = buildApp({});
+    expect((await app.request("/api/v1/system/indexer/logs?limit=0")).status).toBe(400);
+    expect((await app.request("/api/v1/system/indexer/logs?level=debug")).status).toBe(400);
+    expect((await app.request("/api/v1/system/indexer/logs?before=nope")).status).toBe(400);
+  });
+
+  it("returns a subsystem's entries newest first, with data only when present", async () => {
+    const { app, systemEvents } = buildApp({});
+    await systemEvents.append({ subsystem: "indexer", level: "info", message: "older" });
+    await systemEvents.append({
+      subsystem: "indexer",
+      level: "warn",
+      message: "newer",
+      data: { root: "sftpgo" },
+    });
+    await systemEvents.append({ subsystem: "ocr", level: "info", message: "other subsystem" });
+
+    const res = await app.request("/api/v1/system/indexer/logs");
+    const body = SystemLogsResponse.parse(await res.json());
+
+    expect(res.status).toBe(200);
+    expect(body.subsystem).toBe("indexer");
+    expect(body.entries.map((entry) => entry.message)).toEqual(["newer", "older"]);
+    expect(body.entries[0]).toMatchObject({
+      level: "warn",
+      source: "api",
+      data: { root: "sftpgo" },
+    });
+    expect(body.entries[1]?.data).toBeUndefined();
+    expect(body.nextCursor).toBeUndefined();
+  });
+
+  it("filters to the requested minimum level", async () => {
+    const { app } = await seed([
+      { subsystem: "search", level: "info", message: "i" },
+      { subsystem: "search", level: "warn", message: "w" },
+      { subsystem: "search", level: "error", message: "e" },
+    ]);
+
+    const res = await app.request("/api/v1/system/search/logs?level=warn");
+    const body = SystemLogsResponse.parse(await res.json());
+
+    expect(body.entries.map((entry) => entry.message)).toEqual(["e", "w"]);
+  });
+
+  it("clamps an over-large limit instead of rejecting it", async () => {
+    const { app } = buildApp({});
+    const res = await app.request("/api/v1/system/office/logs?limit=100000");
+    expect(res.status).toBe(200);
+  });
+
+  it("offers a cursor for a full page and pages back with it", async () => {
+    const { app } = await seed([
+      { subsystem: "ocr", level: "info", message: "a" },
+      { subsystem: "ocr", level: "info", message: "b" },
+      { subsystem: "ocr", level: "info", message: "c" },
+    ]);
+
+    const first = SystemLogsResponse.parse(
+      await (await app.request("/api/v1/system/ocr/logs?limit=2")).json(),
+    );
+    expect(first.entries.map((entry) => entry.message)).toEqual(["c", "b"]);
+    expect(first.nextCursor).toBe(first.entries[1]?.at);
+
+    const second = SystemLogsResponse.parse(
+      await (
+        await app.request(
+          `/api/v1/system/ocr/logs?limit=2&before=${encodeURIComponent(first.nextCursor ?? "")}`,
+        )
+      ).json(),
+    );
+    expect(second.entries.map((entry) => entry.message)).toEqual(["a"]);
+    expect(second.nextCursor).toBeUndefined();
+  });
+});
+
+describe("system routes: recorded events", () => {
+  it("records a settings update with the keys that actually changed", async () => {
+    const { app, recorded } = buildApp({});
+
+    const res = await app.request("/api/v1/system/indexer/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({
+        scanIntervalSeconds: 60,
+        workers: 4,
+        textExcludeGlobs: [],
+        ocrImageGlobs: ["**"],
+        tesseractLangs: "swe+eng",
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(recorded).toEqual([
+      {
+        subsystem: "indexer",
+        level: "info",
+        message: "Settings updated",
+        data: { changed: ["scanIntervalSeconds"] },
+      },
+    ]);
+  });
+
+  it("records an OCR settings update", async () => {
+    const { app, recorded } = buildApp({});
+
+    await app.request("/api/v1/system/ocr/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({
+        hour: 4,
+        langs: "swe+eng",
+        excludeGlobs: [],
+        maxMb: 200,
+        keepOriginals: false,
+      }),
+    });
+
+    expect(recorded).toEqual([
+      {
+        subsystem: "ocr",
+        level: "info",
+        message: "Settings updated",
+        data: { changed: ["hour", "keepOriginals"] },
+      },
+    ]);
+  });
+
+  it("records a requested maintenance action, and clears as warnings", async () => {
+    const indexerClient = fakeIndexerClient({
+      reindex: async () => ({ ok: true, data: { marked: 1 } }),
+      clearIndex: async () => ({ ok: true, data: { started: true } }),
+      clearThumbnails: async () => ({ ok: true, data: { started: true } }),
+      clearImageEmbeddings: async () => ({ ok: true, data: { started: true } }),
+      thumbnailsRebuild: async () => ({ ok: true, data: { started: true, total: 1 } }),
+      imageEmbeddingsRebuild: async () => ({ ok: true, data: { started: true, total: 1 } }),
+    });
+    const ocrClient = fakeOcrClient({ run: async () => ({ ok: true, data: { started: true } }) });
+    const { app, recorded } = buildApp({
+      deps: { indexerClient, ocrClient, indexRootNames: ["sftpgo"] },
+    });
+    const post = (path: string, body?: unknown) =>
+      app.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+
+    await post("/api/v1/system/indexer/reindex", { root: "sftpgo" });
+    await post("/api/v1/system/thumbnails/rebuild");
+    await post("/api/v1/system/indexer/thumbnails/rebuild", {});
+    await post("/api/v1/system/image-search/rebuild", {});
+    await post("/api/v1/system/ocr/run");
+    await post("/api/v1/system/search/reembed");
+    await post("/api/v1/system/indexer/clear", {});
+    await post("/api/v1/system/thumbnails/clear", {});
+    await post("/api/v1/system/image-search/clear", {});
+
+    expect(recorded.map((event) => [event.subsystem, event.level, event.message])).toEqual([
+      ["indexer", "info", "Reindex requested"],
+      ["thumbnails", "info", "Thumbnail rebuild requested"],
+      ["thumbnails", "info", "Thumbnail rebuild requested"],
+      ["image-search", "info", "Image embedding rebuild requested"],
+      ["ocr", "info", "OCR run requested"],
+      ["search", "info", "Reembed requested"],
+      ["indexer", "warn", "Index clear requested"],
+      ["thumbnails", "warn", "Thumbnail clear requested"],
+      ["image-search", "warn", "Image embedding clear requested"],
+    ]);
+    expect(recorded[0]?.data).toEqual({ root: "sftpgo" });
+    expect(recorded[5]?.data).toEqual({ roots: ["sftpgo"] });
+  });
+
+  it("records an error for every sidecar action that fails", async () => {
+    const failure = {
+      ok: false as const,
+      reason: "unreachable" as const,
+      detail: "connect refused",
+    };
+    const indexerClient = fakeIndexerClient({
+      reindex: async () => failure,
+      clearIndex: async () => failure,
+      clearThumbnails: async () => failure,
+      clearImageEmbeddings: async () => failure,
+      thumbnailsRebuild: async () => failure,
+      imageEmbeddingsRebuild: async () => failure,
+    });
+    const ocrClient = fakeOcrClient({ run: async () => failure });
+    const { app, recorded } = buildApp({
+      deps: { indexerClient, ocrClient, indexRootNames: ["sftpgo"] },
+    });
+    const post = (path: string, body?: unknown) =>
+      app.request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+
+    await post("/api/v1/system/indexer/reindex", { root: "sftpgo" });
+    await post("/api/v1/system/thumbnails/rebuild");
+    await post("/api/v1/system/indexer/thumbnails/rebuild", {});
+    await post("/api/v1/system/image-search/rebuild", {});
+    await post("/api/v1/system/ocr/run");
+    await post("/api/v1/system/search/reembed");
+    await post("/api/v1/system/indexer/clear", {});
+    await post("/api/v1/system/thumbnails/clear", {});
+    await post("/api/v1/system/image-search/clear", {});
+
+    expect(recorded.every((event) => event.level === "error")).toBe(true);
+    expect(recorded.map((event) => event.message)).toEqual([
+      "Reindex failed: connect refused",
+      "Thumbnail rebuild failed: connect refused",
+      "Thumbnail rebuild failed: connect refused",
+      "Image embedding rebuild failed: connect refused",
+      "OCR run failed: connect refused",
+      "Reembed failed: connect refused",
+      "Index clear failed: connect refused",
+      "Thumbnail clear failed: connect refused",
+      "Image embedding clear failed: connect refused",
+    ]);
+  });
+});
+
+describe("changedSettingKeys", () => {
+  it("compares by value, so an equal array counts as unchanged", () => {
+    expect(changedSettingKeys({ a: 1, globs: ["**"] }, { a: 1, globs: ["**"] })).toEqual([]);
+    expect(changedSettingKeys({ a: 1, globs: ["**"] }, { a: 2, globs: [] })).toEqual([
+      "a",
+      "globs",
+    ]);
   });
 });

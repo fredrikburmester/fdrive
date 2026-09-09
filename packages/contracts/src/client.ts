@@ -58,6 +58,7 @@ import {
   publicShareRoute,
   ROUTES,
   shareRoute,
+  systemLogsRoute,
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
@@ -97,6 +98,9 @@ import {
   type OcrSettingsUpdateRequest,
   SystemImageSearchResponse,
   SystemIndexerResponse,
+  type SystemLogLevel,
+  type SystemLogSubsystem,
+  SystemLogsResponse,
   SystemOcrResponse,
   SystemReembedResponse,
   SystemSearchResponse,
@@ -279,6 +283,11 @@ export interface ApiClient {
   systemRunOcr(): Promise<OcrRunResponse>;
   systemThumbnails(): Promise<SystemThumbnailsResponse>;
   systemRebuildThumbnails(): Promise<IndexerThumbnailsRebuildResponse>;
+  /** One subsystem's event log, newest first. Admin only. */
+  systemLogs(
+    subsystem: SystemLogSubsystem,
+    query?: { limit?: number; level?: SystemLogLevel; before?: string },
+  ): Promise<SystemLogsResponse>;
   listApiTokens(): Promise<ApiTokensResponse>;
   createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResponse>;
   revokeApiToken(id: string): Promise<OkResponse>;
@@ -1073,6 +1082,22 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "POST", path: ROUTES.system.thumbnailsRebuild },
         IndexerThumbnailsRebuildResponse,
+      );
+    },
+
+    systemLogs(subsystem, query = {}) {
+      return requestJson(
+        ctx,
+        {
+          method: "GET",
+          path: systemLogsRoute(subsystem),
+          query: {
+            limit: query.limit === undefined ? undefined : String(query.limit),
+            level: query.level,
+            before: query.before,
+          },
+        },
+        SystemLogsResponse,
       );
     },
 

@@ -290,6 +290,66 @@ export interface RecentRepo {
   prune(identityId: string, keep: number): Promise<void>;
 }
 
+/** Severity of one `SystemEvent`, ordered `info` < `warn` < `error`. */
+export type SystemEventLevel = "info" | "warn" | "error";
+
+/**
+ * Which store an event was read from: `api` for a row the API wrote to
+ * `app.system_events`, `indexer` and `ocr` for history the sidecars keep in
+ * their own tables and that reads merge in.
+ */
+export type SystemEventSource = "api" | "indexer" | "ocr";
+
+/**
+ * One entry in a subsystem's event log. `id` is prefixed by source
+ * ("api:123", "scan:45") because the merged stream draws from several
+ * tables whose numeric ids overlap.
+ */
+export interface SystemEvent {
+  readonly id: string;
+  readonly at: Date;
+  readonly subsystem: string;
+  readonly level: SystemEventLevel;
+  readonly message: string;
+  readonly data: unknown | null;
+  readonly source: SystemEventSource;
+}
+
+export interface SystemEventListOptions {
+  /** Maximum entries to return. */
+  readonly limit: number;
+  /** Minimum severity to include; defaults to `info` (everything). */
+  readonly minLevel?: SystemEventLevel;
+  /** Only entries strictly older than this instant, for paging backwards. */
+  readonly before?: Date;
+}
+
+/** Severity order, lowest first. */
+export const SYSTEM_EVENT_LEVELS = ["info", "warn", "error"] as const;
+
+/**
+ * The levels at or above `minLevel` (every level when it is omitted), the
+ * filter both the Drizzle and the in-memory event log apply to a `list`.
+ */
+export function levelsAtLeast(minLevel: SystemEventLevel | undefined): SystemEventLevel[] {
+  const from = SYSTEM_EVENT_LEVELS.indexOf(minLevel ?? "info");
+  return SYSTEM_EVENT_LEVELS.slice(from === -1 ? 0 : from);
+}
+
+export interface SystemEventRepo {
+  /** Appends one API-written event. */
+  append(input: {
+    subsystem: string;
+    level: SystemEventLevel;
+    message: string;
+    data?: unknown;
+  }): Promise<void>;
+  /** One subsystem's entries, newest first, merged across every source. */
+  list(subsystem: string, opts: SystemEventListOptions): Promise<SystemEvent[]>;
+  /** Deletes every API-written row for `subsystem` beyond the `keep` newest. */
+  prune(subsystem: string, keep: number): Promise<void>;
+}
+
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
   readonly providers: ProviderRepo;
@@ -304,4 +364,5 @@ export interface Repos {
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
   readonly recents: RecentRepo;
+  readonly systemEvents: SystemEventRepo;
 }

@@ -7,6 +7,7 @@ import {
   jobRoute,
   MODIFIED_AT_HEADER,
   ROUTES,
+  systemLogsRoute,
   tagFilesRoute,
   tagRoute,
 } from "./routes";
@@ -203,5 +204,15 @@ describe("headers", () => {
 
   it("MODIFIED_AT_HEADER is x-modified-at", () => {
     expect(MODIFIED_AT_HEADER).toBe("x-modified-at");
+  });
+});
+
+describe("systemLogsRoute", () => {
+  it("builds the log path for a subsystem", () => {
+    expect(systemLogsRoute("image-search")).toBe("/api/v1/system/image-search/logs");
+  });
+
+  it("url-encodes the subsystem", () => {
+    expect(systemLogsRoute("a/b")).toBe("/api/v1/system/a%2Fb/logs");
   });
 });

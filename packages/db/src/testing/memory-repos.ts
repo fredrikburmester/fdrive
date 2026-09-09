@@ -26,10 +26,12 @@ import type {
   Session,
   SessionRepo,
   SettingsRepo,
+  SystemEvent,
+  SystemEventRepo,
   Tag,
   TagRepo,
 } from "../repos/types.js";
-import { ConflictError } from "../repos/types.js";
+import { ConflictError, levelsAtLeast } from "../repos/types.js";
 
 export interface CreateMemoryReposOptions {
   /** Id generator, defaults to `crypto.randomUUID`. Override for deterministic tests. */
@@ -665,6 +667,53 @@ function createMemoryRecentRepo(): RecentRepo {
 }
 
 /**
+ * The in-memory event log. Only the API's own entries exist here: the
+ * sidecar history the Drizzle implementation merges in lives in the
+ * indexer's Postgres tables, which have no in-memory counterpart.
+ */
+function createMemorySystemEventRepo(): SystemEventRepo {
+  const bySubsystem = new Map<string, SystemEvent[]>();
+  let nextId = 0;
+
+  return {
+    async append(input) {
+      nextId += 1;
+      const entries = bySubsystem.get(input.subsystem) ?? [];
+      entries.push({
+        id: `api:${nextId}`,
+        at: new Date(),
+        subsystem: input.subsystem,
+        level: input.level,
+        message: input.message,
+        data: input.data ?? null,
+        source: "api",
+      });
+      bySubsystem.set(input.subsystem, entries);
+    },
+    async list(subsystem, opts) {
+      const levels = levelsAtLeast(opts.minLevel);
+      const entries = bySubsystem.get(subsystem) ?? [];
+      return entries
+        .filter(
+          (entry) =>
+            levels.includes(entry.level) &&
+            (opts.before === undefined || entry.at.getTime() < opts.before.getTime()),
+        )
+        .slice()
+        .reverse()
+        .slice(0, opts.limit);
+    },
+    async prune(subsystem, keep) {
+      const entries = bySubsystem.get(subsystem);
+      if (entries === undefined) {
+        return;
+      }
+      bySubsystem.set(subsystem, entries.slice(Math.max(0, entries.length - keep)));
+    },
+  };
+}
+
+/**
  * In-memory implementations of every `Repos` interface, matching the
  * uniqueness and expiry semantics of the Drizzle-backed repositories.
  * Intended for fast unit tests; not shared across processes.
@@ -686,5 +735,6 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     favorites: createMemoryFavoriteRepo(),
     folderViews: createMemoryFolderViewRepo(),
     recents: createMemoryRecentRepo(),
+    systemEvents: createMemorySystemEventRepo(),
   };
 }

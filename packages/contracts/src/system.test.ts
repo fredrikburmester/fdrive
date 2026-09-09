@@ -711,3 +711,86 @@ it("bounds internal directory metadata and rejects malformed or extra fields", a
       IndexerDirectoryResponse.safeParse({ items: [{ name: "a", kind }], overflow: false }).success,
     ).toBe(true);
 });
+
+describe("SystemLogsQuery", () => {
+  it("defaults to 200 info-level entries and no cursor", async () => {
+    const { SystemLogsQuery } = await import("./index.ts");
+    expect(SystemLogsQuery.parse({})).toEqual({ limit: 200, level: "info" });
+  });
+
+  it("coerces a string limit and clamps it to the maximum", async () => {
+    const { SYSTEM_LOGS_MAX_LIMIT, SystemLogsQuery } = await import("./index.ts");
+    expect(SystemLogsQuery.parse({ limit: "50" }).limit).toBe(50);
+    expect(SystemLogsQuery.parse({ limit: "999999" }).limit).toBe(SYSTEM_LOGS_MAX_LIMIT);
+  });
+
+  it("rejects a non-positive or fractional limit, an unknown level, and a non-ISO cursor", async () => {
+    const { SystemLogsQuery } = await import("./index.ts");
+    for (const value of [
+      { limit: "0" },
+      { limit: "-1" },
+      { limit: "1.5" },
+      { limit: "abc" },
+      { level: "debug" },
+      { before: "yesterday" },
+    ])
+      expect(SystemLogsQuery.safeParse(value).success).toBe(false);
+  });
+
+  it("accepts an ISO cursor with an explicit offset", async () => {
+    const { SystemLogsQuery } = await import("./index.ts");
+    expect(SystemLogsQuery.parse({ before: "2026-01-01T12:00:00+00:00" }).before).toBe(
+      "2026-01-01T12:00:00+00:00",
+    );
+  });
+});
+
+describe("SystemLogsResponse", () => {
+  it("parses a page of entries, with data optional", async () => {
+    const { SystemLogsResponse } = await import("./index.ts");
+    const parsed = SystemLogsResponse.parse({
+      subsystem: "indexer",
+      entries: [
+        {
+          id: "api:1",
+          at: "2026-01-01T12:00:00Z",
+          level: "warn",
+          message: "Index clear requested",
+          data: { root: "sftpgo" },
+          source: "api",
+        },
+        {
+          id: "scan:2",
+          at: "2026-01-01T11:00:00Z",
+          level: "info",
+          message: "Scan of sftpgo finished: 1 seen, 0 changed, 0 deleted",
+          source: "indexer",
+        },
+      ],
+      nextCursor: "2026-01-01T11:00:00Z",
+    });
+    expect(parsed.entries).toHaveLength(2);
+    expect(parsed.entries[1]?.data).toBeUndefined();
+  });
+
+  it("rejects an unknown subsystem or source", async () => {
+    const { SystemLogsResponse, SystemLogSubsystem } = await import("./index.ts");
+    expect(SystemLogSubsystem.options).toEqual([
+      "indexer",
+      "search",
+      "ocr",
+      "thumbnails",
+      "image-search",
+      "office",
+    ]);
+    expect(SystemLogsResponse.safeParse({ subsystem: "trash", entries: [] }).success).toBe(false);
+    expect(
+      SystemLogsResponse.safeParse({
+        subsystem: "ocr",
+        entries: [
+          { id: "x", at: "2026-01-01T12:00:00Z", level: "info", message: "m", source: "web" },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
