@@ -8,10 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AccountIdentity } from "@/lib/account/identities";
 import { useAccountTransition } from "@/lib/account/transition";
+import { IdentityScope } from "./identity-scope";
 import { LinkLoginDialog } from "./link-login-dialog";
 import { UnlinkLoginDialog } from "./unlink-login-dialog";
 
-/** Account page card: every SFTPGo login linked to the signed-in account. */
+/** Account page card: every SFTPGo login linked to the signed-in account, each with its index status. */
 export function IdentitiesCard() {
   const { data: me, isLoading } = useShellMe();
   const [linkOpen, setLinkOpen] = useState(false);
@@ -31,26 +32,29 @@ export function IdentitiesCard() {
           me.identities.map((identity) => (
             <div
               key={identity.id}
-              className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+              className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2 text-sm"
             >
-              <div className="flex flex-col">
-                <span className="font-medium">{identity.username}</span>
-                <span className="text-xs text-muted-foreground">{identity.providerLabel}</span>
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="font-medium">{identity.username}</span>
+                  <span className="text-xs text-muted-foreground">{identity.providerLabel}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {identity.id === me.activeIdentityId ? (
+                    <Badge variant="secondary">Active</Badge>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={pending || me.identities.length < 2}
+                    onClick={() => setUnlink(identity)}
+                    aria-label={`Unlink ${identity.username}`}
+                  >
+                    Unlink
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                {identity.id === me.activeIdentityId ? (
-                  <Badge variant="secondary">Active</Badge>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={pending || me.identities.length < 2}
-                  onClick={() => setUnlink(identity)}
-                  aria-label={`Unlink ${identity.username}`}
-                >
-                  Unlink
-                </Button>
-              </div>
+              <IdentityScope identityId={identity.id} username={identity.username} />
             </div>
           ))
         )}

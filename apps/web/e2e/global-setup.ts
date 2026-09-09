@@ -9,6 +9,7 @@ import { Client } from "pg";
 import { ACCOUNT_FILES } from "./support/account-fixture.js";
 import { startEnvironment } from "./support/environment.js";
 import { startFakeIndexer } from "./support/fake-indexer.js";
+import { SCOPE_FILES, SHARED_FOLDER_INDEX_PREFIX } from "./support/scope-fixture.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -38,7 +39,10 @@ function extensionOf(name: string): string {
  * `search.spec.ts` has real rows to find: a filename match on "readme.md",
  * a content match on a word from the readme, and (since only alice's files
  * are indexed under alice's scope) proof that bob's search for the same
- * term finds nothing.
+ * term finds nothing. Also indexes the shared folder's own content under
+ * its physical `_folders/shared` location and scope_admin's home, so
+ * `account-scope.spec.ts` can prove a freshly mapped virtual folder yields
+ * a search hit.
  *
  * Runs after the API is healthy, since the API applies the `idx`/`app`
  * schema migrations on boot (`FDRIVE_AUTO_MIGRATE=true`) and this needs
@@ -76,17 +80,23 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
       throw new Error("fdrive e2e: failed to seed idx.roots");
     }
 
-    const indexedFiles = { alice: SEED_FILES.alice ?? {}, ...ACCOUNT_FILES };
+    const indexedFiles: Record<string, Record<string, string>> = {
+      alice: SEED_FILES.alice ?? {},
+      ...ACCOUNT_FILES,
+      ...SCOPE_FILES,
+      [SHARED_FOLDER_INDEX_PREFIX]: SEED_FILES["@shared"] ?? {},
+    };
     const mtimeNs = (BigInt(Date.now()) * BigInt(1_000_000)).toString();
     let readmeFileId: number | undefined;
     let readmeText: string | undefined;
 
-    for (const [username, files] of Object.entries(indexedFiles)) {
+    for (const [prefix, files] of Object.entries(indexedFiles)) {
       for (const [virtualPath, content] of Object.entries(files)) {
-        // testkit's SEED_FILES paths are alice-home-relative ("/docs/readme.md");
+        // testkit's SEED_FILES paths are home-relative ("/docs/readme.md");
         // the index stores root-relative paths with no leading slash
         // ("alice/docs/readme.md"), matching the indexer's own convention.
-        const relativePath = `${username}${virtualPath}`;
+        // The shared folder's prefix is its physical location instead.
+        const relativePath = `${prefix}${virtualPath}`;
         const name = virtualPath.split("/").at(-1) ?? virtualPath;
         const ext = extensionOf(name);
         const size = Buffer.byteLength(content, "utf-8");

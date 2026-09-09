@@ -50,6 +50,7 @@ function stubIndexQueries(): IndexQueries {
     listFiles: async () => ({ total: 0, files: [] }),
     filesBySha256: async () => fail("filesBySha256"),
     rootIdsByName: async () => ({ sftpgo: 1 }),
+    directoriesWithFiles: async () => [],
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     duplicates: async () => [],

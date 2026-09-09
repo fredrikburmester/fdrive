@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createInMemoryScopeOverrideStore,
   createSettingsScopeOverrideStore,
+  normalizeScopeOverrideRecord,
   scopeOverrideSettingsKey,
 } from "./override-store.ts";
 
@@ -31,26 +32,75 @@ describe.each([
 
   it("returns the stored override after set", async () => {
     const store = build();
-    await store.set("identity-1", sample);
-    expect(await store.get("identity-1")).toEqual({ version: 1, scopes: sample });
+    await store.set("identity-1", sample, ["/archive"]);
+    expect(await store.get("identity-1")).toEqual({
+      version: 2,
+      scopes: sample,
+      unindexedPrefixes: ["/archive"],
+    });
   });
 
   it("returns null after reset", async () => {
     const store = build();
-    await store.set("identity-1", sample);
+    await store.set("identity-1", sample, []);
     await store.reset("identity-1");
     expect(await store.get("identity-1")).toBeNull();
   });
 
   it("keeps overrides for different identities independent", async () => {
     const store = build();
-    await store.set("identity-1", sample);
+    await store.set("identity-1", sample, []);
     expect(await store.get("identity-2")).toBeNull();
   });
 
-  it("set with an empty scope list stores an empty array rather than resetting", async () => {
+  it("reads an override with nothing in it as no override", async () => {
     const store = build();
-    await store.set("identity-1", []);
-    expect(await store.get("identity-1")).toEqual({ version: 1, scopes: [] });
+    await store.set("identity-1", [], []);
+    expect(await store.get("identity-1")).toBeNull();
+    await store.set("identity-1", [], ["/archive"]);
+    expect(await store.get("identity-1")).toEqual({
+      version: 2,
+      scopes: [],
+      unindexedPrefixes: ["/archive"],
+    });
+  });
+});
+
+it("reset never writes a JSON null, which app.settings.value cannot hold", async () => {
+  const repos = createMemoryRepos();
+  const store = createSettingsScopeOverrideStore(repos.settings);
+  await store.set("identity-1", sample, []);
+  await store.reset("identity-1");
+  expect(await repos.settings.get(scopeOverrideSettingsKey("identity-1"))).toEqual({
+    version: 2,
+    scopes: [],
+    unindexedPrefixes: [],
+  });
+  expect(await store.get("identity-1")).toBeNull();
+});
+
+describe("version 1 records", () => {
+  it("normalizes a stored version 1 record to version 2 with no unindexed prefixes", () => {
+    expect(normalizeScopeOverrideRecord({ version: 1, scopes: sample })).toEqual({
+      version: 2,
+      scopes: sample,
+      unindexedPrefixes: [],
+    });
+    expect(normalizeScopeOverrideRecord(null)).toBeNull();
+    expect(normalizeScopeOverrideRecord({ version: 1, scopes: [] })).toBeNull();
+  });
+
+  it("reads a version 1 row written before unindexed prefixes existed", async () => {
+    const repos = createMemoryRepos();
+    await repos.settings.set(scopeOverrideSettingsKey("identity-1"), {
+      version: 1,
+      scopes: sample,
+    });
+    const store = createSettingsScopeOverrideStore(repos.settings);
+    expect(await store.get("identity-1")).toEqual({
+      version: 2,
+      scopes: sample,
+      unindexedPrefixes: [],
+    });
   });
 });

@@ -1,20 +1,29 @@
 import {
   AccountIdentityId,
   IdentityScopeResponse,
+  IdentityScopeSuggestionsResponse,
+  MountMappingsResponse,
   ROUTES,
   SetIdentityScopeRequest,
+  SetMountMappingsRequest,
 } from "@fdrive/contracts";
 import type { IdentityRepo } from "@fdrive/db";
 import { accountContext } from "../accounts/routes.js";
 import type { AppHono, AuthedHono } from "../app.js";
+import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
 import { ApiHttpError } from "../errors.js";
 import type { ScopeResolver } from "./resolver.ts";
+import type { ScopeSuggester } from "./suggest.ts";
 import { ScopeOverrideValidationError } from "./validate-overrides.ts";
 
 export interface ScopeRoutesDeps {
-  readonly resolver: Pick<ScopeResolver, "status" | "setOverrides">;
+  readonly resolver: Pick<
+    ScopeResolver,
+    "status" | "setOverrides" | "mountMappings" | "setMountMappings"
+  >;
   readonly identities: Pick<IdentityRepo, "get">;
+  readonly suggester: Pick<ScopeSuggester, "suggest">;
 }
 
 /** `${ROUTES.account.identities}/:id/scope`, with the shared `/api/v1` prefix already stripped. */
@@ -42,7 +51,10 @@ async function ownedIdentity(deps: ScopeRoutesDeps, accountId: string, rawId: st
 }
 
 /**
- * Registers `GET`/`PUT /api/v1/account/identities/:id/scope`. Both require
+ * Registers `GET`/`PUT /api/v1/account/identities/:id/scope`, the
+ * administrator-only `GET .../scope/suggestions`, and the
+ * administrator-only `GET`/`PUT /api/v1/system/mount-mappings` (folder-level
+ * mappings, see `docs/workflow/P8-FOLDER-MAPPINGS.md`). The scope routes require
  * a cookie session that owns `:id`; a bearer/API-token principal is
  * rejected on both, since a token carries no session (`accountContext`
  * throws when an `authorization` header is present). `PUT` additionally
@@ -86,15 +98,51 @@ export function registerScopeRoutes(
     }
 
     try {
-      await deps.resolver.setOverrides(identity, parsed.data.scopes);
+      await deps.resolver.setOverrides(identity, parsed.data.scopes, parsed.data.unindexedPrefixes);
     } catch (error) {
       if (error instanceof ScopeOverrideValidationError) {
-        throw new ApiHttpError("bad_request", error.message);
+        // `reason` lets the account page map the failure to the offending field.
+        throw new ApiHttpError("bad_request", error.message, { reason: error.reason });
       }
       throw error;
     }
 
     const status = await deps.resolver.status(identity, input.principal.isAdmin);
     return c.json(IdentityScopeResponse.parse(status));
+  });
+
+  // Suggestions are computed from live SFTP listings and index rows, so
+  // they are administrator-only like the physical mapping itself.
+  authed.get(`${path}/suggestions`, async (c) => {
+    const input = accountContext(c);
+    if (!input.principal.isAdmin) {
+      throw new ApiHttpError("forbidden", "admin access required");
+    }
+    const identity = await ownedIdentity(deps, input.principal.accountId, c.req.param("id"));
+    return c.json(IdentityScopeSuggestionsResponse.parse(await deps.suggester.suggest(identity)));
+  });
+
+  const mountPath = withoutApiV1Prefix(ROUTES.system.mountMappings);
+  const requireAdmin = createRequireAdmin();
+  authed.get(mountPath, requireAdmin, async (c) =>
+    c.json(MountMappingsResponse.parse({ mappings: await deps.resolver.mountMappings() })),
+  );
+  authed.put(mountPath, requireAdmin, async (c) => {
+    const json: unknown = await c.req.json().catch(() => undefined);
+    const parsed = SetMountMappingsRequest.safeParse(json);
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid folder mappings", {
+        issues: parsed.error.issues,
+      });
+    }
+    try {
+      await deps.resolver.setMountMappings(parsed.data.mappings);
+    } catch (error) {
+      if (error instanceof ScopeOverrideValidationError) {
+        throw new ApiHttpError("bad_request", error.message, { reason: error.reason });
+      }
+      throw error;
+    }
+    return c.json(MountMappingsResponse.parse({ mappings: await deps.resolver.mountMappings() }));
   });
 }

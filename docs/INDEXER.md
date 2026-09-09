@@ -211,6 +211,9 @@ Environment (see `deploy/.env.example`):
 - Additional roots: copy the `indexer` service's volume line
   (`<host path>:/roots/<name>:ro`) and extend `INDEX_ROOTS` with
   `,<name>=/roots/<name>` for each one.
+- SFTPGo virtual folders are only searchable when their `mapped_path` is
+  under one of these roots and an administrator has mapped them per account;
+  see [SFTPGo virtual folders](../deploy/REFERENCE.md#sftpgo-virtual-folders).
 
 In `deploy/compose.dev.yaml`, the same `--profile index` mounts the dev
 environment's seeded SFTPGo data (the `fdrive-dev-sftpgo-data` named volume,

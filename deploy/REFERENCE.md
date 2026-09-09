@@ -172,17 +172,24 @@ work for a virtual folder only when **both** of these hold:
 1. The folder's SFTPGo `mapped_path` sits inside a configured `FDRIVE_INDEX_ROOTS` root,
    or it has a root of its own plus a matching indexer bind mount
    (`<host path>:/roots/<name>:ro`, see [multiple roots](../docs/INDEXER.md#multiple-roots)).
-2. An administrator maps it for each account that mounts it, in **Account**, under the
-   login's index status: choose the root and enter the physical prefix, the folder's path
-   inside that root. The same physical folder is indexed once; every account that mounts
-   it carries its own mapping, and each user's SFTPGo permissions still apply to results.
+2. An administrator maps it once, in **Account**, under any login's index status that names
+   the folder: choose the root and enter the physical prefix, the folder's path inside that
+   root. By default the mapping is saved as a **shared folder mapping** and every login that
+   mounts the same virtual path adopts it automatically, but only while SFTPGo actually
+   shows that folder in the login's files and the index lacks it there. A real directory of
+   the same name in someone's home is never affected. The same physical folder is indexed
+   once, and each user's SFTPGo permissions still apply to results. Untick "Apply to every
+   login" to store the mapping for one login only. Shared folder mappings are listed and
+   removed under **System > Connection**.
 
 fdrive cannot read a folder's `mapped_path`: that is only available through SFTPGo's admin
-API, which fdrive never uses. The physical prefix is therefore always supplied by a human.
-Until it is, the account's status names the mount (`/shared is not indexed`) and the home
-scope keeps its index-backed features; the unmapped folder alone stays out of search. If
-the folder deliberately lives outside every indexed root, mark it **Not indexed** on the
-same page so it stops being reported.
+API, which fdrive never uses. The physical prefix is therefore always confirmed by a human.
+fdrive does propose it: it lists the folder over SFTP and offers indexed directories whose
+files match, confirmed against the indexer's own listing. A folder with no files at its top
+level gets no suggestion. Until a mapping exists, the account's status names the mount
+(`/shared is not indexed`) and the home scope keeps its index-backed features; the unmapped
+folder alone stays out of search. If the folder deliberately lives outside every indexed
+root, mark it **Not indexed** on the same page so it stops being reported.
 
 The dev stack satisfies constraint 1 by placing folders under `_folders/` inside
 `/srv/sftpgo/data`, the one seeded root, so the mapping for `carol`'s `/shared` is root

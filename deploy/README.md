@@ -192,6 +192,7 @@ requires container recreation, not merely `docker restart`.
 | Directory check returns 400/403/404 | Check the requested directory, permissions, and mapping; these responses do not mean the indexer is down. Correct the deployment source first if it points at the fallback directory. |
 | Indexer connection timeout/refusal or 5xx | Check indexer startup, its logs, internal network and service health. A folder-mapping form cannot repair a service outage. |
 | Files browse but search/thumbnails do not work | Confirm the feature is enabled, worker readiness, and the account's verified directory. Mapping exceptions belong in Account settings, not onboarding. |
+| Account status says a folder "is not indexed" | An SFTPGo virtual folder has no fdrive mapping. Map it (or mark it not indexed) in Account; its `mapped_path` must be inside an indexed root first. See [SFTPGo virtual folders](REFERENCE.md#sftpgo-virtual-folders). |
 | PDF conversion blocked | Its worker needs readable and writable file access. Normal search/indexing needs only read access. |
 
 For further diagnostics, inspect `docker compose -f compose.yaml logs --tail=100 indexer`

@@ -113,6 +113,7 @@ describe("ROUTES", () => {
       publicUrl: "/api/v1/system/public-url",
       office: "/api/v1/system/office",
       trash: "/api/v1/system/trash",
+      mountMappings: "/api/v1/system/mount-mappings",
       indexer: "/api/v1/system/indexer",
       indexerSettings: "/api/v1/system/indexer/settings",
       indexerReindex: "/api/v1/system/indexer/reindex",

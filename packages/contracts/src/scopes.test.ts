@@ -2,13 +2,45 @@ import { describe, expect, it } from "vitest";
 import {
   IdentityScopeReason,
   IdentityScopeResponse,
+  IdentityScopeSuggestionsResponse,
   isCanonicalScopePath,
   MAX_SCOPE_MAPPINGS,
+  MountMapping,
   ScopeCanonicalPath,
   ScopeMapping,
   ScopeRootName,
   SetIdentityScopeRequest,
+  SetMountMappingsRequest,
 } from "./scopes.ts";
+
+describe("MountMapping and SetMountMappingsRequest", () => {
+  const mapping = { virtualPath: "/shared", rootName: "sftpgo", fsPrefix: "/_folders/shared" };
+
+  it("accepts a folder mapping and rejects one targeting the root", () => {
+    expect(MountMapping.safeParse(mapping).success).toBe(true);
+    expect(MountMapping.safeParse({ ...mapping, virtualPath: "/" }).success).toBe(false);
+  });
+
+  it("rejects duplicate virtual paths across the list", () => {
+    const result = SetMountMappingsRequest.safeParse({ mappings: [mapping, mapping] });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.path).toEqual(["mappings"]);
+    expect(SetMountMappingsRequest.safeParse({ mappings: [] }).success).toBe(true);
+  });
+});
+
+describe("IdentityScopeSuggestionsResponse", () => {
+  it("accepts mounts with and without suggestions", () => {
+    expect(
+      IdentityScopeSuggestionsResponse.safeParse({
+        mounts: [
+          { virtualPath: "/shared", suggestions: [{ rootName: "sftpgo", fsPrefix: "/x" }] },
+          { virtualPath: "/other", suggestions: [] },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+});
 
 describe("isCanonicalScopePath", () => {
   it("accepts the root and simple absolute paths", () => {
@@ -133,6 +165,54 @@ describe("SetIdentityScopeRequest", () => {
   it("rejects extra top-level fields", () => {
     expect(SetIdentityScopeRequest.safeParse({ scopes: [], extra: 1 }).success).toBe(false);
   });
+
+  it("defaults unindexedPrefixes to an empty list", () => {
+    const parsed = SetIdentityScopeRequest.parse({ scopes: [] });
+    expect(parsed.unindexedPrefixes).toEqual([]);
+  });
+
+  it("accepts canonical unindexed prefixes alongside mappings", () => {
+    const body = {
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+      unindexedPrefixes: ["/archive", "/shared/old"],
+    };
+    expect(SetIdentityScopeRequest.safeParse(body).success).toBe(true);
+  });
+
+  it("rejects a non-canonical unindexed prefix", () => {
+    expect(
+      SetIdentityScopeRequest.safeParse({ scopes: [], unindexedPrefixes: ["archive/"] }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a duplicate unindexed prefix", () => {
+    const result = SetIdentityScopeRequest.safeParse({
+      scopes: [],
+      unindexedPrefixes: ["/archive", "/archive"],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(["unindexedPrefixes"]);
+    }
+  });
+
+  it("rejects an unindexed prefix that collides with a mapped virtualPrefix", () => {
+    const result = SetIdentityScopeRequest.safeParse({
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+      unindexedPrefixes: ["/shared"],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toMatch(/collide/);
+    }
+  });
+
+  it("rejects more unindexed prefixes than the cap", () => {
+    const unindexedPrefixes = Array.from({ length: MAX_SCOPE_MAPPINGS + 1 }, (_, i) => `/p${i}`);
+    expect(SetIdentityScopeRequest.safeParse({ scopes: [], unindexedPrefixes }).success).toBe(
+      false,
+    );
+  });
 });
 
 describe("IdentityScopeReason", () => {
@@ -146,6 +226,7 @@ describe("IdentityScopeReason", () => {
       "mismatch",
       "overflow",
       "indexer_unreachable",
+      "unmapped_mount",
     ])
       expect(IdentityScopeReason.safeParse(reason).success).toBe(true);
   });
@@ -161,11 +242,57 @@ describe("IdentityScopeResponse", () => {
     reason: "ok" as const,
     usesOverride: false,
     virtualPrefixes: ["/"],
+    unmappedMounts: [],
+    unverifiedPrefixes: [],
+    unindexedPrefixes: [],
     warning: "example warning",
   };
 
   it("accepts a non-administrator response with no physical mapping data", () => {
     expect(IdentityScopeResponse.safeParse({ ...common, isAdmin: false }).success).toBe(true);
+  });
+
+  it("carries unmapped mounts and unverified prefixes for both roles", () => {
+    const detail = {
+      unmappedMounts: [{ virtualPath: "/shared", kind: "dir" }],
+      unverifiedPrefixes: ["/team"],
+    };
+    expect(IdentityScopeResponse.safeParse({ ...common, ...detail, isAdmin: false }).success).toBe(
+      true,
+    );
+    expect(
+      IdentityScopeResponse.safeParse({
+        ...common,
+        ...detail,
+        isAdmin: true,
+        configuredRoots: ["sftpgo"],
+        mappings: [],
+        overrides: [],
+        adoptedMappings: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an unmapped mount whose virtual path is not canonical or whose kind is unknown", () => {
+    expect(
+      IdentityScopeResponse.safeParse({
+        ...common,
+        unmappedMounts: [{ virtualPath: "shared", kind: "dir" }],
+        isAdmin: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      IdentityScopeResponse.safeParse({
+        ...common,
+        unmappedMounts: [{ virtualPath: "/shared", kind: "symlink" }],
+        isAdmin: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a response missing the unmapped-mount fields", () => {
+    const { unmappedMounts: _mounts, ...rest } = common;
+    expect(IdentityScopeResponse.safeParse({ ...rest, isAdmin: false }).success).toBe(false);
   });
 
   it("rejects a non-administrator response carrying admin-only fields", () => {
@@ -186,6 +313,8 @@ describe("IdentityScopeResponse", () => {
         isAdmin: true,
         configuredRoots: ["sftpgo"],
         mappings: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+        overrides: [],
+        adoptedMappings: [],
       }).success,
     ).toBe(true);
   });

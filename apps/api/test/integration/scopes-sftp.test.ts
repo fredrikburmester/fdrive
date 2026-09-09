@@ -9,6 +9,7 @@ import { createIdentityClientResolver } from "../../src/auth/provider-client.ts"
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
 import type { IndexRootConfig } from "../../src/config.js";
 import { createConnectionStore } from "../../src/connection/store.js";
+import { createInMemoryMountMappingStore } from "../../src/scoping/mount-mapping-store.ts";
 import {
   createInMemoryScopeOverrideStore,
   createSettingsScopeOverrideStore,
@@ -51,11 +52,20 @@ describe("scope engine against real SFTPGo and Postgres", () => {
           // A list-only identity: `list` but never `download`, so a live
           // read check must deny every file even though listing succeeds.
           { username: "reader", password: "reader-pass", permissions: { "/": ["list"] } },
+          // Shares the same virtual folder as alice, but may only list it:
+          // the mapping is per identity, the permission stays SFTPGo's.
+          {
+            username: "bob",
+            password: "bob-pass",
+            permissions: { "/": ["*"], "/vshared": ["list"] },
+            virtualFolders: [{ name: "shared", virtualPath: "/vshared" }],
+          },
         ],
         folders: [{ name: "shared" }],
         files: {
           alice: { "/report.txt": "alice's report" },
           reader: { "/notes.txt": "reader's notes" },
+          bob: { "/mine.txt": "bob's own file" },
           // Seeds the "shared" folder's own physical content (see
           // `seedFileLayout`'s "@shared" convention), independent of any
           // single user's home.
@@ -92,6 +102,12 @@ describe("scope engine against real SFTPGo and Postgres", () => {
       providerId: provider.id,
       externalUsername: "reader",
     });
+    const bobAccount = await repos.accounts.create({ displayName: "Bob" });
+    const bob = await repos.identities.create({
+      accountId: bobAccount.id,
+      providerId: provider.id,
+      externalUsername: "bob",
+    });
     // Stores each identity's real SFTPGo password sealed under `master`, the
     // same shape the login flow persists, so `storageFactory` below can
     // mint tokens against the real container on demand.
@@ -110,6 +126,15 @@ describe("scope engine against real SFTPGo and Postgres", () => {
         master,
         new TextEncoder().encode(JSON.stringify({ password: "reader-pass" })),
         reader.id,
+      ),
+      keyId: KEY_ID,
+    });
+    await repos.credentials.put({
+      identityId: bob.id,
+      ciphertext: seal(
+        master,
+        new TextEncoder().encode(JSON.stringify({ password: "bob-pass" })),
+        bob.id,
       ),
       keyId: KEY_ID,
     });
@@ -151,12 +176,14 @@ describe("scope engine against real SFTPGo and Postgres", () => {
           "sftpgo:/reader",
           { items: [{ name: "notes.txt", kind: "file" as const }], overflow: false },
         ],
+        ["sftpgo:/bob", { items: [{ name: "mine.txt", kind: "file" as const }], overflow: false }],
       ]),
     );
 
     const resolver = createScopeResolver({
       providers: repos.providers,
       overrides: createSettingsScopeOverrideStore(repos.settings),
+      mountMappings: createInMemoryMountMappingStore(),
       connection: connectionStore,
       indexRoots,
       indexer,
@@ -168,11 +195,16 @@ describe("scope engine against real SFTPGo and Postgres", () => {
     // folder mounted (an administrator-controlled SFTPGo-level assignment,
     // independent of fdrive's own override state); with no matching fdrive
     // override yet, that extra SFTP-visible entry is unaccounted for by the
-    // index, so home-only verification correctly reports a mismatch rather
-    // than silently granting access to an unmapped mount. Plain storage
-    // access is entirely unaffected (checked directly in step 2 below).
+    // index, so home-only verification correctly fails closed rather than
+    // silently granting access to an unmapped mount, and the status names
+    // the mount so an administrator can map it. Plain storage access is
+    // entirely unaffected (checked directly in step 2 below).
     const aliceHomeOnly = await resolver.verifiedIndexScopes(alice);
-    expect(aliceHomeOnly).toEqual({ available: false, reason: "mismatch" });
+    expect(aliceHomeOnly).toEqual({ available: false, reason: "unmapped_mount" });
+    const aliceStatus = await resolver.status(alice, false);
+    expect(aliceStatus.unmappedMounts).toEqual([{ virtualPath: "/vshared", kind: "dir" }]);
+    expect(aliceStatus.isAdmin).toBe(false);
+    expect("mappings" in aliceStatus).toBe(false);
 
     // An identity with no extra virtual folder mounts verifies cleanly.
     const readerVerified = await resolver.verifiedIndexScopes(reader);
@@ -185,6 +217,7 @@ describe("scope engine against real SFTPGo and Postgres", () => {
     const wrongTemplateResolver = createScopeResolver({
       providers: repos.providers,
       overrides: createInMemoryScopeOverrideStore(),
+      mountMappings: createInMemoryMountMappingStore(),
       connection: createConnectionStore({
         settings: repos.settings,
         envUrl: sftp.baseUrl,
@@ -201,14 +234,13 @@ describe("scope engine against real SFTPGo and Postgres", () => {
     const wrongTemplateVerified = await wrongTemplateResolver.verifiedIndexScopes(alice);
     expect(wrongTemplateVerified.available).toBe(false);
 
-    // 3. Admin sets a virtual-folder override for alice: "/vshared" maps to
-    // the physical "shared" root, exactly matching the real SFTPGo virtual
-    // folder mapped into her account.
-    await expect(
-      resolver.setOverrides(alice, [
-        { rootName: "sftpgo", fsPrefix: "/shared", virtualPrefix: "/vshared" },
-      ]),
-    ).resolves.toBeUndefined();
+    // 3. Admin sets a virtual-folder override for alice and bob: "/vshared"
+    // maps to the physical "shared" folder, exactly matching the real
+    // SFTPGo virtual folder mapped into both accounts. The folder is
+    // indexed once; each identity carries its own mapping to it.
+    const vsharedOverride = { rootName: "sftpgo", fsPrefix: "/shared", virtualPrefix: "/vshared" };
+    await expect(resolver.setOverrides(alice, [vsharedOverride])).resolves.toBeUndefined();
+    await expect(resolver.setOverrides(bob, [vsharedOverride])).resolves.toBeUndefined();
 
     // The override is visible on the very next call: no stale cache entry.
     const afterOverride = await resolver.verifiedIndexScopes(alice);
@@ -218,6 +250,15 @@ describe("scope engine against real SFTPGo and Postgres", () => {
       { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
       { rootName: "sftpgo", fsPrefix: "/shared", virtualPrefix: "/vshared" },
     ]);
+    const bobVerified = await resolver.verifiedIndexScopes(bob);
+    if (!bobVerified.available) throw new Error("expected bob's scopes to verify");
+    expect(bobVerified).toEqual({
+      available: true,
+      scopes: [
+        { rootName: "sftpgo", fsPrefix: "/bob", virtualPrefix: "/" },
+        { rootName: "sftpgo", fsPrefix: "/shared", virtualPrefix: "/vshared" },
+      ],
+    });
 
     // 4. Seed index rows: one under alice's own home at the exact physical
     // location the override's virtual name now shadows ("alice/vshared/..",
@@ -281,6 +322,26 @@ describe("scope engine against real SFTPGo and Postgres", () => {
     expect(dupResult.sections.files).toHaveLength(1);
     expect(dupResult.sections.files[0]?.path).toBe("/vshared/dup.txt");
 
+    // Bob shares the folder and the mapping, but SFTPGo only lets him list
+    // "/vshared": the same index row is in his verified scope and the live
+    // read check still denies it, so his search comes back empty. The
+    // permission difference resolves at result time, never at index time.
+    const bobStorage = await storageFactory(bob.id);
+    const bobDup = await searchService.search({
+      scopes: bobVerified.scopes,
+      authorizer: createReadAuthorizer({ storage: bobStorage }),
+      query: "dup",
+      filters: parseSearchFilters({}),
+      limit: 20,
+    });
+    expect(bobDup.sections.files).toEqual([]);
+    await expect(
+      createReadAuthorizer({ storage: bobStorage }).authorize({
+        path: "/vshared/dup.txt",
+        kind: "file",
+      }),
+    ).resolves.toMatchObject({ allowed: false });
+
     // 6. A list-only reader can list her own home (verification above
     // succeeded) but the live-read check denies every file: she gets no
     // hits, and therefore no snippets or thumbnails, even though the row
@@ -302,5 +363,47 @@ describe("scope engine against real SFTPGo and Postgres", () => {
     await expect(
       readerAuthorizer.authorize({ path: "/notes.txt", kind: "file" }),
     ).resolves.toMatchObject({ allowed: false });
+
+    // 7. Removing the mapping again goes through the real `app.settings`
+    // row (a `NOT NULL` jsonb column): the reset must persist and the
+    // unmapped mount must be reported again immediately.
+    await expect(resolver.setOverrides(bob, [], [])).resolves.toBeUndefined();
+    const bobReset = await resolver.status(bob, true);
+    expect(bobReset.reason).toBe("unmapped_mount");
+    expect(bobReset.usesOverride).toBe(false);
+    expect(bobReset.unmappedMounts).toEqual([{ virtualPath: "/vshared", kind: "dir" }]);
+
+    // 8. One folder-level mapping covers every login that mounts "/vshared":
+    // both alice (override removed) and bob adopt it, reader (no mount)
+    // is untouched, and the same permission-filtered search still holds.
+    await expect(resolver.setOverrides(alice, [], [])).resolves.toBeUndefined();
+    await expect(
+      resolver.setMountMappings([
+        { virtualPath: "/vshared", rootName: "sftpgo", fsPrefix: "/shared" },
+      ]),
+    ).resolves.toBeUndefined();
+    for (const identity of [alice, bob]) {
+      const verified = await resolver.verifiedIndexScopes(identity);
+      expect(verified.available && verified.scopes.map((s) => s.virtualPrefix)).toEqual([
+        "/",
+        "/vshared",
+      ]);
+      const status = await resolver.status(identity, true);
+      expect(status.usesOverride).toBe(false);
+      expect(status.isAdmin && status.adoptedMappings).toEqual([
+        { rootName: "sftpgo", fsPrefix: "/shared", virtualPrefix: "/vshared" },
+      ]);
+    }
+    const readerStatus = await resolver.status(reader, true);
+    expect(readerStatus.isAdmin && readerStatus.adoptedMappings).toEqual([]);
+    const aliceAdopted = await resolver.verifiedIndexScopes(alice);
+    const adoptedDup = await searchService.search({
+      scopes: aliceAdopted.available ? aliceAdopted.scopes : [],
+      authorizer: createReadAuthorizer({ storage: aliceStorage }),
+      query: "dup",
+      filters: parseSearchFilters({}),
+      limit: 20,
+    });
+    expect(adoptedDup.sections.files.map((file) => file.path)).toEqual(["/vshared/dup.txt"]);
   });
 });

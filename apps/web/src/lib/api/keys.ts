@@ -32,9 +32,13 @@ export const queryKeys = {
     ocr: () => ["system", "ocr"] as const,
     thumbnails: () => ["system", "thumbnails"] as const,
     imageSearch: () => ["system", "image-search"] as const,
+    mountMappings: () => ["system", "mount-mappings"] as const,
   },
   account: {
     tokens: () => ["account", "tokens"] as const,
+    identityScope: (identityId: string) => ["account", "identity-scope", identityId] as const,
+    identityScopeSuggestions: (identityId: string) =>
+      ["account", "identity-scope-suggestions", identityId] as const,
     favorites: (accountId: string) => ["account", accountId, "favorites"] as const,
   },
   tags: {

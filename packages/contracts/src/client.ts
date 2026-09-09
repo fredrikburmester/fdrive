@@ -51,6 +51,7 @@ import {
   accountTokenRoute,
   IDENTITY_HEADER,
   identityScopeRoute,
+  identityScopeSuggestionsRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -60,7 +61,13 @@ import {
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
-import { IdentityScopeResponse, type SetIdentityScopeRequest } from "./scopes.ts";
+import {
+  IdentityScopeResponse,
+  IdentityScopeSuggestionsResponse,
+  MountMappingsResponse,
+  type SetIdentityScopeRequestInput,
+  type SetMountMappingsRequest,
+} from "./scopes.ts";
 import { ImageSearchResponse, SearchResponse, SearchStatusResponse } from "./search.ts";
 import {
   ConnectionTestResponse,
@@ -212,7 +219,13 @@ export interface ApiClient {
   /** The identity's scope mapping and index-availability status; 404 for an unknown or unowned id. */
   identityScope(id: string): Promise<IdentityScopeResponse>;
   /** Admin + CSRF only: replaces the identity's scope override. `{ scopes: [] }` resets it to the template-derived home scope. */
-  setIdentityScope(id: string, body: SetIdentityScopeRequest): Promise<IdentityScopeResponse>;
+  setIdentityScope(id: string, body: SetIdentityScopeRequestInput): Promise<IdentityScopeResponse>;
+  /** Admin only: confirmed candidate locations for each of the identity's unmapped mounts. */
+  identityScopeSuggestions(id: string): Promise<IdentityScopeSuggestionsResponse>;
+  /** Admin only: the folder-level virtual folder mappings. */
+  mountMappings(): Promise<MountMappingsResponse>;
+  /** Admin + CSRF only: replaces the folder-level mappings. */
+  setMountMappings(body: SetMountMappingsRequest): Promise<MountMappingsResponse>;
   list(path: string): Promise<ListResponse>;
   stat(path: string): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
@@ -591,6 +604,27 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "PUT", path: identityScopeRoute(id), jsonBody: body },
         IdentityScopeResponse,
+      );
+    },
+    identityScopeSuggestions(id) {
+      return requestJson(
+        ctx,
+        { method: "GET", path: identityScopeSuggestionsRoute(id) },
+        IdentityScopeSuggestionsResponse,
+      );
+    },
+    mountMappings() {
+      return requestJson(
+        ctx,
+        { method: "GET", path: ROUTES.system.mountMappings },
+        MountMappingsResponse,
+      );
+    },
+    setMountMappings(body) {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.mountMappings, jsonBody: body },
+        MountMappingsResponse,
       );
     },
     accountSearch(query, opts) {

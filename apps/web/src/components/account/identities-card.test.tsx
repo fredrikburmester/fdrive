@@ -2,7 +2,7 @@
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
 import { IdentitiesCard } from "./identities-card";
@@ -21,6 +21,12 @@ afterEach(() => {
   cleanup();
   accountTransition.finish(false);
   vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  // Each identity row loads its own index status; keep it pending here so
+  // these tests stay about linking and unlinking.
+  vi.spyOn(apiClient, "identityScope").mockImplementation(() => new Promise(() => {}));
 });
 
 it("confirms the exact login, explains retained files, and reports unlink conflicts", async () => {

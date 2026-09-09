@@ -1,3 +1,4 @@
+import type { IndexerDirectoryResponse } from "@fdrive/contracts";
 import { MeResponse } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
@@ -11,9 +12,10 @@ import { memoryIdentityOperations } from "../auth/test-fixtures/index.ts";
 import type { IndexRootConfig } from "../config.js";
 import { loadConfig } from "../config.js";
 import { createConnectionStore } from "../connection/store.js";
+import { createInMemoryMountMappingStore } from "./mount-mapping-store.ts";
 import { createSettingsScopeOverrideStore } from "./override-store.ts";
 import { createScopeResolver, type ScopeResolver } from "./resolver.ts";
-import { registerScopeRoutes } from "./routes.js";
+import { registerScopeRoutes, type ScopeRoutesDeps } from "./routes.js";
 import { fakeIndexerDirectory } from "./test-fixtures/index.ts";
 import { ScopeOverrideValidationError } from "./validate-overrides.ts";
 
@@ -35,7 +37,14 @@ function createTestLogger(): Logger {
 function harness(
   options: {
     adminUsernames?: readonly string[];
-    resolverOverrides?: Partial<Pick<ScopeResolver, "status" | "setOverrides">>;
+    resolverOverrides?: Partial<
+      Pick<ScopeResolver, "status" | "setOverrides" | "mountMappings" | "setMountMappings">
+    >;
+    /** Indexer directory listings by `"<root>:<path>"`; unlisted directories read as unreachable. */
+    indexerFixtures?: ReadonlyMap<string, IndexerDirectoryResponse>;
+    /** Gives every user the fake "shared" folder mounted at this virtual path. */
+    mountSharedAt?: string;
+    suggester?: ScopeRoutesDeps["suggester"];
   } = {},
 ) {
   const now = { value: new Date("2026-09-07T00:00:00Z") };
@@ -54,7 +63,11 @@ function harness(
       username,
       password: `${username}-pass`,
       permissions: { "/": ["*"] },
+      ...(options.mountSharedAt === undefined
+        ? {}
+        : { virtualFolders: [{ name: "shared", virtualPath: options.mountSharedAt }] }),
     })),
+    ...(options.mountSharedAt === undefined ? {} : { folders: [{ name: "shared" }] }),
     files: {},
     now: clock,
   });
@@ -94,9 +107,10 @@ function harness(
     ...createScopeResolver({
       providers: repos.providers,
       overrides: createSettingsScopeOverrideStore(repos.settings),
+      mountMappings: createInMemoryMountMappingStore(),
       connection: connectionStore,
       indexRoots: INDEX_ROOTS,
-      indexer: fakeIndexerDirectory(new Map()),
+      indexer: fakeIndexerDirectory(options.indexerFixtures ?? new Map()),
       storageForIdentity: (identity) => storageFactory(identity.id),
       clock,
     }),
@@ -112,7 +126,11 @@ function harness(
     principalResolver: auth.principalResolver,
     registerRoutes: (groups) => {
       auth.registerRoutes(groups);
-      registerScopeRoutes(groups, { resolver, identities: repos.identities });
+      registerScopeRoutes(groups, {
+        resolver,
+        identities: repos.identities,
+        suggester: options.suggester ?? { suggest: async () => ({ mounts: [] }) },
+      });
     },
   });
 
@@ -358,11 +376,97 @@ describe("PUT /api/v1/account/identities/:id/scope", () => {
       { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
       { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
     ]);
+    expect(putBody.overrides).toEqual([
+      { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
+    ]);
 
     const getRes = await h.call(`/api/v1/account/identities/${id}/scope`, { cookie: alice.cookie });
     const getBody = (await getRes.json()) as Record<string, unknown>;
     expect(getBody.usesOverride).toBe(true);
     expect(getBody.virtualPrefixes).toEqual(["/", "/shared"]);
+  });
+
+  it("names an unmapped mount, then verifies through a mapping or an unindexed acknowledgement", async () => {
+    const empty: IndexerDirectoryResponse = { items: [], overflow: false };
+    const h = harness({
+      adminUsernames: ["alice"],
+      mountSharedAt: "/shared",
+      indexerFixtures: new Map([
+        ["sftpgo:/alice", empty],
+        ["sftpgo:/_folders/shared", empty],
+      ]),
+    });
+    const alice = await h.login("alice");
+    const id = alice.me.activeIdentityId;
+
+    const before = (await (
+      await h.call(`/api/v1/account/identities/${id}/scope`, { cookie: alice.cookie })
+    ).json()) as Record<string, unknown>;
+    expect(before.status).toBe("unavailable");
+    expect(before.reason).toBe("unmapped_mount");
+    expect(before.unmappedMounts).toEqual([{ virtualPath: "/shared", kind: "dir" }]);
+
+    const acknowledged = await h.call(`/api/v1/account/identities/${id}/scope`, {
+      cookie: alice.cookie,
+      method: "PUT",
+      body: { scopes: [], unindexedPrefixes: ["/shared"] },
+    });
+    expect(acknowledged.status).toBe(200);
+    const acknowledgedBody = (await acknowledged.json()) as Record<string, unknown>;
+    expect(acknowledgedBody.status).toBe("available");
+    expect(acknowledgedBody.usesOverride).toBe(true);
+    expect(acknowledgedBody.unmappedMounts).toEqual([]);
+    expect(acknowledgedBody.virtualPrefixes).toEqual(["/"]);
+    expect(acknowledgedBody.unindexedPrefixes).toEqual(["/shared"]);
+
+    const mapped = await h.call(`/api/v1/account/identities/${id}/scope`, {
+      cookie: alice.cookie,
+      method: "PUT",
+      body: {
+        scopes: [{ rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" }],
+      },
+    });
+    const mappedBody = (await mapped.json()) as Record<string, unknown>;
+    expect(mapped.status).toBe(200);
+    expect(mappedBody.status).toBe("available");
+    expect(mappedBody.virtualPrefixes).toEqual(["/", "/shared"]);
+    expect(mappedBody.unverifiedPrefixes).toEqual([]);
+  });
+
+  it("reports the validation reason in the 400 details", async () => {
+    const h = harness({ adminUsernames: ["alice"] });
+    const alice = await h.login("alice");
+
+    const unknownRoot = await h.call(
+      `/api/v1/account/identities/${alice.me.activeIdentityId}/scope`,
+      {
+        cookie: alice.cookie,
+        method: "PUT",
+        body: { scopes: [{ rootName: "elsewhere", fsPrefix: "/x", virtualPrefix: "/x" }] },
+      },
+    );
+    expect(unknownRoot.status).toBe(400);
+    const unknownRootBody = (await unknownRoot.json()) as {
+      error: { details?: { reason?: string } };
+    };
+    expect(unknownRootBody.error.details?.reason).toBe("unknown_root");
+
+    const collision = await h.call(
+      `/api/v1/account/identities/${alice.me.activeIdentityId}/scope`,
+      {
+        cookie: alice.cookie,
+        method: "PUT",
+        body: {
+          scopes: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+          unindexedPrefixes: ["/shared"],
+        },
+      },
+    );
+    expect(collision.status).toBe(400);
+    const collisionBody = (await collision.json()) as {
+      error: { details?: { issues?: { path: unknown[] }[] } };
+    };
+    expect(collisionBody.error.details?.issues?.[0]?.path).toEqual(["unindexedPrefixes"]);
   });
 
   it("resets to the plain template when scopes is an empty array", async () => {
@@ -386,5 +490,131 @@ describe("PUT /api/v1/account/identities/:id/scope", () => {
     expect(resetRes.status).toBe(200);
     expect(resetBody.usesOverride).toBe(false);
     expect(resetBody.virtualPrefixes).toEqual(["/"]);
+  });
+
+  it("adopts a folder mapping for every login that mounts the folder, and serves suggestions", async () => {
+    const empty: IndexerDirectoryResponse = { items: [], overflow: false };
+    const suggest = vi.fn(async () => ({
+      mounts: [
+        {
+          virtualPath: "/shared",
+          suggestions: [{ rootName: "sftpgo", fsPrefix: "/_folders/shared" }],
+        },
+      ],
+    }));
+    const h = harness({
+      adminUsernames: ["alice"],
+      mountSharedAt: "/shared",
+      indexerFixtures: new Map([
+        ["sftpgo:/alice", empty],
+        ["sftpgo:/bob", empty],
+        ["sftpgo:/_folders/shared", empty],
+      ]),
+      suggester: { suggest },
+    });
+    const alice = await h.login("alice");
+    const bob = await h.login("bob");
+    const aliceId = alice.me.activeIdentityId;
+
+    const suggestions = await h.call(`/api/v1/account/identities/${aliceId}/scope/suggestions`, {
+      cookie: alice.cookie,
+    });
+    expect(suggestions.status).toBe(200);
+    expect(((await suggestions.json()) as { mounts: unknown[] }).mounts).toHaveLength(1);
+    // Suggestions are administrator-only.
+    const denied = await h.call(
+      `/api/v1/account/identities/${bob.me.activeIdentityId}/scope/suggestions`,
+      { cookie: bob.cookie },
+    );
+    expect(denied.status).toBe(403);
+
+    const put = await h.call("/api/v1/system/mount-mappings", {
+      cookie: alice.cookie,
+      method: "PUT",
+      body: {
+        mappings: [{ virtualPath: "/shared", rootName: "sftpgo", fsPrefix: "/_folders/shared" }],
+      },
+    });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({
+      mappings: [{ virtualPath: "/shared", rootName: "sftpgo", fsPrefix: "/_folders/shared" }],
+    });
+
+    const aliceStatus = (await (
+      await h.call(`/api/v1/account/identities/${aliceId}/scope`, { cookie: alice.cookie })
+    ).json()) as Record<string, unknown>;
+    expect(aliceStatus.status).toBe("available");
+    expect(aliceStatus.virtualPrefixes).toEqual(["/", "/shared"]);
+    expect(aliceStatus.overrides).toEqual([]);
+    expect(aliceStatus.adoptedMappings).toEqual([
+      { rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" },
+    ]);
+    // Bob mounts the same folder and needs nothing stored on his own login.
+    const bobStatus = (await (
+      await h.call(`/api/v1/account/identities/${bob.me.activeIdentityId}/scope`, {
+        cookie: bob.cookie,
+      })
+    ).json()) as Record<string, unknown>;
+    expect(bobStatus.status).toBe("available");
+    expect(bobStatus.virtualPrefixes).toEqual(["/", "/shared"]);
+    expect(bobStatus.usesOverride).toBe(false);
+
+    const bobDenied = await h.call("/api/v1/system/mount-mappings", {
+      cookie: bob.cookie,
+      method: "PUT",
+      body: { mappings: [] },
+    });
+    expect(bobDenied.status).toBe(403);
+
+    const invalid = await h.call("/api/v1/system/mount-mappings", {
+      cookie: alice.cookie,
+      method: "PUT",
+      body: { mappings: [{ virtualPath: "/shared", rootName: "nope", fsPrefix: "/x" }] },
+    });
+    expect(invalid.status).toBe(400);
+    expect(
+      ((await invalid.json()) as { error: { details?: { reason?: string } } }).error.details
+        ?.reason,
+    ).toBe("unknown_root");
+  });
+
+  it("lists folder mappings, rejects a malformed list, and surfaces unexpected failures", async () => {
+    const h = harness({ adminUsernames: ["alice"] });
+    const alice = await h.login("alice");
+
+    const list = await h.call("/api/v1/system/mount-mappings", { cookie: alice.cookie });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toEqual({ mappings: [] });
+
+    const malformed = await h.call("/api/v1/system/mount-mappings", {
+      cookie: alice.cookie,
+      method: "PUT",
+      body: { mappings: [{ virtualPath: "/", rootName: "sftpgo", fsPrefix: "/x" }] },
+    });
+    expect(malformed.status).toBe(400);
+
+    const broken = harness({
+      adminUsernames: ["alice"],
+      resolverOverrides: {
+        setMountMappings: async () => {
+          throw new Error("settings store down");
+        },
+        setOverrides: async () => {
+          throw new Error("settings store down");
+        },
+      },
+    });
+    const admin = await broken.login("alice");
+    const failedFolder = await broken.call("/api/v1/system/mount-mappings", {
+      cookie: admin.cookie,
+      method: "PUT",
+      body: { mappings: [] },
+    });
+    expect(failedFolder.status).toBe(500);
+    const failedScope = await broken.call(
+      `/api/v1/account/identities/${admin.me.activeIdentityId}/scope`,
+      { cookie: admin.cookie, method: "PUT", body: { scopes: [] } },
+    );
+    expect(failedScope.status).toBe(500);
   });
 });
