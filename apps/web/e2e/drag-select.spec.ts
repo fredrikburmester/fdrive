@@ -17,7 +17,9 @@ async function createSandbox(page: Page, prefix: string): Promise<string> {
   const sandbox = uniqueName(prefix);
   await page.goto("/files");
   await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  // By URL, not by double-clicking the row: the shared root is virtualized
+  // and a folder sorted past the rendered window is never in the DOM.
+  await page.goto(`/files/${sandbox}`);
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
   return sandbox;
 }
@@ -54,7 +56,9 @@ async function belowPoint(locator: Locator): Promise<{ x: number; y: number }> {
 }
 
 async function switchToGrid(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "View" }).click();
+  // Exact: the sidebar tree's "Expand view-<id>" buttons for other specs'
+  // folders otherwise match the substring "View" too.
+  await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Grid" }).click();
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
 }
