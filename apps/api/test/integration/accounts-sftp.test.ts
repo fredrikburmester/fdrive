@@ -167,6 +167,7 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
     const unlinked = await call(`${ROUTES.account.identities}/${b.me.activeIdentityId}`, {
       method: "DELETE",
       cookie,
+      body: { currentPassword: "bob-pass" },
     });
     expect(unlinked.status).toBe(200);
     const remaining = MeResponse.parse(await unlinked.json());

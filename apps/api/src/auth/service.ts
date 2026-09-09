@@ -211,6 +211,17 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     if (!session) {
       return null;
     }
+    // Sliding expiry keeps an active session alive, but never beyond a fixed
+    // age from login: a stolen session id cannot be kept valid indefinitely
+    // by periodic use. Rotation preserves `createdAt`, so linking or
+    // unlinking does not restart this clock.
+    if (
+      now.getTime() - session.createdAt.getTime() >=
+      deps.config.fdriveSessionMaxAgeDays * MS_PER_DAY
+    ) {
+      await deps.repos.sessions.delete(idHash);
+      return null;
+    }
 
     const identityMutation =
       c.req.method !== "GET" &&

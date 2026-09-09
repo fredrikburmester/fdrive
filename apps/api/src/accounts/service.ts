@@ -1,4 +1,4 @@
-import type { LinkIdentityRequest, MeResponse } from "@fdrive/contracts";
+import type { LinkIdentityRequest, MeResponse, UnlinkIdentityRequest } from "@fdrive/contracts";
 import type { Session } from "@fdrive/db";
 import { KEY_ID, seal } from "../auth/crypto.js";
 import { requireCurrentConnection } from "../auth/provider-client.ts";
@@ -56,8 +56,9 @@ export function createAccountsService(deps: AccountsDeps) {
     }
   }
   /**
-   * Linking plants a durable login path on the account, so a cookie alone is
-   * not enough: the owner re-proves the session's active login with its own
+   * Linking plants a durable login path on the account and unlinking detaches
+   * one (signing out its sessions), so a cookie alone is not enough for
+   * either: the owner re-proves the session's active login with its own
    * password (and TOTP when SFTPGo demands it) through the same limiter as
    * login, so a hijacked session cannot guess it freely either.
    */
@@ -113,7 +114,13 @@ export function createAccountsService(deps: AccountsDeps) {
       await deps.tokenSource.prime(identity.id, verified.token);
       return rotate(session, identity.id);
     },
-    async unlink(input: AccountRequestContext, identityId: string): Promise<AccountRotation> {
+    async unlink(
+      input: AccountRequestContext,
+      identityId: string,
+      credentials: UnlinkIdentityRequest & { ip: string },
+    ): Promise<AccountRotation> {
+      const current = await liveAccountSession(deps, input);
+      await reauthenticate(current, credentials);
       const session = await liveAccountSession(deps, input);
       const result = await accountRepositoryCall(() =>
         deps.links.unlink({

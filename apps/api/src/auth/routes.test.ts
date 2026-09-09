@@ -423,6 +423,23 @@ describe("auth routes: GET /auth/me", () => {
     expect(res.status).toBe(401);
   });
 
+  it("refuses and deletes a session older than FDRIVE_SESSION_MAX_AGE_DAYS even while it keeps sliding", async () => {
+    const { app, repos } = buildTestApp({
+      clockCtl,
+      envOverrides: { FDRIVE_SESSION_TTL_DAYS: "30", FDRIVE_SESSION_MAX_AGE_DAYS: "2" },
+    });
+    const cookie = extractCookie(await login(app, { username: "alice", password: "wonderland" }));
+    const { hashSessionId } = await import("./sessions.js");
+    const idHash = hashSessionId(cookie.split("=")[1] ?? "");
+
+    // Daily use keeps the sliding expiry fresh; the absolute cap still ends it.
+    clockCtl.advance(24 * 60 * 60 * 1000);
+    expect((await app.request(ROUTES.auth.me, { headers: { cookie } })).status).toBe(200);
+    clockCtl.advance(24 * 60 * 60 * 1000 + 60 * 1000);
+    expect((await app.request(ROUTES.auth.me, { headers: { cookie } })).status).toBe(401);
+    expect(await repos.sessions.getByIdHash(idHash, clockCtl.clock())).toBeNull();
+  });
+
   it("slides the session expiry forward on access more than 5 minutes after the last one", async () => {
     const { app, repos } = buildTestApp({
       clockCtl,

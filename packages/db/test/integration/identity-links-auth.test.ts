@@ -378,7 +378,9 @@ describe("atomic session rotation", () => {
     expect(rotated).toMatchObject({
       accountId: accountA,
       activeIdentityId: f.sibling.id,
-      createdAt: later,
+      // Rotation keeps the original login time: it must not extend the
+      // session's absolute lifetime.
+      createdAt: at,
       lastSeenAt: later,
       expiresAt: expiry,
       userAgent: "Original",

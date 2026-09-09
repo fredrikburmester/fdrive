@@ -130,6 +130,15 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "network",
   },
   {
+    key: "FDRIVE_SESSION_MAX_AGE_DAYS",
+    description:
+      "Hard cap in days on a session's age since login; activity never extends a session past it.",
+    default: "90",
+    example: "90",
+    secret: false,
+    subsystem: "network",
+  },
+  {
     key: "FDRIVE_COOKIE_SECURE",
     description:
       "auto, true, or false; whether the session cookie requires HTTPS. Leave auto behind a TLS-terminating edge proxy.",

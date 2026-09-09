@@ -4,6 +4,7 @@ import {
   AccountFavoritesResponse,
   AccountSearchResponse,
   type LinkIdentityRequest,
+  type UnlinkIdentityRequest,
 } from "./accounts.ts";
 import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./admin.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
@@ -201,7 +202,7 @@ export interface ApiClient {
   logout(): Promise<OkResponse>;
   me(): Promise<MeResponse>;
   linkIdentity(input: LinkIdentityRequest): Promise<MeResponse>;
-  unlinkIdentity(id: string): Promise<MeResponse>;
+  unlinkIdentity(id: string, input: UnlinkIdentityRequest): Promise<MeResponse>;
   switchIdentity(id: string): Promise<MeResponse>;
   accountFavorites(): Promise<AccountFavoritesResponse>;
   accountSearch(query: string, opts?: ApiClientSearchOptions): Promise<AccountSearchResponse>;
@@ -550,10 +551,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         MeResponse,
       );
     },
-    unlinkIdentity(id) {
+    unlinkIdentity(id, input) {
       return requestJson(
         ctx,
-        { method: "DELETE", path: `${ROUTES.account.identities}/${encodeURIComponent(id)}` },
+        {
+          method: "DELETE",
+          path: `${ROUTES.account.identities}/${encodeURIComponent(id)}`,
+          jsonBody: input,
+        },
         MeResponse,
       );
     },

@@ -89,6 +89,8 @@ test("links, switches, finds both owners of one path, and unlinks a login", asyn
   await page.getByRole("button", { name: "Unlink account_right", exact: true }).click();
   const unlink = page.getByRole("dialog", { name: "Unlink account_right?", exact: true });
   await expect(unlink.getByText(/Files remain on the server/)).toBeVisible();
+  // The tab switched back to account_left above, so that login confirms the unlink.
+  await unlink.getByLabel("Your current password").fill("account-left-test-password");
   await unlink.getByRole("button", { name: "Unlink login", exact: true }).click();
   await expect(page).toHaveURL(/\/files$/);
   await expect(page.getByText("left-only.txt", { exact: true })).toBeVisible();

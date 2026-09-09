@@ -48,6 +48,8 @@ export interface AppConfig {
   readonly fdriveMasterKey: string;
   readonly fdriveHomeTemplate: string;
   readonly fdriveSessionTtlDays: number;
+  /** Hard cap on a session's age since login; sliding expiry never extends past it. */
+  readonly fdriveSessionMaxAgeDays: number;
   readonly fdriveCookieSecure: CookieSecureMode;
   /**
    * How many reverse-proxy hops in front of fdrive are trusted to append an
@@ -281,6 +283,14 @@ const envSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1)),
   ),
+  FDRIVE_SESSION_MAX_AGE_DAYS: z.preprocess(
+    (value) => withDefault(value, "90"),
+    z
+      .string()
+      .regex(/^\d+$/, "must be a positive integer")
+      .transform(Number)
+      .pipe(z.number().int().min(1)),
+  ),
   FDRIVE_COOKIE_SECURE: z.preprocess(
     (value) => withDefault(value, "auto"),
     z.enum(COOKIE_SECURE_MODES),
@@ -455,6 +465,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveMasterKey: parsed.FDRIVE_MASTER_KEY,
     fdriveHomeTemplate: parsed.FDRIVE_HOME_TEMPLATE,
     fdriveSessionTtlDays: parsed.FDRIVE_SESSION_TTL_DAYS,
+    fdriveSessionMaxAgeDays: parsed.FDRIVE_SESSION_MAX_AGE_DAYS,
     fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,
     fdriveTrustedProxyHops: parsed.FDRIVE_TRUSTED_PROXY_HOPS,
     fdrivePublicUrl: parsed.FDRIVE_PUBLIC_URL,

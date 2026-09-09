@@ -206,7 +206,9 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
             expiresAt: old.expiresAt,
             userAgent: old.userAgent,
             ip: old.ip,
-            createdAt: input.at,
+            // The rotated session is the same login, so its absolute age
+            // (`createdAt`) carries over; only `lastSeenAt` is now.
+            createdAt: old.createdAt,
             lastSeenAt: input.at,
           })
           .returning();

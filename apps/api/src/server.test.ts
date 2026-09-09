@@ -26,6 +26,7 @@ function buildConfig(): AppConfig {
     fdriveMasterKey: Buffer.alloc(32, 7).toString("base64"),
     fdriveHomeTemplate: "sftpgo:/{username}",
     fdriveSessionTtlDays: 30,
+    fdriveSessionMaxAgeDays: 90,
     fdriveCookieSecure: "auto",
     fdriveTrustedProxyHops: 1,
     fdrivePublicUrl: undefined,

@@ -16,7 +16,10 @@ Updated: 2026-09-08. Owner: primary agent.
   `account-identities.spec.ts` and `shares.spec.ts` against the real backend. The full
   `integration` profile also failed `sftp-rename.test.ts` on a Docker image pull for the indexer
   build (environmental, unrelated). No manual dev-UI pass beyond those e2e flows.
-- Not committed. Residuals recorded in the findings table (write-share metadata stays withheld;
+- Follow-up (2026-09-09): AUTH-VULN-03 closed with `FDRIVE_SESSION_MAX_AGE_DAYS` (default 90;
+  `resolvePrincipal` refuses older sessions, rotation keeps `createdAt`); unlink now requires the
+  owner's password like link (`UnlinkIdentityRequest` DELETE body; web dialog and e2e updated).
+- Committed and pushed to `main` on 2026-09-09; CI green after Linux/CI-only fixes. Residuals recorded in the findings table (write-share metadata stays withheld;
   limiter is count-after-failure; SFTPGo-side password rotation still honours the 60s cache).
 
 ## ONLYOFFICE onboarding (verified)

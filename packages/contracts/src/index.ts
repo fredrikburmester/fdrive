@@ -6,6 +6,7 @@ export {
   AccountSearchResponse,
   LinkIdentityRequest,
   SwitchIdentityRequest,
+  UnlinkIdentityRequest,
 } from "./accounts.ts";
 export {
   AdminConnectionResponse,

@@ -104,6 +104,7 @@ describe("identity account routes", () => {
         await h.call(`${ROUTES.account.identities}/${a.me.activeIdentityId}`, {
           method: "DELETE",
           cookie: a.cookie,
+          body: { currentPassword: "alice-pass" },
         })
       ).status,
     ).toBe(409);
@@ -117,7 +118,11 @@ describe("identity account routes", () => {
     const b = linkedMe.activeIdentityId;
     const office = await officeHarness();
 
-    const result = await h.call(`${ROUTES.account.identities}/${b}`, { method: "DELETE", cookie });
+    const result = await h.call(`${ROUTES.account.identities}/${b}`, {
+      method: "DELETE",
+      cookie,
+      body: { currentPassword: "bob-pass" },
+    });
     expect(result.status).toBe(200);
     expect(MeResponse.parse(await result.json()).activeIdentityId).toBe(a.me.activeIdentityId);
     expect(await h.repos.sessions.getByIdHash(hashCookie(cookie), h.clock())).toBeNull();
@@ -148,6 +153,7 @@ describe("identity account routes", () => {
     const result = await h.call(`${ROUTES.account.identities}/${a.me.activeIdentityId}`, {
       method: "DELETE",
       cookie: cookieFrom(linked),
+      body: { currentPassword: "bob-pass" },
     });
     expect(MeResponse.parse(await result.json()).activeIdentityId).toBe(me.activeIdentityId);
   });
@@ -199,8 +205,13 @@ describe("identity account routes", () => {
       ).status,
     ).toBe(403);
     expect(
-      (await h.call(`${ROUTES.account.identities}/bad`, { method: "DELETE", cookie: a.cookie }))
-        .status,
+      (
+        await h.call(`${ROUTES.account.identities}/bad`, {
+          method: "DELETE",
+          cookie: a.cookie,
+          body: { currentPassword: "alice-pass" },
+        })
+      ).status,
     ).toBe(400);
     expect(
       (
@@ -415,6 +426,7 @@ it("unlinking revokes other sessions using that login and keeps sessions on othe
   const result = await h.call(`${ROUTES.account.identities}/${me.activeIdentityId}`, {
     method: "DELETE",
     cookie: requester,
+    body: { currentPassword: "bob-pass" },
   });
   expect(result.status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie: cookieFrom(result) })).status).toBe(200);
@@ -526,4 +538,34 @@ it("an undecryptable stored credential counts as replaced: the next login revoke
   const fresh = await h.login();
   expect((await h.call(ROUTES.auth.me, { cookie: fresh.cookie })).status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie: stale.cookie })).status).toBe(401);
+});
+
+it("unlinking re-authenticates the signed-in login: missing or wrong owner password never unlinks", async () => {
+  const h = accountsHarness();
+  const a = await h.login();
+  const linked = await h.call(ROUTES.account.identities, {
+    method: "POST",
+    cookie: a.cookie,
+    body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+  });
+  const cookie = cookieFrom(linked);
+  const target = `${ROUTES.account.identities}/${a.me.activeIdentityId}`;
+  const unlink = vi.spyOn(h.links, "unlink");
+  expect((await h.call(target, { method: "DELETE", cookie })).status).toBe(400);
+  // The session is active as bob now, so alice's password is not the owner's.
+  for (const currentPassword of ["not-bob", "alice-pass"]) {
+    const wrong = await h.call(target, { method: "DELETE", cookie, body: { currentPassword } });
+    expect(wrong.status).toBe(401);
+    expect(await wrong.text()).toContain("current password is incorrect");
+  }
+  expect(unlink).not.toHaveBeenCalled();
+  expect(await h.repos.identities.listByAccount(a.me.account.id)).toHaveLength(2);
+  expect((await h.call(ROUTES.auth.me, { cookie })).status).toBe(200);
+  const ok = await h.call(target, {
+    method: "DELETE",
+    cookie,
+    body: { currentPassword: "bob-pass" },
+  });
+  expect(ok.status).toBe(200);
+  expect(await h.repos.identities.listByAccount(a.me.account.id)).toHaveLength(1);
 });

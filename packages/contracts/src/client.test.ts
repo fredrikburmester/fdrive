@@ -1534,7 +1534,7 @@ it("calls account identity and cross-identity view routes with typed responses",
       currentPassword: "mine",
     }),
   ).toEqual(VALID_ME);
-  expect(await client.unlinkIdentity(VALID_UUID)).toEqual(VALID_ME);
+  expect(await client.unlinkIdentity(VALID_UUID, { currentPassword: "mine" })).toEqual(VALID_ME);
   expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
   expect(await client.accountFavorites()).toEqual(favorites);
   expect(await client.accountSearch("a")).toEqual(search);
