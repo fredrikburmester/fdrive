@@ -59,6 +59,9 @@ test.describe("trash available", () => {
   let webBaseUrl = "";
 
   test.beforeAll(async () => {
+    // `describe.configure({ timeout })` covers tests, not this hook, which
+    // boots a second Docker stack and overran the default 30s on CI runners.
+    test.setTimeout(300_000);
     const apiPort = await getFreePort(E2E_HOST);
     const webPort = await getFreePort(E2E_HOST);
     environment = await startEnvironment({
@@ -169,7 +172,19 @@ test.describe("trash available", () => {
 
 test.describe("trash not configured", () => {
   test("no Trash sidebar item, and the permanent-delete dialog copy", async ({ page }) => {
-    await page.goto("/files");
+    // A private folder: the shared root gathers one folder per test across
+    // the suite, and the virtualized listing never renders a file sorted past
+    // its window, so a root upload could not be found there.
+    const sandbox = `/${uniqueName("no-trash")}`;
+    expect(
+      (
+        await page.request.post("/api/v1/fs/mkdir", {
+          headers: { "x-requested-with": "fdrive" },
+          data: { path: sandbox },
+        })
+      ).ok(),
+    ).toBe(true);
+    await page.goto(`/files${sandbox}`);
 
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash" }),

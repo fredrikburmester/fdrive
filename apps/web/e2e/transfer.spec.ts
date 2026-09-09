@@ -42,7 +42,10 @@ test.describe("uploads and downloads", () => {
     await dialog.getByLabel("Folder name").fill(sandbox);
     await dialog.getByRole("button", { name: "Create" }).click();
     await expect(dialog).toBeHidden();
-    await listing(page).getByText(sandbox, { exact: true }).dblclick();
+    // Navigate by URL rather than double-clicking the new row: the shared
+    // root accumulates one folder per test across the suite, the listing is
+    // virtualized, and a row sorted past the rendered window never exists.
+    await page.goto(`/files/${sandbox}`);
     await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
   });
 
