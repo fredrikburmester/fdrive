@@ -1,6 +1,6 @@
 "use client";
 
-import type { LinkIdentityRequest, MeResponse } from "@fdrive/contracts";
+import type { LinkIdentityRequest, MeResponse, UnlinkIdentityRequest } from "@fdrive/contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -32,9 +32,9 @@ export function useIdentityActions() {
     error,
     resetError: () => setError(null),
     link: (request: LinkIdentityRequest) => run(() => apiClient.linkIdentity(request)),
-    unlink: (id: string) =>
+    unlink: (id: string, request: UnlinkIdentityRequest) =>
       run(async () => {
-        const me = await apiClient.unlinkIdentity(id);
+        const me = await apiClient.unlinkIdentity(id, request);
         useUploadStore.getState().cancelIdentity(id);
         return me;
       }),

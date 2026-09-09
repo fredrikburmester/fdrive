@@ -74,9 +74,14 @@ triggering a CORS preflight that fdrive's default same-origin policy denies.
 A session's `expiresAt` is not extended on every request. `resolvePrincipal`
 only pushes it forward (to `now + FDRIVE_SESSION_TTL_DAYS`) when the session
 has not been touched in the last 5 minutes, and does so lazily as part of
-handling the request rather than as a separate background job. This keeps a
-frequently-used session alive indefinitely while limiting the write load a
-sliding window would otherwise put on the `sessions` table.
+handling the request rather than as a separate background job. This limits
+the write load a sliding window would otherwise put on the `sessions` table.
+
+Sliding never extends a session past `FDRIVE_SESSION_MAX_AGE_DAYS` (default
+90) from the login that created it: `resolvePrincipal` deletes a session
+whose `createdAt` is older than that and treats the request as anonymous, so
+a stolen session id cannot be kept valid indefinitely by periodic use.
+Session rotation on link and unlink preserves `createdAt`.
 
 ## Token minting and re-minting
 
@@ -145,8 +150,10 @@ fdrive's current single-instance deployment shape.
 Linking another SFTPGo login (`POST /api/v1/account/identities`) requires
 the signed-in login's own password (`currentPassword`, plus `currentOtp`
 when SFTPGo enforces TOTP for it) in addition to the new login's
-credentials. A stolen cookie is therefore not enough to plant a durable
-login path on the account.
+credentials, and unlinking one (`DELETE /api/v1/account/identities/:id`)
+requires the same fields as its JSON body. A stolen cookie is therefore not
+enough to plant a durable login path on the account, nor to detach and sign
+out the owner's other logins.
 
 Two events revoke sessions server-side:
 

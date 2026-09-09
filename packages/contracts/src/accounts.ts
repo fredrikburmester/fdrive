@@ -17,6 +17,12 @@ export const LinkIdentityRequest = z.strictObject({
   currentOtp: z.string().min(1).max(32).optional(),
 });
 export type LinkIdentityRequest = z.infer<typeof LinkIdentityRequest>;
+/** Unlinking also re-authenticates the signed-in login; sent as the DELETE body. */
+export const UnlinkIdentityRequest = LinkIdentityRequest.pick({
+  currentPassword: true,
+  currentOtp: true,
+});
+export type UnlinkIdentityRequest = z.infer<typeof UnlinkIdentityRequest>;
 export const SwitchIdentityRequest = z.strictObject({ identityId: AccountIdentityId });
 export type SwitchIdentityRequest = z.infer<typeof SwitchIdentityRequest>;
 export const AccountFavoriteItem = FavoriteItem.extend({ identityId: AccountIdentityId });

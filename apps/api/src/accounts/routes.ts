@@ -4,6 +4,7 @@ import {
   ROUTES,
   SearchQuery,
   SwitchIdentityRequest,
+  UnlinkIdentityRequest,
 } from "@fdrive/contracts";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
@@ -63,7 +64,13 @@ export function registerAccountsRoutes(
     const input = accountContext(c);
     const id = AccountIdentityId.safeParse(c.req.param("id"));
     if (!id.success) throw new ApiHttpError("bad_request", "invalid identity ID");
-    const result = await accountRepositoryCall(() => deps.service.unlink(input, id.data));
+    const body = await parseBody(UnlinkIdentityRequest, c);
+    const result = await accountRepositoryCall(() =>
+      deps.service.unlink(input, id.data, {
+        ...body,
+        ip: extractClientIp(c, deps.config.fdriveTrustedProxyHops),
+      }),
+    );
     rotationCookie(c, result);
     return c.json(result.me);
   });

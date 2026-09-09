@@ -141,6 +141,7 @@ describe("loadConfig", () => {
       fdriveMasterKey: MASTER_KEY_32_BYTES,
       fdriveHomeTemplate: "sftpgo:/{username}",
       fdriveSessionTtlDays: 30,
+      fdriveSessionMaxAgeDays: 90,
       fdriveCookieSecure: "auto",
       fdriveTrustedProxyHops: 1,
       fdrivePublicUrl: undefined,
@@ -187,6 +188,7 @@ describe("loadConfig", () => {
       LOG_LEVEL: "debug",
       FDRIVE_HOME_TEMPLATE: "sftpgo:/home/{username}",
       FDRIVE_SESSION_TTL_DAYS: "7",
+      FDRIVE_SESSION_MAX_AGE_DAYS: "45",
       FDRIVE_COOKIE_SECURE: "true",
       FDRIVE_TRUSTED_PROXY_HOPS: "2",
       FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
@@ -225,6 +227,7 @@ describe("loadConfig", () => {
       fdriveMasterKey: MASTER_KEY_32_BYTES,
       fdriveHomeTemplate: "sftpgo:/home/{username}",
       fdriveSessionTtlDays: 7,
+      fdriveSessionMaxAgeDays: 45,
       fdriveCookieSecure: "true",
       fdriveTrustedProxyHops: 2,
       fdrivePublicUrl: "https://fdrive.example.com",
@@ -372,6 +375,17 @@ describe("loadConfig", () => {
 
   it("treats an empty FDRIVE_PUBLIC_URL as unset", () => {
     expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_PUBLIC_URL: "" }).fdrivePublicUrl).toBeUndefined();
+  });
+
+  it("defaults the absolute session age to 90 days and rejects zero or non-integers", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveSessionMaxAgeDays).toBe(90);
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_SESSION_MAX_AGE_DAYS: "7" }).fdriveSessionMaxAgeDays,
+    ).toBe(7);
+    for (const bad of ["0", "never", "1.5"])
+      expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_SESSION_MAX_AGE_DAYS: bad })).toThrow(
+        /FDRIVE_SESSION_MAX_AGE_DAYS/,
+      );
   });
 
   it("rejects a non-integer FDRIVE_SESSION_TTL_DAYS", () => {

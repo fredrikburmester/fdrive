@@ -75,13 +75,13 @@ it("cancels removed identity uploads only after successful unlink", async () => 
   const cancel = vi.spyOn(useUploadStore.getState(), "cancelIdentity");
   const { result } = setup();
   await act(async () => {
-    await result.current.unlink("removed");
+    await result.current.unlink("removed", { currentPassword: "mine" });
   });
   expect(cancel).not.toHaveBeenCalled();
   await act(async () => {
-    expect(await result.current.unlink("removed")).toBe(true);
+    expect(await result.current.unlink("removed", { currentPassword: "mine" })).toBe(true);
   });
-  expect(unlink).toHaveBeenCalledWith("removed");
+  expect(unlink).toHaveBeenCalledWith("removed", { currentPassword: "mine" });
   expect(cancel).toHaveBeenCalledWith("removed");
 });
 
