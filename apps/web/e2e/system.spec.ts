@@ -3,7 +3,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 
 /**
- * Clicks the connection page's Save button by dispatching the click event
+ * Clicks the General page's Save button by dispatching the click event
  * directly on the element rather than simulating a real pointer click.
  * Earlier specs in a full run can leave finished jobs in the account-wide
  * Activity panel (fixed bottom-right on every page), which can visually
@@ -12,17 +12,17 @@ import { loginAs } from "./support/login.js";
  * to this page's own behaviour and not what this test means to exercise.
  */
 async function clickSave(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Save" }).dispatchEvent("click");
+  await page.getByRole("button", { name: "Save", exact: true }).dispatchEvent("click");
 }
 
-test("alice (admin) sees System > Connection with a reachable host and can change the home template", async ({
+test("alice (admin) sees System > General with a reachable host and can change the home template", async ({
   page,
 }) => {
   await page.goto("/files");
 
-  await expect(page.getByRole("link", { name: "Connection" })).toBeVisible();
-  await page.getByRole("link", { name: "Connection" }).click();
-  await expect(page).toHaveURL(/\/system\/connection$/);
+  await expect(page.getByRole("link", { name: "General" })).toBeVisible();
+  await page.getByRole("link", { name: "General" }).click();
+  await expect(page).toHaveURL(/\/system\/general$/);
 
   await expect(page.getByText("Host", { exact: true })).toBeVisible();
   await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
@@ -32,9 +32,9 @@ test("alice (admin) sees System > Connection with a reachable host and can chang
   const updatedTemplate = "sftpgo:/updated/{username}";
 
   await templateInput.fill(updatedTemplate);
-  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await clickSave(page);
-  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
 
   await page.reload();
   await expect(page.getByLabel("Template")).toHaveValue(updatedTemplate);
@@ -43,7 +43,14 @@ test("alice (admin) sees System > Connection with a reachable host and can chang
   // repeated local runs against the same environment.
   await page.getByLabel("Template").fill(originalTemplate);
   await clickSave(page);
-  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+});
+
+test("the retired /system/connection route redirects to General", async ({ page }) => {
+  await page.goto("/system/connection");
+
+  await expect(page).toHaveURL(/\/system\/general$/);
+  await expect(page.getByText("SFTPGo connection", { exact: true })).toBeVisible();
 });
 
 test("alice (admin) sees the Search embedding server and OCR as not configured in the e2e stack", async ({
@@ -195,24 +202,26 @@ test("alice (admin) can save the indexer's settings even while the indexer sidec
 }) => {
   await page.goto("/system/indexer");
 
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const workersInput = page.getByLabel("Workers");
   await expect(workersInput).toBeVisible();
   const originalWorkers = await workersInput.inputValue();
   const updatedWorkers = "7";
 
   await workersInput.fill(updatedWorkers);
-  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
   await clickSave(page);
-  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
 
   await page.reload();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("Workers")).toHaveValue(updatedWorkers);
 
   // Restore the original value so this test stays idempotent across
   // repeated local runs against the same environment.
   await page.getByLabel("Workers").fill(originalWorkers);
   await clickSave(page);
-  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
 });
 
 test.describe("bob (not admin)", () => {
@@ -228,7 +237,7 @@ test.describe("bob (not admin)", () => {
 
     await expect(page.getByText("Locations")).toBeVisible();
     await expect(page.getByText("System")).toBeHidden();
-    await expect(page.getByRole("link", { name: "Connection" })).toBeHidden();
+    await expect(page.getByRole("link", { name: "General" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Indexer" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Search", exact: true })).toBeHidden();
     await expect(page.getByRole("link", { name: "OCR" })).toBeHidden();

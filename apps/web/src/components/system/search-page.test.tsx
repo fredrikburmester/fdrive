@@ -20,9 +20,10 @@ vi.mock("./system-page", () => ({
     title: string;
     description: string;
     actions?: ReactNode;
+    feature?: string | readonly string[];
     children: ReactNode;
   }) => (
-    <div>
+    <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
       <div data-testid="actions">{props.actions}</div>
@@ -62,6 +63,13 @@ afterEach(() => {
 });
 
 describe("SearchPage", () => {
+  it("declares the feature that gates this page", () => {
+    mockConfigured();
+    render(<SearchPage />);
+
+    expect(screen.getByTestId("system-page").dataset.feature).toBe("semanticSearch");
+  });
+
   it("renders the semantic status and model", async () => {
     mockConfigured();
     render(<SearchPage />);

@@ -5,38 +5,50 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 
-export interface SettingsFormShellProps {
+export interface SettingsFormActionsProps {
   dirty: boolean;
   invalid: boolean;
   pending: boolean;
   onSave: () => void;
   onReset: () => void;
-  children: ReactNode;
 }
 
 /**
- * The Save/Reset row shared by every settings form on the System pages: Save
- * is disabled until the draft is both dirty and valid, Reset is disabled
- * until the draft is dirty.
+ * Save and Reset for a settings draft: Save is disabled until the draft is
+ * both dirty and valid, Reset until it is dirty. Rendered inline by
+ * `SettingsFormShell` and in the footer by `SettingsSheet`, so both places
+ * agree on when each button is available.
  */
-export function SettingsFormShell({
+export function SettingsFormActions({
   dirty,
   invalid,
   pending,
   onSave,
   onReset,
-  children,
-}: SettingsFormShellProps) {
+}: SettingsFormActionsProps) {
+  return (
+    <>
+      <Button type="button" variant="outline" disabled={!dirty || pending} onClick={onReset}>
+        Reset
+      </Button>
+      <Button type="button" disabled={!dirty || invalid || pending} onClick={onSave}>
+        {pending ? "Saving…" : "Save"}
+      </Button>
+    </>
+  );
+}
+
+export interface SettingsFormShellProps extends SettingsFormActionsProps {
+  children: ReactNode;
+}
+
+/** A settings form with its Save/Reset row below the fields. */
+export function SettingsFormShell({ children, ...actions }: SettingsFormShellProps) {
   return (
     <div className="flex flex-col gap-4">
       {children}
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" disabled={!dirty || pending} onClick={onReset}>
-          Reset
-        </Button>
-        <Button type="button" disabled={!dirty || invalid || pending} onClick={onSave}>
-          {pending ? "Saving…" : "Save"}
-        </Button>
+        <SettingsFormActions {...actions} />
       </div>
     </div>
   );

@@ -27,7 +27,7 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
-const field = () => screen.getByLabelText("fdrive server address") as HTMLInputElement;
+const field = () => screen.getByLabelText("fdrive public address") as HTMLInputElement;
 const save = () => screen.getByRole("button", { name: "Save and continue" }) as HTMLButtonElement;
 
 it("prefills the browser's own address when none is saved and advances after saving", () => {

@@ -132,6 +132,12 @@ const nextConfig: NextConfig = {
   // `next dev`. In the compose deployment (see deploy/README.md), Caddy
   // routes /api/* straight to the api service and this rewrite never runs;
   // the production proxy owns /api.
+  // `System > Connection` became `System > General` (see
+  // `docs/workflow/P9-SYSTEM-SETTINGS.md`); bookmarks and links to the old
+  // route keep working.
+  async redirects() {
+    return [{ source: "/system/connection", destination: "/system/general", permanent: true }];
+  },
   async rewrites() {
     return [
       {

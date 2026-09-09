@@ -35,13 +35,14 @@ function features(source: SystemFeaturesResponse["source"], values = off): Syste
   };
 }
 
-function mount(title: string) {
+function mount(props: Partial<Parameters<typeof SystemPage>[0]> = {}) {
   return render(
     <SystemPage
-      title={title}
+      title="Indexer"
       description="Page description"
       lastUpdated={null}
       actions={<button type="button">Page action</button>}
+      {...props}
     >
       <p>Sidecar content</p>
     </SystemPage>,
@@ -56,9 +57,12 @@ afterEach(() => {
 describe("SystemPage feature admission", () => {
   it("replaces a managed-off processing page with the feature control link", () => {
     useSystemFeatures.mockReturnValue({ data: features("settings") });
-    mount("Indexer");
+    mount({ feature: ["thumbnails", "textSearch", "imageSearch"] });
 
     expect(screen.getByText("Indexer is off")).toBeTruthy();
+    expect(
+      screen.getByText("Processing is inactive. Existing index and cache data are retained."),
+    ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Manage features" }).getAttribute("href")).toBe(
       "/system/features",
     );
@@ -70,10 +74,33 @@ describe("SystemPage feature admission", () => {
     useSystemFeatures.mockReturnValue({
       data: features("settings", { ...off, thumbnails: true }),
     });
-    mount("Thumbnails");
+    mount({ title: "Thumbnails", feature: "thumbnails" });
 
     expect(screen.getByText("Sidecar content")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Page action" })).toBeTruthy();
     expect(screen.queryByText("Thumbnails is off")).toBeNull();
+  });
+
+  it("shows a page that administers no feature at all", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    mount({ title: "General" });
+
+    expect(screen.getByText("Sidecar content")).toBeTruthy();
+    expect(screen.queryByText("General is off")).toBeNull();
+  });
+
+  it("turns a page off through `enabled` for a subsystem that is not a feature", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    mount({ title: "Office", enabled: false });
+
+    expect(screen.getByText("Office is off")).toBeTruthy();
+    expect(screen.queryByText("Sidecar content")).toBeNull();
+  });
+
+  it("keeps an enabled non-feature page visible", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    mount({ title: "Office", enabled: true });
+
+    expect(screen.getByText("Sidecar content")).toBeTruthy();
   });
 });
