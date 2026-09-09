@@ -129,7 +129,9 @@ export async function composeApp(
 
   const master = parseMasterKey(config.fdriveMasterKey);
 
-  const { db, pool } = createDb(config.databaseUrl);
+  const { db, pool } = createDb(config.databaseUrl, {
+    onError: (error) => logger.warn({ err: error }, "idle database connection error"),
+  });
   if (config.fdriveAutoMigrate) {
     await migrate(db);
   }

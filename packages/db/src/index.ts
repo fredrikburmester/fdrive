@@ -144,6 +144,13 @@ export type Db = NodePgDatabase<Schema>;
 
 export interface CreateDbOptions {
   readonly max?: number;
+  /**
+   * Receives the errors `pg` raises on behalf of idle pooled clients (a
+   * backend restart, a dropped connection). Without a listener Node treats
+   * them as uncaught exceptions and exits the process; the pool itself
+   * recovers by reconnecting on the next checkout. Defaults to ignoring them.
+   */
+  readonly onError?: (error: Error) => void;
 }
 
 export interface CreateDbResult {
@@ -162,6 +169,7 @@ export function createDb(connectionString: string, opts: CreateDbOptions = {}): 
     connectionString,
     ...(opts.max === undefined ? {} : { max: opts.max }),
   });
+  pool.on("error", opts.onError ?? (() => {}));
   const db = drizzle(pool, { schema });
 
   return {
