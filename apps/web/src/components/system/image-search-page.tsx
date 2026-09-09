@@ -22,6 +22,7 @@ import {
 } from "@/lib/api/system-queries";
 import { describeMaintenanceError } from "@/lib/system/maintenance";
 import { sidecarStatus } from "@/lib/system/status";
+import { LogSheet } from "./log-sheet";
 import { MaintenanceProgress } from "./maintenance-progress";
 import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
@@ -94,7 +95,7 @@ export function ImageSearchPage() {
           <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
             Rebuild
           </Button>
-          {/* LogSheet mounts here (P9 event log) */}
+          <LogSheet subsystem="image-search" />
         </>
       }
     >

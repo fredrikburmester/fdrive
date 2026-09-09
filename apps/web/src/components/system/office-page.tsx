@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { describeApiError } from "@/lib/api/errors";
 import { officeStatus } from "@/lib/system/status";
+import { LogSheet } from "./log-sheet";
 import { OfficeSettingsFields, useOfficeSettingsDraft } from "./office-settings-card";
 import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
 import { StatGrid } from "./stat-grid";
@@ -44,7 +45,7 @@ export function OfficeSystemPage() {
             onClick={() => setSettingsOpen(true)}
             disabled={values === undefined}
           />
-          {/* LogSheet mounts here (P9 event log) */}
+          <LogSheet subsystem="office" />
         </>
       }
     >

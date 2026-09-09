@@ -47,6 +47,7 @@ import {
   validateIndexerSettings,
 } from "@/lib/system/settings";
 import { sidecarStatus } from "@/lib/system/status";
+import { LogSheet } from "./log-sheet";
 import { MaintenanceProgress } from "./maintenance-progress";
 import { GlobsField } from "./settings-form";
 import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
@@ -217,7 +218,7 @@ export function IndexerPage() {
             Reindex
           </Button>
           <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
-          {/* LogSheet mounts here (P9 event log) */}
+          <LogSheet subsystem="indexer" />
         </>
       }
     >
@@ -304,19 +305,6 @@ export function IndexerPage() {
                     </span>
                   </div>
                 ))}
-            </SystemSection>
-          ) : null}
-
-          {(data.stats?.errorsSample.length ?? 0) > 0 ? (
-            <SystemSection title="Recent errors">
-              <ul className="flex flex-col gap-2 text-sm">
-                {data.stats?.errorsSample.map((sample) => (
-                  <li key={sample.path} className="flex flex-col">
-                    <span className="font-mono text-xs">{sample.path}</span>
-                    <span className="text-muted-foreground">{sample.error ?? "unknown error"}</span>
-                  </li>
-                ))}
-              </ul>
             </SystemSection>
           ) : null}
         </>

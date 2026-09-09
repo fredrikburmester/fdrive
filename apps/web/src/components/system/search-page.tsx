@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { describeApiError } from "@/lib/api/errors";
 import { useReembed, useSystemSearch } from "@/lib/api/system-queries";
 import { sidecarStatus } from "@/lib/system/status";
+import { LogSheet } from "./log-sheet";
 import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
@@ -57,7 +58,7 @@ export function SearchPage() {
           >
             Re-embed
           </Button>
-          {/* LogSheet mounts here (P9 event log) */}
+          <LogSheet subsystem="search" />
         </>
       }
     >
