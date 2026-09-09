@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +83,12 @@ export class SftpIndexerStack {
         users: dump.users.map((user) => ({ ...user, public_keys: [publicKey] })),
       }),
     );
+    // `mkdtemp` creates a 0700 directory. The seed is bind-mounted into the
+    // SFTPGo container, which reads it as uid 1000: on a Linux host (CI) it
+    // could not open the file, loaded no users, and every login answered 401.
+    // Docker Desktop's file sharing masked this on macOS.
+    await chmod(this.directory, 0o755);
+    await chmod(join(this.directory, "seed.json"), 0o644);
     await this.docker(["network", "create", this.prefix]);
     this.networkCreated = true;
     await this.docker(["volume", "create", this.prefix]);

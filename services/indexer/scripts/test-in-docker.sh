@@ -3,8 +3,10 @@
 # inside the service's own Docker image, on a development machine that is not
 # Linux (macOS, Windows). The container gets the host's Docker socket so
 # testcontainers can start its own Postgres containers from inside.
-# Docker Desktop's socket belongs to group 0; override FDRIVE_TEST_DOCKER_GID
-# for a different Linux socket group. The tests still run as the indexer user.
+# The container joins the socket's owning group so the indexer user can reach
+# it: Docker Desktop's socket belongs to group 0, a Linux host's (including
+# GitHub's runners) to the `docker` group, read from the socket itself here.
+# Override with FDRIVE_TEST_DOCKER_GID when neither applies.
 #
 # Usage: services/indexer/scripts/test-in-docker.sh [pytest args...]
 set -euo pipefail
@@ -12,12 +14,22 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 IMAGE_TAG="fdrive-indexer-test:local"
+SOCKET=/var/run/docker.sock
+if [[ -z "${FDRIVE_TEST_DOCKER_GID:-}" ]]; then
+  # Only a Linux host's socket is the one mounted into the container; Docker
+  # Desktop mounts its VM's socket (group 0), whatever the macOS path says.
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    FDRIVE_TEST_DOCKER_GID="$(stat -c %g "$SOCKET" 2>/dev/null || echo 0)"
+  else
+    FDRIVE_TEST_DOCKER_GID=0
+  fi
+fi
 
 docker build -t "$IMAGE_TAG" .
 
 docker run --rm \
-  --group-add "${FDRIVE_TEST_DOCKER_GID:-0}" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  --group-add "$FDRIVE_TEST_DOCKER_GID" \
+  -v "$SOCKET":/var/run/docker.sock \
   -v "$(pwd)/tests:/app/tests:ro" \
   -v "$(pwd)/scripts:/app/scripts:ro" \
   -v "$(pwd)/pyproject.toml:/app/pyproject.toml:ro" \
