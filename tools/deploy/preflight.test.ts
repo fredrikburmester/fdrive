@@ -179,56 +179,30 @@ describe("deploy/preflight.sh", () => {
     expect(result.output).toContain("bind address: 127.0.0.1:9090");
   });
 
-  it("accepts an HTTPS FDRIVE_PUBLIC_URL (the proxy derives its scheme from it)", () => {
+  it.each(["FDRIVE_PROXY_SCHEME=https", "FDRIVE_PUBLIC_URL=https://drive.example.com"])(
+    "rejects the removed key %s with a pointer to onboarding instead of calling it a typo",
+    (line) => {
+      const result = runPreflight(
+        ["POSTGRES_PASSWORD=real", "FDRIVE_MASTER_KEY=abc", line].join("\n"),
+      );
+      expect(result.code).toBe(1);
+      expect(result.output).toContain(`'${line.split("=")[0]}' in`);
+      expect(result.output).toContain("no longer used; remove it");
+      expect(result.output).toContain("System > Features > Server address");
+      expect(result.output).not.toContain("typo?");
+    },
+  );
+
+  it("accepts the Collabora overlay's address key", () => {
     const result = runPreflight(
       [
         "POSTGRES_PASSWORD=real",
         "FDRIVE_MASTER_KEY=abc",
-        'FDRIVE_PUBLIC_URL="https://drive.example.com"',
+        "FDRIVE_COLLABORA_APP_URL=https://drive.example.com",
+        "FDRIVE_COLLABORA_HOST=office.example.com",
       ].join("\n"),
     );
     expect(result.code).toBe(0);
-    expect(result.output).toContain("preflight OK");
-  });
-
-  it("accepts an HTTP FDRIVE_PUBLIC_URL", () => {
-    const result = runPreflight(
-      [
-        "POSTGRES_PASSWORD=real",
-        "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_PUBLIC_URL=http://192.168.1.10:8090",
-      ].join("\n"),
-    );
-    expect(result.code).toBe(0);
-  });
-
-  it("rejects a FDRIVE_PUBLIC_URL without a scheme", () => {
-    const result = runPreflight(
-      [
-        "POSTGRES_PASSWORD=real",
-        "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_PUBLIC_URL=drive.example.com",
-      ].join("\n"),
-    );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "FDRIVE_PUBLIC_URL 'drive.example.com' must start with http:// or https://",
-    );
-  });
-
-  it("rejects the removed FDRIVE_PROXY_SCHEME key with a pointer to FDRIVE_PUBLIC_URL", () => {
-    const result = runPreflight(
-      [
-        "POSTGRES_PASSWORD=real",
-        "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_PUBLIC_URL=https://drive.example.com",
-        "FDRIVE_PROXY_SCHEME=https",
-      ].join("\n"),
-    );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain("'FDRIVE_PROXY_SCHEME' in");
-    expect(result.output).toContain("no longer used; remove it");
-    expect(result.output).not.toContain("typo?");
   });
 
   it("reports every failure together (both change-me and an unknown key) before exiting", () => {

@@ -11,6 +11,7 @@ function harness(
     product?: "onlyoffice" | "collabora";
     status?: "starting" | "ready" | "unavailable";
     failProbe?: boolean;
+    publicUrl?: string | null;
   } = {},
 ) {
   let stored: unknown | null = null;
@@ -32,6 +33,8 @@ function harness(
   const service = createOfficeSettingsService({
     settings,
     product: options.product ?? "onlyoffice",
+    publicUrl: async () =>
+      options.publicUrl === undefined ? "https://drive.example" : options.publicUrl,
     probeStatus,
   });
   return {
@@ -53,7 +56,6 @@ describe("Office settings service", () => {
     expect(initial).toEqual({
       revision: 0,
       enabled: false,
-      appUrl: null,
       editingEnabled: false,
       editingProviderId: null,
       editorUsernames: [],
@@ -74,12 +76,11 @@ describe("Office settings service", () => {
     const updated = await service.update(PROVIDER_A, {
       ...initial,
       enabled: true,
-      appUrl: "https://drive.example/",
       editingEnabled: true,
       editingProviderId: PROVIDER_A,
       editorUsernames: ["alice"],
     });
-    expect(updated).toMatchObject({ revision: 1, appUrl: "https://drive.example" });
+    expect(updated).toMatchObject({ revision: 1, enabled: true });
     expect(await service.runtimeConfiguration()).toEqual({
       version: 1,
       revision: 1,
@@ -95,7 +96,6 @@ describe("Office settings service", () => {
       service.update(PROVIDER_B, {
         ...initial,
         enabled: true,
-        appUrl: "https://drive.example",
         editingEnabled: true,
         editingProviderId: PROVIDER_A,
         editorUsernames: ["alice"],
@@ -104,7 +104,6 @@ describe("Office settings service", () => {
     const enabled = await service.update(PROVIDER_A, {
       ...initial,
       enabled: true,
-      appUrl: "https://drive.example",
       editingEnabled: true,
       editingProviderId: PROVIDER_A,
       editorUsernames: ["alice"],
@@ -113,8 +112,17 @@ describe("Office settings service", () => {
       { enabled: false, revision: 2 },
     );
     await expect(
-      service.update(PROVIDER_A, { ...initial, appUrl: "https://stale.example" }),
+      service.update(PROVIDER_A, { ...initial, editorUsernames: [] }),
     ).rejects.toMatchObject({ kind: "conflict" });
+  });
+
+  it("refuses to enable Office until the server address is set", async () => {
+    const { service } = harness({ publicUrl: null });
+    const initial = await service.configuration();
+    await expect(service.update(PROVIDER_A, { ...initial, enabled: true })).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    await expect(service.update(PROVIDER_A, initial)).resolves.toMatchObject({ revision: 1 });
   });
 
   it("does not activate the bundled controller for Collabora", async () => {
@@ -123,7 +131,6 @@ describe("Office settings service", () => {
     await service.update(PROVIDER_A, {
       ...initial,
       enabled: true,
-      appUrl: "https://drive.example",
     });
     expect(await service.runtimeConfiguration()).toMatchObject({ revision: 1, enabled: false });
     expect(await service.status(null)).toMatchObject({
@@ -139,7 +146,6 @@ describe("Office settings service", () => {
     await service.update(PROVIDER_A, {
       ...initial,
       enabled: true,
-      appUrl: "https://drive.example",
     });
     expect(await service.status(PROVIDER_A)).toMatchObject({ status: "starting" });
   });
@@ -161,7 +167,6 @@ describe("Office settings service", () => {
     await failing.service.update(PROVIDER_A, {
       ...disabled,
       enabled: true,
-      appUrl: "https://drive.example",
     });
     expect(await failing.service.status(PROVIDER_A)).toMatchObject({ status: "unavailable" });
   });

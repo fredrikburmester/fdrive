@@ -129,7 +129,9 @@ export const ROUTES = {
   },
   system: {
     features: "/api/v1/system/features",
-    /** GET/PUT, admin only: Office activation, browser origin, and editing permission. */
+    /** GET/PUT, admin only: the address everyone opens fdrive at -> `PublicUrlSettings`. */
+    publicUrl: "/api/v1/system/public-url",
+    /** GET/PUT, admin only: Office activation and editing permission. */
     office: "/api/v1/system/office",
     /** GET/PUT, admin only: provider-bound Trash configuration. */
     trash: "/api/v1/system/trash",

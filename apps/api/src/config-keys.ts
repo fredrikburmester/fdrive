@@ -157,15 +157,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "network",
   },
   {
-    key: "FDRIVE_PUBLIC_URL",
-    description:
-      "The externally reachable URL fdrive is served at, used in logged links and Office callbacks.",
-    default: null,
-    example: "https://fdrive.example.com",
-    secret: false,
-    subsystem: "network",
-  },
-  {
     key: "FDRIVE_AUTO_MIGRATE",
     description: "Whether the API runs pending database migrations on startup.",
     default: "true",

@@ -5,11 +5,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemOffice, useUpdateOfficeSettings } from "@/lib/api/office-settings-queries";
+import { useSystemPublicUrl } from "@/lib/api/public-url-queries";
 import { SystemErrorState } from "./system-error-state";
 
 export function OfficeSettingsCard({
@@ -20,6 +20,7 @@ export function OfficeSettingsCard({
   disabled?: boolean;
 }) {
   const query = useSystemOffice();
+  const address = useSystemPublicUrl();
   const update = useUpdateOfficeSettings();
   const [draft, setDraft] = useState<OfficeSettings | null>(null);
   const [editorsText, setEditorsText] = useState<string | null>(null);
@@ -44,6 +45,9 @@ export function OfficeSettingsCard({
   const busy = disabled || update.isPending;
   const product = query.data?.product === "collabora" ? "Collabora" : "ONLYOFFICE";
   const parsed = OfficeSettingsUpdateRequest.safeParse(values);
+  // The editor is told fdrive lives at the server address; without one the
+  // api refuses to enable Office, so say so before the owner tries.
+  const addressMissing = address.data !== undefined && address.data.url === null;
   const editingMatchesProvider = values?.editingProviderId === query.data?.activeProviderId;
   function change(patch: Partial<OfficeSettings>) {
     if (values) setDraft({ ...values, ...patch });
@@ -93,7 +97,7 @@ export function OfficeSettingsCard({
                 checked={values.enabled}
                 disabled={busy}
                 onCheckedChange={(enabled) => {
-                  if (enabled) change({ enabled, appUrl: values.appUrl ?? window.location.origin });
+                  if (enabled) change({ enabled });
                   else {
                     setDraft(saved ? { ...saved, enabled: false } : null);
                     setEditorsText(null);
@@ -107,24 +111,14 @@ export function OfficeSettingsCard({
             </FieldDescription>
             {values.enabled ? (
               <>
-                <Field>
-                  <FieldLabel htmlFor="office-app-url">fdrive browser address</FieldLabel>
-                  <Input
-                    id="office-app-url"
-                    type="url"
-                    value={values.appUrl ?? ""}
-                    disabled={busy}
-                    onChange={(event) => change({ appUrl: event.target.value })}
-                  />
-                  <FieldDescription>
-                    The address everyone uses to open fdrive, including http:// or https:// and any
-                    port.
-                  </FieldDescription>
-                </Field>
+                {addressMissing ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    Set the fdrive server address first: the editor opens documents through it.
+                  </p>
+                ) : null}
                 {(draft || editorsText !== null) && !parsed.success ? (
                   <p role="alert" className="text-sm text-destructive">
-                    Check the fdrive address and, when editing is enabled, enter at least one
-                    allowed username.
+                    When editing is enabled, enter at least one allowed username.
                   </p>
                 ) : null}
                 {providerChanged ? (
@@ -218,7 +212,10 @@ export function OfficeSettingsCard({
                   Skip {product}
                 </Button>
               ) : null}
-              <Button disabled={busy || !parsed.success} onClick={() => save()}>
+              <Button
+                disabled={busy || !parsed.success || (values.enabled && addressMissing)}
+                onClick={() => save()}
+              >
                 {update.isPending
                   ? "Saving…"
                   : onContinue

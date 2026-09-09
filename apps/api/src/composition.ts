@@ -53,7 +53,11 @@ import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
 import { applyOfficeStorageEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
 import { createOfficeService } from "./office/service.ts";
-import { createOfficeSettingsService, probeOnlyOfficeRuntime } from "./office/settings.ts";
+import {
+  createOfficeSettingsService,
+  OFFICE_SETTINGS_KEY,
+  probeOnlyOfficeRuntime,
+} from "./office/settings.ts";
 import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
@@ -79,6 +83,8 @@ import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
 import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
+import { createPublicUrlService } from "./system/public-url.js";
+import { registerPublicUrlRoutes } from "./system/public-url-routes.js";
 import { registerSystemRoutes } from "./system/routes.js";
 import { createThumbnailsRepo } from "./system/thumbnails-repo.js";
 import { registerThumbRoutes } from "./thumbs/routes.js";
@@ -167,6 +173,16 @@ export async function composeApp(
   const trashSettings = createTrashSettingsService({
     settings: repos.settings,
     identities: repos.identities,
+  });
+  // The address everyone opens fdrive at, chosen in onboarding. Deployments
+  // from before it was a setting of its own stored it as Office's `appUrl`;
+  // that value stays in force until the owner saves the address here.
+  const publicUrl = createPublicUrlService({
+    settings: repos.settings,
+    legacyUrl: async () => {
+      const stored = await repos.settings.get<{ appUrl?: unknown }>(OFFICE_SETTINGS_KEY);
+      return typeof stored?.appUrl === "string" ? stored.appUrl : null;
+    },
   });
 
   const storageFactory = createIdentityStorageFactory({
@@ -320,13 +336,14 @@ export async function composeApp(
   const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
   const officeRuntimeFor = async (configuration: {
     enabled: boolean;
-    appUrl: string | null;
   }): Promise<{
     config: ReturnType<typeof officeConfig>;
     discovery: ReturnType<typeof createDiscoveryCache>;
   } | null> => {
-    if (!configuration.enabled || configuration.appUrl === null) return null;
-    const resolved = officeConfig(config, configuration.appUrl);
+    if (!configuration.enabled) return null;
+    const appUrl = await publicUrl.current();
+    if (appUrl === null) return null;
+    const resolved = officeConfig(config, appUrl);
     let discovery = officeDiscoveries.get(resolved.serverUrl);
     if (discovery === undefined) {
       discovery = createDiscoveryCache({ serverUrl: resolved.serverUrl, fetch: fetchImpl });
@@ -337,6 +354,7 @@ export async function composeApp(
   const officeSettings = createOfficeSettingsService({
     settings: repos.settings,
     product: officeProduct,
+    publicUrl: () => publicUrl.current(),
     probeStatus: async (configuration) => {
       const runtime = await officeRuntimeFor(configuration);
       if (runtime === null) return "unavailable";
@@ -480,7 +498,7 @@ export async function composeApp(
     // re-run, but the line still lands in log storage. Operators rotate logs afterwards.
     logger.warn(`setup token: ${setupToken}`);
     logger.warn("the setup token is one-time and invalidated after setup; rotate logs afterwards");
-    logger.info(`open ${config.fdrivePublicUrl ?? ""}/setup to finish setup`);
+    logger.info(`open ${(await publicUrl.current()) ?? ""}/setup to finish setup`);
   }
 
   const version = readVersion();
@@ -626,6 +644,7 @@ export async function composeApp(
         service: trashSettings,
         identities: repos.identities,
       });
+      registerPublicUrlRoutes(groups, { service: publicUrl });
       registerOfficeSettingsRoutes(groups, {
         service: officeSettings,
         workerToken: config.fdriveWorkerToken,
@@ -682,7 +701,7 @@ export async function composeApp(
       searchService,
       scopeResolver,
       identities: repos.identities,
-      fdrivePublicUrl: config.fdrivePublicUrl,
+      publicUrl: () => publicUrl.current(),
       indexerClient: indexerExtractClient,
       writesEnabled: config.fdriveMcpWrites,
       clock,

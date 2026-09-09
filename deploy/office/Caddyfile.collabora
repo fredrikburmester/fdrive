@@ -1,7 +1,11 @@
-# Direct LAN HTTP works by default. Behind an HTTPS edge, set
-# FDRIVE_PUBLIC_URL=https://... in deploy/.env: compose.yaml derives
-# FDRIVE_FORWARDED_PROTO from it before starting Caddy (see ../Caddyfile).
-# The scheme is deployment-controlled; client headers cannot override it.
+# X-Forwarded-Proto is passed through from a private-network edge proxy and
+# otherwise set from the connection itself; see ../Caddyfile.
+{
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
 :80 {
 	request_body {
 		max_size 0
@@ -9,24 +13,16 @@
 	header -Server
 	@office host {$FDRIVE_COLLABORA_HOST}
 	handle @office {
-		reverse_proxy collabora:9980 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy collabora:9980
 	}
 	handle /api/* {
-		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy api:3001
 	}
 	handle /mcp* {
-		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy api:3001
 	}
 	handle {
 		encode zstd gzip
-		reverse_proxy web:3000 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy web:3000
 	}
 }

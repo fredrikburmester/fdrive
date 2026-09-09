@@ -1,3 +1,4 @@
+import { PUBLIC_URL_SETTINGS_KEY } from "@fdrive/contracts";
 import { createDb, createRepos, migrate } from "@fdrive/db";
 import { createFakeSftpgoServer } from "@fdrive/sftpgo";
 import { startPostgres } from "@fdrive/testkit";
@@ -35,7 +36,6 @@ it("composes persisted editor admission, advanced policy and explicit server inj
         DATABASE_URL: postgres.connectionString,
         SFTPGO_URL: "http://fixture-storage",
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-        FDRIVE_PUBLIC_URL: "http://fixture-app",
         FDRIVE_OFFICE_PRODUCT: "onlyoffice",
         FDRIVE_OFFICE_URL: "http://fixture-editor",
         FDRIVE_OFFICE_PUBLIC_URL: "http://fixture-editor",
@@ -50,10 +50,13 @@ it("composes persisted editor admission, advanced policy and explicit server inj
             }
           : {}),
       });
+      await createRepos(db).settings.set(PUBLIC_URL_SETTINGS_KEY, {
+        revision: 1,
+        url: "http://fixture-app",
+      });
       await createRepos(db).settings.set(OFFICE_SETTINGS_KEY, {
         revision: 1,
         enabled: true,
-        appUrl: "http://fixture-app",
         editingEnabled: true,
         editingProviderId: provider.id,
         editorUsernames: ["alice"],

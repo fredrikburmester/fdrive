@@ -43,12 +43,13 @@ export interface OfficeSettingsService {
 export function createOfficeSettingsService(deps: {
   settings: Pick<SettingsRepo, "get" | "compareAndSet">;
   product: "onlyoffice" | "collabora";
+  /** The owner-chosen server address the editor is told fdrive lives at; Office cannot be enabled without one. */
+  publicUrl: () => Promise<string | null>;
   probeStatus: (configuration: OfficeSettings) => Promise<"starting" | "ready" | "unavailable">;
 }): OfficeSettingsService {
   const defaults: OfficeSettings = {
     revision: 0,
     enabled: false,
-    appUrl: null,
     editingEnabled: false,
     editingProviderId: null,
     editorUsernames: [],
@@ -68,6 +69,11 @@ export function createOfficeSettingsService(deps: {
       return (await read()).value;
     },
     async update(activeProviderId, input) {
+      if (input.enabled && (await deps.publicUrl()) === null)
+        throw new ApiHttpError(
+          "bad_request",
+          "Set the fdrive server address before enabling Office.",
+        );
       if (input.enabled && input.editingEnabled && input.editingProviderId !== activeProviderId)
         throw new ApiHttpError(
           "conflict",

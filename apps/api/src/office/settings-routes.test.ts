@@ -33,6 +33,7 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
   const service = createOfficeSettingsService({
     settings,
     product: "onlyoffice",
+    publicUrl: async () => "https://drive.example",
     probeStatus: async () => "ready",
   });
   const principal: Principal = {
@@ -79,7 +80,6 @@ describe("Office settings routes", () => {
       body: JSON.stringify({
         ...initial.configuration,
         enabled: true,
-        appUrl: "https://drive.example",
       }),
     });
     expect(response.status).toBe(200);

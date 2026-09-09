@@ -50,7 +50,7 @@ cd "$repo/deploy"
 # Read only stack selectors and network addresses needed for startup output
 # and the health check; never source .env as executable shell code.
 if [[ -f .env ]]; then
-  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES FDRIVE_HTTP_BIND FDRIVE_HTTP_PORT FDRIVE_PUBLIC_URL; do
+  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES FDRIVE_HTTP_BIND FDRIVE_HTTP_PORT; do
     if [[ -z "${!key:-}" ]]; then
       # `|| true` keeps an absent key from aborting the script under pipefail.
       value="$({ grep -E "^${key}=" .env || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')"
@@ -93,9 +93,7 @@ echo -n "==> api health (${health}): "
 curl -sf --max-time 10 "$health" || { echo "NOT HEALTHY"; exit 1; }
 echo
 
-if [[ -n "${FDRIVE_PUBLIC_URL:-}" ]]; then
-  echo "==> Open ${FDRIVE_PUBLIC_URL} in your browser to complete setup."
-elif [[ "${FDRIVE_HTTP_BIND:-0.0.0.0}" == "0.0.0.0" ]]; then
+if [[ "${FDRIVE_HTTP_BIND:-0.0.0.0}" == "0.0.0.0" ]]; then
   echo "==> From another device on your network, open http://<server-ip>:${FDRIVE_HTTP_PORT:-8090} to complete setup."
 else
   echo "==> Open http://${FDRIVE_HTTP_BIND}:${FDRIVE_HTTP_PORT:-8090} in your browser to complete setup."

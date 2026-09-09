@@ -6,9 +6,10 @@ activation environment variable, or processing storage mount is needed.
 
 ## Enable the editor
 
-1. Turn on **Enable ONLYOFFICE**.
-2. Check **fdrive browser address**. It is filled from your current browser address;
-   use the HTTP(S) origin everyone uses to reach fdrive, including any port.
+1. Check the **Server address** step (System > Features > Server address afterwards). It
+   is filled from your current browser address; use the HTTP(S) origin everyone uses to
+   reach fdrive, including any port. The editor cannot be enabled without it.
+2. Turn on **Enable ONLYOFFICE**.
 3. Leave editing off for viewing only, or enable **Allow document editing** and enter
    the SFTPGo usernames allowed to edit, one per line.
 4. Save. The bundled Document Server starts automatically. You may finish onboarding
@@ -46,9 +47,9 @@ preserve the `/onlyoffice` path. See the [deployment reference](../deploy/REFERE
 - **Editor fails to load:** verify the saved browser address and reverse proxy forwarding.
 - **Editor opens over HTTPS but shows "Download failed":** the document server is
   handing the browser `http://` URLs, which the page blocks as mixed content. Server-side
-  logs stay clean (WOPI calls return 200, no ONLYOFFICE errors). Set
-  `FDRIVE_PUBLIC_URL=https://…` in `deploy/.env` and run `./update.sh`; the proxy derives
-  the scheme it forwards from that URL. Hard-reload the editor tab afterwards.
+  logs stay clean (WOPI calls return 200, no ONLYOFFICE errors). Check that the server
+  address in **System > Features** is the `https://` one, and that your reverse proxy sends
+  `X-Forwarded-Proto` (see the deployment reference). Hard-reload the editor tab afterwards.
 - **Viewing works but editing is unavailable:** check the editing toggle and exact SFTPGo
   username in the allowed-user list.
 
@@ -63,7 +64,11 @@ Configure these deployment inputs for a dedicated HTTPS Collabora hostname:
 FDRIVE_COMPOSE_FILES="compose.office.collabora.yaml"
 FDRIVE_PROFILES="collabora"
 FDRIVE_COLLABORA_HOST=office.example.com
+FDRIVE_COLLABORA_APP_URL=https://drive.example.com
 ```
+
+`FDRIVE_COLLABORA_APP_URL` is the fdrive address Collabora allows to frame its editor; it
+is read when the container starts, so it cannot come from the address saved in onboarding.
 
 Route that hostname to the fdrive proxy, then run `./update.sh`. Enable and configure
 Office through the same System settings. The advanced overlay supplies its network

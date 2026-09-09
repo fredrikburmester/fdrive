@@ -58,29 +58,29 @@ fdrive publishes port `8090` on all interfaces (`0.0.0.0`) by default. Open
 listen address, not a browser URL. Override `FDRIVE_HTTP_PORT` to change the port.
 For local-only access, explicitly set `FDRIVE_HTTP_BIND=127.0.0.1`.
 
-When placing an HTTPS reverse proxy (Nginx, Caddy, Traefik, NPM) in front of fdrive,
-set the address users reach it at in `deploy/.env`, then run `./update.sh`:
+An HTTPS reverse proxy (Nginx, Caddy, Traefik, NPM) in front of fdrive needs no
+`deploy/.env` setting. The bundled proxy passes the edge's `X-Forwarded-Proto` through to
+every service, so the api sets Secure cookies and the bundled ONLYOFFICE builds `https://`
+browser URLs whenever the edge says the request was HTTPS, and direct LAN clients on
+`http://<server-ip>:8090` keep working at the same time. Forwarded headers are honoured
+from private-network peers only (where an edge proxy lives: the host, the LAN, or another
+container); a LAN client forging `https` only breaks its own session.
 
-```dotenv
-FDRIVE_PUBLIC_URL=https://drive.example.com
-```
+The address everyone opens fdrive at is chosen in onboarding (afterwards in
+**System > Features > Server address**), prefilled from the browser's own address. The
+bundled editor is told fdrive lives there and links from connected assistants point there,
+so onboard through the address others will use: behind an HTTPS edge, the `https://` one.
+An `http://` address saved there hands the editor `http://` document URLs that an HTTPS
+page blocks as mixed content ("Download failed" with clean server logs).
 
-The bundled proxy derives the browser-facing scheme from that URL and sends it to every
-service as `X-Forwarded-Proto`; the api derives Secure cookies from it and the bundled
-ONLYOFFICE builds every browser-facing URL from it. Without an `https://` public URL
-behind an HTTPS edge, the editor is handed `http://` document URLs that the browser
-blocks as mixed content ("Download failed" with clean server logs). The header a client
-or the edge proxy sends is replaced, never trusted. (`FDRIVE_PROXY_SCHEME` used to set
-this separately; `preflight.sh` now rejects it.)
-
-Leave `FDRIVE_COOKIE_SECURE` at its `auto` default: direct LAN HTTP works without a
-public URL, and an HTTPS public URL makes sessions use Secure cookies.
-Keep direct LAN HTTP behind your home network firewall; use HTTPS for internet access.
+`FDRIVE_PROXY_SCHEME` and `FDRIVE_PUBLIC_URL` used to configure this; `preflight.sh` now
+rejects both. Leave `FDRIVE_COOKIE_SECURE` at its `auto` default. Keep direct LAN HTTP
+behind your home network firewall; use HTTPS for internet access.
 
 ### Proxy Requirements
 1. **WebSocket Support**: Ensure WebSocket forwarding is enabled (required for ONLYOFFICE live collaboration).
 2. **Large Uploads**: Set client max body size to unlimited or your desired maximum upload limit (e.g. `client_max_body_size 0;` in Nginx).
-3. **Forwarding Headers**: Send standard `X-Forwarded-For` and `X-Forwarded-Proto` headers.
+3. **Forwarding Headers**: Send standard `X-Forwarded-For` and `X-Forwarded-Proto` headers. Both example configurations below do; NPM does by default.
 
 ### Reverse Proxy Configuration Examples
 

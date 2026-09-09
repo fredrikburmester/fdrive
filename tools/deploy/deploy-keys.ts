@@ -152,6 +152,15 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "network",
   },
   {
+    key: "FDRIVE_COLLABORA_APP_URL",
+    description:
+      "The address everyone opens fdrive at, which Collabora (compose.office.collabora.yaml) allows to frame its editor. Required with that overlay, ignored otherwise; the bundled ONLYOFFICE reads the address saved in onboarding instead.",
+    default: null,
+    example: "https://drive.example.com",
+    secret: false,
+    subsystem: "office",
+  },
+  {
     key: "FDRIVE_COLLABORA_HOST",
     description:
       "Public hostname for Collabora (compose.office.collabora.yaml), routed to the same proxy port as fdrive. Required with that overlay, ignored otherwise.",

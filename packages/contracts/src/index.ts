@@ -106,6 +106,12 @@ export {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+export {
+  HttpOrigin,
+  PUBLIC_URL_SETTINGS_KEY,
+  PublicUrlSettings,
+  PublicUrlUpdateRequest,
+} from "./public-url.ts";
 export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,

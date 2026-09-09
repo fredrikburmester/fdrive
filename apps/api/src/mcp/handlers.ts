@@ -53,7 +53,12 @@ export interface McpToolDeps {
    */
   readonly scopeResolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly identities: Pick<IdentityRepo, "get">;
-  readonly fdrivePublicUrl: string | undefined;
+  /**
+   * The address everyone opens fdrive at (System > Features), the base of
+   * every link a tool returns; `null` until the owner sets one, when links
+   * are relative paths (still useful to an LLM, just not clickable).
+   */
+  readonly publicUrl: () => Promise<string | null>;
   readonly indexerClient: IndexerExtractClient | null;
   readonly writesEnabled: boolean;
   readonly clock: () => Date;
@@ -127,7 +132,7 @@ export interface FileSummary {
 
 /** Builds a `FileSummary` from a file and its already round-tripped, already read-authorized virtual path. */
 function fileSummaryFor(
-  publicUrl: string | undefined,
+  publicUrl: string | null,
   file: IndexedFile,
   virtualPath: string,
 ): FileSummary {
@@ -229,9 +234,10 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     return { query: args.query, results: [], available: false };
   }
 
+  const publicUrl = await deps.publicUrl();
   const results = response.sections.files.map((hit) => ({
     path: hit.path,
-    url: fileUrl(deps.fdrivePublicUrl, hit.path),
+    url: fileUrl(publicUrl, hit.path),
     name: hit.name,
     ext: hit.ext,
     size_bytes: hit.size,
@@ -301,12 +307,13 @@ export async function findFilesInScope(
     partial: authPartial,
   } = await authorizeIndexedFiles(ctx, authorizer, candidates);
 
+  const publicUrl = await deps.publicUrl();
   const results = accessible.map((file) => {
     const virtualPath = virtualPaths.get(file.id);
     // Every entry of `accessible` has a matching `virtualPaths` entry by
     // construction (`authorizeIndexedFiles` sets both together); the
     // fallback below only guards the type checker.
-    return fileSummaryFor(deps.fdrivePublicUrl, file, virtualPath ?? "");
+    return fileSummaryFor(publicUrl, file, virtualPath ?? "");
   });
   const partial = authPartial || total > candidates.length;
 
@@ -339,14 +346,14 @@ export async function runListDirectory(principal: Principal, args: ListDirectory
 
   return {
     path,
-    url: folderUrl(undefined, path),
+    url: folderUrl(null, path),
     entries: sliced.map((entry) => ({
       name: entry.name,
       type: entry.kind === "dir" ? "dir" : "file",
       path: entry.path,
       size_bytes: entry.kind === "dir" ? null : entry.size,
       modified: entry.modifiedAt.toISOString(),
-      url: entry.kind === "dir" ? folderUrl(undefined, entry.path) : fileUrl(undefined, entry.path),
+      url: entry.kind === "dir" ? folderUrl(null, entry.path) : fileUrl(null, entry.path),
     })),
     truncated,
   };
@@ -401,10 +408,11 @@ export async function readFileTextWithScopes(
     throw new McpToolError("failed to extract text (indexer unreachable or unsupported file)");
   }
 
+  const publicUrl = await deps.publicUrl();
   if (extracted.text.length === 0) {
     return {
       path: args.path,
-      url: fileUrl(deps.fdrivePublicUrl, args.path),
+      url: fileUrl(publicUrl, args.path),
       status: extracted.status,
       text: "",
     };
@@ -413,7 +421,7 @@ export async function readFileTextWithScopes(
   const page = pageText(extracted.text, args.offset ?? 0, args.max_chars ?? 8000);
   return {
     path: args.path,
-    url: fileUrl(deps.fdrivePublicUrl, args.path),
+    url: fileUrl(publicUrl, args.path),
     status: extracted.status,
     total_chars: page.totalChars,
     offset: args.offset ?? 0,
@@ -479,7 +487,7 @@ export async function fileInfoInScope(
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
 
-  const summary = fileSummaryFor(deps.fdrivePublicUrl, file, virtualPath);
+  const summary = fileSummaryFor(await deps.publicUrl(), file, virtualPath);
 
   let identicalCopies: string[] = [];
   let partial = false;
@@ -692,6 +700,7 @@ export async function similarFilesInScope(
     partial,
   } = await authorizeIndexedFiles(ctx, authorizer, candidates);
 
+  const publicUrl = await deps.publicUrl();
   const results = accessible
     .map((matchedFile): SimilarResult | null => {
       const virtualPath = virtualPaths.get(matchedFile.id);
@@ -700,7 +709,7 @@ export async function similarFilesInScope(
         return null;
       }
       return {
-        ...fileSummaryFor(deps.fdrivePublicUrl, matchedFile, virtualPath),
+        ...fileSummaryFor(publicUrl, matchedFile, virtualPath),
         similarity: Math.round(similarity * 10_000) / 10_000,
       };
     })
@@ -786,12 +795,13 @@ export async function folderOverviewInScope(
     byFolder.set(key, agg);
   }
 
+  const publicUrl = await deps.publicUrl();
   const folders = Array.from(byFolder.entries())
     .sort((a, b) => b[1].bytes - a[1].bytes)
     .slice(0, 200)
     .map(([path, agg]) => ({
       path,
-      url: folderUrl(deps.fdrivePublicUrl, path),
+      url: folderUrl(publicUrl, path),
       files: agg.files,
       bytes: agg.bytes,
       newest: agg.newestNs > 0n ? isoFromNs(agg.newestNs) : null,
@@ -900,7 +910,7 @@ export async function runCreateFolder(
 ) {
   requireWrites(deps);
   await principal.storage.mkdir(args.path, { parents: true });
-  return { created: args.path, url: folderUrl(deps.fdrivePublicUrl, args.path) };
+  return { created: args.path, url: folderUrl(await deps.publicUrl(), args.path) };
 }
 
 // -------------------------------------------------------------- move_path
@@ -972,12 +982,11 @@ export async function runMovePath(deps: McpToolDeps, principal: Principal, args:
   // a destination with no extension is treated as a folder, matching how
   // fdrive's own folder names are chosen in practice.
   const isDir = extensionOf(baseName(args.dst)) === "";
+  const publicUrl = await deps.publicUrl();
   return {
     moved: args.src,
     to: args.dst,
-    url: isDir
-      ? folderUrl(deps.fdrivePublicUrl, args.dst)
-      : fileUrl(deps.fdrivePublicUrl, args.dst),
+    url: isDir ? folderUrl(publicUrl, args.dst) : fileUrl(publicUrl, args.dst),
   };
 }
 

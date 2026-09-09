@@ -36,7 +36,6 @@ function loadFullyConfiguredEnv(): AppConfig {
     FDRIVE_OFFICE_URL: "http://onlyoffice",
     FDRIVE_OFFICE_PUBLIC_URL: "https://office.example.com",
     FDRIVE_WOPI_URL: "http://api:3001/wopi",
-    FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
   });
 }
 
