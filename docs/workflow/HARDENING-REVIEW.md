@@ -6,7 +6,8 @@ of change. Items 1–4 should land before connecting a real instance to the inte
 
 Update 2026-09-08: the user selected direct LAN onboarding as the default. The fixed-HTTPS
 assumption in item 4 and loopback web binding in item 8 are superseded: web listens on all
-interfaces and uses HTTP by default. HTTPS edges set `FDRIVE_PROXY_SCHEME=https`;
+interfaces and uses HTTP by default. HTTPS edges set `FDRIVE_PUBLIC_URL=https://…`, from
+which the proxy derives the forwarded scheme (2026-09-09: replaced `FDRIVE_PROXY_SCHEME`);
 see [current network setup](../../deploy/REFERENCE.md#network-placement--reverse-proxies).
 
 | # | Change | Severity | Where | Size |
