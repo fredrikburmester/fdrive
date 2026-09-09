@@ -236,3 +236,13 @@ it("a single-file archive share shows Peek beside its download button", async ()
   await screen.findByRole("region", { name: "Archive entries for bundle.tar.gz" });
   expect(calls.archiveEntries).toHaveBeenCalledWith(id, "/");
 });
+
+it("names a withheld share generically and reports a password the server did not verify", async () => {
+  calls.metadata.mockResolvedValue({ ...metadata, name: "", fileName: null });
+  setup();
+  await screen.findByText("Password-protected share");
+  fireEvent.change(screen.getByLabelText("Share password"), { target: { value: "nope" } });
+  fireEvent.click(screen.getByRole("button", { name: "Use password" }));
+  await screen.findByText("Share password incorrect.");
+  expect(calls.entries).not.toHaveBeenCalled();
+});

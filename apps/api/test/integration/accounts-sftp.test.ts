@@ -130,7 +130,7 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
     const linked = await call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass" },
+      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
     });
     expect(linked.status).toBe(200);
     const cookie = cookieFrom(linked);
@@ -200,7 +200,7 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
       call(ROUTES.account.identities, {
         method: "POST",
         cookie: d.cookie,
-        body: { username: "carol", password: "carol-pass" },
+        body: { username: "carol", password: "carol-pass", currentPassword: "dave-pass" },
       }),
       ...Array.from({ length: 8 }, () =>
         call(ROUTES.auth.login, {

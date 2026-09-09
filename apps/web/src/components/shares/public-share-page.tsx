@@ -407,6 +407,10 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
       const client = publicShareClient(controller.signal);
       await client.setSharePassword(id, value);
       latest = await client.publicShare(id);
+      // A viewable share reports whether the stored password verified; an
+      // upload share cannot be checked until something is uploaded.
+      if (latest.hasPassword && latest.scope === "read" && !latest.credentialPresent)
+        setError("Share password incorrect.");
     } catch (cause) {
       if (!controller.signal.aborted)
         setError(cause instanceof Error ? cause.message : "Could not use this password.");
@@ -443,7 +447,9 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
             <CardHeader>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 space-y-2">
-                  <CardTitle className="break-words text-2xl">{metadata.data.name}</CardTitle>
+                  <CardTitle className="break-words text-2xl">
+                    {metadata.data.name || "Password-protected share"}
+                  </CardTitle>
                   {metadata.data.description && (
                     <CardDescription className="whitespace-pre-wrap">
                       {metadata.data.description}

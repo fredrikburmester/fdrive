@@ -4,6 +4,7 @@ const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_MAX_ENTRIES = 256;
 
 interface CacheEntry {
+  readonly shareId: string;
   readonly verified: boolean;
   readonly expiresAt: number;
 }
@@ -13,6 +14,12 @@ export interface SharePasswordCache {
   /** `undefined` on a miss (never verified, or the entry expired). */
   get(shareId: string, password: string): boolean | undefined;
   set(shareId: string, password: string, verified: boolean): void;
+  /**
+   * Forgets every verification for `shareId`. Called when the owner changes
+   * or removes the share, so a rotated-away password stops answering
+   * thumbnail requests immediately rather than for the rest of its TTL.
+   */
+  invalidate(shareId: string): void;
 }
 
 export interface SharePasswordCacheOptions {
@@ -83,7 +90,14 @@ export function createSharePasswordCache(
           entries.delete(oldest);
         }
       }
-      entries.set(key, { verified, expiresAt: clock() + ttlMs });
+      entries.set(key, { shareId, verified, expiresAt: clock() + ttlMs });
+    },
+    invalidate(shareId) {
+      for (const [key, entry] of entries) {
+        if (entry.shareId === shareId) {
+          entries.delete(key);
+        }
+      }
     },
   };
 }

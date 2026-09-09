@@ -233,7 +233,10 @@ SFTPGo's token IP binding is fine because SFTPGo always sees the API container's
 the API tolerates it either way by re-minting on 401.
 
 **Sessions**: httpOnly, Secure, SameSite=Lax cookie with an opaque id; server-side row. Linking
-another SFTPGo identity is the same login flow while signed in. The identity switcher changes the
+another SFTPGo identity is the same login flow while signed in, plus the signed-in login's own
+password (and TOTP when SFTPGo demands it): a cookie alone cannot plant a durable login path.
+Logging in with a password that differs from the stored one revokes the account's other sessions;
+unlinking a login revokes every session that was using it. The identity switcher changes the
 session's active identity; cross-identity views (favorites, search) query all identities of the
 account.
 

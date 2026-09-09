@@ -95,7 +95,7 @@ it("reports failed compensation, ownership change, unavailable upstream and layo
   const row = await h.shares.get(share.id);
   if (!row) throw new Error("missing row");
   vi.spyOn(h.repos.identities, "get").mockResolvedValueOnce(null);
-  await expect(h.service.publicMetadata(share.id, false)).rejects.toMatchObject({
+  await expect(h.service.publicMetadata(share.id, undefined)).rejects.toMatchObject({
     kind: "not_found",
   });
   const failure = vi.spyOn(h.client, "user").mockImplementation((token) => {
@@ -125,7 +125,7 @@ it("reports failed compensation, ownership change, unavailable upstream and layo
   expect((await h.request(`/api/v1/public/shares/${share.id}`)).status).toBe(403);
   layoutFailure.mockRestore();
   vi.spyOn(h.connectionStore, "current").mockResolvedValue(null);
-  await expect(h.service.publicMetadata(share.id, false)).rejects.toMatchObject({
+  await expect(h.service.publicMetadata(share.id, undefined)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
 });
@@ -214,7 +214,7 @@ it("pins share clients to the checked provider and refuses changes before owner 
     return h.client;
   });
   const user = vi.spyOn(h.client, "user");
-  await expect(h.service.publicMetadata(id, false)).rejects.toMatchObject({
+  await expect(h.service.publicMetadata(id, undefined)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
   expect(user).not.toHaveBeenCalled();

@@ -183,6 +183,37 @@ describe("atomic verified login", () => {
     });
     await assertSessionOwnership();
   });
+  it("revokes every other session of the account only when asked, and never on a first login", async () => {
+    const f = await linkedFixture();
+    await a.loginVerified({ ...loginInput("c", "new-user"), revokeOtherSessions: true });
+    expect(await first.db.select().from(sessions)).toHaveLength(4);
+    const kept = await a.loginVerified({ ...loginInput("d"), at: later });
+    expect((await first.db.select().from(sessions)).map((s) => s.idHash).sort()).toEqual(
+      ["a", "b", "c", "d", "e"].map((h) => h.repeat(64)),
+    );
+    const replaced = await a.loginVerified({
+      ...loginInput("1"),
+      at: later,
+      revokeOtherSessions: true,
+    });
+    const remaining = await first.db.select().from(sessions).orderBy(asc(sessions.idHash));
+    // Account A (alice + sibling) keeps only the new session; account B and
+    // the unrelated new user are untouched; the expired "e" row goes too.
+    expect(remaining.map((s) => s.idHash)).toEqual(["1", "b", "c"].map((h) => h.repeat(64)));
+    expect(remaining[0]).toMatchObject({
+      accountId: f.alice.accountId,
+      activeIdentityId: f.alice.id,
+    });
+    expect(replaced.session.idHash).toBe("1".repeat(64));
+    expect(kept.session.accountId).toBe(f.alice.accountId);
+    await assertSessionOwnership();
+    await expect(
+      a.loginVerified({
+        ...loginInput("2"),
+        revokeOtherSessions: "yes" as unknown as boolean,
+      }),
+    ).rejects.toThrow(TypeError);
+  });
   it("serializes first logins across pools without duplicate accounts or identities", async () => {
     const logins = await Promise.all(
       Array.from({ length: 10 }, (_, index) =>

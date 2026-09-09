@@ -30,7 +30,12 @@ afterEach(() => {
 });
 
 it("links without storing request credentials in either cache", async () => {
-  const request = { username: "ada", password: "sensitive test value", otp: "123456" };
+  const request = {
+    username: "ada",
+    password: "sensitive test value",
+    otp: "123456",
+    currentPassword: "owner value",
+  };
   const link = vi.spyOn(apiClient, "linkIdentity").mockResolvedValue(me);
   const { result, client } = setup();
   await act(async () => {
@@ -47,7 +52,13 @@ it("reports failures, clears feedback and preserves old cache", async () => {
   const { result, client } = setup();
   client.setQueryData(["private"], "keep");
   await act(async () => {
-    expect(await result.current.link({ username: "ada", password: "temporary" })).toBe(false);
+    expect(
+      await result.current.link({
+        username: "ada",
+        password: "temporary",
+        currentPassword: "mine",
+      }),
+    ).toBe(false);
   });
   expect(result.current.error).toBe("Could not link login");
   expect(client.getQueryData(["private"])).toBe("keep");

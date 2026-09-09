@@ -73,7 +73,12 @@ it("rechecks session after upstream verification and revokes rotated sessions if
   });
   const link = vi.spyOn(h.links, "linkVerified");
   await expect(
-    h.service.link(input, { username: "bob", password: "bob-pass", ip: "test" }),
+    h.service.link(input, {
+      username: "bob",
+      password: "bob-pass",
+      currentPassword: "alice-pass",
+      ip: "test",
+    }),
   ).rejects.toMatchObject({ kind: "unauthorized" });
   expect(link).not.toHaveBeenCalled();
   const other = accountsHarness();
@@ -83,7 +88,12 @@ it("rechecks session after upstream verification and revokes rotated sessions if
     new ApiHttpError("unauthorized", "ownership changed"),
   );
   await expect(
-    other.service.link(own, { username: "bob", password: "bob-pass", ip: "test" }),
+    other.service.link(own, {
+      username: "bob",
+      password: "bob-pass",
+      currentPassword: "alice-pass",
+      ip: "test",
+    }),
   ).rejects.toMatchObject({ kind: "unauthorized" });
   const rotated = await rotate.mock.results[0]?.value;
   if (!rotated) throw new Error("Missing rotation");

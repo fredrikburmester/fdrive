@@ -123,16 +123,24 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
         (item) => item.id === share.id,
       ),
     ).toBe(true);
-    expect(PublicShare.parse(await (await call(pub(share.id))).json())).toMatchObject({
+    // The link alone (or a wrong password) reveals nothing; the real SFTPGo
+    // root listing verifies the correct one and unlocks the details.
+    const withheld = { name: "", fileName: null, hasPassword: true, credentialPresent: false };
+    expect(PublicShare.parse(await (await call(pub(share.id))).json())).toMatchObject(withheld);
+    expect((await call(`${pub(share.id)}/download`)).status).toBe(401);
+    const wrong = await credentials(share.id, "wrong");
+    expect(
+      PublicShare.parse(await (await call(pub(share.id), { cookie: wrong })).json()),
+    ).toMatchObject(withheld);
+    expect((await call(`${pub(share.id)}/download`, { cookie: wrong })).status).toBe(401);
+    const cookie = await credentials(share.id, "initial-secret");
+    expect(PublicShare.parse(await (await call(pub(share.id), { cookie })).json())).toMatchObject({
       layout: "single-file",
       presentation: "auto",
       fileName: "doc.txt",
       hasPassword: true,
+      credentialPresent: true,
     });
-    expect((await call(`${pub(share.id)}/download`)).status).toBe(401);
-    const wrong = await credentials(share.id, "wrong");
-    expect((await call(`${pub(share.id)}/download`, { cookie: wrong })).status).toBe(401);
-    const cookie = await credentials(share.id, "initial-secret");
     requests.length = 0;
     let res = await call(`${pub(share.id)}/download`, { cookie, headers: { range: "bytes=-7" } });
     expect(res.status, await res.clone().text()).toBe(206);

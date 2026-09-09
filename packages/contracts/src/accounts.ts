@@ -12,6 +12,9 @@ export const LinkIdentityRequest = z.strictObject({
     .regex(/^[^\0]+$/),
   password: z.string().min(1).max(4096),
   otp: z.string().min(1).max(32).optional(),
+  /** The signed-in login's own password: linking re-authenticates the account owner. */
+  currentPassword: z.string().min(1).max(4096),
+  currentOtp: z.string().min(1).max(32).optional(),
 });
 export type LinkIdentityRequest = z.infer<typeof LinkIdentityRequest>;
 export const SwitchIdentityRequest = z.strictObject({ identityId: AccountIdentityId });

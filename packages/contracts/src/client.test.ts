@@ -1527,7 +1527,12 @@ it("calls account identity and cross-identity view routes with typed responses",
   ]);
   const client = createApiClient({ fetch: fetchStub });
   expect(
-    await client.linkIdentity({ username: "alice", password: "secret", otp: "123456" }),
+    await client.linkIdentity({
+      username: "alice",
+      password: "secret",
+      otp: "123456",
+      currentPassword: "mine",
+    }),
   ).toEqual(VALID_ME);
   expect(await client.unlinkIdentity(VALID_UUID)).toEqual(VALID_ME);
   expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
@@ -1550,7 +1555,12 @@ it("calls account identity and cross-identity view routes with typed responses",
     "/api/v1/account/search?q=a",
   ]);
   expect(calls[0]?.init.body).toBe(
-    JSON.stringify({ username: "alice", password: "secret", otp: "123456" }),
+    JSON.stringify({
+      username: "alice",
+      password: "secret",
+      otp: "123456",
+      currentPassword: "mine",
+    }),
   );
   expect(calls[1]?.init.method).toBe("DELETE");
   expect(calls[2]?.init.body).toBe(JSON.stringify({ identityId: VALID_UUID }));

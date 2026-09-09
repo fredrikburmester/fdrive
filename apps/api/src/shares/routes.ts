@@ -265,18 +265,20 @@ export function registerSharesRoutes(
   groups.authed.patch(`${base}/:id`, (c) =>
     shareCall(async () => {
       const input = accountContext(c);
-      return c.json(
-        await deps.service.update(
-          input,
-          shareId(c),
-          await publicBody(UpdateShareRequest, c, 32 * 1024 * 1024),
-        ),
+      const updated = await deps.service.update(
+        input,
+        shareId(c),
+        await publicBody(UpdateShareRequest, c, 32 * 1024 * 1024),
       );
+      // The password may have changed: no memoized verification survives an update.
+      passwordCache.invalidate(shareId(c));
+      return c.json(updated);
     }),
   );
   groups.authed.delete(`${base}/:id`, (c) =>
     shareCall(async () => {
       await deps.service.remove(accountContext(c), shareId(c));
+      passwordCache.invalidate(shareId(c));
       return c.json({ ok: true });
     }),
   );
@@ -316,15 +318,13 @@ export function registerSharesRoutes(
     });
   }
   groups.public.get(pub, (c) =>
-    shareCall(async () =>
-      c.json(await deps.service.publicMetadata(shareId(c), password(c) !== undefined)),
-    ),
+    shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), password(c)))),
   );
   groups.public.post(`${pub}/credentials`, (c) =>
     shareCall(async () => {
       const id = shareId(c);
       const body = await publicBody(ShareCredentialsRequest, c);
-      await deps.service.publicMetadata(id, false);
+      await deps.service.publicMetadata(id, undefined);
       credentialCookie(c, deps.codec.encode(id, body.password), SHARE_CREDENTIAL_SECONDS);
       return c.json({ ok: true });
     }),

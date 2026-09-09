@@ -297,7 +297,13 @@ describe("unlink and switch", () => {
   it("unlinks into nonadmin independent account, retaining UUID, credentials and metadata", async () => {
     const f = await fixture();
     const before = await snapshot();
-    const result = await a.unlink({ accountId: accountA, identityId: f.alice.id, at });
+    await makeSession("d", accountA, f.alice.id);
+    const result = await a.unlink({
+      accountId: accountA,
+      identityId: f.alice.id,
+      at,
+      requestingSessionIdHash: "a".repeat(64),
+    });
     expect(result.identity.id).toBe(f.alice.id);
     expect(result.remainingIdentityId).toBe(f.sibling.id);
     expect(result.identity.accountId).not.toBe(accountA);
@@ -310,11 +316,14 @@ describe("unlink and switch", () => {
     expect(after.favorites).toEqual(before.favorites);
     expect(after.recents).toEqual(before.recents);
     expect(after.shares).toEqual(before.shares);
+    // Only the requesting session moves to the remaining login; every other
+    // session that was using the unlinked login is revoked with it.
     expect(after.sessions).toEqual(
       before.sessions.map((s) =>
-        s.activeIdentityId === f.alice.id ? { ...s, activeIdentityId: f.sibling.id } : s,
+        s.idHash === "a".repeat(64) ? { ...s, activeIdentityId: f.sibling.id } : s,
       ),
     );
+    expect(after.sessions.some((s) => s.idHash === "d".repeat(64))).toBe(false);
     expect(after.tokens).toEqual(before.tokens.filter((t) => t.identityId !== f.alice.id));
     const newTags = after.tags.filter((t) => t.accountId === result.identity.accountId);
     expect(newTags.map((t) => t.name).sort()).toEqual(["Shared", "Used"]);
@@ -334,10 +343,27 @@ describe("unlink and switch", () => {
     await makeSession("a", accountA, alice.id);
     await makeSession("b", accountA, alice.id);
     const expected = [firstSibling.id, secondSibling.id].sort()[0];
-    const result = await a.unlink({ accountId: accountA, identityId: alice.id, at });
+    const result = await a.unlink({
+      accountId: accountA,
+      identityId: alice.id,
+      at,
+      requestingSessionIdHash: "b".repeat(64),
+    });
     expect(result.remainingIdentityId).toBe(expected);
-    const active = await first.db.select({ identityId: sessions.activeIdentityId }).from(sessions);
-    expect(active).toEqual([{ identityId: expected }, { identityId: expected }]);
+    const active = await first.db
+      .select({ idHash: sessions.idHash, identityId: sessions.activeIdentityId })
+      .from(sessions);
+    expect(active).toEqual([{ idHash: "b".repeat(64), identityId: expected }]);
+  });
+  it("unlink without a requesting session revokes every session using that login", async () => {
+    const alice = await a.linkVerified(base);
+    const sibling = await a.linkVerified({ ...base, username: "sibling" });
+    await makeSession("a", accountA, alice.id);
+    await makeSession("b", accountA, alice.id);
+    await makeSession("c", accountA, sibling.id);
+    await a.unlink({ accountId: accountA, identityId: alice.id, at });
+    const remaining = await first.db.select({ idHash: sessions.idHash }).from(sessions);
+    expect(remaining).toEqual([{ idHash: "c".repeat(64) }]);
   });
   it("rejects final-identity and foreign unlink without creating an account", async () => {
     const alice = await a.linkVerified(base);
@@ -402,7 +428,12 @@ describe("unlink and switch", () => {
   it("rechecks ownership when unlink races a switch or verified transfer", async () => {
     const f = await fixture();
     const results = await Promise.allSettled([
-      a.unlink({ accountId: accountA, identityId: f.alice.id, at }),
+      a.unlink({
+        accountId: accountA,
+        identityId: f.alice.id,
+        at,
+        requestingSessionIdHash: "a".repeat(64),
+      }),
       b.switchActive({
         accountId: accountA,
         identityId: f.alice.id,
@@ -432,7 +463,14 @@ describe("unlink and switch", () => {
       sql`alter table app.sessions add constraint fail_switch check(active_identity_id is null) not valid`,
     );
     try {
-      await expect(a.unlink({ accountId: accountA, identityId: f.alice.id, at })).rejects.toThrow();
+      await expect(
+        a.unlink({
+          accountId: accountA,
+          identityId: f.alice.id,
+          at,
+          requestingSessionIdHash: "a".repeat(64),
+        }),
+      ).rejects.toThrow();
       expect(await snapshot()).toEqual(before);
     } finally {
       await first.db.execute(sql`alter table app.sessions drop constraint fail_switch`);

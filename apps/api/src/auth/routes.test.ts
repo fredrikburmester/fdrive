@@ -335,15 +335,29 @@ describe("auth routes: POST /auth/login", () => {
     expect(body.error.details?.retryAfterMs).toEqual(expect.any(Number));
   });
 
-  it("does not rate limit a different username from the same ip", async () => {
+  it("keeps usernames independent below the per-address bound, then blocks the whole address", async () => {
     const { app } = buildTestApp({ clockCtl });
 
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       await login(app, { username: "alice", password: "wrong-password" });
     }
+    // Four failures for alice do not touch bob's own bucket.
+    expect((await login(app, { username: "bob", password: "builder" })).status).toBe(200);
 
-    const res = await login(app, { username: "bob", password: "builder" });
-    expect(res.status).toBe(200);
+    // The fifth failure from this address trips its shared bucket, so even a
+    // correct password for another username is refused here (password
+    // spraying), while the same login from another address still works.
+    await login(app, { username: "alice", password: "wrong-password" });
+    expect((await login(app, { username: "bob", password: "builder" })).status).toBe(429);
+    expect(
+      (
+        await login(
+          app,
+          { username: "bob", password: "builder" },
+          { "x-forwarded-for": "198.51.100.4" },
+        )
+      ).status,
+    ).toBe(200);
   });
 
   it("rejects a cross-site login POST via the CSRF guard", async () => {

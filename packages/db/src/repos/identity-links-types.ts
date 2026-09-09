@@ -47,6 +47,12 @@ export interface LoginSessionInput {
 export interface LoginVerifiedInput
   extends Omit<LinkVerifiedInput, "accountId" | "requestingSessionIdHash"> {
   readonly session: LoginSessionInput;
+  /**
+   * Revokes every other session of the identity's account in the same
+   * transaction. Set when the verified password differs from the stored one:
+   * a login with replaced credentials must not leave older sessions alive.
+   */
+  readonly revokeOtherSessions?: boolean;
 }
 export interface LoginVerifiedResult {
   readonly identity: Identity;
@@ -113,6 +119,8 @@ export function validateLoginVerified(input: LoginVerifiedInput): void {
     throw new TypeError("Session must expire after login");
   validateSessionText(input.session.userAgent, 4096);
   validateSessionText(input.session.ip, 255);
+  if (input.revokeOtherSessions !== undefined && typeof input.revokeOtherSessions !== "boolean")
+    throw new TypeError("Invalid session revocation flag");
 }
 export function validateRotateSession(input: RotateSessionInput): void {
   validateAccountTime(input);

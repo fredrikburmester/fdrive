@@ -9,16 +9,24 @@ import {
 
 const identityId = "123e4567-e89b-42d3-a456-426614174000";
 it("bounds strict credential requests and canonical identity selection", () => {
-  expect(
-    LinkIdentityRequest.parse({ username: "alice", password: "secret", otp: "123456" }),
-  ).toEqual({ username: "alice", password: "secret", otp: "123456" });
+  const link = { username: "alice", password: "secret", otp: "123456", currentPassword: "mine" };
+  expect(LinkIdentityRequest.parse(link)).toEqual(link);
+  expect(LinkIdentityRequest.parse({ ...link, currentOtp: "654321" })).toEqual({
+    ...link,
+    currentOtp: "654321",
+  });
   for (const invalid of [
-    { username: "", password: "x" },
-    { username: "a\0", password: "x" },
-    { username: "a".repeat(256), password: "x" },
-    { username: "a", password: "x".repeat(4097) },
-    { username: "a", password: "x", otp: "x".repeat(33) },
-    { username: "a", password: "x", accountId: identityId },
+    { username: "", password: "x", currentPassword: "x" },
+    { username: "a\0", password: "x", currentPassword: "x" },
+    { username: "a".repeat(256), password: "x", currentPassword: "x" },
+    { username: "a", password: "x".repeat(4097), currentPassword: "x" },
+    { username: "a", password: "x", otp: "x".repeat(33), currentPassword: "x" },
+    { username: "a", password: "x", accountId: identityId, currentPassword: "x" },
+    // The signed-in login's own password is mandatory and bounded like the new one.
+    { username: "a", password: "x" },
+    { username: "a", password: "x", currentPassword: "" },
+    { username: "a", password: "x", currentPassword: "x".repeat(4097) },
+    { username: "a", password: "x", currentPassword: "x", currentOtp: "x".repeat(33) },
   ])
     expect(LinkIdentityRequest.safeParse(invalid).success).toBe(false);
   expect(SwitchIdentityRequest.parse({ identityId })).toEqual({ identityId });

@@ -126,13 +126,39 @@ response beyond the error kind and message, since the remedy is the same.
 ## Login rate limiting
 
 `apps/api/src/auth/login-limiter.ts` implements a simple, in-memory,
-per-process limiter keyed by `${ip}|${username}`: after 5 failed attempts
-within a 60-second window, the key is blocked for 60 seconds
+per-process limiter. Every credential check (login, setup, and the owner
+re-authentication that identity linking requires) consults two keys: a
+`${ip}|${username}` key, and an independent `login-ip|${ip}` key shared by
+every username tried from that address, so one address cannot spray a
+password across many usernames. Each key follows the same policy: after 5
+failed attempts within a 60-second window it is blocked for 60 seconds
 (`rate_limited`, with `retryAfterMs` in the error details). A successful
-login clears the key's failure history immediately. Because the limiter is
-in-memory, it resets on process restart and is not shared across multiple
-api instances; this is an accepted simplification for fdrive's current
-single-instance deployment shape.
+login clears the `ip|username` key's failure history immediately but never
+the address key, so knowing one valid login cannot reset the spraying
+bound; the address key only drains as its window and block expire. Because
+the limiter is in-memory, it resets on process restart and is not shared
+across multiple api instances; this is an accepted simplification for
+fdrive's current single-instance deployment shape.
+
+## Re-authentication and session revocation
+
+Linking another SFTPGo login (`POST /api/v1/account/identities`) requires
+the signed-in login's own password (`currentPassword`, plus `currentOtp`
+when SFTPGo enforces TOTP for it) in addition to the new login's
+credentials. A stolen cookie is therefore not enough to plant a durable
+login path on the account.
+
+Two events revoke sessions server-side:
+
+- A login whose password differs from the credential fdrive has stored for
+  that identity (or whose stored credential is missing or undecryptable)
+  deletes every other session of the account inside the same transaction
+  that stores the new credential. Changing the SFTPGo password and signing
+  in again is how a user locks a stolen session out. Logging in again with
+  the unchanged password leaves other devices signed in.
+- Unlinking a login deletes every session that was using it as its active
+  identity, except the requesting session, which moves to a remaining login
+  and is rotated as before.
 
 ## Known limitation: SFTPGo TOTP enforced for HTTP
 

@@ -9,7 +9,7 @@ import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppConfig } from "../config.js";
 import type { ConnectionStore } from "../connection/store.js";
 import { ApiHttpError } from "../errors.js";
-import { KEY_ID, seal } from "./crypto.js";
+import { KEY_ID, open, seal } from "./crypto.js";
 import type { LoginLimiter } from "./login-limiter.js";
 import type { Principal } from "./principal.js";
 import { type ClientForBaseUrl, requireCurrentConnection } from "./provider-client.ts";
@@ -101,6 +101,38 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     };
   }
 
+  /**
+   * True when `password` differs from the credential already stored for the
+   * identity `username` resolves to, or that credential is missing or
+   * unreadable: the user replaced their SFTPGo password, so sessions issued
+   * under the old one must not outlive this login. A first login has nothing
+   * to compare against and revokes nothing.
+   */
+  async function credentialReplaced(
+    providerId: string,
+    username: string,
+    password: string,
+  ): Promise<boolean> {
+    const identity = await deps.repos.identities.findByProviderUsername(providerId, username);
+    if (identity === null) return false;
+    const credential = await deps.repos.credentials.get(identity.id);
+    if (credential === null) return true;
+    try {
+      const stored: unknown = JSON.parse(
+        new TextDecoder().decode(open(deps.master, credential.ciphertext, identity.id)),
+      );
+      return (
+        typeof stored !== "object" ||
+        stored === null ||
+        (stored as { password?: unknown }).password !== password
+      );
+    } catch {
+      // Undecryptable (rotated master key) or malformed: nothing usable was
+      // stored, so the verified password is by definition a replacement.
+      return true;
+    }
+  }
+
   async function loginAt(input: LoginInput, candidateBaseUrl: string | null): Promise<LoginResult> {
     const { provider, token } =
       candidateBaseUrl === null
@@ -111,11 +143,17 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const at = deps.clock();
     if (candidateBaseUrl === null)
       await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
+    const revokeOtherSessions = await credentialReplaced(
+      provider.id,
+      input.username,
+      input.password,
+    );
     const result = await accountRepositoryCall(() =>
       deps.identityLinks.loginVerified({
         providerId: provider.id,
         username: input.username,
         at,
+        revokeOtherSessions,
         sealCredential: (identityId) => ({
           ciphertext: seal(
             deps.master,
