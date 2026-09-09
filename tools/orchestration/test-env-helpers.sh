@@ -118,9 +118,11 @@ printf ' PWD=<%s>\n' "$PWD" >> "$LOG"
 if [[ $* == 'dev:env' || $* == *'compose -f deploy/compose.dev.yaml --profile index up -d'* ]]; then exit 0; fi
 if [[ $* == *'@fdrive/api dev'* || $* == *'@fdrive/web dev'* ]]; then
   if [[ $* == *'@fdrive/api dev'* ]]; then server=api; else server=web; fi
+  # Trap before announcing the start: a sibling's early exit can have the
+  # helper terminate this server the moment it appears in the log.
+  trap 'printf "server-term <%s>\\n" "$server" >> "$LOG"; exit 0' TERM INT
   printf 'server-start <%s>\n' "$server" >> "$LOG"
   if [[ ${EARLY_SERVER:-} == "$server" ]]; then exit 0; fi
-  trap 'printf "server-term <%s>\\n" "$server" >> "$LOG"; exit 0' TERM INT
   while true; do sleep 1; done
 fi
 exit 0
@@ -223,7 +225,9 @@ write_repo early
 : > "$LOG"
 capture env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" EARLY_SERVER=api bash "$DEV_APP" "$ROOT" --web-port 32125
 [[ $STATUS -eq 1 ]] || { printf 'early clean exit status: %s\n' "$STATUS" >&2; exit 1; }
-assert_contains "$LOG" 'server-term <web>'
+# The api mock exits at once, so the helper may terminate web before that
+# mock has even begun executing; a web server that did start must be cleaned.
+if grep -q 'server-start <web>' "$LOG"; then assert_contains "$LOG" 'server-term <web>'; fi
 printf 'PASS dev treats an early zero exit as failure\n'
 
 write_repo interrupt
