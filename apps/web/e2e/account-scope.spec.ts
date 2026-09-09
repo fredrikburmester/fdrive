@@ -49,9 +49,9 @@ test("an administrator maps an unmapped virtual folder from a suggestion and sea
   await expect(dialog.getByText("team.txt").first()).toBeVisible();
   await expect(dialog.getByText("/shared/team.txt").first()).toBeVisible();
 
-  // Folder mappings are managed under System > Connection; removing it
+  // Folder mappings are managed under System > Shared folders; removing it
   // restores the fixture so a rerun in the same environment starts unmapped.
-  await page.goto("/system/connection");
+  await page.goto("/system/shared-folders");
   const card = page.getByLabel("Shared folder mappings");
   await expect(card.getByText("sftpgo:/_folders/shared")).toBeVisible();
   await card.getByRole("button", { name: "Remove shared folder /shared" }).click();

@@ -32,9 +32,10 @@ vi.mock("./system-page", () => ({
     title: string;
     description: string;
     actions?: ReactNode;
+    feature?: string | readonly string[];
     children: ReactNode;
   }) => (
-    <div>
+    <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
       <div data-testid="actions">{props.actions}</div>
@@ -76,6 +77,13 @@ afterEach(() => {
 });
 
 describe("ImageSearchPage", () => {
+  it("declares the feature that gates this page", () => {
+    mockHealthy();
+    render(<ImageSearchPage />);
+
+    expect(screen.getByTestId("system-page").dataset.feature).toBe("imageSearch");
+  });
+
   it("shows Loading while the query has not resolved yet", () => {
     useSystemImageSearchMock.mockReturnValue({
       data: undefined,

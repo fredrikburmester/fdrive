@@ -36,7 +36,7 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
   await expect(page.getByRole("button", { name: "Save and continue" })).toBeDisabled();
   await page.getByRole("checkbox", { name: /I configured and tested/ }).check();
   await page.getByRole("button", { name: "Save and continue" }).click();
-  await expect(page.getByLabel("fdrive server address")).not.toHaveValue("");
+  await expect(page.getByLabel("fdrive public address")).not.toHaveValue("");
   await page.getByRole("button", { name: "Save and continue" }).click();
   await page.getByRole("button", { name: "Skip ONLYOFFICE" }).click();
   await page.getByRole("button", { name: "Finish setup" }).click();
@@ -161,7 +161,7 @@ test.describe("trash available", () => {
     await expect(secondRow).toBeHidden();
 
     // Settings apply live: disabling removes Trash without restarting the API.
-    await page.goto(`${webBaseUrl}/system/features`);
+    await page.goto(`${webBaseUrl}/system/general`);
     await page.getByRole("switch", { name: "Enable Trash" }).click();
     await page.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(

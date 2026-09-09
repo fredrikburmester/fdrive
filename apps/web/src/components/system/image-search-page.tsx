@@ -4,7 +4,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -24,10 +23,11 @@ import {
 import { describeMaintenanceError } from "@/lib/system/maintenance";
 import { sidecarStatus } from "@/lib/system/status";
 import { MaintenanceProgress } from "./maintenance-progress";
-import { StatCard } from "./stat-card";
+import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+import { SystemSection } from "./system-section";
 
 /** Admin controls for image-content (thumbnail embedding) search maintenance. */
 export function ImageSearchPage() {
@@ -80,6 +80,7 @@ export function ImageSearchPage() {
       title="Image search"
       description="Search images by what they show, not just their name."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+      feature="imageSearch"
       actions={
         <>
           <Button
@@ -93,6 +94,7 @@ export function ImageSearchPage() {
           <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
             Rebuild
           </Button>
+          {/* LogSheet mounts here (P9 event log) */}
         </>
       }
     >
@@ -102,44 +104,43 @@ export function ImageSearchPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Status</CardTitle>
-              <CardDescription>
-                {status === "ok"
-                  ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
-                  : status === "unreachable"
-                    ? "The image-embedding sidecar is unreachable."
-                    : "Not configured: set FDRIVE_IMAGE_EMBED_URL."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <StatusBadge status={status} />
-              <p className="text-sm text-muted-foreground">
-                Image search matches a thumbnail's contents to a text query using a SigLIP 2
-                embedding sidecar. Rebuild fills missing embeddings for photos with a thumbnail.
-                Force rebuild replaces embeddings written by a different model. Clear removes every
-                embedding. Original files, thumbnails, and text search data stay unchanged.
-              </p>
-            </CardContent>
-          </Card>
-          <div className="grid grid-cols-2 gap-3">
-            <StatCard label="Embedded thumbnails" value={data.embedded.toLocaleString()} />
-            <StatCard
-              label="Embedding model"
-              value={
-                <span className="flex items-center gap-2">
-                  {data.embeddedModel ?? "None yet"}
-                  {modelMismatch ? <Badge variant="destructive">Model mismatch</Badge> : null}
-                </span>
-              }
-              {...(modelMismatch
-                ? {
-                    hint: `The sidecar now runs ${data.model}. Force rebuild to replace these rows.`,
-                  }
-                : {})}
-            />
-          </div>
+          <SystemSection
+            title="Status"
+            description={
+              status === "ok"
+                ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
+                : status === "unreachable"
+                  ? "The image-embedding sidecar is unreachable."
+                  : "Not configured: set FDRIVE_IMAGE_EMBED_URL."
+            }
+          >
+            <StatusBadge status={status} />
+            <p className="text-sm text-muted-foreground">
+              Image search matches a thumbnail's contents to a text query using a SigLIP 2 embedding
+              sidecar. Rebuild fills missing embeddings for photos with a thumbnail. Force rebuild
+              replaces embeddings written by a different model. Clear removes every embedding.
+              Original files, thumbnails, and text search data stay unchanged.
+            </p>
+          </SystemSection>
+          <StatGrid
+            stats={[
+              { label: "Embedded thumbnails", value: data.embedded.toLocaleString() },
+              {
+                label: "Embedding model",
+                value: (
+                  <span className="flex items-center gap-2">
+                    {data.embeddedModel ?? "None yet"}
+                    {modelMismatch ? <Badge variant="destructive">Model mismatch</Badge> : null}
+                  </span>
+                ),
+                ...(modelMismatch
+                  ? {
+                      hint: `The sidecar now runs ${data.model}. Force rebuild to replace these rows.`,
+                    }
+                  : {}),
+              },
+            ]}
+          />
           <MaintenanceProgress title="Image embedding rebuild" job={data.rebuild} />
           <MaintenanceProgress title="Image embedding clear" job={data.clear} />
         </>

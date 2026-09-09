@@ -24,3 +24,21 @@ export function sidecarStatusLabel(status: SidecarStatus): string {
       return "Not configured";
   }
 }
+
+/**
+ * The Office service's own four-state status as one of the three badges
+ * every other System page uses: `ready` is reachable, `off` means the owner
+ * has not turned it on, and both `starting` and `unavailable` are "not
+ * reachable yet" — the Office page's description says which of the two it
+ * is, since only the transient one resolves on its own.
+ */
+export function officeStatus(status: "off" | "starting" | "ready" | "unavailable"): SidecarStatus {
+  switch (status) {
+    case "ready":
+      return "ok";
+    case "off":
+      return "not_configured";
+    default:
+      return "unreachable";
+  }
+}
