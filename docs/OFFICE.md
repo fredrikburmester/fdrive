@@ -47,9 +47,8 @@ preserve the `/onlyoffice` path. See the [deployment reference](../deploy/REFERE
 - **Editor opens over HTTPS but shows "Download failed":** the document server is
   handing the browser `http://` URLs, which the page blocks as mixed content. Server-side
   logs stay clean (WOPI calls return 200, no ONLYOFFICE errors). Set
-  `FDRIVE_PROXY_SCHEME=https` next to `FDRIVE_PUBLIC_URL` in `deploy/.env` and run
-  `./update.sh`; `preflight.sh` rejects a mismatch between the two. Hard-reload the
-  editor tab afterwards.
+  `FDRIVE_PUBLIC_URL=https://…` in `deploy/.env` and run `./update.sh`; the proxy derives
+  the scheme it forwards from that URL. Hard-reload the editor tab afterwards.
 - **Viewing works but editing is unavailable:** check the editing toggle and exact SFTPGo
   username in the allowed-user list.
 

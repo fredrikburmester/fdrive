@@ -59,21 +59,22 @@ listen address, not a browser URL. Override `FDRIVE_HTTP_PORT` to change the por
 For local-only access, explicitly set `FDRIVE_HTTP_BIND=127.0.0.1`.
 
 When placing an HTTPS reverse proxy (Nginx, Caddy, Traefik, NPM) in front of fdrive,
-set these in `deploy/.env`, then run `./update.sh`:
+set the address users reach it at in `deploy/.env`, then run `./update.sh`:
 
 ```dotenv
 FDRIVE_PUBLIC_URL=https://drive.example.com
-FDRIVE_PROXY_SCHEME=https
 ```
 
-Both are required together. `FDRIVE_PROXY_SCHEME` is what the bundled proxy sends every
+The bundled proxy derives the browser-facing scheme from that URL and sends it to every
 service as `X-Forwarded-Proto`; the api derives Secure cookies from it and the bundled
-ONLYOFFICE builds every browser-facing URL from it. Left at `http` behind an HTTPS edge,
-the editor is handed `http://` document URLs that the browser blocks as mixed content
-("Download failed" with clean server logs). `preflight.sh` fails when the two disagree.
+ONLYOFFICE builds every browser-facing URL from it. Without an `https://` public URL
+behind an HTTPS edge, the editor is handed `http://` document URLs that the browser
+blocks as mixed content ("Download failed" with clean server logs). The header a client
+or the edge proxy sends is replaced, never trusted. (`FDRIVE_PROXY_SCHEME` used to set
+this separately; `preflight.sh` now rejects it.)
 
-Leave `FDRIVE_COOKIE_SECURE` at its `auto` default: direct LAN HTTP works with the
-HTTP default, and the HTTPS proxy setting makes sessions use Secure cookies.
+Leave `FDRIVE_COOKIE_SECURE` at its `auto` default: direct LAN HTTP works without a
+public URL, and an HTTPS public URL makes sessions use Secure cookies.
 Keep direct LAN HTTP behind your home network firewall; use HTTPS for internet access.
 
 ### Proxy Requirements

@@ -1,9 +1,10 @@
 #!/bin/bash
 # Fails loudly on common deploy/.env mistakes before `docker compose up`:
 # a leftover change-me placeholder, an unknown FDRIVE_* key (a likely
-# typo), or a FDRIVE_HOME_TEMPLATE that does not look like
-# <root>:<path with {username}>. Prints the resolved FDRIVE_INDEX_ROOTS and
-# bind address so the operator sees exactly what will be used. Reads only
+# typo), a FDRIVE_HOME_TEMPLATE that does not look like
+# <root>:<path with {username}>, or a FDRIVE_PUBLIC_URL without a scheme.
+# Prints the resolved FDRIVE_INDEX_ROOTS and bind address so the operator
+# sees exactly what will be used. Reads only
 # deploy/.env; run automatically by update.sh before `up`, or directly:
 #   ./preflight.sh
 set -euo pipefail
@@ -50,7 +51,6 @@ KNOWN_FDRIVE_KEYS=(
     "FDRIVE_COMPOSE_FILES"
     "FDRIVE_PROFILES"
     "FDRIVE_HTTP_BIND"
-    "FDRIVE_PROXY_SCHEME"
     "FDRIVE_HTTP_PORT"
     "FDRIVE_INDEX_SFTPGO_DIR"
     "FDRIVE_INDEX_SFTPGO_PATH"
@@ -80,6 +80,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   done
   if [[ "$known" -eq 0 ]]; then
     case "$key" in
+      FDRIVE_PROXY_SCHEME)
+        # Removed: the proxy now derives the browser-facing scheme from
+        # FDRIVE_PUBLIC_URL, so this key can only ever contradict it.
+        echo "error: 'FDRIVE_PROXY_SCHEME' in $env_file is no longer used; remove it and make sure FDRIVE_PUBLIC_URL starts with https:// behind an HTTPS reverse proxy (the proxy derives the scheme from it)" >&2
+        ;;
       FDRIVE_INDEX_ROOTS|FDRIVE_INDEXER_URL|FDRIVE_EMBED_URL|FDRIVE_IMAGE_EMBED_URL|FDRIVE_OCR_URL|FDRIVE_THUMBS_DIR)
         # compose.yaml fixes these to the stack's own sidecar addresses and
         # the mounted root; a value in .env would be silently ignored, so it
@@ -100,31 +105,19 @@ if [[ -n "$home_template" ]] && [[ ! "$home_template" =~ ^[A-Za-z0-9_-]+:.*\{use
   fail=1
 fi
 
-scheme="$(read_env_value FDRIVE_PROXY_SCHEME)"
-scheme="${scheme:-http}"
-case "$scheme" in
-  http|https) ;;
-  *) echo "error: FDRIVE_PROXY_SCHEME must be http or https" >&2; fail=1 ;;
-esac
-
-# FDRIVE_PROXY_SCHEME is what the bundled proxy sends every upstream as
-# X-Forwarded-Proto, and ONLYOFFICE builds the URLs it hands the browser from
-# it. Behind an HTTPS edge with the scheme left at http, the editor page
-# (loaded over https) is told to fetch documents over http, which browsers
-# block as mixed content: every server-side call still returns 200 and the
-# only symptom is "Download failed" in the editor. FDRIVE_PUBLIC_URL states
-# the scheme users actually reach fdrive over, so the two must agree.
+# The scheme the proxy tells every service the browser used is derived from
+# FDRIVE_PUBLIC_URL (compose.yaml), so the URL must carry one, or behind an
+# HTTPS edge the Office editor is handed http:// document URLs that the
+# browser blocks as mixed content ("Download failed" with clean server logs).
 public_url="$(read_env_value FDRIVE_PUBLIC_URL)"
 if [[ -n "$public_url" ]]; then
   case "$public_url" in
-    http://*) public_scheme=http ;;
-    https://*) public_scheme=https ;;
-    *) public_scheme="" ;;
+    http://*|https://*) ;;
+    *)
+      echo "error: FDRIVE_PUBLIC_URL '$public_url' must start with http:// or https:// (the proxy derives the browser-facing scheme from it)" >&2
+      fail=1
+      ;;
   esac
-  if [[ -n "$public_scheme" ]] && [[ "$public_scheme" != "$scheme" ]]; then
-    echo "error: FDRIVE_PUBLIC_URL is ${public_scheme}:// but FDRIVE_PROXY_SCHEME is ${scheme}; set FDRIVE_PROXY_SCHEME=${public_scheme} (behind an HTTPS reverse proxy the Office editor otherwise fails with \"Download failed\" because its document URLs are blocked as mixed content)" >&2
-    fail=1
-  fi
 fi
 
 if [[ "$fail" -ne 0 ]]; then

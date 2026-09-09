@@ -179,79 +179,19 @@ describe("deploy/preflight.sh", () => {
     expect(result.output).toContain("bind address: 127.0.0.1:9090");
   });
 
-  it("accepts HTTPS edge configuration", () => {
-    expect(
-      runPreflight("POSTGRES_PASSWORD=real\nFDRIVE_MASTER_KEY=abc\nFDRIVE_PROXY_SCHEME=https").code,
-    ).toBe(0);
-  });
-
-  it("rejects an invalid proxy scheme", () => {
-    const result = runPreflight(
-      "POSTGRES_PASSWORD=real\nFDRIVE_MASTER_KEY=abc\nFDRIVE_PROXY_SCHEME=ftp",
-    );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain("FDRIVE_PROXY_SCHEME must be http or https");
-  });
-
-  it("fails when FDRIVE_PUBLIC_URL is https but FDRIVE_PROXY_SCHEME is left at its http default", () => {
-    const result = runPreflight(
-      [
-        "POSTGRES_PASSWORD=real",
-        "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_PUBLIC_URL=https://drive.example.com",
-      ].join("\n"),
-    );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "FDRIVE_PUBLIC_URL is https:// but FDRIVE_PROXY_SCHEME is http",
-    );
-    expect(result.output).toContain("set FDRIVE_PROXY_SCHEME=https");
-    expect(result.output).toContain("Download failed");
-  });
-
-  it("fails when FDRIVE_PUBLIC_URL is https but FDRIVE_PROXY_SCHEME is explicitly http", () => {
+  it("accepts an HTTPS FDRIVE_PUBLIC_URL (the proxy derives its scheme from it)", () => {
     const result = runPreflight(
       [
         "POSTGRES_PASSWORD=real",
         "FDRIVE_MASTER_KEY=abc",
         'FDRIVE_PUBLIC_URL="https://drive.example.com"',
-        "FDRIVE_PROXY_SCHEME=http",
-      ].join("\n"),
-    );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain("set FDRIVE_PROXY_SCHEME=https");
-  });
-
-  it("fails when FDRIVE_PUBLIC_URL is http but FDRIVE_PROXY_SCHEME is https", () => {
-    const result = runPreflight(
-      [
-        "POSTGRES_PASSWORD=real",
-        "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_PUBLIC_URL=http://192.168.1.10:8090",
-        "FDRIVE_PROXY_SCHEME=https",
-      ].join("\n"),
-    );
-    expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "FDRIVE_PUBLIC_URL is http:// but FDRIVE_PROXY_SCHEME is https",
-    );
-    expect(result.output).toContain("set FDRIVE_PROXY_SCHEME=http");
-  });
-
-  it("accepts FDRIVE_PUBLIC_URL and FDRIVE_PROXY_SCHEME that agree on https", () => {
-    const result = runPreflight(
-      [
-        "POSTGRES_PASSWORD=real",
-        "FDRIVE_MASTER_KEY=abc",
-        "FDRIVE_PUBLIC_URL=https://drive.example.com",
-        "FDRIVE_PROXY_SCHEME=https",
       ].join("\n"),
     );
     expect(result.code).toBe(0);
     expect(result.output).toContain("preflight OK");
   });
 
-  it("accepts an http FDRIVE_PUBLIC_URL with the default proxy scheme", () => {
+  it("accepts an HTTP FDRIVE_PUBLIC_URL", () => {
     const result = runPreflight(
       [
         "POSTGRES_PASSWORD=real",
@@ -262,16 +202,33 @@ describe("deploy/preflight.sh", () => {
     expect(result.code).toBe(0);
   });
 
-  it("leaves a FDRIVE_PUBLIC_URL without a recognised scheme to the api's own validation", () => {
+  it("rejects a FDRIVE_PUBLIC_URL without a scheme", () => {
     const result = runPreflight(
       [
         "POSTGRES_PASSWORD=real",
         "FDRIVE_MASTER_KEY=abc",
         "FDRIVE_PUBLIC_URL=drive.example.com",
+      ].join("\n"),
+    );
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      "FDRIVE_PUBLIC_URL 'drive.example.com' must start with http:// or https://",
+    );
+  });
+
+  it("rejects the removed FDRIVE_PROXY_SCHEME key with a pointer to FDRIVE_PUBLIC_URL", () => {
+    const result = runPreflight(
+      [
+        "POSTGRES_PASSWORD=real",
+        "FDRIVE_MASTER_KEY=abc",
+        "FDRIVE_PUBLIC_URL=https://drive.example.com",
         "FDRIVE_PROXY_SCHEME=https",
       ].join("\n"),
     );
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("'FDRIVE_PROXY_SCHEME' in");
+    expect(result.output).toContain("no longer used; remove it");
+    expect(result.output).not.toContain("typo?");
   });
 
   it("reports every failure together (both change-me and an unknown key) before exiting", () => {

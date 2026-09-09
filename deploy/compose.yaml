@@ -21,7 +21,22 @@ services:
       # Set FDRIVE_HTTP_BIND=127.0.0.1 for an explicitly local-only deployment.
       - "${FDRIVE_HTTP_BIND:-0.0.0.0}:${FDRIVE_HTTP_PORT:-8090}:80"
     environment:
-      FDRIVE_PROXY_SCHEME: ${FDRIVE_PROXY_SCHEME:-http}
+      FDRIVE_PUBLIC_URL: ${FDRIVE_PUBLIC_URL:-}
+    # The scheme every upstream is told the browser used (X-Forwarded-Proto)
+    # is derived here from FDRIVE_PUBLIC_URL, so an HTTPS edge needs only that
+    # one setting and the value can never disagree with it. The api derives
+    # Secure cookies from it and the bundled ONLYOFFICE builds every URL it
+    # hands the browser from it. Deployment-controlled on purpose: the header
+    # a client or an edge proxy sends is replaced, never trusted.
+    command:
+      - sh
+      - -c
+      - |
+        case "$$FDRIVE_PUBLIC_URL" in
+          https://*) export FDRIVE_FORWARDED_PROTO=https ;;
+          *) export FDRIVE_FORWARDED_PROTO=http ;;
+        esac
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:

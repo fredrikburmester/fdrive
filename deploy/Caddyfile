@@ -1,11 +1,11 @@
 # Direct LAN HTTP works by default. Behind an HTTPS edge, set
-# FDRIVE_PROXY_SCHEME=https so generated URLs and automatic cookies use HTTPS.
-# The scheme is deployment-controlled; client headers cannot override it, and
-# an edge proxy's own X-Forwarded-Proto is deliberately replaced too (any LAN
-# client could otherwise claim https). ONLYOFFICE builds the URLs it hands the
-# browser from this header, so a wrong value behind HTTPS surfaces only as a
-# mixed-content "Download failed" in the editor; preflight.sh checks it
-# against FDRIVE_PUBLIC_URL.
+# FDRIVE_PUBLIC_URL=https://... in deploy/.env: compose.yaml derives
+# FDRIVE_FORWARDED_PROTO from it before starting Caddy, and that is what every
+# upstream receives as X-Forwarded-Proto. The scheme is deployment-controlled;
+# the header a client or an edge proxy sends is replaced, never trusted (any
+# LAN client could otherwise claim https). ONLYOFFICE builds the URLs it hands
+# the browser from this header, so a wrong value behind HTTPS surfaces only as
+# a mixed-content "Download failed" in the editor.
 :80 {
 	# No request body limit: uploads can be large files.
 	request_body {
@@ -21,7 +21,7 @@
 	handle_path /onlyoffice/* {
 		reverse_proxy onlyoffice:80 {
 			header_up X-Forwarded-Host {http.request.hostport}/onlyoffice
-			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
+			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
 		}
 	}
 
@@ -32,20 +32,20 @@
 	# over the compose network.
 	handle /api/* {
 		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
+			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
 		}
 	}
 
 	handle /mcp* {
 		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
+			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
 		}
 	}
 
 	handle {
 		encode zstd gzip
 		reverse_proxy web:3000 {
-			header_up X-Forwarded-Proto {$FDRIVE_PROXY_SCHEME:http}
+			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
 		}
 	}
 }
