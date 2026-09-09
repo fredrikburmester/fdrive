@@ -2,6 +2,34 @@
 
 Updated: 2026-09-09. Owner: primary agent.
 
+## P9 System settings restructure and event log (committed 2026-09-09)
+
+- Spec: [P9-SYSTEM-SETTINGS.md](P9-SYSTEM-SETTINGS.md). Two `implementer` worktrees
+  (`claude/p9-system-web` for `apps/web`, `claude/p9-event-log` for db/contracts/api) merged
+  with `merge-chunk.sh`; the `LogSheet`, its hook and the page mounts were added directly in
+  the main checkout afterwards.
+- Web: Features is toggles only (six cards with "Open" links plus an Office card); Connection
+  became General (`/system/general`, old URL redirects); new Shared folders and Office pages;
+  Indexer and OCR settings live in a `SettingsSheet` with a discard guard; `SystemPage` gates
+  on `feature` ids instead of the page title; every feature page has a Logs sheet with level
+  filter, copy, .txt/.ndjson download and "Load older". The Indexer "Recent errors" list is gone.
+- API: `app.system_events` (migration `0008_system_events`), `GET /api/v1/system/{subsystem}/logs`
+  merging `idx.scans`/`idx.files` errors and `idx.ocr_runs`/`idx.ocr_log` failures; events are
+  recorded for settings saves, maintenance requests and failures, feature toggles, worker
+  reachability transitions and Office settings saves.
+- Passed on `main`: `application` (lint, typecheck, coverage) and browser `system`, `features`,
+  `office-settings`, `trash`, `account-scope` specs with `--workers=1`. In the event-log
+  worktree: `@fdrive/db` integration 10/10 (migration and the merge query) and
+  `composition.test.ts`. Two API integration tests fail there and on unchanged `main` alike:
+  `sftp-rename.test.ts` (Docker credential helper hangs on `python:3.12-slim` pull) and
+  `provider-binding.test.ts` "provider barrier was not reached" (reproduced on `main`).
+- Known: the five browser specs race each other at the default two workers (onboarding
+  specs reset `walkthroughComplete`, and the clear tests share the fake indexer's busy state);
+  pre-existing, run them with `--workers=1`. The walkthrough's Office step label is still
+  the literal "ONLYOFFICE" regardless of product.
+- Not done: no real dev-stack pass yet (the browser specs run against the production build
+  with a fake indexer).
+
 ## P8 virtual folder index support (in progress, uncommitted)
 
 - Spec: [P8-VIRTUAL-FOLDERS.md](P8-VIRTUAL-FOLDERS.md). Implemented directly in the main

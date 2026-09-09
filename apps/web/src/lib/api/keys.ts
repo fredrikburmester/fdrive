@@ -33,6 +33,7 @@ export const queryKeys = {
     thumbnails: () => ["system", "thumbnails"] as const,
     imageSearch: () => ["system", "image-search"] as const,
     mountMappings: () => ["system", "mount-mappings"] as const,
+    logs: (subsystem: string, level: string) => ["system", "logs", subsystem, level] as const,
   },
   account: {
     tokens: () => ["account", "tokens"] as const,

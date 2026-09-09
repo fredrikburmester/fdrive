@@ -95,10 +95,10 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
   await expect(page.getByText(/0 changed/)).toBeVisible();
   await expect(page.getByText(/0 deleted/)).toBeVisible();
 
-  // Errors sample.
-  await expect(page.getByText("Recent errors")).toBeVisible();
-  await expect(page.getByText("alice/docs/report.pdf", { exact: true })).toBeVisible();
-  await expect(page.getByText(/FileDataError/)).toBeVisible();
+  // The error sample now lives in the Logs sheet rather than inline.
+  await expect(page.getByText("Recent errors")).toHaveCount(0);
+  await page.getByRole("button", { name: "Logs", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "indexer log" })).toBeVisible();
 });
 
 test("alice (admin) can reindex the sftpgo root and sees a toast reporting how many files were marked", async ({

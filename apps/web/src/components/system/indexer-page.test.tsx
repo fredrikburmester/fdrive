@@ -172,13 +172,13 @@ describe("IndexerPage", () => {
     expect(screen.getByText(/0 errors/)).toBeTruthy();
   });
 
-  it("renders the errors sample", async () => {
+  it("offers the Logs sheet instead of an inline errors list", async () => {
     mockConfigured();
     render(<IndexerPage />);
 
-    expect(await screen.findByText("Recent errors")).toBeTruthy();
-    expect(screen.getByText("alice/docs/report.pdf")).toBeTruthy();
-    expect(screen.getByText(/FileDataError/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Logs" })).toBeTruthy();
+    expect(screen.queryByText("Recent errors")).toBeNull();
+    expect(screen.queryByText("alice/docs/report.pdf")).toBeNull();
   });
 
   it("renders the settings form pre-filled with the fixture's values", async () => {

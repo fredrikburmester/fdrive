@@ -35,6 +35,7 @@ import {
   validateOcrSettings,
 } from "@/lib/system/settings";
 import { sidecarStatus } from "@/lib/system/status";
+import { LogSheet } from "./log-sheet";
 import { GlobsField } from "./settings-form";
 import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
 import { StatGrid } from "./stat-grid";
@@ -159,7 +160,7 @@ export function OcrPage() {
             Run now
           </Button>
           <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
-          {/* LogSheet mounts here (P9 event log) */}
+          <LogSheet subsystem="ocr" />
         </>
       }
     >
