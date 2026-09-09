@@ -12,12 +12,16 @@ import {
   ROUTES,
   type SystemImageSearchResponse,
   type SystemIndexerResponse,
+  type SystemLogEntry,
+  SystemLogSubsystem,
+  SystemLogsQuery,
+  type SystemLogsResponse,
   type SystemOcrResponse,
   type SystemReembedResponse,
   type SystemSearchResponse,
   type SystemThumbnailsResponse,
 } from "@fdrive/contracts";
-import type { IndexQueries, SettingsRepo } from "@fdrive/db";
+import type { IndexQueries, SettingsRepo, SystemEventRepo } from "@fdrive/db";
 import { z } from "zod";
 import type { AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
@@ -25,6 +29,7 @@ import { withoutApiV1Prefix } from "../auth/routes.js";
 import { ApiHttpError } from "../errors.js";
 import type { ImageEmbedClient } from "../search/image-embed-client.js";
 import { fetchEmbedStatus } from "./embed-status.js";
+import type { SystemEventLog } from "./event-log.js";
 import type { IndexerClient } from "./indexer-client.js";
 import type { OcrClient } from "./ocr-client.js";
 import {
@@ -49,6 +54,10 @@ const TEXT_STATUSES_WITH_TEXT = new Set(["indexed", "partial"]);
 
 export interface SystemRoutesDeps {
   readonly settings: SettingsRepo;
+  /** Backs `GET /system/:subsystem/logs`; reads merge the API's rows with sidecar history. */
+  readonly systemEvents: SystemEventRepo;
+  /** Records what an admin did here, for the same log. Never awaited by a handler. */
+  readonly eventLog: SystemEventLog;
   readonly indexQueries: IndexQueries;
   readonly thumbnailsRepo: ThumbnailsRepo;
   /** `null` when `FDRIVE_INDEXER_URL` is not configured. */
@@ -100,6 +109,20 @@ function throwForClearFailure(result: { reason: string; detail: string; status?:
     throw new ApiHttpError("conflict", "a clear or thumbnail rebuild is already running");
   }
   throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
+}
+
+/**
+ * The keys whose value `after` changes relative to `before`, recorded with
+ * a settings-update event so the log says what an admin actually touched
+ * rather than just that they pressed Save.
+ */
+export function changedSettingKeys(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): string[] {
+  return Object.keys(after).filter(
+    (key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]),
+  );
 }
 
 /** Empty bodies are allowed; malformed JSON must never become a global clear. */
@@ -158,12 +181,16 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
 
+    const before = resolveIndexerSettings(await deps.settings.all()).values;
     for (const [key, value] of indexerSettingsEntries(parsed.data)) {
       await deps.settings.set(key, value);
     }
 
     const settingsAll = await deps.settings.all();
     const body: IndexerSettingsResponse = resolveIndexerSettings(settingsAll);
+    deps.eventLog.record("indexer", "info", "Settings updated", {
+      changed: changedSettingKeys(before, parsed.data),
+    });
     return c.json(body);
   });
 
@@ -180,14 +207,21 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
 
+    const target = {
+      ...(parsed.data.root === undefined ? {} : { root: parsed.data.root }),
+      ...(parsed.data.path === undefined ? {} : { path: parsed.data.path }),
+      ...(parsed.data.thumbnails === undefined ? {} : { thumbnails: parsed.data.thumbnails }),
+    };
     const result = await deps.indexerClient.reindex(
       parsed.data.root,
       parsed.data.path,
       parsed.data.thumbnails,
     );
     if (!result.ok) {
+      deps.eventLog.record("indexer", "error", `Reindex failed: ${result.detail}`, target);
       throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
     }
+    deps.eventLog.record("indexer", "info", "Reindex requested", target);
 
     const body: IndexerActionResponse = result.data;
     return c.json(body);
@@ -211,8 +245,15 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
       const result = await deps.indexerClient.thumbnailsRebuild(parsed.data);
       if (!result.ok) {
+        deps.eventLog.record(
+          "thumbnails",
+          "error",
+          `Thumbnail rebuild failed: ${result.detail}`,
+          parsed.data,
+        );
         throwForThumbnailsRebuildFailure(result);
       }
+      deps.eventLog.record("thumbnails", "info", "Thumbnail rebuild requested", parsed.data);
 
       const body: IndexerThumbnailsRebuildResponse = result.data;
       return c.json(body, 202);
@@ -230,7 +271,11 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
     const result = await deps.indexerClient.clearIndex(parsed.data);
-    if (!result.ok) throwForClearFailure(result);
+    if (!result.ok) {
+      deps.eventLog.record("indexer", "error", `Index clear failed: ${result.detail}`, parsed.data);
+      throwForClearFailure(result);
+    }
+    deps.eventLog.record("indexer", "warn", "Index clear requested", parsed.data);
     return c.json(result.data, 202);
   });
 
@@ -245,7 +290,11 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
     const result = await deps.indexerClient.clearThumbnails();
-    if (!result.ok) throwForClearFailure(result);
+    if (!result.ok) {
+      deps.eventLog.record("thumbnails", "error", `Thumbnail clear failed: ${result.detail}`);
+      throwForClearFailure(result);
+    }
+    deps.eventLog.record("thumbnails", "warn", "Thumbnail clear requested");
     return c.json(result.data, 202);
   });
 
@@ -291,6 +340,7 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     for (const root of deps.indexRootNames) {
       const result = await indexerClient.reindex(root);
       if (!result.ok) {
+        deps.eventLog.record("search", "error", `Reembed failed: ${result.detail}`, { root });
         throw new ApiHttpError(
           "upstream_unavailable",
           sidecarErrorMessage(`the indexer (root "${root}")`, result),
@@ -298,6 +348,9 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       }
       marked += result.data.marked;
     }
+    deps.eventLog.record("search", "info", "Reembed requested", {
+      roots: [...deps.indexRootNames],
+    });
 
     const body: SystemReembedResponse = { marked, roots: [...deps.indexRootNames] };
     return c.json(body);
@@ -344,8 +397,15 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
     const result = await deps.indexerClient.imageEmbeddingsRebuild(parsed.data);
     if (!result.ok) {
+      deps.eventLog.record(
+        "image-search",
+        "error",
+        `Image embedding rebuild failed: ${result.detail}`,
+        parsed.data,
+      );
       throwForThumbnailsRebuildFailure(result);
     }
+    deps.eventLog.record("image-search", "info", "Image embedding rebuild requested", parsed.data);
 
     const body: IndexerThumbnailsRebuildResponse = result.data;
     return c.json(body, 202);
@@ -362,7 +422,15 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
     const result = await deps.indexerClient.clearImageEmbeddings();
-    if (!result.ok) throwForClearFailure(result);
+    if (!result.ok) {
+      deps.eventLog.record(
+        "image-search",
+        "error",
+        `Image embedding clear failed: ${result.detail}`,
+      );
+      throwForClearFailure(result);
+    }
+    deps.eventLog.record("image-search", "warn", "Image embedding clear requested");
     return c.json(result.data, 202);
   });
 
@@ -399,12 +467,16 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       });
     }
 
+    const before = resolveOcrSettings(await deps.settings.all()).values;
     for (const [key, value] of ocrSettingsEntries(parsed.data)) {
       await deps.settings.set(key, value);
     }
 
     const settingsAll = await deps.settings.all();
     const body: OcrSettingsResponse = resolveOcrSettings(settingsAll);
+    deps.eventLog.record("ocr", "info", "Settings updated", {
+      changed: changedSettingKeys(before, parsed.data),
+    });
     return c.json(body);
   });
 
@@ -415,8 +487,10 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
     const result = await deps.ocrClient.run();
     if (!result.ok) {
+      deps.eventLog.record("ocr", "error", `OCR run failed: ${result.detail}`);
       throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("OCR", result));
     }
+    deps.eventLog.record("ocr", "info", "OCR run requested");
 
     const body: OcrRunResponse = result.data;
     return c.json(body);
@@ -441,10 +515,52 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
 
     const result = await deps.indexerClient.thumbnailsRebuild();
     if (!result.ok) {
+      deps.eventLog.record("thumbnails", "error", `Thumbnail rebuild failed: ${result.detail}`);
       throwForThumbnailsRebuildFailure(result);
     }
+    deps.eventLog.record("thumbnails", "info", "Thumbnail rebuild requested");
 
     const body: IndexerThumbnailsRebuildResponse = result.data;
     return c.json(body, 202);
+  });
+
+  // Registered last, and with a literal `/logs` suffix, so it can never
+  // shadow the fixed `/system/<name>` routes above.
+  authed.get("/system/:subsystem/logs", requireAdmin, async (c) => {
+    const subsystem = SystemLogSubsystem.safeParse(c.req.param("subsystem"));
+    if (!subsystem.success) {
+      throw new ApiHttpError("bad_request", "unknown subsystem", {
+        issues: subsystem.error.issues,
+      });
+    }
+    const query = SystemLogsQuery.safeParse(c.req.query());
+    if (!query.success) {
+      throw new ApiHttpError("bad_request", "invalid log query", { issues: query.error.issues });
+    }
+
+    const { limit, level, before } = query.data;
+    const events = await deps.systemEvents.list(subsystem.data, {
+      limit,
+      minLevel: level,
+      ...(before === undefined ? {} : { before: new Date(before) }),
+    });
+    const entries: SystemLogEntry[] = events.map((event) => ({
+      id: event.id,
+      at: event.at.toISOString(),
+      level: event.level,
+      message: event.message,
+      ...(event.data === null ? {} : { data: event.data }),
+      source: event.source,
+    }));
+
+    // A full page means there may be more; a short one is the end of the
+    // log, so no cursor is offered and the caller stops paging.
+    const last = entries.length === limit ? entries[entries.length - 1] : undefined;
+    const body: SystemLogsResponse = {
+      subsystem: subsystem.data,
+      entries,
+      ...(last === undefined ? {} : { nextCursor: last.at }),
+    };
+    return c.json(body);
   });
 }

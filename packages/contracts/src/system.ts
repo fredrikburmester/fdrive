@@ -450,3 +450,78 @@ export const IndexerDirectoryResponse = z.strictObject({
   overflow: z.boolean(),
 });
 export type IndexerDirectoryResponse = z.infer<typeof IndexerDirectoryResponse>;
+
+// ---------------------------------------------------------------------------
+// Event log
+// ---------------------------------------------------------------------------
+
+/** The subsystems that keep their own admin-visible event log. */
+export const SystemLogSubsystem = z.enum([
+  "indexer",
+  "search",
+  "ocr",
+  "thumbnails",
+  "image-search",
+  "office",
+]);
+
+export type SystemLogSubsystem = z.infer<typeof SystemLogSubsystem>;
+
+/** Severity of one log entry, ordered `info` < `warn` < `error`. */
+export const SystemLogLevel = z.enum(["info", "warn", "error"]);
+
+export type SystemLogLevel = z.infer<typeof SystemLogLevel>;
+
+/**
+ * Which store the entry came from: `api` for one fdrive recorded itself,
+ * `indexer` and `ocr` for history read back out of the sidecars' own tables.
+ */
+export const SystemLogSource = z.enum(["api", "indexer", "ocr"]);
+
+export type SystemLogSource = z.infer<typeof SystemLogSource>;
+
+/** The largest page `GET /api/v1/system/{subsystem}/logs` will return. */
+export const SYSTEM_LOGS_MAX_LIMIT = 1000;
+
+/**
+ * Query for `GET /api/v1/system/{subsystem}/logs`. `level` is a *minimum*
+ * severity rather than an exact match, and an over-large `limit` is clamped
+ * rather than rejected so a log viewer never fails on a stale bookmark.
+ */
+export const SystemLogsQuery = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(200)
+    .transform((value) => Math.min(value, SYSTEM_LOGS_MAX_LIMIT)),
+  level: SystemLogLevel.default("info"),
+  before: z.iso.datetime({ offset: true }).optional(),
+});
+
+export type SystemLogsQuery = z.infer<typeof SystemLogsQuery>;
+
+/** One entry in a subsystem's log. `data` carries whatever context the writer attached. */
+export const SystemLogEntry = z.object({
+  id: z.string(),
+  at: z.iso.datetime({ offset: true }),
+  level: SystemLogLevel,
+  message: z.string(),
+  data: z.unknown().optional(),
+  source: SystemLogSource,
+});
+
+export type SystemLogEntry = z.infer<typeof SystemLogEntry>;
+
+/**
+ * Response for `GET /api/v1/system/{subsystem}/logs`, newest first.
+ * `nextCursor` is the last entry's `at` and is set only when the page came
+ * back full, so a caller stops paging as soon as a short page arrives.
+ */
+export const SystemLogsResponse = z.object({
+  subsystem: SystemLogSubsystem,
+  entries: z.array(SystemLogEntry),
+  nextCursor: z.iso.datetime({ offset: true }).optional(),
+});
+
+export type SystemLogsResponse = z.infer<typeof SystemLogsResponse>;

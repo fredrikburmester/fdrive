@@ -1612,3 +1612,33 @@ it("calls account identity and cross-identity view routes with typed responses",
   expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
   expect(calls[5]?.url).toContain("limit=5");
 });
+
+describe("system logs client", () => {
+  it("requests a subsystem's log page and omits unset query parameters", async () => {
+    const response = {
+      subsystem: "indexer",
+      entries: [
+        {
+          id: "api:1",
+          at: "2026-01-01T12:00:00Z",
+          level: "info",
+          message: "Reindex requested",
+          source: "api",
+        },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(response));
+    const client = createApiClient({ fetch: fetchMock });
+
+    expect(await client.systemLogs("indexer")).toEqual(response);
+    expect(
+      await client.systemLogs("ocr", { limit: 50, level: "error", before: "2026-01-01T12:00:00Z" }),
+    ).toEqual(response);
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/v1/system/indexer/logs",
+      "/api/v1/system/ocr/logs?limit=50&level=error&before=2026-01-01T12%3A00%3A00Z",
+    ]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET"]);
+  });
+});
