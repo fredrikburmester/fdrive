@@ -7,10 +7,37 @@ import {
   type FeaturesUpdateRequest,
   type FeatureValues,
   type SystemFeaturesResponse,
+  type SystemLogSubsystem,
 } from "@fdrive/contracts";
 import type { SettingsRepo } from "@fdrive/db";
 import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import type { SystemEventLog } from "../system/event-log.js";
+import { noopSystemEventLog } from "../system/event-log.js";
+
+/**
+ * Which subsystem's log a feature toggle belongs in. Several features are
+ * carried by the indexer, so their entries land in the indexer's log
+ * rather than in one log per toggle.
+ */
+export const FEATURE_LOG_SUBSYSTEMS: Record<FeatureId, SystemLogSubsystem> = {
+  thumbnails: "indexer",
+  textSearch: "indexer",
+  searchOcr: "indexer",
+  pdfOcr: "ocr",
+  semanticSearch: "search",
+  imageSearch: "image-search",
+};
+
+/** The worker each `status()` probe stands for, and the log its reachability is reported in. */
+const PROBE_SUBSYSTEMS = {
+  indexer: "indexer",
+  ocr: "ocr",
+  embed: "search",
+  image: "image-search",
+} as const satisfies Record<string, SystemLogSubsystem>;
+
+type ProbeName = keyof typeof PROBE_SUBSYSTEMS;
 
 export const DISABLED_FEATURES: FeatureValues = {
   thumbnails: false,
@@ -90,8 +117,32 @@ export function createFeatureService(deps: {
   settings: FeatureSettingsStore;
   config: AppConfig;
   fetch: typeof fetch;
+  /** Optional so existing call sites keep working; defaults to recording nothing. */
+  eventLog?: SystemEventLog;
 }): FeatureService {
   const { settings, config } = deps;
+  const eventLog = deps.eventLog ?? noopSystemEventLog;
+  // Per-process, so a restart re-emits one entry for a worker that is
+  // still down rather than staying silent about it forever.
+  const lastKnown = new Map<ProbeName, boolean>();
+
+  /** Records only the edges of a worker's reachability, never every poll. */
+  function recordProbe(name: ProbeName, worker: Probe | null): void {
+    if (worker === null) return;
+    const previous = lastKnown.get(name);
+    lastKnown.set(name, worker.ok);
+    if (previous === worker.ok) return;
+    if (previous === undefined && worker.ok) return;
+    if (worker.ok) {
+      eventLog.record(PROBE_SUBSYSTEMS[name], "info", "Worker reachable again");
+      return;
+    }
+    eventLog.record(
+      PROBE_SUBSYSTEMS[name],
+      "error",
+      `Worker unreachable: ${worker.detail ?? "no detail"}`,
+    );
+  }
   const defaults: FeatureConfiguration = {
     version: 1,
     revision: 0,
@@ -136,6 +187,14 @@ export function createFeatureService(deps: {
           "Feature settings changed in another session. Reload and try again.",
         );
       }
+      for (const id of FEATURE_IDS) {
+        if (next.values[id] === current.configuration.values[id]) continue;
+        eventLog.record(
+          FEATURE_LOG_SUBSYSTEMS[id],
+          "info",
+          `Feature ${id} ${next.values[id] ? "enabled" : "disabled"}`,
+        );
+      }
       return next;
     },
     async status() {
@@ -160,6 +219,10 @@ export function createFeatureService(deps: {
           : null,
         values.textSearch ? probe("http://tika", deps.fetch, "9997") : null,
       ]);
+      recordProbe("indexer", indexer);
+      recordProbe("ocr", ocr);
+      recordProbe("embed", embed);
+      recordProbe("image", image);
       const statuses = FEATURE_IDS.map((id): FeatureStatus => {
         if (!values[id]) {
           const worker =

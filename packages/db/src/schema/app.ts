@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigserial,
   boolean,
   customType,
   index,
@@ -266,5 +267,28 @@ export const officeFiles = appSchema.table(
     uniqueIndex("office_files_active_location_unique")
       .on(table.providerId, table.rootName, table.path)
       .where(sql`${table.deletedAt} is null`),
+  ],
+);
+
+/**
+ * The admin-facing event log: one row per notable subsystem event the API
+ * records (a settings change, a maintenance action, a sidecar failure).
+ * Written only by the API; reads merge it with the sidecars' own history
+ * (`idx.scans`, `idx.files`, `idx.ocr_runs`, `idx.ocr_log`) so an admin
+ * sees one stream per subsystem. Retention is per subsystem, pruned
+ * opportunistically rather than by a scheduled job.
+ */
+export const systemEvents = appSchema.table(
+  "system_events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    subsystem: text("subsystem").notNull(),
+    level: text("level").notNull(),
+    message: text("message").notNull(),
+    data: jsonb("data"),
+  },
+  (table) => [
+    index("system_events_subsystem_at_idx").on(table.subsystem, table.at.desc(), table.id.desc()),
   ],
 );

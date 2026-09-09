@@ -1362,5 +1362,86 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(listed.map((r) => r.path).sort()).toEqual(["/b.txt", "/c.txt"]);
       });
     });
+
+    describe("systemEvents", () => {
+      it("returns appended entries newest first", async () => {
+        await repos.systemEvents.append({ subsystem: "indexer", level: "info", message: "first" });
+        await repos.systemEvents.append({
+          subsystem: "indexer",
+          level: "warn",
+          message: "second",
+          data: { root: "sftpgo" },
+        });
+
+        const listed = await repos.systemEvents.list("indexer", { limit: 10 });
+
+        expect(listed.map((entry) => entry.message)).toEqual(["second", "first"]);
+        expect(listed[0]).toMatchObject({
+          subsystem: "indexer",
+          level: "warn",
+          source: "api",
+          data: { root: "sftpgo" },
+        });
+        expect(listed[0]?.at).toBeInstanceOf(Date);
+        expect(listed[1]?.data).toBeNull();
+      });
+
+      it("keeps each subsystem's entries separate", async () => {
+        await repos.systemEvents.append({ subsystem: "indexer", level: "info", message: "idx" });
+        await repos.systemEvents.append({ subsystem: "ocr", level: "info", message: "ocr" });
+
+        expect((await repos.systemEvents.list("indexer", { limit: 10 })).map((e) => e.message)) //
+          .toEqual(["idx"]);
+        expect((await repos.systemEvents.list("search", { limit: 10 })).map((e) => e.message)) //
+          .toEqual([]);
+      });
+
+      it("filters out entries below minLevel", async () => {
+        await repos.systemEvents.append({ subsystem: "search", level: "info", message: "i" });
+        await repos.systemEvents.append({ subsystem: "search", level: "warn", message: "w" });
+        await repos.systemEvents.append({ subsystem: "search", level: "error", message: "e" });
+
+        const warnPlus = await repos.systemEvents.list("search", { limit: 10, minLevel: "warn" });
+        const errorsOnly = await repos.systemEvents.list("search", {
+          limit: 10,
+          minLevel: "error",
+        });
+
+        expect(warnPlus.map((entry) => entry.message)).toEqual(["e", "w"]);
+        expect(errorsOnly.map((entry) => entry.message)).toEqual(["e"]);
+      });
+
+      it("honours limit and the before cursor", async () => {
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+        await repos.systemEvents.append({ subsystem: "ocr", level: "info", message: "a" });
+        await sleep(5);
+        await repos.systemEvents.append({ subsystem: "ocr", level: "info", message: "b" });
+        await sleep(5);
+        await repos.systemEvents.append({ subsystem: "ocr", level: "info", message: "c" });
+
+        const firstPage = await repos.systemEvents.list("ocr", { limit: 2 });
+        expect(firstPage.map((entry) => entry.message)).toEqual(["c", "b"]);
+
+        const cursor = firstPage[firstPage.length - 1]?.at;
+        if (cursor === undefined) throw new Error("expected a cursor");
+        const secondPage = await repos.systemEvents.list("ocr", { limit: 2, before: cursor });
+        expect(secondPage.map((entry) => entry.message)).toEqual(["a"]);
+      });
+
+      it("prune keeps only the newest entries and ignores unknown subsystems", async () => {
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+        await repos.systemEvents.append({ subsystem: "office", level: "info", message: "a" });
+        await sleep(5);
+        await repos.systemEvents.append({ subsystem: "office", level: "info", message: "b" });
+        await sleep(5);
+        await repos.systemEvents.append({ subsystem: "office", level: "info", message: "c" });
+
+        await repos.systemEvents.prune("office", 2);
+        await repos.systemEvents.prune("thumbnails", 2);
+
+        expect((await repos.systemEvents.list("office", { limit: 10 })).map((e) => e.message)) //
+          .toEqual(["c", "b"]);
+      });
+    });
   });
 }

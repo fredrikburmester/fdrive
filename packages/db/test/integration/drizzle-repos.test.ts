@@ -41,7 +41,8 @@ defineReposSuite("drizzle", async () => {
       app.identities,
       app.accounts,
       app.providers,
-      app.settings
+      app.settings,
+      app.system_events
     cascade
   `);
   return createRepos(db);

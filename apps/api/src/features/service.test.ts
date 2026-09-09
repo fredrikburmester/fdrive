@@ -1,7 +1,31 @@
 import { FEATURES_SETTINGS_KEY, type FeatureConfiguration } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { type AppConfig, loadConfig } from "../config.js";
-import { createFeatureService, DISABLED_FEATURES, type FeatureSettingsStore } from "./service.js";
+import type { SystemEventLog } from "../system/event-log.js";
+import {
+  createFeatureService,
+  DISABLED_FEATURES,
+  FEATURE_LOG_SUBSYSTEMS,
+  type FeatureSettingsStore,
+} from "./service.js";
+
+interface Recorded {
+  subsystem: string;
+  level: string;
+  message: string;
+}
+
+function recorder(): { eventLog: SystemEventLog; recorded: Recorded[] } {
+  const recorded: Recorded[] = [];
+  return {
+    recorded,
+    eventLog: {
+      record: (subsystem, level, message) => {
+        recorded.push({ subsystem, level, message });
+      },
+    },
+  };
+}
 
 const base = loadConfig({
   DATABASE_URL: "postgres://localhost/fdrive",
@@ -33,7 +57,13 @@ const config: FeatureConfiguration = {
 };
 
 function fixture(
-  options: { config?: AppConfig; raw?: unknown; fetch?: typeof fetch; rejectCas?: boolean } = {},
+  options: {
+    config?: AppConfig;
+    raw?: unknown;
+    fetch?: typeof fetch;
+    rejectCas?: boolean;
+    eventLog?: SystemEventLog;
+  } = {},
 ) {
   let raw: unknown | null = options.raw ?? null;
   const settings: FeatureSettingsStore = {
@@ -53,7 +83,12 @@ function fixture(
       Response.json({ ok: true, status: "ok", features: { revision: 1, values: enabled } }),
     ) as typeof fetch);
   return {
-    service: createFeatureService({ settings, config: options.config ?? full, fetch: fetchImpl }),
+    service: createFeatureService({
+      settings,
+      config: options.config ?? full,
+      fetch: fetchImpl,
+      ...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
+    }),
     fetchImpl,
   };
 }
@@ -217,5 +252,109 @@ describe("observed feature status", () => {
       pdfWritable: false,
     });
     expect(result.statuses.every((s) => s.state === "off")).toBe(true);
+  });
+});
+
+describe("feature event log", () => {
+  it("records one entry per changed value, in the feature's own subsystem", async () => {
+    const { eventLog, recorded } = recorder();
+    const { service } = fixture({ eventLog });
+
+    await service.update({
+      revision: 0,
+      values: { ...DISABLED_FEATURES, thumbnails: true, pdfOcr: true },
+      walkthroughComplete: false,
+    });
+    await service.update({
+      revision: 1,
+      values: { ...DISABLED_FEATURES, thumbnails: true },
+      walkthroughComplete: false,
+    });
+
+    expect(recorded).toEqual([
+      { subsystem: "indexer", level: "info", message: "Feature thumbnails enabled" },
+      { subsystem: "ocr", level: "info", message: "Feature pdfOcr enabled" },
+      { subsystem: "ocr", level: "info", message: "Feature pdfOcr disabled" },
+    ]);
+  });
+
+  it("records nothing when only the walkthrough moved", async () => {
+    const { eventLog, recorded } = recorder();
+    const { service } = fixture({ eventLog });
+
+    await service.update({
+      revision: 0,
+      values: DISABLED_FEATURES,
+      walkthroughComplete: true,
+      walkthroughStep: 2,
+    });
+
+    expect(recorded).toEqual([]);
+  });
+
+  it("maps every feature to a subsystem that has a log", () => {
+    expect(Object.values(FEATURE_LOG_SUBSYSTEMS).sort()).toEqual([
+      "image-search",
+      "indexer",
+      "indexer",
+      "indexer",
+      "ocr",
+      "search",
+    ]);
+  });
+
+  it("records only worker probe transitions, not every poll", async () => {
+    const { eventLog, recorded } = recorder();
+    let up = true;
+    const { service } = fixture({
+      eventLog,
+      raw: config,
+      fetch: (async () =>
+        up
+          ? Response.json({ ok: true, status: "ok", features: { revision: 1, values: enabled } })
+          : new Response("nope", { status: 503 })) as typeof fetch,
+    });
+
+    await service.status();
+    expect(recorded).toEqual([]);
+
+    up = false;
+    await service.status();
+    await service.status();
+    const down = recorded.filter((entry) => entry.level === "error");
+    expect(down).toHaveLength(4);
+    expect(new Set(down.map((entry) => entry.subsystem))).toEqual(
+      new Set(["indexer", "ocr", "search", "image-search"]),
+    );
+    expect(down[0]?.message).toBe(
+      "Worker unreachable: Worker is unavailable. Retry after checking its status.",
+    );
+
+    up = true;
+    recorded.length = 0;
+    await service.status();
+    await service.status();
+    expect(recorded).toHaveLength(4);
+    expect(recorded.every((entry) => entry.message === "Worker reachable again")).toBe(true);
+  });
+
+  it("reports a worker that is already down on the first observation", async () => {
+    const { eventLog, recorded } = recorder();
+    const { service } = fixture({
+      eventLog,
+      raw: config,
+      fetch: (async () => {
+        throw new Error("connection refused");
+      }) as typeof fetch,
+    });
+
+    await service.status();
+
+    expect(recorded).toHaveLength(4);
+    expect(recorded[0]).toEqual({
+      subsystem: "indexer",
+      level: "error",
+      message: "Worker unreachable: Worker is unreachable. Check the bundled service, then retry.",
+    });
   });
 });

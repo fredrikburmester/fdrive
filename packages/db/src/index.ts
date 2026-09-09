@@ -88,6 +88,7 @@ export {
   validateSharePath,
   validateShareUpsert,
 } from "./repos/shares-state.js";
+export { createSystemEventRepo } from "./repos/system-events.js";
 export type {
   Account,
   AccountRepo,
@@ -115,10 +116,15 @@ export type {
   Session,
   SessionRepo,
   SettingsRepo,
+  SystemEvent,
+  SystemEventLevel,
+  SystemEventListOptions,
+  SystemEventRepo,
+  SystemEventSource,
   Tag,
   TagRepo,
 } from "./repos/types.js";
-export { ConflictError } from "./repos/types.js";
+export { ConflictError, levelsAtLeast, SYSTEM_EVENT_LEVELS } from "./repos/types.js";
 export type {
   BoundWopiLockRepo,
   LockInput,

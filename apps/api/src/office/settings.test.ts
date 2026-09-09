@@ -14,6 +14,7 @@ function harness(
     publicUrl?: string | null;
   } = {},
 ) {
+  const recorded: { subsystem: string; level: string; message: string; data: unknown }[] = [];
   let stored: unknown | null = null;
   let rejectCas = false;
   const settings: Pick<SettingsRepo, "get" | "compareAndSet"> = {
@@ -36,10 +37,16 @@ function harness(
     publicUrl: async () =>
       options.publicUrl === undefined ? "https://drive.example" : options.publicUrl,
     probeStatus,
+    eventLog: {
+      record: (subsystem, level, message, data) => {
+        recorded.push({ subsystem, level, message, data });
+      },
+    },
   });
   return {
     service,
     probeStatus,
+    recorded,
     setStored: (value: unknown) => {
       stored = value;
     },
@@ -185,5 +192,40 @@ describe("ONLYOFFICE runtime status", () => {
       expected,
     );
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("http://onlyoffice:8099/runtime");
+  });
+});
+
+describe("Office settings event log", () => {
+  it("records an entry only once the write actually lands", async () => {
+    const { service, recorded, rejectCas } = harness();
+
+    await service.update(PROVIDER_A, {
+      revision: 0,
+      enabled: true,
+      editingEnabled: true,
+      editingProviderId: PROVIDER_A,
+      editorUsernames: ["alice"],
+    });
+
+    expect(recorded).toEqual([
+      {
+        subsystem: "office",
+        level: "info",
+        message: "Office settings updated",
+        data: { enabled: true, editingEnabled: true },
+      },
+    ]);
+
+    rejectCas();
+    await expect(
+      service.update(PROVIDER_A, {
+        revision: 1,
+        enabled: false,
+        editingEnabled: false,
+        editingProviderId: null,
+        editorUsernames: [],
+      }),
+    ).rejects.toThrow();
+    expect(recorded).toHaveLength(1);
   });
 });

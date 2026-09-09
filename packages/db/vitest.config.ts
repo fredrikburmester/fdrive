@@ -17,6 +17,7 @@ export default definePackageConfig({
         "src/repos/office-write-scope.ts",
         "src/repos/identity-links.ts",
         "src/repos/shares.ts",
+        "src/repos/system-events.ts",
       ],
     },
   },
