@@ -97,6 +97,9 @@ including ones already in the done-log; `ocred` / `skipped` / `failed` only
 count files actually decided on this pass (`too_big`, `excluded`, `has_text`,
 `signed`, and `encrypted` all fold into `skipped`).
 
+The admin **Logs** sheet on System > OCR reads `idx.ocr_runs` and failed or timed-out
+`idx.ocr_log` rows, alongside API-side events such as settings saves and run requests.
+
 ## Compose
 
 Add `--profile index` to bring up `ocr` alongside `indexer`, `tika`, and

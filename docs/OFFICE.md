@@ -1,12 +1,12 @@
 # Office documents and editing
 
 ONLYOFFICE is bundled with the standard fdrive stack. Enable it during onboarding,
-or later in **System > Features > ONLYOFFICE**. No additional Compose file,
+or later in **System > Features** (the ONLYOFFICE card) or **System > Office > Settings**. No additional Compose file,
 activation environment variable, or processing storage mount is needed.
 
 ## Enable the editor
 
-1. Check the **Server address** step (System > Features > Server address afterwards). It
+1. Check the **Server address** step (System > General > Server address afterwards). It
    is filled from your current browser address; use the HTTP(S) origin everyone uses to
    reach fdrive, including any port. The editor cannot be enabled without it.
 2. Turn on **Enable ONLYOFFICE**.
@@ -48,7 +48,7 @@ preserve the `/onlyoffice` path. See the [deployment reference](../deploy/REFERE
 - **Editor opens over HTTPS but shows "Download failed":** the document server is
   handing the browser `http://` URLs, which the page blocks as mixed content. Server-side
   logs stay clean (WOPI calls return 200, no ONLYOFFICE errors). Check that the server
-  address in **System > Features** is the `https://` one, and that your reverse proxy sends
+  address in **System > General** is the `https://` one, and that your reverse proxy sends
   `X-Forwarded-Proto` (see the deployment reference). Hard-reload the editor tab afterwards.
 - **Viewing works but editing is unavailable:** check the editing toggle and exact SFTPGo
   username in the allowed-user list.
