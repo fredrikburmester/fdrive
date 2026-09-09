@@ -349,7 +349,11 @@ describe("RenameFile", () => {
     const h = await officeHarness();
     const opened = await h.open();
     const tag = await h.deps.metadata.createTag(h.alice.account.id, { name: "work", color: null });
-    await h.deps.metadata.setFileTags(h.alice.identity.id, "/a.docx", [tag.id]);
+    await h.deps.metadata.setFileTags(
+      { accountId: h.alice.account.id, identityId: h.alice.identity.id },
+      "/a.docx",
+      [tag.id],
+    );
     await h.deps.metadata.addFavorite(h.alice.identity.id, "/a.docx", "file");
     const result = await h.callback(opened, {
       method: "POST",

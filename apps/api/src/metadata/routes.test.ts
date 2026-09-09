@@ -180,6 +180,34 @@ describe("GET /fs/list decoration", () => {
   });
 });
 
+describe("PUT /fs/tags", () => {
+  it("rejects tag ids that belong to another account with 400 and leaves the file untagged", async () => {
+    const { app, repos } = await buildHarness();
+    const tag = await createTag(app, "Work");
+    const bob = await repos.accounts.create({ displayName: "Bob" });
+    const bobsTag = await repos.tags.create(bob.id, { name: "Private", color: null });
+
+    const res = await app.request(
+      "/api/v1/fs/tags",
+      requestedWith({
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", tagIds: [tag.id, bobsTag.id] }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: { kind: "bad_request", details: { tagIds: [bobsTag.id] } },
+    });
+
+    const listRes = await app.request("/api/v1/fs/list?path=/");
+    const body = (await listRes.json()) as {
+      entries: { path: string; meta?: { tagIds: string[] } }[];
+    };
+    expect(body.entries.find((e) => e.path === "/hello.txt")?.meta?.tagIds).toEqual([]);
+  });
+});
+
 describe("tag CRUD", () => {
   it("creates, lists, updates, and deletes a tag", async () => {
     const { app } = await buildHarness();

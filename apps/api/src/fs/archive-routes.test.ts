@@ -458,6 +458,21 @@ describe("POST /fs/compress and the resulting job", () => {
     expect(final.result?.path).toBe("/bundle.zip");
   });
 
+  it.each(["../escaped", "sub/inner", ".", ".."])(
+    "rejects a name that is not a single safe segment (%s)",
+    async (name) => {
+      const { app } = await buildHarness();
+
+      const res = await app.request(
+        "/api/v1/fs/compress",
+        jsonPost({ paths: ["/dir"], format: "zip", name, destination: "/dir" }),
+      );
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: { kind: "bad_request" } });
+    },
+  );
+
   it("defaults the archive name to the shared parent folder's name for a multi-path selection", async () => {
     const { app } = await buildHarness();
 

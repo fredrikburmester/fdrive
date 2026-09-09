@@ -73,12 +73,14 @@ describe("external SFTP directory rename through the real indexer", () => {
     const movedPaths = ["/docs", "/docs/top.dat", "/docs/nested", "/docs/nested/child.dat"];
     const siblingPath = "/docs-other/keep.dat";
     for (const path of [...movedPaths, siblingPath]) {
-      await metadata.setFileTags(identity.id, path, [tag.id]);
+      await metadata.setFileTags({ accountId: alice.id, identityId: identity.id }, path, [tag.id]);
       await metadata.addFavorite(identity.id, path, path.endsWith(".dat") ? "file" : "dir");
       if (path.endsWith(".dat")) await metadata.touchRecent(identity.id, path);
     }
     for (const path of ["/docs", "/docs/top.dat"]) {
-      await metadata.setFileTags(otherIdentity.id, path, [otherTag.id]);
+      await metadata.setFileTags({ accountId: other.id, identityId: otherIdentity.id }, path, [
+        otherTag.id,
+      ]);
       await metadata.addFavorite(otherIdentity.id, path, path.endsWith(".dat") ? "file" : "dir");
     }
     await metadata.touchRecent(otherIdentity.id, "/docs/top.dat");

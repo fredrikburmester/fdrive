@@ -87,7 +87,9 @@ describe("createMetadataService: file tags", () => {
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
 
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
 
     expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual(["/a.txt"]);
   });
@@ -106,6 +108,24 @@ describe("createMetadataService: favorites", () => {
 
     await service.removeFavorite(IDENTITY_ID, "/a.txt");
     expect(await service.listFavorites(IDENTITY_ID)).toEqual([]);
+  });
+
+  it("rejects a tag owned by another account and writes nothing", async () => {
+    const { repos, service } = buildService();
+    const alice = await repos.accounts.create({ displayName: "Alice" });
+    const bob = await repos.accounts.create({ displayName: "Bob" });
+    const mine = await service.createTag(alice.id, { name: "Work", color: null });
+    const theirs = await service.createTag(bob.id, { name: "Private", color: null });
+
+    await expect(
+      service.setFileTags({ accountId: alice.id, identityId: IDENTITY_ID }, "/a.txt", [
+        mine.id,
+        theirs.id,
+      ]),
+    ).rejects.toMatchObject({ name: "UnknownTagError", tagIds: [theirs.id] });
+
+    expect(await service.filesForTag(IDENTITY_ID, mine.id)).toEqual([]);
+    expect(await service.filesForTag(IDENTITY_ID, theirs.id)).toEqual([]);
   });
 });
 
@@ -201,7 +221,9 @@ describe("createMetadataService: onMoved", () => {
     const { repos, service } = buildService();
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
     await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
     await service.touchRecent(IDENTITY_ID, "/a.txt");
 
@@ -216,7 +238,9 @@ describe("createMetadataService: onMoved", () => {
     const { repos, service } = buildService();
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
 
     await service.onMoved(IDENTITY_ID, "/a.txt", "/b.txt", false);
     await service.onMoved(IDENTITY_ID, "/a.txt", "/b.txt", false);
@@ -255,7 +279,9 @@ describe("createMetadataService: onDeleted", () => {
     const { repos, service } = buildService();
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
     await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
     await service.touchRecent(IDENTITY_ID, "/a.txt");
 
@@ -290,7 +316,9 @@ describe("createMetadataService: onTrashed", () => {
     const { repos, service } = buildService();
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
     await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
     await service.touchRecent(IDENTITY_ID, "/a.txt");
 
@@ -314,7 +342,9 @@ describe("createMetadataService: onCopied", () => {
     const { repos, service } = buildService();
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
     await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
 
     service.onCopied(IDENTITY_ID, "/a.txt", "/copy.txt");
@@ -334,7 +364,9 @@ describe("hasTrackedMetadata", () => {
     const { repos, service } = buildService();
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags(IDENTITY_ID, "/a.txt", [tag.id]);
+    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
+      tag.id,
+    ]);
 
     expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(true);
   });

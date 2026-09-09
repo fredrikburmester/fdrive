@@ -358,7 +358,11 @@ describe("GET /fs/stat", () => {
     const metadata = createMetadataService(repos);
     const account = await repos.accounts.create({ displayName: "Alice" });
     const tag = await metadata.createTag(account.id, { name: "Work", color: null });
-    await metadata.setFileTags(ALICE_IDENTITY_ID, "/hello.txt", [tag.id]);
+    await metadata.setFileTags(
+      { accountId: account.id, identityId: ALICE_IDENTITY_ID },
+      "/hello.txt",
+      [tag.id],
+    );
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
     const { app } = await buildHarness(SEED, "alice", "secret", metadata);
     const response = await app.request("/api/v1/fs/stat?path=/hello.txt");
