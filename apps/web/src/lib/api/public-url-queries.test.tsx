@@ -6,22 +6,15 @@ import { expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }));
 vi.mock("./client", () => ({
-  apiClient: { systemOffice: mocks.get, systemUpdateOffice: mocks.put },
+  apiClient: { systemPublicUrl: mocks.get, systemUpdatePublicUrl: mocks.put },
 }));
 
-import { useSystemOffice, useUpdateOfficeSettings } from "./office-settings-queries";
+import { useSystemPublicUrl, useUpdatePublicUrl } from "./public-url-queries";
 
-it("loads settings and refreshes editor capabilities after saving", async () => {
-  const configuration = {
-    revision: 0,
-    enabled: false,
-    editingProviderId: null,
-    editorUsernames: [],
-    editingEnabled: false,
-  };
-  const data = { configuration, product: "onlyoffice", status: "off" };
-  const changed = { ...configuration, enabled: true };
-  const updated = { ...data, configuration: { ...changed, revision: 1 }, status: "starting" };
+it("loads the address and refreshes Office status after saving it", async () => {
+  const data = { revision: 0, url: null };
+  const changed = { revision: 0, url: "http://localhost:8090" };
+  const updated = { revision: 1, url: "http://localhost:8090" };
   mocks.get.mockResolvedValue(data);
   mocks.put.mockResolvedValue(updated);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -29,15 +22,15 @@ it("loads settings and refreshes editor capabilities after saving", async () => 
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const query = renderHook(() => useSystemOffice(), { wrapper });
+  const query = renderHook(() => useSystemPublicUrl(), { wrapper });
   await waitFor(() => expect(query.result.current.data).toEqual(data));
-  const mutation = renderHook(() => useUpdateOfficeSettings(), { wrapper });
+  const mutation = renderHook(() => useUpdatePublicUrl(), { wrapper });
   await act(async () => {
     await mutation.result.current.mutateAsync(changed);
   });
   expect(mocks.put).toHaveBeenCalledWith(changed);
-  expect(client.getQueryData(["system", "office"])).toEqual(updated);
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["office"] });
+  expect(client.getQueryData(["system", "public-url"])).toEqual(updated);
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["system", "office"] });
   query.unmount();
   mutation.unmount();
   client.clear();

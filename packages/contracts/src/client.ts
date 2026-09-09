@@ -46,6 +46,7 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
   accountTokenRoute,
   IDENTITY_HEADER,
@@ -170,6 +171,8 @@ export interface ApiClientImageSearchOptions {
 export interface ApiClient {
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
+  systemPublicUrl(): Promise<PublicUrlSettings>;
+  systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings>;
   systemOffice(): Promise<SystemOfficeResponse>;
   systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse>;
   systemTrash(): Promise<TrashSettings>;
@@ -881,6 +884,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ctx,
         { method: "PUT", path: ROUTES.system.features, jsonBody: input },
         SystemFeaturesResponse,
+      );
+    },
+    systemPublicUrl(): Promise<PublicUrlSettings> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.system.publicUrl }, PublicUrlSettings);
+    },
+    systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings> {
+      return requestJson(
+        ctx,
+        { method: "PUT", path: ROUTES.system.publicUrl, jsonBody: input },
+        PublicUrlSettings,
       );
     },
     systemOffice(): Promise<SystemOfficeResponse> {

@@ -188,7 +188,7 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
       verifiedIndexScopes: async () => ({ available: true as const, scopes: ALICE_HOME_SCOPES }),
     },
     identities: { get: async () => buildIdentity() },
-    fdrivePublicUrl: "https://fdrive.example.com",
+    publicUrl: async () => "https://fdrive.example.com",
     indexerClient: null,
     writesEnabled: false,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),

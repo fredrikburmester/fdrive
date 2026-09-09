@@ -63,7 +63,7 @@ services:
       - --o:storage.wopi.alias_groups.group[0].host=http://api:3001
       - --o:storage.wopi.alias_groups.group[0].host[@allow]=true
       - --o:storage.wopi.max_file_size=104857600
-      - --o:net.content_security_policy=frame-ancestors ${FDRIVE_PUBLIC_URL:-https://localhost};
+      - --o:net.content_security_policy=frame-ancestors ${FDRIVE_COLLABORA_APP_URL:-https://localhost};
       - --o:server_name=${FDRIVE_COLLABORA_HOST:-office.localhost}
       - --o:logging.level=warning
     volumes:

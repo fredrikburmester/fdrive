@@ -1,10 +1,9 @@
 #!/bin/bash
 # Fails loudly on common deploy/.env mistakes before `docker compose up`:
 # a leftover change-me placeholder, an unknown FDRIVE_* key (a likely
-# typo), a FDRIVE_HOME_TEMPLATE that does not look like
-# <root>:<path with {username}>, or a FDRIVE_PUBLIC_URL without a scheme.
-# Prints the resolved FDRIVE_INDEX_ROOTS and bind address so the operator
-# sees exactly what will be used. Reads only
+# typo), or a FDRIVE_HOME_TEMPLATE that does not look like
+# <root>:<path with {username}>. Prints the resolved FDRIVE_INDEX_ROOTS and
+# bind address so the operator sees exactly what will be used. Reads only
 # deploy/.env; run automatically by update.sh before `up`, or directly:
 #   ./preflight.sh
 set -euo pipefail
@@ -32,7 +31,6 @@ KNOWN_FDRIVE_KEYS=(
     "FDRIVE_SESSION_MAX_AGE_DAYS"
     "FDRIVE_COOKIE_SECURE"
     "FDRIVE_TRUSTED_PROXY_HOPS"
-    "FDRIVE_PUBLIC_URL"
     "FDRIVE_AUTO_MIGRATE"
     "FDRIVE_TMP_DIR"
     "FDRIVE_JOB_MAX_BYTES"
@@ -55,6 +53,7 @@ KNOWN_FDRIVE_KEYS=(
     "FDRIVE_INDEX_SFTPGO_DIR"
     "FDRIVE_INDEX_SFTPGO_PATH"
     "FDRIVE_INDEX_UID"
+    "FDRIVE_COLLABORA_APP_URL"
     "FDRIVE_COLLABORA_HOST"
 )
 # END GENERATED KNOWN FDRIVE KEYS
@@ -80,10 +79,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   done
   if [[ "$known" -eq 0 ]]; then
     case "$key" in
-      FDRIVE_PROXY_SCHEME)
-        # Removed: the proxy now derives the browser-facing scheme from
-        # FDRIVE_PUBLIC_URL, so this key can only ever contradict it.
-        echo "error: 'FDRIVE_PROXY_SCHEME' in $env_file is no longer used; remove it and make sure FDRIVE_PUBLIC_URL starts with https:// behind an HTTPS reverse proxy (the proxy derives the scheme from it)" >&2
+      FDRIVE_PROXY_SCHEME|FDRIVE_PUBLIC_URL)
+        # Removed: the proxy passes an edge proxy's X-Forwarded-Proto through
+        # (see Caddyfile) and the address everyone opens fdrive at is chosen
+        # in onboarding (System > Features > Server address), so neither key
+        # has any effect any more.
+        echo "error: '$key' in $env_file is no longer used; remove it. The browser-facing scheme now follows your reverse proxy's X-Forwarded-Proto, and the server address is set in onboarding (System > Features > Server address; FDRIVE_COLLABORA_APP_URL is the only remaining address key, for the Collabora overlay)" >&2
         ;;
       FDRIVE_INDEX_ROOTS|FDRIVE_INDEXER_URL|FDRIVE_EMBED_URL|FDRIVE_IMAGE_EMBED_URL|FDRIVE_OCR_URL|FDRIVE_THUMBS_DIR)
         # compose.yaml fixes these to the stack's own sidecar addresses and
@@ -103,21 +104,6 @@ home_template="$(read_env_value FDRIVE_HOME_TEMPLATE)"
 if [[ -n "$home_template" ]] && [[ ! "$home_template" =~ ^[A-Za-z0-9_-]+:.*\{username\}.*$ ]]; then
   echo "error: FDRIVE_HOME_TEMPLATE '$home_template' must look like <root>:<path with {username}>, for example sftpgo:/{username}" >&2
   fail=1
-fi
-
-# The scheme the proxy tells every service the browser used is derived from
-# FDRIVE_PUBLIC_URL (compose.yaml), so the URL must carry one, or behind an
-# HTTPS edge the Office editor is handed http:// document URLs that the
-# browser blocks as mixed content ("Download failed" with clean server logs).
-public_url="$(read_env_value FDRIVE_PUBLIC_URL)"
-if [[ -n "$public_url" ]]; then
-  case "$public_url" in
-    http://*|https://*) ;;
-    *)
-      echo "error: FDRIVE_PUBLIC_URL '$public_url' must start with http:// or https:// (the proxy derives the browser-facing scheme from it)" >&2
-      fail=1
-      ;;
-  esac
 fi
 
 if [[ "$fail" -ne 0 ]]; then

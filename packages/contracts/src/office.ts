@@ -48,53 +48,44 @@ export const OfficeStatusResponse = z.object({
 });
 export type OfficeStatusResponse = z.infer<typeof OfficeStatusResponse>;
 
-const OfficeAppUrl = z
-  .url()
-  .refine((value) => {
-    if (!URL.canParse(value)) return false;
-    const url = new URL(value);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === "" &&
-      (url.pathname === "" || url.pathname === "/")
-    );
-  }, "appUrl must be an HTTP(S) origin without credentials, path, query, or fragment")
-  .transform((value) => new URL(value).origin);
+const officeSettingsShape = {
+  revision: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  editingEnabled: z.boolean(),
+  editingProviderId: z.uuid().nullable(),
+  editorUsernames: z.array(z.string().min(1).max(255)).max(1000),
+};
 
-/** Owner-controlled activation and browser origin for the configured Office service. */
-export const OfficeSettings = z
-  .object({
-    revision: z.number().int().nonnegative(),
-    enabled: z.boolean(),
-    appUrl: OfficeAppUrl.nullable(),
-    editingEnabled: z.boolean(),
-    editingProviderId: z.uuid().nullable(),
-    editorUsernames: z.array(z.string().min(1).max(255)).max(1000),
-  })
-  .strict()
-  .refine((value) => !value.enabled || value.appUrl !== null, {
-    message: "appUrl is required when Office is enabled",
-    path: ["appUrl"],
-  })
-  .refine(
-    (value) =>
-      !value.editingEnabled ||
-      (value.editingProviderId !== null && value.editorUsernames.length > 0),
-    {
-      message: "editing requires a provider and at least one SFTPGo username",
+function withOfficeRules<T extends z.ZodType<z.infer<z.ZodObject<typeof officeSettingsShape>>>>(
+  schema: T,
+) {
+  return schema
+    .refine(
+      (value) =>
+        !value.editingEnabled ||
+        (value.editingProviderId !== null && value.editorUsernames.length > 0),
+      {
+        message: "editing requires a provider and at least one SFTPGo username",
+        path: ["editorUsernames"],
+      },
+    )
+    .refine((value) => new Set(value.editorUsernames).size === value.editorUsernames.length, {
+      message: "editor usernames must be unique",
       path: ["editorUsernames"],
-    },
-  )
-  .refine((value) => new Set(value.editorUsernames).size === value.editorUsernames.length, {
-    message: "editor usernames must be unique",
-    path: ["editorUsernames"],
-  });
+    });
+}
+
+/**
+ * Owner-controlled activation of the configured Office service. The
+ * browser origin the editor is told fdrive lives at is the system-wide
+ * `PublicUrlSettings`, not part of this record. Stored rows written before
+ * that split carry an `appUrl` key; parsing strips it (the update request
+ * below stays strict).
+ */
+export const OfficeSettings = withOfficeRules(z.object(officeSettingsShape));
 export type OfficeSettings = z.infer<typeof OfficeSettings>;
 
-export const OfficeSettingsUpdateRequest = OfficeSettings;
+export const OfficeSettingsUpdateRequest = withOfficeRules(z.strictObject(officeSettingsShape));
 export type OfficeSettingsUpdateRequest = z.infer<typeof OfficeSettingsUpdateRequest>;
 
 export const SystemOfficeResponse = z.object({

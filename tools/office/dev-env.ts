@@ -17,7 +17,6 @@ export function devEnvironment(product: OfficeProduct, secret: string): string {
     `FDRIVE_OFFICE_URL=http://localhost:${port}`,
     `FDRIVE_OFFICE_PUBLIC_URL=http://localhost:${port}`,
     "FDRIVE_WOPI_URL=http://host.docker.internal:3001/wopi",
-    "FDRIVE_PUBLIC_URL=http://localhost:3002",
     "FDRIVE_OFFICE_MAX_BYTES=104857600",
     `ONLYOFFICE_JWT_SECRET=${secret}`,
     "",

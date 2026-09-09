@@ -44,11 +44,9 @@ describe("update startup addresses", () => {
     expect(output).toContain("Open http://127.0.0.1:9090 in your browser");
   });
 
-  it("checks a specific server binding and prints the configured HTTPS address", () => {
-    const output = run(
-      'FDRIVE_HTTP_BIND=192.0.2.5\nFDRIVE_HTTP_PORT=9090\nFDRIVE_PUBLIC_URL="https://drive.example.com"\n',
-    );
+  it("checks a specific server binding and prints that address", () => {
+    const output = run("FDRIVE_HTTP_BIND=192.0.2.5\nFDRIVE_HTTP_PORT=9090\n");
     expect(output).toContain("http://192.0.2.5:9090/api/v1/health");
-    expect(output).toContain("Open https://drive.example.com in your browser");
+    expect(output).toContain("Open http://192.0.2.5:9090 in your browser");
   });
 });

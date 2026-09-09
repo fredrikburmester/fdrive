@@ -162,7 +162,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
       }),
     },
     identities: repos.identities,
-    fdrivePublicUrl: "https://fdrive.example.com",
+    publicUrl: async () => "https://fdrive.example.com",
     indexerClient: createIndexerExtractClient({
       baseUrl: "http://indexer.test",
       fetch: indexerFetch,

@@ -59,8 +59,9 @@ with:
   - `"true"`: always set.
   - `"false"`: never set (useful for plain-http local development).
   - `"auto"` (default): set when the request arrived over https, judged from
-    `X-Forwarded-Proto` (when a reverse proxy is in front of the api) or
-    otherwise from the request's own URL scheme.
+    `X-Forwarded-Proto` (the bundled proxy passes an edge proxy's value through
+    and otherwise sets it from the connection) or, without the header, from the
+    request's own URL scheme.
 
 State-changing requests under `/api/v1/*` (`POST`, `PUT`, `PATCH`, `DELETE`)
 must also pass a CSRF guard: `Sec-Fetch-Site` must be absent, `same-origin`,

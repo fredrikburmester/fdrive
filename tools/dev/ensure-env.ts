@@ -45,7 +45,6 @@ export function buildApiEnvDev(masterKey: string): string {
     `FDRIVE_MASTER_KEY=${masterKey}`,
     "FDRIVE_HOME_TEMPLATE=sftpgo:/{username}",
     "FDRIVE_COOKIE_SECURE=false",
-    "FDRIVE_PUBLIC_URL=http://localhost:3000",
     "",
   ].join("\n");
 }

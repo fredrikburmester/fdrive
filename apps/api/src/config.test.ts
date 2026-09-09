@@ -144,7 +144,6 @@ describe("loadConfig", () => {
       fdriveSessionMaxAgeDays: 90,
       fdriveCookieSecure: "auto",
       fdriveTrustedProxyHops: 1,
-      fdrivePublicUrl: undefined,
       nodeEnv: "development",
       fdriveAutoMigrate: true,
       fdriveTmpDir: tmpdir(),
@@ -191,7 +190,6 @@ describe("loadConfig", () => {
       FDRIVE_SESSION_MAX_AGE_DAYS: "45",
       FDRIVE_COOKIE_SECURE: "true",
       FDRIVE_TRUSTED_PROXY_HOPS: "2",
-      FDRIVE_PUBLIC_URL: "https://fdrive.example.com",
       NODE_ENV: "production",
       FDRIVE_AUTO_MIGRATE: "false",
       FDRIVE_TMP_DIR: "/var/tmp/fdrive",
@@ -230,7 +228,6 @@ describe("loadConfig", () => {
       fdriveSessionMaxAgeDays: 45,
       fdriveCookieSecure: "true",
       fdriveTrustedProxyHops: 2,
-      fdrivePublicUrl: "https://fdrive.example.com",
       nodeEnv: "production",
       fdriveAutoMigrate: false,
       fdriveTmpDir: "/var/tmp/fdrive",
@@ -365,16 +362,6 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_TRUSTED_PROXY_HOPS: "-1" })).toThrow(
       /FDRIVE_TRUSTED_PROXY_HOPS/,
     );
-  });
-
-  it("rejects a non-http FDRIVE_PUBLIC_URL", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_PUBLIC_URL: "not a url" })).toThrow(
-      /FDRIVE_PUBLIC_URL/,
-    );
-  });
-
-  it("treats an empty FDRIVE_PUBLIC_URL as unset", () => {
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_PUBLIC_URL: "" }).fdrivePublicUrl).toBeUndefined();
   });
 
   it("defaults the absolute session age to 90 days and rejects zero or non-integers", () => {

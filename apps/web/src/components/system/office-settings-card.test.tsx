@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
+  address: vi.fn(),
   update: vi.fn(),
   mutate: vi.fn(),
   refetch: vi.fn(),
@@ -13,17 +14,20 @@ vi.mock("@/lib/api/office-settings-queries", () => ({
   useSystemOffice: () => mocks.query(),
   useUpdateOfficeSettings: () => mocks.update(),
 }));
+vi.mock("@/lib/api/public-url-queries", () => ({
+  useSystemPublicUrl: () => mocks.address(),
+}));
 const { OfficeSettingsCard, OfficeReview } = await import("./office-settings-card");
 const providerId = "123e4567-e89b-42d3-a456-426614174000";
 const configuration = {
   revision: 2,
   enabled: false,
-  appUrl: null,
   editingProviderId: null,
   editorUsernames: [],
   editingEnabled: false,
 };
 beforeEach(() => {
+  mocks.address.mockReturnValue({ data: { revision: 1, url: "https://files.example" } });
   mocks.query.mockReturnValue({
     data: { configuration, product: "onlyoffice", activeProviderId: providerId, status: "off" },
     refetch: mocks.refetch,
@@ -41,13 +45,10 @@ afterEach(() => {
 });
 const toggle = () => fireEvent.click(screen.getByRole("switch", { name: "Enable ONLYOFFICE" }));
 const save = () => screen.getByRole("button", { name: "Save and continue" }) as HTMLButtonElement;
-it("prefills the browser address and saves explicit editing permission before advancing", () => {
+it("saves explicit editing permission before advancing", () => {
   const next = vi.fn();
   render(<OfficeSettingsCard onContinue={next} />);
   toggle();
-  expect((screen.getByLabelText("fdrive browser address") as HTMLInputElement).value).toBe(
-    window.location.origin,
-  );
   fireEvent.click(screen.getByRole("switch", { name: "Allow document editing" }));
   fireEvent.change(screen.getByLabelText("Users allowed to edit"), { target: { value: "alice" } });
   fireEvent.click(save());
@@ -55,7 +56,6 @@ it("prefills the browser address and saves explicit editing permission before ad
     {
       ...configuration,
       enabled: true,
-      appUrl: window.location.origin,
       editingEnabled: true,
       editingProviderId: providerId,
       editorUsernames: ["alice"],
@@ -66,21 +66,25 @@ it("prefills the browser address and saves explicit editing permission before ad
   act(() => mocks.mutate.mock.calls[0]?.[1].onSuccess());
   expect(next).toHaveBeenCalledOnce();
 });
-it("blocks invalid addresses, but allows skipping without saving drafts", () => {
+it("refuses to enable without a server address, but allows skipping without saving drafts", () => {
+  mocks.address.mockReturnValue({ data: { revision: 0, url: null } });
   const next = vi.fn();
   render(<OfficeSettingsCard onContinue={next} />);
   toggle();
-  fireEvent.change(screen.getByLabelText("fdrive browser address"), {
-    target: { value: "https://server.example/files" },
-  });
   expect(save().disabled).toBe(true);
-  expect(screen.getByRole("alert")).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("server address");
   fireEvent.click(screen.getByRole("button", { name: "Skip ONLYOFFICE" }));
   expect(mocks.mutate).not.toHaveBeenCalled();
   expect(next).toHaveBeenCalledOnce();
 });
-it("can disable with invalid fields hidden, preserving the saved address", () => {
-  const enabled = { ...configuration, enabled: true, appUrl: "https://files.example" };
+it("can disable with invalid fields hidden", () => {
+  const enabled = {
+    ...configuration,
+    enabled: true,
+    editingEnabled: true,
+    editingProviderId: providerId,
+    editorUsernames: ["alice"],
+  };
   mocks.query.mockReturnValue({
     data: {
       configuration: enabled,
@@ -90,9 +94,7 @@ it("can disable with invalid fields hidden, preserving the saved address", () =>
     },
   });
   render(<OfficeSettingsCard onContinue={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText("fdrive browser address"), {
-    target: { value: "invalid" },
-  });
+  fireEvent.change(screen.getByLabelText("Users allowed to edit"), { target: { value: "" } });
   toggle();
   expect(save().disabled).toBe(false);
   fireEvent.click(save());
@@ -101,7 +103,7 @@ it("can disable with invalid fields hidden, preserving the saved address", () =>
 it("shows readiness and does not require startup to finish onboarding", () => {
   mocks.query.mockReturnValue({
     data: {
-      configuration: { ...configuration, enabled: true, appUrl: "https://files.example" },
+      configuration: { ...configuration, enabled: true },
       product: "onlyoffice",
       activeProviderId: providerId,
       status: "starting",
@@ -166,7 +168,6 @@ it("does not copy editor grants from a different SFTPGo provider", () => {
       configuration: {
         ...configuration,
         enabled: true,
-        appUrl: "https://files.example",
         editingEnabled: true,
         editingProviderId: "223e4567-e89b-42d3-a456-426614174000",
         editorUsernames: ["alice"],
@@ -194,7 +195,6 @@ it("keeps the edited revision when background polling sees another owner's chang
   const enabled = {
     ...configuration,
     enabled: true,
-    appUrl: "https://files.example",
     editingEnabled: true,
     editingProviderId: providerId,
     editorUsernames: ["alice"],

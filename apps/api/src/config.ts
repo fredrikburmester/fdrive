@@ -60,7 +60,6 @@ export interface AppConfig {
    * trusted as the client's IP.
    */
   readonly fdriveTrustedProxyHops: number;
-  readonly fdrivePublicUrl: string | undefined;
   readonly nodeEnv: NodeEnv;
   readonly fdriveAutoMigrate: boolean;
   /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
@@ -303,16 +302,6 @@ const envSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(0)),
   ),
-  FDRIVE_PUBLIC_URL: z.preprocess(
-    (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
-    z
-      .string()
-      .min(1)
-      .optional()
-      .refine((value) => value === undefined || isHttpUrl(value), {
-        message: "must be an http(s) URL",
-      }),
-  ),
   NODE_ENV: z.preprocess((value) => withDefault(value, "development"), z.enum(NODE_ENVS)),
   FDRIVE_AUTO_MIGRATE: z.preprocess(
     (value) => withDefault(value, "true"),
@@ -468,7 +457,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveSessionMaxAgeDays: parsed.FDRIVE_SESSION_MAX_AGE_DAYS,
     fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,
     fdriveTrustedProxyHops: parsed.FDRIVE_TRUSTED_PROXY_HOPS,
-    fdrivePublicUrl: parsed.FDRIVE_PUBLIC_URL,
     nodeEnv: parsed.NODE_ENV,
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,

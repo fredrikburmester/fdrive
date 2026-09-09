@@ -9,7 +9,7 @@ describe("fileUrl", () => {
   });
 
   it("falls back to a relative path when no public url is configured", () => {
-    expect(fileUrl(undefined, "/docs/report.pdf")).toBe("/view/docs/report.pdf");
+    expect(fileUrl(null, "/docs/report.pdf")).toBe("/view/docs/report.pdf");
   });
 });
 
@@ -21,6 +21,6 @@ describe("folderUrl", () => {
   });
 
   it("falls back to a relative path when no public url is configured", () => {
-    expect(folderUrl(undefined, "/docs")).toBe("/files/docs");
+    expect(folderUrl(null, "/docs")).toBe("/files/docs");
   });
 });

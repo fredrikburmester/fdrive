@@ -296,7 +296,7 @@ describe("MCP tools against real SFTPGo and Postgres", () => {
       }),
       scopeResolver,
       identities: repos.identities,
-      fdrivePublicUrl: "https://fdrive.example.com",
+      publicUrl: async () => "https://fdrive.example.com",
       indexerClient,
       writesEnabled: false,
       clock,

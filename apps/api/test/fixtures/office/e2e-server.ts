@@ -1,4 +1,5 @@
 /** Dedicated disposable-browser fixture process. Never imported by production. */
+import { PUBLIC_URL_SETTINGS_KEY } from "@fdrive/contracts";
 import { createDb, createRepos, migrate } from "@fdrive/db";
 import pino from "pino";
 import { composeApp } from "../../../src/composition.ts";
@@ -32,10 +33,15 @@ try {
     },
     walkthroughComplete: true,
   });
+  // The address the browser opens the fixture at; production owners choose
+  // it in onboarding, this process is told by `office-e2e/setup.ts`.
+  await repos.settings.set(PUBLIC_URL_SETTINGS_KEY, {
+    revision: 1,
+    url: new URL(process.env.FDRIVE_FIXTURE_PUBLIC_URL ?? "http://127.0.0.1:3000").origin,
+  });
   await repos.settings.set(OFFICE_SETTINGS_KEY, {
     revision: 1,
     enabled: true,
-    appUrl: new URL(config.fdrivePublicUrl ?? "http://127.0.0.1:3000").origin,
     editingEnabled: true,
     editingProviderId: provider.id,
     editorUsernames: ["alice", "bob"],

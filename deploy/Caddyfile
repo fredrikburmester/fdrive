@@ -1,11 +1,20 @@
-# Direct LAN HTTP works by default. Behind an HTTPS edge, set
-# FDRIVE_PUBLIC_URL=https://... in deploy/.env: compose.yaml derives
-# FDRIVE_FORWARDED_PROTO from it before starting Caddy, and that is what every
-# upstream receives as X-Forwarded-Proto. The scheme is deployment-controlled;
-# the header a client or an edge proxy sends is replaced, never trusted (any
-# LAN client could otherwise claim https). ONLYOFFICE builds the URLs it hands
-# the browser from this header, so a wrong value behind HTTPS surfaces only as
-# a mixed-content "Download failed" in the editor.
+# The scheme every service is told the browser used (X-Forwarded-Proto) is
+# whatever the edge in front of this proxy says it was, when there is one:
+# an HTTPS reverse proxy on the LAN or on the host forwards "https", a direct
+# LAN client gets the scheme of its own connection (http). The api derives
+# Secure cookies from it and the bundled ONLYOFFICE builds every URL it
+# hands the browser from it, so no deployment setting is needed for HTTPS.
+#
+# Forwarded headers are honoured from private-network peers only, which is
+# where an edge proxy lives (host, LAN, or another container); anything else
+# has them replaced. A LAN client forging "https" can only affect its own
+# session: it gets a Secure cookie it cannot send back over plain http.
+{
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
 :80 {
 	# No request body limit: uploads can be large files.
 	request_body {
@@ -21,7 +30,6 @@
 	handle_path /onlyoffice/* {
 		reverse_proxy onlyoffice:80 {
 			header_up X-Forwarded-Host {http.request.hostport}/onlyoffice
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
 		}
 	}
 
@@ -31,21 +39,15 @@
 	# the office server reaches the API directly at http://api:3001/wopi
 	# over the compose network.
 	handle /api/* {
-		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy api:3001
 	}
 
 	handle /mcp* {
-		reverse_proxy api:3001 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy api:3001
 	}
 
 	handle {
 		encode zstd gzip
-		reverse_proxy web:3000 {
-			header_up X-Forwarded-Proto {$FDRIVE_FORWARDED_PROTO:http}
-		}
+		reverse_proxy web:3000
 	}
 }

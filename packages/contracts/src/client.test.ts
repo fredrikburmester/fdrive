@@ -29,13 +29,27 @@ describe("feature client", () => {
   });
 });
 
+describe("Public URL settings client", () => {
+  it("reads and updates the server address", async () => {
+    const response = { revision: 1, url: "https://drive.example" };
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(response));
+    const client = createApiClient({ fetch: fetchMock });
+    expect(await client.systemPublicUrl()).toEqual(response);
+    expect(await client.systemUpdatePublicUrl(response)).toEqual(response);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "PUT"]);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/v1/system/public-url",
+      "/api/v1/system/public-url",
+    ]);
+  });
+});
+
 describe("Office settings client", () => {
   it("reads and updates owner-controlled Office settings", async () => {
     const response = {
       configuration: {
         revision: 0,
         enabled: false,
-        appUrl: null,
         editingEnabled: false,
         editingProviderId: null,
         editorUsernames: [],

@@ -20,6 +20,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
 import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
 import { OfficeReview, OfficeSettingsCard } from "./office-settings-card";
+import { PublicUrlCard, PublicUrlReview } from "./public-url-card";
 import { SetupFrame } from "./setup-frame";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
@@ -115,16 +116,18 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         <div>
           <h2 className="font-medium">fdrive setup walkthrough</h2>
           <p className="text-sm text-muted-foreground">
-            Step {step + 4} of 12 ·{" "}
+            Step {step + 4} of 13 ·{" "}
             {step === 6
               ? "Trash"
               : step === 7
-                ? "ONLYOFFICE"
+                ? "Server address"
                 : step === 8
-                  ? "Review"
-                  : id
-                    ? FEATURE_DESCRIPTIONS[id].title
-                    : "Features"}
+                  ? "ONLYOFFICE"
+                  : step === 9
+                    ? "Review"
+                    : id
+                      ? FEATURE_DESCRIPTIONS[id].title
+                      : "Features"}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             Choose each optional feature. Your progress is saved when you continue.
@@ -153,12 +156,18 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         />
       ) : null}
       {!walkthrough || step === 7 ? (
-        <OfficeSettingsCard
+        <PublicUrlCard
           disabled={update.isPending}
           {...(walkthrough ? { onContinue: () => save({ walkthroughStep: 8 }) } : {})}
         />
       ) : null}
-      {walkthrough && step === 8 ? (
+      {!walkthrough || step === 8 ? (
+        <OfficeSettingsCard
+          disabled={update.isPending}
+          {...(walkthrough ? { onContinue: () => save({ walkthroughStep: 9 }) } : {})}
+        />
+      ) : null}
+      {walkthrough && step === 9 ? (
         <Card>
           <CardHeader>
             <CardTitle>Ready to use fdrive</CardTitle>
@@ -179,6 +188,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
               </div>
             ))}
             <TrashReview />
+            <PublicUrlReview />
             <OfficeReview />
           </CardContent>
         </Card>
@@ -217,7 +227,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
             >
               Back
             </Button>
-            {step !== 6 && step !== 7 ? (
+            {step !== 6 && step !== 7 && step !== 8 ? (
               <div className="flex gap-2">
                 {id ? (
                   <Button
@@ -233,10 +243,10 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
                 <Button
                   disabled={update.isPending}
                   onClick={() =>
-                    save(step === 8 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
+                    save(step === 9 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
                   }
                 >
-                  {update.isPending ? "Saving…" : step === 8 ? "Finish setup" : "Save and continue"}
+                  {update.isPending ? "Saving…" : step === 9 ? "Finish setup" : "Save and continue"}
                 </Button>
               </div>
             ) : null}
@@ -270,7 +280,7 @@ export function FeaturesPage() {
   return (
     <SystemPage
       title="Features"
-      description="Manage optional processing, Trash, and browser document editing."
+      description="Manage optional processing, Trash, the server address, and browser document editing."
       lastUpdated={query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null}
     >
       {query.isError ? (

@@ -11,6 +11,7 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import { PublicUrlSettings } from "./public-url.ts";
 
 describe("office contracts", () => {
   it.each(["file.docx", "Årsrapport.odt", "🚀.pptx"])("accepts safe filename %s", (name) =>
@@ -75,17 +76,15 @@ describe("office contracts", () => {
       }).mode,
     ).toBe("view");
   });
-  it("normalizes safe Office origins and requires an explicit bound editor allowlist", () => {
+  it("requires an explicit bound editor allowlist", () => {
     const providerId = "123e4567-e89b-42d3-a456-426614174000";
     const settings = OfficeSettingsUpdateRequest.parse({
       revision: 0,
       enabled: true,
-      appUrl: "https://drive.example/",
       editingEnabled: true,
       editingProviderId: providerId,
       editorUsernames: ["alice"],
     });
-    expect(settings.appUrl).toBe("https://drive.example");
     expect(
       SystemOfficeResponse.parse({
         configuration: settings,
@@ -97,6 +96,37 @@ describe("office contracts", () => {
     expect(OfficeSettings.safeParse({ ...settings, editingProviderId: null }).success).toBe(false);
     expect(OfficeSettings.safeParse({ ...settings, editorUsernames: [] }).success).toBe(false);
   });
+  it("strips the appUrl of rows stored before the address became system-wide, but rejects it in requests", () => {
+    const legacy = {
+      revision: 3,
+      enabled: true,
+      appUrl: "https://drive.example",
+      editingEnabled: false,
+      editingProviderId: null,
+      editorUsernames: [],
+    };
+    expect(OfficeSettings.parse(legacy)).toEqual({
+      revision: 3,
+      enabled: true,
+      editingEnabled: false,
+      editingProviderId: null,
+      editorUsernames: [],
+    });
+    expect(OfficeSettingsUpdateRequest.safeParse(legacy).success).toBe(false);
+  });
+});
+
+describe("public URL contracts", () => {
+  it("normalizes a safe origin", () => {
+    expect(PublicUrlSettings.parse({ revision: 0, url: "https://drive.example/" })).toEqual({
+      revision: 0,
+      url: "https://drive.example",
+    });
+    expect(PublicUrlSettings.parse({ revision: 0, url: null }).url).toBeNull();
+    expect(PublicUrlSettings.parse({ revision: 0, url: "http://192.168.1.10:8090" }).url).toBe(
+      "http://192.168.1.10:8090",
+    );
+  });
   it.each([
     "invalid",
     "",
@@ -105,16 +135,7 @@ describe("office contracts", () => {
     "https://drive.example/path",
     "https://drive.example?token=secret",
     "https://drive.example#fragment",
-  ])("rejects unsafe Office app URL %s", (appUrl) => {
-    expect(
-      OfficeSettings.safeParse({
-        revision: 0,
-        enabled: true,
-        appUrl,
-        editingEnabled: false,
-        editingProviderId: null,
-        editorUsernames: [],
-      }).success,
-    ).toBe(false);
+  ])("rejects unsafe address %s", (url) => {
+    expect(PublicUrlSettings.safeParse({ revision: 0, url }).success).toBe(false);
   });
 });

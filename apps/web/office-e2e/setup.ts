@@ -131,7 +131,7 @@ export default async function setup(): Promise<() => Promise<void>> {
       extraApiEnv: {
         HOST: "0.0.0.0",
         FDRIVE_WORKER_TOKEN: workerToken,
-        FDRIVE_PUBLIC_URL: webUrl,
+        FDRIVE_FIXTURE_PUBLIC_URL: webUrl,
         FDRIVE_OFFICE_PRODUCT: product,
         FDRIVE_OFFICE_URL: officeUrl,
         FDRIVE_OFFICE_PUBLIC_URL: officeUrl,

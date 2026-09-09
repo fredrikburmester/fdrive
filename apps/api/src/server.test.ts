@@ -29,7 +29,6 @@ function buildConfig(): AppConfig {
     fdriveSessionMaxAgeDays: 90,
     fdriveCookieSecure: "auto",
     fdriveTrustedProxyHops: 1,
-    fdrivePublicUrl: undefined,
     nodeEnv: "test",
     fdriveAutoMigrate: true,
     fdriveTmpDir: "/tmp",
