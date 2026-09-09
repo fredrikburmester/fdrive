@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -49,11 +48,13 @@ import {
 } from "@/lib/system/settings";
 import { sidecarStatus } from "@/lib/system/status";
 import { MaintenanceProgress } from "./maintenance-progress";
-import { GlobsField, SettingsFormShell } from "./settings-form";
-import { StatCard } from "./stat-card";
+import { GlobsField } from "./settings-form";
+import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
+import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+import { SystemSection } from "./system-section";
 
 /** Sentinel `root` select value meaning "every configured root" (the API's `root` omitted). */
 const ALL_ROOTS = "__all__";
@@ -102,12 +103,7 @@ export function IndexerPage() {
   const [clearOpen, setClearOpen] = useState(false);
   const [clearRoot, setClearRoot] = useState(ALL_ROOTS);
   const [clearPath, setClearPath] = useState("");
-
-  useEffect(() => {
-    if (data !== undefined) {
-      setDraft(draftFromValues(data.settings.values));
-    }
-  }, [data]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const status = data !== undefined ? sidecarStatus(data.configured, data.reachable) : null;
   const roots = data?.stats?.roots ?? [];
@@ -131,6 +127,15 @@ export function IndexerPage() {
     data !== undefined &&
     indexerSettingsDirty(data.settings.values, draftValues);
   const validationMessages = draftValues !== null ? validateIndexerSettings(draftValues) : [];
+
+  // The page polls every 5 seconds; reseeding the draft from each response
+  // would wipe whatever is being typed in the open sheet, so a dirty draft
+  // is left alone until it is saved or reset.
+  useEffect(() => {
+    if (data !== undefined && !dirty) {
+      setDraft(draftFromValues(data.settings.values));
+    }
+  }, [data, dirty]);
 
   function handleSave() {
     if (draftValues === null) {
@@ -193,6 +198,7 @@ export function IndexerPage() {
       title="Indexer"
       description="Roots, scan status, and extraction settings for the fdrive indexer."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+      feature={["thumbnails", "textSearch", "imageSearch"]}
       actions={
         <>
           <Button
@@ -210,6 +216,8 @@ export function IndexerPage() {
           >
             Reindex
           </Button>
+          <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
+          {/* LogSheet mounts here (P9 event log) */}
         </>
       }
     >
@@ -219,200 +227,173 @@ export function IndexerPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Status</CardTitle>
-              <CardDescription>
-                {data.configured
-                  ? "The indexer's internal API, per configured root."
-                  : "Not configured: set FDRIVE_INDEXER_URL and FDRIVE_INDEX_ROOTS."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
-              {status !== null ? <StatusBadge status={status} /> : null}
-              {rootNames.map((root) => (
-                <Badge key={root} variant={watcher[root] ? "secondary" : "outline"}>
-                  {root} · watcher {watcher[root] ? "on" : "off"}
-                </Badge>
-              ))}
-            </CardContent>
-          </Card>
+          <SystemSection
+            title="Status"
+            description={
+              data.configured
+                ? "The indexer's internal API, per configured root."
+                : "Not configured: set FDRIVE_INDEXER_URL and FDRIVE_INDEX_ROOTS."
+            }
+            contentClassName="flex-row flex-wrap items-center gap-3"
+          >
+            {status !== null ? <StatusBadge status={status} /> : null}
+            {rootNames.map((root) => (
+              <Badge key={root} variant={watcher[root] ? "secondary" : "outline"}>
+                {root} · watcher {watcher[root] ? "on" : "off"}
+              </Badge>
+            ))}
+          </SystemSection>
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
-            <StatCard label="Files" value={totalFiles.toLocaleString()} />
-            <StatCard label="With text" value={withText.toLocaleString()} />
-            <StatCard label="Chunks" value={totalChunks.toLocaleString()} />
-            <StatCard label="Embedded" value={totalEmbedded.toLocaleString()} />
-            <StatCard label="Queue depth" value={(data.stats?.queueDepth ?? 0).toLocaleString()} />
-          </div>
+          <StatGrid
+            stats={[
+              { label: "Files", value: totalFiles.toLocaleString() },
+              { label: "With text", value: withText.toLocaleString() },
+              { label: "Chunks", value: totalChunks.toLocaleString() },
+              { label: "Embedded", value: totalEmbedded.toLocaleString() },
+              { label: "Queue depth", value: (data.stats?.queueDepth ?? 0).toLocaleString() },
+            ]}
+          />
 
           <MaintenanceProgress title="Index clear" job={data.stats?.indexClear} />
 
           {roots.length > 0 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Counts by status</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Root</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Files</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {roots.flatMap((root) =>
-                      Object.entries(root.countsByStatus).map(([status_, count]) => (
-                        <TableRow key={`${root.root}-${status_}`}>
-                          <TableCell className="font-medium">{root.root}</TableCell>
-                          <TableCell>{status_}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {count.toLocaleString()}
-                          </TableCell>
-                        </TableRow>
-                      )),
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+            <SystemSection title="Counts by status">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Root</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Files</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {roots.flatMap((root) =>
+                    Object.entries(root.countsByStatus).map(([status_, count]) => (
+                      <TableRow key={`${root.root}-${status_}`}>
+                        <TableCell className="font-medium">{root.root}</TableCell>
+                        <TableCell>{status_}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {count.toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    )),
+                  )}
+                </TableBody>
+              </Table>
+            </SystemSection>
           ) : null}
 
           {roots.some((root) => root.lastScan !== null) ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Last scan</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                {roots
-                  .filter((root) => root.lastScan !== null)
-                  .map((root) => (
-                    <div
-                      key={root.root}
-                      className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"
-                    >
-                      <span className="font-medium">{root.root}</span>
-                      <span className="text-muted-foreground">
-                        started{" "}
-                        {formatRelativeTime(new Date(root.lastScan?.startedAt ?? 0), new Date())}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {root.lastScan?.filesSeen ?? 0} seen · {root.lastScan?.filesChanged ?? 0}{" "}
-                        changed · {root.lastScan?.filesDeleted ?? 0} deleted ·{" "}
-                        {root.lastScan?.errors ?? 0} errors
-                      </span>
-                    </div>
-                  ))}
-              </CardContent>
-            </Card>
+            <SystemSection title="Last scan">
+              {roots
+                .filter((root) => root.lastScan !== null)
+                .map((root) => (
+                  <div
+                    key={root.root}
+                    className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"
+                  >
+                    <span className="font-medium">{root.root}</span>
+                    <span className="text-muted-foreground">
+                      started{" "}
+                      {formatRelativeTime(new Date(root.lastScan?.startedAt ?? 0), new Date())}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {root.lastScan?.filesSeen ?? 0} seen · {root.lastScan?.filesChanged ?? 0}{" "}
+                      changed · {root.lastScan?.filesDeleted ?? 0} deleted ·{" "}
+                      {root.lastScan?.errors ?? 0} errors
+                    </span>
+                  </div>
+                ))}
+            </SystemSection>
           ) : null}
 
           {(data.stats?.errorsSample.length ?? 0) > 0 ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent errors</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ul className="flex flex-col gap-2 text-sm">
-                  {data.stats?.errorsSample.map((sample) => (
-                    <li key={sample.path} className="flex flex-col">
-                      <span className="font-mono text-xs">{sample.path}</span>
-                      <span className="text-muted-foreground">
-                        {sample.error ?? "unknown error"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+            <SystemSection title="Recent errors">
+              <ul className="flex flex-col gap-2 text-sm">
+                {data.stats?.errorsSample.map((sample) => (
+                  <li key={sample.path} className="flex flex-col">
+                    <span className="font-mono text-xs">{sample.path}</span>
+                    <span className="text-muted-foreground">{sample.error ?? "unknown error"}</span>
+                  </li>
+                ))}
+              </ul>
+            </SystemSection>
           ) : null}
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Settings</CardTitle>
-              <CardDescription>Applied on the indexer's next scan cycle.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {draft !== null ? (
-                <SettingsFormShell
-                  dirty={dirty}
-                  invalid={validationMessages.length > 0}
-                  pending={updateSettings.isPending}
-                  onSave={handleSave}
-                  onReset={handleReset}
-                >
-                  <Field>
-                    <FieldLabel htmlFor="indexer-scan-interval">Scan interval (seconds)</FieldLabel>
-                    <Input
-                      id="indexer-scan-interval"
-                      type="number"
-                      min={30}
-                      max={86400}
-                      value={draft.scanIntervalSeconds}
-                      onChange={(event) =>
-                        setDraft({ ...draft, scanIntervalSeconds: event.target.value })
-                      }
-                    />
-                    <FieldDescription>
-                      Time between scheduled scans of every configured root.
-                    </FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="indexer-workers">Workers</FieldLabel>
-                    <Input
-                      id="indexer-workers"
-                      type="number"
-                      min={1}
-                      max={16}
-                      value={draft.workers}
-                      onChange={(event) => setDraft({ ...draft, workers: event.target.value })}
-                    />
-                    <FieldDescription>
-                      Number of files extracted concurrently during indexing.
-                    </FieldDescription>
-                  </Field>
-                  <GlobsField
-                    id="indexer-text-exclude-globs"
-                    label="Text exclude globs"
-                    value={draft.textExcludeGlobs}
-                    onChange={(value) => setDraft({ ...draft, textExcludeGlobs: value })}
-                    description="Paths matching any of these are never extracted."
-                  />
-                  <GlobsField
-                    id="indexer-ocr-image-globs"
-                    label="OCR image globs"
-                    value={draft.ocrImageGlobs}
-                    onChange={(value) => setDraft({ ...draft, ocrImageGlobs: value })}
-                    description="Images outside these paths are never OCR'd."
-                  />
-                  <Field>
-                    <FieldLabel htmlFor="indexer-tesseract-langs">Tesseract languages</FieldLabel>
-                    <Input
-                      id="indexer-tesseract-langs"
-                      value={draft.tesseractLangs}
-                      onChange={(event) =>
-                        setDraft({ ...draft, tesseractLangs: event.target.value })
-                      }
-                    />
-                    <FieldDescription>
-                      Languages used to read text from images, such as "eng" or "swe+eng".
-                    </FieldDescription>
-                  </Field>
-                  {validationMessages.length > 0 ? (
-                    <ul className="text-sm text-destructive">
-                      {validationMessages.map((message) => (
-                        <li key={message}>{message}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </SettingsFormShell>
-              ) : null}
-            </CardContent>
-          </Card>
         </>
       )}
+
+      <SettingsSheet
+        title="Indexer settings"
+        description="Applied on the indexer's next scan cycle."
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        dirty={dirty}
+        invalid={validationMessages.length > 0}
+        pending={updateSettings.isPending}
+        onSave={handleSave}
+        onReset={handleReset}
+        validationMessages={validationMessages}
+      >
+        {draft !== null ? (
+          <>
+            <Field>
+              <FieldLabel htmlFor="indexer-scan-interval">Scan interval (seconds)</FieldLabel>
+              <Input
+                id="indexer-scan-interval"
+                type="number"
+                min={30}
+                max={86400}
+                value={draft.scanIntervalSeconds}
+                onChange={(event) =>
+                  setDraft({ ...draft, scanIntervalSeconds: event.target.value })
+                }
+              />
+              <FieldDescription>
+                Time between scheduled scans of every configured root.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="indexer-workers">Workers</FieldLabel>
+              <Input
+                id="indexer-workers"
+                type="number"
+                min={1}
+                max={16}
+                value={draft.workers}
+                onChange={(event) => setDraft({ ...draft, workers: event.target.value })}
+              />
+              <FieldDescription>
+                Number of files extracted concurrently during indexing.
+              </FieldDescription>
+            </Field>
+            <GlobsField
+              id="indexer-text-exclude-globs"
+              label="Text exclude globs"
+              value={draft.textExcludeGlobs}
+              onChange={(value) => setDraft({ ...draft, textExcludeGlobs: value })}
+              description="Paths matching any of these are never extracted."
+            />
+            <GlobsField
+              id="indexer-ocr-image-globs"
+              label="OCR image globs"
+              value={draft.ocrImageGlobs}
+              onChange={(value) => setDraft({ ...draft, ocrImageGlobs: value })}
+              description="Images outside these paths are never OCR'd."
+            />
+            <Field>
+              <FieldLabel htmlFor="indexer-tesseract-langs">Tesseract languages</FieldLabel>
+              <Input
+                id="indexer-tesseract-langs"
+                value={draft.tesseractLangs}
+                onChange={(event) => setDraft({ ...draft, tesseractLangs: event.target.value })}
+              />
+              <FieldDescription>
+                Languages used to read text from images, such as "eng" or "swe+eng".
+              </FieldDescription>
+            </Field>
+          </>
+        ) : null}
+      </SettingsSheet>
 
       <Dialog open={reindexOpen} onOpenChange={setReindexOpen}>
         <DialogContent className="sm:max-w-md">

@@ -15,6 +15,17 @@ export interface SystemPageProps {
   lastUpdated: Date | null;
   /** Right-aligned page-specific controls (Reindex, Run now, Rebuild, ...). */
   actions?: ReactNode;
+  /**
+   * The feature (or features) whose processing this page administers. The
+   * page is shown while any of them is on; with all of them off it is
+   * replaced by a pointer to the feature controls.
+   */
+  feature?: FeatureId | readonly FeatureId[];
+  /**
+   * An extra gate for a page whose activation is not a `FeatureId`, such as
+   * Office. `false` shows the same off panel as a disabled `feature`.
+   */
+  enabled?: boolean;
   children: ReactNode;
 }
 
@@ -29,21 +40,17 @@ export function SystemPage({
   description,
   lastUpdated,
   actions,
+  feature,
+  enabled,
   children,
 }: SystemPageProps) {
   const features = useSystemFeatures();
-  const pageFeatures: Record<string, FeatureId[]> = {
-    Indexer: ["thumbnails", "textSearch", "imageSearch"],
-    OCR: ["pdfOcr"],
-    Search: ["semanticSearch"],
-    "Image search": ["imageSearch"],
-    Thumbnails: ["thumbnails"],
-  };
-  const ids = pageFeatures[title];
-  const disabled =
-    ids !== undefined &&
+  const ids = feature === undefined ? [] : typeof feature === "string" ? [feature] : feature;
+  const featureOff =
+    ids.length > 0 &&
     features.data !== undefined &&
     ids.every((id) => !features.data.configuration.values[id]);
+  const disabled = featureOff || enabled === false;
   return (
     <>
       <PageHeader breadcrumbs={<span className="text-sm font-medium">System / {title}</span>} />

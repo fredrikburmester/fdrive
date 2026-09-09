@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sidecarStatus, sidecarStatusLabel } from "./status";
+import { officeStatus, sidecarStatus, sidecarStatusLabel } from "./status";
 
 describe("sidecarStatus", () => {
   it("returns not_configured when configured is false, regardless of reachable", () => {
@@ -21,5 +21,20 @@ describe("sidecarStatusLabel", () => {
     expect(sidecarStatusLabel("ok")).toBe("Reachable");
     expect(sidecarStatusLabel("unreachable")).toBe("Unreachable");
     expect(sidecarStatusLabel("not_configured")).toBe("Not configured");
+  });
+});
+
+describe("officeStatus", () => {
+  it("reports a ready Office service as reachable", () => {
+    expect(officeStatus("ready")).toBe("ok");
+  });
+
+  it("reports an Office service that was never turned on as not configured", () => {
+    expect(officeStatus("off")).toBe("not_configured");
+  });
+
+  it("reports a starting or broken Office service as unreachable", () => {
+    expect(officeStatus("starting")).toBe("unreachable");
+    expect(officeStatus("unavailable")).toBe("unreachable");
   });
 });

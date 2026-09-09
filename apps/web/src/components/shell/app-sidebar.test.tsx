@@ -30,9 +30,9 @@ const me: MeResponse = {
   isAdmin: false,
 };
 
-function renderSidebar() {
+function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(["auth", "me"], me);
+  client.setQueryData(["auth", "me"], account);
   client.setQueryData(["trash", "status"], {
     available: true,
     path: "/.trash",
@@ -107,4 +107,41 @@ it("applies tighter vertical nav item spacing via scoped descendant styles on Si
   expect(content?.className).toContain("[&_[data-sidebar=group]]:py-1");
   expect(content?.className).toContain("[&_[data-sidebar=group-label]]:h-7");
   expect(content?.className).toContain("[&_[data-sidebar=menu]]:gap-0");
+});
+
+it("lists the System pages in order, each as its own menu item", async () => {
+  renderSidebar({ ...me, isAdmin: true });
+
+  const expected = [
+    ["Features", "/system/features"],
+    ["General", "/system/general"],
+    ["Shared folders", "/system/shared-folders"],
+    ["Thumbnails", "/system/thumbnails"],
+    ["Indexer", "/system/indexer"],
+    ["Search", "/system/search"],
+    ["OCR", "/system/ocr"],
+    ["Image search", "/system/image-search"],
+    ["Office", "/system/office"],
+  ] as const;
+
+  const links = await Promise.all(
+    expected.map(([label]) => screen.findByRole("link", { name: label, exact: true })),
+  );
+  for (const [index, link] of links.entries()) {
+    expect(link.getAttribute("href")).toBe(expected[index]?.[1]);
+    expect(link.closest("li")).not.toBeNull();
+    if (index > 0) {
+      const previous = links[index - 1];
+      expect(previous !== undefined && isBefore(previous, link)).toBe(true);
+    }
+  }
+  expect(screen.queryByRole("link", { name: "Connection" })).toBeNull();
+});
+
+it("hides the System group from a non-admin", async () => {
+  renderSidebar();
+  await screen.findByRole("link", { name: "Shares" });
+
+  expect(screen.queryByRole("link", { name: "Features" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "General" })).toBeNull();
 });

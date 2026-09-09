@@ -14,14 +14,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { describeApiError } from "@/lib/api/errors";
 import { useReembed, useSystemSearch } from "@/lib/api/system-queries";
 import { sidecarStatus } from "@/lib/system/status";
-import { StatCard } from "./stat-card";
+import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+import { SystemSection } from "./system-section";
 
 /** Admin page: `System > Search`. Semantic status, index totals, and a re-embed action. */
 export function SearchPage() {
@@ -46,15 +46,19 @@ export function SearchPage() {
       title="Search"
       description="Semantic embeddings and the hybrid search index."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+      feature="semanticSearch"
       actions={
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => setReembedOpen(true)}
-          disabled={data === undefined || !data.configured}
-        >
-          Re-embed
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setReembedOpen(true)}
+            disabled={data === undefined || !data.configured}
+          >
+            Re-embed
+          </Button>
+          {/* LogSheet mounts here (P9 event log) */}
+        </>
       }
     >
       {isLoading ? (
@@ -63,63 +67,57 @@ export function SearchPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Semantic search</CardTitle>
-              <CardDescription>
-                {data.semantic.configured
-                  ? "The embedding server (TEI) fdrive queries at search time."
-                  : "Not configured: set FDRIVE_EMBED_URL."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <StatusBadge
-                  status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
-                />
-                {data.semantic.model !== undefined ? (
-                  <Badge variant="secondary">{data.semantic.model}</Badge>
-                ) : null}
-                {data.semantic.maxInputLength !== undefined ? (
-                  <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
-                ) : null}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Each chunk of text is turned into a 384-dimension vector by this model, so search
-                can rank results by meaning, not just matching words. The badge above shows the
-                model's own limit on how much text it can embed at once.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Re-embed re-extracts and re-embeds every file in every configured root from scratch,
-                not just the embeddings. On a large index this can take a long time and loads the
-                indexer with work.
-              </p>
-            </CardContent>
-          </Card>
+          <SystemSection
+            title="Semantic search"
+            description={
+              data.semantic.configured
+                ? "The embedding server (TEI) fdrive queries at search time."
+                : "Not configured: set FDRIVE_EMBED_URL."
+            }
+          >
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge
+                status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
+              />
+              {data.semantic.model !== undefined ? (
+                <Badge variant="secondary">{data.semantic.model}</Badge>
+              ) : null}
+              {data.semantic.maxInputLength !== undefined ? (
+                <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
+              ) : null}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Each chunk of text is turned into a 384-dimension vector by this model, so search can
+              rank results by meaning, not just matching words. The badge above shows the model's
+              own limit on how much text it can embed at once.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Re-embed re-extracts and re-embeds every file in every configured root from scratch,
+              not just the embeddings. On a large index this can take a long time and loads the
+              indexer with work.
+            </p>
+          </SystemSection>
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <StatCard label="Files" value={data.index.files.toLocaleString()} />
-            <StatCard label="With text" value={data.index.withText.toLocaleString()} />
-            <StatCard label="Chunks" value={data.index.chunks.toLocaleString()} />
-            <StatCard label="Embedded" value={data.index.embedded.toLocaleString()} />
-          </div>
+          <StatGrid
+            stats={[
+              { label: "Files", value: data.index.files.toLocaleString() },
+              { label: "With text", value: data.index.withText.toLocaleString() },
+              { label: "Chunks", value: data.index.chunks.toLocaleString() },
+              { label: "Embedded", value: data.index.embedded.toLocaleString() },
+            ]}
+          />
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Roots</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              {data.roots.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No index roots are configured.</p>
-              ) : (
-                data.roots.map((root) => (
-                  <Badge key={root} variant="secondary">
-                    {root}
-                  </Badge>
-                ))
-              )}
-            </CardContent>
-          </Card>
+          <SystemSection title="Roots" contentClassName="flex-row flex-wrap gap-2">
+            {data.roots.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No index roots are configured.</p>
+            ) : (
+              data.roots.map((root) => (
+                <Badge key={root} variant="secondary">
+                  {root}
+                </Badge>
+              ))
+            )}
+          </SystemSection>
         </>
       )}
 

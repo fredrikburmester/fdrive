@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -33,10 +32,11 @@ import { formatBytes } from "@/lib/format";
 import { describeMaintenanceError } from "@/lib/system/maintenance";
 import { sidecarStatus } from "@/lib/system/status";
 import { MaintenanceProgress } from "./maintenance-progress";
-import { StatCard } from "./stat-card";
+import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+import { SystemSection } from "./system-section";
 
 const ALL_ROOTS = "__all__";
 
@@ -103,6 +103,7 @@ export function ThumbnailsPage() {
       title="Thumbnails"
       description="The indexer's on-disk thumbnail cache."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+      feature="thumbnails"
       actions={
         <>
           <Button
@@ -116,6 +117,7 @@ export function ThumbnailsPage() {
           <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
             Rebuild
           </Button>
+          {/* LogSheet mounts here (P9 event log) */}
         </>
       }
     >
@@ -125,34 +127,33 @@ export function ThumbnailsPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Status</CardTitle>
-              <CardDescription>
-                {status === "ok"
-                  ? "Thumbnail cache is available."
-                  : status === "unreachable"
-                    ? "The indexer that generates thumbnails is unreachable."
-                    : "Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <StatusBadge status={status} />
-              <p className="text-sm text-muted-foreground">
-                Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
-                existing previews. Clear cache removes previews globally. Original files, text,
-                search data, and metadata stay unchanged. Normal indexing or on-demand generation
-                can create previews again.
-              </p>
-            </CardContent>
-          </Card>
+          <SystemSection
+            title="Status"
+            description={
+              status === "ok"
+                ? "Thumbnail cache is available."
+                : status === "unreachable"
+                  ? "The indexer that generates thumbnails is unreachable."
+                  : "Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."
+            }
+          >
+            <StatusBadge status={status} />
+            <p className="text-sm text-muted-foreground">
+              Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
+              existing previews. Clear cache removes previews globally. Original files, text, search
+              data, and metadata stay unchanged. Normal indexing or on-demand generation can create
+              previews again.
+            </p>
+          </SystemSection>
           {indexer.error ? (
             <SystemErrorState error={indexer.error} onRetry={() => void indexer.refetch()} />
           ) : null}
-          <div className="grid grid-cols-2 gap-3">
-            <StatCard label="Thumbnails" value={data.count.toLocaleString()} />
-            <StatCard label="Cache size" value={formatBytes(data.bytes)} />
-          </div>
+          <StatGrid
+            stats={[
+              { label: "Thumbnails", value: data.count.toLocaleString() },
+              { label: "Cache size", value: formatBytes(data.bytes) },
+            ]}
+          />
           <MaintenanceProgress
             title="Thumbnail rebuild"
             job={indexer.data?.stats?.thumbnailRebuild}

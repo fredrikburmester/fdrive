@@ -3,6 +3,8 @@
 import {
   ChevronsUpDown,
   Database,
+  FileText,
+  FolderSymlink,
   Image,
   Images,
   Link2,
@@ -13,6 +15,7 @@ import {
   Search,
   Settings2,
   Sun,
+  ToggleRight,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -55,6 +58,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
+import { FEATURE_PAGES, OFFICE_PAGE } from "@/lib/system/pages";
 import { useTrashStatus } from "@/lib/trash/queries";
 
 const THEME_OPTIONS = [
@@ -84,22 +88,24 @@ export function isTrashRoute(pathname: string | null): boolean {
 }
 
 const TRASH_ROUTE = "/trash" as Route;
-const SYSTEM_CONNECTION_ROUTE = "/system/connection" as Route;
-const SYSTEM_INDEXER_ROUTE = "/system/indexer" as Route;
-const SYSTEM_SEARCH_ROUTE = "/system/search" as Route;
-const SYSTEM_OCR_ROUTE = "/system/ocr" as Route;
-const SYSTEM_THUMBNAILS_ROUTE = "/system/thumbnails" as Route;
-const SYSTEM_IMAGE_SEARCH_ROUTE = "/system/image-search" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
 
+/**
+ * The System group, ordered the way an owner works through it: what is on,
+ * the settings that are neither feature nor sidecar, then one entry per
+ * subsystem page. Feature hrefs come from `lib/system/pages` so the cards on
+ * the Features page and this list cannot drift apart.
+ */
 const SYSTEM_NAV_ITEMS = [
-  { href: "/system/features" as Route, label: "Features", Icon: Settings2 },
-  { href: SYSTEM_CONNECTION_ROUTE, label: "Connection", Icon: Settings2 },
-  { href: SYSTEM_INDEXER_ROUTE, label: "Indexer", Icon: Database },
-  { href: SYSTEM_SEARCH_ROUTE, label: "Search", Icon: Search },
-  { href: SYSTEM_OCR_ROUTE, label: "OCR", Icon: ScanText },
-  { href: SYSTEM_THUMBNAILS_ROUTE, label: "Thumbnails", Icon: Image },
-  { href: SYSTEM_IMAGE_SEARCH_ROUTE, label: "Image search", Icon: Images },
+  { href: "/system/features" as Route, label: "Features", Icon: ToggleRight },
+  { href: "/system/general" as Route, label: "General", Icon: Settings2 },
+  { href: "/system/shared-folders" as Route, label: "Shared folders", Icon: FolderSymlink },
+  { href: FEATURE_PAGES.thumbnails.href, label: "Thumbnails", Icon: Image },
+  { href: FEATURE_PAGES.textSearch.href, label: "Indexer", Icon: Database },
+  { href: FEATURE_PAGES.semanticSearch.href, label: "Search", Icon: Search },
+  { href: FEATURE_PAGES.pdfOcr.href, label: "OCR", Icon: ScanText },
+  { href: FEATURE_PAGES.imageSearch.href, label: "Image search", Icon: Images },
+  { href: OFFICE_PAGE.href, label: "Office", Icon: FileText },
 ] as const;
 
 export function AppSidebar() {
@@ -164,14 +170,12 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {SYSTEM_NAV_ITEMS.map(({ href, label, Icon }) => (
-                  <SidebarMenuButton
-                    key={href}
-                    isActive={pathname === href}
-                    render={<Link href={href} />}
-                  >
-                    <Icon />
-                    <span>{label}</span>
-                  </SidebarMenuButton>
+                  <SidebarMenuItem key={label}>
+                    <SidebarMenuButton isActive={pathname === href} render={<Link href={href} />}>
+                      <Icon />
+                      <span>{label}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                 ))}
               </SidebarMenu>
             </SidebarGroupContent>
