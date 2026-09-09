@@ -44,6 +44,12 @@ preserve the `/onlyoffice` path. See the [deployment reference](../deploy/REFERE
 - **Starting:** allow startup time and check the ONLYOFFICE container's logs.
 - **Unavailable:** check the container, its connection to the API, and discovery endpoint.
 - **Editor fails to load:** verify the saved browser address and reverse proxy forwarding.
+- **Editor opens over HTTPS but shows "Download failed":** the document server is
+  handing the browser `http://` URLs, which the page blocks as mixed content. Server-side
+  logs stay clean (WOPI calls return 200, no ONLYOFFICE errors). Set
+  `FDRIVE_PROXY_SCHEME=https` next to `FDRIVE_PUBLIC_URL` in `deploy/.env` and run
+  `./update.sh`; `preflight.sh` rejects a mismatch between the two. Hard-reload the
+  editor tab afterwards.
 - **Viewing works but editing is unavailable:** check the editing toggle and exact SFTPGo
   username in the allowed-user list.
 

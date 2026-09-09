@@ -1,6 +1,11 @@
 # Direct LAN HTTP works by default. Behind an HTTPS edge, set
 # FDRIVE_PROXY_SCHEME=https so generated URLs and automatic cookies use HTTPS.
-# The scheme is deployment-controlled; client headers cannot override it.
+# The scheme is deployment-controlled; client headers cannot override it, and
+# an edge proxy's own X-Forwarded-Proto is deliberately replaced too (any LAN
+# client could otherwise claim https). ONLYOFFICE builds the URLs it hands the
+# browser from this header, so a wrong value behind HTTPS surfaces only as a
+# mixed-content "Download failed" in the editor; preflight.sh checks it
+# against FDRIVE_PUBLIC_URL.
 :80 {
 	# No request body limit: uploads can be large files.
 	request_body {

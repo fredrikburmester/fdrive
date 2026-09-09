@@ -66,6 +66,12 @@ FDRIVE_PUBLIC_URL=https://drive.example.com
 FDRIVE_PROXY_SCHEME=https
 ```
 
+Both are required together. `FDRIVE_PROXY_SCHEME` is what the bundled proxy sends every
+service as `X-Forwarded-Proto`; the api derives Secure cookies from it and the bundled
+ONLYOFFICE builds every browser-facing URL from it. Left at `http` behind an HTTPS edge,
+the editor is handed `http://` document URLs that the browser blocks as mixed content
+("Download failed" with clean server logs). `preflight.sh` fails when the two disagree.
+
 Leave `FDRIVE_COOKIE_SECURE` at its `auto` default: direct LAN HTTP works with the
 HTTP default, and the HTTPS proxy setting makes sessions use Secure cookies.
 Keep direct LAN HTTP behind your home network firewall; use HTTPS for internet access.
@@ -152,8 +158,36 @@ For an account whose home is not named after its username, an administrator can 
 per-account mapping in **Account** after setup. **System > Connection** also contains
 the common home template. Correct the underlying worker mount first: an account override
 cannot expose a host directory that is absent from the container. Existing SFTPGo virtual
-folders may require additional roots/mappings; do not assume one user's successful check
+folders need their own mapping (next section); do not assume one user's successful check
 proves every account and virtual folder is configured.
+
+### SFTPGo virtual folders
+
+A virtual folder is not a directory inside the user's home on disk: SFTPGo mounts a
+separate `mapped_path` at a virtual path (for example `/shared`). The indexer only sees
+what is under a configured root, so search, thumbnails, duplicates, folder sizes, and MCP
+work for a virtual folder only when **both** of these hold:
+
+1. The folder's SFTPGo `mapped_path` sits inside a configured `FDRIVE_INDEX_ROOTS` root,
+   or it has a root of its own plus a matching indexer bind mount
+   (`<host path>:/roots/<name>:ro`, see [multiple roots](../docs/INDEXER.md#multiple-roots)).
+2. An administrator maps it for each account that mounts it, in **Account**, under the
+   login's index status: choose the root and enter the physical prefix, the folder's path
+   inside that root. The same physical folder is indexed once; every account that mounts
+   it carries its own mapping, and each user's SFTPGo permissions still apply to results.
+
+fdrive cannot read a folder's `mapped_path`: that is only available through SFTPGo's admin
+API, which fdrive never uses. The physical prefix is therefore always supplied by a human.
+Until it is, the account's status names the mount (`/shared is not indexed`) and the home
+scope keeps its index-backed features; the unmapped folder alone stays out of search. If
+the folder deliberately lives outside every indexed root, mark it **Not indexed** on the
+same page so it stops being reported.
+
+The dev stack satisfies constraint 1 by placing folders under `_folders/` inside
+`/srv/sftpgo/data`, the one seeded root, so the mapping for `carol`'s `/shared` is root
+`sftpgo`, physical prefix `/_folders/shared`. A production deployment gets none of this for
+free: a folder mapped elsewhere on the host needs its own root and mount before any
+account mapping can verify.
 
 For SFTPGo backed by a Docker named volume, explicitly share that existing volume through
 an overlay instead of depending on Docker's internal volume directory. Example
