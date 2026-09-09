@@ -1202,6 +1202,9 @@ describe("createApiClient: identityScope", () => {
     reason: "ok",
     usesOverride: false,
     virtualPrefixes: ["/"],
+    unmappedMounts: [{ virtualPath: "/shared", kind: "dir" }],
+    unverifiedPrefixes: [],
+    unindexedPrefixes: ["/archive"],
     warning: "warning text",
     isAdmin: false,
   };
@@ -1220,12 +1223,40 @@ describe("createApiClient: identityScope", () => {
     const client = createApiClient({ fetch: fetchStub });
     const body = {
       scopes: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+      unindexedPrefixes: ["/archive"],
     };
 
     expect(await client.setIdentityScope(VALID_UUID, body)).toEqual(NONADMIN_STATUS);
     expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope`);
     expect(calls[0]?.init.method).toBe("PUT");
     expect(calls[0]?.init.body).toBe(JSON.stringify(body));
+  });
+});
+
+describe("createApiClient: folder mappings and suggestions", () => {
+  const MAPPINGS = {
+    mappings: [{ virtualPath: "/shared", rootName: "sftpgo", fsPrefix: "/_folders/shared" }],
+  };
+
+  it("gets and puts the folder-level mappings", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, MAPPINGS),
+      jsonResponse(200, MAPPINGS),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+    expect(await client.mountMappings()).toEqual(MAPPINGS);
+    expect(calls[0]?.url).toBe("/api/v1/system/mount-mappings");
+    expect(await client.setMountMappings(MAPPINGS)).toEqual(MAPPINGS);
+    expect(calls[1]?.init.method).toBe("PUT");
+    expect(calls[1]?.init.body).toBe(JSON.stringify(MAPPINGS));
+  });
+
+  it("gets an identity's mapping suggestions", async () => {
+    const body = { mounts: [{ virtualPath: "/shared", suggestions: [] }] };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
+    const client = createApiClient({ fetch: fetchStub });
+    expect(await client.identityScopeSuggestions(VALID_UUID)).toEqual(body);
+    expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope/suggestions`);
   });
 });
 

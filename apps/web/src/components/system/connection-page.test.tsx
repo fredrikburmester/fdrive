@@ -25,6 +25,7 @@ vi.mock("@/components/shell/page-header", () => ({
     data: { activeIdentityId: "alice", identities: [{ id: "alice", username: "alice" }] },
   }),
 }));
+vi.mock("./shared-folders-card", () => ({ SharedFoldersCard: () => null }));
 vi.mock("@/lib/api/system-queries", () => ({
   useAdminConnection: () => ({ data: mocks.connection, isLoading: false }),
   useAdminTestConnection: () => mocks.test,

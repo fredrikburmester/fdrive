@@ -58,6 +58,9 @@ const AVAILABLE_STATUS: ScopeStatus = {
   reason: "ok",
   usesOverride: false,
   virtualPrefixes: ["/"],
+  unmappedMounts: [],
+  unverifiedPrefixes: [],
+  unindexedPrefixes: [],
   warning: "warning",
   isAdmin: false,
 };

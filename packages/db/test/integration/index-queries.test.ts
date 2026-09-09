@@ -114,6 +114,38 @@ async function insertChunk(fileId: number, idx: number, text: string, embedding?
 }
 
 describe("index-queries", () => {
+  describe("directoriesWithFiles", () => {
+    it("finds directories whose direct live files include every name, across roots", async () => {
+      const sftpgo = await insertRoot("sftpgo");
+      const other = await insertRoot("other");
+      await insertFile(sftpgo, "_folders/shared/team.txt");
+      await insertFile(sftpgo, "_folders/shared/notes.md");
+      await insertFile(sftpgo, "alice/team.txt");
+      await insertFile(sftpgo, "alice/deep/notes.md");
+      await insertFile(sftpgo, "team.txt");
+      await insertFile(sftpgo, "notes.md");
+      await insertFile(other, "mirror/team.txt");
+      await insertFile(other, "mirror/notes.md");
+      await insertFile(other, "gone/team.txt", { deletedAt: new Date() });
+      await insertFile(other, "gone/notes.md");
+
+      const rows = await queries.directoriesWithFiles(["team.txt", "notes.md"], 10);
+      expect(rows).toEqual([
+        { rootId: sftpgo, directory: "" },
+        { rootId: sftpgo, directory: "_folders/shared" },
+        { rootId: other, directory: "mirror" },
+      ]);
+    });
+
+    it("returns nothing for an empty name list and honours the cap", async () => {
+      const sftpgo = await insertRoot("sftpgo");
+      await insertFile(sftpgo, "a/x.txt");
+      await insertFile(sftpgo, "b/x.txt");
+      expect(await queries.directoriesWithFiles([], 10)).toEqual([]);
+      expect(await queries.directoriesWithFiles(["x.txt"], 1)).toHaveLength(1);
+    });
+  });
+
   describe("semantic", () => {
     it("orders chunks by cosine distance, closest first", async () => {
       const rootId = await insertRoot("primary");

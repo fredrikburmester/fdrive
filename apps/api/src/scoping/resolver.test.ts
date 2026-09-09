@@ -3,6 +3,7 @@ import type { Scope } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IndexRootConfig } from "../config.ts";
+import { createInMemoryMountMappingStore } from "./mount-mapping-store.ts";
 import { createInMemoryScopeOverrideStore, type ScopeOverrideStore } from "./override-store.ts";
 import { type CreateScopeResolverDeps, createScopeResolver } from "./resolver.ts";
 import {
@@ -33,11 +34,13 @@ async function setup(overrides: Partial<CreateScopeResolverDeps> = {}) {
   const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: CONNECTION.baseUrl });
   const identity = buildIdentity({ providerId: provider.id });
   const overrideStore: ScopeOverrideStore = createInMemoryScopeOverrideStore();
+  const mountMappingStore = createInMemoryMountMappingStore();
   const clockCtl = buildClock(1_700_000_000_000);
 
   const deps: CreateScopeResolverDeps = {
     providers: repos.providers,
     overrides: overrideStore,
+    mountMappings: mountMappingStore,
     connection: fakeConnectionStore(CONNECTION),
     indexRoots: INDEX_ROOTS,
     indexer: fakeIndexerDirectory(new Map()),
@@ -46,7 +49,7 @@ async function setup(overrides: Partial<CreateScopeResolverDeps> = {}) {
     ...overrides,
   };
   const resolver = createScopeResolver(deps);
-  return { resolver, identity, provider, overrideStore, clockCtl, deps };
+  return { resolver, identity, provider, overrideStore, mountMappingStore, clockCtl, deps };
 }
 
 describe("configuredMappings", () => {
@@ -68,7 +71,7 @@ describe("configuredMappings", () => {
       fsPrefix: "/pool/team",
       virtualPrefix: "/shared",
     };
-    await overrideStore.set(identity.id, [override]);
+    await overrideStore.set(identity.id, [override], []);
 
     const result = await resolver.configuredMappings(identity);
     expect(result.available).toBe(true);
@@ -95,6 +98,7 @@ describe("configuredMappings", () => {
     const resolver = createScopeResolver({
       providers: repos.providers,
       overrides: createInMemoryScopeOverrideStore(),
+      mountMappings: createInMemoryMountMappingStore(),
       connection: fakeConnectionStore(CONNECTION),
       indexRoots: INDEX_ROOTS,
       indexer: fakeIndexerDirectory(new Map()),
@@ -170,17 +174,258 @@ describe("verifiedIndexScopes", () => {
     });
   });
 
-  it("is unavailable with mismatch when an SFTP entry is missing from the index", async () => {
+  it("is unavailable with unmapped_mount when an SFTP entry is missing from the index", async () => {
+    // A mount is never a real entry on disk in the home directory, so the
+    // only symptom of a missing mapping is an SFTP-visible name the index
+    // has never seen. It still fails closed; the reason just says why.
     const indexData: IndexerDirectoryResponse = { items: [], overflow: false };
     const { resolver, identity } = await setup({
       storageForIdentity: async () =>
-        fakeStorageProvider({ list: async () => [fileEntry("a.txt")] }),
+        fakeStorageProvider({ list: async () => [fileEntry("shared", "dir")] }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", indexData]])),
+    });
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: false,
+      reason: "unmapped_mount",
+    });
+    const status = await resolver.status(identity, false);
+    expect(status.reason).toBe("unmapped_mount");
+    expect(status.unmappedMounts).toEqual([{ virtualPath: "/shared", kind: "dir" }]);
+    // Nothing survived, so there is no "other" scope to report against.
+    expect(status.unverifiedPrefixes).toEqual([]);
+  });
+
+  it("still reports mismatch when an entry exists in the index with a different kind", async () => {
+    const indexData: IndexerDirectoryResponse = {
+      items: [{ name: "shared", kind: "file" }],
+      overflow: false,
+    };
+    const { resolver, identity } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({ list: async () => [fileEntry("shared", "dir")] }),
       indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", indexData]])),
     });
     expect(await resolver.verifiedIndexScopes(identity)).toEqual({
       available: false,
       reason: "mismatch",
     });
+    expect((await resolver.status(identity, false)).unmappedMounts).toEqual([]);
+  });
+
+  it("reports mismatch, not unmapped_mount, when a missing entry sits next to a kind mismatch", async () => {
+    const indexData: IndexerDirectoryResponse = {
+      items: [{ name: "x", kind: "file" }],
+      overflow: false,
+    };
+    const { resolver, identity } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({
+          list: async () => [fileEntry("shared", "dir"), fileEntry("x", "dir")],
+        }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", indexData]])),
+    });
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: false,
+      reason: "mismatch",
+    });
+  });
+
+  it("treats a missing symlink as a mismatch rather than a mount candidate", async () => {
+    const indexData: IndexerDirectoryResponse = { items: [], overflow: false };
+    const { resolver, identity } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({ list: async () => [fileEntry("link", "symlink")] }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", indexData]])),
+    });
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: false,
+      reason: "mismatch",
+    });
+  });
+
+  it("verifies the home scope through shadow exclusion once the mount is mapped", async () => {
+    // Home lists the mount name, which is absent from home's own index
+    // listing (it is not on disk there); the override's own directory is
+    // verified normally, and both scopes end up in the verified set.
+    const homeIndex: IndexerDirectoryResponse = {
+      items: [{ name: "a.txt", kind: "file" }],
+      overflow: false,
+    };
+    const sharedIndex: IndexerDirectoryResponse = {
+      items: [{ name: "x.txt", kind: "file" }],
+      overflow: false,
+    };
+    const { resolver, identity, overrideStore } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({
+          list: async (path: string) =>
+            path === "/" ? [fileEntry("a.txt"), fileEntry("shared", "dir")] : [fileEntry("x.txt")],
+        }),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          ["sftpgo:/alice", homeIndex],
+          ["sftpgo:/_folders/shared", sharedIndex],
+        ]),
+      ),
+    });
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" }],
+      [],
+    );
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [
+        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" },
+      ],
+    });
+    const status = await resolver.status(identity, false);
+    expect(status).toMatchObject({
+      status: "available",
+      reason: "ok",
+      unmappedMounts: [],
+      unverifiedPrefixes: [],
+    });
+  });
+
+  it("verifies the home scope when the mount is acknowledged as unindexed", async () => {
+    const homeIndex: IndexerDirectoryResponse = {
+      items: [{ name: "a.txt", kind: "file" }],
+      overflow: false,
+    };
+    const { resolver, identity, overrideStore } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({
+          list: async () => [fileEntry("a.txt"), fileEntry("shared", "dir")],
+        }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", homeIndex]])),
+    });
+    await overrideStore.set(identity.id, [], ["/shared"]);
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    const status = await resolver.status(identity, false);
+    expect(status.reason).toBe("ok");
+    expect(status.usesOverride).toBe(true);
+    // An unindexed prefix maps to nothing: it is never a scope of its own,
+    // but it is echoed back so an editor can keep it on its next save.
+    expect(status.virtualPrefixes).toEqual(["/"]);
+    expect(status.unindexedPrefixes).toEqual(["/shared"]);
+  });
+
+  it("keeps the home scope when an override fails, and reports that prefix unverified", async () => {
+    const homeIndex: IndexerDirectoryResponse = {
+      items: [{ name: "a.txt", kind: "file" }],
+      overflow: false,
+    };
+    // The override's index listing is missing entirely (unreachable for
+    // that directory), so only the override fails.
+    const { resolver, identity, overrideStore } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({
+          list: async (path: string) =>
+            path === "/" ? [fileEntry("a.txt"), fileEntry("team", "dir")] : [fileEntry("y.txt")],
+        }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", homeIndex]])),
+    });
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/team" }],
+      [],
+    );
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    const status = await resolver.status(identity, true);
+    expect(status).toMatchObject({
+      status: "available",
+      reason: "ok",
+      virtualPrefixes: ["/", "/team"],
+      unverifiedPrefixes: ["/team"],
+      unmappedMounts: [],
+      overrides: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/team" }],
+    });
+  });
+
+  it("keeps a healthy override when only the home scope has an unmapped mount", async () => {
+    const sharedIndex: IndexerDirectoryResponse = {
+      items: [{ name: "x.txt", kind: "file" }],
+      overflow: false,
+    };
+    const { resolver, identity, overrideStore } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({
+          list: async (path: string) =>
+            path === "/"
+              ? [fileEntry("shared", "dir"), fileEntry("other", "dir")]
+              : [fileEntry("x.txt")],
+        }),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          ["sftpgo:/alice", { items: [], overflow: false }],
+          ["sftpgo:/_folders/shared", sharedIndex],
+        ]),
+      ),
+    });
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" }],
+      [],
+    );
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" }],
+    });
+    const status = await resolver.status(identity, false);
+    expect(status).toMatchObject({
+      status: "available",
+      unverifiedPrefixes: ["/"],
+      unmappedMounts: [{ virtualPath: "/other", kind: "dir" }],
+    });
+  });
+
+  it("reports the most severe reason when every scope fails", async () => {
+    // Home: unmapped mount (least severe). Override: indexer unreachable
+    // (most severe). Nothing survives, so the identity-wide reason is the
+    // more severe of the two.
+    const { resolver, identity, overrideStore } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({
+          list: async (path: string) => (path === "/" ? [fileEntry("shared", "dir")] : []),
+        }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", { items: [], overflow: false }]])),
+    });
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/team" }],
+      [],
+    );
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: false,
+      reason: "indexer_unreachable",
+    });
+    const status = await resolver.status(identity, false);
+    expect(status.reason).toBe("indexer_unreachable");
+    // The unmapped mount is still named so the administrator can act on it.
+    expect(status.unmappedMounts).toEqual([{ virtualPath: "/shared", kind: "dir" }]);
+  });
+
+  it("caps the reported unmapped mounts at the contract maximum", async () => {
+    const names = Array.from({ length: 70 }, (_, i) => fileEntry(`m${i}`, "dir"));
+    const { resolver, identity } = await setup({
+      storageForIdentity: async () => fakeStorageProvider({ list: async () => names }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", { items: [], overflow: false }]])),
+    });
+    const status = await resolver.status(identity, false);
+    expect(status.reason).toBe("unmapped_mount");
+    expect(status.unmappedMounts).toHaveLength(64);
   });
 
   it("is unavailable with overflow when the index listing overflowed", async () => {
@@ -292,9 +537,11 @@ describe("verifiedIndexScopes", () => {
         ]),
       ),
     });
-    await overrideStore.set(identity.id, [
-      { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
-    ]);
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+      [],
+    );
 
     const result = await resolver.verifiedIndexScopes(identity);
     expect(result.available).toBe(true);
@@ -379,7 +626,7 @@ describe("verifiedIndexScopes", () => {
       indexer: fakeIndexerDirectory(indexEntries),
       verifyConcurrency: 2,
     });
-    await overrideStore.set(identity.id, overrides);
+    await overrideStore.set(identity.id, overrides, []);
 
     const result = await resolver.verifiedIndexScopes(identity);
     expect(result.available).toBe(true);
@@ -387,7 +634,7 @@ describe("verifiedIndexScopes", () => {
     expect(listSpy).toHaveBeenCalledTimes(4);
   });
 
-  it("skips remaining candidates once a failure is already known", async () => {
+  it("verifies every candidate even after one has already failed", async () => {
     const listSpy = vi.fn(async (path: string) => {
       if (path === "/") {
         throw new Error("boom");
@@ -404,17 +651,211 @@ describe("verifiedIndexScopes", () => {
       indexRoots: roots,
       storageForIdentity: async () => fakeStorageProvider({ list: listSpy }),
       indexer: fakeIndexerDirectory(new Map([["root-b:/b", { items: [], overflow: false }]])),
-      // Serialize the two candidates so the second only starts once the
-      // first (which fails) has already set `failure`.
       verifyConcurrency: 1,
     });
-    await overrideStore.set(identity.id, overrides);
+    await overrideStore.set(identity.id, overrides, []);
 
     const result = await resolver.verifiedIndexScopes(identity);
-    expect(result).toEqual({ available: false, reason: "mismatch" });
-    // The home scope ("/alice") always runs first (it is always present);
-    // the second candidate must never even call list once failure is known.
-    expect(listSpy).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ available: true, scopes: overrides });
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect((await resolver.status(identity, false)).unverifiedPrefixes).toEqual(["/"]);
+  });
+
+  it("recomputes immediately after the unindexed prefixes change", async () => {
+    const listSpy = vi.fn(async () => [fileEntry("shared", "dir")]);
+    const { resolver, identity } = await setup({
+      storageForIdentity: async () => fakeStorageProvider({ list: listSpy }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", { items: [], overflow: false }]])),
+      cacheTtlMs: 60_000,
+    });
+
+    expect((await resolver.verifiedIndexScopes(identity)).available).toBe(false);
+    await resolver.setOverrides(identity, [], ["/shared"]);
+    expect((await resolver.verifiedIndexScopes(identity)).available).toBe(true);
+    expect(listSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("folder-level mappings", () => {
+  const sharedIndex: IndexerDirectoryResponse = {
+    items: [{ name: "x.txt", kind: "file" }],
+    overflow: false,
+  };
+  const homeIndex: IndexerDirectoryResponse = {
+    items: [{ name: "a.txt", kind: "file" }],
+    overflow: false,
+  };
+  const folderMapping = {
+    virtualPath: "/shared",
+    rootName: "sftpgo",
+    fsPrefix: "/_folders/shared",
+  };
+
+  function mountedHome() {
+    return fakeStorageProvider({
+      list: async (path: string) =>
+        path === "/" ? [fileEntry("a.txt"), fileEntry("shared", "dir")] : [fileEntry("x.txt")],
+    });
+  }
+
+  it("adopts a folder mapping only for a login whose unmapped mount matches it", async () => {
+    const { resolver, identity, mountMappingStore } = await setup({
+      storageForIdentity: async () => mountedHome(),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          ["sftpgo:/alice", homeIndex],
+          ["sftpgo:/_folders/shared", sharedIndex],
+        ]),
+      ),
+    });
+    await mountMappingStore.set([folderMapping]);
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [
+        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" },
+      ],
+    });
+    // Office and event consumers see the adopted scope through configuredMappings too.
+    const configured = await resolver.configuredMappings(identity);
+    expect(configured.available && configured.scopes.map((s) => s.virtualPrefix)).toEqual([
+      "/",
+      "/shared",
+    ]);
+    const status = await resolver.status(identity, true);
+    expect(status).toMatchObject({
+      status: "available",
+      usesOverride: false,
+      virtualPrefixes: ["/", "/shared"],
+      overrides: [],
+      adoptedMappings: [
+        { rootName: "sftpgo", fsPrefix: "/_folders/shared", virtualPrefix: "/shared" },
+      ],
+    });
+  });
+
+  it("never adopts for a login whose same-named directory is really on disk", async () => {
+    // "shared" exists in the index listing of the home, so it is an ordinary
+    // directory, not a mount: the folder mapping must not shadow it.
+    const { resolver, identity, mountMappingStore } = await setup({
+      storageForIdentity: async () => mountedHome(),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          [
+            "sftpgo:/alice",
+            {
+              items: [
+                { name: "a.txt", kind: "file" },
+                { name: "shared", kind: "dir" },
+              ],
+              overflow: false,
+            },
+          ],
+          ["sftpgo:/_folders/shared", sharedIndex],
+        ]),
+      ),
+    });
+    await mountMappingStore.set([folderMapping]);
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    const status = await resolver.status(identity, true);
+    expect(status.isAdmin && status.adoptedMappings).toEqual([]);
+  });
+
+  it("does nothing for a login without the mount", async () => {
+    const { resolver, identity, mountMappingStore } = await setup({
+      storageForIdentity: async () =>
+        fakeStorageProvider({ list: async () => [fileEntry("a.txt")] }),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", homeIndex]])),
+    });
+    await mountMappingStore.set([folderMapping]);
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+  });
+
+  it("lets a per-login override win over a folder mapping at the same path", async () => {
+    const { resolver, identity, overrideStore, mountMappingStore } = await setup({
+      storageForIdentity: async () => mountedHome(),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          ["sftpgo:/alice", homeIndex],
+          ["sftpgo:/pool/team", sharedIndex],
+        ]),
+      ),
+    });
+    await mountMappingStore.set([folderMapping]);
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+      [],
+    );
+    const result = await resolver.verifiedIndexScopes(identity);
+    expect(result).toEqual({
+      available: true,
+      scopes: [
+        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
+      ],
+    });
+    const status = await resolver.status(identity, true);
+    expect(status.isAdmin && status.adoptedMappings).toEqual([]);
+  });
+
+  it("reports an adopted mapping that itself fails as unverified, keeping the home", async () => {
+    // The folder mapping points somewhere the indexer cannot list.
+    const { resolver, identity, mountMappingStore } = await setup({
+      storageForIdentity: async () => mountedHome(),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", homeIndex]])),
+    });
+    await mountMappingStore.set([folderMapping]);
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    const status = await resolver.status(identity, false);
+    expect(status.unverifiedPrefixes).toEqual(["/shared"]);
+    expect(status.unmappedMounts).toEqual([]);
+  });
+
+  it("recomputes every login immediately after setMountMappings", async () => {
+    const listSpy = vi.fn(async (path: string) =>
+      path === "/" ? [fileEntry("a.txt"), fileEntry("shared", "dir")] : [fileEntry("x.txt")],
+    );
+    const { resolver, identity } = await setup({
+      storageForIdentity: async () => fakeStorageProvider({ list: listSpy }),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          ["sftpgo:/alice", homeIndex],
+          ["sftpgo:/_folders/shared", sharedIndex],
+        ]),
+      ),
+      cacheTtlMs: 60_000,
+    });
+    expect((await resolver.verifiedIndexScopes(identity)).available).toBe(false);
+    await resolver.setMountMappings([folderMapping]);
+    expect(await resolver.mountMappings()).toEqual([folderMapping]);
+    expect((await resolver.verifiedIndexScopes(identity)).available).toBe(true);
+    await resolver.setMountMappings([]);
+    expect((await resolver.verifiedIndexScopes(identity)).available).toBe(false);
+  });
+
+  it("validates folder mappings against the known roots", async () => {
+    const { resolver } = await setup();
+    await expect(
+      resolver.setMountMappings([{ ...folderMapping, rootName: "elsewhere" }]),
+    ).rejects.toMatchObject({ reason: "unknown_root" });
+    await expect(
+      resolver.setMountMappings([folderMapping, { ...folderMapping, fsPrefix: "/other" }]),
+    ).rejects.toMatchObject({ reason: "duplicate_virtual_prefix" });
+    await expect(
+      resolver.setMountMappings([{ ...folderMapping, virtualPath: "/" }]),
+    ).rejects.toMatchObject({ reason: "invalid_mapping" });
   });
 });
 
@@ -449,6 +890,7 @@ describe("status", () => {
       expect(result.mappings).toEqual([
         { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
       ]);
+      expect(result.overrides).toEqual([]);
     }
     expect(result.status).toBe("available");
     expect(result.reason).toBe("ok");
@@ -458,9 +900,11 @@ describe("status", () => {
     const { resolver, identity, overrideStore } = await setup();
     expect((await resolver.status(identity, false)).usesOverride).toBe(false);
 
-    await overrideStore.set(identity.id, [
-      { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
-    ]);
+    await overrideStore.set(
+      identity.id,
+      [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
+      [],
+    );
     expect((await resolver.status(identity, false)).usesOverride).toBe(true);
   });
 
@@ -549,7 +993,45 @@ describe("setOverrides", () => {
   it("persists a valid override", async () => {
     const scope: Scope = { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" };
     await ctx.resolver.setOverrides(ctx.identity, [scope]);
-    expect(await ctx.overrideStore.get(ctx.identity.id)).toEqual({ version: 1, scopes: [scope] });
+    expect(await ctx.overrideStore.get(ctx.identity.id)).toEqual({
+      version: 2,
+      scopes: [scope],
+      unindexedPrefixes: [],
+    });
+  });
+
+  it("persists unindexed prefixes on their own, and resets once both lists are empty", async () => {
+    await ctx.resolver.setOverrides(ctx.identity, [], ["/archive"]);
+    expect(await ctx.overrideStore.get(ctx.identity.id)).toEqual({
+      version: 2,
+      scopes: [],
+      unindexedPrefixes: ["/archive"],
+    });
+    await ctx.resolver.setOverrides(ctx.identity, [], []);
+    expect(await ctx.overrideStore.get(ctx.identity.id)).toBeNull();
+  });
+
+  it("rejects an unindexed prefix colliding with a mapping, and never persists it", async () => {
+    const scope: Scope = { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" };
+    await expect(
+      ctx.resolver.setOverrides(ctx.identity, [scope], ["/shared"]),
+    ).rejects.toMatchObject({ reason: "unindexed_prefix_collision" });
+    expect(await ctx.overrideStore.get(ctx.identity.id)).toBeNull();
+  });
+
+  it("rejects a mapping on a root that is neither indexed nor the template root", async () => {
+    const scope: Scope = { rootName: "elsewhere", fsPrefix: "/x", virtualPrefix: "/x" };
+    await expect(ctx.resolver.setOverrides(ctx.identity, [scope])).rejects.toMatchObject({
+      reason: "unknown_root",
+    });
+  });
+
+  it("accepts a mapping on the template root even when it is not an index root", async () => {
+    const other = await setup({
+      indexRoots: [{ name: "other-root", sftpgoPath: "/x", indexerPath: "/y" }],
+    });
+    const scope: Scope = { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/team" };
+    await expect(other.resolver.setOverrides(other.identity, [scope])).resolves.toBeUndefined();
   });
 
   it("resets the override when given an empty list", async () => {

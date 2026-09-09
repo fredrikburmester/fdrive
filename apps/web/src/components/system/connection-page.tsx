@@ -21,6 +21,7 @@ import {
   homeTemplatePreview,
   isPlausibleHomeTemplate,
 } from "@/lib/system/connection";
+import { SharedFoldersCard } from "./shared-folders-card";
 
 /** Admin page: `System > Connection`. Shows the active SFTPGo connection and lets an admin edit the home template. */
 export function ConnectionPage() {
@@ -178,6 +179,8 @@ export function ConnectionPage() {
             </FieldGroup>
           </CardContent>
         </Card>
+
+        <SharedFoldersCard />
       </div>
     </>
   );

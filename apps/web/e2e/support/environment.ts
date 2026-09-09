@@ -13,6 +13,7 @@ import {
 } from "@fdrive/testkit";
 import { ACCOUNT_FILES, ACCOUNT_USERS } from "./account-fixture.js";
 import { E2E_HOST, getApiPort, getEnvStatePath, getStateDirectory, getWebPort } from "./paths.js";
+import { SCOPE_FILES, SCOPE_USERS } from "./scope-fixture.js";
 import { SHARE_FILES, SHARE_USERS } from "./share-fixture.js";
 import { waitForHttpOk } from "./wait.js";
 
@@ -214,13 +215,14 @@ export async function startEnvironment(
           ...SEED_USERS,
           ...ACCOUNT_USERS,
           ...SHARE_USERS,
+          ...SCOPE_USERS,
           {
             username: "folder_views",
             password: "folder-views-test-password",
             permissions: { "/": ["*"] },
           },
         ],
-        files: { ...SEED_FILES, ...ACCOUNT_FILES, ...SHARE_FILES },
+        files: { ...SEED_FILES, ...ACCOUNT_FILES, ...SHARE_FILES, ...SCOPE_FILES },
       },
     );
     stopFns.push(() => sftpgo.stop());
@@ -247,7 +249,8 @@ export async function startEnvironment(
           // alice is the e2e suite's always-admin user (system.spec.ts),
           // so the System sidebar section and its admin-only routes have
           // someone to exercise them without a `/setup` run in every spec.
-          FDRIVE_ADMIN_USERS: "alice",
+          // scope_admin maps its own virtual folder in `account-scope.spec.ts`.
+          FDRIVE_ADMIN_USERS: "alice,scope_admin",
           // Makes `System > Thumbnails` render as configured (see
           // `system.spec.ts`): no spec relies on real thumbnail files
           // existing under it, so the OS temp directory is enough. Never

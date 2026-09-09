@@ -36,6 +36,22 @@ describe("shadowedChildNames", () => {
     );
   });
 
+  it("excludes the immediate child of an acknowledged unindexed prefix", () => {
+    expect(shadowedChildNames(home, [home], ["/archive", "/shared/deep"])).toEqual(
+      new Set(["archive", "shared"]),
+    );
+    // An unindexed prefix inside the override shadows from that scope, not from home.
+    expect(shadowedChildNames(sharedOverride, [home, sharedOverride], ["/shared/old"])).toEqual(
+      new Set(["old"]),
+    );
+  });
+
+  it("never treats an unindexed prefix equal to the scope itself as a child", () => {
+    expect(shadowedChildNames(sharedOverride, [home, sharedOverride], ["/shared"])).toEqual(
+      new Set(),
+    );
+  });
+
   it("shadows a child name even when the override points at a different root", () => {
     // The virtual namespace is shared across roots: an override mapping
     // "/other" to a different root still shadows that name from home's
@@ -82,7 +98,7 @@ describe("verifyMountDirectory", () => {
     ).toEqual({ ok: true });
   });
 
-  it("fails when an SFTP entry is missing from the index", () => {
+  it("fails when an SFTP entry is missing from the index, naming it as missing", () => {
     expect(
       verifyMountDirectory({
         sftpEntries: [file],
@@ -90,10 +106,14 @@ describe("verifyMountDirectory", () => {
         indexOverflow: false,
         excludedNames: new Set(),
       }),
-    ).toEqual({ ok: false, reason: "mismatch" });
+    ).toEqual({
+      ok: false,
+      reason: "mismatch",
+      entries: [{ name: "a.txt", kind: "file", problem: "missing" }],
+    });
   });
 
-  it("fails when the kind differs", () => {
+  it("fails when the kind differs, naming it as a kind mismatch", () => {
     expect(
       verifyMountDirectory({
         sftpEntries: [{ name: "x", kind: "dir" }],
@@ -101,7 +121,35 @@ describe("verifyMountDirectory", () => {
         indexOverflow: false,
         excludedNames: new Set(),
       }),
-    ).toEqual({ ok: false, reason: "mismatch" });
+    ).toEqual({
+      ok: false,
+      reason: "mismatch",
+      entries: [{ name: "x", kind: "dir", problem: "kind_mismatch" }],
+    });
+  });
+
+  it("reports every offending entry in SFTP order, skipping the ones that match", () => {
+    expect(
+      verifyMountDirectory({
+        sftpEntries: [
+          { name: "shared", kind: "dir" },
+          file,
+          { name: "x", kind: "dir" },
+          { name: "other", kind: "symlink" },
+        ],
+        indexEntries: [file, { name: "x", kind: "file" }],
+        indexOverflow: false,
+        excludedNames: new Set(),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "mismatch",
+      entries: [
+        { name: "shared", kind: "dir", problem: "missing" },
+        { name: "x", kind: "dir", problem: "kind_mismatch" },
+        { name: "other", kind: "symlink", problem: "missing" },
+      ],
+    });
   });
 
   it("ignores a shadowed name even when it is entirely absent from the index", () => {

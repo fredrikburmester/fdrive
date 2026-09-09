@@ -135,6 +135,8 @@ export const ROUTES = {
     office: "/api/v1/system/office",
     /** GET/PUT, admin only: provider-bound Trash configuration. */
     trash: "/api/v1/system/trash",
+    /** GET/PUT, admin only: folder-level virtual folder mappings -> `MountMappingsResponse`. */
+    mountMappings: "/api/v1/system/mount-mappings",
     /** GET, admin only: indexer health, stats, and settings -> `SystemIndexerResponse`. */
     indexer: "/api/v1/system/indexer",
     /** PUT, admin only: update the indexer's settings -> `IndexerSettingsResponse`. */
@@ -232,4 +234,9 @@ export function publicShareRoute(id: string): string {
  */
 export function identityScopeRoute(id: string): string {
   return `${ROUTES.account.identities}/${encodeURIComponent(id)}/scope`;
+}
+
+/** GET, admin only: candidate physical locations for the identity's unmapped mounts -> `IdentityScopeSuggestionsResponse`. */
+export function identityScopeSuggestionsRoute(id: string): string {
+  return `${identityScopeRoute(id)}/suggestions`;
 }

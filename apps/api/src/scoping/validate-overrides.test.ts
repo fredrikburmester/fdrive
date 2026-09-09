@@ -61,4 +61,59 @@ describe("validateScopeOverrides", () => {
       expect((error as ScopeOverrideValidationError).reason).toBe("duplicate_virtual_prefix");
     }
   });
+
+  it("rejects a mapping on a root outside the known set, when one is given", () => {
+    expect(() =>
+      validateScopeOverrides([scope()], [], { knownRoots: new Set(["sftpgo"]) }),
+    ).not.toThrow();
+    try {
+      validateScopeOverrides([scope({ rootName: "other" })], [], {
+        knownRoots: new Set(["sftpgo"]),
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ScopeOverrideValidationError).reason).toBe("unknown_root");
+    }
+  });
+
+  it("accepts canonical, unique unindexed prefixes that map nothing", () => {
+    expect(() => validateScopeOverrides([scope()], ["/archive", "/shared/old"])).not.toThrow();
+  });
+
+  it("rejects a non-canonical unindexed prefix", () => {
+    try {
+      validateScopeOverrides([], ["archive"]);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ScopeOverrideValidationError).reason).toBe("invalid_unindexed_prefix");
+    }
+  });
+
+  it("rejects a duplicate unindexed prefix", () => {
+    try {
+      validateScopeOverrides([], ["/archive", "/archive"]);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ScopeOverrideValidationError).reason).toBe("duplicate_unindexed_prefix");
+    }
+  });
+
+  it("rejects an unindexed prefix that is also a mapped virtualPrefix", () => {
+    try {
+      validateScopeOverrides([scope()], ["/shared"]);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ScopeOverrideValidationError).reason).toBe("unindexed_prefix_collision");
+    }
+  });
+
+  it("rejects more unindexed prefixes than the cap", () => {
+    const prefixes = Array.from({ length: 33 }, (_, i) => `/p${i}`);
+    try {
+      validateScopeOverrides([], prefixes);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ScopeOverrideValidationError).reason).toBe("too_many");
+    }
+  });
 });

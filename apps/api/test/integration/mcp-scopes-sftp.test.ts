@@ -19,6 +19,7 @@ import {
   runRecentMoves,
 } from "../../src/mcp/handlers.ts";
 import type { IndexerExtractClient } from "../../src/mcp/indexer-client.ts";
+import { createInMemoryMountMappingStore } from "../../src/scoping/mount-mapping-store.ts";
 import { createSettingsScopeOverrideStore } from "../../src/scoping/override-store.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { fakeIndexerDirectory } from "../../src/scoping/test-fixtures/index.ts";
@@ -168,6 +169,7 @@ describe("MCP tools against real SFTPGo and Postgres", () => {
     const scopeResolver = createScopeResolver({
       providers: repos.providers,
       overrides: createSettingsScopeOverrideStore(repos.settings),
+      mountMappings: createInMemoryMountMappingStore(),
       connection: connectionStore,
       indexRoots,
       indexer,

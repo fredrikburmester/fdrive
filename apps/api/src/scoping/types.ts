@@ -1,4 +1,4 @@
-import type { IdentityScopeReason } from "@fdrive/contracts";
+import type { IdentityScopeReason, UnmappedMount } from "@fdrive/contracts";
 import type { Scope } from "@fdrive/core";
 
 export type { Scope } from "@fdrive/core";
@@ -21,7 +21,61 @@ export type ConfiguredUnavailableReason = Extract<
  */
 export type VerifiedUnavailableReason =
   | ConfiguredUnavailableReason
-  | Extract<IdentityScopeReason, "no_roots" | "mismatch" | "overflow" | "indexer_unreachable">;
+  | Extract<
+      IdentityScopeReason,
+      "no_roots" | "mismatch" | "overflow" | "indexer_unreachable" | "unmapped_mount"
+    >;
+
+/**
+ * Why one candidate scope failed live SFTP-vs-index verification. Ordered
+ * from most to least severe in `SCOPE_FAILURE_SEVERITY`: an unreachable
+ * indexer or an overflowed listing says nothing about the mapping, a
+ * `mismatch` is a genuine inconsistency, and an `unmapped_mount` is the
+ * one case an administrator can fix from the account page.
+ */
+export type ScopeVerificationFailureReason = Extract<
+  VerifiedUnavailableReason,
+  "indexer_unreachable" | "overflow" | "mismatch" | "unmapped_mount"
+>;
+
+/** `ScopeVerificationFailureReason` values from most to least severe. */
+export const SCOPE_FAILURE_SEVERITY: readonly ScopeVerificationFailureReason[] = [
+  "indexer_unreachable",
+  "overflow",
+  "mismatch",
+  "unmapped_mount",
+];
+
+/** One candidate scope that did not verify, and (for `unmapped_mount`) the entries that caused it. */
+export interface ScopeVerificationFailure {
+  readonly virtualPrefix: string;
+  readonly reason: ScopeVerificationFailureReason;
+  /** SFTP-visible entries absent from the index at this scope's mount directory, as virtual paths. */
+  readonly unmappedMounts: readonly UnmappedMount[];
+}
+
+/**
+ * The full per-scope outcome of verification, cached by the resolver:
+ * every candidate that verified plus every one that did not. `available`
+ * when at least one scope survived. `ScopeResolver.status` reports this in
+ * detail; `verifiedIndexScopes` projects it to `VerifiedIndexScopesResult`.
+ */
+export type ScopeVerificationPass =
+  | {
+      readonly available: true;
+      readonly scopes: readonly Scope[];
+      readonly failures: readonly ScopeVerificationFailure[];
+    }
+  | {
+      readonly available: false;
+      readonly reason: VerifiedUnavailableReason;
+      readonly failures: readonly ScopeVerificationFailure[];
+    };
+
+export type ScopeVerificationOutcome = ScopeVerificationPass & {
+  /** Folder-level mappings adopted for this identity, as scopes; already part of `scopes` when verified. */
+  readonly adopted: readonly Scope[];
+};
 
 /**
  * The result of resolving an identity's *configured* (trusted,
@@ -57,6 +111,12 @@ interface ScopeStatusCommon {
   /** Whether the identity currently has a stored override rather than only the template-derived home scope. */
   readonly usesOverride: boolean;
   readonly virtualPrefixes: readonly string[];
+  /** SFTP-visible entries the index lacks that look like unmapped mounts, as virtual paths. */
+  readonly unmappedMounts: readonly UnmappedMount[];
+  /** Virtual prefixes dropped from the verified set while at least one other scope survived. */
+  readonly unverifiedPrefixes: readonly string[];
+  /** The stored acknowledgements, returned so the account page can preserve them across saves. */
+  readonly unindexedPrefixes: readonly string[];
   readonly warning: string;
 }
 
@@ -72,6 +132,9 @@ export type ScopeStatus =
       readonly isAdmin: true;
       readonly configuredRoots: readonly string[];
       readonly mappings: readonly Scope[];
+      readonly overrides: readonly Scope[];
+      /** Folder-level mappings currently adopted for this identity. */
+      readonly adoptedMappings: readonly Scope[];
     });
 
 /** One filesystem entry as seen by either the live SFTP listing or the indexer's own directory listing. */

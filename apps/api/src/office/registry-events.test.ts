@@ -3,6 +3,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it, vi } from "vitest";
 import { createConnectionStore } from "../connection/store.js";
 import { createMetadataService } from "../metadata/service.js";
+import { createInMemoryMountMappingStore } from "../scoping/mount-mapping-store.ts";
 import { createInMemoryScopeOverrideStore } from "../scoping/override-store.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
 import { fakeIndexerDirectory, fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
@@ -18,6 +19,7 @@ function configuredMappingsFrom(
   return createScopeResolver({
     providers: repos.providers,
     overrides: createInMemoryScopeOverrideStore(),
+    mountMappings: createInMemoryMountMappingStore(),
     connection,
     indexRoots: [],
     indexer: fakeIndexerDirectory(new Map()),

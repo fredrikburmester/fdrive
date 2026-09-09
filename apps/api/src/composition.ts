@@ -62,10 +62,12 @@ import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
+import { createSettingsMountMappingStore } from "./scoping/mount-mapping-store.ts";
 import { createSettingsScopeOverrideStore } from "./scoping/override-store.ts";
 import { createReadAuthorizer } from "./scoping/read-authorizer.ts";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { registerScopeRoutes } from "./scoping/routes.ts";
+import { createScopeSuggester } from "./scoping/suggest.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
@@ -232,6 +234,7 @@ export async function composeApp(
   const scopeResolver = createScopeResolver({
     providers: repos.providers,
     overrides: createSettingsScopeOverrideStore(repos.settings),
+    mountMappings: createSettingsMountMappingStore(repos.settings),
     connection: connectionStore,
     indexRoots: config.fdriveIndexRoots,
     indexer: scopeIndexerDirectory,
@@ -244,6 +247,15 @@ export async function composeApp(
   // `{ unavailable: true }` rather than erroring when the caller's
   // verified index scopes are unavailable for any reason.
   const indexQueries = createIndexQueries(db);
+  // Proposes physical locations for unmapped virtual folders from index rows
+  // (`docs/workflow/P8-FOLDER-MAPPINGS.md`); administrators confirm them.
+  const scopeSuggester = createScopeSuggester({
+    resolver: scopeResolver,
+    storageForIdentity: (identity) => storageFactory(identity.id),
+    indexer: scopeIndexerDirectory,
+    indexQueries,
+    indexRoots: config.fdriveIndexRoots,
+  });
   const embedClient =
     config.fdriveEmbedUrl === undefined
       ? null
@@ -597,7 +609,11 @@ export async function composeApp(
         config,
         clock,
       });
-      registerScopeRoutes(groups, { resolver: scopeResolver, identities: repos.identities });
+      registerScopeRoutes(groups, {
+        resolver: scopeResolver,
+        identities: repos.identities,
+        suggester: scopeSuggester,
+      });
       registerSetupRoutes(groups, {
         service: setupService,
         tokenGuard: setupTokenGuard,

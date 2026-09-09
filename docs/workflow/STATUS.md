@@ -1,6 +1,61 @@
 # Current handoff
 
-Updated: 2026-09-08. Owner: primary agent.
+Updated: 2026-09-09. Owner: primary agent.
+
+## P8 virtual folder index support (in progress, uncommitted)
+
+- Spec: [P8-VIRTUAL-FOLDERS.md](P8-VIRTUAL-FOLDERS.md). Implemented directly in the main
+  checkout (no worker worktrees): VF-1, VF-2, and VF-3 together.
+- Step 0 evidence (dev stack, indexer container started for this): carol's scope status was
+  `unavailable`/`mismatch` and `/api/v1/search/status` reported `mismatch`; alice's scope
+  status was `available`/`ok`. Reproduced before any change.
+- Contract deltas beyond the spec, both needed by the editor: the status also returns the
+  stored `unindexedPrefixes` (both roles; virtual paths) so a later save cannot silently
+  drop earlier acknowledgements, and the administrator branch returns `overrides` (the
+  stored list on its own) next to the effective `mappings`, so the editor never has to
+  guess which rows are template-derived.
+- Override record is now `version: 2` with `unindexedPrefixes`; version 1 rows read as
+  having none. `reset` now persists an empty record: the previous `null` value violated
+  `app.settings.value NOT NULL` against real Postgres (a 500 on "Remove" in the browser
+  test), which the in-memory repo never caught. Covered in `scopes-sftp.test.ts` step 7.
+- `usableScopesFor` deleted. `validateScopeOverrides` gained `unknown_root` (index roots
+  plus the template root are known); the route reports the reason in `details.reason`.
+- Dev seed: carol's override is not stored by `generate-seed.ts` (the seed is SFTPGo JSON
+  and files only; overrides live in the API database), so carol stays the visible unmapped
+  case and the mapping is `sftpgo` + `/_folders/shared`, documented in deploy/REFERENCE.md.
+- Passed: `application` (lint, typecheck, coverage), `workflow`, full `integration`
+  (including `scopes-sftp.test.ts` with the two-identity virtual folder and reset steps), and
+  browser `e2e/account-scope.spec.ts` 3/3 (serial: both tests edit one login's override).
+- Live dev (API 3001 `tsx watch`, own Next dev server on 3004, real indexer container):
+  carol non-admin view shows `/shared is not indexed. Ask an administrator`; as `dev`
+  (admin) linked carol, mapped `/shared` → `sftpgo:/_folders/shared`, status turned
+  Available with `/`, `/shared`; with text search temporarily enabled, carol's
+  `/api/v1/search?q=team` returned `/shared/team.txt`. Restored afterwards: override reset,
+  carol unlinked, text search off again (dev `features.configuration` row now exists with
+  everything off, equivalent to the default). The 3002 Next server on this machine belongs to
+  an old screenshots checkout under `/private/tmp` and was left alone.
+- Pre-existing, unrelated: clicking "Link login" under `next dev` raised the dev overlay
+  `isSearchShortcut: event.key undefined` (`apps/web/src/lib/search/shortcut.tsx`); not
+  reproduced in the production-build e2e run. Not changed here.
+- Follow-up (same day): folder-level mappings and suggestions, spec
+  [P8-FOLDER-MAPPINGS.md](P8-FOLDER-MAPPINGS.md). `mount_mappings` settings record; adoption
+  decided per login from verification evidence (two-pass verify, cached); `configuredMappings`
+  now includes adopted scopes so Office and events see them. New `IndexQueries.directoriesWithFiles`
+  (real-Postgres test passed, 2 cases). Routes: `GET/PUT /system/mount-mappings`,
+  `GET .../scope/suggestions`. Web: suggestion chips, "Apply to every login" default, Shared
+  folders card on System > Connection.
+- A parallel public-URL effort worked in this same checkout and committed to `main`
+  (`08a9dbd`) while this task was in progress; none of this task's hunks were included.
+  Interim gates ran in `.worktrees/scope-e2e` (branch `claude/scope-e2e`, this task's files on
+  HEAD `10d8a52`): browser `account-scope.spec.ts` 3/3 and `workflow` passed there. Final gates
+  ran in the main checkout on top of `08a9dbd`: `application` (lint, typecheck, coverage),
+  `workflow`, browser `account-scope.spec.ts` 3/3, `scopes-sftp.test.ts` (steps 1-8), and the
+  DB `directoriesWithFiles` cases (2). Live dev: suggestion `sftpgo:/_folders/shared` offered
+  for carol from real index rows, saved as a shared folder mapping, carol's search returned
+  `/shared/team.txt` with nothing stored on her login; card visible under System > Connection.
+  The interim worktree was removed after the main-checkout gates passed. Unrelated committed lint finding from `biome check .`:
+  `apps/web/src/lib/search/queries.test.ts:314` unused `SEARCH_STARTUP_RETRY_MS`.
+- Not committed. Worktree: main checkout, branch `main`.
 
 ## Auth pentest triage fixes (in progress, uncommitted)
 

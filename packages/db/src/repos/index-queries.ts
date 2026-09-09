@@ -1,4 +1,15 @@
-import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  countDistinct,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  sql,
+} from "drizzle-orm";
 import type { Db } from "../index.js";
 import { imageEmbeddings, thumbnails } from "../schema/app.js";
 import { chunks, files, moves, roots } from "../schema/idx.js";
@@ -261,6 +272,17 @@ export interface IndexQueries {
   liveRowsBySha(rootId: number, sha256: string): Promise<IndexedFile[]>;
   /** Every configured root's database id, keyed by name. */
   rootIdsByName(): Promise<Record<string, number>>;
+  /**
+   * Directories (root-relative, "" for the root itself) whose *direct* live
+   * files include every name in `names`, across every root, most complete
+   * matches first. Used to suggest where an unmapped SFTPGo virtual folder
+   * physically lives; `names` must be non-empty and the result is capped at
+   * `limit`. Subdirectories are not matched, only files.
+   */
+  directoriesWithFiles(
+    names: readonly string[],
+    limit: number,
+  ): Promise<{ rootId: number; directory: string }[]>;
   /** Aggregate file and chunk counts over a scope. */
   stats(scopePrefixes: readonly ScopePrefix[]): Promise<IndexStats>;
   /**
@@ -524,6 +546,23 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(files)
         .where(and(eq(files.rootId, rootId), eq(files.sha256, sha256), isNull(files.deletedAt)));
       return rows.map(toIndexedFile);
+    },
+
+    async directoriesWithFiles(names, limit) {
+      const unique = Array.from(new Set(names));
+      if (unique.length === 0 || limit <= 0) return [];
+      // The parent directory of a root-relative path: everything before the
+      // last "/", or "" for a file directly under the root.
+      const directory = sql<string>`case when position('/' in ${files.path}) = 0 then '' else regexp_replace(${files.path}, '/[^/]*$', '') end`;
+      const rows = await db
+        .select({ rootId: files.rootId, directory, matched: countDistinct(files.name) })
+        .from(files)
+        .where(and(inArray(files.name, unique), isNull(files.deletedAt)))
+        .groupBy(files.rootId, directory)
+        .having(sql`count(distinct ${files.name}) = ${unique.length}`)
+        .orderBy(files.rootId, directory)
+        .limit(limit);
+      return rows.map((row) => ({ rootId: row.rootId, directory: row.directory }));
     },
 
     async rootIdsByName() {
