@@ -179,6 +179,39 @@ export function createSharesService(deps: SharesDeps) {
       }
     });
   }
+  /**
+   * Verifies `password` for a password-protected share by listing its
+   * root through the public-share API, the same call `/entries` already
+   * makes: it consumes no download token, unlike an actual file
+   * download. `false` for a rejected password. SFTPGo checks the
+   * password before checking whether the share is a listable directory,
+   * so a single-file share (the common case for one shared image)
+   * answers a *correct* password with `bad_request` ("listing requires a
+   * single directory share") rather than a listing; reaching that error
+   * still proves the password was accepted, so it counts as verified
+   * too. Any other failure (the owner's connection, upstream
+   * reachability) propagates so the caller does not cache a transient
+   * failure as a settled "wrong password".
+   */
+  async function verifyPassword(
+    identityId: string,
+    sftpgoShareId: string,
+    password: string,
+  ): Promise<boolean> {
+    const location = await owner(identityId);
+    try {
+      await deps.clientFor(location.baseUrl).publicShare(sftpgoShareId, password).list();
+      return true;
+    } catch (error) {
+      if (
+        error instanceof SftpgoError &&
+        (error.kind === "unauthorized" || error.kind === "forbidden")
+      )
+        return false;
+      if (error instanceof SftpgoError && error.kind === "bad_request") return true;
+      throw error;
+    }
+  }
   return {
     async list(input: AccountRequestContext) {
       await liveAccountSession(deps, input);
@@ -261,22 +294,39 @@ export function createSharesService(deps: SharesDeps) {
       }
       await deps.shares.removeOwned(row.identityId, id);
     },
-    async publicMetadata(id: string, credentialPresent: boolean): Promise<PublicShare> {
+    /**
+     * Possessing a share's UUID reveals nothing about it: for a
+     * password-protected share the name, description, file name, layout,
+     * expiry and download counts are withheld until `password` verifies
+     * (through the same token-free root listing the thumb route uses).
+     * A write share cannot be listed, so only its upload ever checks the
+     * password: its details stay withheld and `credentialPresent` merely
+     * reports that a password cookie is set, as it does for an expired share.
+     */
+    async publicMetadata(id: string, password: string | undefined): Promise<PublicShare> {
       const { row, share } = await loadPublic(id);
-      const kind = await layout(row, share);
+      const unavailable = unavailableReason(share, deps.clock());
+      const verifiable = share.hasPassword && share.scope === "read" && unavailable === null;
+      const verified =
+        verifiable && password !== undefined
+          ? await verifyPassword(row.identityId, share.id, password)
+          : false;
+      const revealed = !share.hasPassword || verified;
+      const kind = revealed ? await layout(row, share) : "directory";
       return {
-        name: share.name,
-        description: share.description,
+        name: revealed ? share.name : "",
+        description: revealed ? share.description : "",
         scope: share.scope,
         layout: kind,
         presentation: row.presentation,
-        fileName: kind === "single-file" ? (share.paths[0]?.split("/").at(-1) ?? null) : null,
+        fileName:
+          revealed && kind === "single-file" ? (share.paths[0]?.split("/").at(-1) ?? null) : null,
         hasPassword: share.hasPassword,
-        credentialPresent,
-        expiresAt: share.expiresAt?.toISOString() ?? null,
-        maxDownloads: share.maxTokens,
-        usedDownloads: share.usedTokens,
-        unavailableReason: unavailableReason(share, deps.clock()),
+        credentialPresent: password !== undefined && (!verifiable || verified),
+        expiresAt: revealed ? (share.expiresAt?.toISOString() ?? null) : null,
+        maxDownloads: revealed ? share.maxTokens : 0,
+        usedDownloads: revealed ? share.usedTokens : 0,
+        unavailableReason: unavailable,
       };
     },
     async publicAccess(id: string, password: string | undefined, scope: "read" | "write") {
@@ -312,39 +362,7 @@ export function createSharesService(deps: SharesDeps) {
         unavailableReason: unavailableReason(share, deps.clock()),
       };
     },
-    /**
-     * Verifies `password` for a password-protected share by listing its
-     * root through the public-share API, the same call `/entries` already
-     * makes: it consumes no download token, unlike an actual file
-     * download. `false` for a rejected password. SFTPGo checks the
-     * password before checking whether the share is a listable directory,
-     * so a single-file share (the common case for one shared image)
-     * answers a *correct* password with `bad_request` ("listing requires a
-     * single directory share") rather than a listing; reaching that error
-     * still proves the password was accepted, so it counts as verified
-     * too. Any other failure (the owner's connection, upstream
-     * reachability) propagates so the caller does not cache a transient
-     * failure as a settled "wrong password".
-     */
-    async verifySharePassword(
-      identityId: string,
-      sftpgoShareId: string,
-      password: string,
-    ): Promise<boolean> {
-      const location = await owner(identityId);
-      try {
-        await deps.clientFor(location.baseUrl).publicShare(sftpgoShareId, password).list();
-        return true;
-      } catch (error) {
-        if (
-          error instanceof SftpgoError &&
-          (error.kind === "unauthorized" || error.kind === "forbidden")
-        )
-          return false;
-        if (error instanceof SftpgoError && error.kind === "bad_request") return true;
-        throw error;
-      }
-    },
+    verifySharePassword: verifyPassword,
   };
 }
 export type SharesService = ReturnType<typeof createSharesService>;

@@ -94,6 +94,10 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
           identityId: identity.id,
           ...input.sealCredential(identity.id),
         });
+        if (input.revokeOtherSessions === true)
+          for (const session of [...sessions.values()])
+            if (session.accountId === identity.accountId)
+              await repos.sessions.delete(session.idHash);
         const session = await repos.sessions.create({
           ...input.session,
           accountId: identity.accountId,
@@ -152,7 +156,8 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
         for (const session of [...sessions.values()])
           if (session.accountId === input.accountId && session.activeIdentityId === identity.id) {
             await repos.sessions.delete(session.idHash);
-            await repos.sessions.create({ ...session, activeIdentityId: remaining.id });
+            if (session.idHash === input.requestingSessionIdHash)
+              await repos.sessions.create({ ...session, activeIdentityId: remaining.id });
           }
         return { identity: moved, remainingIdentityId: remaining.id };
       }),

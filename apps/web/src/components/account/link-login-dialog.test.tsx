@@ -28,6 +28,9 @@ it("clears password and OTP on close, rejects empty credentials, and never cache
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ada" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "private-password" } });
   fireEvent.change(screen.getByLabelText("One-time code"), { target: { value: "123456" } });
+  fireEvent.change(screen.getByLabelText("Your current password"), {
+    target: { value: "my-password" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(onOpenChange).toHaveBeenCalledWith(false);
   rerender(
@@ -37,12 +40,22 @@ it("clears password and OTP on close, rejects empty credentials, and never cache
   );
   expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
   expect((screen.getByLabelText("One-time code") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("Your current password") as HTMLInputElement).value).toBe("");
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ada" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "private-password" } });
+  expect(submit.hasAttribute("disabled")).toBe(true);
+  fireEvent.change(screen.getByLabelText("Your current password"), {
+    target: { value: "my-password" },
+  });
   fireEvent.click(submit);
   await waitFor(() => expect(screen.getByText("Invalid login")).toBeDefined());
-  expect(link).toHaveBeenCalledWith({ username: "ada", password: "private-password" });
+  expect(link).toHaveBeenCalledWith({
+    username: "ada",
+    password: "private-password",
+    currentPassword: "my-password",
+  });
   expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("Your current password") as HTMLInputElement).value).toBe("");
   expect(client.getMutationCache().getAll()).toEqual([]);
 });
 
@@ -62,6 +75,7 @@ it("disables repeated submission while pending and closes on success", async () 
   );
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ada" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret" } });
+  fireEvent.change(screen.getByLabelText("Your current password"), { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Link login" }));
   await waitFor(() => expect(link).toHaveBeenCalledTimes(1));
   expect(screen.getByRole("button", { name: "Linking…" }).hasAttribute("disabled")).toBe(true);

@@ -2,6 +2,23 @@
 
 Updated: 2026-09-08. Owner: primary agent.
 
+## Auth pentest triage fixes (in progress, uncommitted)
+
+- Source: [SHANNON-PENTEST-FINDINGS.md](SHANNON-PENTEST-FINDINGS.md), fixes table at the end.
+  AUTH-VULN-01 deliberately left as a dev-environment artifact; AUTH-VULN-03 out of scope.
+- Fixed 02, 04, 05, 06, 07 with regression tests. Contract change: `LinkIdentityRequest`
+  now requires `currentPassword` (optional `currentOtp`); web dialog and e2e updated.
+  DB behavior change: login with a replaced password revokes the account's other sessions;
+  unlink revokes sessions using that login (requesting session re-pointed and rotated).
+  Public share metadata is withheld for password-protected shares until the password verifies.
+- Passed: `application` (lint, typecheck, coverage); DB identity-links integration (30/30);
+  API `shares-sftp` and `accounts-sftp` integration against real SFTPGo/PostgreSQL; browser
+  `account-identities.spec.ts` and `shares.spec.ts` against the real backend. The full
+  `integration` profile also failed `sftp-rename.test.ts` on a Docker image pull for the indexer
+  build (environmental, unrelated). No manual dev-UI pass beyond those e2e flows.
+- Not committed. Residuals recorded in the findings table (write-share metadata stays withheld;
+  limiter is count-after-failure; SFTPGo-side password rotation still honours the 60s cache).
+
 ## ONLYOFFICE onboarding (verified)
 
 - Bundled pinned engine; off until enabled in onboarding/System settings. View-only

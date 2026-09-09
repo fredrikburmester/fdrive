@@ -216,20 +216,33 @@ it("manages only selected session identity shares, preserves password, reconcile
       .read(),
   ).toBeDefined();
 });
-it("public password cookie is unverified, encrypted, scoped; actual bytes enforce password and expiry", async () => {
+it("public password cookie is stored unverified, encrypted, scoped; metadata is withheld until it verifies; actual bytes enforce password and expiry", async () => {
   const h = sharesHarness();
   const cookie = await h.login();
-  const { id } = await h.create(cookie, { password: "secret", maxDownloads: 2 });
+  const { id } = await h.create(cookie, {
+    password: "secret",
+    maxDownloads: 2,
+    description: "Quarterly numbers",
+    expiresAt: new Date(h.clock().getTime() + 86_400_000).toISOString(),
+  });
   const path = publicBase(id);
   const metadata = await h.request(path);
   expect(metadata.status).toBe(200);
-  expect(PublicShare.parse(await metadata.json())).toMatchObject({
-    layout: "single-file",
+  // Holding the UUID alone reveals nothing beyond "protected, viewable, not expired".
+  const withheld = {
+    name: "",
+    description: "",
+    layout: "directory",
     presentation: "auto",
-    fileName: "a.docx",
+    fileName: null,
     hasPassword: true,
     credentialPresent: false,
-  });
+    expiresAt: null,
+    maxDownloads: 0,
+    usedDownloads: 0,
+    unavailableReason: null,
+  };
+  expect(PublicShare.parse(await metadata.json())).toMatchObject(withheld);
   expect((await h.request(`${path}/download`)).status).toBe(401);
   let response = await h.request(`${path}/credentials`, {
     method: "POST",
@@ -240,15 +253,27 @@ it("public password cookie is unverified, encrypted, scoped; actual bytes enforc
   expect(response.headers.get("set-cookie")).toContain(`Path=${path}`);
   expect(response.headers.get("set-cookie")).toContain("HttpOnly");
   expect(envelope).not.toContain("wrong");
+  // A wrong password cookie is no better than none.
   expect(
-    PublicShare.parse(await (await h.request(path, { cookie: envelope })).json()).credentialPresent,
-  ).toBe(true);
+    PublicShare.parse(await (await h.request(path, { cookie: envelope })).json()),
+  ).toMatchObject(withheld);
   expect((await h.request(`${path}/download`, { cookie: envelope })).status).toBe(401);
   response = await h.request(`${path}/credentials`, {
     method: "POST",
     body: { password: "secret" },
   });
   envelope = cookieFrom(response);
+  expect(
+    PublicShare.parse(await (await h.request(path, { cookie: envelope })).json()),
+  ).toMatchObject({
+    name: "Document",
+    description: "Quarterly numbers",
+    layout: "single-file",
+    fileName: "a.docx",
+    hasPassword: true,
+    credentialPresent: true,
+    maxDownloads: 2,
+  });
   response = await h.request(`${path}/download`, {
     cookie: envelope,
     headers: { range: "bytes=1-3" },
@@ -1053,4 +1078,70 @@ describe("GET /public/shares/:id/thumb", () => {
 
     expect(res.status).toBe(404);
   });
+});
+
+it("a password-protected upload share withholds its details for everyone: no listing can verify its password", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+  await h.client.user(auth.accessToken).mkdir("/inbox");
+  const { id } = await h.create(cookie, {
+    name: "Send me the contract",
+    paths: ["/inbox"],
+    scope: "write",
+    password: "secret",
+  });
+  const path = publicBase(id);
+  const anonymous = PublicShare.parse(await (await h.request(path)).json());
+  expect(anonymous).toMatchObject({
+    name: "",
+    scope: "write",
+    hasPassword: true,
+    credentialPresent: false,
+  });
+  const envelope = cookieFrom(
+    await h.request(`${path}/credentials`, { method: "POST", body: { password: "secret" } }),
+  );
+  const withCookie = PublicShare.parse(await (await h.request(path, { cookie: envelope })).json());
+  expect(withCookie).toMatchObject({ name: "", scope: "write", credentialPresent: true });
+  // An unprotected share still shows everything to anyone with the link.
+  const open = await h.create(cookie, { name: "Open inbox", paths: ["/inbox"], scope: "write" });
+  expect(PublicShare.parse(await (await h.request(publicBase(open.id))).json())).toMatchObject({
+    name: "Open inbox",
+    credentialPresent: false,
+  });
+});
+it("rotating or removing a share password drops memoized thumbnail verifications at once", async () => {
+  const h = sharesHarnessWithThumbs({
+    indexQueries: {
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      fileByPath: async () => makeIndexedFile(),
+      thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+    },
+  });
+  const cookie = await h.login();
+  const { id } = await h.create(cookie, { password: "secret" });
+  const path = publicBase(id);
+  const envelope = cookieFrom(
+    await h.request(`${path}/credentials`, { method: "POST", body: { password: "secret" } }),
+  );
+  const thumb = `${path}/thumb?path=%2F&size=256`;
+  expect((await h.request(thumb, { cookie: envelope })).status).toBe(200);
+  expect(
+    (
+      await h.request(`${base}/${id}`, {
+        method: "PATCH",
+        cookie,
+        body: { password: "rotated" },
+      })
+    ).status,
+  ).toBe(200);
+  // Still within the cache TTL, yet the old password no longer serves thumbnails.
+  expect((await h.request(thumb, { cookie: envelope })).status).toBe(404);
+  const rotated = cookieFrom(
+    await h.request(`${path}/credentials`, { method: "POST", body: { password: "rotated" } }),
+  );
+  expect((await h.request(thumb, { cookie: rotated })).status).toBe(200);
+  expect((await h.request(`${base}/${id}`, { method: "DELETE", cookie })).status).toBe(200);
+  expect((await h.request(thumb, { cookie: rotated })).status).toBe(404);
 });

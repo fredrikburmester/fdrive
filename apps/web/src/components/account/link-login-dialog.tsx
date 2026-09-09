@@ -25,27 +25,38 @@ export function LinkLoginDialog({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [currentOtp, setCurrentOtp] = useState("");
   const actions = useIdentityActions();
-  const valid = LinkIdentityRequest.safeParse({
-    username,
-    password,
-    ...(otp ? { otp } : {}),
-  }).success;
+  function request() {
+    return {
+      username,
+      password,
+      ...(otp ? { otp } : {}),
+      currentPassword,
+      ...(currentOtp ? { currentOtp } : {}),
+    };
+  }
+  const valid = LinkIdentityRequest.safeParse(request()).success;
 
   function close(next: boolean) {
     if (actions.pending) return;
     setPassword("");
     setOtp("");
+    setCurrentPassword("");
+    setCurrentOtp("");
     setUsername("");
     actions.resetError();
     onOpenChange(next);
   }
 
   async function submit() {
-    const parsed = LinkIdentityRequest.safeParse({ username, password, ...(otp ? { otp } : {}) });
+    const parsed = LinkIdentityRequest.safeParse(request());
     if (!parsed.success || actions.pending) return;
     setPassword("");
     setOtp("");
+    setCurrentPassword("");
+    setCurrentOtp("");
     if (await actions.link(parsed.data)) onOpenChange(false);
   }
 
@@ -104,6 +115,36 @@ export function LinkLoginDialog({
               />
               <FieldDescription>
                 Optional. Enter it if this login uses two-factor authentication.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="link-current-password">Your current password</FieldLabel>
+              <Input
+                id="link-current-password"
+                type="password"
+                autoComplete="current-password"
+                maxLength={4096}
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                disabled={actions.pending}
+                required
+              />
+              <FieldDescription>
+                The password of the login you are signed in with, to confirm this change.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="link-current-otp">Your one-time code</FieldLabel>
+              <Input
+                id="link-current-otp"
+                autoComplete="one-time-code"
+                maxLength={32}
+                value={currentOtp}
+                onChange={(event) => setCurrentOtp(event.target.value)}
+                disabled={actions.pending}
+              />
+              <FieldDescription>
+                Optional. Enter it if your current login uses two-factor authentication.
               </FieldDescription>
             </Field>
             {actions.error ? <FieldError>{actions.error}</FieldError> : null}

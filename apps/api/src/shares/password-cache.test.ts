@@ -88,3 +88,16 @@ describe("createSharePasswordCache", () => {
     expect(cache.get("share1", "secret")).toBe(true);
   });
 });
+
+it("invalidate forgets every entry of one share and leaves other shares alone", () => {
+  const cache = createSharePasswordCache({ clock: () => 0, ttlMs: 60_000 });
+  cache.set("share-a", "old", true);
+  cache.set("share-a", "guess", false);
+  cache.set("share-b", "old", true);
+  cache.invalidate("share-a");
+  expect(cache.get("share-a", "old")).toBeUndefined();
+  expect(cache.get("share-a", "guess")).toBeUndefined();
+  expect(cache.get("share-b", "old")).toBe(true);
+  cache.invalidate("never-set");
+  expect(cache.get("share-b", "old")).toBe(true);
+});

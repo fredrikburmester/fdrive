@@ -33,7 +33,7 @@ async function linkedHarness() {
   const response = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass" },
+    body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
   });
   const me = MeResponse.parse(await response.json());
   return {

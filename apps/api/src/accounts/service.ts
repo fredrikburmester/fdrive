@@ -55,12 +55,39 @@ export function createAccountsService(deps: AccountsDeps) {
       throw error;
     }
   }
+  /**
+   * Linking plants a durable login path on the account, so a cookie alone is
+   * not enough: the owner re-proves the session's active login with its own
+   * password (and TOTP when SFTPGo demands it) through the same limiter as
+   * login, so a hijacked session cannot guess it freely either.
+   */
+  async function reauthenticate(
+    session: Session & { activeIdentityId: string },
+    credentials: Pick<LinkIdentityRequest, "currentPassword" | "currentOtp"> & { ip: string },
+  ): Promise<void> {
+    const active = await deps.repos.identities.get(session.activeIdentityId);
+    if (active?.accountId !== session.accountId)
+      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
+    try {
+      await verifyAccountCredentials(deps, {
+        username: active.externalUsername,
+        password: credentials.currentPassword,
+        otp: credentials.currentOtp,
+        ip: credentials.ip,
+      });
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.kind === "unauthorized")
+        throw new ApiHttpError("unauthorized", "current password is incorrect");
+      throw error;
+    }
+  }
   return {
     async link(
       input: AccountRequestContext,
       credentials: LinkIdentityRequest & { ip: string },
     ): Promise<AccountRotation> {
-      await liveAccountSession(deps, input);
+      const current = await liveAccountSession(deps, input);
+      await reauthenticate(current, credentials);
       const verified = await verifyAccountCredentials(deps, credentials);
       const session = await liveAccountSession(deps, input);
       await requireCurrentConnection(deps.connectionStore, verified.provider.baseUrl);

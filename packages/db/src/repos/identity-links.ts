@@ -156,6 +156,8 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
             .returning();
           if (!updated) throw new IdentityLinksError("missing_identity");
           identity = updated;
+          if (input.revokeOtherSessions === true)
+            await tx.delete(sessions).where(eq(sessions.accountId, identity.accountId));
         } else {
           const [account] = await tx
             .insert(accounts)
@@ -306,15 +308,21 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
           .returning();
         if (!updated) throw new IdentityLinksError("missing_identity");
         await tx.delete(apiTokens).where(eq(apiTokens.identityId, identity.id));
+        // Sessions that were using the unlinked login end with it; only the
+        // requesting session survives, moved to a remaining login so the
+        // caller can rotate it.
+        const active = and(
+          eq(sessions.accountId, input.accountId),
+          eq(sessions.activeIdentityId, identity.id),
+        );
         await tx
-          .update(sessions)
-          .set({ activeIdentityId: remaining.id })
+          .delete(sessions)
           .where(
-            and(
-              eq(sessions.accountId, input.accountId),
-              eq(sessions.activeIdentityId, identity.id),
-            ),
+            input.requestingSessionIdHash === undefined
+              ? active
+              : and(active, ne(sessions.idHash, input.requestingSessionIdHash)),
           );
+        await tx.update(sessions).set({ activeIdentityId: remaining.id }).where(active);
         return { identity: updated, remainingIdentityId: remaining.id };
       });
     },

@@ -13,7 +13,8 @@ test("links, switches, finds both owners of one path, and unlinks a login", asyn
   await page.getByRole("button", { name: "Link login", exact: true }).click();
   const link = page.getByRole("dialog", { name: "Link login" });
   await link.getByLabel("Username").fill("account_right");
-  await link.getByLabel("Password").fill("account-right-test-password");
+  await link.getByLabel("Password", { exact: true }).fill("account-right-test-password");
+  await link.getByLabel("Your current password").fill("account-left-test-password");
   await link.getByRole("button", { name: "Link login" }).click();
   await expect(page).toHaveURL(/\/files$/);
   await expect(page.getByText("right-only.txt", { exact: true })).toBeVisible();

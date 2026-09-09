@@ -26,6 +26,11 @@ export async function verifyCandidateCredentials(
   return verifyCredentialsAt(deps, input, baseUrl, false);
 }
 
+/** The limiter key shared by every login attempt from one address, distinct from `ip|username` and setup's `setup|ip`. */
+export function loginIpKey(ip: string): string {
+  return `login-ip|${ip}`;
+}
+
 async function verifyCredentialsAt(
   deps: Pick<VerifiedCredentialDeps, "repos" | "clientForBaseUrl" | "limiter"> &
     Partial<Pick<VerifiedCredentialDeps, "connectionStore">>,
@@ -35,10 +40,15 @@ async function verifyCredentialsAt(
 ) {
   const client = deps.clientForBaseUrl(baseUrl);
   const key = `${input.ip}|${input.username}`;
+  // An independent per-address bucket bounds password spraying: without it
+  // one address gets a fresh allowance for every username it tries. It is
+  // never cleared by a success, so knowing one valid login cannot reset it.
+  const ipKey = loginIpKey(input.ip);
   const status = deps.limiter.check(key);
-  if (!status.allowed)
+  const ipStatus = deps.limiter.check(ipKey);
+  if (!status.allowed || !ipStatus.allowed)
     throw new ApiHttpError("rate_limited", "too many failed login attempts", {
-      retryAfterMs: status.retryAfterMs ?? 0,
+      retryAfterMs: Math.max(status.retryAfterMs ?? 0, ipStatus.retryAfterMs ?? 0),
     });
   let token: { accessToken: string; expiresAt: Date };
   try {
@@ -51,6 +61,7 @@ async function verifyCredentialsAt(
     if (error instanceof SftpgoError) {
       if (error.kind === "unauthorized") {
         deps.limiter.recordFailure(key);
+        deps.limiter.recordFailure(ipKey);
         throw new ApiHttpError("unauthorized", "invalid username or password");
       }
       if (error.kind === "forbidden")

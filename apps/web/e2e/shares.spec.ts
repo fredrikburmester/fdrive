@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { ApiError, ManagedShare } from "@fdrive/contracts";
+import { ManagedShare } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
@@ -96,13 +96,12 @@ test("single-file password is checked on explicit download; edit preserves, chan
     });
     await applyPassword(visitor, "wrong-password");
     expect(downloads).toBe(0);
-    const denied = visitor.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname.endsWith("/download") && response.status() >= 400,
-    );
-    await visitor.getByRole("link", { name: "Download", exact: true }).click();
-    const deniedError = ApiError.parse(await (await denied).json()).error.message;
-    await expect(visitor.getByText(deniedError, { exact: true })).toBeVisible();
+    // A wrong password is reported by the server-side check and unlocks nothing:
+    // no file name, no download control, no download request.
+    await expect(visitor.getByText("Share password incorrect.", { exact: true })).toBeVisible();
+    await expect(visitor.getByRole("link", { name: "Download", exact: true })).toHaveCount(0);
+    await expect(visitor.getByText("hello.txt", { exact: true })).toHaveCount(0);
+    expect(downloads).toBe(0);
     await applyPassword(visitor, "correct-share-password");
     expect(
       (
