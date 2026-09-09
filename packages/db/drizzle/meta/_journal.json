@@ -57,6 +57,13 @@
       "when": 1788864801079,
       "tag": "0007_tired_living_mummy",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788987170907,
+      "tag": "0008_system_events",
+      "breakpoints": true
     }
   ]
 }

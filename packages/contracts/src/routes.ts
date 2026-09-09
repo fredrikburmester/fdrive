@@ -190,6 +190,11 @@ export function jobRoute(id: string): string {
   return `${ROUTES.fs.jobs}/${encodeURIComponent(id)}`;
 }
 
+/** GET, admin only: one subsystem's event log -> `SystemLogsResponse`. */
+export function systemLogsRoute(subsystem: string): string {
+  return `/api/v1/system/${encodeURIComponent(subsystem)}/logs`;
+}
+
 /** POST: cancel a job -> `JobStatus`. 404 for a job that belongs to another identity. */
 export function jobCancelRoute(id: string): string {
   return `${jobRoute(id)}/cancel`;

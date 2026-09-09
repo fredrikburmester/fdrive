@@ -83,6 +83,7 @@ import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
 import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
+import { createSystemEventLog } from "./system/event-log.js";
 import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
 import { createPublicUrlService } from "./system/public-url.js";
@@ -144,6 +145,7 @@ export async function composeApp(
     await migrate(db);
   }
   const repos = createRepos(db);
+  const eventLog = createSystemEventLog({ repo: repos.systemEvents, logger });
 
   const connectionStore = createConnectionStore({
     settings: repos.settings,
@@ -157,6 +159,7 @@ export async function composeApp(
     settings: repos.settings,
     config,
     fetch: fetchImpl,
+    eventLog,
   });
   const featureValues = async () => (await featureService.configuration()).values;
   const clientForBaseUrl = (baseUrl: string) => createSftpgoClient({ baseUrl, fetch: fetchImpl });
@@ -365,6 +368,7 @@ export async function composeApp(
   };
   const officeSettings = createOfficeSettingsService({
     settings: repos.settings,
+    eventLog,
     product: officeProduct,
     publicUrl: () => publicUrl.current(),
     probeStatus: async (configuration) => {
@@ -691,6 +695,8 @@ export async function composeApp(
       });
       registerSystemRoutes(groups, {
         settings: repos.settings,
+        systemEvents: repos.systemEvents,
+        eventLog,
         indexQueries,
         thumbnailsRepo,
         indexerClient,

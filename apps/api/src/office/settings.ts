@@ -6,6 +6,8 @@ import {
 } from "@fdrive/contracts";
 import type { SettingsRepo } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
+import type { SystemEventLog } from "../system/event-log.js";
+import { noopSystemEventLog } from "../system/event-log.js";
 
 export const OFFICE_SETTINGS_KEY = "office.configuration";
 
@@ -46,7 +48,10 @@ export function createOfficeSettingsService(deps: {
   /** The owner-chosen server address the editor is told fdrive lives at; Office cannot be enabled without one. */
   publicUrl: () => Promise<string | null>;
   probeStatus: (configuration: OfficeSettings) => Promise<"starting" | "ready" | "unavailable">;
+  /** Optional so existing call sites keep working; defaults to recording nothing. */
+  eventLog?: SystemEventLog;
 }): OfficeSettingsService {
+  const eventLog = deps.eventLog ?? noopSystemEventLog;
   const defaults: OfficeSettings = {
     revision: 0,
     enabled: false,
@@ -91,6 +96,10 @@ export function createOfficeSettingsService(deps: {
           "conflict",
           "Office settings changed in another session. Reload and try again.",
         );
+      eventLog.record("office", "info", "Office settings updated", {
+        enabled: next.enabled,
+        editingEnabled: next.editingEnabled,
+      });
       return next;
     },
     async runtimeConfiguration() {
