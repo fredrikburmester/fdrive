@@ -11,9 +11,20 @@ export class JobQueueFullError extends Error {
   }
 }
 
+/** The error a job fails with when its `authorize` check no longer holds at start. */
+export const JOB_AUTHORITY_REVOKED_MESSAGE =
+  "the session that queued this job is no longer authorized";
+
 export interface SubmitJobInput {
   readonly identityId: string;
   readonly kind: JobKind;
+  /**
+   * Re-checked when the job leaves the queue: a `false` fails the job with
+   * `JOB_AUTHORITY_REVOKED_MESSAGE` without ever calling `run`, so a job
+   * queued by a session that has since logged out, unlinked or been
+   * revoked never touches storage. Omit for work that cannot go stale.
+   */
+  readonly authorize?: () => Promise<boolean>;
   readonly run: (ctx: JobRunContext) => Promise<{ path: string; warning?: string }>;
 }
 
@@ -51,6 +62,7 @@ interface InternalJob {
   result?: { path: string };
   error?: string;
   readonly controller: AbortController;
+  readonly authorize: (() => Promise<boolean>) | undefined;
   readonly run: (ctx: JobRunContext) => Promise<{ path: string; warning?: string }>;
   lastProgressPublishMs: number;
 }
@@ -164,8 +176,20 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       publish(job, { force: false });
     };
 
-    job
-      .run({ signal: job.controller.signal, report })
+    const ctx: JobRunContext = { signal: job.controller.signal, report };
+    // Without an authority check `run` starts synchronously, so a caller
+    // observes "running" (and any synchronous throw) right after `submit`.
+    const started =
+      job.authorize === undefined
+        ? job.run(ctx)
+        : job.authorize().then((authorized) => {
+            if (!authorized) {
+              throw new Error(JOB_AUTHORITY_REVOKED_MESSAGE);
+            }
+            return job.run(ctx);
+          });
+
+    started
       .then((outcome) => {
         finishJob(
           job,
@@ -241,6 +265,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         total: null,
         bytes: 0,
         controller: new AbortController(),
+        authorize: input.authorize,
         run: input.run,
         lastProgressPublishMs: 0,
       };

@@ -1,4 +1,11 @@
-import { baseName, extensionOf, parseSearchFilters, type Scope, toFsPath } from "@fdrive/core";
+import {
+  baseName,
+  extensionOf,
+  isUnderPath,
+  parseSearchFilters,
+  type Scope,
+  toFsPath,
+} from "@fdrive/core";
 import type {
   DuplicateGroup,
   FileFilter,
@@ -899,9 +906,54 @@ function requireWrites(deps: McpToolDeps): void {
 }
 
 /**
- * Creates a folder directly through `principal.storage`, authorized
- * natively by the storage provider itself, independent of index
- * availability.
+ * Resolves the caller's verified scopes for a write. Unlike `requireScope`
+ * this needs no index rows (writes work before anything is indexed), only
+ * the identity's verified scope list, so it stays available while the
+ * index is empty or behind.
+ */
+async function requireVerifiedScopes(
+  deps: McpToolDeps,
+  principal: Principal,
+): Promise<readonly Scope[]> {
+  const identity = await deps.identities.get(principal.identityId);
+  const verified =
+    identity === null
+      ? ({ available: false, reason: "no_connection" } as const)
+      : await deps.scopeResolver.verifiedIndexScopes(identity);
+  if (!verified.available) {
+    throw new McpToolError(indexUnavailableMessage(verified.reason));
+  }
+  return verified.scopes;
+}
+
+/**
+ * Throws unless `path` lies inside the caller's verified scope, survives the
+ * virtual round trip (so a location shadowed by a more specific override is
+ * never written through the wrong identity), and is not in the trash. The
+ * same admission every read tool applies before it returns content, so an
+ * MCP token can never write where fdrive itself would refuse to look.
+ */
+function assertWritablePath(
+  scopes: readonly Scope[],
+  trashPath: string | null,
+  path: string,
+  label: string,
+): void {
+  const resolved = toFsPath(scopes, path);
+  const virtualPath =
+    resolved === null ? null : roundTripVirtualPath(scopes, resolved.rootName, resolved.fsPath);
+  if (
+    virtualPath === null ||
+    (trashPath !== null && (virtualPath === trashPath || isUnderPath(trashPath, virtualPath)))
+  ) {
+    throw new McpToolError(`${label} is outside this identity's scope`);
+  }
+}
+
+/**
+ * Creates a folder through `principal.storage` once `args.path` passes the
+ * verified-scope admission (`assertWritablePath`). Works without any index
+ * rows, but never without verified scopes.
  */
 export async function runCreateFolder(
   deps: McpToolDeps,
@@ -909,6 +961,8 @@ export async function runCreateFolder(
   args: CreateFolderArgs,
 ) {
   requireWrites(deps);
+  const scopes = await requireVerifiedScopes(deps, principal);
+  assertWritablePath(scopes, currentTrashPath(deps, principal), args.path, "path");
   await principal.storage.mkdir(args.path, { parents: true });
   return { created: args.path, url: folderUrl(await deps.publicUrl(), args.path) };
 }
@@ -953,29 +1007,22 @@ export async function recordMoveIfInScope(
 }
 
 /**
- * Moves or renames a path directly through `principal.storage`, authorized
- * natively by the storage provider itself, independent of index
- * availability. Best-effort records the move in `idx.moves` afterward when
- * the caller's verified scopes cover both endpoints.
+ * Moves or renames a path through `principal.storage` once both `src` and
+ * `dst` pass the verified-scope admission (`assertWritablePath`). Works
+ * without any index rows, but never without verified scopes. Best-effort
+ * records the move in `idx.moves` afterward when the index knows the root.
  */
 export async function runMovePath(deps: McpToolDeps, principal: Principal, args: MovePathArgs) {
   requireWrites(deps);
+  const scopes = await requireVerifiedScopes(deps, principal);
+  const trashPath = currentTrashPath(deps, principal);
+  assertWritablePath(scopes, trashPath, args.src, "src");
+  assertWritablePath(scopes, trashPath, args.dst, "dst");
   await principal.storage.move(args.src, args.dst);
 
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? { available: false as const }
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
-  if (verified.available) {
-    const ctx = await resolveScopeContext(
-      deps.indexQueries,
-      verified.scopes,
-      currentTrashPath(deps, principal),
-    );
-    if (ctx !== null) {
-      await recordMoveIfInScope(deps, ctx, args);
-    }
+  const ctx = await resolveScopeContext(deps.indexQueries, scopes, trashPath);
+  if (ctx !== null) {
+    await recordMoveIfInScope(deps, ctx, args);
   }
 
   // Best-effort hint only (SFTPGo's move response carries no entry kind):

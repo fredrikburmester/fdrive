@@ -271,12 +271,27 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const isAdmin =
       (account?.isAdmin ?? false) || deps.adminUsernames.includes(identity.externalUsername);
 
+    const verifyAuthority = async (): Promise<boolean> => {
+      const at = deps.clock();
+      const current = await deps.repos.sessions.getByIdHash(idHash, at);
+      if (
+        !current ||
+        at.getTime() - current.createdAt.getTime() >=
+          deps.config.fdriveSessionMaxAgeDays * MS_PER_DAY
+      ) {
+        return false;
+      }
+      const owned = await deps.repos.identities.get(identity.id);
+      return owned !== null && owned.accountId === current.accountId;
+    };
+
     return {
       accountId: session.accountId,
       identityId: identity.id,
       username: identity.externalUsername,
       storage: await deps.storageFactory(identity.id),
       isAdmin,
+      verifyAuthority,
     };
   }
 

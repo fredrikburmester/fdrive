@@ -355,7 +355,12 @@ function submitJob(
   run: Parameters<FsRoutesDeps["jobRunner"]["submit"]>[0]["run"],
 ): ReturnType<FsRoutesDeps["jobRunner"]["submit"]> {
   try {
-    return deps.jobRunner.submit({ identityId: principal.identityId, kind, run });
+    return deps.jobRunner.submit({
+      identityId: principal.identityId,
+      kind,
+      ...(principal.verifyAuthority !== undefined ? { authorize: principal.verifyAuthority } : {}),
+      run,
+    });
   } catch (error) {
     if (error instanceof JobQueueFullError) {
       throw new ApiHttpError("rate_limited", error.message);
