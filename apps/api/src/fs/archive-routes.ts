@@ -16,6 +16,7 @@ import {
   archiveExtensionFor,
   baseName,
   detectArchiveKind,
+  isSafeSegment,
   isStorageError,
   joinPath,
   parentPath,
@@ -218,6 +219,12 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
   const destination = body.destination !== undefined ? normalizeOrThrow(body.destination) : parent;
   await assertIsDirectory(principal.storage, destination, "destination");
 
+  if (body.name !== undefined && !isSafeSegment(body.name)) {
+    throw new ApiHttpError(
+      "bad_request",
+      "name must be a single file name without path separators",
+    );
+  }
   const name = body.name ?? defaultCompressName(paths, parent);
   const targetPath = joinPath(destination, `${name}${archiveExtensionFor(body.format)}`);
   if (await pathExists(principal.storage, targetPath)) {

@@ -51,6 +51,17 @@ export const RECENTS_KEEP = 200;
 /** Default number of items `listRecents` returns when the caller does not ask for a specific limit. */
 export const DEFAULT_RECENTS_LIMIT = 50;
 
+/** Thrown by `setFileTags` when a requested tag id is not one of the account's own tags. */
+export class UnknownTagError extends Error {
+  readonly tagIds: readonly string[];
+
+  constructor(tagIds: readonly string[]) {
+    super(`unknown tag: ${tagIds.join(", ")}`);
+    this.name = "UnknownTagError";
+    this.tagIds = tagIds;
+  }
+}
+
 function toMetadataTag(tag: DbTag): MetadataTag {
   return { id: tag.id, name: tag.name, color: tag.color };
 }
@@ -77,7 +88,17 @@ export interface MetadataService {
   ): Promise<MetadataTag | null>;
   deleteTag(accountId: string, id: string): Promise<void>;
   filesForTag(identityId: string, tagId: string): Promise<string[]>;
-  setFileTags(identityId: string, path: string, tagIds: readonly string[]): Promise<void>;
+  /**
+   * Replaces the tags on `path` for `identityId`. Every id in `tagIds` must
+   * name a tag owned by `accountId`; otherwise throws
+   * `UnknownTagError` and writes nothing, so one account can never attach
+   * (or probe for) another account's tags.
+   */
+  setFileTags(
+    owner: { accountId: string; identityId: string },
+    path: string,
+    tagIds: readonly string[],
+  ): Promise<void>;
   listFavorites(identityId: string): Promise<MetadataFavoriteItem[]>;
   addFavorite(identityId: string, path: string, kind: FavoriteKind): Promise<void>;
   removeFavorite(identityId: string, path: string): Promise<void>;
@@ -169,8 +190,13 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       return deps.fileTags.pathsForTag(identityId, tagId);
     },
 
-    setFileTags(identityId, path, tagIds) {
-      return deps.fileTags.setTags(identityId, path, tagIds);
+    async setFileTags(owner, path, tagIds) {
+      if (tagIds.length > 0) {
+        const owned = new Set((await deps.tags.list(owner.accountId)).map((tag) => tag.id));
+        const unknown = tagIds.filter((id) => !owned.has(id));
+        if (unknown.length > 0) throw new UnknownTagError(unknown);
+      }
+      return deps.fileTags.setTags(owner.identityId, path, tagIds);
     },
 
     async listFavorites(identityId) {

@@ -19,7 +19,7 @@ import { ConflictError } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import { normalizeOrThrow, parseBody, statEntry } from "../fs/routes.js";
-import type { MetadataService } from "./service.js";
+import { type MetadataService, UnknownTagError } from "./service.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -111,7 +111,18 @@ export function registerMetadataRoutes(
     const principal = c.get("principal");
     const input = await parseBody(SetFileTagsRequest, c);
     const path = normalizeOrThrow(input.path);
-    await metadata.setFileTags(principal.identityId, path, input.tagIds);
+    try {
+      await metadata.setFileTags(
+        { accountId: principal.accountId, identityId: principal.identityId },
+        path,
+        input.tagIds,
+      );
+    } catch (err) {
+      if (err instanceof UnknownTagError) {
+        throw new ApiHttpError("bad_request", err.message, { tagIds: err.tagIds });
+      }
+      throw err;
+    }
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
