@@ -15,6 +15,9 @@ vi.mock("@/lib/api/system-queries", () => ({
   useSystemFeatures: () => mocks.query(),
   useUpdateFeatures: () => mocks.update(),
 }));
+vi.mock("./office-feature-card", () => ({
+  OfficeFeatureCard: () => <p>Office feature card</p>,
+}));
 vi.mock("./office-settings-card", () => ({
   OfficeSettingsCard: ({ onContinue }: { onContinue?: () => void }) => (
     <button type="button" onClick={onContinue}>
@@ -145,12 +148,28 @@ describe("feature walkthrough", () => {
   it("shows all six controls after setup and supports restarting the walkthrough", () => {
     mount(6, true);
     expect(screen.getAllByRole("switch")).toHaveLength(6);
+    expect(screen.getByText("Office feature card")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Trash settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Address settings" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Open Thumbnails" }).getAttribute("href")).toBe(
+      "/system/thumbnails",
+    );
+    expect(screen.getByRole("link", { name: "Open Search" }).getAttribute("href")).toBe(
+      "/system/search",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Run walkthrough" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 0, walkthroughComplete: false }),
       expect.anything(),
     );
   });
+  it("keeps the walkthrough free of page links", () => {
+    mount(0);
+
+    expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
+    expect(screen.queryByText("Office feature card")).toBeNull();
+  });
+
   it("includes Trash before review without changing processing settings", () => {
     mount(6);
     expect(screen.getByText("Step 10 of 13 · Trash")).toBeTruthy();

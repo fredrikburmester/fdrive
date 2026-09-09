@@ -18,6 +18,7 @@ import {
   SETUP_STEPS,
   type SetupStep,
 } from "@/lib/system/setup-flow";
+import { WALKTHROUGH_TOTAL } from "@/lib/system/walkthrough";
 import { SetupFeatures } from "./features-page";
 import { SetupFrame } from "./setup-frame";
 
@@ -100,7 +101,9 @@ export function SetupWizard() {
       }
     >
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-muted-foreground">Step {SETUP_STEPS.indexOf(step) + 1} of 13</p>
+        <p className="text-sm text-muted-foreground">
+          Step {SETUP_STEPS.indexOf(step) + 1} of {WALKTHROUGH_TOTAL}
+        </p>
         <Tabs value={step}>
           <TabsList className="w-full">
             {SETUP_STEPS.map((s) => (

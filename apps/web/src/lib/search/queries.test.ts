@@ -311,7 +311,7 @@ describe("useSearchStatus", () => {
     };
     const healthy: SearchStatusResponse = { available: true, semantic: true, images: true };
     searchStatusMock.mockResolvedValueOnce(starting).mockResolvedValue(healthy);
-    const { SEARCH_STARTUP_RETRY_MS, useSearchStatus } = await import("./queries.js");
+    const { useSearchStatus } = await import("./queries.js");
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useSearchStatus({ retryUnavailable: true }), {

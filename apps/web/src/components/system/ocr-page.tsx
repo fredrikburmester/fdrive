@@ -14,7 +14,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,11 +35,13 @@ import {
   validateOcrSettings,
 } from "@/lib/system/settings";
 import { sidecarStatus } from "@/lib/system/status";
-import { GlobsField, SettingsFormShell } from "./settings-form";
-import { StatCard } from "./stat-card";
+import { GlobsField } from "./settings-form";
+import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
+import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
+import { SystemSection } from "./system-section";
 
 interface SettingsDraft {
   hour: string;
@@ -80,12 +81,7 @@ export function OcrPage() {
 
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [runOpen, setRunOpen] = useState(false);
-
-  useEffect(() => {
-    if (data !== undefined) {
-      setDraft(draftFromValues(data.settings.values));
-    }
-  }, [data]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const status = data !== undefined ? sidecarStatus(data.configured, data.reachable) : null;
   const draftValues = draft !== null ? valuesFromDraft(draft) : null;
@@ -94,6 +90,15 @@ export function OcrPage() {
     data !== undefined &&
     ocrSettingsDirty(data.settings.values, draftValues);
   const validationMessages = draftValues !== null ? validateOcrSettings(draftValues) : [];
+
+  // The page polls every 5 seconds; reseeding the draft from each response
+  // would wipe whatever is being typed in the open sheet, so a dirty draft
+  // is left alone until it is saved or reset.
+  useEffect(() => {
+    if (data !== undefined && !dirty) {
+      setDraft(draftFromValues(data.settings.values));
+    }
+  }, [data, dirty]);
 
   function handleSave() {
     if (draftValues === null) {
@@ -127,16 +132,17 @@ export function OcrPage() {
         title="OCR"
         description="Scheduled OCR for scanned PDFs and images."
         lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+        feature="pdfOcr"
       >
-        <Card>
-          <CardHeader>
-            <CardTitle>Not configured</CardTitle>
-            <CardDescription>
+        <SystemSection
+          title="Not configured"
+          description={
+            <>
               Set <code className="font-mono">FDRIVE_OCR_URL</code> and bring the compose stack up
               with the <code className="font-mono">ocr</code> profile to enable this page.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+            </>
+          }
+        />
       </SystemPage>
     );
   }
@@ -146,10 +152,15 @@ export function OcrPage() {
       title="OCR"
       description="Scheduled OCR for scanned PDFs and images."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+      feature="pdfOcr"
       actions={
-        <Button type="button" onClick={() => setRunOpen(true)} disabled={data === undefined}>
-          Run now
-        </Button>
+        <>
+          <Button type="button" onClick={() => setRunOpen(true)} disabled={data === undefined}>
+            Run now
+          </Button>
+          <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
+          {/* LogSheet mounts here (P9 event log) */}
+        </>
       }
     >
       {isLoading ? (
@@ -158,132 +169,123 @@ export function OcrPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Schedule</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
-              {status !== null ? <StatusBadge status={status} /> : null}
-              <span className="text-sm text-muted-foreground">
-                Runs nightly at {data.settings.values.hour.toString().padStart(2, "0")}:00
-                {data.stats?.nextRunAt !== null && data.stats?.nextRunAt !== undefined
-                  ? ` · next run ${formatRelativeTime(new Date(data.stats.nextRunAt), new Date())}`
-                  : ""}
-                {data.stats?.running === true ? " · running now" : ""}
-              </span>
-            </CardContent>
-          </Card>
+          <SystemSection title="Schedule" contentClassName="flex-row flex-wrap items-center gap-3">
+            {status !== null ? <StatusBadge status={status} /> : null}
+            <span className="text-sm text-muted-foreground">
+              Runs nightly at {data.settings.values.hour.toString().padStart(2, "0")}:00
+              {data.stats?.nextRunAt !== null && data.stats?.nextRunAt !== undefined
+                ? ` · next run ${formatRelativeTime(new Date(data.stats.nextRunAt), new Date())}`
+                : ""}
+              {data.stats?.running === true ? " · running now" : ""}
+            </span>
+          </SystemSection>
 
           {data.stats?.lastRun !== null && data.stats?.lastRun !== undefined ? (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <StatCard label="Seen" value={data.stats.lastRun.seen.toLocaleString()} />
-              <StatCard label="OCR'd" value={data.stats.lastRun.ocred.toLocaleString()} />
-              <StatCard label="Skipped" value={data.stats.lastRun.skipped.toLocaleString()} />
-              <StatCard label="Failed" value={data.stats.lastRun.failed.toLocaleString()} />
-            </div>
+            <StatGrid
+              stats={[
+                { label: "Seen", value: data.stats.lastRun.seen.toLocaleString() },
+                { label: "OCR'd", value: data.stats.lastRun.ocred.toLocaleString() },
+                { label: "Skipped", value: data.stats.lastRun.skipped.toLocaleString() },
+                { label: "Failed", value: data.stats.lastRun.failed.toLocaleString() },
+              ]}
+            />
           ) : null}
 
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-2">
-            <StatCard
-              label="Originals kept"
-              value={(data.stats?.originalsCount ?? 0).toLocaleString()}
-            />
-            <StatCard label="Originals size" value={formatBytes(data.stats?.originalsBytes ?? 0)} />
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Settings</CardTitle>
-              <CardDescription>Applied on the OCR service's next scheduled run.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {draft !== null ? (
-                <SettingsFormShell
-                  dirty={dirty}
-                  invalid={validationMessages.length > 0}
-                  pending={updateSettings.isPending}
-                  onSave={handleSave}
-                  onReset={handleReset}
-                >
-                  <Field>
-                    <FieldLabel htmlFor="ocr-hour">Run hour</FieldLabel>
-                    <Select
-                      value={draft.hour}
-                      onValueChange={(value) => setDraft({ ...draft, hour: value ?? draft.hour })}
-                    >
-                      <SelectTrigger id="ocr-hour">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {HOURS.map((hour) => (
-                          <SelectItem key={hour} value={String(hour)}>
-                            {hour.toString().padStart(2, "0")}:00
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FieldDescription>
-                      Hour of the day, in the server's time zone, when the nightly pass starts.
-                    </FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="ocr-langs">Languages</FieldLabel>
-                    <Input
-                      id="ocr-langs"
-                      value={draft.langs}
-                      onChange={(event) => setDraft({ ...draft, langs: event.target.value })}
-                    />
-                    <FieldDescription>
-                      Tesseract language codes joined with "+", e.g. "swe+eng". Each language must
-                      already be installed in the OCR image.
-                    </FieldDescription>
-                  </Field>
-                  <GlobsField
-                    id="ocr-exclude-globs"
-                    label="Exclude globs"
-                    value={draft.excludeGlobs}
-                    onChange={(value) => setDraft({ ...draft, excludeGlobs: value })}
-                    description="Paths matching any of these are never OCR'd."
-                  />
-                  <Field>
-                    <FieldLabel htmlFor="ocr-max-mb">Max file size (MB)</FieldLabel>
-                    <Input
-                      id="ocr-max-mb"
-                      type="number"
-                      min={1}
-                      value={draft.maxMb}
-                      onChange={(event) => setDraft({ ...draft, maxMb: event.target.value })}
-                    />
-                    <FieldDescription>PDFs larger than this are skipped.</FieldDescription>
-                  </Field>
-                  <Field orientation="horizontal">
-                    <FieldContent>
-                      <FieldLabel htmlFor="ocr-keep-originals">Keep originals</FieldLabel>
-                      <FieldDescription>
-                        When OCR rewrites a PDF to add a text layer, the original file is saved
-                        under the OCR state directory so it can be restored. Turning this off saves
-                        disk space but makes OCR irreversible.
-                      </FieldDescription>
-                    </FieldContent>
-                    <Switch
-                      id="ocr-keep-originals"
-                      checked={draft.keepOriginals}
-                      onCheckedChange={(checked) => setDraft({ ...draft, keepOriginals: checked })}
-                    />
-                  </Field>
-                  {validationMessages.length > 0 ? (
-                    <ul className="text-sm text-destructive">
-                      {validationMessages.map((message) => (
-                        <li key={message}>{message}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </SettingsFormShell>
-              ) : null}
-            </CardContent>
-          </Card>
+          <StatGrid
+            stats={[
+              {
+                label: "Originals kept",
+                value: (data.stats?.originalsCount ?? 0).toLocaleString(),
+              },
+              { label: "Originals size", value: formatBytes(data.stats?.originalsBytes ?? 0) },
+            ]}
+          />
         </>
       )}
+
+      <SettingsSheet
+        title="OCR settings"
+        description="Applied on the OCR service's next scheduled run."
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        dirty={dirty}
+        invalid={validationMessages.length > 0}
+        pending={updateSettings.isPending}
+        onSave={handleSave}
+        onReset={handleReset}
+        validationMessages={validationMessages}
+      >
+        {draft !== null ? (
+          <>
+            <Field>
+              <FieldLabel htmlFor="ocr-hour">Run hour</FieldLabel>
+              <Select
+                value={draft.hour}
+                onValueChange={(value) => setDraft({ ...draft, hour: value ?? draft.hour })}
+              >
+                <SelectTrigger id="ocr-hour">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {HOURS.map((hour) => (
+                    <SelectItem key={hour} value={String(hour)}>
+                      {hour.toString().padStart(2, "0")}:00
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                Hour of the day, in the server's time zone, when the nightly pass starts.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="ocr-langs">Languages</FieldLabel>
+              <Input
+                id="ocr-langs"
+                value={draft.langs}
+                onChange={(event) => setDraft({ ...draft, langs: event.target.value })}
+              />
+              <FieldDescription>
+                Tesseract language codes joined with "+", e.g. "swe+eng". Each language must already
+                be installed in the OCR image.
+              </FieldDescription>
+            </Field>
+            <GlobsField
+              id="ocr-exclude-globs"
+              label="Exclude globs"
+              value={draft.excludeGlobs}
+              onChange={(value) => setDraft({ ...draft, excludeGlobs: value })}
+              description="Paths matching any of these are never OCR'd."
+            />
+            <Field>
+              <FieldLabel htmlFor="ocr-max-mb">Max file size (MB)</FieldLabel>
+              <Input
+                id="ocr-max-mb"
+                type="number"
+                min={1}
+                value={draft.maxMb}
+                onChange={(event) => setDraft({ ...draft, maxMb: event.target.value })}
+              />
+              <FieldDescription>PDFs larger than this are skipped.</FieldDescription>
+            </Field>
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldLabel htmlFor="ocr-keep-originals">Keep originals</FieldLabel>
+                <FieldDescription>
+                  When OCR rewrites a PDF to add a text layer, the original file is saved under the
+                  OCR state directory so it can be restored. Turning this off saves disk space but
+                  makes OCR irreversible.
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                id="ocr-keep-originals"
+                checked={draft.keepOriginals}
+                onCheckedChange={(checked) => setDraft({ ...draft, keepOriginals: checked })}
+              />
+            </Field>
+          </>
+        ) : null}
+      </SettingsSheet>
 
       <AlertDialog open={runOpen} onOpenChange={setRunOpen}>
         <AlertDialogContent>

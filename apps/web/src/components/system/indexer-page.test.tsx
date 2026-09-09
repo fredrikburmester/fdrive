@@ -34,9 +34,10 @@ vi.mock("./system-page", () => ({
     title: string;
     description: string;
     actions?: ReactNode;
+    feature?: string | readonly string[];
     children: ReactNode;
   }) => (
-    <div>
+    <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
       <div data-testid="actions">{props.actions}</div>
@@ -46,6 +47,11 @@ vi.mock("./system-page", () => ({
 }));
 
 const { IndexerPage } = await import("./indexer-page");
+
+/** Opens the header's Settings sheet, where the settings form now lives. */
+function openSettings() {
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+}
 
 /** A realistic "configured and reachable" fixture, mirroring the shape the
  * API's `GET /api/v1/system/indexer` actually returns in dev (see the fake
@@ -178,6 +184,7 @@ describe("IndexerPage", () => {
   it("renders the settings form pre-filled with the fixture's values", async () => {
     mockConfigured();
     render(<IndexerPage />);
+    openSettings();
 
     expect(await screen.findByLabelText("Scan interval (seconds)")).toHaveProperty("value", "900");
     expect(screen.getByLabelText("Workers")).toHaveProperty("value", "4");
@@ -208,6 +215,7 @@ describe("IndexerPage", () => {
     );
     useUpdateIndexerSettingsMock.mockReturnValue({ mutate, isPending: false });
     render(<IndexerPage />);
+    openSettings();
     const workers = await screen.findByLabelText("Workers");
     expect(screen.getByText(/Time between scheduled scans/)).toBeTruthy();
     expect(screen.getByText(/Number of files extracted concurrently/)).toBeTruthy();
@@ -218,6 +226,43 @@ describe("IndexerPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ workers: 7 }), expect.anything());
     expect(successToast).toHaveBeenCalledWith("Indexer settings saved.");
+  });
+
+  it("keeps an edited draft when the 5-second poll returns new data", async () => {
+    mockConfigured();
+    const view = render(<IndexerPage />);
+    openSettings();
+    const workers = await screen.findByLabelText("Workers");
+    fireEvent.change(workers, { target: { value: "7" } });
+
+    // A fresh response object, as a refetch produces, with a different
+    // server-side value for a field the admin is not editing.
+    useSystemIndexerMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        settings: {
+          ...CONFIGURED_FIXTURE.settings,
+          values: { ...CONFIGURED_FIXTURE.settings.values, tesseractLangs: "eng" },
+        },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:23:00Z"),
+      refetch: vi.fn(),
+    });
+    view.rerender(<IndexerPage />);
+
+    expect(screen.getByLabelText("Workers")).toHaveProperty("value", "7");
+    expect(screen.getByLabelText("Tesseract languages")).toHaveProperty("value", "swe+eng");
+  });
+
+  it("declares the features that gate this page", () => {
+    mockConfigured();
+    render(<IndexerPage />);
+
+    expect(screen.getByTestId("system-page").dataset.feature).toBe(
+      "thumbnails,textSearch,imageSearch",
+    );
   });
 
   it("reindex contains no thumbnail toggle", async () => {

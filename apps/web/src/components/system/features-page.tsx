@@ -19,6 +19,9 @@ import { Switch } from "@/components/ui/switch";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
 import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
+import { FEATURE_PAGES } from "@/lib/system/pages";
+import { WALKTHROUGH_STEPS, walkthroughLabel } from "@/lib/system/walkthrough";
+import { OfficeFeatureCard } from "./office-feature-card";
 import { OfficeReview, OfficeSettingsCard } from "./office-settings-card";
 import { PublicUrlCard, PublicUrlReview } from "./public-url-card";
 import { SetupFrame } from "./setup-frame";
@@ -32,12 +35,15 @@ function FeatureCard({
   disabled,
   onChange,
   status,
+  href,
 }: {
   id: FeatureId;
   values: FeatureValues;
   disabled: boolean;
   onChange: (id: FeatureId, enabled: boolean) => void;
   status: SystemFeaturesResponse["statuses"][number] | undefined;
+  /** The feature's own System page; omitted during the walkthrough. */
+  href?: Route;
 }) {
   const info = FEATURE_DESCRIPTIONS[id];
   return (
@@ -45,7 +51,14 @@ function FeatureCard({
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <CardTitle>{info.title}</CardTitle>
-          {status ? <Badge variant="secondary">{status.state}</Badge> : null}
+          <div className="flex items-center gap-3">
+            {status ? <Badge variant="secondary">{status.state}</Badge> : null}
+            {href !== undefined ? (
+              <Link href={href} className="text-sm underline">
+                Open {FEATURE_PAGES[id].label}
+              </Link>
+            ) : null}
+          </div>
         </div>
         <CardDescription>{info.description}</CardDescription>
       </CardHeader>
@@ -80,7 +93,8 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const values = draft?.values ?? configuration.values;
   const step = localStep ?? configuration.walkthroughStep ?? 0;
   const walkthrough = !configuration.walkthroughComplete;
-  const id = FEATURE_IDS[step];
+  const current = WALKTHROUGH_STEPS[step];
+  const id = current?.kind === "feature" ? current.id : undefined;
   function change(id: FeatureId, enabled: boolean) {
     setDraft({
       values: changeFeature(values, id, enabled),
@@ -115,20 +129,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
       {walkthrough ? (
         <div>
           <h2 className="font-medium">fdrive setup walkthrough</h2>
-          <p className="text-sm text-muted-foreground">
-            Step {step + 4} of 13 ·{" "}
-            {step === 6
-              ? "Trash"
-              : step === 7
-                ? "Server address"
-                : step === 8
-                  ? "ONLYOFFICE"
-                  : step === 9
-                    ? "Review"
-                    : id
-                      ? FEATURE_DESCRIPTIONS[id].title
-                      : "Features"}
-          </p>
+          <p className="text-sm text-muted-foreground">{walkthroughLabel(step)}</p>
           <p className="mt-1 text-sm text-muted-foreground">
             Choose each optional feature. Your progress is saved when you continue.
           </p>
@@ -147,27 +148,29 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           onChange={change}
           disabled={update.isPending}
           status={data.statuses.find((status) => status.id === featureId)}
+          {...(walkthrough ? {} : { href: FEATURE_PAGES[featureId].href })}
         />
       ))}
-      {!walkthrough || step === 6 ? (
+      {walkthrough ? null : <OfficeFeatureCard disabled={update.isPending} />}
+      {walkthrough && current?.kind === "trash" ? (
         <TrashSettingsCard
           disabled={update.isPending}
-          {...(walkthrough ? { onContinue: () => save({ walkthroughStep: 7 }) } : {})}
+          onContinue={() => save({ walkthroughStep: 7 })}
         />
       ) : null}
-      {!walkthrough || step === 7 ? (
+      {walkthrough && current?.kind === "publicUrl" ? (
         <PublicUrlCard
           disabled={update.isPending}
-          {...(walkthrough ? { onContinue: () => save({ walkthroughStep: 8 }) } : {})}
+          onContinue={() => save({ walkthroughStep: 8 })}
         />
       ) : null}
-      {!walkthrough || step === 8 ? (
+      {walkthrough && current?.kind === "office" ? (
         <OfficeSettingsCard
           disabled={update.isPending}
-          {...(walkthrough ? { onContinue: () => save({ walkthroughStep: 9 }) } : {})}
+          onContinue={() => save({ walkthroughStep: 9 })}
         />
       ) : null}
-      {walkthrough && step === 9 ? (
+      {walkthrough && current?.kind === "review" ? (
         <Card>
           <CardHeader>
             <CardTitle>Ready to use fdrive</CardTitle>
@@ -227,7 +230,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
             >
               Back
             </Button>
-            {step !== 6 && step !== 7 && step !== 8 ? (
+            {current?.kind === "feature" || current?.kind === "review" ? (
               <div className="flex gap-2">
                 {id ? (
                   <Button
@@ -243,10 +246,18 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
                 <Button
                   disabled={update.isPending}
                   onClick={() =>
-                    save(step === 9 ? { walkthroughComplete: true } : { walkthroughStep: step + 1 })
+                    save(
+                      current?.kind === "review"
+                        ? { walkthroughComplete: true }
+                        : { walkthroughStep: step + 1 },
+                    )
                   }
                 >
-                  {update.isPending ? "Saving…" : step === 9 ? "Finish setup" : "Save and continue"}
+                  {update.isPending
+                    ? "Saving…"
+                    : current?.kind === "review"
+                      ? "Finish setup"
+                      : "Save and continue"}
                 </Button>
               </div>
             ) : null}
@@ -280,7 +291,7 @@ export function FeaturesPage() {
   return (
     <SystemPage
       title="Features"
-      description="Manage optional processing, Trash, the server address, and browser document editing."
+      description="Turn optional features on or off. Each feature's settings live on its own page."
       lastUpdated={query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null}
     >
       {query.isError ? (

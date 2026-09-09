@@ -22,9 +22,10 @@ vi.mock("./system-page", () => ({
     title: string;
     description: string;
     actions?: ReactNode;
+    feature?: string | readonly string[];
     children: ReactNode;
   }) => (
-    <div>
+    <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
       <div data-testid="actions">{props.actions}</div>
@@ -34,6 +35,11 @@ vi.mock("./system-page", () => ({
 }));
 
 const { OcrPage } = await import("./ocr-page");
+
+/** Opens the header's Settings sheet, where the settings form now lives. */
+function openSettings() {
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+}
 
 const CONFIGURED_FIXTURE: SystemOcrResponse = {
   configured: true,
@@ -121,6 +127,7 @@ describe("OcrPage", () => {
   it("renders the settings form pre-filled with the fixture's values", async () => {
     mockConfigured();
     render(<OcrPage />);
+    openSettings();
 
     expect(await screen.findByLabelText("Languages")).toHaveProperty("value", "swe+eng");
     expect(screen.getByLabelText("Max file size (MB)")).toHaveProperty("value", "200");
@@ -129,12 +136,46 @@ describe("OcrPage", () => {
   it("renders the Keep originals description explaining reversibility", async () => {
     mockConfigured();
     render(<OcrPage />);
+    openSettings();
 
     expect(
       await screen.findByText(
         "When OCR rewrites a PDF to add a text layer, the original file is saved under the OCR state directory so it can be restored. Turning this off saves disk space but makes OCR irreversible.",
       ),
     ).toBeTruthy();
+  });
+
+  it("keeps an edited draft when the 5-second poll returns new data", async () => {
+    mockConfigured();
+    const view = render(<OcrPage />);
+    openSettings();
+    const langs = await screen.findByLabelText("Languages");
+    fireEvent.change(langs, { target: { value: "deu" } });
+
+    useSystemOcrMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        settings: {
+          ...CONFIGURED_FIXTURE.settings,
+          values: { ...CONFIGURED_FIXTURE.settings.values, maxMb: 400 },
+        },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:23:00Z"),
+      refetch: vi.fn(),
+    });
+    view.rerender(<OcrPage />);
+
+    expect(screen.getByLabelText("Languages")).toHaveProperty("value", "deu");
+    expect(screen.getByLabelText("Max file size (MB)")).toHaveProperty("value", "200");
+  });
+
+  it("declares the feature that gates this page", () => {
+    mockConfigured();
+    render(<OcrPage />);
+
+    expect(screen.getByTestId("system-page").dataset.feature).toBe("pdfOcr");
   });
 
   it("keeps the not-configured branch for a sidecar with no FDRIVE_OCR_URL", () => {
