@@ -1,7 +1,7 @@
 # Trash setup
 
 Trash is the seventh optional choice in fdrive onboarding, after the six processing
-features. It can also be changed in **System > Features > Trash**. No environment
+features. It can also be changed in **System > General > Trash**. No environment
 variables, worker, local storage mount, or restart are required.
 
 fdrive uses SFTPGo's Event Manager recycle-bin rule. It does not create that rule or
@@ -64,7 +64,7 @@ users; they do not repeat onboarding. Each user's own permissions still apply.
 Switching to a different SFTPGo provider requires configuring and confirming Trash
 for that provider; confirmation is not carried across connections.
 
-You may **Skip Trash** and enable it later in **System > Features**. Disabling the
+You may **Skip Trash** and enable it later in **System > General**. Disabling the
 integration hides fdrive's Trash controls; it does not remove existing items or
 change SFTPGo rules. A configured SFTPGo rule can still recycle subsequent deletions.
 

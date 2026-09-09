@@ -43,7 +43,7 @@ Updated: 2026-09-09. Owner: primary agent.
   now includes adopted scopes so Office and events see them. New `IndexQueries.directoriesWithFiles`
   (real-Postgres test passed, 2 cases). Routes: `GET/PUT /system/mount-mappings`,
   `GET .../scope/suggestions`. Web: suggestion chips, "Apply to every login" default, Shared
-  folders card on System > Connection.
+  folders card on System > Connection (now System > Shared folders, see P9).
 - A parallel public-URL effort worked in this same checkout and committed to `main`
   (`08a9dbd`) while this task was in progress; none of this task's hunks were included.
   Interim gates ran in `.worktrees/scope-e2e` (branch `claude/scope-e2e`, this task's files on
@@ -52,7 +52,7 @@ Updated: 2026-09-09. Owner: primary agent.
   `workflow`, browser `account-scope.spec.ts` 3/3, `scopes-sftp.test.ts` (steps 1-8), and the
   DB `directoriesWithFiles` cases (2). Live dev: suggestion `sftpgo:/_folders/shared` offered
   for carol from real index rows, saved as a shared folder mapping, carol's search returned
-  `/shared/team.txt` with nothing stored on her login; card visible under System > Connection.
+  `/shared/team.txt` with nothing stored on her login; card visible under System > Connection (now System > Shared folders, see P9).
   The interim worktree was removed after the main-checkout gates passed. Unrelated committed lint finding from `biome check .`:
   `apps/web/src/lib/search/queries.test.ts:314` unused `SEARCH_STARTUP_RETRY_MS`.
 - Not committed. Worktree: main checkout, branch `main`.

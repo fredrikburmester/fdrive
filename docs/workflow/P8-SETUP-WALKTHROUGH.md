@@ -31,8 +31,11 @@ environment changes after initial deployment.
    PDF-only processing checks its own read/write access, independently of the indexer.
    Every feature can be skipped and storage failures never block finishing or browsing.
 
-Selected features and progress remain editable under System. An administrator can restart
-this same shell-free walkthrough from Features. No legacy step migrations are needed.
+Selected features and progress remain editable under System: the six toggles and the Office
+card on Features, Trash and the server address on General, Office details on the Office page
+(see [P9-SYSTEM-SETTINGS.md](P9-SYSTEM-SETTINGS.md)). The walkthrough keeps its Trash,
+Server address and Office steps. An administrator can restart this same shell-free
+walkthrough from Features. No legacy step migrations are needed.
 
 ## Features and dependencies
 

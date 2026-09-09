@@ -116,6 +116,9 @@ admission lock (only one heavy background pass runs at a time).
 | `excluded` | Skipped by a rule: `excluded:prefix` (`indexer.text_exclude_globs`), `excluded:image_dir` (outside `indexer.ocr_image_globs`), `excluded:too_big`. |
 | `error` | Extraction raised; the reason is in the row's `error` column. |
 
+The admin **Logs** sheet on System > Indexer lists these `error` rows together with
+`idx.scans` history and API-side events (settings saves, reindex and clear requests).
+
 ## Multiple roots
 
 `INDEX_ROOTS` is a comma-separated `name=path` list, for example:
