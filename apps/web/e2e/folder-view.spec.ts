@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
+import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 
 test.describe.configure({ mode: "serial" });
@@ -203,7 +204,9 @@ test("favorites and tags follow the global default without inheriting a folder p
     .getByRole("button", { name: "Tree", exact: true })
     .click();
   await page.goto(`/tags/${tag.id}`);
-  const parent = page.locator(`[data-path="${root}"]`);
+  // Scoped to the listing: the sidebar folder tree renders `data-path` rows
+  // for the same folders once it has expanded to the current location.
+  const parent = listing(page).locator(`[data-path="${root}"]`);
   await parent.getByRole("button", { name: `Expand ${root.slice(1)}`, exact: true }).click();
-  await expect(page.locator(`[data-path="${root}/child"]`)).toHaveCount(1);
+  await expect(listing(page).locator(`[data-path="${root}/child"]`)).toHaveCount(1);
 });
