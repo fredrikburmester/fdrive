@@ -150,8 +150,8 @@ export function OfficeSettingsCard({
                   />
                 </Field>
                 <FieldDescription>
-                  When off, documents open for viewing. Only the users you list below may join
-                  editing sessions.
+                  When off, all documents open for viewing. When on, only the users you list below
+                  can edit.
                 </FieldDescription>
                 {values.editingEnabled && editingMatchesProvider ? (
                   <Field>
@@ -166,8 +166,9 @@ export function OfficeSettingsCard({
                       }}
                     />
                     <FieldDescription>
-                      One SFTPGo username per line. Add only users who should edit documents
-                      together; SFTPGo file permissions still apply to saves.
+                      One SFTPGo username per line. These users can open documents for editing;
+                      everyone else gets view-only. Being listed here grants no file access — SFTPGo
+                      permissions still apply to saves.
                     </FieldDescription>
                   </Field>
                 ) : null}
