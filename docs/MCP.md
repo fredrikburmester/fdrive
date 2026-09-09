@@ -74,3 +74,5 @@ By default, the AI assistant cannot alter any files. If you want to allow the as
 2. Run `./update.sh`.
 
 This activates the `create_folder` and `move_path` tools for all valid tokens.
+
+Both tools only write inside the token identity's verified scope, the same paths the read tools can see. A path outside that scope, or in the Trash folder, is refused before storage is touched, and the tools are unavailable while the identity's scopes cannot be verified.

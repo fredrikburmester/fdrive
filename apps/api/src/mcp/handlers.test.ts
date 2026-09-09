@@ -1397,6 +1397,38 @@ describe("runCreateFolder", () => {
     expect(mkdir).toHaveBeenCalledWith("/new", { parents: true });
     expect(result).toEqual({ created: "/new", url: "https://fdrive.example.com/files/new" });
   });
+  it("refuses a folder outside the verified scope without touching storage", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      writesEnabled: true,
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({
+          available: true,
+          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+        }),
+      },
+    });
+
+    await expect(
+      runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path: "/private/new" }),
+    ).rejects.toThrow("path is outside this identity's scope");
+    expect(mkdir).not.toHaveBeenCalled();
+  });
+
+  it("refuses a folder when verified scopes are unavailable", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      writesEnabled: true,
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" }),
+      },
+    });
+
+    await expect(
+      runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path: "/new" }),
+    ).rejects.toThrow(McpToolError);
+    expect(mkdir).not.toHaveBeenCalled();
+  });
 });
 
 describe("runMovePath", () => {
@@ -1452,7 +1484,8 @@ describe("runMovePath", () => {
     expect(result.url).toBe("https://fdrive.example.com/files/folder");
   });
 
-  it("skips recording the move when the index is unavailable", async () => {
+  it("refuses the move without touching storage when verified scopes are unavailable", async () => {
+    const move = vi.fn(async () => undefined);
     const deps = baseDeps({
       writesEnabled: true,
       scopeResolver: {
@@ -1460,28 +1493,54 @@ describe("runMovePath", () => {
       },
     });
 
-    const result = await runMovePath(
-      deps,
-      fakePrincipal(fakeStorage({ move: async () => undefined })),
-      {
-        src: "/a.txt",
-        dst: "/b.txt",
-      },
-    );
-
-    expect(result.moved).toBe("/a.txt");
+    await expect(
+      runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src: "/a.txt", dst: "/b.txt" }),
+    ).rejects.toThrow(McpToolError);
+    expect(move).not.toHaveBeenCalled();
   });
 
-  it("skips recording the move when the caller's identity no longer exists", async () => {
+  it("refuses the move without touching storage when the caller's identity no longer exists", async () => {
+    const move = vi.fn(async () => undefined);
     const deps = baseDeps({ writesEnabled: true, identities: { get: async () => null } });
 
-    const result = await runMovePath(
-      deps,
-      fakePrincipal(fakeStorage({ move: async () => undefined })),
-      { src: "/a.txt", dst: "/b.txt" },
-    );
+    await expect(
+      runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src: "/a.txt", dst: "/b.txt" }),
+    ).rejects.toThrow(McpToolError);
+    expect(move).not.toHaveBeenCalled();
+  });
 
-    expect(result.moved).toBe("/a.txt");
+  it.each([
+    ["src", { src: "/elsewhere/a.txt", dst: "/docs/b.txt" }],
+    ["dst", { src: "/docs/a.txt", dst: "/elsewhere/b.txt" }],
+  ])("refuses a move whose %s is outside the verified scope", async (label, args) => {
+    const move = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      writesEnabled: true,
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({
+          available: true,
+          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+        }),
+      },
+    });
+
+    await expect(runMovePath(deps, fakePrincipal(fakeStorage({ move })), args)).rejects.toThrow(
+      `${label} is outside this identity's scope`,
+    );
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("refuses a move into the trash", async () => {
+    const move = vi.fn(async () => undefined);
+    const deps = baseDeps({ writesEnabled: true, trashPath: "/Trash" });
+
+    await expect(
+      runMovePath(deps, fakePrincipal(fakeStorage({ move })), {
+        src: "/a.txt",
+        dst: "/Trash/a.txt",
+      }),
+    ).rejects.toThrow("dst is outside this identity's scope");
+    expect(move).not.toHaveBeenCalled();
   });
 
   it("skips recording the move when verified scopes land on no indexed root", async () => {

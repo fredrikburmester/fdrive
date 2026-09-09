@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BusEvent } from "../events/bus.js";
 import { createEventBus } from "../events/bus.js";
-import { createJobRunner, JobQueueFullError } from "./runner.js";
+import { createJobRunner, JOB_AUTHORITY_REVOKED_MESSAGE, JobQueueFullError } from "./runner.js";
 import type { JobRunContext } from "./types.js";
 
 const IDENTITY_A = "identity-a";
@@ -78,6 +78,51 @@ describe("createJobRunner", () => {
     expect(runner.get(status.id, IDENTITY_A)?.state).toBe("done");
     const final = runner.get(status.id, IDENTITY_A);
     expect(final?.result).toEqual({ path: "/out.zip" });
+  });
+
+  it("fails a job whose authority check no longer holds when it starts, without running it", async () => {
+    const bus = createEventBus();
+    const runner = createJobRunner({ clock, bus, concurrencyPerIdentity: 1 });
+    const first = deferred<{ path: string }>();
+    const run = vi.fn(async () => ({ path: "/never.zip" }));
+    let authorized = true;
+
+    runner.submit({ identityId: IDENTITY_A, kind: "compress", run: () => first.promise });
+    const queued = runner.submit({
+      identityId: IDENTITY_A,
+      kind: "compress",
+      authorize: async () => authorized,
+      run,
+    });
+    expect(queued.state).toBe("queued");
+
+    // The session that queued the second job ends before it leaves the queue.
+    authorized = false;
+    first.resolve({ path: "/a.zip" });
+    await flush();
+
+    const final = runner.get(queued.id, IDENTITY_A);
+    expect(final?.state).toBe("failed");
+    expect(final?.error).toBe(JOB_AUTHORITY_REVOKED_MESSAGE);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("runs a job whose authority check still holds when it starts", async () => {
+    const bus = createEventBus();
+    const runner = createJobRunner({ clock, bus });
+
+    const status = runner.submit({
+      identityId: IDENTITY_A,
+      kind: "compress",
+      authorize: async () => true,
+      run: async () => ({ path: "/ok.zip" }),
+    });
+    await flush();
+
+    expect(runner.get(status.id, IDENTITY_A)).toMatchObject({
+      state: "done",
+      result: { path: "/ok.zip" },
+    });
   });
 
   it("queues jobs beyond the per-identity concurrency limit and starts the next one when a slot frees", async () => {

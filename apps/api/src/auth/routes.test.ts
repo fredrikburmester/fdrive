@@ -793,6 +793,50 @@ describe("auth service: direct edge cases", () => {
   });
 });
 
+describe("auth service: principal.verifyAuthority", () => {
+  async function principalFor(h: ReturnType<typeof buildTestApp>, cookie: string) {
+    const { Context } = await import("hono");
+    const ctx = new Context(new Request("http://test/api/v1/fs/compress", { headers: { cookie } }));
+    const principal = await h.authModule.service.resolvePrincipal(ctx);
+    if (principal === null || principal.verifyAuthority === undefined) {
+      throw new Error("expected a session principal with verifyAuthority");
+    }
+    return { ...principal, verifyAuthority: principal.verifyAuthority };
+  }
+
+  it("holds while the session lives and turns false once it is logged out", async () => {
+    const h = buildTestApp({ clockCtl: createClock(Date.now()) });
+    const cookie = extractCookie(await login(h.app, { username: "alice", password: "wonderland" }));
+    const principal = await principalFor(h, cookie);
+
+    expect(await principal.verifyAuthority()).toBe(true);
+
+    const logoutRes = await h.app.request(ROUTES.auth.logout, {
+      method: "POST",
+      headers: { cookie, "x-requested-with": "fdrive" },
+    });
+    expect(logoutRes.status).toBe(200);
+
+    expect(await principal.verifyAuthority()).toBe(false);
+  });
+
+  it("turns false once the session passes its maximum age, even while it keeps sliding", async () => {
+    const clockCtl = createClock(Date.now());
+    const h = buildTestApp({
+      clockCtl,
+      envOverrides: { FDRIVE_SESSION_TTL_DAYS: "30", FDRIVE_SESSION_MAX_AGE_DAYS: "2" },
+    });
+    const cookie = extractCookie(await login(h.app, { username: "alice", password: "wonderland" }));
+    const principal = await principalFor(h, cookie);
+
+    clockCtl.advance(24 * 60 * 60 * 1000);
+    expect(await principal.verifyAuthority()).toBe(true);
+
+    clockCtl.advance(24 * 60 * 60 * 1000 + 1);
+    expect(await principal.verifyAuthority()).toBe(false);
+  });
+});
+
 describe("native safe-request identity selection", () => {
   it("selects an owned query identity for GET/HEAD without switching session", async () => {
     const h = buildTestApp({ clockCtl: createClock(Date.now()) });
