@@ -57,7 +57,7 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_PROXY_SCHEME",
     description:
-      "Browser-facing protocol: http for direct LAN access; https when an HTTPS reverse proxy fronts fdrive. Keeps forwarded URLs and automatic session cookies aligned.",
+      'Browser-facing protocol: http for direct LAN access; https when an HTTPS reverse proxy fronts fdrive. Sent upstream as X-Forwarded-Proto, so it decides the scheme of automatic session cookies and of every URL the bundled ONLYOFFICE hands the browser; must match FDRIVE_PUBLIC_URL (preflight checks) or the editor fails with mixed-content "Download failed".',
     default: "http",
     example: "https",
     secret: false,

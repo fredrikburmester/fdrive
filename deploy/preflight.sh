@@ -101,10 +101,31 @@ if [[ -n "$home_template" ]] && [[ ! "$home_template" =~ ^[A-Za-z0-9_-]+:.*\{use
 fi
 
 scheme="$(read_env_value FDRIVE_PROXY_SCHEME)"
-case "${scheme:-http}" in
+scheme="${scheme:-http}"
+case "$scheme" in
   http|https) ;;
   *) echo "error: FDRIVE_PROXY_SCHEME must be http or https" >&2; fail=1 ;;
 esac
+
+# FDRIVE_PROXY_SCHEME is what the bundled proxy sends every upstream as
+# X-Forwarded-Proto, and ONLYOFFICE builds the URLs it hands the browser from
+# it. Behind an HTTPS edge with the scheme left at http, the editor page
+# (loaded over https) is told to fetch documents over http, which browsers
+# block as mixed content: every server-side call still returns 200 and the
+# only symptom is "Download failed" in the editor. FDRIVE_PUBLIC_URL states
+# the scheme users actually reach fdrive over, so the two must agree.
+public_url="$(read_env_value FDRIVE_PUBLIC_URL)"
+if [[ -n "$public_url" ]]; then
+  case "$public_url" in
+    http://*) public_scheme=http ;;
+    https://*) public_scheme=https ;;
+    *) public_scheme="" ;;
+  esac
+  if [[ -n "$public_scheme" ]] && [[ "$public_scheme" != "$scheme" ]]; then
+    echo "error: FDRIVE_PUBLIC_URL is ${public_scheme}:// but FDRIVE_PROXY_SCHEME is ${scheme}; set FDRIVE_PROXY_SCHEME=${public_scheme} (behind an HTTPS reverse proxy the Office editor otherwise fails with \"Download failed\" because its document URLs are blocked as mixed content)" >&2
+    fail=1
+  fi
+fi
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1
