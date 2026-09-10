@@ -40,8 +40,9 @@ Office are gated, so an S3 login would show Download as zip, Share and Compress 
    returns the `externalUsername` it wants stored, an access key id or a label); a credential
    schema is not password-shaped; `atomicMove` and `setModifiedAt` are capability flags; `zip`
    and `setModifiedAt` become optional on the port.
-7. The connection singleton is folded into provider rows. `SFTPGO_URL` seeds the first row and
-   pins its endpoint (`managedByEnv`), as it pins `baseUrl` today.
+7. The connection singleton is replaced by provider rows. `SFTPGO_URL` seeds the first row and
+   pins its endpoint (`managedByEnv`), as it pins `baseUrl` today. No data migration: fdrive
+   is pre-release.
 8. One package per provider: `packages/sftpgo` (existing, gains the module) and
    `packages/provider-webdav`. Each has its own coverage gate and an in-package fake.
 
@@ -92,8 +93,8 @@ routes with a typed `unsupported` error.
 - `app.providers`: keep `id`, `type`, `base_url`, `created_at`; add `label text`, `config jsonb`
   (validated by `configSchema`; for SFTPGo holds `homeTemplate`), `enabled boolean`,
   `managed_by_env boolean`. Unique `(type, base_url)` stays.
-- `connection.sftpgo` settings key is migrated into the SFTPGo provider row at startup and
-  removed. `ConnectionStore` is deleted; its seven consumers resolve the identity's provider row.
+- The `connection.sftpgo` settings key and `ConnectionStore` are gone; the seven consumers
+  resolve the identity's provider row. No data migration (pre-release).
 - `app.credentials` unchanged: the ciphertext is the module's credential JSON.
 - `app.shares` per [P10-SHARES.md](P10-SHARES.md).
 

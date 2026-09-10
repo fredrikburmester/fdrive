@@ -14,7 +14,7 @@ export interface MemoryProviderServiceOptions {
 
 /** Test double only: a `ProviderService` over in-memory repos with no event log. */
 export function memoryProviderService(
-  repos: Pick<Repos, "providers" | "identities" | "settings">,
+  repos: Pick<Repos, "providers" | "identities">,
   options: MemoryProviderServiceOptions = {},
 ): ProviderService {
   return createProviderService({

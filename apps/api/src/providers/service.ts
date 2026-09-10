@@ -15,9 +15,6 @@ import { ApiHttpError } from "../errors.js";
 import { noopSystemEventLog, type SystemEventLog } from "../system/event-log.js";
 import { isProviderType, PROVIDER_MODULES } from "./registry.js";
 
-/** The settings key the single SFTPGo connection lived under before providers became rows. */
-export const LEGACY_CONNECTION_SETTINGS_KEY = "connection.sftpgo";
-
 /** A provider row with the module that implements it and the instance the module sees. */
 export interface ResolvedProvider {
   readonly provider: Provider;
@@ -30,7 +27,7 @@ export interface IdentityProvider extends ResolvedProvider {
 }
 
 export interface ProviderServiceDeps {
-  readonly repos: Pick<Repos, "providers" | "identities" | "settings">;
+  readonly repos: Pick<Repos, "providers" | "identities">;
   readonly fetch: typeof globalThis.fetch;
   readonly clock: () => Date;
   readonly eventLog?: SystemEventLog;
@@ -79,8 +76,7 @@ export interface ProviderService {
   types(): AdminProviderType[];
   /**
    * Runs once at startup: creates or pins the SFTPGo provider named by
-   * `SFTPGO_URL`, folds the pre-row `connection.sftpgo` setting into a
-   * provider row, and removes that setting. Idempotent.
+   * `SFTPGO_URL` and unpins any row the variable no longer names. Idempotent.
    */
   seedFromEnvironment(): Promise<void>;
 }
@@ -106,11 +102,6 @@ function assertValidConfig(module: ProviderModule, config: unknown): Record<stri
     });
   }
   return result.value;
-}
-
-interface StoredConnection {
-  readonly baseUrl?: string;
-  readonly homeTemplate?: string;
 }
 
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
@@ -350,38 +341,23 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }));
     },
     async seedFromEnvironment() {
-      const stored = await deps.repos.settings.get<StoredConnection>(
-        LEGACY_CONNECTION_SETTINGS_KEY,
-      );
       const envUrl = deps.environment.sftpgoUrl;
-      const rows = await repo.list();
-      for (const row of rows) {
+      for (const row of await repo.list()) {
         if (row.managedByEnv && (envUrl === undefined || row.baseUrl !== envUrl)) {
           await repo.update(row.id, { managedByEnv: false });
         }
       }
-      const homeTemplateFor = (row: Provider): string | undefined =>
-        typeof row.config.homeTemplate === "string"
-          ? undefined
-          : (stored?.homeTemplate ?? deps.environment.homeTemplate);
-      if (envUrl !== undefined && envUrl.length > 0) {
-        const row = await repo.ensure({ type: "sftpgo", baseUrl: envUrl });
-        const homeTemplate = homeTemplateFor(row);
-        await repo.update(row.id, {
-          managedByEnv: true,
-          enabled: true,
-          ...(homeTemplate === undefined ? {} : { config: { ...row.config, homeTemplate } }),
-        });
-      } else if (stored?.baseUrl !== undefined) {
-        const row = await repo.ensure({ type: "sftpgo", baseUrl: stored.baseUrl });
-        const homeTemplate = homeTemplateFor(row);
-        if (homeTemplate !== undefined) {
-          await repo.update(row.id, { config: { ...row.config, homeTemplate } });
-        }
+      if (envUrl === undefined || envUrl.length === 0) {
+        return;
       }
-      if (stored !== null) {
-        await deps.repos.settings.delete(LEGACY_CONNECTION_SETTINGS_KEY);
-      }
+      const row = await repo.ensure({ type: "sftpgo", baseUrl: envUrl });
+      await repo.update(row.id, {
+        managedByEnv: true,
+        enabled: true,
+        ...(typeof row.config.homeTemplate === "string"
+          ? {}
+          : { config: { ...row.config, homeTemplate: deps.environment.homeTemplate } }),
+      });
     },
   };
 }

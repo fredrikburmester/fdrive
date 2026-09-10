@@ -22,9 +22,9 @@ SFTPGo becomes the first registered module and every existing behaviour stays by
 
 - Migration `0009_providers`: `label`, `config jsonb not null default '{}'`, `enabled boolean
   not null default true`, `managed_by_env boolean not null default false` on `app.providers`.
-- Startup migration in composition: if `connection.sftpgo` exists, write `homeTemplate` into the
-  SFTPGo row's `config`, set `managed_by_env` when `SFTPGO_URL` is set, delete the settings key.
-  If `SFTPGO_URL` is set and no row exists, create it. Idempotent.
+- Startup seed in composition: if `SFTPGO_URL` is set and no row exists, create it, pinned and
+  enabled, with `FDRIVE_HOME_TEMPLATE` as its home template. Idempotent. No data migration:
+  fdrive is pre-release and the old `connection.sftpgo` setting is simply ignored.
 - `ProviderRepo`: `list`, `get`, `create`, `update`, `delete` (refused while identities reference
   it), `ensure` stays for the env seed.
 

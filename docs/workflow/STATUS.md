@@ -9,8 +9,9 @@ Updated: 2026-09-10. Owner: primary agent.
   deviations. Implemented directly in the main checkout, no worker worktrees.
 - Delivered: `ProviderModule` port and field validation in core, `stat`/`ifRange`/optional
   `zip`+`setModifiedAt` on `StorageProvider`, `withMoveToTrash`; `app.providers` gains
-  `label`/`config`/`enabled`/`managed_by_env` (migration `0009_providers`) and the
-  `connection.sftpgo` setting is folded into a row at startup (`ProviderService.seedFromEnvironment`);
+  `label`/`config`/`enabled`/`managed_by_env` (migration `0009_providers`); `SFTPGO_URL` seeds
+  and pins the SFTPGo row at startup (`ProviderService.seedFromEnvironment`), nothing else is
+  migrated (pre-release, no compatibility with the old `connection.sftpgo` setting);
   `packages/sftpgo` exports `sftpgoModule` (adapter, probe and 401 retry moved in from the API);
   `@fdrive/testkit` exports the canonical `createMemoryStorage` and `describeStorageProvider`
   (runs against memory, the SFTPGo fake, and the real SFTPGo container in

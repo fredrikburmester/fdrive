@@ -2,7 +2,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { createSftpgoModule, sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
 import type { SystemEventLog } from "../system/event-log.js";
-import { createProviderService, hostLabel, LEGACY_CONNECTION_SETTINGS_KEY } from "./service.js";
+import { createProviderService, hostLabel } from "./service.js";
 
 function probeFetch(): typeof globalThis.fetch {
   return vi.fn(async (url: unknown) =>
@@ -319,41 +319,20 @@ describe("createProviderService: seedFromEnvironment", () => {
     expect((await h.service.list())[0]?.config).toEqual({ homeTemplate: "kept:/{username}" });
   });
 
-  it("folds the legacy connection setting into a row and removes the setting", async () => {
-    const h = harness();
-    await h.repos.settings.set(LEGACY_CONNECTION_SETTINGS_KEY, {
-      baseUrl: "http://legacy:8080",
-      homeTemplate: "legacy:/{username}",
-    });
-    await h.service.seedFromEnvironment();
-    expect(await h.service.list()).toEqual([
-      expect.objectContaining({
-        baseUrl: "http://legacy:8080",
-        managedByEnv: false,
-        config: { homeTemplate: "legacy:/{username}" },
-      }),
-    ]);
-    expect(await h.repos.settings.get(LEGACY_CONNECTION_SETTINGS_KEY)).toBeNull();
-  });
-
-  it("prefers SFTPGO_URL over the legacy setting, keeping the stored home template, and unpins a stale env row", async () => {
+  it("unpins a row SFTPGO_URL no longer names and pins the one it does", async () => {
     const h = harness({ sftpgoUrl: "http://env:8080" });
     const stale = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old:8080" });
     await h.repos.providers.update(stale.id, { managedByEnv: true });
-    await h.repos.settings.set(LEGACY_CONNECTION_SETTINGS_KEY, {
-      homeTemplate: "stored:/{username}",
-    });
     await h.service.seedFromEnvironment();
     expect(await h.repos.providers.get(stale.id)).toMatchObject({ managedByEnv: false });
     const env = (await h.service.list()).find((row) => row.baseUrl === "http://env:8080");
     expect(env).toMatchObject({
       managedByEnv: true,
-      config: { homeTemplate: "stored:/{username}" },
+      config: { homeTemplate: "sftpgo:/{username}" },
     });
-    expect(await h.repos.settings.get(LEGACY_CONNECTION_SETTINGS_KEY)).toBeNull();
   });
 
-  it("does nothing without an environment URL or a legacy setting", async () => {
+  it("does nothing without an environment URL", async () => {
     const h = harness();
     await h.service.seedFromEnvironment();
     expect(await h.service.list()).toEqual([]);
