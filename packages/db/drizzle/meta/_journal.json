@@ -5,64 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1788684829775,
-      "tag": "0000_panoramic_reptil",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1788709946537,
-      "tag": "0001_admin",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1788714879731,
-      "tag": "0002_ocr",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1788721491080,
-      "tag": "0003_metadata",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1788730606860,
-      "tag": "0004_flashy_warlock",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1788775410372,
-      "tag": "0005_add_share_presentation",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1788789012033,
-      "tag": "0006_image_embeddings",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1788864801079,
-      "tag": "0007_tired_living_mummy",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1788987170907,
-      "tag": "0008_system_events",
+      "when": 1789074251698,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]
