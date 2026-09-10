@@ -5,6 +5,7 @@ import {
   Database,
   FileText,
   FolderSymlink,
+  HardDrive,
   Image,
   Images,
   Link2,
@@ -99,6 +100,7 @@ const ACCOUNT_ROUTE = "/account" as Route;
 const SYSTEM_NAV_ITEMS = [
   { href: "/system/features" as Route, label: "Features", Icon: ToggleRight },
   { href: "/system/general" as Route, label: "General", Icon: Settings2 },
+  { href: "/system/storage" as Route, label: "Storage", Icon: HardDrive },
   { href: "/system/shared-folders" as Route, label: "Shared folders", Icon: FolderSymlink },
   { href: FEATURE_PAGES.thumbnails.href, label: "Thumbnails", Icon: Image },
   { href: FEATURE_PAGES.textSearch.href, label: "Indexer", Icon: Database },
