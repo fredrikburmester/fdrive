@@ -174,6 +174,7 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
       return { available: false, reason: "no_roots" };
     }
     const homeTemplateRaw = sftpgoHomeTemplate(provider);
+    if (homeTemplateRaw === null) return { available: false, reason: "no_roots" };
 
     const overrideRecord = await deps.overrides.get(identity.id);
 
@@ -458,7 +459,8 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
     for (const provider of await deps.providers.list()) {
       if (provider.type !== "sftpgo" || !provider.enabled) continue;
       try {
-        knownRoots.add(parseHomeTemplate(sftpgoHomeTemplate(provider)).rootName);
+        const template = sftpgoHomeTemplate(provider);
+        if (template !== null) knownRoots.add(parseHomeTemplate(template).rootName);
       } catch {
         // An unparsable template is reported by `configuredMappings`; it
         // contributes no extra known root here.

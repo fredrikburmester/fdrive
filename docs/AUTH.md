@@ -12,6 +12,10 @@ that row's endpoint (`docs/workflow/P10-STORAGE-PROVIDERS.md`). This
 document describes that design as implemented in `apps/api/src/auth/` and
 `apps/api/src/providers/`.
 
+`FDRIVE_ADMIN_USERS` grants apply only to usernames on the SFTPGo endpoint named
+by `SFTPGO_URL`. The same username on another provider gains no administrator
+access. Persisted `accounts.is_admin` grants remain account-wide.
+
 ## What is stored, and how it is encrypted
 
 On a successful login (`POST /api/v1/auth/login`, `apps/api/src/auth/service.ts`):

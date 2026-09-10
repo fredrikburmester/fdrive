@@ -101,6 +101,7 @@ export function createAccountsService(deps: AccountsDeps) {
         deps.links.linkVerified({
           accountId: session.accountId,
           providerId: verified.provider.id,
+          verifiedProvider: { type: verified.provider.type, baseUrl: verified.provider.baseUrl },
           username: verified.externalUsername,
           requestingSessionIdHash: session.idHash,
           at: deps.clock(),

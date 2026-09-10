@@ -268,12 +268,21 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }
       const config =
         patch.config === undefined ? undefined : assertValidConfig(module, patch.config);
-      const updated = await repo.update(id, {
-        ...(patch.label !== undefined ? { label: patch.label } : {}),
-        ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-        ...(config !== undefined ? { config } : {}),
-        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-      });
+      const updated = await repo
+        .update(id, {
+          ...(patch.label !== undefined ? { label: patch.label } : {}),
+          ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+          ...(config !== undefined ? { config } : {}),
+          ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        })
+        .catch((error: unknown) => {
+          if (error instanceof ConflictError)
+            throw new ApiHttpError(
+              "conflict",
+              "logins already use this provider; add a new provider for another address",
+            );
+          throw error;
+        });
       if (updated === null) {
         throw new ApiHttpError("not_found", "storage provider not found");
       }

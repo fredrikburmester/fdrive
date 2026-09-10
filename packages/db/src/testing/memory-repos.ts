@@ -78,6 +78,13 @@ function createMemoryProviderRepo(
       if (!existing) {
         return null;
       }
+      if (
+        patch.baseUrl !== undefined &&
+        patch.baseUrl !== existing.baseUrl &&
+        identityCount(id) > 0
+      ) {
+        throw new ConflictError("provider is still used by identities");
+      }
       const next: Provider = {
         ...existing,
         ...(patch.label !== undefined ? { label: patch.label } : {}),

@@ -22,6 +22,8 @@ export type SetupOwnerState = PendingSetupOwner | CompletedSetupOwner;
 
 export interface SetupClaimStore {
   current(): Promise<SetupOwnerState | null>;
+  wasInitialized(): Promise<boolean>;
+  markInitialized(): Promise<void>;
   /** Creates the durable single-owner claim, or resumes the same claimant. */
   claim(input: { accountId: string; baseUrl: string }): Promise<"claimed" | "resumed" | "taken">;
   /** Marks only the currently-pending owner as complete. */
@@ -49,6 +51,12 @@ function parseState(value: unknown): SetupOwnerState | null {
  */
 export function createSetupClaimStore(settings: SettingsRepo): SetupClaimStore {
   return {
+    async wasInitialized() {
+      return (await settings.get<boolean>("setup.initialized.v1")) === true;
+    },
+    async markInitialized() {
+      await settings.set("setup.initialized.v1", true);
+    },
     async current() {
       return parseState(await settings.get<unknown>(SETUP_OWNER_SETTINGS_KEY));
     },

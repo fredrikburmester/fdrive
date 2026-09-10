@@ -20,7 +20,7 @@ import type { SftpgoClient } from "./types.js";
 /** SFTPGo's source, linked from the About page as its AGPL-3.0 NOTICE terms ask. */
 export const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
 
-/** The home template applied when an SFTPGo provider has none configured. */
+/** Default used by deployment setup; never inferred for an unmapped provider row. */
 export const DEFAULT_SFTPGO_HOME_TEMPLATE = "sftpgo:/{username}";
 
 export const SFTPGO_CONFIG_FIELDS: readonly ProviderField[] = [
@@ -48,10 +48,10 @@ export const SFTPGO_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   },
 ];
 
-/** The home template of an SFTPGo provider row, falling back to the default. */
-export function sftpgoHomeTemplate(instance: Pick<ProviderInstance, "config">): string {
+/** Explicit index mapping only; remote rows never inherit another server's root. */
+export function sftpgoHomeTemplate(instance: Pick<ProviderInstance, "config">): string | null {
   const value = instance.config.homeTemplate;
-  return typeof value === "string" && value.length > 0 ? value : DEFAULT_SFTPGO_HOME_TEMPLATE;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export interface CreateSftpgoModuleOptions {
@@ -138,7 +138,8 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
 
     indexRootName(instance) {
       try {
-        return parseHomeTemplate(sftpgoHomeTemplate(instance)).rootName;
+        const template = sftpgoHomeTemplate(instance);
+        return template === null ? null : parseHomeTemplate(template).rootName;
       } catch {
         return null;
       }

@@ -41,9 +41,7 @@ export async function seedSftpgoProvider(
   const updated = await repos.providers.update(row.id, {
     enabled: options.enabled ?? true,
     managedByEnv: options.managedByEnv ?? false,
-    ...(options.homeTemplate === undefined
-      ? {}
-      : { config: { ...row.config, homeTemplate: options.homeTemplate } }),
+    config: { ...row.config, homeTemplate: options.homeTemplate ?? "sftpgo:/{username}" },
   });
   if (updated === null) throw new Error("provider vanished");
   return updated;
