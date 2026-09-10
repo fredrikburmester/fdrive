@@ -2,6 +2,18 @@
 
 Updated: 2026-09-10. Owner: primary agent.
 
+## P10 prerequisite merged and PR rebased (2026-09-10)
+
+- PR #3 merged into main (`46228b5`); PR #1 rebased onto that main revision.
+  The obsolete migration-squash commit was dropped; the final rebased Git tree exactly
+  matches the previously verified PR tree. Application/integration/browser checks remain
+  applicable; no application code or migration content changed.
+- PR #3's CI application job had an unrelated failure in the unchanged session maximum-age
+  test (`expected true to be false`); local schema and DB checks passed. Normal merge used,
+  without overriding branch protections. PR #1 now targets main.
+- Local uncommitted edits preserved byte-for-byte; pre-rebase history retained on
+  `codex/p10-before-rebase`. Publication uses a lease against the previous remote PR head.
+
 ## P10 PR reduction follow-up (2026-09-10)
 
 - Prerequisite [PR #3](https://github.com/fredrikburmester/fdrive-web/pull/3),
