@@ -504,8 +504,12 @@ def test_embed_thumbnail_missing_file_is_noop(postgres_dsn: str, monkeypatch: py
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
     ctx = _make_context(cfg, "sftpgo", str(tmp_path))
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
-    indexer.embed_thumbnail(ctx, "sha-missing-thumb")
+    logged: list[str] = []
+    monkeypatch.setattr(indexer, "log", logged.append)
+    assert indexer.embed_thumbnail(ctx, "sha-missing-thumb") is False
     assert db.image_embeddings_count(ctx.conn()) == 0
+    # Thumbnailing already reported the failure; a missing thumb is not a second error.
+    assert logged == []
 
 
 def _write_thumbnail(cfg: Config, sha256: str) -> None:

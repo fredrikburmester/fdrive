@@ -10,6 +10,7 @@ import threading
 import time
 from typing import cast
 
+import psycopg
 import uvicorn
 
 from . import db
@@ -126,6 +127,30 @@ def run_root(ctx: RootContext, watchers: dict[str, object | None], wake_events: 
             next_scan = 0.0
 
 
+class SharedConnection:
+    """One process-wide connection for the HTTP handlers that reopens itself
+    after postgres goes away.
+
+    The bootstrap connection used to be captured for the lifetime of the
+    process, so recreating the `db` container left `/health` failing forever
+    on a dead socket and `restart: unless-stopped` never acts on unhealthy.
+    Reconnects try once so a still-down database fails the health check fast
+    instead of blocking the handler for the full startup retry budget.
+    """
+
+    def __init__(self, dsn: str, conn: psycopg.Connection) -> None:
+        self._dsn = dsn
+        self._conn = conn
+        self._lock = threading.Lock()
+
+    def get(self) -> psycopg.Connection:
+        with self._lock:
+            if self._conn.closed or self._conn.broken:
+                log("database connection lost; reconnecting")
+                self._conn = db.connect(self._dsn, retries=1, sleep=lambda _seconds: None)
+            return self._conn
+
+
 def main() -> None:
     cfg = Config()
     bootstrap_conn = db.connect(cfg.database_url)
@@ -146,16 +171,17 @@ def main() -> None:
         thread = threading.Thread(target=run_root, args=(ctx, watchers, wake_events), daemon=True, name=f"root-{ctx.name}")
         thread.start()
 
+    shared = SharedConnection(cfg.database_url, bootstrap_conn)
     state = ServerState(
         contexts=contexts,
         watchers=watchers,
         wake_events=wake_events,
-        conn_factory=lambda: bootstrap_conn,
-        schema_version=lambda: db.read_schema_version(bootstrap_conn),
+        conn_factory=shared.get,
+        schema_version=lambda: db.read_schema_version(shared.get()),
         feature_configuration=lambda: (
             next(iter(contexts.values())).feature_configuration()
             if contexts
-            else resolve_features(db.read_settings(bootstrap_conn))
+            else resolve_features(db.read_settings(shared.get()))
         ),
     )
     app = create_app(state)

@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from fdrive_runtime.controller import NoRedirect, serve_status
+from fdrive_runtime.controller import DEFAULT_RETRY_AFTER_SECONDS, NoRedirect, parse_retry_after, serve_status
 
 DEFAULT_OFFICE_URL = "http://api:3001/api/v1/internal/office"
 
@@ -86,6 +86,8 @@ class OfficeLifecycle:
         urlopen: Callable[..., object] = urllib.request.urlopen,
         waitpid: Callable[[int, int], tuple[int, int]] = os.waitpid,
         max_attempts: int = 3,
+        retry_after_seconds: float = DEFAULT_RETRY_AFTER_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not command:
             raise ValueError("Office start command is required")
@@ -102,9 +104,12 @@ class OfficeLifecycle:
         self._urlopen = urlopen
         self._waitpid = waitpid
         self._max_attempts = max_attempts
+        self._retry_after_seconds = retry_after_seconds
+        self._clock = clock
         self._process: Process | None = None
         self._revision: int | None = None
         self._attempts = 0
+        self._exhausted_at: float | None = None
         self._status = "preparing"
         self._error: str | None = None
         self._services_stopped = False
@@ -115,8 +120,7 @@ class OfficeLifecycle:
             return
         if snapshot.revision != self._revision:
             self._revision = snapshot.revision
-            self._attempts = 0
-            self._error = None
+            self._reset_attempts()
         if not snapshot.enabled:
             self.stop(None)
             return
@@ -133,9 +137,11 @@ class OfficeLifecycle:
                 self._error = cleanup_error
                 return
         if self._attempts >= self._max_attempts:
-            self._status = "failed"
-            self._error = "Office exceeded bounded startup retries"
-            return
+            if not self._retry_window_elapsed():
+                self._status = "failed"
+                self._error = "Office exceeded bounded startup retries"
+                return
+            self._reset_attempts()
         self._attempts += 1
         try:
             self._process = self._popen(self.command, start_new_session=True)
@@ -144,6 +150,19 @@ class OfficeLifecycle:
         except OSError as error:
             self._status = "failed"
             self._error = f"Office start failed: {type(error).__name__}"
+
+    def _reset_attempts(self) -> None:
+        self._attempts = 0
+        self._exhausted_at = None
+        self._error = None
+
+    def _retry_window_elapsed(self) -> bool:
+        """Bounded retries latch Office off only for `retry_after_seconds`;
+        a revision bump still clears them immediately."""
+        if self._exhausted_at is None:
+            self._exhausted_at = self._clock()
+            return False
+        return self._clock() - self._exhausted_at >= self._retry_after_seconds
 
     def stop(self, error: str | None) -> None:
         process = self._process
@@ -234,6 +253,7 @@ def main() -> None:
         command,
         (os.environ.get("FDRIVE_OFFICE_STOP_COMMAND", "/fdrive/onlyoffice-stop.sh"),),
         os.environ.get("FDRIVE_OFFICE_READY_URL", "http://127.0.0.1/hosting/discovery"),
+        retry_after_seconds=parse_retry_after(os.environ.get("FDRIVE_RUNTIME_RETRY_AFTER_SECONDS", "")),
     )
     client = OfficeClient(
         os.environ.get("FDRIVE_OFFICE_SETTINGS_URL", DEFAULT_OFFICE_URL),
