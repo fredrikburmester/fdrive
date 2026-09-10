@@ -26,12 +26,16 @@ export type HealthSubsystemName = z.infer<typeof HealthSubsystemName>;
  * /api/v1/health`'s public `subsystems` field. `not_configured` means the
  * variables in `missing` (by name) must be set to enable it; `unreachable`
  * means it is configured but the API could not reach it just now;
- * `configured` means it is set up and, where a liveness probe exists,
- * reachable.
+ * `failed` means its bundled controller is reachable but reports that the
+ * worker it manages could not start, with the controller's own fixed
+ * reason in `detail`; `configured` means it is set up and, where a liveness
+ * probe exists, reachable. `detail` is only ever a controller's literal
+ * status text, never an upstream error message or a secret.
  */
 export const HealthSubsystemStatus = z.object({
-  status: z.enum(["configured", "not_configured", "unreachable"]),
+  status: z.enum(["configured", "not_configured", "unreachable", "failed"]),
   missing: z.array(z.string()),
+  detail: z.string().optional(),
 });
 
 export type HealthSubsystemStatus = z.infer<typeof HealthSubsystemStatus>;

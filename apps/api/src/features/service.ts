@@ -14,6 +14,7 @@ import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import type { SystemEventLog } from "../system/event-log.js";
 import { noopSystemEventLog } from "../system/event-log.js";
+import { runtimeError } from "../system/runtime-status.js";
 
 /**
  * Which subsystem's log a feature toggle belongs in. Several features are
@@ -62,6 +63,8 @@ export interface FeatureService {
 interface Probe {
   ok: boolean;
   status?: string;
+  /** A controller's own fixed reason when `status` is `failed`; see `runtime-status.ts`. */
+  error?: string;
   revision?: number;
   detail?: string;
   values?: Record<string, unknown>;
@@ -92,8 +95,10 @@ async function probe(
       return { ok: false, detail: "Worker is unavailable. Retry after checking its status." };
     const body = record(await response.json());
     const features = record(body.features);
+    const error = runtimeError(body);
     return {
       ok: body.ok !== false,
+      ...(error === null ? {} : { error }),
       ...(typeof features.status === "string"
         ? { status: features.status }
         : typeof body.status === "string"
@@ -282,15 +287,21 @@ export function createFeatureService(deps: {
         const failed = workers.find((worker) => worker !== null && !worker.ok);
         if (failed)
           return { id, state: "failed", detail: failed.detail ?? "Worker is unavailable." };
-        if (
-          workers.some(
-            (worker) => worker !== null && ["failed", "error"].includes(worker.status ?? ""),
-          )
-        ) {
+        const preparationFailed = workers.find(
+          (worker) => worker !== null && ["failed", "error"].includes(worker.status ?? ""),
+        );
+        if (preparationFailed) {
+          // The controller's reason ("worker exceeded bounded startup
+          // retries") is the line an operator needs first; it is a fixed
+          // literal, never an upstream message.
+          const reason = preparationFailed.error;
           return {
             id,
             state: "failed",
-            detail: "Worker preparation failed. Check its System page and retry.",
+            detail:
+              reason === undefined
+                ? "Worker preparation failed. Check its System page and retry."
+                : `Worker preparation failed: ${reason}. Check its System page and retry.`,
           };
         }
         if (

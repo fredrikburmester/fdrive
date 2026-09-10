@@ -134,6 +134,28 @@ describe("createApp health route", () => {
     expect(body.subsystems.index.status).toBe("not_configured");
   });
 
+  it("reports a subsystem whose controller gave up as failed, carrying the controller's reason", async () => {
+    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_IMAGE_EMBED_URL: "http://image-embed" });
+    const app = createApp({
+      config,
+      logger: createTestLogger(),
+      version: "1.2.3",
+      startedAt: START,
+      clock: () => LATER,
+      subsystemReachability: async () => ({
+        imageSearch: { failed: "worker exceeded bounded startup retries" },
+      }),
+    });
+
+    const res = await app.request("/api/v1/health");
+    const body = HealthResponse.parse(await res.json());
+    expect(body.subsystems.imageSearch).toEqual({
+      status: "failed",
+      missing: [],
+      detail: "worker exceeded bounded startup retries",
+    });
+  });
+
   it("logs a structured request completion line", async () => {
     const { app, logger } = buildApp();
 

@@ -11,7 +11,12 @@ import {
   type PrincipalVariables,
 } from "./auth/principal.js";
 import type { AppConfig } from "./config.js";
-import { applyReachability, type Subsystem, subsystemsStatus } from "./config-keys.js";
+import {
+  applyReachability,
+  type Subsystem,
+  type SubsystemProbe,
+  subsystemsStatus,
+} from "./config-keys.js";
 import { ApiHttpError, toApiError } from "./errors.js";
 
 export type AppVariables = {
@@ -71,7 +76,7 @@ export interface AppDeps {
    */
   readonly subsystemReachability?: (
     config: AppConfig,
-  ) => Promise<Partial<Record<Subsystem, boolean>>>;
+  ) => Promise<Partial<Record<Subsystem, SubsystemProbe>>>;
 }
 
 const REQUEST_ID_HEADER = "X-Request-Id";
