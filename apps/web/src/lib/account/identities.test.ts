@@ -1,48 +1,15 @@
 import type { MeResponse } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { accountItemHref, accountItemKey, identityLabel, navigateAccountItem } from "./identities";
 
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [
-    {
-      id: "one",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "Main",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
-    {
-      id: "two",
-      username: "bob",
-      providerType: "sftpgo",
-      providerLabel: "Other",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
+    makeIdentity(),
+    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
   ],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 
 describe("account identity results", () => {
   it("labels unavailable identities and separates duplicate paths", () => {

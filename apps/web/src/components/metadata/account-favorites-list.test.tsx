@@ -1,50 +1,18 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AccountFavoritesList } from "./account-favorites-list";
 
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [
-    {
-      id: "one",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "Main",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
-    {
-      id: "two",
-      username: "bob",
-      providerType: "sftpgo",
-      providerLabel: "Other",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
+    makeIdentity(),
+    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
   ],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 afterEach(cleanup);
 it("renders both duplicate paths with ownership, partial errors, and explicit navigation targets", () => {
   const onNavigate = vi.fn();

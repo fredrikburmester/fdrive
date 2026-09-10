@@ -1,54 +1,22 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { IdentitiesCard } from "./identities-card";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [
-    {
-      id: "one",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "Main",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
-    {
-      id: "two",
-      username: "bob",
-      providerType: "sftpgo",
-      providerLabel: "Other",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
+    makeIdentity(),
+    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
   ],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 afterEach(() => {
   cleanup();
   accountTransition.finish(false);

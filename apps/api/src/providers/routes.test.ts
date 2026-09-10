@@ -6,8 +6,8 @@ import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
 import { registerProviderRoutes } from "./routes.js";
-import { createProviderService, type ProviderService } from "./service.js";
-import { probeFetch, seedSftpgoProvider } from "./test-fixtures/index.ts";
+import type { ProviderService } from "./service.js";
+import { memoryProviderService, probeFetch, seedSftpgoProvider } from "./test-fixtures/index.ts";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
@@ -21,11 +21,9 @@ function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: Provi
   const repos = createMemoryRepos();
   const service =
     opts.service ??
-    createProviderService({
-      repos,
+    memoryProviderService(repos, {
       fetch: probeFetch(opts.reachable ?? true),
       clock: () => new Date("2026-09-10T00:00:00Z"),
-      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootNames: [] },
     });
   const principal: Principal = {
     accountId: "account-1",
@@ -149,61 +147,41 @@ describe("/admin/providers", () => {
     expect(await h.repos.providers.get(row.id)).toBeNull();
   });
 
-  it("rejects malformed bodies, bad ids, invalid home templates and unknown rows", async () => {
-    const h = buildApp({ isAdmin: true });
-    expect(
-      (await h.call("/api/v1/admin/providers", { method: "POST", body: { type: "sftpgo" } }))
-        .status,
-    ).toBe(400);
-    expect(
-      (
-        await h.call("/api/v1/admin/providers", {
-          method: "POST",
-          body: {
-            type: "sftpgo",
-            label: "x",
-            baseUrl: "http://a",
-            config: { homeTemplate: "no-colon" },
-          },
-        })
-      ).status,
-    ).toBe(400);
-    expect(
-      (await h.call("/api/v1/admin/providers/test", { method: "POST", body: { type: "sftpgo" } }))
-        .status,
-    ).toBe(400);
-    expect((await h.call("/api/v1/admin/providers/nope/test", { method: "POST" })).status).toBe(
+  it.each([
+    ["incomplete create", "POST", "", { type: "sftpgo" }, 400],
+    [
+      "invalid create template",
+      "POST",
+      "",
+      {
+        type: "sftpgo",
+        label: "x",
+        baseUrl: "http://a",
+        config: { homeTemplate: "no-colon" },
+      },
       400,
-    );
-    expect(
-      (await h.call("/api/v1/admin/providers/nope", { method: "PATCH", body: { label: "x" } }))
-        .status,
-    ).toBe(400);
-    expect(
-      (
-        await h.call("/api/v1/admin/providers/00000000-0000-4000-8000-000000000000", {
-          method: "PATCH",
-          body: { label: "x" },
-        })
-      ).status,
-    ).toBe(404);
-    expect(
-      (
-        await h.call("/api/v1/admin/providers/00000000-0000-4000-8000-000000000000", {
-          method: "PATCH",
-          body: { nope: "x" },
-        })
-      ).status,
-    ).toBe(400);
+    ],
+    ["incomplete probe", "POST", "/test", { type: "sftpgo" }, 400],
+    ["invalid probe id", "POST", "/nope/test", undefined, 400],
+    ["invalid update id", "PATCH", "/nope", { label: "x" }, 400],
+    ["unknown provider", "PATCH", "/00000000-0000-4000-8000-000000000000", { label: "x" }, 404],
+    ["unknown patch field", "PATCH", "/00000000-0000-4000-8000-000000000000", { nope: "x" }, 400],
+    [
+      "invalid update template",
+      "PATCH",
+      "/:id",
+      { config: { homeTemplate: "still-no-colon" } },
+      400,
+    ],
+  ] as const)("rejects %s", async (_name, method, path, body, status) => {
+    const h = buildApp({ isAdmin: true });
     const row = await seedSftpgoProvider(h.repos, "http://a:8080");
-    expect(
-      (
-        await h.call(`/api/v1/admin/providers/${row.id}`, {
-          method: "PATCH",
-          body: { config: { homeTemplate: "still-no-colon" } },
-        })
-      ).status,
-    ).toBe(400);
+    const response = await h.call(`/api/v1/admin/providers${path.replace(":id", row.id)}`, {
+      method,
+      body,
+    });
+    expect(response.status).toBe(status);
+    expect(await h.repos.providers.list()).toEqual([row]);
   });
 
   it("treats an unparsable JSON body as a bad request on every writing route", async () => {

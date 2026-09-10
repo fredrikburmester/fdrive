@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+
 import type { AdminProvidersResponse, IndexerStats, MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 
 const setupStatusMock = vi.fn();
 const systemFeaturesMock = vi.fn();
@@ -64,30 +66,14 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const ME_RESPONSE: MeResponse = {
+const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
   identities: [
-    {
-      id: "00000000-0000-0000-0000-000000000001",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "SFTPGo",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
+    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "SFTPGo" }),
   ],
   activeIdentityId: "00000000-0000-0000-0000-000000000001",
   isAdmin: true,
-};
+});
 
 describe("feature queries", () => {
   it("fetches choices and updates caches after saving a revision", async () => {

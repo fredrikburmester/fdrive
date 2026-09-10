@@ -1,9 +1,11 @@
 import type { ProviderModule } from "@fdrive/core";
 import type { Provider, Repos } from "@fdrive/db";
 import { vi } from "vitest";
+import type { SystemEventLog } from "../../system/event-log.js";
 import { createProviderService, type ProviderService } from "../service.js";
 
 export interface MemoryProviderServiceOptions {
+  readonly eventLog?: SystemEventLog;
   readonly fetch?: typeof globalThis.fetch;
   readonly clock?: () => Date;
   readonly sftpgoUrl?: string | undefined;
@@ -13,7 +15,7 @@ export interface MemoryProviderServiceOptions {
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
-/** Test double only: a `ProviderService` over in-memory repos with no event log. */
+/** Test double only: a `ProviderService` over in-memory repos with optional event recording. */
 export function memoryProviderService(
   repos: Pick<Repos, "providers" | "identities">,
   options: MemoryProviderServiceOptions = {},
@@ -28,6 +30,7 @@ export function memoryProviderService(
       indexRootNames: options.indexRootNames ?? [],
     },
     ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
+    ...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
     ...(options.modules === undefined ? {} : { modules: options.modules }),
   });
 }

@@ -1,6 +1,6 @@
 {
-  "id": "60764557-e2bf-4d71-9ece-a0e333e46c4e",
-  "prevId": "62ebee0d-ba14-427e-a537-9d4fdaa2132a",
+  "id": "05e38a23-f674-4db5-ac59-2d8141beadd6",
+  "prevId": "44fe26f6-d073-44c4-85a5-8314055a8a71",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -596,7 +596,7 @@
           "schemaTo": "app",
           "columnsFrom": ["provider_id"],
           "columnsTo": ["id"],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

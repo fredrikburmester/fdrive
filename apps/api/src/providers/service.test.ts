@@ -3,17 +3,13 @@ import { createSftpgoModule, sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
 import type { SystemEventLog } from "../system/event-log.js";
 import { createProviderService, hostLabel } from "./service.js";
-import { probeFetch } from "./test-fixtures/index.ts";
+import {
+  type MemoryProviderServiceOptions,
+  memoryProviderService,
+  probeFetch,
+} from "./test-fixtures/index.ts";
 
-function harness(
-  options: {
-    sftpgoUrl?: string;
-    homeTemplate?: string;
-    indexRootNames?: readonly string[];
-    trashEnabled?: (providerId: string) => Promise<boolean>;
-    fetch?: typeof globalThis.fetch;
-  } = {},
-) {
+function harness(options: MemoryProviderServiceOptions = {}) {
   const repos = createMemoryRepos();
   const events: string[] = [];
   const eventLog: SystemEventLog = {
@@ -21,17 +17,11 @@ function harness(
       events.push(`${subsystem}:${level}:${message}`);
     },
   };
-  const service = createProviderService({
-    repos,
+  const service = memoryProviderService(repos, {
+    ...options,
     fetch: options.fetch ?? probeFetch(),
     clock: () => new Date("2026-09-10T00:00:00Z"),
     eventLog,
-    environment: {
-      sftpgoUrl: options.sftpgoUrl,
-      homeTemplate: options.homeTemplate ?? "sftpgo:/{username}",
-      indexRootNames: options.indexRootNames ?? [],
-    },
-    ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
   });
   return { repos, service, events };
 }
