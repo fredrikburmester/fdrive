@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { PageHeader } from "@/components/shell/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverApiClient } from "@/lib/api/server";
+import { providerTypeLabel } from "@/lib/identity/provider-type";
 
 export const metadata: Metadata = {
   title: "About - fdrive",
@@ -39,8 +40,7 @@ export default async function AboutPage() {
               .filter((provider) => provider.label !== null)
               .map((provider) => (
                 <p key={`${provider.type}-${provider.label}`}>
-                  Connected to {provider.type === "sftpgo" ? "SFTPGo" : provider.type} at{" "}
-                  {provider.label}.
+                  Connected to {providerTypeLabel(provider.type)} at {provider.label}.
                 </p>
               ))}
             <p>fdrive is licensed under the AGPL-3.0 license.</p>

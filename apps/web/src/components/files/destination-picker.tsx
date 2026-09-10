@@ -50,6 +50,8 @@ export interface DestinationPickerProps {
   onOpenChange: (open: boolean) => void;
   onConfirm: (destination: string) => void;
   pending?: boolean;
+  /** A caution shown under the description, e.g. that this provider moves a folder by copying it. */
+  warning?: string | null;
 }
 
 /**
@@ -64,6 +66,7 @@ export function DestinationPicker({
   onOpenChange,
   onConfirm,
   pending = false,
+  warning = null,
 }: DestinationPickerProps) {
   const [path, setPath] = useState(initialPath);
   const { data, isLoading } = useListing(path);
@@ -84,6 +87,7 @@ export function DestinationPicker({
         <DialogHeader>
           <DialogTitle>{labels.title}</DialogTitle>
           <DialogDescription>Choose a destination folder.</DialogDescription>
+          {warning !== null && <p className="text-sm text-muted-foreground">{warning}</p>}
         </DialogHeader>
 
         <Breadcrumb>

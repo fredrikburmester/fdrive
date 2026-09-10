@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ProviderIcon } from "@/components/identity/provider-icon";
 import { useShellMe } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,7 @@ import { IdentityScope } from "./identity-scope";
 import { LinkLoginDialog } from "./link-login-dialog";
 import { UnlinkLoginDialog } from "./unlink-login-dialog";
 
-/** Account page card: every SFTPGo login linked to the signed-in account, each with its index status. */
+/** Account page card: every login linked to the signed-in account, each with its index status where its provider is indexed. */
 export function IdentitiesCard() {
   const { data: me, isLoading } = useShellMe();
   const [linkOpen, setLinkOpen] = useState(false);
@@ -23,7 +24,7 @@ export function IdentitiesCard() {
     <Card className="w-full max-w-2xl">
       <CardHeader>
         <CardTitle>Logins</CardTitle>
-        <CardDescription>Every SFTPGo login you can use from this account.</CardDescription>
+        <CardDescription>Every login you can use from this account.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {isLoading || !me ? (
@@ -37,7 +38,10 @@ export function IdentitiesCard() {
               <div className="flex items-center justify-between">
                 <div className="flex flex-col">
                   <span className="font-medium">{identity.username}</span>
-                  <span className="text-xs text-muted-foreground">{identity.providerLabel}</span>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <ProviderIcon type={identity.providerType} />
+                    {identity.providerLabel}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2">
                   {identity.id === me.activeIdentityId ? (
@@ -54,7 +58,9 @@ export function IdentitiesCard() {
                   </Button>
                 </div>
               </div>
-              <IdentityScope identityId={identity.id} username={identity.username} />
+              {identity.capabilities.scopeMapping && (
+                <IdentityScope identityId={identity.id} username={identity.username} />
+              )}
             </div>
           ))
         )}

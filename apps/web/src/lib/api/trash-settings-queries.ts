@@ -21,6 +21,8 @@ export function useUpdateTrashSettings() {
       client.setQueryData(queryKeys.system.trash(), data);
       await Promise.all([
         client.invalidateQueries({ queryKey: ["trash"] }),
+        // Each login's `capabilities.trash` (sidebar Trash, "Move to Trash") follows this setting.
+        client.invalidateQueries({ queryKey: queryKeys.auth.me() }),
         client.invalidateQueries({ queryKey: ["fs"] }),
         client.invalidateQueries({ queryKey: ["search"] }),
       ]);

@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   apiClient,
+  capabilitiesFor,
   DeleteDialog,
   describeFsError,
   PageHeader,
@@ -22,6 +23,7 @@ import {
   type RowContextAction,
   useDelete,
   useDuplicate,
+  useMe,
   useRename,
   useTrashStatus,
   viewHref,
@@ -69,6 +71,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const remove = useDelete();
   const duplicate = useDuplicate();
   const { data: trashStatus } = useTrashStatus();
+  const { data: me } = useMe();
 
   const liveEntries = useMemo(
     () => resolved.flatMap((item) => (item.entry !== null ? [item.entry] : [])),
@@ -198,7 +201,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
-                  trashAvailable={trashStatus?.available === true}
+                  capabilities={capabilitiesFor(me)}
                 />
               </div>
             )}
