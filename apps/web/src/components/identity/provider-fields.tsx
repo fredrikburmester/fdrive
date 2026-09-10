@@ -40,15 +40,9 @@ function autoCompleteFor(field: ProviderField): string | undefined {
   }
 }
 
-function inputTypeFor(field: ProviderField): string {
-  switch (field.kind) {
-    case "password":
-      return "password";
-    case "url":
-      return "url";
-    default:
-      return "text";
-  }
+export function inputTypeFor(fieldOrKind: ProviderField | string): string {
+  const kind = typeof fieldOrKind === "string" ? fieldOrKind : fieldOrKind.kind;
+  return kind === "password" ? "password" : kind === "url" ? "url" : "text";
 }
 
 /**

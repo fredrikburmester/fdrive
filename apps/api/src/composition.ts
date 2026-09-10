@@ -76,7 +76,6 @@ import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
 import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
-import { createSetupClaimStore } from "./setup/claim.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
@@ -512,7 +511,7 @@ export async function composeApp(
     providers: providerService,
     authService: auth.service,
     accounts: repos.accounts,
-    claims: createSetupClaimStore(repos.settings),
+    settings: repos.settings,
     hasEnvUrl: config.sftpgoUrl !== undefined,
   });
 

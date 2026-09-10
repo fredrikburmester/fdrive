@@ -45,27 +45,8 @@ export interface SftpgoDownloadOpts {
  * not use ("unexpected") becomes "internal".
  */
 function toStorageErrorKind(error: SftpgoError): StorageErrorKind {
-  switch (error.kind) {
-    case "unauthorized":
-      return "unauthorized";
-    case "forbidden":
-      return "forbidden";
-    case "not_found":
-      return "not_found";
-    case "conflict":
-      return "conflict";
-    case "payload_too_large":
-      return "payload_too_large";
-    case "rate_limited":
-      return "rate_limited";
-    case "bad_request":
-      return "bad_request";
-    case "network":
-    case "server":
-      return "upstream_unavailable";
-    case "unexpected":
-      return "internal";
-  }
+  if (error.kind === "network" || error.kind === "server") return "upstream_unavailable";
+  return error.kind === "unexpected" ? "internal" : error.kind;
 }
 
 /**
@@ -100,59 +81,33 @@ async function runStorage<T>(withToken: WithToken, fn: (token: string) => Promis
  */
 export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): StorageProvider {
   const { client, withToken } = deps;
+  const runUser = <T>(fn: (user: ReturnType<SftpgoClient["user"]>) => Promise<T>) =>
+    runStorage(withToken, (token) => fn(client.user(token)));
 
   return {
     async list(path: string): Promise<FileEntry[]> {
       const normalized = normalizePath(path);
-      const entries = await runStorage(withToken, (token) => client.user(token).list(normalized));
-      return entries.map((entry) =>
-        makeEntry(normalized, {
-          name: entry.name,
-          kind: entry.kind,
-          size: entry.size,
-          modifiedAt: entry.modifiedAt,
-        }),
-      );
+      const entries = await runUser((u) => u.list(normalized));
+      return entries.map((entry) => makeEntry(normalized, entry));
     },
 
-    async probeDirectoryRead(path: string): Promise<void> {
-      const normalized = normalizePath(path);
-      await runStorage(withToken, (token) => client.user(token).probeDirectoryRead(normalized));
-    },
+    probeDirectoryRead: (path) => runUser((u) => u.probeDirectoryRead(normalizePath(path))),
+    statFile: (path) => runUser((u) => u.statFile(normalizePath(path))),
 
-    async statFile(path: string) {
-      const normalized = normalizePath(path);
-      return runStorage(withToken, (token) => client.user(token).statFile(normalized));
-    },
-
-    /**
-     * SFTPGo has no "stat a path of unknown kind" endpoint: `HEAD /user/files`
-     * reports a directory as a bad request, and listing a path that turns
-     * out to be a file drops the connection on a real server. So a file is
-     * stat'ed directly and a directory is found in its parent's listing.
-     */
     async stat(path: string): Promise<EntryStat> {
       const normalized = normalizePath(path);
       try {
-        const file = await runStorage(withToken, (token) =>
-          client.user(token).statFile(normalized),
-        );
+        const file = await runUser((u) => u.statFile(normalized));
         return { kind: "file", ...file };
       } catch (error) {
-        if (!isStorageError(error) || error.kind !== "bad_request") {
-          throw error;
-        }
+        if (!isStorageError(error) || error.kind !== "bad_request") throw error;
       }
       if (normalized === "/") {
         return { kind: "dir", size: 0, modifiedAt: null, contentType: null };
       }
-      const entries = await runStorage(withToken, (token) =>
-        client.user(token).list(parentPath(normalized)),
-      );
+      const entries = await runUser((u) => u.list(parentPath(normalized)));
       const match = entries.find((entry) => entry.name === baseName(normalized));
-      if (match === undefined) {
-        throw new StorageError("not_found", `not found: ${normalized}`);
-      }
+      if (!match) throw new StorageError("not_found", `not found: ${normalized}`);
       return {
         kind: match.kind,
         size: match.size,
@@ -161,83 +116,14 @@ export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): St
       };
     },
 
-    async download(path: string, opts?: SftpgoDownloadOpts) {
-      const normalized = normalizePath(path);
-      return runStorage(withToken, (token) =>
-        client.user(token).download(normalized, {
-          ...(opts?.range !== undefined ? { range: opts.range } : {}),
-          ...(opts?.ifRange !== undefined ? { ifRange: opts.ifRange } : {}),
-          ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
-        }),
-      );
-    },
-
-    async upload(
-      path: string,
-      body: ReadableStream<Uint8Array> | Uint8Array,
-      opts?: {
-        mkdirParents?: boolean;
-        modifiedAt?: Date;
-        contentLength?: number;
-        signal?: AbortSignal;
-      },
-    ): Promise<void> {
-      const normalized = normalizePath(path);
-      await runStorage(withToken, (token) =>
-        client.user(token).upload(normalized, body, {
-          ...(opts?.mkdirParents !== undefined ? { mkdirParents: opts.mkdirParents } : {}),
-          ...(opts?.modifiedAt !== undefined ? { modifiedAt: opts.modifiedAt } : {}),
-          ...(opts?.contentLength !== undefined ? { contentLength: opts.contentLength } : {}),
-          ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
-        }),
-      );
-    },
-
-    async mkdir(path: string, opts?: { parents?: boolean }): Promise<void> {
-      const normalized = normalizePath(path);
-      await runStorage(withToken, (token) =>
-        client.user(token).mkdir(normalized, {
-          ...(opts?.parents !== undefined ? { parents: opts.parents } : {}),
-        }),
-      );
-    },
-
-    async move(path: string, target: string): Promise<void> {
-      const normalizedPath = normalizePath(path);
-      const normalizedTarget = normalizePath(target);
-      await runStorage(withToken, (token) =>
-        client.user(token).move(normalizedPath, normalizedTarget),
-      );
-    },
-
-    async copy(path: string, target: string): Promise<void> {
-      const normalizedPath = normalizePath(path);
-      const normalizedTarget = normalizePath(target);
-      await runStorage(withToken, (token) =>
-        client.user(token).copy(normalizedPath, normalizedTarget),
-      );
-    },
-
-    async deleteFile(path: string): Promise<void> {
-      const normalized = normalizePath(path);
-      await runStorage(withToken, (token) => client.user(token).deleteFile(normalized));
-    },
-
-    async deleteDir(path: string): Promise<void> {
-      const normalized = normalizePath(path);
-      await runStorage(withToken, (token) => client.user(token).deleteDir(normalized));
-    },
-
-    async setModifiedAt(path: string, modifiedAt: Date): Promise<void> {
-      const normalized = normalizePath(path);
-      await runStorage(withToken, (token) =>
-        client.user(token).setModifiedAt(normalized, modifiedAt),
-      );
-    },
-
-    async zip(paths: readonly string[]): Promise<ReadableStream<Uint8Array>> {
-      const normalized = paths.map((path) => normalizePath(path));
-      return runStorage(withToken, (token) => client.user(token).zip(normalized));
-    },
+    download: (path, opts) => runUser((u) => u.download(normalizePath(path), opts ?? {})),
+    upload: (path, body, opts) => runUser((u) => u.upload(normalizePath(path), body, opts ?? {})),
+    mkdir: (path, opts) => runUser((u) => u.mkdir(normalizePath(path), opts ?? {})),
+    move: (path, target) => runUser((u) => u.move(normalizePath(path), normalizePath(target))),
+    copy: (path, target) => runUser((u) => u.copy(normalizePath(path), normalizePath(target))),
+    deleteFile: (path) => runUser((u) => u.deleteFile(normalizePath(path))),
+    deleteDir: (path) => runUser((u) => u.deleteDir(normalizePath(path))),
+    setModifiedAt: (path, at) => runUser((u) => u.setModifiedAt(normalizePath(path), at)),
+    zip: (paths) => runUser((u) => u.zip(paths.map((p) => normalizePath(p)))),
   };
 }

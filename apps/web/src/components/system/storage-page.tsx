@@ -240,15 +240,12 @@ export function StoragePage() {
         open={confirmation !== null}
         onOpenChange={(open) => (open ? undefined : setConfirmation(null))}
       >
-        {/* Mounted only while a confirmation is pending: an exiting dialog
-            would otherwise briefly render the other action's copy. */}
-        {confirmation === null ? null : (
+        {/* Keep the confirmation copy stable while the dialog exits. */}
+        {confirmation && (
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {confirmation.kind === "remove"
-                  ? `Remove "${confirmation.provider.label}"?`
-                  : `Disable "${confirmation.provider.label}"?`}
+                {`${confirmation.kind === "remove" ? "Remove" : "Disable"} "${confirmation.provider.label}"?`}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {confirmation.kind === "remove"

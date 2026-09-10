@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMemoryStorage } from "../../test/fixtures/memory-storage.ts";
+import { createMemoryStorage } from "../testing/memory-storage.ts";
 import { withMoveToTrash } from "./move-to-trash.ts";
 import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
 

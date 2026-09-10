@@ -3,6 +3,7 @@ import type { AdminProvider, AdminProviderType } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
+import { allCapabilities } from "@/lib/identity/capabilities";
 
 const PRIMARY: AdminProvider = {
   id: "00000000-0000-4000-8000-000000000009",
@@ -41,16 +42,7 @@ const SFTPGO_TYPE: AdminProviderType = {
     },
   ],
   credentialFields: [],
-  capabilities: {
-    zip: true,
-    setModifiedAt: false,
-    atomicMove: true,
-    trash: true,
-    shares: true,
-    office: true,
-    index: true,
-    scopeMapping: true,
-  },
+  capabilities: { ...allCapabilities(true), setModifiedAt: false },
 };
 
 const mocks = vi.hoisted(() => ({

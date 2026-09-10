@@ -3,20 +3,12 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthService, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
-import { memoryProviderService, seedSftpgoProvider } from "../providers/test-fixtures/index.ts";
-import { createSetupClaimStore } from "./claim.js";
+import {
+  memoryProviderService,
+  probeFetch,
+  seedSftpgoProvider,
+} from "../providers/test-fixtures/index.ts";
 import { createSetupService } from "./service.js";
-
-function textResponse(status: number, body: string): Response {
-  return new Response(body, { status });
-}
-
-/** A fetch that answers SFTPGo's health and token probes the way a live server does. */
-function okProbeFetch(): typeof globalThis.fetch {
-  return vi.fn(async (url: unknown) =>
-    String(url).endsWith("/healthz") ? textResponse(200, "ok") : textResponse(401, "unauthorized"),
-  ) as unknown as typeof globalThis.fetch;
-}
 
 const CAPABILITIES = {
   zip: true,
@@ -54,19 +46,18 @@ function buildAuthService(loginResult: LoginResult): Pick<AuthService, "loginCan
 
 function harness(options: { fetch?: typeof globalThis.fetch; hasEnvUrl?: boolean } = {}) {
   const repos = createMemoryRepos();
-  const fetchImpl = options.fetch ?? okProbeFetch();
+  const fetchImpl = options.fetch ?? probeFetch();
   const providers = memoryProviderService(repos, { fetch: fetchImpl });
   const authService = buildAuthService({ sessionId: "session-1", me: ME });
   const setAdmin = vi.fn();
-  const claims = createSetupClaimStore(repos.settings);
   const service = createSetupService({
     providers,
     authService,
     accounts: { setAdmin },
-    claims,
+    settings: repos.settings,
     hasEnvUrl: options.hasEnvUrl ?? false,
   });
-  return { repos, providers, authService, setAdmin, claims, service, fetch: fetchImpl };
+  return { repos, providers, authService, setAdmin, service, fetch: fetchImpl };
 }
 
 const COMPLETE_INPUT = {
@@ -211,7 +202,7 @@ describe("createSetupService: complete", () => {
 
   it("rejects when the candidate SFTPGo does not probe ok, creating nothing", async () => {
     const h = harness({
-      fetch: vi.fn().mockResolvedValue(textResponse(500, "boom")) as unknown as typeof fetch,
+      fetch: probeFetch(false),
     });
     await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
       kind: "bad_request",
@@ -235,9 +226,27 @@ describe("createSetupService: complete", () => {
     expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
   });
 
+  it("resumes the verified owner's pending claim after restart", async () => {
+    const h = harness();
+    h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
+    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toThrow("interrupted");
+    const restarted = createSetupService({
+      providers: h.providers,
+      authService: h.authService,
+      accounts: { setAdmin: h.setAdmin },
+      settings: h.repos.settings,
+      hasEnvUrl: false,
+    });
+    expect((await restarted.status()).required).toBe(true);
+    await restarted.complete(COMPLETE_INPUT);
+    expect((await restarted.status()).required).toBe(false);
+  });
+
   it("reports a conflict when the claim cannot be finalized by the same owner", async () => {
     const h = harness();
-    vi.spyOn(h.claims, "finalize").mockResolvedValueOnce(false);
+    vi.spyOn(h.repos.settings, "compareAndSet")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
     await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({ kind: "conflict" });
   });
 
@@ -256,10 +265,15 @@ describe("createSetupService: complete", () => {
     vi.mocked(h.authService.loginCandidate)
       .mockResolvedValueOnce({ sessionId: "session-1", me: ME })
       .mockResolvedValueOnce({ sessionId: "session-2", me: bob });
-    await h.service.complete(COMPLETE_INPUT);
-    await expect(
+    await seedSftpgoProvider(h.repos, COMPLETE_INPUT.baseUrl, { enabled: false });
+    const results = await Promise.allSettled([
+      h.service.complete(COMPLETE_INPUT),
       h.service.complete({ ...COMPLETE_INPUT, username: "bob", password: "builder" }),
-    ).rejects.toMatchObject({ kind: "conflict" });
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { kind: "conflict" },
+    });
     expect(h.setAdmin).toHaveBeenCalledTimes(1);
     expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
   });

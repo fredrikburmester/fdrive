@@ -22,35 +22,25 @@ export function validateFields(fields: readonly ProviderField[], input: unknown)
     return { ok: false, issues: [{ field: "", message: "expected an object" }] };
   }
   const record = input as Record<string, unknown>;
-  const known = new Set(fields.map((field) => field.name));
-  const issues: FieldIssue[] = [];
-  for (const key of Object.keys(record)) {
-    if (!known.has(key)) {
-      issues.push({ field: key, message: "unknown field" });
-    }
-  }
+  const known = new Set(fields.map((f) => f.name));
+  const issues: FieldIssue[] = Object.keys(record)
+    .filter((k) => !known.has(k))
+    .map((field) => ({ field, message: "unknown field" }));
+
   const value: Record<string, string> = {};
-  for (const field of fields) {
-    const raw = record[field.name];
+  for (const { name, required, maxLength = DEFAULT_MAX_LENGTH } of fields) {
+    const raw = record[name];
     if (raw === undefined || raw === "") {
-      if (field.required) {
-        issues.push({ field: field.name, message: "required" });
-      }
-      continue;
+      if (required) issues.push({ field: name, message: "required" });
+    } else if (typeof raw !== "string") {
+      issues.push({ field: name, message: "expected a string" });
+    } else if (raw.includes("\0")) {
+      issues.push({ field: name, message: "must not contain NUL" });
+    } else if (raw.length > maxLength) {
+      issues.push({ field: name, message: "too long" });
+    } else {
+      value[name] = raw;
     }
-    if (typeof raw !== "string") {
-      issues.push({ field: field.name, message: "expected a string" });
-      continue;
-    }
-    if (raw.includes("\0")) {
-      issues.push({ field: field.name, message: "must not contain NUL" });
-      continue;
-    }
-    if (raw.length > (field.maxLength ?? DEFAULT_MAX_LENGTH)) {
-      issues.push({ field: field.name, message: "too long" });
-      continue;
-    }
-    value[field.name] = raw;
   }
   return issues.length > 0 ? { ok: false, issues } : { ok: true, value };
 }
@@ -60,14 +50,8 @@ export function stripTransientFields(
   fields: readonly ProviderField[],
   value: Readonly<Record<string, string>>,
 ): Record<string, string> {
-  const transient = new Set(fields.filter((field) => field.transient === true).map((f) => f.name));
-  const result: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (!transient.has(key)) {
-      result[key] = entry;
-    }
-  }
-  return result;
+  const transient = new Set(fields.filter((f) => f.transient).map((f) => f.name));
+  return Object.fromEntries(Object.entries(value).filter(([k]) => !transient.has(k)));
 }
 
 /** True when the two credentials store the same non-transient values. */
@@ -76,13 +60,5 @@ export function sameCredential(
   a: Readonly<Record<string, unknown>>,
   b: Readonly<Record<string, unknown>>,
 ): boolean {
-  for (const field of fields) {
-    if (field.transient === true) {
-      continue;
-    }
-    if (a[field.name] !== b[field.name]) {
-      return false;
-    }
-  }
-  return true;
+  return fields.every((f) => f.transient || a[f.name] === b[f.name]);
 }

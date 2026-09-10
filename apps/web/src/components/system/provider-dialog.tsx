@@ -9,6 +9,7 @@ import type {
 import { isHttpUrl } from "@fdrive/contracts";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,7 +41,6 @@ import {
   providerAddressLock,
   providerConfigDraft,
   providerFormError,
-  providerInputType,
   providerUpdatePatch,
 } from "@/lib/system/connection";
 
@@ -186,28 +186,18 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
               {addressLock ?? "Where fdrive reaches this server, such as http://sftpgo:8080."}
             </FieldDescription>
           </Field>
-          {fields.map((field) => (
-            <Field key={field.name}>
-              <FieldLabel htmlFor={`provider-config-${field.name}`}>{field.label}</FieldLabel>
-              {field.help === undefined ? null : <FieldDescription>{field.help}</FieldDescription>}
-              <Input
-                id={`provider-config-${field.name}`}
-                type={providerInputType(field.kind)}
-                value={config[field.name] ?? ""}
-                required={field.required}
-                {...(field.maxLength === undefined ? {} : { maxLength: field.maxLength })}
-                onChange={(event) => {
-                  setConfig({ ...config, [field.name]: event.target.value });
-                  setTouched(true);
-                }}
-              />
-              {field.name === "homeTemplate" && (config[field.name] ?? "").length > 0 ? (
-                <FieldDescription>
-                  {homeTemplatePreview(config[field.name] ?? "", "")}
-                </FieldDescription>
-              ) : null}
-            </Field>
-          ))}
+          <ProviderFieldInputs
+            fields={fields}
+            values={config}
+            idPrefix="provider-config"
+            onChange={(name, value) => {
+              setConfig({ ...config, [name]: value });
+              setTouched(true);
+            }}
+          />
+          {fields.some((field) => field.name === "homeTemplate") && config.homeTemplate ? (
+            <FieldDescription>{homeTemplatePreview(config.homeTemplate, "")}</FieldDescription>
+          ) : null}
           {editing ? null : (
             <div className="flex flex-wrap items-center gap-2">
               <Button

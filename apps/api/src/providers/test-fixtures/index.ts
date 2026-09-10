@@ -1,5 +1,6 @@
 import type { ProviderModule } from "@fdrive/core";
 import type { Provider, Repos } from "@fdrive/db";
+import { vi } from "vitest";
 import { createProviderService, type ProviderService } from "../service.js";
 
 export interface MemoryProviderServiceOptions {
@@ -45,4 +46,14 @@ export async function seedSftpgoProvider(
   });
   if (updated === null) throw new Error("provider vanished");
   return updated;
+}
+
+/** A fetch double that answers SFTPGo's health and token probes. */
+export function probeFetch(reachable = true): typeof globalThis.fetch {
+  return vi.fn(async (url: unknown) => {
+    if (!reachable) return new Response("boom", { status: 500 });
+    return String(url).endsWith("/healthz")
+      ? new Response("ok", { status: 200 })
+      : new Response("unauthorized", { status: 401 });
+  }) as unknown as typeof globalThis.fetch;
 }

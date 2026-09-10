@@ -8,7 +8,6 @@ import {
   ProvidersResponse,
   ROUTES,
 } from "@fdrive/contracts";
-import { CoreError, parseHomeTemplate } from "@fdrive/core";
 import { z } from "zod";
 import type { AppHono, AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
@@ -26,27 +25,6 @@ async function parseBody<T>(schema: z.ZodType<T>, raw: unknown, what: string): P
     throw new ApiHttpError("bad_request", `invalid ${what}`, { issues: parsed.error.issues });
   }
   return parsed.data;
-}
-
-/**
- * The SFTPGo home template is the one configuration value with structure
- * of its own; validate it here so a typo is a 400, not a broken scope
- * engine later.
- */
-function assertValidSftpgoConfig(type: string, config: Record<string, string> | undefined): void {
-  const homeTemplate = config?.homeTemplate;
-  if (type !== "sftpgo" || homeTemplate === undefined || homeTemplate.length === 0) {
-    return;
-  }
-  try {
-    parseHomeTemplate(homeTemplate);
-  } catch (err) {
-    throw new ApiHttpError(
-      "bad_request",
-      err instanceof CoreError ? err.message : "invalid home template",
-      err instanceof CoreError ? err.details : undefined,
-    );
-  }
 }
 
 /**
@@ -93,7 +71,6 @@ export function registerProviderRoutes(
       await c.req.json().catch(() => undefined),
       "provider",
     );
-    assertValidSftpgoConfig(body.type, body.config);
     const probe = await deps.service.probe({
       type: body.type,
       baseUrl: body.baseUrl,
@@ -103,7 +80,7 @@ export function registerProviderRoutes(
       throw new ApiHttpError("bad_request", `provider is not reachable: ${probe.detail}`);
     }
     const created = await deps.service.create(body);
-    return c.json(AdminProvider.parse(await deps.service.adminView(created)));
+    return c.json(AdminProvider.parse(await deps.service.adminView(created, probe)));
   });
 
   groups.authed.post(withoutApiV1Prefix(ROUTES.admin.providersTest), requireAdmin, async (c) => {
@@ -138,9 +115,9 @@ export function registerProviderRoutes(
       if (current === null) {
         throw new ApiHttpError("not_found", "storage provider not found");
       }
-      assertValidSftpgoConfig(current.provider.type, body.config);
+      let probe: ConnectionTestResponse | undefined;
       if (body.baseUrl !== undefined && body.baseUrl !== current.provider.baseUrl) {
-        const probe = await deps.service.probe({
+        probe = await deps.service.probe({
           type: current.module.type as AdminProviderTestRequest["type"],
           baseUrl: body.baseUrl,
         });
@@ -149,7 +126,7 @@ export function registerProviderRoutes(
         }
       }
       const updated = await deps.service.update(id, body);
-      return c.json(AdminProvider.parse(await deps.service.adminView(updated)));
+      return c.json(AdminProvider.parse(await deps.service.adminView(updated, probe)));
     },
   );
 
