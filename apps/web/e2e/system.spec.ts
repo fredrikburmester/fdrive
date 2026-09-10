@@ -243,7 +243,7 @@ test.describe("bob (not admin)", () => {
     await expect(page.getByRole("link", { name: "OCR" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Thumbnails" })).toBeHidden();
 
-    const connectionRes = await page.request.get("/api/v1/admin/connection");
+    const connectionRes = await page.request.get("/api/v1/admin/providers");
     expect(connectionRes.status()).toBe(403);
 
     for (const path of [

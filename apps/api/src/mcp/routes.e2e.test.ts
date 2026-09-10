@@ -1,6 +1,11 @@
 import type { IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
+import {
+  createFakeSftpgoServer,
+  createSftpgoClient,
+  createSftpgoStorageProvider,
+  type FakeSeed,
+} from "@fdrive/sftpgo";
 import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -10,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import type { SearchService } from "../search/service.js";
-import { createSftpgoStorageProvider } from "../storage/sftpgo-provider.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { generateApiToken, hashApiToken } from "../tokens/token-format.js";
 import type { McpToolDeps } from "./handlers.js";
@@ -185,7 +189,10 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: false, host: "sftpgo:8080" }),
+    connectionStatus: async () => ({
+      required: false,
+      providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+    }),
   });
   registerMcpRoutes(app, { resolveToken, toolDeps });
 

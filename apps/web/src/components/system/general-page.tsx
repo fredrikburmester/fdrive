@@ -1,5 +1,6 @@
 "use client";
 
+import type { AdminProvider } from "@fdrive/contracts";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useShellMe } from "@/components/shell/page-header";
@@ -10,9 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { describeApiError } from "@/lib/api/errors";
 import {
-  useAdminConnection,
-  useAdminTestConnection,
-  useAdminUpdateConnection,
+  useAdminProviders,
+  useAdminTestProvider,
+  useAdminUpdateProvider,
 } from "@/lib/api/system-queries";
 import {
   connectionSourceLabel,
@@ -25,6 +26,15 @@ import { SystemPage } from "./system-page";
 import { SystemSection } from "./system-section";
 import { TrashSettingsCard } from "./trash-settings-card";
 
+const DEFAULT_HOME_TEMPLATE = "sftpgo:/{username}";
+
+/** The SFTPGo provider this page edits: the oldest one, which setup created. */
+export function primarySftpgoProvider(
+  providers: readonly AdminProvider[] | undefined,
+): AdminProvider | null {
+  return providers?.find((provider) => provider.type === "sftpgo") ?? null;
+}
+
 /**
  * Admin page: `System > General`. The settings that are neither a feature
  * nor a sidecar: the address fdrive is reached at, the SFTPGo server it
@@ -32,23 +42,25 @@ import { TrashSettingsCard } from "./trash-settings-card";
  */
 export function GeneralPage() {
   const { data: me } = useShellMe();
-  const { data: connection, isLoading, dataUpdatedAt } = useAdminConnection();
-  const testConnection = useAdminTestConnection();
-  const updateConnection = useAdminUpdateConnection();
+  const { data, isLoading, dataUpdatedAt } = useAdminProviders();
+  const provider = primarySftpgoProvider(data?.providers);
+  const testProvider = useAdminTestProvider();
+  const updateProvider = useAdminUpdateProvider();
   const [urlDraft, setUrlDraft] = useState("");
   const [homeTemplateDraft, setHomeTemplateDraft] = useState("");
 
+  const savedHomeTemplate = provider?.config.homeTemplate ?? DEFAULT_HOME_TEMPLATE;
   useEffect(() => {
-    if (connection) {
-      setHomeTemplateDraft(connection.homeTemplate);
-      setUrlDraft(connection.baseUrl);
+    if (provider) {
+      setHomeTemplateDraft(provider.config.homeTemplate ?? DEFAULT_HOME_TEMPLATE);
+      setUrlDraft(provider.baseUrl);
     }
-  }, [connection]);
+  }, [provider]);
 
   const username = me?.identities.find((identity) => identity.id === me.activeIdentityId)?.username;
-  const changed = connection
-    ? hasHomeTemplateChanged(connection.homeTemplate, homeTemplateDraft)
-    : false;
+  const changed = provider ? hasHomeTemplateChanged(savedHomeTemplate, homeTemplateDraft) : false;
+  const testedCandidate =
+    typeof testProvider.variables === "object" ? testProvider.variables.baseUrl : null;
 
   return (
     <SystemPage
@@ -63,47 +75,49 @@ export function GeneralPage() {
         description="Where fdrive reaches your SFTPGo server."
         contentClassName="gap-4"
       >
-        {isLoading || !connection ? (
+        {isLoading || !provider ? (
           <Skeleton className="h-24 w-full" />
         ) : (
           <>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Host</span>
-              <span className="font-medium">{connection.host}</span>
+              <span className="font-medium">{provider.label}</span>
             </div>
             <Field>
               <FieldLabel htmlFor="connection-url">SFTPGo address</FieldLabel>
               <Input
                 id="connection-url"
                 value={urlDraft}
-                disabled={connection.source === "env" || updateConnection.isPending}
+                disabled={provider.managedByEnv || updateProvider.isPending}
                 onChange={(event) => {
                   setUrlDraft(event.target.value);
-                  testConnection.reset();
+                  testProvider.reset();
                 }}
               />
               <FieldDescription>
-                {connection.source === "env"
+                {provider.managedByEnv
                   ? "Set by the deployment. Remove SFTPGO_URL to manage the connection here."
-                  : "Changing servers requires users to sign in to the new server. Existing identities remain bound to their original server."}
+                  : "Changing servers requires users to sign in to the new server. Existing logins stay bound to the server they were created on."}
               </FieldDescription>
             </Field>
-            {connection.source === "settings" && urlDraft !== connection.baseUrl ? (
+            {!provider.managedByEnv && urlDraft !== provider.baseUrl ? (
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  disabled={testConnection.isPending}
-                  onClick={() => testConnection.mutate(urlDraft)}
+                  disabled={testProvider.isPending}
+                  onClick={() => testProvider.mutate({ type: "sftpgo", baseUrl: urlDraft })}
                 >
                   Test new URL
                 </Button>
                 <Button
                   disabled={
-                    !testConnection.data?.ok ||
-                    testConnection.variables !== urlDraft ||
-                    updateConnection.isPending
+                    !testProvider.data?.ok ||
+                    testedCandidate !== urlDraft ||
+                    updateProvider.isPending
                   }
-                  onClick={() => updateConnection.mutate({ baseUrl: urlDraft })}
+                  onClick={() =>
+                    updateProvider.mutate({ id: provider.id, patch: { baseUrl: urlDraft } })
+                  }
                 >
                   Save connection
                 </Button>
@@ -111,30 +125,40 @@ export function GeneralPage() {
             ) : null}
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Source</span>
-              <Badge variant={connection.source === "env" ? "outline" : "secondary"}>
-                {connectionSourceLabel(connection.source)}
+              <Badge variant={provider.managedByEnv ? "outline" : "secondary"}>
+                {connectionSourceLabel(provider.managedByEnv)}
               </Badge>
             </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Reachability</span>
               <div className="flex items-center gap-2">
-                <Badge variant={connection.reachable ? "default" : "destructive"}>
-                  {connection.reachable ? "Reachable" : "Unreachable"}
+                <Badge
+                  variant={
+                    (testProvider.data?.ok ?? provider.reachable) ? "default" : "destructive"
+                  }
+                >
+                  {(testProvider.data?.ok ?? provider.reachable) ? "Reachable" : "Unreachable"}
                 </Badge>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={testConnection.isPending}
-                  onClick={() => testConnection.mutate(urlDraft || undefined)}
+                  disabled={testProvider.isPending}
+                  onClick={() =>
+                    testProvider.mutate(
+                      urlDraft && urlDraft !== provider.baseUrl
+                        ? { type: "sftpgo", baseUrl: urlDraft }
+                        : provider.id,
+                    )
+                  }
                 >
-                  <RefreshCw className={testConnection.isPending ? "animate-spin" : ""} />
+                  <RefreshCw className={testProvider.isPending ? "animate-spin" : ""} />
                   Test
                 </Button>
               </div>
             </div>
-            {testConnection.data ? (
-              <p className="text-sm text-muted-foreground">{testConnection.data.detail}</p>
+            {testProvider.data ? (
+              <p className="text-sm text-muted-foreground">{testProvider.data.detail}</p>
             ) : null}
           </>
         )}
@@ -155,7 +179,7 @@ export function GeneralPage() {
               id="home-template"
               value={homeTemplateDraft}
               onChange={(event) => setHomeTemplateDraft(event.target.value)}
-              disabled={isLoading}
+              disabled={isLoading || !provider}
             />
             <FieldDescription>
               {homeTemplatePreview(homeTemplateDraft, username ?? "")}
@@ -166,20 +190,27 @@ export function GeneralPage() {
               directory.
             </FieldDescription>
           </Field>
-          {updateConnection.isError ? (
-            <FieldError>{describeApiError(updateConnection.error)}</FieldError>
+          {updateProvider.isError ? (
+            <FieldError>{describeApiError(updateProvider.error)}</FieldError>
           ) : null}
           <div className="flex justify-end">
             <Button
               type="button"
               disabled={
+                !provider ||
                 !changed ||
                 !isPlausibleHomeTemplate(homeTemplateDraft) ||
-                updateConnection.isPending
+                updateProvider.isPending
               }
-              onClick={() => updateConnection.mutate({ homeTemplate: homeTemplateDraft })}
+              onClick={() =>
+                provider &&
+                updateProvider.mutate({
+                  id: provider.id,
+                  patch: { config: { ...provider.config, homeTemplate: homeTemplateDraft } },
+                })
+              }
             >
-              {updateConnection.isPending ? "Saving..." : "Save"}
+              {updateProvider.isPending ? "Saving..." : "Save"}
             </Button>
           </div>
         </FieldGroup>

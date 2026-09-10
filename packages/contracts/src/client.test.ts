@@ -97,7 +97,23 @@ const AT = "2026-01-01T00:00:00.000Z";
 const VALID_ME = {
   account: { id: VALID_UUID, displayName: "Alice" },
   identities: [
-    { id: VALID_UUID, username: "alice", providerType: "sftpgo", providerLabel: "Home" },
+    {
+      id: VALID_UUID,
+      username: "alice",
+      providerId: VALID_UUID,
+      providerType: "sftpgo",
+      providerLabel: "Home",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: true,
+      },
+    },
   ],
   activeIdentityId: VALID_UUID,
   isAdmin: false,
@@ -116,8 +132,8 @@ const VALID_ENTRY = {
 const VALID_LIST = { path: "/photos", entries: [VALID_ENTRY] };
 const VALID_ABOUT = {
   version: "1.0.0",
-  builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-  provider: { type: "sftpgo", label: "localhost:8080" },
+  builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+  providers: [{ type: "sftpgo", label: "localhost:8080" }],
   setupRequired: false,
 };
 
@@ -189,7 +205,7 @@ describe("createApiClient: login", () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ baseUrl: "https://api.test", fetch: fetchStub });
 
-    const result = await client.login({ username: "alice", password: "hunter2" });
+    const result = await client.login({ credential: { username: "alice", password: "hunter2" } });
 
     expect(result).toEqual(VALID_ME);
     expect(calls).toHaveLength(1);
@@ -198,14 +214,16 @@ describe("createApiClient: login", () => {
     expect(calls[0]?.init.credentials).toBe("include");
     expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
     expect(headerValue(calls[0]?.init ?? {}, "content-type")).toBe("application/json");
-    expect(calls[0]?.init.body).toBe(JSON.stringify({ username: "alice", password: "hunter2" }));
+    expect(calls[0]?.init.body).toBe(
+      JSON.stringify({ credential: { username: "alice", password: "hunter2" } }),
+    );
   });
 
   it("sends the identity header when configured", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ fetch: fetchStub, identityId: "identity-1" });
 
-    await client.login({ username: "alice", password: "hunter2" });
+    await client.login({ credential: { username: "alice", password: "hunter2" } });
 
     expect(headerValue(calls[0]?.init ?? {}, "x-identity-id")).toBe("identity-1");
   });
@@ -214,7 +232,7 @@ describe("createApiClient: login", () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ fetch: fetchStub });
 
-    await client.login({ username: "alice", password: "hunter2" });
+    await client.login({ credential: { username: "alice", password: "hunter2" } });
 
     expect(headerValue(calls[0]?.init ?? {}, "x-identity-id")).toBeNull();
   });
@@ -758,53 +776,74 @@ describe("createApiClient: setup", () => {
   });
 });
 
-describe("createApiClient: admin", () => {
-  const VALID_CONNECTION = {
+describe("createApiClient: providers", () => {
+  const FIELD = { name: "username", label: "Username", kind: "text", required: true };
+  const PROVIDER = {
+    id: VALID_UUID,
+    type: "sftpgo",
+    label: "Home",
     baseUrl: "http://sftpgo:8080",
-    host: "sftpgo:8080",
-    homeTemplate: "sftpgo:/{username}",
-    source: "env",
+    config: { homeTemplate: "sftpgo:/{username}" },
+    enabled: true,
+    managedByEnv: false,
+    identityCount: 1,
     reachable: true,
     checkedAt: AT,
+    createdAt: AT,
   };
 
-  it("gets admin/connection", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_CONNECTION)]);
+  it("gets the public provider list", async () => {
+    const body = {
+      providers: [{ id: VALID_UUID, type: "sftpgo", label: "Home", credentialFields: [FIELD] }],
+    };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
     const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.adminConnection()).toEqual(VALID_CONNECTION);
-    expect(calls[0]?.url).toBe("/api/v1/admin/connection");
+    expect(await client.providers()).toEqual(body);
+    expect(calls[0]?.url).toBe("/api/v1/providers");
   });
 
-  it("puts admin/connection with the patch body", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_CONNECTION)]);
+  it("gets, creates, updates and deletes admin providers", async () => {
+    const list = { providers: [PROVIDER], types: [] };
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, list),
+      jsonResponse(200, PROVIDER),
+      jsonResponse(200, PROVIDER),
+      jsonResponse(200, { ok: true }),
+    ]);
     const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.adminUpdateConnection({ homeTemplate: "sftpgo:/{username}" })).toEqual(
-      VALID_CONNECTION,
-    );
-    expect(calls[0]?.init.method).toBe("PUT");
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
-      homeTemplate: "sftpgo:/{username}",
-    });
+    expect(await client.adminProviders()).toEqual(list);
+    expect(
+      await client.adminCreateProvider({ type: "sftpgo", label: "Home", baseUrl: "http://a" }),
+    ).toEqual(PROVIDER);
+    expect(await client.adminUpdateProvider(VALID_UUID, { enabled: false })).toEqual(PROVIDER);
+    expect(await client.adminDeleteProvider(VALID_UUID)).toEqual({ ok: true });
+    expect(calls.map((call) => `${call.init.method ?? "GET"} ${call.url}`)).toEqual([
+      "GET /api/v1/admin/providers",
+      "POST /api/v1/admin/providers",
+      `PATCH /api/v1/admin/providers/${VALID_UUID}`,
+      `DELETE /api/v1/admin/providers/${VALID_UUID}`,
+    ]);
+    expect(JSON.parse(String(calls[2]?.init.body))).toEqual({ enabled: false });
   });
 
-  it("posts admin/connection/test with no body when baseUrl is omitted", async () => {
+  it("probes a saved provider by id and an unsaved candidate by body", async () => {
     const result = { ok: true, detail: "reachable" };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, result),
+      jsonResponse(200, result),
+    ]);
     const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.adminTestConnection()).toEqual(result);
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
-  });
-
-  it("posts admin/connection/test with the candidate baseUrl", async () => {
-    const result = { ok: false, detail: "unreachable" };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
-    const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.adminTestConnection("http://other:8080")).toEqual(result);
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ baseUrl: "http://other:8080" });
+    expect(await client.adminTestProvider(VALID_UUID)).toEqual(result);
+    expect(
+      await client.adminTestProvider({ type: "sftpgo", baseUrl: "http://other:8080" }),
+    ).toEqual(result);
+    expect(calls[0]?.url).toBe(`/api/v1/admin/providers/${VALID_UUID}/test`);
+    expect(calls[0]?.init.body).toBeUndefined();
+    expect(calls[1]?.url).toBe("/api/v1/admin/providers/test");
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      type: "sftpgo",
+      baseUrl: "http://other:8080",
+    });
   });
 });
 
@@ -1573,13 +1612,13 @@ it("calls account identity and cross-identity view routes with typed responses",
   const client = createApiClient({ fetch: fetchStub });
   expect(
     await client.linkIdentity({
-      username: "alice",
-      password: "secret",
-      otp: "123456",
-      currentPassword: "mine",
+      credential: { username: "alice", password: "secret", otp: "123456" },
+      currentCredential: { password: "mine" },
     }),
   ).toEqual(VALID_ME);
-  expect(await client.unlinkIdentity(VALID_UUID, { currentPassword: "mine" })).toEqual(VALID_ME);
+  expect(
+    await client.unlinkIdentity(VALID_UUID, { currentCredential: { password: "mine" } }),
+  ).toEqual(VALID_ME);
   expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
   expect(await client.accountFavorites()).toEqual(favorites);
   expect(await client.accountSearch("a")).toEqual(search);
@@ -1601,10 +1640,8 @@ it("calls account identity and cross-identity view routes with typed responses",
   ]);
   expect(calls[0]?.init.body).toBe(
     JSON.stringify({
-      username: "alice",
-      password: "secret",
-      otp: "123456",
-      currentPassword: "mine",
+      credential: { username: "alice", password: "secret", otp: "123456" },
+      currentCredential: { password: "mine" },
     }),
   );
   expect(calls[1]?.init.method).toBe("DELETE");

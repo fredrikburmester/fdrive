@@ -1,12 +1,15 @@
 import type { StorageErrorKind } from "@fdrive/core";
 import { isStorageError } from "@fdrive/core";
-import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
 import { describe, expect, it } from "vitest";
+import { createSftpgoClient } from "./client.js";
+import { SftpgoError } from "./errors.js";
+import { createFakeSftpgoServer } from "./fake/server.js";
+import type { FakeSeed } from "./fake/types.js";
 import {
   createSftpgoStorageProvider,
   type SftpgoDownloadOpts,
   type WithToken,
-} from "./sftpgo-provider.js";
+} from "./storage-provider.js";
 
 const FULL_PERMS = ["*"];
 
@@ -84,6 +87,33 @@ describe("createSftpgoStorageProvider - happy paths against the fake server", ()
 
     expect(stat.size).toBe(11);
     expect(stat.modifiedAt).toBeInstanceOf(Date);
+  });
+
+  it("stats the root and a directory through the parent listing", async () => {
+    const { client } = setup({
+      ...ALICE_SEED,
+      files: { alice: { "/docs/hello.txt": "hello world" } },
+    });
+    const withToken = await withTokenFor(client, "alice", "secret");
+    const provider = createSftpgoStorageProvider({ client, withToken });
+
+    expect(await provider.stat("/")).toMatchObject({ kind: "dir", size: 0 });
+    expect(await provider.stat("/docs")).toMatchObject({ kind: "dir" });
+    expect(await provider.stat("/docs/hello.txt")).toMatchObject({ kind: "file", size: 11 });
+  });
+
+  it("reports not_found from stat when the parent listing lacks the entry", async () => {
+    const client = {
+      user: () => ({
+        statFile: async () => {
+          throw new SftpgoError("is a directory", "bad_request", 400, null);
+        },
+        list: async () => [],
+      }),
+    } as unknown as ReturnType<typeof createSftpgoClient>;
+    const provider = createSftpgoStorageProvider({ client, withToken: (fn) => fn("t") });
+
+    await expect(provider.stat("/gone")).rejects.toMatchObject({ kind: "not_found" });
   });
 
   it("downloads a whole file", async () => {
@@ -233,7 +263,7 @@ describe("createSftpgoStorageProvider - happy paths against the fake server", ()
     const withToken = await withTokenFor(client, "alice", "secret");
     const provider = createSftpgoStorageProvider({ client, withToken });
 
-    await provider.setModifiedAt("/hello.txt", new Date("2020-01-01T00:00:00.000Z"));
+    await provider.setModifiedAt?.("/hello.txt", new Date("2020-01-01T00:00:00.000Z"));
 
     const stat = await provider.statFile("/hello.txt");
     expect(stat.modifiedAt?.toISOString()).toBe("2020-01-01T00:00:00.000Z");
@@ -244,7 +274,7 @@ describe("createSftpgoStorageProvider - happy paths against the fake server", ()
     const withToken = await withTokenFor(client, "alice", "secret");
     const provider = createSftpgoStorageProvider({ client, withToken });
 
-    const stream = await provider.zip(["/hello.txt"]);
+    const stream = await provider.zip?.(["/hello.txt"]);
     const bytes = await new Response(stream).arrayBuffer();
     expect(bytes.byteLength).toBeGreaterThan(0);
   });

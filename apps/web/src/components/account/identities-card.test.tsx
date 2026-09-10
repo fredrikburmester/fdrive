@@ -11,8 +11,40 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 const me: MeResponse = {
   account: { id: "a", displayName: "Ada" },
   identities: [
-    { id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" },
-    { id: "two", username: "bob", providerType: "sftpgo", providerLabel: "Other" },
+    {
+      id: "one",
+      username: "ada",
+      providerType: "sftpgo",
+      providerLabel: "Main",
+      providerId: "00000000-0000-4000-8000-000000000009",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: true,
+      },
+    },
+    {
+      id: "two",
+      username: "bob",
+      providerType: "sftpgo",
+      providerLabel: "Other",
+      providerId: "00000000-0000-4000-8000-000000000009",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: true,
+      },
+    },
   ],
   activeIdentityId: "one",
   isAdmin: false,
@@ -49,7 +81,7 @@ it("confirms the exact login, explains retained files, and reports unlink confli
   fireEvent.change(screen.getByLabelText("Your current password"), { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Remove login" }));
   await waitFor(() => expect(screen.getByText("Login changed elsewhere")).toBeDefined());
-  expect(unlink).toHaveBeenCalledWith("two", { currentPassword: "mine" });
+  expect(unlink).toHaveBeenCalledWith("two", { currentCredential: { password: "mine" } });
   expect((screen.getByLabelText("Your current password") as HTMLInputElement).value).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

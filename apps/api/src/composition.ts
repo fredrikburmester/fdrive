@@ -19,7 +19,6 @@ import { registerAccountsRoutes } from "./accounts/routes.ts";
 import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
-import { registerAdminRoutes } from "./admin/routes.js";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
 import {
@@ -28,11 +27,13 @@ import {
   createTokenSource,
   parseMasterKey,
 } from "./auth/index.js";
-import { createIdentityClientResolver } from "./auth/provider-client.ts";
-import { createIdentityStorageFactory, trashSettingsForStorage } from "./auth/storage-factory.ts";
+import {
+  createIdentityStorageFactory,
+  createPinnedStorageFactory,
+  trashSettingsForStorage,
+} from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
-import { createConnectionStore } from "./connection/store.js";
 import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
@@ -62,6 +63,8 @@ import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
+import { registerProviderRoutes } from "./providers/routes.js";
+import { createProviderService, hostLabel } from "./providers/service.js";
 import { createSettingsMountMappingStore } from "./scoping/mount-mapping-store.ts";
 import { createSettingsScopeOverrideStore } from "./scoping/override-store.ts";
 import { createReadAuthorizer } from "./scoping/read-authorizer.ts";
@@ -117,12 +120,12 @@ const HEALTH_PROBE_TTL_MS = 15_000;
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
  * (running migrations first when `config.fdriveAutoMigrate` is set), the
- * connection store (env `SFTPGO_URL` or `settings`, see
- * `src/connection/store.ts`) and a connection-aware SFTPGo client, the
- * event bus, the login rate limiter, the auth module, the setup module
- * (logging the one-time setup token while setup is required), the admin
- * connection routes, and the fs and events route groups. Returns the
- * resulting `Hono` app plus a `close` that ends the database pool.
+ * provider service (rows in `app.providers`, seeded from `SFTPGO_URL`, see
+ * `src/providers/service.ts`), the event bus, the login rate limiter, the
+ * auth module, the setup module (logging the one-time setup token while
+ * setup is required), the admin provider routes, and the fs and events
+ * route groups. Returns the resulting `Hono` app plus a `close` that ends
+ * the database pool.
  */
 export async function composeApp(
   config: AppConfig,
@@ -148,14 +151,30 @@ export async function composeApp(
   const repos = createRepos(db);
   const eventLog = createSystemEventLog({ repo: repos.systemEvents, logger });
 
-  const connectionStore = createConnectionStore({
-    settings: repos.settings,
-    envUrl: config.sftpgoUrl,
-    defaultHomeTemplate: config.fdriveHomeTemplate,
-    clock,
-  });
-
   const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const trashSettings = createTrashSettingsService({
+    settings: repos.settings,
+    identities: repos.identities,
+  });
+  // Storage providers are rows: the SFTPGo named by `SFTPGO_URL` is seeded
+  // and pinned at startup, and the pre-row `connection.sftpgo` setting is
+  // folded into its row. Every credential-bearing call resolves an
+  // identity's own row first, so nothing ever follows a configuration
+  // change to another server.
+  const providerService = createProviderService({
+    repos,
+    fetch: fetchImpl,
+    clock,
+    eventLog,
+    environment: {
+      sftpgoUrl: config.sftpgoUrl,
+      homeTemplate: config.fdriveHomeTemplate,
+      indexRootCount: (config.fdriveIndexRoots ?? []).length,
+    },
+    trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
+  });
+  await providerService.seedFromEnvironment();
+
   const featureService = createFeatureService({
     settings: repos.settings,
     config,
@@ -163,22 +182,16 @@ export async function composeApp(
     eventLog,
   });
   const featureValues = async () => (await featureService.configuration()).values;
-  const clientForBaseUrl = (baseUrl: string) => createSftpgoClient({ baseUrl, fetch: fetchImpl });
-  const clientForIdentity = createIdentityClientResolver({
-    identities: repos.identities,
-    providers: repos.providers,
-    connections: connectionStore,
-    clientForBaseUrl,
-  });
 
   const bus = createEventBus();
   const jobRunner = createJobRunner({ clock, bus });
   const limiter = createLoginLimiter({ clock });
-  const tokenSource = createTokenSource({ repos, clientForIdentity, master, clock });
-
-  const trashSettings = createTrashSettingsService({
-    settings: repos.settings,
-    identities: repos.identities,
+  const tokenSource = createTokenSource({
+    repos,
+    providers: providerService,
+    master,
+    clock,
+    fetch: fetchImpl,
   });
   // The address everyone opens fdrive at, chosen in onboarding. Deployments
   // from before it was a setting of its own stored it as Office's `appUrl`;
@@ -192,22 +205,28 @@ export async function composeApp(
   });
 
   const storageFactory = createIdentityStorageFactory({
-    clientForIdentity,
+    providers: providerService,
     tokenSource,
+    fetch: fetchImpl,
+    clock,
     resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
+  });
+  const pinnedStorageFactory = createPinnedStorageFactory({
+    providers: providerService,
+    tokenSource,
+    fetch: fetchImpl,
   });
   const identityLinks = createIdentityLinksRepo(db);
   const auth = createAuthModule({
     identityLinks,
     repos,
-    clientForBaseUrl,
-    clientForIdentity,
+    providers: providerService,
+    fetch: fetchImpl,
     master,
     clock,
     config,
     limiter,
     tokenSource,
-    connectionStore,
     storageFactory,
   });
 
@@ -239,7 +258,6 @@ export async function composeApp(
     providers: repos.providers,
     overrides: createSettingsScopeOverrideStore(repos.settings),
     mountMappings: createSettingsMountMappingStore(repos.settings),
-    connection: connectionStore,
     indexRoots: config.fdriveIndexRoots,
     indexer: scopeIndexerDirectory,
     storageForIdentity: (identity) => storageFactory(identity.id),
@@ -290,12 +308,7 @@ export async function composeApp(
     clock,
   });
 
-  const accountStorage = createOfficeStorageFactory({
-    connections: connectionStore,
-    providers: repos.providers,
-    tokens: tokenSource,
-    fetch: fetchImpl,
-  });
+  const accountStorage = createOfficeStorageFactory({ pinned: pinnedStorageFactory });
   const identityStorageForAccount = async (identity: { id: string; providerId: string }) => {
     try {
       return await accountStorage(identity.id, identity.providerId);
@@ -310,11 +323,11 @@ export async function composeApp(
     links: identityLinks,
     auth: auth.service,
     tokenSource,
-    clientForBaseUrl,
+    providers: providerService,
+    fetch: fetchImpl,
     limiter,
     master,
     clock,
-    connectionStore,
     storageForIdentity: identityStorageForAccount,
     searchForIdentity: async (identity, query) => {
       const current = await repos.identities.get(identity.id);
@@ -403,13 +416,9 @@ export async function composeApp(
       ? { providerId: configured.providerId, scopes: configured.scopes }
       : null;
   };
-  /** The provider id of the currently configured connection, independent of any identity; used only to route indexer registry events. */
-  const currentOfficeProviderId = async (): Promise<string | null> => {
-    const connection = await connectionStore.current();
-    if (connection === null) return null;
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: connection.baseUrl });
-    return provider.id;
-  };
+  /** The default (oldest enabled) provider's id, independent of any identity; used to route indexer registry events and Office settings. */
+  const currentOfficeProviderId = async (): Promise<string | null> =>
+    (await providerService.defaultProvider())?.id ?? null;
   const officeService = createOfficeService({
     canEdit: async (actor, path) => {
       const settings = await officeSettings.configuration();
@@ -434,12 +443,7 @@ export async function composeApp(
     withWriteScope: createOfficeWriteScope(db),
     clock,
     location: officeLocation,
-    storageFactory: createOfficeStorageFactory({
-      connections: connectionStore,
-      providers: repos.providers,
-      tokens: tokenSource,
-      fetch: fetchImpl,
-    }),
+    storageFactory: accountStorage,
     metadata: metadataService,
     bus,
   });
@@ -506,11 +510,10 @@ export async function composeApp(
   const setupToken = config.fdriveSetupToken ?? generateSetupToken();
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
-    connectionStore,
+    providers: providerService,
     authService: auth.service,
     accounts: repos.accounts,
     claims: createSetupClaimStore(repos.settings),
-    fetch: fetchImpl,
     hasEnvUrl: config.sftpgoUrl !== undefined,
   });
 
@@ -618,10 +621,14 @@ export async function composeApp(
     principalResolver: auth.principalResolver,
     connectionStatus: async () => {
       const setup = await setupService.status();
-      const connection = await connectionStore.current();
-      return setup.required || connection === null
-        ? { required: true, host: null }
-        : { required: false, host: new URL(connection.baseUrl).host };
+      if (setup.required) return { required: true, providers: [] };
+      return {
+        required: false,
+        providers: (await providerService.enabled()).map((provider) => ({
+          type: provider.type,
+          host: hostLabel(provider.baseUrl),
+        })),
+      };
     },
     registerRoutes: (groups) => {
       registerFeatureAdmission(groups.authed, featureService);
@@ -637,7 +644,7 @@ export async function composeApp(
           shares: createShareRepo(db),
           clientFor: (baseUrl) => createSftpgoClient({ baseUrl, fetch: fetchImpl }),
           tokenSource,
-          connectionStore,
+          providers: providerService,
           clock,
           logger,
         }),
@@ -666,7 +673,7 @@ export async function composeApp(
         limiter,
         config,
       });
-      registerAdminRoutes(groups, { connectionStore, fetch: fetchImpl, clock });
+      registerProviderRoutes(groups, { service: providerService });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
       // itself; see `fs/archive-routes.ts`'s `ArchiveRoutesDeps`) reaches

@@ -1,0 +1,164 @@
+import {
+  AdminProvider,
+  AdminProviderCreateRequest,
+  AdminProvidersResponse,
+  AdminProviderTestRequest,
+  AdminProviderUpdateRequest,
+  ConnectionTestResponse,
+  ProvidersResponse,
+  ROUTES,
+} from "@fdrive/contracts";
+import { CoreError, parseHomeTemplate } from "@fdrive/core";
+import { z } from "zod";
+import type { AppHono, AuthedHono } from "../app.js";
+import { createRequireAdmin } from "../auth/principal.js";
+import { withoutApiV1Prefix } from "../auth/routes.js";
+import { ApiHttpError } from "../errors.js";
+import type { ProviderService } from "./service.js";
+
+export interface RegisterProviderRoutesDeps {
+  readonly service: ProviderService;
+}
+
+async function parseBody<T>(schema: z.ZodType<T>, raw: unknown, what: string): Promise<T> {
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ApiHttpError("bad_request", `invalid ${what}`, { issues: parsed.error.issues });
+  }
+  return parsed.data;
+}
+
+/**
+ * The SFTPGo home template is the one configuration value with structure
+ * of its own; validate it here so a typo is a 400, not a broken scope
+ * engine later.
+ */
+function assertValidSftpgoConfig(type: string, config: Record<string, string> | undefined): void {
+  const homeTemplate = config?.homeTemplate;
+  if (type !== "sftpgo" || homeTemplate === undefined || homeTemplate.length === 0) {
+    return;
+  }
+  try {
+    parseHomeTemplate(homeTemplate);
+  } catch (err) {
+    throw new ApiHttpError(
+      "bad_request",
+      err instanceof CoreError ? err.message : "invalid home template",
+      err instanceof CoreError ? err.details : undefined,
+    );
+  }
+}
+
+/**
+ * Registers the public `GET /providers` (what the login page renders) and
+ * the admin `/admin/providers` routes: list, create, update, delete and
+ * probe. Creating or re-addressing a provider probes it first and refuses
+ * an unreachable endpoint.
+ */
+export function registerProviderRoutes(
+  groups: { public: AppHono; authed: AuthedHono },
+  deps: RegisterProviderRoutesDeps,
+): void {
+  const requireAdmin = createRequireAdmin();
+  const providerId = (raw: string): string => {
+    const parsed = z.uuid().safeParse(raw);
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid provider id");
+    }
+    return parsed.data;
+  };
+
+  groups.public.get(withoutApiV1Prefix(ROUTES.providers), async (c) => {
+    const providers = (await deps.service.enabled())
+      .map((provider) => deps.service.publicView(provider))
+      .filter((view) => view !== null);
+    return c.json(ProvidersResponse.parse({ providers }));
+  });
+
+  groups.authed.get(withoutApiV1Prefix(ROUTES.admin.providers), requireAdmin, async (c) => {
+    const views = await Promise.all(
+      (await deps.service.list()).map((provider) => deps.service.adminView(provider)),
+    );
+    return c.json(
+      AdminProvidersResponse.parse({
+        providers: views.filter((view) => view !== null),
+        types: deps.service.types(),
+      }),
+    );
+  });
+
+  groups.authed.post(withoutApiV1Prefix(ROUTES.admin.providers), requireAdmin, async (c) => {
+    const body = await parseBody(
+      AdminProviderCreateRequest,
+      await c.req.json().catch(() => undefined),
+      "provider",
+    );
+    assertValidSftpgoConfig(body.type, body.config);
+    const probe = await deps.service.probe({
+      type: body.type,
+      baseUrl: body.baseUrl,
+      ...(body.config === undefined ? {} : { config: body.config }),
+    });
+    if (!probe.ok) {
+      throw new ApiHttpError("bad_request", `provider is not reachable: ${probe.detail}`);
+    }
+    const created = await deps.service.create(body);
+    return c.json(AdminProvider.parse(await deps.service.adminView(created)));
+  });
+
+  groups.authed.post(withoutApiV1Prefix(ROUTES.admin.providersTest), requireAdmin, async (c) => {
+    const body = await parseBody(
+      AdminProviderTestRequest,
+      await c.req.json().catch(() => undefined),
+      "provider test request",
+    );
+    return c.json(ConnectionTestResponse.parse(await deps.service.probe(body)));
+  });
+
+  groups.authed.post(
+    `${withoutApiV1Prefix(ROUTES.admin.providers)}/:id/test`,
+    requireAdmin,
+    async (c) => {
+      const result = await deps.service.probe(providerId(c.req.param("id")));
+      return c.json(ConnectionTestResponse.parse(result));
+    },
+  );
+
+  groups.authed.patch(
+    `${withoutApiV1Prefix(ROUTES.admin.providers)}/:id`,
+    requireAdmin,
+    async (c) => {
+      const id = providerId(c.req.param("id"));
+      const body = await parseBody(
+        AdminProviderUpdateRequest,
+        await c.req.json().catch(() => undefined),
+        "provider update",
+      );
+      const current = await deps.service.get(id);
+      if (current === null) {
+        throw new ApiHttpError("not_found", "storage provider not found");
+      }
+      assertValidSftpgoConfig(current.provider.type, body.config);
+      if (body.baseUrl !== undefined && body.baseUrl !== current.provider.baseUrl) {
+        const probe = await deps.service.probe({
+          type: current.module.type as AdminProviderTestRequest["type"],
+          baseUrl: body.baseUrl,
+        });
+        if (!probe.ok) {
+          throw new ApiHttpError("bad_request", `provider is not reachable: ${probe.detail}`);
+        }
+      }
+      const updated = await deps.service.update(id, body);
+      return c.json(AdminProvider.parse(await deps.service.adminView(updated)));
+    },
+  );
+
+  groups.authed.delete(
+    `${withoutApiV1Prefix(ROUTES.admin.providers)}/:id`,
+    requireAdmin,
+    async (c) => {
+      await deps.service.remove(providerId(c.req.param("id")));
+      return c.json({ ok: true });
+    },
+  );
+}

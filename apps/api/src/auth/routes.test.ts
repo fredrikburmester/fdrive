@@ -7,7 +7,7 @@ import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
-import { createConnectionStore } from "../connection/store";
+import { memoryProviderService, seedSftpgoProvider } from "../providers/test-fixtures/index.ts";
 import { parseMasterKey } from "./crypto";
 import { createAuthModule } from "./index";
 import { registerAuthRoutes } from "./routes";
@@ -19,6 +19,7 @@ function notImplemented(): never {
 
 const FAKE_STORAGE: StorageProvider = {
   list: notImplemented,
+  stat: notImplemented,
   statFile: notImplemented,
   download: notImplemented,
   upload: notImplemented,
@@ -74,25 +75,24 @@ function buildTestApp(opts: {
     now: opts.clockCtl.clock,
   });
   const fetchImpl = opts.wrapFetch ? opts.wrapFetch(server.fetch) : server.fetch;
-  const sftpgo = createSftpgoClient({ baseUrl: "http://sftpgo.internal:8080", fetch: fetchImpl });
   const repos: Repos = createMemoryRepos();
   const config = loadConfig({ ...REQUIRED_ENV, ...opts.envOverrides });
-  const connectionStore = createConnectionStore({
-    settings: repos.settings,
-    envUrl: config.sftpgoUrl,
-    defaultHomeTemplate: config.fdriveHomeTemplate,
+  const providers = memoryProviderService(repos, {
+    fetch: fetchImpl,
     clock: opts.clockCtl.clock,
+    sftpgoUrl: config.sftpgoUrl,
   });
+  // Memory repos settle in microtasks, well before the first request below.
+  void seedSftpgoProvider(repos, "http://sftpgo.internal:8080", { managedByEnv: true });
   const authModule = createAuthModule({
     identityLinks: memoryIdentityOperations(repos),
     repos,
-    clientForBaseUrl: () => sftpgo,
-    clientForIdentity: async () => sftpgo,
+    providers,
+    fetch: fetchImpl,
     master: parseMasterKey(config.fdriveMasterKey),
     clock: opts.clockCtl.clock,
     config,
     storageFactory: async () => FAKE_STORAGE,
-    connectionStore,
   });
   const app = createApp({
     config,
@@ -104,7 +104,7 @@ function buildTestApp(opts: {
     registerRoutes: authModule.registerRoutes,
   });
 
-  return { app, repos, server, config, authModule };
+  return { app, repos, server, config, authModule, providers };
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -135,7 +135,7 @@ async function login(
       "x-requested-with": "fdrive",
       ...extraHeaders,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify("credential" in body ? body : { credential: body }),
   });
 }
 
@@ -146,37 +146,25 @@ describe("auth routes: POST /auth/login", () => {
     clockCtl = createClock(Date.now());
   });
 
-  it("responds setup_required when the auth service's own connection store has no connection", async () => {
-    // Exercises `requireConnection` in isolation from the app-level setup
-    // gate (which derives its own status from `config.sftpgoUrl`, set in
-    // `REQUIRED_ENV`): the auth service is wired with a connection store
-    // that has nothing configured.
+  it("responds setup_required when no provider is configured", async () => {
+    // Exercises the auth service in isolation from the app-level setup gate
+    // (which derives its own status from `config.sftpgoUrl`, set in
+    // `REQUIRED_ENV`): the auth service sees no provider rows at all.
     const server = createFakeSftpgoServer({
       users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
       now: clockCtl.clock,
     });
-    const sftpgo = createSftpgoClient({
-      baseUrl: "http://sftpgo.internal:8080",
-      fetch: server.fetch,
-    });
     const repos: Repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
-    const connectionStore = createConnectionStore({
-      settings: repos.settings,
-      envUrl: undefined,
-      defaultHomeTemplate: config.fdriveHomeTemplate,
-      clock: clockCtl.clock,
-    });
     const authModule = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
-      clientForBaseUrl: () => sftpgo,
-      clientForIdentity: async () => sftpgo,
+      providers: memoryProviderService(repos, { fetch: server.fetch, clock: clockCtl.clock }),
+      fetch: server.fetch,
       master: parseMasterKey(config.fdriveMasterKey),
       clock: clockCtl.clock,
       config,
       storageFactory: async () => FAKE_STORAGE,
-      connectionStore,
     });
     const app = createApp({
       config,
@@ -193,44 +181,46 @@ describe("auth routes: POST /auth/login", () => {
     expect(res.status).toBe(503);
   });
 
-  it("binds a setup candidate login to its supplied provider without changing the active connection", async () => {
+  it("binds a setup candidate login to its own provider row even while that row is disabled", async () => {
     const server = createFakeSftpgoServer({
       users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
       now: clockCtl.clock,
     });
-    const sftpgo = createSftpgoClient({ baseUrl: "http://candidate:8080", fetch: server.fetch });
     const repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
-    const connectionStore = createConnectionStore({
-      settings: repos.settings,
-      envUrl: "http://active:8080",
-      defaultHomeTemplate: config.fdriveHomeTemplate,
-      clock: clockCtl.clock,
-    });
-    const clientForBaseUrl = vi.fn(() => sftpgo);
+    const requests: string[] = [];
+    const fetchImpl: typeof globalThis.fetch = async (url, init) => {
+      requests.push(new URL(String(url)).host);
+      return server.fetch(url, init);
+    };
+    const active = await seedSftpgoProvider(repos, "http://active:8080", { managedByEnv: true });
+    const candidate = await seedSftpgoProvider(repos, "http://candidate:8080", { enabled: false });
     const auth = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
-      clientForBaseUrl,
-      clientForIdentity: async () => sftpgo,
+      providers: memoryProviderService(repos, { fetch: fetchImpl, clock: clockCtl.clock }),
+      fetch: fetchImpl,
       master: parseMasterKey(config.fdriveMasterKey),
       clock: clockCtl.clock,
       config,
       storageFactory: async () => FAKE_STORAGE,
-      connectionStore,
     });
 
     const result = await auth.service.loginCandidate(
-      { username: "alice", password: "wonderland", userAgent: null, ip: "127.0.0.1" },
-      "http://candidate:8080",
+      {
+        credential: { username: "alice", password: "wonderland" },
+        userAgent: null,
+        ip: "127.0.0.1",
+      },
+      candidate.id,
     );
     const identity = await repos.identities.get(result.me.activeIdentityId);
     if (identity === null) throw new Error("expected candidate identity");
-    const provider = await repos.providers.get(identity.providerId);
 
-    expect(clientForBaseUrl).toHaveBeenCalledWith("http://candidate:8080");
-    expect(provider?.baseUrl).toBe("http://candidate:8080");
-    expect((await connectionStore.current())?.baseUrl).toBe("http://active:8080");
+    expect(requests).toEqual(["candidate:8080"]);
+    expect(identity.providerId).toBe(candidate.id);
+    expect((await repos.providers.get(active.id))?.enabled).toBe(true);
+    expect((await repos.providers.get(candidate.id))?.enabled).toBe(false);
   });
 
   it("succeeds with correct credentials, returns MeResponse, and sets a non-Secure cookie over plain http", async () => {
@@ -366,7 +356,7 @@ describe("auth routes: POST /auth/login", () => {
     const res = await app.request(ROUTES.auth.login, {
       method: "POST",
       headers: { "content-type": "application/json", "sec-fetch-site": "cross-site" },
-      body: JSON.stringify({ username: "alice", password: "wonderland" }),
+      body: JSON.stringify({ credential: { username: "alice", password: "wonderland" } }),
     });
 
     expect(res.status).toBe(403);
@@ -832,7 +822,9 @@ describe("auth service: principal.verifyAuthority", () => {
     clockCtl.advance(24 * 60 * 60 * 1000);
     expect(await principal.verifyAuthority()).toBe(true);
 
-    clockCtl.advance(24 * 60 * 60 * 1000 + 1);
+    // The session's createdAt comes from the wall clock in the memory repo,
+    // so leave a real-time margin rather than a single millisecond.
+    clockCtl.advance(24 * 60 * 60 * 1000 + 1000);
     expect(await principal.verifyAuthority()).toBe(false);
   });
 });

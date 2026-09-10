@@ -1,8 +1,8 @@
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createMemoryStorage } from "@fdrive/testkit";
 import { describe, expect, it, vi } from "vitest";
-import { createMemoryStorage } from "../../test/fixtures/memory-storage.js";
 import { boundedStream, contentVersion, withStagedUpload } from "./streams.ts";
 
 describe("bounded office streams", () => {

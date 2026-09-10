@@ -1,0 +1,361 @@
+import { createMemoryRepos } from "@fdrive/db/testing";
+import { createSftpgoModule, sftpgoModule } from "@fdrive/sftpgo";
+import { describe, expect, it, vi } from "vitest";
+import type { SystemEventLog } from "../system/event-log.js";
+import { createProviderService, hostLabel, LEGACY_CONNECTION_SETTINGS_KEY } from "./service.js";
+
+function probeFetch(): typeof globalThis.fetch {
+  return vi.fn(async (url: unknown) =>
+    String(url).endsWith("/healthz")
+      ? new Response("ok", { status: 200 })
+      : new Response("unauthorized", { status: 401 }),
+  ) as unknown as typeof globalThis.fetch;
+}
+
+function harness(
+  options: {
+    sftpgoUrl?: string;
+    homeTemplate?: string;
+    indexRootCount?: number;
+    trashEnabled?: (providerId: string) => Promise<boolean>;
+    fetch?: typeof globalThis.fetch;
+  } = {},
+) {
+  const repos = createMemoryRepos();
+  const events: string[] = [];
+  const eventLog: SystemEventLog = {
+    record: (subsystem, level, message) => {
+      events.push(`${subsystem}:${level}:${message}`);
+    },
+  };
+  const service = createProviderService({
+    repos,
+    fetch: options.fetch ?? probeFetch(),
+    clock: () => new Date("2026-09-10T00:00:00Z"),
+    eventLog,
+    environment: {
+      sftpgoUrl: options.sftpgoUrl,
+      homeTemplate: options.homeTemplate ?? "sftpgo:/{username}",
+      indexRootCount: options.indexRootCount ?? 0,
+    },
+    ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
+  });
+  return { repos, service, events };
+}
+
+describe("hostLabel", () => {
+  it("uses the endpoint host and tolerates a non-URL", () => {
+    expect(hostLabel("https://sftpgo.internal:9443/base")).toBe("sftpgo.internal:9443");
+    expect(hostLabel("not a url")).toBe("not a url");
+  });
+});
+
+describe("createProviderService: rows", () => {
+  it("creates a validated, labelled provider and lists, resolves and views it", async () => {
+    const h = harness({ indexRootCount: 1 });
+    const created = await h.service.create({
+      type: "sftpgo",
+      label: "Home",
+      baseUrl: "http://sftpgo:8080",
+      config: { homeTemplate: "sftpgo:/{username}" },
+    });
+    expect(created).toMatchObject({
+      type: "sftpgo",
+      label: "Home",
+      enabled: true,
+      managedByEnv: false,
+      config: { homeTemplate: "sftpgo:/{username}" },
+    });
+    expect(await h.service.list()).toHaveLength(1);
+    expect(await h.service.enabled()).toHaveLength(1);
+    expect((await h.service.defaultProvider())?.id).toBe(created.id);
+    const resolved = await h.service.resolve(created.id);
+    expect(resolved.module.type).toBe("sftpgo");
+    expect(resolved.instance).toEqual({
+      id: created.id,
+      baseUrl: "http://sftpgo:8080",
+      config: { homeTemplate: "sftpgo:/{username}" },
+    });
+    expect(h.service.labelFor(created)).toBe("Home");
+    expect(h.service.publicView(created)).toMatchObject({
+      id: created.id,
+      type: "sftpgo",
+      label: "Home",
+      credentialFields: sftpgoModule.credentialFields,
+    });
+    expect(await h.service.adminView(created)).toMatchObject({
+      id: created.id,
+      baseUrl: "http://sftpgo:8080",
+      config: { homeTemplate: "sftpgo:/{username}" },
+      identityCount: 0,
+      reachable: true,
+      checkedAt: "2026-09-10T00:00:00.000Z",
+      createdAt: expect.any(String),
+    });
+    expect(h.service.types().map((type) => type.type)).toEqual(["sftpgo"]);
+    expect(await h.service.capabilitiesFor(resolved)).toEqual({
+      ...sftpgoModule.capabilities,
+      trash: false,
+    });
+    expect(h.events).toEqual(["general:info:Storage provider added: Home"]);
+  });
+
+  it("falls back to the endpoint host as label and treats an empty config as valid", async () => {
+    const h = harness();
+    const created = await h.service.create({
+      type: "sftpgo",
+      label: "x",
+      baseUrl: "http://sftpgo:8080",
+    });
+    const unlabeled = await h.repos.providers.update(created.id, { label: "" });
+    if (unlabeled === null) throw new Error("vanished");
+    expect(h.service.labelFor(unlabeled)).toBe("sftpgo:8080");
+    expect(h.service.publicView(unlabeled)?.label).toBe("sftpgo:8080");
+  });
+
+  it("refuses an unknown type, a bad config, and a duplicate endpoint", async () => {
+    const h = harness();
+    await expect(
+      h.service.create({ type: "gdrive" as "sftpgo", label: "x", baseUrl: "http://a" }),
+    ).rejects.toMatchObject({ kind: "bad_request" });
+    await expect(
+      h.service.create({
+        type: "sftpgo",
+        label: "x",
+        baseUrl: "http://a",
+        config: { unknown: "field" },
+      }),
+    ).rejects.toMatchObject({ kind: "bad_request", details: { issues: expect.any(Array) } });
+    await h.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" });
+    await expect(
+      h.service.create({ type: "sftpgo", label: "y", baseUrl: "http://a" }),
+    ).rejects.toMatchObject({ kind: "conflict" });
+  });
+
+  it("reports a row that vanishes between insert and update", async () => {
+    const h = harness();
+    vi.spyOn(h.repos.providers, "update").mockResolvedValueOnce(null);
+    await expect(
+      h.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" }),
+    ).rejects.toMatchObject({ kind: "internal" });
+    const row = await h.service.create({ type: "sftpgo", label: "y", baseUrl: "http://b" });
+    vi.spyOn(h.repos.providers, "update").mockResolvedValueOnce(null);
+    await expect(h.service.update(row.id, { label: "z" })).rejects.toMatchObject({
+      kind: "not_found",
+    });
+  });
+
+  it("hides rows of a type this build does not know", async () => {
+    const h = harness();
+    const foreign = await h.repos.providers.ensure({ type: "gdrive", baseUrl: "http://g" });
+    expect(await h.service.get(foreign.id)).toBeNull();
+    expect(await h.service.enabled()).toEqual([]);
+    expect(await h.service.defaultProvider()).toBeNull();
+    expect(h.service.publicView(foreign)).toBeNull();
+    expect(await h.service.adminView(foreign)).toBeNull();
+    await expect(h.service.resolve(foreign.id)).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+    });
+    await expect(h.service.update(foreign.id, { label: "x" })).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+  });
+
+  it("resolves disabled rows only on request, and identities through their rows", async () => {
+    const h = harness();
+    const row = await h.service.create(
+      { type: "sftpgo", label: "x", baseUrl: "http://a" },
+      { enabled: false },
+    );
+    await expect(h.service.resolve(row.id)).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+    });
+    expect((await h.service.resolve(row.id, { allowDisabled: true })).provider.id).toBe(row.id);
+    await expect(h.service.resolve("00000000-0000-4000-8000-000000000000")).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+    });
+    const account = await h.repos.accounts.create({ displayName: null });
+    const identity = await h.repos.identities.create({
+      accountId: account.id,
+      providerId: row.id,
+      externalUsername: "alice",
+    });
+    await expect(h.service.forIdentity(identity.id)).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+    });
+    await h.service.update(row.id, { enabled: true });
+    expect((await h.service.forIdentity(identity.id)).identity.id).toBe(identity.id);
+    await expect(
+      h.service.forIdentity("00000000-0000-4000-8000-000000000001"),
+    ).rejects.toMatchObject({ kind: "reauth_required" });
+    expect((await h.service.adminView(row))?.identityCount).toBe(1);
+  });
+
+  it("updates label, config and enabled, and refuses re-addressing a used or pinned row", async () => {
+    const h = harness();
+    const row = await h.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" });
+    const updated = await h.service.update(row.id, {
+      label: "Renamed",
+      config: { homeTemplate: "data:/{username}" },
+      enabled: false,
+    });
+    expect(updated).toMatchObject({
+      label: "Renamed",
+      config: { homeTemplate: "data:/{username}" },
+      enabled: false,
+    });
+    expect(h.events.at(-1)).toContain("Storage provider updated: Renamed");
+    expect((await h.service.update(row.id, { baseUrl: "http://b" })).baseUrl).toBe("http://b");
+    await expect(h.service.update(row.id, { config: { nope: "x" } })).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    const account = await h.repos.accounts.create({ displayName: null });
+    await h.repos.identities.create({
+      accountId: account.id,
+      providerId: row.id,
+      externalUsername: "alice",
+    });
+    await expect(h.service.update(row.id, { baseUrl: "http://c" })).rejects.toMatchObject({
+      kind: "conflict",
+    });
+    // The same address is not a change.
+    expect((await h.service.update(row.id, { baseUrl: "http://b" })).baseUrl).toBe("http://b");
+    await h.repos.providers.update(row.id, { managedByEnv: true });
+    await expect(h.service.update(row.id, { baseUrl: "http://d" })).rejects.toMatchObject({
+      kind: "forbidden",
+    });
+    await expect(
+      h.service.update("00000000-0000-4000-8000-000000000000", { label: "x" }),
+    ).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("removes unused rows and refuses used or pinned ones", async () => {
+    const h = harness();
+    const unused = await h.service.create({ type: "sftpgo", label: "u", baseUrl: "http://u" });
+    const used = await h.service.create({ type: "sftpgo", label: "v", baseUrl: "http://v" });
+    const account = await h.repos.accounts.create({ displayName: null });
+    await h.repos.identities.create({
+      accountId: account.id,
+      providerId: used.id,
+      externalUsername: "alice",
+    });
+    await h.service.remove(unused.id);
+    expect(await h.service.get(unused.id)).toBeNull();
+    expect(h.events.at(-1)).toContain("Storage provider removed: u");
+    await expect(h.service.remove(used.id)).rejects.toMatchObject({ kind: "conflict" });
+    await h.repos.providers.update(used.id, { managedByEnv: true });
+    await expect(h.service.remove(used.id)).rejects.toMatchObject({ kind: "forbidden" });
+    await expect(h.service.remove("00000000-0000-4000-8000-000000000000")).rejects.toMatchObject({
+      kind: "not_found",
+    });
+    const boom = new Error("db down");
+    vi.spyOn(h.repos.providers, "delete").mockRejectedValueOnce(boom);
+    await h.repos.providers.update(used.id, { managedByEnv: false });
+    await expect(h.service.remove(used.id)).rejects.toBe(boom);
+  });
+
+  it("probes saved rows and unsaved candidates", async () => {
+    const h = harness();
+    const row = await h.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" });
+    expect(await h.service.probe(row.id)).toEqual({ ok: true, detail: "SFTPGo is reachable" });
+    expect(await h.service.probe({ type: "sftpgo", baseUrl: "http://b" })).toMatchObject({
+      ok: true,
+    });
+    await expect(h.service.probe("00000000-0000-4000-8000-000000000000")).rejects.toMatchObject({
+      kind: "not_found",
+    });
+    await expect(
+      h.service.probe({ type: "sftpgo", baseUrl: "http://b", config: { nope: "x" } }),
+    ).rejects.toMatchObject({ kind: "bad_request" });
+  });
+
+  it("derives capabilities from the module, trash settings and index roots", async () => {
+    const withRoots = harness({ indexRootCount: 2, trashEnabled: async () => true });
+    const row = await withRoots.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" });
+    expect(
+      await withRoots.service.capabilitiesFor(await withRoots.service.resolve(row.id)),
+    ).toEqual({ ...sftpgoModule.capabilities, trash: true, index: true, scopeMapping: true });
+    const moveModule = createSftpgoModule();
+    const noTrash = { ...moveModule, trash: "none" as const };
+    expect(
+      await withRoots.service.capabilitiesFor({
+        provider: row,
+        module: noTrash,
+        instance: { id: row.id, baseUrl: row.baseUrl, config: row.config },
+      }),
+    ).toMatchObject({ trash: false });
+  });
+
+  it("uses injected modules instead of the registry", async () => {
+    const repos = createMemoryRepos();
+    const custom = { ...sftpgoModule, label: "Custom SFTPGo" };
+    const service = createProviderService({
+      repos,
+      fetch: probeFetch(),
+      clock: () => new Date(),
+      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootCount: 0 },
+      modules: { sftpgo: custom },
+    });
+    expect(service.types().map((type) => type.label)).toEqual(["Custom SFTPGo"]);
+  });
+});
+
+describe("createProviderService: seedFromEnvironment", () => {
+  it("creates and pins the SFTPGo provider named by SFTPGO_URL with the environment home template", async () => {
+    const h = harness({ sftpgoUrl: "http://env:8080", homeTemplate: "env:/{username}" });
+    await h.service.seedFromEnvironment();
+    const [row] = await h.service.list();
+    expect(row).toMatchObject({
+      type: "sftpgo",
+      baseUrl: "http://env:8080",
+      managedByEnv: true,
+      enabled: true,
+      config: { homeTemplate: "env:/{username}" },
+    });
+    // Idempotent, and a stored template is never overwritten.
+    await h.repos.providers.update(row?.id ?? "", { config: { homeTemplate: "kept:/{username}" } });
+    await h.service.seedFromEnvironment();
+    expect(await h.service.list()).toHaveLength(1);
+    expect((await h.service.list())[0]?.config).toEqual({ homeTemplate: "kept:/{username}" });
+  });
+
+  it("folds the legacy connection setting into a row and removes the setting", async () => {
+    const h = harness();
+    await h.repos.settings.set(LEGACY_CONNECTION_SETTINGS_KEY, {
+      baseUrl: "http://legacy:8080",
+      homeTemplate: "legacy:/{username}",
+    });
+    await h.service.seedFromEnvironment();
+    expect(await h.service.list()).toEqual([
+      expect.objectContaining({
+        baseUrl: "http://legacy:8080",
+        managedByEnv: false,
+        config: { homeTemplate: "legacy:/{username}" },
+      }),
+    ]);
+    expect(await h.repos.settings.get(LEGACY_CONNECTION_SETTINGS_KEY)).toBeNull();
+  });
+
+  it("prefers SFTPGO_URL over the legacy setting, keeping the stored home template, and unpins a stale env row", async () => {
+    const h = harness({ sftpgoUrl: "http://env:8080" });
+    const stale = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old:8080" });
+    await h.repos.providers.update(stale.id, { managedByEnv: true });
+    await h.repos.settings.set(LEGACY_CONNECTION_SETTINGS_KEY, {
+      homeTemplate: "stored:/{username}",
+    });
+    await h.service.seedFromEnvironment();
+    expect(await h.repos.providers.get(stale.id)).toMatchObject({ managedByEnv: false });
+    const env = (await h.service.list()).find((row) => row.baseUrl === "http://env:8080");
+    expect(env).toMatchObject({
+      managedByEnv: true,
+      config: { homeTemplate: "stored:/{username}" },
+    });
+    expect(await h.repos.settings.get(LEGACY_CONNECTION_SETTINGS_KEY)).toBeNull();
+  });
+
+  it("does nothing without an environment URL or a legacy setting", async () => {
+    const h = harness();
+    await h.service.seedFromEnvironment();
+    expect(await h.service.list()).toEqual([]);
+  });
+});

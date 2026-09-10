@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { parseHomeTemplate, type StorageProvider, scopesFor } from "@fdrive/core";
 import { createMemoryOfficeFileRepo, createMemoryWopiLockRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createMemoryStorage } from "@fdrive/testkit";
 import { getCookie } from "hono/cookie";
 import type { Logger } from "pino";
 import { createApp } from "../../../src/app.js";
@@ -14,7 +15,6 @@ import { registerOfficeRoutes, registerWopiRoutes } from "../../../src/office/ro
 import { createOfficeService } from "../../../src/office/service.ts";
 import { createOfficeTokenCodec } from "../../../src/office/tokens.ts";
 import type { OfficeConfig, OfficeDeps } from "../../../src/office/types.ts";
-import { createMemoryStorage } from "../memory-storage.js";
 export const proofPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
 export function proofKey(pair = proofPair) {
   const jwk = pair.publicKey.export({ format: "jwk" });

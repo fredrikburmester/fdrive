@@ -16,15 +16,15 @@ import type { Logger } from "pino";
 import { liveAccountSession } from "../accounts/service.ts";
 import type { AccountRequestContext } from "../accounts/types.ts";
 import type { TokenSource } from "../auth/token-source.ts";
-import type { ConnectionStore } from "../connection/store.ts";
 import { ApiHttpError } from "../errors.ts";
+import type { ProviderService } from "../providers/service.ts";
 
 export interface SharesDeps {
   repos: Repos;
   shares: ShareRepo;
   clientFor: (baseUrl: string) => SftpgoClient;
-  tokenSource: TokenSource;
-  connectionStore: ConnectionStore;
+  tokenSource: Pick<TokenSource, "get" | "invalidate">;
+  providers: Pick<ProviderService, "forIdentity">;
   clock: () => Date;
   logger: Logger;
 }
@@ -90,16 +90,28 @@ export async function shareCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 export function createSharesService(deps: SharesDeps) {
+  /**
+   * Shares are an SFTPGo feature: the identity's provider must be an
+   * enabled SFTPGo row, and the client is bound to that row's endpoint for
+   * the operation's lifetime.
+   */
   async function owner(identityId: string, accountId?: string) {
     const identity = await deps.repos.identities.get(identityId);
     if (identity === null || (accountId !== undefined && identity.accountId !== accountId))
       throw new ApiHttpError("not_found", "Share unavailable");
-    const connection = await deps.connectionStore.current();
-    const provider = await deps.repos.providers.get(identity.providerId);
-    if (connection === null || provider?.baseUrl !== connection.baseUrl)
+    let resolved: Awaited<ReturnType<ProviderService["forIdentity"]>>;
+    try {
+      resolved = await deps.providers.forIdentity(identityId);
+    } catch {
       throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
-    return { identity, baseUrl: connection.baseUrl };
+    }
+    if (resolved.provider.type !== "sftpgo")
+      throw new ApiHttpError("unsupported", "Sharing is not available for this storage", {
+        capability: "shares",
+      });
+    return { identity, baseUrl: resolved.provider.baseUrl };
   }
+  /** Runs `fn` with the owner's JWT, re-minting once when SFTPGo answers 401. */
   async function withOwner<T>(
     identityId: string,
     fn: (api: SftpgoUserApi) => Promise<T>,
@@ -107,12 +119,24 @@ export function createSharesService(deps: SharesDeps) {
   ) {
     const location = await owner(identityId, accountId);
     const client = deps.clientFor(location.baseUrl);
-    return deps.tokenSource.withToken(identityId, async (token) => {
+    const call = async (): Promise<T> => {
+      const token = await deps.tokenSource.get(identityId);
+      if (token === null)
+        throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
       const current = await owner(identityId, accountId);
       if (current.baseUrl !== location.baseUrl)
         throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
       return fn(client.user(token));
-    });
+    };
+    try {
+      return await call();
+    } catch (error) {
+      if (error instanceof SftpgoError && error.kind === "unauthorized") {
+        await deps.tokenSource.invalidate(identityId);
+        return await call();
+      }
+      throw error;
+    }
   }
   async function mirror(
     identityId: string,

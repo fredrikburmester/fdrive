@@ -1,19 +1,43 @@
-/** A storage backend instance, e.g. one SFTPGo server. */
+/** A storage backend instance: one SFTPGo server, one WebDAV endpoint, one bucket. */
 export interface Provider {
   readonly id: string;
   readonly type: string;
   readonly baseUrl: string;
+  /** Shown to users; empty means "use the endpoint host". */
+  readonly label: string;
+  /** The provider module's configuration values, validated by the module. */
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly enabled: boolean;
+  /** The endpoint is pinned by environment and cannot be changed at runtime. */
+  readonly managedByEnv: boolean;
   readonly createdAt: Date;
+}
+
+export interface ProviderPatch {
+  readonly label?: string;
+  readonly baseUrl?: string;
+  readonly config?: Readonly<Record<string, unknown>>;
+  readonly enabled?: boolean;
+  readonly managedByEnv?: boolean;
 }
 
 export interface ProviderRepo {
   get(id: string): Promise<Provider | null>;
+  /** Every provider, oldest first. */
+  list(): Promise<Provider[]>;
   /**
    * Finds the provider for (type, baseUrl), creating it when it does not
    * exist yet. Idempotent: repeated calls with the same input always
-   * return the same row.
+   * return the same row, and never change an existing row's other fields.
    */
   ensure(input: { type: string; baseUrl: string }): Promise<Provider>;
+  /** Applies `patch` and returns the row, or `null` when no such provider exists. */
+  update(id: string, patch: ProviderPatch): Promise<Provider | null>;
+  /**
+   * Deletes the provider. Throws `ConflictError` while identities still
+   * reference it; a no-op when it does not exist.
+   */
+  delete(id: string): Promise<void>;
 }
 
 /** An fdrive user, created on first successful login. */
@@ -51,6 +75,8 @@ export interface IdentityRepo {
   get(id: string): Promise<Identity | null>;
   listByAccount(accountId: string): Promise<Identity[]>;
   touchLogin(id: string, at: Date): Promise<void>;
+  /** How many identities reference `providerId`. */
+  countByProvider(providerId: string): Promise<number>;
   /**
    * Every identity across every account. Used by the indexer event listener
    * to resolve which identities a filesystem change under a given root and
@@ -127,6 +153,8 @@ export interface SettingsRepo {
    * structurally by the database, so this is safe for cross-process claims.
    */
   compareAndSet(key: string, expected: unknown | null, value: unknown): Promise<boolean>;
+  /** Removes the setting at `key`; a no-op when it does not exist. */
+  delete(key: string): Promise<void>;
   /** Returns every setting as a plain object keyed by its setting key. */
   all(): Promise<Record<string, unknown>>;
 }

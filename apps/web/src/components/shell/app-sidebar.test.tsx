@@ -25,7 +25,25 @@ vi.mock("@/components/shell/folder-tree", () => ({
 
 const me: MeResponse = {
   account: { id: "a", displayName: "Ada" },
-  identities: [{ id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" }],
+  identities: [
+    {
+      id: "one",
+      username: "ada",
+      providerType: "sftpgo",
+      providerLabel: "Main",
+      providerId: "00000000-0000-4000-8000-000000000009",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: true,
+      },
+    },
+  ],
   activeIdentityId: "one",
   isAdmin: false,
 };

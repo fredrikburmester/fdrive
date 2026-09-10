@@ -34,6 +34,13 @@ export const providers = appSchema.table(
     id: uuid("id").primaryKey().defaultRandom(),
     type: text("type").notNull(),
     baseUrl: text("base_url").notNull(),
+    /** Shown to users on the login page and in the login switcher. Defaults to the endpoint host. */
+    label: text("label").notNull().default(""),
+    /** The provider module's `configFields` values (for SFTPGo: `homeTemplate`). */
+    config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+    enabled: boolean("enabled").notNull().default(true),
+    /** True when the endpoint is pinned by environment (`SFTPGO_URL`) and cannot change at runtime. */
+    managedByEnv: boolean("managed_by_env").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [unique("providers_type_base_url_unique").on(table.type, table.baseUrl)],

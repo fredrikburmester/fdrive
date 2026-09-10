@@ -8,11 +8,11 @@ import {
 
 describe("connectionSourceLabel", () => {
   it("labels env as locked", () => {
-    expect(connectionSourceLabel("env")).toBe("Environment (locked)");
+    expect(connectionSourceLabel(true)).toBe("Environment (locked)");
   });
 
   it("labels settings as editable", () => {
-    expect(connectionSourceLabel("settings")).toBe("Settings");
+    expect(connectionSourceLabel(false)).toBe("Settings");
   });
 });
 

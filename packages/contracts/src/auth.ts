@@ -1,26 +1,27 @@
 import { z } from "zod";
+import { ProviderCapabilities, ProviderFieldValues, ProviderType } from "./providers.ts";
 
 /**
- * Body for `POST /api/v1/auth/login`. `otp` is required only when SFTPGo
- * demands a TOTP code for the account.
+ * Body for `POST /api/v1/auth/login`. `credential` holds the values of the
+ * provider's `credentialFields` (for SFTPGo: `username`, `password` and an
+ * optional `otp`), validated by the provider module on the server.
+ * `providerId` may be omitted when exactly one provider is enabled.
  */
-export const LoginRequest = z.object({
-  username: z.string().min(1).max(255),
-  password: z.string().min(1),
-  otp: z.string().optional(),
+export const LoginRequest = z.strictObject({
+  providerId: z.uuid().optional(),
+  credential: ProviderFieldValues,
 });
 
 export type LoginRequest = z.infer<typeof LoginRequest>;
 
-/**
- * A single SFTPGo login linked to the signed-in account. v1 ships exactly
- * one provider type, `sftpgo`, but the shape leaves room for others.
- */
+/** A single login linked to the signed-in account, with what its storage can do. */
 export const IdentitySummary = z.object({
   id: z.uuid(),
   username: z.string(),
-  providerType: z.literal("sftpgo"),
+  providerId: z.uuid(),
+  providerType: ProviderType,
   providerLabel: z.string(),
+  capabilities: ProviderCapabilities,
 });
 
 export type IdentitySummary = z.infer<typeof IdentitySummary>;

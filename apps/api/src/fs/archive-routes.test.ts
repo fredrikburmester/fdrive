@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ArchiveEntriesResponse, FsEvent, JobStatus } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
+import {
+  createFakeSftpgoServer,
+  createSftpgoClient,
+  createSftpgoStorageProvider,
+  type FakeSeed,
+  type WithToken,
+} from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import * as tar from "tar-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +23,6 @@ import { loadConfig } from "../config.js";
 import { createEventBus, type EventBus } from "../events/bus.js";
 import { registerEventRoutes } from "../events/routes.js";
 import { createJobRunner } from "../jobs/runner.js";
-import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerFsRoutes } from "./routes.js";
 
 /**
@@ -347,6 +352,7 @@ function notImplemented(): never {
 function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
   return {
     list: notImplemented,
+    stat: notImplemented,
     statFile: notImplemented,
     download: notImplemented,
     upload: notImplemented,
@@ -358,7 +364,7 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     setModifiedAt: notImplemented,
     zip: notImplemented,
     ...overrides,
-  };
+  } as StorageProvider;
 }
 
 describe("POST /fs/duplicate", () => {

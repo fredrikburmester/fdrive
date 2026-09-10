@@ -21,19 +21,28 @@ export default async function AboutPage() {
             <CardDescription>Version {about.version}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
-            <p>
-              Built on{" "}
-              <a
-                href={about.builtOn.sourceUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-              >
-                {about.builtOn.name}
-              </a>
-              .
-            </p>
-            {about.provider ? <p>Connected to SFTPGo at {about.provider.label}.</p> : null}
+            {about.builtOn.map((attribution) => (
+              <p key={attribution.name}>
+                Built on{" "}
+                <a
+                  href={attribution.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-foreground underline-offset-4 hover:underline"
+                >
+                  {attribution.name}
+                </a>
+                .
+              </p>
+            ))}
+            {about.providers
+              .filter((provider) => provider.label !== null)
+              .map((provider) => (
+                <p key={`${provider.type}-${provider.label}`}>
+                  Connected to {provider.type === "sftpgo" ? "SFTPGo" : provider.type} at{" "}
+                  {provider.label}.
+                </p>
+              ))}
             <p>fdrive is licensed under the AGPL-3.0 license.</p>
           </CardContent>
         </Card>

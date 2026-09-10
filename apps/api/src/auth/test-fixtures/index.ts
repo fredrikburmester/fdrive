@@ -1,26 +1,12 @@
-import {
-  type Identity,
-  IdentityLinksError,
-  type Provider,
-  type Repos,
-  type Session,
-} from "@fdrive/db";
+import { type Identity, IdentityLinksError, type Repos, type Session } from "@fdrive/db";
 import type { AccountIdentityOperations } from "../../accounts/types.ts";
 
 /** Test double only. PostgreSQL ownership/lock guarantees have separate integration coverage. */
 export function memoryIdentityOperations(repos: Repos): AccountIdentityOperations {
   const changed = new Map<string, Identity>();
   const sessions = new Map<string, Session>();
-  const providers = new Map<string, Provider>();
   const baseIdentities = { ...repos.identities };
   const baseSessions = { ...repos.sessions };
-  const ensure = repos.providers.ensure;
-  repos.providers.ensure = async (input) => {
-    const row = await ensure(input);
-    providers.set(row.id, row);
-    return row;
-  };
-  Object.assign(repos.providers, { get: async (id: string) => providers.get(id) ?? null });
   repos.identities.get = async (id) => changed.get(id) ?? baseIdentities.get(id);
   repos.identities.listAll = async () => {
     const all = new Map((await baseIdentities.listAll()).map((row) => [row.id, row]));

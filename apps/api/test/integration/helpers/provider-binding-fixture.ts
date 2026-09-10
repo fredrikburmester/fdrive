@@ -1,16 +1,20 @@
 import { createDb, createIdentityLinksRepo, createRepos, type Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createSftpgoClient } from "@fdrive/sftpgo";
 import pino from "pino";
 import { KEY_ID, seal } from "../../../src/auth/crypto.js";
-import { createIdentityClientResolver } from "../../../src/auth/provider-client.ts";
 import { createIdentityStorageFactory } from "../../../src/auth/storage-factory.ts";
 import { createTokenSource } from "../../../src/auth/token-source.js";
 import { composeApp } from "../../../src/composition.js";
 import { loadConfig } from "../../../src/config.js";
-import { createConnectionStore } from "../../../src/connection/store.js";
+import { createProviderService } from "../../../src/providers/service.js";
 import { startProviderServer, USERNAME } from "./provider-binding-server.ts";
 
+/**
+ * Two isolated upstream servers, A and B, with an identity bound to A. A
+ * "switch" re-points the identity's provider row at B the way a
+ * configuration change would; every credential-bearing path must keep
+ * refusing to send A's password or token to B.
+ */
 export async function providerFixture(repos: Repos = createMemoryRepos()) {
   let now = Date.parse("2026-09-08T12:00:00Z");
   const clock = () => new Date(now);
@@ -24,32 +28,29 @@ export async function providerFixture(repos: Repos = createMemoryRepos()) {
   }
   try {
     const master = Buffer.alloc(32, 19);
-    const connections = createConnectionStore({
-      settings: repos.settings,
-      envUrl: undefined,
-      defaultHomeTemplate: "sftpgo:/{username}",
+    const providers = createProviderService({
+      repos,
+      fetch: globalThis.fetch,
+      clock,
+      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootCount: 0 },
+    });
+    const providerA = await repos.providers.ensure({ type: "sftpgo", baseUrl: a.baseUrl });
+    const tokenDeps = { repos, providers, master, clock, fetch: globalThis.fetch };
+    const tokens = createTokenSource(tokenDeps);
+    const storageFactory = createIdentityStorageFactory({
+      providers,
+      tokenSource: tokens,
+      fetch: globalThis.fetch,
       clock,
     });
-    await connections.update({ baseUrl: a.baseUrl });
-    const clientForBaseUrl = (baseUrl: string) =>
-      createSftpgoClient({ baseUrl, fetch: globalThis.fetch });
-    const clientForIdentity = createIdentityClientResolver({
-      ...repos,
-      connections,
-      clientForBaseUrl,
-    });
-    const tokenDeps = { repos, master, clock, clientForIdentity };
-    const tokens = createTokenSource(tokenDeps);
-    const storageFactory = createIdentityStorageFactory({ clientForIdentity, tokenSource: tokens });
     return {
       a,
       b,
       repos,
       clock,
       master,
-      connections,
-      clientForBaseUrl,
-      clientForIdentity,
+      providers,
+      providerA,
       tokenDeps,
       tokens,
       storageFactory,
@@ -57,11 +58,10 @@ export async function providerFixture(repos: Repos = createMemoryRepos()) {
         now += milliseconds;
       },
       async seedIdentity() {
-        const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: a.baseUrl });
         const account = await repos.accounts.create({ displayName: USERNAME });
         const identity = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
+          providerId: providerA.id,
           externalUsername: USERNAME,
         });
         await repos.credentials.put({
@@ -75,7 +75,11 @@ export async function providerFixture(repos: Repos = createMemoryRepos()) {
         });
         return identity;
       },
-      switchToB: () => connections.update({ baseUrl: b.baseUrl }),
+      /** Disables A and enables B as a separate provider: a stored credential must not follow. */
+      async switchToB() {
+        await repos.providers.update(providerA.id, { enabled: false });
+        return repos.providers.ensure({ type: "sftpgo", baseUrl: b.baseUrl });
+      },
       async close() {
         await Promise.all([a.close(), b.close()]);
       },

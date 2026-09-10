@@ -109,8 +109,10 @@ export const ROUTES = {
     /** POST: permanently delete every entry -> `OkResponse`. */
     empty: "/api/v1/trash/empty",
   },
-  /** GET: version and SFTPGo attribution -> `AboutResponse`. */
+  /** GET: version and provider attribution -> `AboutResponse`. */
   about: "/api/v1/about",
+  /** GET, public: the enabled providers and their credential forms -> `ProvidersResponse`. */
+  providers: "/api/v1/providers",
   setup: {
     /** GET, public: whether setup is required -> `SetupStatusResponse`. */
     status: "/api/v1/setup/status",
@@ -120,12 +122,10 @@ export const ROUTES = {
     complete: "/api/v1/setup/complete",
   },
   admin: {
-    /** GET, admin only: the active connection -> `AdminConnectionResponse`. */
-    connection: "/api/v1/admin/connection",
-    /** PUT, admin only: update the connection -> `AdminConnectionResponse`. */
-    connectionUpdate: "/api/v1/admin/connection",
-    /** POST, admin only: probe the active or a candidate connection -> `ConnectionTestResponse`. */
-    connectionTest: "/api/v1/admin/connection/test",
+    /** GET, admin only: every configured provider -> `AdminProvidersResponse`; POST: add one -> `AdminProvider`. */
+    providers: "/api/v1/admin/providers",
+    /** POST, admin only: probe an unsaved candidate -> `ConnectionTestResponse`. */
+    providersTest: "/api/v1/admin/providers/test",
   },
   system: {
     features: "/api/v1/system/features",
@@ -186,6 +186,16 @@ export const ROUTES = {
 export type Routes = typeof ROUTES;
 
 /** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
+/** `PATCH`/`DELETE`, admin only: one configured provider. */
+export function adminProviderRoute(id: string): string {
+  return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
+}
+
+/** `POST`, admin only: probe one configured provider -> `ConnectionTestResponse`. */
+export function adminProviderTestRoute(id: string): string {
+  return `${adminProviderRoute(id)}/test`;
+}
+
 export function jobRoute(id: string): string {
   return `${ROUTES.fs.jobs}/${encodeURIComponent(id)}`;
 }

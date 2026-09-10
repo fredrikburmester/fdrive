@@ -5,10 +5,12 @@ import { startPostgres, startSftpgo } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { KEY_ID, seal } from "../../src/auth/crypto.js";
 import { createTokenSource } from "../../src/auth/index.js";
-import { createIdentityClientResolver } from "../../src/auth/provider-client.ts";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
 import type { IndexRootConfig } from "../../src/config.js";
-import { createConnectionStore } from "../../src/connection/store.js";
+import {
+  memoryProviderService,
+  seedSftpgoProvider,
+} from "../../src/providers/test-fixtures/index.ts";
 import { createInMemoryMountMappingStore } from "../../src/scoping/mount-mapping-store.ts";
 import {
   createInMemoryScopeOverrideStore,
@@ -139,22 +141,28 @@ describe("scope engine against real SFTPGo and Postgres", () => {
       keyId: KEY_ID,
     });
 
-    const connectionStore = createConnectionStore({
-      settings: repos.settings,
-      envUrl: sftp.baseUrl,
-      defaultHomeTemplate: "sftpgo:/{username}",
+    await seedSftpgoProvider(repos, sftp.baseUrl, {
+      managedByEnv: true,
+      homeTemplate: "sftpgo:/{username}",
+    });
+    const providers = memoryProviderService(repos, {
+      fetch: globalThis.fetch,
+      clock,
+      sftpgoUrl: sftp.baseUrl,
+    });
+    const tokenSource = createTokenSource({
+      repos,
+      providers,
+      master,
+      clock,
+      fetch: globalThis.fetch,
+    });
+    const storageFactory = createIdentityStorageFactory({
+      providers,
+      tokenSource,
+      fetch: globalThis.fetch,
       clock,
     });
-    const clientForBaseUrl = () =>
-      createSftpgoClient({ baseUrl: sftp.baseUrl, fetch: globalThis.fetch });
-    const clientForIdentity = createIdentityClientResolver({
-      identities: repos.identities,
-      providers: repos.providers,
-      connections: connectionStore,
-      clientForBaseUrl,
-    });
-    const tokenSource = createTokenSource({ repos, master, clock, clientForIdentity });
-    const storageFactory = createIdentityStorageFactory({ clientForIdentity, tokenSource });
 
     const indexRoots: IndexRootConfig[] = [
       { name: "sftpgo", sftpgoPath: "/data", indexerPath: "/data" },
@@ -184,7 +192,6 @@ describe("scope engine against real SFTPGo and Postgres", () => {
       providers: repos.providers,
       overrides: createSettingsScopeOverrideStore(repos.settings),
       mountMappings: createInMemoryMountMappingStore(),
-      connection: connectionStore,
       indexRoots,
       indexer,
       storageForIdentity: (identity) => storageFactory(identity.id),
@@ -215,15 +222,17 @@ describe("scope engine against real SFTPGo and Postgres", () => {
     // index-backed feature is denied because the physical prefix the wrong
     // template computes was never indexed.
     const wrongTemplateResolver = createScopeResolver({
-      providers: repos.providers,
+      providers: {
+        get: async (id) => {
+          const row = await repos.providers.get(id);
+          return row === null
+            ? null
+            : { ...row, config: { homeTemplate: "sftpgo:/wrong/{username}" } };
+        },
+        list: () => repos.providers.list(),
+      },
       overrides: createInMemoryScopeOverrideStore(),
       mountMappings: createInMemoryMountMappingStore(),
-      connection: createConnectionStore({
-        settings: repos.settings,
-        envUrl: sftp.baseUrl,
-        defaultHomeTemplate: "sftpgo:/wrong/{username}",
-        clock,
-      }),
       indexRoots,
       indexer,
       storageForIdentity: (identity) => storageFactory(identity.id),

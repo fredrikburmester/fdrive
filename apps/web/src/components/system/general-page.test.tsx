@@ -4,16 +4,24 @@ import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  connection: {
+  provider: {
+    id: "00000000-0000-4000-8000-000000000009",
+    type: "sftpgo" as const,
+    label: "original",
     baseUrl: "http://original",
-    host: "original",
-    source: "settings",
-    homeTemplate: "sftpgo:/{username}",
+    config: { homeTemplate: "sftpgo:/{username}" } as Record<string, string>,
+    enabled: true,
+    managedByEnv: false,
+    identityCount: 1,
     reachable: true,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2026-01-01T00:00:00.000Z",
   },
   test: {
     data: { ok: true, detail: "Reachable" },
-    variables: "http://original",
+    variables: { type: "sftpgo", baseUrl: "http://original" } as
+      | string
+      | { type: string; baseUrl: string },
     isPending: false,
     mutate: vi.fn(),
     reset: vi.fn(),
@@ -38,16 +46,20 @@ vi.mock("./system-page", () => ({
   ),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
-  useAdminConnection: () => ({ data: mocks.connection, isLoading: false, dataUpdatedAt: 1 }),
-  useAdminTestConnection: () => mocks.test,
-  useAdminUpdateConnection: () => mocks.update,
+  useAdminProviders: () => ({
+    data: { providers: [mocks.provider], types: [] },
+    isLoading: false,
+    dataUpdatedAt: 1,
+  }),
+  useAdminTestProvider: () => mocks.test,
+  useAdminUpdateProvider: () => mocks.update,
 }));
 const { GeneralPage } = await import("./general-page");
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  mocks.connection.source = "settings";
-  mocks.test.variables = "http://original";
+  mocks.provider.managedByEnv = false;
+  mocks.test.variables = { type: "sftpgo", baseUrl: "http://original" };
 });
 
 it("gathers the address, SFTPGo connection, home template, and Trash on one page", () => {
@@ -69,15 +81,18 @@ it("requires a successful probe for the current candidate URL before saving", ()
     (screen.getByRole("button", { name: "Save connection" }) as HTMLButtonElement).disabled,
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Test new URL" }));
-  expect(mocks.test.mutate).toHaveBeenCalledWith("http://candidate");
-  mocks.test.variables = "http://candidate";
+  expect(mocks.test.mutate).toHaveBeenCalledWith({ type: "sftpgo", baseUrl: "http://candidate" });
+  mocks.test.variables = { type: "sftpgo", baseUrl: "http://candidate" };
   view.rerender(<GeneralPage />);
   fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
-  expect(mocks.update.mutate).toHaveBeenCalledWith({ baseUrl: "http://candidate" });
+  expect(mocks.update.mutate).toHaveBeenCalledWith({
+    id: mocks.provider.id,
+    patch: { baseUrl: "http://candidate" },
+  });
 });
 
 it("explains when the deployment owns the connection URL", () => {
-  mocks.connection.source = "env";
+  mocks.provider.managedByEnv = true;
   render(<GeneralPage />);
   expect((screen.getByLabelText("SFTPGo address") as HTMLInputElement).disabled).toBe(true);
   expect(screen.getByText(/Remove SFTPGO_URL to manage the connection here/)).toBeTruthy();
@@ -94,6 +109,7 @@ it("saves an edited home template only once it plausibly parses", () => {
   fireEvent.change(template, { target: { value: "sftpgo:/homes/{username}" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(mocks.update.mutate).toHaveBeenCalledWith({
-    homeTemplate: "sftpgo:/homes/{username}",
+    id: mocks.provider.id,
+    patch: { config: { homeTemplate: "sftpgo:/homes/{username}" } },
   });
 });

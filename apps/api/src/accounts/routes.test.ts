@@ -27,7 +27,10 @@ describe("identity account routes", () => {
     const response = await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie: alice.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
     });
     expect(response.status).toBe(200);
     const me = MeResponse.parse(await response.json());
@@ -53,12 +56,15 @@ describe("identity account routes", () => {
       JSON.parse(
         new TextDecoder().decode(open(h.master, stored.ciphertext, bob.me.activeIdentityId)),
       ),
-    ).toEqual({ password: "bob-pass" });
+    ).toEqual({ username: "bob", password: "bob-pass" });
     const own = await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie,
       // The rotated session is now active as bob, so bob's password is the owner's.
-      body: { username: "bob", password: "bob-pass", currentPassword: "bob-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "bob-pass" },
+      },
     });
     expect(own.status).toBe(200);
     expect(MeResponse.parse(await own.json()).identities).toHaveLength(2);
@@ -70,7 +76,10 @@ describe("identity account routes", () => {
     const linked = await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
     });
     const cookie = cookieFrom(linked);
     const before = await h.repos.sessions.getByIdHash(hashCookie(cookie), h.clock());
@@ -104,14 +113,17 @@ describe("identity account routes", () => {
         await h.call(`${ROUTES.account.identities}/${a.me.activeIdentityId}`, {
           method: "DELETE",
           cookie: a.cookie,
-          body: { currentPassword: "alice-pass" },
+          body: { currentCredential: { password: "alice-pass" } },
         })
       ).status,
     ).toBe(409);
     const linked = await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
     });
     const linkedMe = MeResponse.parse(await linked.json());
     const cookie = cookieFrom(linked);
@@ -121,7 +133,7 @@ describe("identity account routes", () => {
     const result = await h.call(`${ROUTES.account.identities}/${b}`, {
       method: "DELETE",
       cookie,
-      body: { currentPassword: "bob-pass" },
+      body: { currentCredential: { password: "bob-pass" } },
     });
     expect(result.status).toBe(200);
     expect(MeResponse.parse(await result.json()).activeIdentityId).toBe(a.me.activeIdentityId);
@@ -147,13 +159,16 @@ describe("identity account routes", () => {
     const linked = await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
     });
     const me = MeResponse.parse(await linked.json());
     const result = await h.call(`${ROUTES.account.identities}/${a.me.activeIdentityId}`, {
       method: "DELETE",
       cookie: cookieFrom(linked),
-      body: { currentPassword: "bob-pass" },
+      body: { currentCredential: { password: "bob-pass" } },
     });
     expect(MeResponse.parse(await result.json()).activeIdentityId).toBe(me.activeIdentityId);
   });
@@ -162,15 +177,23 @@ describe("identity account routes", () => {
     const a = await h.login();
     const b = await h.login("bob");
     for (const body of [
-      { username: "bob", password: "", currentPassword: "alice-pass" },
-      { username: "bob", password: "bob-pass", currentPassword: "" },
       {
-        username: "bob",
-        password: "bob-pass",
-        accountId: b.me.account.id,
-        currentPassword: "alice-pass",
+        credential: { username: "bob", password: "" },
+        currentCredential: { password: "alice-pass" },
       },
-      { username: "bob", password: "x".repeat(4097), currentPassword: "alice-pass" },
+      {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "" },
+      },
+      {
+        credential: { username: "bob", password: "bob-pass" },
+        accountId: b.me.account.id,
+        currentCredential: { password: "alice-pass" },
+      },
+      {
+        credential: { username: "bob", password: "x".repeat(4097) },
+        currentCredential: { password: "alice-pass" },
+      },
     ])
       expect(
         (await h.call(ROUTES.account.identities, { method: "POST", cookie: a.cookie, body }))
@@ -180,7 +203,10 @@ describe("identity account routes", () => {
       (
         await h.call(ROUTES.account.identities, {
           method: "POST",
-          body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+          body: {
+            credential: { username: "bob", password: "bob-pass" },
+            currentCredential: { password: "alice-pass" },
+          },
         })
       ).status,
     ).toBe(401);
@@ -190,7 +216,7 @@ describe("identity account routes", () => {
           method: "POST",
           cookie: a.cookie,
           headers: { authorization: "Bearer ignored" },
-          body: { username: "bob", password: "bob-pass" },
+          body: { credential: { username: "bob", password: "bob-pass" } },
         })
       ).status,
     ).toBe(403);
@@ -200,7 +226,7 @@ describe("identity account routes", () => {
           method: "POST",
           cookie: a.cookie,
           headers: { "x-identity-id": b.me.activeIdentityId },
-          body: { username: "bob", password: "bob-pass" },
+          body: { credential: { username: "bob", password: "bob-pass" } },
         })
       ).status,
     ).toBe(403);
@@ -209,7 +235,7 @@ describe("identity account routes", () => {
         await h.call(`${ROUTES.account.identities}/bad`, {
           method: "DELETE",
           cookie: a.cookie,
-          body: { currentPassword: "alice-pass" },
+          body: { currentCredential: { password: "alice-pass" } },
         })
       ).status,
     ).toBe(400);
@@ -248,7 +274,10 @@ describe("identity account routes", () => {
           await h.call(ROUTES.account.identities, {
             method: "POST",
             cookie: a.cookie,
-            body: { username: "bob", password: "wrong", currentPassword: "alice-pass" },
+            body: {
+              credential: { username: "bob", password: "wrong" },
+              currentCredential: { password: "alice-pass" },
+            },
           })
         ).status,
       ).toBe(401);
@@ -257,7 +286,7 @@ describe("identity account routes", () => {
       (
         await h.call(ROUTES.auth.login, {
           method: "POST",
-          body: { username: "bob", password: "bob-pass" },
+          body: { credential: { username: "bob", password: "bob-pass" } },
         })
       ).status,
     ).toBe(429);
@@ -280,7 +309,10 @@ describe("identity account routes", () => {
           await h.call(ROUTES.account.identities, {
             method: "POST",
             cookie: a.cookie,
-            body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+            body: {
+              credential: { username: "bob", password: "bob-pass" },
+              currentCredential: { password: "alice-pass" },
+            },
           })
         ).status,
       ).toBe(status);
@@ -289,7 +321,10 @@ describe("identity account routes", () => {
     const response = await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
     });
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain("SQL secret");
@@ -311,10 +346,8 @@ it("passes optional TOTP through link verification and never mutates for invalid
         method: "POST",
         cookie: a.cookie,
         body: {
-          username: "bob",
-          password: "bob-pass",
-          otp: "wrong",
-          currentPassword: "alice-pass",
+          credential: { username: "bob", password: "bob-pass", otp: "wrong" },
+          currentCredential: { password: "alice-pass" },
         },
       })
     ).status,
@@ -323,7 +356,10 @@ it("passes optional TOTP through link verification and never mutates for invalid
   const linked = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass", otp: "123456", currentPassword: "alice-pass" },
+    body: {
+      credential: { username: "bob", password: "bob-pass", otp: "123456" },
+      currentCredential: { password: "alice-pass" },
+    },
   });
   expect(linked.status).toBe(200);
   expect(login).toHaveBeenLastCalledWith({ username: "bob", password: "bob-pass", otp: "123456" });
@@ -336,13 +372,16 @@ it("linking re-authenticates the signed-in login: missing or wrong owner passwor
   const missing = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass" },
+    body: { credential: { username: "bob", password: "bob-pass" } },
   });
   expect(missing.status).toBe(400);
   const wrong = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass", currentPassword: "not-alice" },
+    body: {
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "not-alice" },
+    },
   });
   expect(wrong.status).toBe(401);
   expect(await wrong.text()).toContain("current password is incorrect");
@@ -350,7 +389,10 @@ it("linking re-authenticates the signed-in login: missing or wrong owner passwor
   const swapped = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass", currentPassword: "bob-pass" },
+    body: {
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "bob-pass" },
+    },
   });
   expect(swapped.status).toBe(401);
   expect(link).not.toHaveBeenCalled();
@@ -361,13 +403,16 @@ it("linking re-authenticates the signed-in login: missing or wrong owner passwor
     await h.call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "guess" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "guess" },
+      },
     });
   expect(
     (
       await h.call(ROUTES.auth.login, {
         method: "POST",
-        body: { username: "alice", password: "alice-pass" },
+        body: { credential: { username: "alice", password: "alice-pass" } },
       })
     ).status,
   ).toBe(429);
@@ -385,7 +430,7 @@ it("login with a replaced SFTPGo password revokes the account's other sessions; 
   );
   const rotated = await h.call(ROUTES.auth.login, {
     method: "POST",
-    body: { username: "alice", password: "alice-rotated" },
+    body: { credential: { username: "alice", password: "alice-rotated" } },
   });
   expect(rotated.status).toBe(200);
   const cookie = cookieFrom(rotated);
@@ -394,7 +439,7 @@ it("login with a replaced SFTPGo password revokes the account's other sessions; 
   expect((await h.call(ROUTES.auth.me, { cookie: second.cookie })).status).toBe(401);
   const again = await h.call(ROUTES.auth.login, {
     method: "POST",
-    body: { username: "alice", password: "alice-rotated" },
+    body: { credential: { username: "alice", password: "alice-rotated" } },
   });
   expect(again.status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie })).status).toBe(200);
@@ -403,7 +448,7 @@ it("login with a replaced SFTPGo password revokes the account's other sessions; 
   const bob = await h.login("bob");
   await h.call(ROUTES.auth.login, {
     method: "POST",
-    body: { username: "alice", password: "alice-pass" },
+    body: { credential: { username: "alice", password: "alice-pass" } },
   });
   expect((await h.call(ROUTES.auth.me, { cookie: bob.cookie })).status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie })).status).toBe(401);
@@ -414,7 +459,10 @@ it("unlinking revokes other sessions using that login and keeps sessions on othe
   const linked = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+    body: {
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "alice-pass" },
+    },
   });
   const me = MeResponse.parse(await linked.json());
   const requester = cookieFrom(linked);
@@ -426,7 +474,7 @@ it("unlinking revokes other sessions using that login and keeps sessions on othe
   const result = await h.call(`${ROUTES.account.identities}/${me.activeIdentityId}`, {
     method: "DELETE",
     cookie: requester,
-    body: { currentPassword: "bob-pass" },
+    body: { currentCredential: { password: "bob-pass" } },
   });
   expect(result.status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie: cookieFrom(result) })).status).toBe(200);
@@ -443,7 +491,7 @@ it("one address cannot spray passwords across usernames: a per-IP bucket blocks 
         await h.call(ROUTES.auth.login, {
           method: "POST",
           headers: from("203.0.113.7"),
-          body: { username, password: "wrong" },
+          body: { credential: { username, password: "wrong" } },
         })
       ).status,
     ).toBe(401);
@@ -451,7 +499,7 @@ it("one address cannot spray passwords across usernames: a per-IP bucket blocks 
   const blocked = await h.call(ROUTES.auth.login, {
     method: "POST",
     headers: from("203.0.113.7"),
-    body: { username: "frank", password: "frank-pass" },
+    body: { credential: { username: "frank", password: "frank-pass" } },
   });
   expect(blocked.status).toBe(429);
   // Another address is unaffected.
@@ -460,7 +508,7 @@ it("one address cannot spray passwords across usernames: a per-IP bucket blocks 
       await h.call(ROUTES.auth.login, {
         method: "POST",
         headers: from("203.0.113.8"),
-        body: { username: "frank", password: "frank-pass" },
+        body: { credential: { username: "frank", password: "frank-pass" } },
       })
     ).status,
   ).toBe(200);
@@ -470,28 +518,28 @@ it("one address cannot spray passwords across usernames: a per-IP bucket blocks 
     await h.call(ROUTES.auth.login, {
       method: "POST",
       headers: from("203.0.113.9"),
-      body: { username: `user${n}`, password: "wrong" },
+      body: { credential: { username: `user${n}`, password: "wrong" } },
     });
   expect(
     (
       await h.call(ROUTES.auth.login, {
         method: "POST",
         headers: from("203.0.113.9"),
-        body: { username: "alice", password: "alice-pass" },
+        body: { credential: { username: "alice", password: "alice-pass" } },
       })
     ).status,
   ).toBe(200);
   await h.call(ROUTES.auth.login, {
     method: "POST",
     headers: from("203.0.113.9"),
-    body: { username: "user5", password: "wrong" },
+    body: { credential: { username: "user5", password: "wrong" } },
   });
   expect(
     (
       await h.call(ROUTES.auth.login, {
         method: "POST",
         headers: from("203.0.113.9"),
-        body: { username: "bob", password: "bob-pass" },
+        body: { credential: { username: "bob", password: "bob-pass" } },
       })
     ).status,
   ).toBe(429);
@@ -499,7 +547,10 @@ it("one address cannot spray passwords across usernames: a per-IP bucket blocks 
 it("re-authentication refuses a vanished active login and passes upstream outages through", async () => {
   const h = accountsHarness();
   const a = await h.login();
-  const body = { username: "bob", password: "bob-pass", currentPassword: "alice-pass" };
+  const body = {
+    credential: { username: "bob", password: "bob-pass" },
+    currentCredential: { password: "alice-pass" },
+  };
   // Calling the service directly: the live-session check looks the identity up
   // once, then the re-authentication lookup sees it vanish.
   const input = {
@@ -546,7 +597,10 @@ it("unlinking re-authenticates the signed-in login: missing or wrong owner passw
   const linked = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+    body: {
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "alice-pass" },
+    },
   });
   const cookie = cookieFrom(linked);
   const target = `${ROUTES.account.identities}/${a.me.activeIdentityId}`;
@@ -554,7 +608,11 @@ it("unlinking re-authenticates the signed-in login: missing or wrong owner passw
   expect((await h.call(target, { method: "DELETE", cookie })).status).toBe(400);
   // The session is active as bob now, so alice's password is not the owner's.
   for (const currentPassword of ["not-bob", "alice-pass"]) {
-    const wrong = await h.call(target, { method: "DELETE", cookie, body: { currentPassword } });
+    const wrong = await h.call(target, {
+      method: "DELETE",
+      cookie,
+      body: { currentCredential: { password: currentPassword } },
+    });
     expect(wrong.status).toBe(401);
     expect(await wrong.text()).toContain("current password is incorrect");
   }
@@ -564,7 +622,7 @@ it("unlinking re-authenticates the signed-in login: missing or wrong owner passw
   const ok = await h.call(target, {
     method: "DELETE",
     cookie,
-    body: { currentPassword: "bob-pass" },
+    body: { currentCredential: { password: "bob-pass" } },
   });
   expect(ok.status).toBe(200);
   expect(await h.repos.identities.listByAccount(a.me.account.id)).toHaveLength(1);

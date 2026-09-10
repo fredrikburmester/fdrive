@@ -26,8 +26,10 @@ export function UnlinkLoginDialog({
   const actions = useIdentityActions();
   const [currentPassword, setCurrentPassword] = useState("");
   const [currentOtp, setCurrentOtp] = useState("");
-  const request = { currentPassword, ...(currentOtp ? { currentOtp } : {}) };
-  const valid = UnlinkIdentityRequest.safeParse(request).success;
+  const request = {
+    currentCredential: { password: currentPassword, ...(currentOtp ? { otp: currentOtp } : {}) },
+  };
+  const valid = currentPassword.length > 0 && UnlinkIdentityRequest.safeParse(request).success;
   function close() {
     setCurrentPassword("");
     setCurrentOtp("");

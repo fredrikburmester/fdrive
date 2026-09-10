@@ -2,8 +2,8 @@ import { MAX_UNMAPPED_MOUNTS, type MountMapping, type UnmappedMount } from "@fdr
 import type { StorageProvider } from "@fdrive/core";
 import { joinPath, parseHomeTemplate, type Scope, scopesFor } from "@fdrive/core";
 import type { Identity, ProviderRepo } from "@fdrive/db";
+import { sftpgoHomeTemplate } from "@fdrive/sftpgo";
 import type { IndexRootConfig } from "../config.ts";
-import type { ConnectionStore } from "../connection/store.ts";
 import type { IndexerClient } from "../system/indexer-client.ts";
 import {
   createScopeCache,
@@ -76,10 +76,9 @@ export interface ScopeResolver {
 }
 
 export interface CreateScopeResolverDeps {
-  readonly providers: Pick<ProviderRepo, "get">;
+  readonly providers: Pick<ProviderRepo, "get" | "list">;
   readonly overrides: ScopeOverrideStore;
   readonly mountMappings: MountMappingStore;
-  readonly connection: Pick<ConnectionStore, "current">;
   /** The shape of `AppConfig.fdriveIndexRoots`: `null` when search/index features are disabled entirely. */
   readonly indexRoots: readonly IndexRootConfig[] | null;
   readonly indexer: Pick<IndexerClient, "directory">;
@@ -165,24 +164,21 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
 
   /** The template-derived home scope plus stored overrides: no SFTP or indexer access. */
   async function baseMappings(identity: Identity): Promise<ConfiguredMappingsResult> {
-    const connection = await deps.connection.current();
-    if (connection === null) {
-      return { available: false, reason: "no_connection" };
-    }
-
     const provider = await deps.providers.get(identity.providerId);
-    if (
-      provider === null ||
-      provider.type !== "sftpgo" ||
-      provider.baseUrl !== connection.baseUrl
-    ) {
+    if (provider === null || !provider.enabled) {
       return { available: false, reason: "provider_mismatch" };
     }
+    // Only SFTPGo providers can map onto an index root today: their files
+    // are on a disk the indexer reads. Every other provider is not indexed.
+    if (provider.type !== "sftpgo") {
+      return { available: false, reason: "no_roots" };
+    }
+    const homeTemplateRaw = sftpgoHomeTemplate(provider);
 
     const overrideRecord = await deps.overrides.get(identity.id);
 
     try {
-      const template = parseHomeTemplate(connection.homeTemplate);
+      const template = parseHomeTemplate(homeTemplateRaw);
       const scopes = scopesFor({
         template,
         username: identity.externalUsername,
@@ -191,7 +187,7 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
       return {
         available: true,
         providerId: provider.id,
-        homeTemplateRaw: connection.homeTemplate,
+        homeTemplateRaw,
         scopes,
       };
     } catch {
@@ -459,10 +455,10 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
   /** Index roots plus the template root: the only roots a mapping may name. */
   async function knownRootNames(): Promise<Set<string>> {
     const knownRoots = new Set((deps.indexRoots ?? []).map((root) => root.name));
-    const connection = await deps.connection.current();
-    if (connection !== null) {
+    for (const provider of await deps.providers.list()) {
+      if (provider.type !== "sftpgo" || !provider.enabled) continue;
       try {
-        knownRoots.add(parseHomeTemplate(connection.homeTemplate).rootName);
+        knownRoots.add(parseHomeTemplate(sftpgoHomeTemplate(provider)).rootName);
       } catch {
         // An unparsable template is reported by `configuredMappings`; it
         // contributes no extra known root here.

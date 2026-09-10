@@ -1,6 +1,15 @@
-import type { FileEntry, StorageProvider } from "@fdrive/core";
-import { makeEntry, normalizePath, StorageError, type StorageErrorKind } from "@fdrive/core";
-import { type SftpgoClient, SftpgoError } from "@fdrive/sftpgo";
+import type { EntryStat, FileEntry, StorageProvider } from "@fdrive/core";
+import {
+  baseName,
+  isStorageError,
+  makeEntry,
+  normalizePath,
+  parentPath,
+  StorageError,
+  type StorageErrorKind,
+} from "@fdrive/core";
+import { SftpgoError } from "./errors.js";
+import type { SftpgoClient } from "./types.js";
 
 /**
  * Retries the wrapped call once on a 401 from SFTPGo (by re-minting a
@@ -65,7 +74,7 @@ function toStorageErrorKind(error: SftpgoError): StorageErrorKind {
  * unchanged, so callers only ever have to handle `StorageError` for
  * provider failures.
  */
-function toStorageError(error: unknown): never {
+export function toStorageError(error: unknown): never {
   if (!(error instanceof SftpgoError)) {
     throw error;
   }
@@ -114,6 +123,42 @@ export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): St
     async statFile(path: string) {
       const normalized = normalizePath(path);
       return runStorage(withToken, (token) => client.user(token).statFile(normalized));
+    },
+
+    /**
+     * SFTPGo has no "stat a path of unknown kind" endpoint: `HEAD /user/files`
+     * reports a directory as a bad request, and listing a path that turns
+     * out to be a file drops the connection on a real server. So a file is
+     * stat'ed directly and a directory is found in its parent's listing.
+     */
+    async stat(path: string): Promise<EntryStat> {
+      const normalized = normalizePath(path);
+      try {
+        const file = await runStorage(withToken, (token) =>
+          client.user(token).statFile(normalized),
+        );
+        return { kind: "file", ...file };
+      } catch (error) {
+        if (!isStorageError(error) || error.kind !== "bad_request") {
+          throw error;
+        }
+      }
+      if (normalized === "/") {
+        return { kind: "dir", size: 0, modifiedAt: null, contentType: null };
+      }
+      const entries = await runStorage(withToken, (token) =>
+        client.user(token).list(parentPath(normalized)),
+      );
+      const match = entries.find((entry) => entry.name === baseName(normalized));
+      if (match === undefined) {
+        throw new StorageError("not_found", `not found: ${normalized}`);
+      }
+      return {
+        kind: match.kind,
+        size: match.size,
+        modifiedAt: match.modifiedAt,
+        contentType: null,
+      };
     },
 
     async download(path: string, opts?: SftpgoDownloadOpts) {

@@ -8,18 +8,13 @@ import { createInMemoryScopeOverrideStore, type ScopeOverrideStore } from "./ove
 import { type CreateScopeResolverDeps, createScopeResolver } from "./resolver.ts";
 import {
   buildIdentity,
-  fakeConnectionStore,
   fakeIndexerDirectory,
   fakeStorageProvider,
   fileEntry,
 } from "./test-fixtures/index.ts";
 import { ScopeOverrideValidationError } from "./validate-overrides.ts";
 
-const CONNECTION = {
-  baseUrl: "http://sftpgo:8080",
-  homeTemplate: "sftpgo:/{username}",
-  source: "env" as const,
-};
+const BASE_URL = "http://sftpgo:8080";
 const INDEX_ROOTS: IndexRootConfig[] = [
   { name: "sftpgo", sftpgoPath: "/data", indexerPath: "/index-data" },
 ];
@@ -29,9 +24,17 @@ function buildClock(startMs: number) {
   return { clock: () => new Date(now), advance: (ms: number) => (now += ms) };
 }
 
-async function setup(overrides: Partial<CreateScopeResolverDeps> = {}) {
+async function setup(
+  overrides: Partial<CreateScopeResolverDeps> = {},
+  providerOptions: { enabled?: boolean; homeTemplate?: string } = {},
+) {
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: CONNECTION.baseUrl });
+  const created = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
+  const provider = await repos.providers.update(created.id, {
+    enabled: providerOptions.enabled ?? true,
+    config: { homeTemplate: providerOptions.homeTemplate ?? "sftpgo:/{username}" },
+  });
+  if (provider === null) throw new Error("provider vanished");
   const identity = buildIdentity({ providerId: provider.id });
   const overrideStore: ScopeOverrideStore = createInMemoryScopeOverrideStore();
   const mountMappingStore = createInMemoryMountMappingStore();
@@ -41,7 +44,6 @@ async function setup(overrides: Partial<CreateScopeResolverDeps> = {}) {
     providers: repos.providers,
     overrides: overrideStore,
     mountMappings: mountMappingStore,
-    connection: fakeConnectionStore(CONNECTION),
     indexRoots: INDEX_ROOTS,
     indexer: fakeIndexerDirectory(new Map()),
     storageForIdentity: async () => fakeStorageProvider(),
@@ -80,26 +82,22 @@ describe("configuredMappings", () => {
     }
   });
 
-  it("is unavailable with no_connection when there is no active connection", async () => {
-    const { resolver, identity } = await setup({ connection: fakeConnectionStore(null) });
+  it("is unavailable with provider_mismatch when the identity's provider is disabled", async () => {
+    const { resolver, identity } = await setup({}, { enabled: false });
     expect(await resolver.configuredMappings(identity)).toEqual({
       available: false,
-      reason: "no_connection",
+      reason: "provider_mismatch",
     });
   });
 
-  it("is unavailable with provider_mismatch when the identity's provider baseUrl differs", async () => {
+  it("is unavailable with no_roots for a provider that is not SFTPGo", async () => {
     const repos = createMemoryRepos();
-    const otherProvider = await repos.providers.ensure({
-      type: "sftpgo",
-      baseUrl: "http://other:8080",
-    });
-    const identity = buildIdentity({ providerId: otherProvider.id });
+    const other = await repos.providers.ensure({ type: "webdav", baseUrl: "http://dav:8080" });
+    const identity = buildIdentity({ providerId: other.id });
     const resolver = createScopeResolver({
       providers: repos.providers,
       overrides: createInMemoryScopeOverrideStore(),
       mountMappings: createInMemoryMountMappingStore(),
-      connection: fakeConnectionStore(CONNECTION),
       indexRoots: INDEX_ROOTS,
       indexer: fakeIndexerDirectory(new Map()),
       storageForIdentity: async () => fakeStorageProvider(),
@@ -107,7 +105,26 @@ describe("configuredMappings", () => {
     });
     expect(await resolver.configuredMappings(identity)).toEqual({
       available: false,
-      reason: "provider_mismatch",
+      reason: "no_roots",
+    });
+  });
+
+  it("uses the default home template when the provider has none configured", async () => {
+    const repos = createMemoryRepos();
+    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://other:8080" });
+    const identity = buildIdentity({ providerId: provider.id });
+    const resolver = createScopeResolver({
+      providers: repos.providers,
+      overrides: createInMemoryScopeOverrideStore(),
+      mountMappings: createInMemoryMountMappingStore(),
+      indexRoots: INDEX_ROOTS,
+      indexer: fakeIndexerDirectory(new Map()),
+      storageForIdentity: async () => fakeStorageProvider(),
+      clock: () => new Date(),
+    });
+    expect(await resolver.configuredMappings(identity)).toMatchObject({
+      available: true,
+      homeTemplateRaw: "sftpgo:/{username}",
     });
   });
 
@@ -121,9 +138,7 @@ describe("configuredMappings", () => {
   });
 
   it("is unavailable with invalid_configuration for an unparsable home template", async () => {
-    const { resolver, identity } = await setup({
-      connection: fakeConnectionStore({ ...CONNECTION, homeTemplate: "not-a-template" }),
-    });
+    const { resolver, identity } = await setup({}, { homeTemplate: "not-a-template" });
     expect(await resolver.configuredMappings(identity)).toEqual({
       available: false,
       reason: "invalid_configuration",
@@ -133,10 +148,10 @@ describe("configuredMappings", () => {
 
 describe("verifiedIndexScopes", () => {
   it("propagates a configuredMappings failure reason", async () => {
-    const { resolver, identity } = await setup({ connection: fakeConnectionStore(null) });
+    const { resolver, identity } = await setup({}, { enabled: false });
     expect(await resolver.verifiedIndexScopes(identity)).toEqual({
       available: false,
-      reason: "no_connection",
+      reason: "provider_mismatch",
     });
   });
 
@@ -909,10 +924,10 @@ describe("status", () => {
   });
 
   it("gives an admin an empty mapping when configuredMappings itself is unavailable", async () => {
-    const { resolver, identity } = await setup({ connection: fakeConnectionStore(null) });
+    const { resolver, identity } = await setup({}, { enabled: false });
     const result = await resolver.status(identity, true);
     expect(result.status).toBe("unavailable");
-    expect(result.reason).toBe("no_connection");
+    expect(result.reason).toBe("provider_mismatch");
     if (result.isAdmin) {
       expect(result.mappings).toEqual([]);
       expect(result.configuredRoots).toEqual(["sftpgo"]);
@@ -920,10 +935,10 @@ describe("status", () => {
   });
 
   it("redacts a non-administrator's view when configuredMappings itself is unavailable", async () => {
-    const { resolver, identity } = await setup({ connection: fakeConnectionStore(null) });
+    const { resolver, identity } = await setup({}, { enabled: false });
     const result = await resolver.status(identity, false);
     expect(result.status).toBe("unavailable");
-    expect(result.reason).toBe("no_connection");
+    expect(result.reason).toBe("provider_mismatch");
     expect(result.isAdmin).toBe(false);
     expect("mappings" in result).toBe(false);
     expect("configuredRoots" in result).toBe(false);
@@ -948,10 +963,7 @@ describe("status", () => {
   });
 
   it("gives an admin an empty configuredRoots list when configuredMappings is unavailable and no roots are configured", async () => {
-    const { resolver, identity } = await setup({
-      connection: fakeConnectionStore(null),
-      indexRoots: null,
-    });
+    const { resolver, identity } = await setup({ indexRoots: null }, { enabled: false });
     const result = await resolver.status(identity, true);
     expect(result.status).toBe("unavailable");
     if (result.isAdmin) {

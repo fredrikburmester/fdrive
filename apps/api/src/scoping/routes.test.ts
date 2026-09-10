@@ -6,12 +6,11 @@ import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import { createAuthModule, createLoginLimiter, createTokenSource } from "../auth/index.js";
-import { createIdentityClientResolver } from "../auth/provider-client.ts";
 import { createIdentityStorageFactory } from "../auth/storage-factory.ts";
 import { memoryIdentityOperations } from "../auth/test-fixtures/index.ts";
 import type { IndexRootConfig } from "../config.js";
 import { loadConfig } from "../config.js";
-import { createConnectionStore } from "../connection/store.js";
+import { memoryProviderService, seedSftpgoProvider } from "../providers/test-fixtures/index.ts";
 import { createInMemoryMountMappingStore } from "./mount-mapping-store.ts";
 import { createSettingsScopeOverrideStore } from "./override-store.ts";
 import { createScopeResolver, type ScopeResolver } from "./resolver.ts";
@@ -72,33 +71,32 @@ function harness(
     now: clock,
   });
   const client = createSftpgoClient({ baseUrl: "http://storage.test", fetch: server.fetch });
-  const connectionStore = createConnectionStore({
-    settings: repos.settings,
-    envUrl: config.sftpgoUrl,
-    defaultHomeTemplate: config.fdriveHomeTemplate,
+  const providers = memoryProviderService(repos, {
+    fetch: server.fetch,
+    clock,
+    sftpgoUrl: config.sftpgoUrl,
+    indexRootCount: INDEX_ROOTS.length,
+  });
+  // Memory repos settle in microtasks, well before the first request below.
+  void seedSftpgoProvider(repos, "http://storage.test", { managedByEnv: true });
+  const tokenSource = createTokenSource({ repos, providers, master, clock, fetch: server.fetch });
+  const limiter = createLoginLimiter({ clock });
+  const storageFactory = createIdentityStorageFactory({
+    providers,
+    tokenSource,
+    fetch: server.fetch,
     clock,
   });
-  const clientForBaseUrl = () => client;
-  const clientForIdentity = createIdentityClientResolver({
-    identities: repos.identities,
-    providers: repos.providers,
-    connections: connectionStore,
-    clientForBaseUrl,
-  });
-  const tokenSource = createTokenSource({ repos, master, clock, clientForIdentity });
-  const limiter = createLoginLimiter({ clock });
-  const storageFactory = createIdentityStorageFactory({ clientForIdentity, tokenSource });
   const auth = createAuthModule({
     repos,
     identityLinks: links,
-    clientForBaseUrl,
-    clientForIdentity,
+    providers,
+    fetch: server.fetch,
     master,
     clock,
     config,
     limiter,
     tokenSource,
-    connectionStore,
     storageFactory,
     ...(options.adminUsernames === undefined ? {} : { adminUsernames: options.adminUsernames }),
   });
@@ -108,7 +106,6 @@ function harness(
       providers: repos.providers,
       overrides: createSettingsScopeOverrideStore(repos.settings),
       mountMappings: createInMemoryMountMappingStore(),
-      connection: connectionStore,
       indexRoots: INDEX_ROOTS,
       indexer: fakeIndexerDirectory(options.indexerFixtures ?? new Map()),
       storageForIdentity: (identity) => storageFactory(identity.id),
@@ -158,7 +155,7 @@ function harness(
   async function login(username = "alice") {
     const response = await call("/api/v1/auth/login", {
       method: "POST",
-      body: { username, password: `${username}-pass` },
+      body: { credential: { username, password: `${username}-pass` } },
     });
     const me = MeResponse.parse(await response.json());
     const cookie = response.headers.get("set-cookie")?.split(";")[0];

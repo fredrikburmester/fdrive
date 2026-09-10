@@ -1,9 +1,8 @@
 import type { StorageProvider } from "@fdrive/core";
-import { createSftpgoClient } from "@fdrive/sftpgo";
+import { createSftpgoClient, createSftpgoStorageProvider } from "@fdrive/sftpgo";
 import { type SftpgoContainer, startSftpgo } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createSftpgoStorageProvider } from "../../src/storage/sftpgo-provider.js";
 import { type OfficeHarness, officeHarness } from "../fixtures/office/harness.ts";
 
 // Isolated fixture administration configures a shared home. Application requests

@@ -50,9 +50,8 @@ it("clears password and OTP on close, rejects empty credentials, and never cache
   fireEvent.click(submit);
   await waitFor(() => expect(screen.getByText("Invalid login")).toBeDefined());
   expect(link).toHaveBeenCalledWith({
-    username: "ada",
-    password: "private-password",
-    currentPassword: "my-password",
+    credential: { username: "ada", password: "private-password" },
+    currentCredential: { password: "my-password" },
   });
   expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
   expect((screen.getByLabelText("Your current password") as HTMLInputElement).value).toBe("");

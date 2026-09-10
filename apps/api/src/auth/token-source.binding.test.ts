@@ -1,11 +1,16 @@
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient, SftpgoError } from "@fdrive/sftpgo";
+import { createFakeSftpgoServer, sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
-import type { Connection } from "../connection/store.js";
+import { memoryProviderService } from "../providers/test-fixtures/index.ts";
 import { seal } from "./crypto.js";
-import { createIdentityClientResolver } from "./provider-client.ts";
 import { createTokenSource } from "./token-source.js";
 
+/**
+ * Server A holds the identity's real account; server B is a different
+ * SFTPGo the deployment later points at. "Switching" disables A and adds
+ * B: the stored credential is bound to A's row and must never be sent to
+ * B, and once A is disabled nothing is sent anywhere.
+ */
 async function fixture() {
   const repos = createMemoryRepos();
   const master = Buffer.alloc(32, 2);
@@ -34,36 +39,26 @@ async function fixture() {
     users: [{ username: "alice", password: "b-password", permissions: { "/": ["*"] } }],
     now: clock,
   });
-  let connection: Connection = {
-    baseUrl: provider.baseUrl,
-    homeTemplate: "sftpgo:/{username}",
-    source: "settings",
-  };
   const requests: { host: string; authenticated: boolean }[] = [];
   let beforeRequest: (() => Promise<void>) | null = null;
-  const clientForIdentity = createIdentityClientResolver({
-    ...repos,
-    connections: { current: async () => connection },
-    clientForBaseUrl: (baseUrl) =>
-      createSftpgoClient({
-        baseUrl,
-        fetch: async (url, init) => {
-          const host = new URL(String(url)).host;
-          requests.push({ host, authenticated: new Headers(init?.headers).has("authorization") });
-          await beforeRequest?.();
-          return (host === "a.test" ? a : b).fetch(url, init);
-        },
-      }),
-  });
-  const deps = { repos, master, clock, clientForIdentity };
+  const fetchImpl: typeof globalThis.fetch = async (url, init) => {
+    const host = new URL(String(url)).host;
+    requests.push({ host, authenticated: new Headers(init?.headers).has("authorization") });
+    await beforeRequest?.();
+    return (host === "a.test" ? a : b).fetch(url, init);
+  };
+  const providers = memoryProviderService(repos, { fetch: fetchImpl, clock });
+  const deps = { repos, providers, master, clock, fetch: fetchImpl };
   return {
     ...deps,
     deps,
     identity,
+    provider,
     requests,
     source: createTokenSource(deps),
-    switchToB() {
-      connection = { ...connection, baseUrl: "http://b.test" };
+    async switchToB() {
+      await repos.providers.update(provider.id, { enabled: false });
+      await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://b.test" });
     },
     intercept(fn: () => Promise<void>) {
       beforeRequest = fn;
@@ -75,12 +70,15 @@ describe("cached token provider binding", () => {
     const h = await fixture();
     await h.source.get(h.identity.id);
     const second = createTokenSource(h.deps);
-    h.switchToB();
+    await h.switchToB();
     const get = vi.spyOn(h.repos.credentials, "get");
     for (const source of [h.source, second])
       await expect(source.get(h.identity.id)).rejects.toMatchObject({
         kind: "upstream_unavailable",
       });
+    await expect(h.source.credential(h.identity.id)).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+    });
     expect(get).not.toHaveBeenCalled();
     expect(h.requests.map((call) => call.host)).toEqual(["a.test"]);
   });
@@ -100,7 +98,7 @@ describe("cached token provider binding", () => {
     });
     const mint = h.source.get(h.identity.id);
     await started;
-    h.switchToB();
+    await h.switchToB();
     release();
     expect(await mint).toEqual(expect.any(String));
     await expect(h.source.get(h.identity.id)).rejects.toMatchObject({
@@ -108,27 +106,36 @@ describe("cached token provider binding", () => {
     });
     expect(h.requests).toEqual([{ host: "a.test", authenticated: true }]);
   });
-  it("revalidates before a401 retry and never sends credentials to the new server", async () => {
+  it("revalidates before a 401 retry and never sends credentials to the new server", async () => {
     const h = await fixture();
     await h.source.prime(h.identity.id, {
-      accessToken: "a-token",
+      token: "a-token",
       expiresAt: new Date(h.clock().getTime() + 600000),
     });
-    const operation = vi.fn(async () => {
-      h.switchToB();
-      throw new SftpgoError("Expired", "unauthorized", 401, null);
-    });
-    await expect(h.source.withToken(h.identity.id, operation)).rejects.toMatchObject({
-      kind: "upstream_unavailable",
-    });
-    expect(operation).toHaveBeenCalledOnce();
-    expect(operation).toHaveBeenCalledWith("a-token");
-    expect(h.requests).toEqual([]);
+    const session = h.source.sessionFor(h.identity.id, "alice");
+    const storage = sftpgoModule.createStorage(
+      { id: h.provider.id, baseUrl: h.provider.baseUrl, config: {} },
+      session,
+      {
+        fetch: async (url, init) => {
+          // The first authenticated call is the storage operation itself;
+          // configuration changes while it is in flight and it fails 401.
+          await h.switchToB();
+          h.requests.push({
+            host: new URL(String(url)).host,
+            authenticated: new Headers(init?.headers).has("authorization"),
+          });
+          return new Response("expired", { status: 401 });
+        },
+      },
+    );
+    await expect(storage.list("/")).rejects.toMatchObject({ kind: "upstream_unavailable" });
+    expect(h.requests).toEqual([{ host: "a.test", authenticated: true }]);
   });
   it("does not let a primed token bypass identity validation", async () => {
     const h = await fixture();
     await h.source.prime(h.identity.id, {
-      accessToken: "a-token",
+      token: "a-token",
       expiresAt: new Date(h.clock().getTime() + 600000),
     });
     vi.spyOn(h.repos.identities, "get").mockResolvedValue(null);

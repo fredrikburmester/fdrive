@@ -1,20 +1,21 @@
 import { MeResponse, type SearchResponse } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
+import { createFakeSftpgoServer, createSftpgoClient, createSftpgoModule } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { vi } from "vitest";
 import { createApp } from "../../app.js";
 import { createAuthModule, createLoginLimiter, createTokenSource } from "../../auth/index.js";
 import type { PrincipalResolver } from "../../auth/principal.js";
-import { createIdentityClientResolver } from "../../auth/provider-client.ts";
 import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
 import { memoryIdentityOperations } from "../../auth/test-fixtures/index.ts";
 import { loadConfig } from "../../config.js";
-import { createConnectionStore } from "../../connection/store.js";
+import { memoryProviderService, seedSftpgoProvider } from "../../providers/test-fixtures/index.ts";
 import { registerAccountsRoutes } from "../routes.ts";
 import { createAccountsService } from "../service.ts";
 import type { AccountsDeps } from "../types.ts";
 import { createAccountViews } from "../views.ts";
+
+export const HARNESS_BASE_URL = "http://storage.test";
 
 export function accountsHarness(
   options: {
@@ -29,7 +30,7 @@ export function accountsHarness(
   const master = Buffer.alloc(32, 13);
   const config = loadConfig({
     DATABASE_URL: "postgres://test/fdrive",
-    SFTPGO_URL: "http://storage.test",
+    SFTPGO_URL: HARNESS_BASE_URL,
     FDRIVE_MASTER_KEY: master.toString("base64"),
     FDRIVE_COOKIE_SECURE: "auto",
   });
@@ -47,37 +48,36 @@ export function accountsHarness(
     ),
     now: clock,
   });
-  const client = createSftpgoClient({
-    baseUrl: "http://storage.test",
-    fetch: options.wrapFetch?.(server.fetch) ?? server.fetch,
+  const fetchImpl = options.wrapFetch?.(server.fetch) ?? server.fetch;
+  const client = createSftpgoClient({ baseUrl: HARNESS_BASE_URL, fetch: fetchImpl });
+  // The module authenticates and reads storage through this one client, so
+  // a test can spy on `client.login` or `client.user` to shape upstream
+  // behaviour exactly as production would see it.
+  const providers = memoryProviderService(repos, {
+    fetch: fetchImpl,
+    clock,
+    sftpgoUrl: HARNESS_BASE_URL,
+    modules: { sftpgo: createSftpgoModule({ clientFor: () => client }) },
   });
-  const connectionStore = createConnectionStore({
-    settings: repos.settings,
-    envUrl: config.sftpgoUrl,
-    defaultHomeTemplate: config.fdriveHomeTemplate,
+  const seeded = seedSftpgoProvider(repos, HARNESS_BASE_URL, { managedByEnv: true });
+  const tokenSource = createTokenSource({ repos, providers, master, clock, fetch: fetchImpl });
+  const limiter = createLoginLimiter({ clock });
+  const storageFactory = createIdentityStorageFactory({
+    providers,
+    tokenSource,
+    fetch: fetchImpl,
     clock,
   });
-  const clientForBaseUrl = () => client;
-  const clientForIdentity = createIdentityClientResolver({
-    identities: repos.identities,
-    providers: repos.providers,
-    connections: connectionStore,
-    clientForBaseUrl,
-  });
-  const tokenSource = createTokenSource({ repos, master, clock, clientForIdentity });
-  const limiter = createLoginLimiter({ clock });
-  const storageFactory = createIdentityStorageFactory({ clientForIdentity, tokenSource });
   const auth = createAuthModule({
     repos,
     identityLinks: links,
-    clientForBaseUrl,
-    clientForIdentity,
+    providers,
+    fetch: fetchImpl,
     master,
     clock,
     config,
     limiter,
     tokenSource,
-    connectionStore,
     storageFactory,
   });
   const emptySearch: SearchResponse = {
@@ -92,11 +92,11 @@ export function accountsHarness(
     links,
     auth: auth.service,
     tokenSource,
-    clientForBaseUrl,
+    providers,
+    fetch: fetchImpl,
     limiter,
     master,
     clock,
-    connectionStore,
     storageForIdentity: (identity) => storageFactory(identity.id),
     searchForIdentity: async () => emptySearch,
   };
@@ -124,6 +124,7 @@ export function accountsHarness(
       headers?: Record<string, string>;
     } = {},
   ) {
+    await seeded;
     return app.request(path, {
       method: options.method ?? "GET",
       headers: {
@@ -138,7 +139,7 @@ export function accountsHarness(
   async function login(username = "alice") {
     const response = await call("/api/v1/auth/login", {
       method: "POST",
-      body: { username, password: `${username}-pass` },
+      body: { credential: { username, password: `${username}-pass` } },
     });
     const me = MeResponse.parse(await response.json());
     const cookie = response.headers.get("set-cookie")?.split(";")[0];
@@ -154,7 +155,9 @@ export function accountsHarness(
     config,
     server,
     client,
-    connectionStore,
+    providers,
+    /** Resolves once the SFTPGo provider row exists; `call` and `login` await it themselves. */
+    seeded,
     tokenSource,
     limiter,
     auth,

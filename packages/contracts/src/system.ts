@@ -457,6 +457,7 @@ export type IndexerDirectoryResponse = z.infer<typeof IndexerDirectoryResponse>;
 
 /** The subsystems that keep their own admin-visible event log. */
 export const SystemLogSubsystem = z.enum([
+  "general",
   "indexer",
   "search",
   "ocr",
