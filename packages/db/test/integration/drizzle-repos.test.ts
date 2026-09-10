@@ -1,7 +1,7 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { sql } from "drizzle-orm";
-import { afterAll, beforeAll } from "vitest";
-import { createDb, type Db, migrate } from "../../src/index.js";
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
 import { createRepos } from "../../src/repos/drizzle.js";
 import { defineReposSuite } from "../repos-suite.js";
 
@@ -46,4 +46,22 @@ defineReposSuite("drizzle", async () => {
     cascade
   `);
   return createRepos(db);
+});
+
+// Office file rows go with their provider: a provider with no logins but
+// past Office documents must still be removable (the FK cascades).
+it("cascades office_files when their provider is deleted", async () => {
+  await db.execute(sql`truncate table app.office_files, app.providers cascade`);
+  const repos = createRepos(db);
+  const officeFiles = createOfficeFileRepo(db);
+  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://office" });
+  const file = await officeFiles.ensure({
+    providerId: provider.id,
+    rootName: "sftpgo",
+    path: "alice/report.docx",
+  });
+  expect(await officeFiles.get(file.id)).not.toBeNull();
+  await repos.providers.delete(provider.id);
+  expect(await repos.providers.get(provider.id)).toBeNull();
+  expect(await officeFiles.get(file.id)).toBeNull();
 });

@@ -7,7 +7,7 @@ export interface MemoryProviderServiceOptions {
   readonly clock?: () => Date;
   readonly sftpgoUrl?: string | undefined;
   readonly homeTemplate?: string;
-  readonly indexRootCount?: number;
+  readonly indexRootNames?: readonly string[];
   readonly trashEnabled?: (providerId: string) => Promise<boolean>;
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
@@ -24,7 +24,7 @@ export function memoryProviderService(
     environment: {
       sftpgoUrl: options.sftpgoUrl,
       homeTemplate: options.homeTemplate ?? "sftpgo:/{username}",
-      indexRootCount: options.indexRootCount ?? 0,
+      indexRootNames: options.indexRootNames ?? [],
     },
     ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
     ...(options.modules === undefined ? {} : { modules: options.modules }),

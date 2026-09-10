@@ -100,9 +100,22 @@ provider rows of the same type, identity A never reaches row B. `workflow`.
 - `createSftpgoModule({ clientFor })` exists so tests can share one client; production uses
   `sftpgoModule`. `ProviderServiceDeps.modules` overrides the registry for the same reason.
 - `verifyCredentials` re-resolves the provider after the upstream login and refuses with
-  `unauthorized` when the row was disabled meanwhile, matching the old connection-change rule.
-  Re-addressing a provider that logins use is refused with `conflict`; env-managed rows refuse
-  address changes and deletion.
+  `unauthorized` when the row was disabled, removed or re-addressed meanwhile (type and
+  `baseUrl` must still match), matching the old connection-change rule. Re-addressing a
+  provider that logins use, or to an address another row has, is refused with `conflict`;
+  env-managed rows refuse address changes and deletion.
+- Review fixes (2026-09-10): a disabled provider no longer takes its logins' sessions down.
+  `resolvePrincipal` substitutes `unavailableStorage` (every call rejects `upstream_unavailable`,
+  no trash) when the storage factory cannot resolve the row, so `/auth/me`, logout, identity
+  switching and the admin routes keep working and only file routes 502. `publicView.label` is
+  the admin-set label or empty, never the host (the web shows the product name instead); setup
+  creates its row with an empty label and writes the home template only after the login and
+  claim succeed (a new row carries it from creation and is removed on failure). The startup
+  seed keeps an existing row's `enabled` state, disables and unpins the row `SFTPGO_URL` moved
+  away from (logged to `general`), and only unpins when the variable is removed;
+  `defaultProvider()` prefers the env-pinned row. `office_files.provider_id` cascades on
+  provider delete. `index`/`scopeMapping` need the row's own home-template root to be a
+  configured index root (`ProviderModule.indexRootName`), not just any root.
 - `AdminProvider` carries `reachable`/`checkedAt` from a probe taken when the view is built, so
   System > General keeps its reachability badge without a second request.
 - Not done here: `SystemFeaturesResponse.roots[].sftpgoPath` keeps its name (index roots are

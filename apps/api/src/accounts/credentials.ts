@@ -113,13 +113,17 @@ export async function verifyCredentials(
     throw new ApiHttpError("upstream_unavailable", "storage provider is unavailable");
   }
   // The provider must still be what it was when the credential was sent:
-  // a row disabled or removed while the upstream login was in flight must
-  // not gain an identity bound to it.
-  try {
-    await deps.providers.resolve(target.provider.id, {
-      allowDisabled: opts.allowDisabled ?? false,
-    });
-  } catch {
+  // a row disabled, removed or re-addressed while the upstream login was in
+  // flight must not gain an identity (and a sealed credential) bound to a
+  // server that never verified it.
+  const current = await deps.providers
+    .resolve(target.provider.id, { allowDisabled: opts.allowDisabled ?? false })
+    .catch(() => null);
+  if (
+    current === null ||
+    current.provider.type !== target.provider.type ||
+    current.provider.baseUrl !== target.provider.baseUrl
+  ) {
     throw new ApiHttpError("unauthorized", "storage provider changed; sign in again");
   }
   deps.limiter.recordSuccess(key);

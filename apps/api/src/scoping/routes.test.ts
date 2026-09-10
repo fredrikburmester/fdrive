@@ -75,7 +75,7 @@ function harness(
     fetch: server.fetch,
     clock,
     sftpgoUrl: config.sftpgoUrl,
-    indexRootCount: INDEX_ROOTS.length,
+    indexRootNames: INDEX_ROOTS.map((root) => root.name),
   });
   // Memory repos settle in microtasks, well before the first request below.
   void seedSftpgoProvider(repos, "http://storage.test", { managedByEnv: true });

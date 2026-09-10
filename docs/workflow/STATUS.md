@@ -30,6 +30,11 @@ Updated: 2026-09-10. Owner: primary agent.
   and D (owned shares, [P10-SHARES.md](P10-SHARES.md)) in parallel.
 - Worktree: main checkout, branch `main`; the `p10-system-storage` worktree can be removed once
   the transfer commit is in.
+- Review (PR #1, `claude/p10-storage-providers`): ten confirmed findings fixed on 2026-09-10,
+  listed under "Review fixes" in [P10-REGISTRY-API.md](P10-REGISTRY-API.md) (disabled provider
+  keeps sessions alive, public label never the host, setup writes config after login, address
+  equality after upstream login, seed keeps/retires rows, duplicate address 409, office_files
+  cascade, per-row `index`, delete dialog reads the capability).
 
 ## P10 storage providers: A1 registry and generic auth (implemented 2026-09-10)
 

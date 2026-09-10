@@ -86,8 +86,12 @@ migrated SFTPGo row. `workflow`.
   adds an upload-time note. `index`: the Inspector reports "Not indexed" for a folder without a
   request, the "Show thumbnails" toggle and list thumbnails are off, grid tiles fall back to icons.
   `office`: the Office items and the New document kinds are hidden even while Office is enabled.
-  `trash`: the label and the sidebar entry read the capability; `DeleteDialog` keeps
-  `TrashStatusResponse` for its retention sentence.
+  `trash`: the label, the sidebar entry and the delete confirmation all read the capability
+  (`trashAvailabilityFor`); the separately cached `TrashStatusResponse` only contributes the
+  retention sentence, so the menu and the dialog cannot disagree.
+- Login page copy: the public provider list never carries the host, so an unlabelled provider
+  is shown by product name (`providerDisplayName`) in the picker and the subtitle reads "Sign in
+  with your SFTPGo account" without an "on …" part.
 - Sidebar Shares and Trash are the union across linked logins (`anyLoginCan`); the switcher and
   the Logins card show a per-type `ProviderIcon` (labelled with the product name).
 - Login page: the server component loads `GET /providers`; `LoginForm` renders

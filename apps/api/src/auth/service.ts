@@ -1,5 +1,5 @@
 import { IDENTITY_HEADER, type IdentitySummary, type MeResponse } from "@fdrive/contracts";
-import { sameCredential } from "@fdrive/core";
+import { type StorageProvider, sameCredential } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
@@ -14,7 +14,7 @@ import { KEY_ID, open, seal } from "./crypto.js";
 import type { LoginLimiter } from "./login-limiter.js";
 import type { Principal } from "./principal.js";
 import { COOKIE_NAME, generateSessionId, hashSessionId } from "./sessions.js";
-import type { IdentityStorageFactory } from "./storage-factory.ts";
+import { type IdentityStorageFactory, unavailableStorage } from "./storage-factory.ts";
 import { parseStoredCredential, type TokenSource } from "./token-source.js";
 
 /** How stale a session's `lastSeenAt` must be before `resolvePrincipal` slides its expiry. */
@@ -287,11 +287,23 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       return owned !== null && owned.accountId === current.accountId;
     };
 
+    // A provider an admin disabled must not take the session down with it:
+    // the account's own routes keep working and only storage calls fail.
+    let storage: StorageProvider;
+    try {
+      storage = await deps.storageFactory(identity.id);
+    } catch (error) {
+      if (!(error instanceof ApiHttpError && error.kind === "upstream_unavailable")) {
+        throw error;
+      }
+      storage = unavailableStorage(error);
+    }
+
     return {
       accountId: session.accountId,
       identityId: identity.id,
       username: identity.externalUsername,
-      storage: await deps.storageFactory(identity.id),
+      storage,
       isAdmin,
       verifyAuthority,
     };

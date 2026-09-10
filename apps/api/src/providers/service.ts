@@ -31,11 +31,15 @@ export interface ProviderServiceDeps {
   readonly fetch: typeof globalThis.fetch;
   readonly clock: () => Date;
   readonly eventLog?: SystemEventLog;
-  /** How `SFTPGO_URL` and `FDRIVE_HOME_TEMPLATE` seed and pin the first SFTPGo provider. */
+  /**
+   * How `SFTPGO_URL` and `FDRIVE_HOME_TEMPLATE` seed and pin the first
+   * SFTPGo provider, and which index roots (`FDRIVE_INDEX_ROOTS`) exist for
+   * a provider's files to be indexed under.
+   */
   readonly environment: {
     readonly sftpgoUrl: string | undefined;
     readonly homeTemplate: string;
-    readonly indexRootCount: number;
+    readonly indexRootNames: readonly string[];
   };
   /** Whether the recycle folder is switched on for a provider (Trash settings). */
   readonly trashEnabled?: (providerId: string) => Promise<boolean>;
@@ -48,7 +52,7 @@ export interface ProviderService {
   list(): Promise<Provider[]>;
   /** Enabled providers only, oldest first: what users may log in to. */
   enabled(): Promise<Provider[]>;
-  /** The oldest enabled provider, or `null` before setup. */
+  /** The enabled provider pinned by `SFTPGO_URL`, else the oldest enabled one; `null` before setup. */
   defaultProvider(): Promise<Provider | null>;
   /** The row, module and instance for `id`; `null` when it does not exist or its type is unknown. */
   get(id: string): Promise<ResolvedProvider | null>;
@@ -69,14 +73,22 @@ export interface ProviderService {
   /** Probes a saved provider by id or an unsaved candidate. */
   probe(target: string | AdminProviderTestRequest): Promise<ProbeResult>;
   capabilitiesFor(resolved: ResolvedProvider): Promise<ProviderCapabilities>;
+  /** The admin-set label, else the endpoint host: for callers that already know the row. */
   labelFor(provider: Provider): string;
+  /**
+   * The login page's view of a row. Its `label` is the admin-set one or
+   * empty, never the host: this is served to anonymous callers.
+   */
   publicView(provider: Provider): PublicProvider | null;
   /** The admin view of a row, including a fresh reachability probe. */
   adminView(provider: Provider): Promise<AdminProvider | null>;
   types(): AdminProviderType[];
   /**
    * Runs once at startup: creates or pins the SFTPGo provider named by
-   * `SFTPGO_URL` and unpins any row the variable no longer names. Idempotent.
+   * `SFTPGO_URL` and unpins any row the variable no longer names. A row
+   * that already exists keeps whatever enabled state an admin gave it;
+   * a row the variable moved away from is also disabled, so the deployment
+   * has one default again. Idempotent.
    */
   seedFromEnvironment(): Promise<void>;
 }
@@ -153,7 +165,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
 
   async function capabilitiesFor(target: ResolvedProvider): Promise<ProviderCapabilities> {
     const flags = target.module.capabilities;
-    const hasRoots = deps.environment.indexRootCount > 0;
+    // Indexing is per row: only a provider whose files live under one of the
+    // configured index roots has thumbnails, folder sizes and scope mapping.
+    const root = target.module.indexRootName?.(target.instance) ?? null;
+    const hasRoots = root !== null && deps.environment.indexRootNames.includes(root);
     const trashOn =
       target.module.trash !== "none" &&
       flags.trash &&
@@ -182,10 +197,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       );
     },
     async defaultProvider() {
-      const rows = await repo.list();
-      return (
-        rows.find((provider) => provider.enabled && moduleForType(provider.type) !== null) ?? null
+      const usable = (await repo.list()).filter(
+        (provider) => provider.enabled && moduleForType(provider.type) !== null,
       );
+      return usable.find((provider) => provider.managedByEnv) ?? usable[0] ?? null;
     },
     get,
     resolve,
@@ -240,6 +255,15 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
             "conflict",
             "logins already use this provider; add a new provider for another address",
           );
+        }
+        const taken = (await repo.list()).some(
+          (provider) =>
+            provider.id !== id &&
+            provider.type === current.type &&
+            provider.baseUrl === patch.baseUrl,
+        );
+        if (taken) {
+          throw new ApiHttpError("conflict", "a provider with this endpoint already exists");
         }
       }
       const config =
@@ -301,7 +325,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       return {
         id: provider.id,
         type: module.type as PublicProvider["type"],
-        label: labelFor(provider),
+        label: provider.label,
         credentialFields: [...module.credentialFields],
       };
     },
@@ -341,19 +365,39 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }));
     },
     async seedFromEnvironment() {
-      const envUrl = deps.environment.sftpgoUrl;
-      for (const row of await repo.list()) {
-        if (row.managedByEnv && (envUrl === undefined || row.baseUrl !== envUrl)) {
-          await repo.update(row.id, { managedByEnv: false });
+      const envUrl =
+        deps.environment.sftpgoUrl === undefined || deps.environment.sftpgoUrl.length === 0
+          ? undefined
+          : deps.environment.sftpgoUrl;
+      const rows = await repo.list();
+      for (const row of rows) {
+        if (!row.managedByEnv || row.baseUrl === envUrl) {
+          continue;
         }
+        // Without the variable the row is simply handed to the admin. With
+        // it pointing elsewhere the deployment has moved: retire this row
+        // so its logins stop and the new address is the only default.
+        const moved = envUrl !== undefined;
+        await repo.update(row.id, { managedByEnv: false, ...(moved ? { enabled: false } : {}) });
+        eventLog.record(
+          "general",
+          "info",
+          moved
+            ? `Storage provider disabled: ${labelFor(row)} (SFTPGO_URL now names another server)`
+            : `Storage provider unpinned: ${labelFor(row)} (SFTPGO_URL is no longer set)`,
+          { providerId: row.id },
+        );
       }
-      if (envUrl === undefined || envUrl.length === 0) {
+      if (envUrl === undefined) {
         return;
       }
-      const row = await repo.ensure({ type: "sftpgo", baseUrl: envUrl });
+      const existing = rows.find((row) => row.type === "sftpgo" && row.baseUrl === envUrl);
+      const row = existing ?? (await repo.ensure({ type: "sftpgo", baseUrl: envUrl }));
+      // Only a row this seed creates starts enabled; one an admin disabled
+      // stays that way across restarts.
       await repo.update(row.id, {
         managedByEnv: true,
-        enabled: true,
+        ...(existing === undefined ? { enabled: true } : {}),
         ...(typeof row.config.homeTemplate === "string"
           ? {}
           : { config: { ...row.config, homeTemplate: deps.environment.homeTemplate } }),

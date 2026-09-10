@@ -8,7 +8,7 @@ import { ApiHttpError } from "../errors.js";
 import { verifyCredentials } from "./credentials.ts";
 import { accountRepositoryCall } from "./errors.ts";
 import { liveAccountSession } from "./service.ts";
-import { accountsHarness } from "./test-fixtures/index.ts";
+import { accountsHarness, HARNESS_BASE_URL } from "./test-fixtures/index.ts";
 
 async function context(h: ReturnType<typeof accountsHarness>) {
   const a = await h.login();
@@ -166,6 +166,20 @@ it("fails closed on provider changes and maps verification errors without databa
     kind: "unauthorized",
   });
   expect(await h.repos.identities.listAll()).toEqual([]);
+  // A row re-addressed while the upstream login was in flight is a change
+  // too: the password was verified by the old server, not the new one.
+  const seededRow = await h.seeded;
+  const realLogin = h.client.login.bind(h.client);
+  vi.spyOn(h.client, "login").mockImplementationOnce(async (body) => {
+    await h.repos.providers.update(seededRow.id, { baseUrl: "http://moved.test" });
+    return realLogin(body);
+  });
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
+    kind: "unauthorized",
+    message: "storage provider changed; sign in again",
+  });
+  expect(await h.repos.identities.listAll()).toEqual([]);
+  await h.repos.providers.update(seededRow.id, { baseUrl: HARNESS_BASE_URL });
   vi.spyOn(h.limiter, "check").mockReturnValueOnce({ allowed: false });
   await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "rate_limited",

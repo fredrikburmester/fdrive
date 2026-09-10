@@ -7,6 +7,7 @@ import {
   credentialFieldsFor,
   DEFAULT_CREDENTIAL_FIELDS,
   loginSubtitle,
+  providerDisplayName,
   selectProvider,
 } from "./login-model";
 
@@ -44,8 +45,16 @@ describe("confirmationFieldsFor", () => {
 describe("loginSubtitle", () => {
   it("names the one provider, asks to choose among several, and stays generic without any", () => {
     expect(loginSubtitle([sftpgo])).toBe("Sign in with your SFTPGo account on files.example.org");
+    expect(loginSubtitle([{ ...sftpgo, label: "" }])).toBe("Sign in with your SFTPGo account");
     expect(loginSubtitle([sftpgo, second])).toBe("Choose a server and sign in");
     expect(loginSubtitle([])).toBe("Sign in with your account");
+  });
+});
+
+describe("providerDisplayName", () => {
+  it("uses the admin's label and falls back to the product name", () => {
+    expect(providerDisplayName(sftpgo)).toBe("files.example.org");
+    expect(providerDisplayName({ type: "sftpgo", label: "" })).toBe("SFTPGo");
   });
 });
 

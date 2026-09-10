@@ -51,7 +51,7 @@ function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: Provi
       repos,
       fetch: probeFetch(opts.reachable ?? true),
       clock: () => new Date("2026-09-10T00:00:00Z"),
-      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootCount: 0 },
+      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootNames: [] },
     });
   const principal: Principal = {
     accountId: "account-1",
@@ -97,13 +97,14 @@ describe("GET /providers", () => {
     expect(res.status).toBe(200);
     const body = ProvidersResponse.parse(await res.json());
     expect(body.providers).toHaveLength(1);
-    expect(body.providers[0]).toMatchObject({ type: "sftpgo", label: "a:8080" });
+    // No admin-set label and no host: the page names the product instead.
+    expect(body.providers[0]).toMatchObject({ type: "sftpgo", label: "" });
     expect(body.providers[0]?.credentialFields.map((field) => field.name)).toEqual([
       "username",
       "password",
       "otp",
     ]);
-    expect(JSON.stringify(body)).not.toContain("http://a:8080");
+    expect(JSON.stringify(body)).not.toContain("a:8080");
   });
 });
 

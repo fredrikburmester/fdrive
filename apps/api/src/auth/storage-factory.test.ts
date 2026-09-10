@@ -9,6 +9,7 @@ import {
   createIdentityStorageFactory,
   createPinnedStorageFactory,
   trashSettingsForStorage,
+  unavailableStorage,
   withIdempotentMkdir,
   withRecycleFolderTrash,
 } from "./storage-factory.ts";
@@ -328,4 +329,22 @@ it("withIdempotentMkdir rethrows a non-StorageError from mkdir unchanged", async
     },
   });
   await expect(withIdempotentMkdir(storage).mkdir("/x")).rejects.toBe(failure);
+});
+
+it("unavailableStorage rejects every call with the given error and has no trash", async () => {
+  const error = new ApiHttpError("upstream_unavailable", "storage provider unavailable");
+  const storage = unavailableStorage(error);
+  expect(storage.trash).toBeUndefined();
+  expect(storage.zip).toBeUndefined();
+  await expect(storage.list("/")).rejects.toBe(error);
+  await expect(storage.stat("/a")).rejects.toBe(error);
+  await expect(storage.statFile("/a")).rejects.toBe(error);
+  await expect(storage.download("/a")).rejects.toBe(error);
+  await expect(storage.upload("/a", new Uint8Array())).rejects.toBe(error);
+  await expect(storage.mkdir("/a")).rejects.toBe(error);
+  await expect(storage.move("/a", "/b")).rejects.toBe(error);
+  await expect(storage.copy("/a", "/b")).rejects.toBe(error);
+  await expect(storage.deleteFile("/a")).rejects.toBe(error);
+  await expect(storage.deleteDir("/a")).rejects.toBe(error);
+  expect(trashSettingsForStorage(storage)).toBeNull();
 });

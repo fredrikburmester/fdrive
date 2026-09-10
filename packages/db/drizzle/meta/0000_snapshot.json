@@ -596,7 +596,7 @@
           "schemaTo": "app",
           "columnsFrom": ["provider_id"],
           "columnsTo": ["id"],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

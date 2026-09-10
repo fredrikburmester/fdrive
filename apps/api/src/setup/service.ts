@@ -3,7 +3,7 @@ import { CoreError, parseHomeTemplate } from "@fdrive/core";
 import type { AccountRepo, Provider } from "@fdrive/db";
 import type { AuthService, LoginInput, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
-import { hostLabel, type ProviderService } from "../providers/service.js";
+import type { ProviderService } from "../providers/service.js";
 import type { SetupClaimStore } from "./claim.js";
 
 export interface SetupCompleteInput {
@@ -104,17 +104,26 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
           (provider) => provider.type === "sftpgo" && provider.baseUrl === baseUrl,
         ) ??
         null;
+      // A row this call creates carries the template from the start; it is
+      // disabled and removed again should the login fail. An existing row
+      // (env-pinned, or found by address) is left untouched until the login
+      // has been verified and the claim taken: a wrong password must not
+      // rewrite a live provider's configuration. The label stays empty so
+      // the public login page names the product, not the host; admins see
+      // the host until they set a name.
       const created =
         existing === null
           ? await deps.providers.create(
-              { type: "sftpgo", label: hostLabel(baseUrl), baseUrl },
+              {
+                type: "sftpgo",
+                label: "",
+                baseUrl,
+                config: { homeTemplate: input.homeTemplate },
+              },
               { enabled: false },
             )
           : null;
       const candidate = existing ?? (created as Provider);
-      await deps.providers.update(candidate.id, {
-        config: { ...stringConfig(candidate.config), homeTemplate: input.homeTemplate },
-      });
 
       const loginInput: LoginInput = {
         providerId: candidate.id,
@@ -148,7 +157,12 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
 
       // A crash after the claim is recoverable: the same verified identity
       // resumes the pending claim, while another process cannot overwrite it.
-      await deps.providers.update(candidate.id, { enabled: true });
+      await deps.providers.update(candidate.id, {
+        ...(existing === null
+          ? {}
+          : { config: { ...stringConfig(existing.config), homeTemplate: input.homeTemplate } }),
+        enabled: true,
+      });
 
       await deps.accounts.setAdmin(loginResult.me.account.id, true);
       if (

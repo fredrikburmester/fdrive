@@ -49,7 +49,9 @@ test("the login page shows no server picker with one provider and a picker with 
     await page.goto("/login");
     await expect(page.getByLabel("Username")).toBeVisible();
     await expect(page.getByLabel("Server")).toHaveCount(0);
-    await expect(page.getByText(/Sign in with your SFTPGo account on/)).toBeVisible();
+    // The seeded provider has no admin-set name, and the public list never
+    // carries the host, so the page names the product only.
+    await expect(page.getByText("Sign in with your SFTPGo account", { exact: true })).toBeVisible();
 
     // The same SFTPGo server through another host spelling is a new
     // (type, baseUrl) pair, so it becomes a second enabled provider.
@@ -74,8 +76,9 @@ test("the login page shows no server picker with one provider and a picker with 
     await picker.click();
     await expect(page.getByRole("option", { name: new RegExp(SECOND_LABEL) })).toBeVisible();
     // Signing in through the first (seeded) provider still works with the
-    // picker present and sends that provider's id.
-    await page.getByRole("option", { name: new RegExp(seeded.label) }).click();
+    // picker present and sends that provider's id. It is listed by product
+    // name alone: the admin view's host label is not public.
+    await page.getByRole("option", { name: "SFTPGo", exact: true }).click();
     const loginRequest = page.waitForRequest(
       (request) => request.url().endsWith("/api/v1/auth/login") && request.method() === "POST",
     );

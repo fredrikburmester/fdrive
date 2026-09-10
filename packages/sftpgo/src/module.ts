@@ -10,7 +10,7 @@ import type {
   StorageProvider,
   StorageSession,
 } from "@fdrive/core";
-import { StorageError } from "@fdrive/core";
+import { parseHomeTemplate, StorageError } from "@fdrive/core";
 import { createSftpgoClient } from "./client.js";
 import { SftpgoError } from "./errors.js";
 import { probeConnection } from "./probe.js";
@@ -135,6 +135,14 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
       scopeMapping: true,
     },
     trash: "native",
+
+    indexRootName(instance) {
+      try {
+        return parseHomeTemplate(sftpgoHomeTemplate(instance)).rootName;
+      } catch {
+        return null;
+      }
+    },
 
     probe(instance, ctx) {
       return probeConnection(instance.baseUrl, { fetch: ctx.fetch });

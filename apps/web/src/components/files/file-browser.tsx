@@ -118,6 +118,7 @@ import { tagCheckState as computeTagCheckState, toggleTagId } from "@/lib/metada
 import { isOfficePreviewCandidate, officeModesFor, opensInOffice } from "@/lib/office/capabilities";
 import type { OfficeDocumentKind } from "@/lib/office/new-document";
 import { officeHref } from "@/lib/office/route";
+import { trashAvailabilityFor } from "@/lib/trash/format";
 import { useTrashStatus } from "@/lib/trash/queries";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
@@ -1067,7 +1068,7 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashStatus ?? null}
+        trash={trashAvailabilityFor(capabilities, trashStatus)}
       />
       {destinationPicker !== null && (
         <DestinationPicker

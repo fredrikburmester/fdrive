@@ -16,7 +16,7 @@ function harness(
   options: {
     sftpgoUrl?: string;
     homeTemplate?: string;
-    indexRootCount?: number;
+    indexRootNames?: readonly string[];
     trashEnabled?: (providerId: string) => Promise<boolean>;
     fetch?: typeof globalThis.fetch;
   } = {},
@@ -36,7 +36,7 @@ function harness(
     environment: {
       sftpgoUrl: options.sftpgoUrl,
       homeTemplate: options.homeTemplate ?? "sftpgo:/{username}",
-      indexRootCount: options.indexRootCount ?? 0,
+      indexRootNames: options.indexRootNames ?? [],
     },
     ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
   });
@@ -52,7 +52,7 @@ describe("hostLabel", () => {
 
 describe("createProviderService: rows", () => {
   it("creates a validated, labelled provider and lists, resolves and views it", async () => {
-    const h = harness({ indexRootCount: 1 });
+    const h = harness({ indexRootNames: ["sftpgo"] });
     const created = await h.service.create({
       type: "sftpgo",
       label: "Home",
@@ -100,7 +100,7 @@ describe("createProviderService: rows", () => {
     expect(h.events).toEqual(["general:info:Storage provider added: Home"]);
   });
 
-  it("falls back to the endpoint host as label and treats an empty config as valid", async () => {
+  it("falls back to the endpoint host as label for known callers only", async () => {
     const h = harness();
     const created = await h.service.create({
       type: "sftpgo",
@@ -110,7 +110,21 @@ describe("createProviderService: rows", () => {
     const unlabeled = await h.repos.providers.update(created.id, { label: "" });
     if (unlabeled === null) throw new Error("vanished");
     expect(h.service.labelFor(unlabeled)).toBe("sftpgo:8080");
-    expect(h.service.publicView(unlabeled)?.label).toBe("sftpgo:8080");
+    expect((await h.service.adminView(unlabeled))?.label).toBe("sftpgo:8080");
+    // The public view is served without a session, so it never names the host.
+    expect(h.service.publicView(unlabeled)?.label).toBe("");
+  });
+
+  it("prefers the env-pinned row as the default over an older enabled one", async () => {
+    const h = harness();
+    const older = await h.service.create({ type: "sftpgo", label: "a", baseUrl: "http://a" });
+    const pinned = await h.service.create(
+      { type: "sftpgo", label: "env", baseUrl: "http://env:8080" },
+      { managedByEnv: true },
+    );
+    expect((await h.service.defaultProvider())?.id).toBe(pinned.id);
+    await h.service.update(pinned.id, { enabled: false });
+    expect((await h.service.defaultProvider())?.id).toBe(older.id);
   });
 
   it("refuses an unknown type, a bad config, and a duplicate endpoint", async () => {
@@ -220,6 +234,12 @@ describe("createProviderService: rows", () => {
     });
     // The same address is not a change.
     expect((await h.service.update(row.id, { baseUrl: "http://b" })).baseUrl).toBe("http://b");
+    // Another row's address is a conflict, not a unique-constraint crash.
+    const other = await h.service.create({ type: "sftpgo", label: "o", baseUrl: "http://o" });
+    await expect(h.service.update(other.id, { baseUrl: "http://b" })).rejects.toMatchObject({
+      kind: "conflict",
+      message: "a provider with this endpoint already exists",
+    });
     await h.repos.providers.update(row.id, { managedByEnv: true });
     await expect(h.service.update(row.id, { baseUrl: "http://d" })).rejects.toMatchObject({
       kind: "forbidden",
@@ -269,12 +289,26 @@ describe("createProviderService: rows", () => {
     ).rejects.toMatchObject({ kind: "bad_request" });
   });
 
-  it("derives capabilities from the module, trash settings and index roots", async () => {
-    const withRoots = harness({ indexRootCount: 2, trashEnabled: async () => true });
+  it("derives capabilities from the module, trash settings and the row's own index root", async () => {
+    const withRoots = harness({
+      indexRootNames: ["sftpgo", "photos"],
+      trashEnabled: async () => true,
+    });
     const row = await withRoots.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" });
     expect(
       await withRoots.service.capabilitiesFor(await withRoots.service.resolve(row.id)),
     ).toEqual({ ...sftpgoModule.capabilities, trash: true, index: true, scopeMapping: true });
+    // A second row whose home template names a root the indexer does not
+    // read is not indexed, whatever the deployment-wide root list says.
+    const unmapped = await withRoots.service.create({
+      type: "sftpgo",
+      label: "archive",
+      baseUrl: "http://b",
+      config: { homeTemplate: "archive:/{username}" },
+    });
+    expect(
+      await withRoots.service.capabilitiesFor(await withRoots.service.resolve(unmapped.id)),
+    ).toMatchObject({ index: false, scopeMapping: false });
     const moveModule = createSftpgoModule();
     const noTrash = { ...moveModule, trash: "none" as const };
     expect(
@@ -293,7 +327,7 @@ describe("createProviderService: rows", () => {
       repos,
       fetch: probeFetch(),
       clock: () => new Date(),
-      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootCount: 0 },
+      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootNames: [] },
       modules: { sftpgo: custom },
     });
     expect(service.types().map((type) => type.label)).toEqual(["Custom SFTPGo"]);
@@ -317,19 +351,62 @@ describe("createProviderService: seedFromEnvironment", () => {
     await h.service.seedFromEnvironment();
     expect(await h.service.list()).toHaveLength(1);
     expect((await h.service.list())[0]?.config).toEqual({ homeTemplate: "kept:/{username}" });
+    expect(h.events).toEqual([]);
   });
 
-  it("unpins a row SFTPGO_URL no longer names and pins the one it does", async () => {
+  it("leaves a row an admin disabled alone across restarts", async () => {
+    const h = harness({ sftpgoUrl: "http://env:8080" });
+    await h.service.seedFromEnvironment();
+    const [row] = await h.service.list();
+    if (row === undefined) throw new Error("not seeded");
+    await h.service.update(row.id, { enabled: false });
+    await h.service.seedFromEnvironment();
+    expect(await h.repos.providers.get(row.id)).toMatchObject({
+      managedByEnv: true,
+      enabled: false,
+    });
+    expect(await h.service.enabled()).toEqual([]);
+  });
+
+  it("retires the row SFTPGO_URL moved away from and pins the one it names now", async () => {
     const h = harness({ sftpgoUrl: "http://env:8080" });
     const stale = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old:8080" });
-    await h.repos.providers.update(stale.id, { managedByEnv: true });
+    await h.repos.providers.update(stale.id, { managedByEnv: true, enabled: true });
     await h.service.seedFromEnvironment();
-    expect(await h.repos.providers.get(stale.id)).toMatchObject({ managedByEnv: false });
+    expect(await h.repos.providers.get(stale.id)).toMatchObject({
+      managedByEnv: false,
+      enabled: false,
+    });
     const env = (await h.service.list()).find((row) => row.baseUrl === "http://env:8080");
     expect(env).toMatchObject({
       managedByEnv: true,
+      enabled: true,
       config: { homeTemplate: "sftpgo:/{username}" },
     });
+    expect((await h.service.defaultProvider())?.id).toBe(env?.id);
+    expect(h.events).toEqual([
+      "general:info:Storage provider disabled: old:8080 (SFTPGO_URL now names another server)",
+    ]);
+  });
+
+  it("only unpins, and keeps enabled, a row when SFTPGO_URL is removed", async () => {
+    const seeded = harness({ sftpgoUrl: "http://env:8080" });
+    await seeded.service.seedFromEnvironment();
+    const h = harness();
+    const [row] = await seeded.service.list();
+    if (row === undefined) throw new Error("not seeded");
+    await h.repos.providers.ensure({ type: "sftpgo", baseUrl: row.baseUrl });
+    const [copy] = await h.service.list();
+    if (copy === undefined) throw new Error("not copied");
+    await h.repos.providers.update(copy.id, { managedByEnv: true, enabled: true });
+    await h.service.seedFromEnvironment();
+    expect(await h.repos.providers.get(copy.id)).toMatchObject({
+      managedByEnv: false,
+      enabled: true,
+    });
+    expect(h.events).toEqual([
+      "general:info:Storage provider unpinned: env:8080 (SFTPGO_URL is no longer set)",
+    ]);
   });
 
   it("does nothing without an environment URL", async () => {

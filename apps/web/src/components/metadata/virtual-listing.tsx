@@ -21,6 +21,7 @@ import {
   pathToHref,
   RenameDialog,
   type RowContextAction,
+  trashAvailabilityFor,
   useDelete,
   useDuplicate,
   useMe,
@@ -72,6 +73,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const duplicate = useDuplicate();
   const { data: trashStatus } = useTrashStatus();
   const { data: me } = useMe();
+  const capabilities = capabilitiesFor(me);
 
   const liveEntries = useMemo(
     () => resolved.flatMap((item) => (item.entry !== null ? [item.entry] : [])),
@@ -201,7 +203,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
-                  capabilities={capabilitiesFor(me)}
+                  capabilities={capabilities}
                 />
               </div>
             )}
@@ -249,7 +251,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashStatus ?? null}
+        trash={trashAvailabilityFor(capabilities, trashStatus)}
       />
     </>
   );

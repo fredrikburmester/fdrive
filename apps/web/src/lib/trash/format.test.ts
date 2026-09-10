@@ -11,6 +11,7 @@ import {
   restoredToastMessage,
   retentionDaysLabel,
   retentionNote,
+  trashAvailabilityFor,
 } from "./format";
 
 describe("originalFolderLabel", () => {
@@ -174,5 +175,20 @@ describe("restoreConflictMessage", () => {
     expect(restoreConflictMessage("a.txt")).toBe(
       'Could not restore "a.txt": a file already exists at that location.',
     );
+  });
+});
+
+describe("trashAvailabilityFor", () => {
+  it("follows the login's trash capability and keeps only the retention note from the status", () => {
+    expect(trashAvailabilityFor({ trash: true }, { retentionHours: 48 })).toEqual({
+      available: true,
+      retentionHours: 48,
+    });
+    expect(trashAvailabilityFor({ trash: true }, undefined)).toEqual({
+      available: true,
+      retentionHours: null,
+    });
+    // A stale cached status cannot promise a trash the login no longer has.
+    expect(trashAvailabilityFor({ trash: false }, { retentionHours: 48 })).toBeNull();
   });
 });
