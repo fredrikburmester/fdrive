@@ -11,7 +11,9 @@ const systemUpdateFeaturesMock = vi.fn();
 const setupTestMock = vi.fn();
 const setupCompleteMock = vi.fn();
 const adminProvidersMock = vi.fn();
+const adminCreateProviderMock = vi.fn();
 const adminUpdateProviderMock = vi.fn();
+const adminDeleteProviderMock = vi.fn();
 const adminTestProviderMock = vi.fn();
 const systemIndexerMock = vi.fn();
 const systemUpdateIndexerSettingsMock = vi.fn();
@@ -38,7 +40,9 @@ vi.mock("./client.js", () => ({
     setupTest: (...args: unknown[]) => setupTestMock(...args),
     setupComplete: (...args: unknown[]) => setupCompleteMock(...args),
     adminProviders: (...args: unknown[]) => adminProvidersMock(...args),
+    adminCreateProvider: (...args: unknown[]) => adminCreateProviderMock(...args),
     adminUpdateProvider: (...args: unknown[]) => adminUpdateProviderMock(...args),
+    adminDeleteProvider: (...args: unknown[]) => adminDeleteProviderMock(...args),
     adminTestProvider: (...args: unknown[]) => adminTestProviderMock(...args),
     systemIndexer: (...args: unknown[]) => systemIndexerMock(...args),
     systemUpdateIndexerSettings: (...args: unknown[]) => systemUpdateIndexerSettingsMock(...args),
@@ -146,7 +150,9 @@ beforeEach(() => {
   setupTestMock.mockReset();
   setupCompleteMock.mockReset();
   adminProvidersMock.mockReset();
+  adminCreateProviderMock.mockReset();
   adminUpdateProviderMock.mockReset();
+  adminDeleteProviderMock.mockReset();
   adminTestProviderMock.mockReset();
   systemIndexerMock.mockReset();
   systemUpdateIndexerSettingsMock.mockReset();
@@ -227,6 +233,48 @@ describe("useAdminProviders", () => {
     });
 
     await waitFor(() => expect(result.current.data).toEqual(PROVIDERS_RESPONSE));
+  });
+});
+
+describe("useAdminCreateProvider", () => {
+  it("adds a provider and invalidates the cached list", async () => {
+    adminCreateProviderMock.mockResolvedValue(PROVIDER);
+    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
+    const { useAdminCreateProvider } = await import("./system-queries.js");
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
+
+    const { result } = renderHook(() => useAdminCreateProvider(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate({ type: "sftpgo", label: "Second", baseUrl: "http://other:8080" });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(adminCreateProviderMock).toHaveBeenCalledWith({
+      type: "sftpgo",
+      label: "Second",
+      baseUrl: "http://other:8080",
+    });
+    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useAdminDeleteProvider", () => {
+  it("removes a provider and invalidates the cached list", async () => {
+    adminDeleteProviderMock.mockResolvedValue({ ok: true });
+    adminProvidersMock.mockResolvedValue({ providers: [], types: [] });
+    const { useAdminDeleteProvider } = await import("./system-queries.js");
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
+
+    const { result } = renderHook(() => useAdminDeleteProvider(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate(PROVIDER.id);
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(adminDeleteProviderMock).toHaveBeenCalledWith(PROVIDER.id);
+    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
   });
 });
 

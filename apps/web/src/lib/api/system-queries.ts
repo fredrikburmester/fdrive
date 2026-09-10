@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  AdminProviderCreateRequest,
   AdminProviderTestRequest,
   AdminProviderUpdateRequest,
   FeaturesUpdateRequest,
@@ -73,11 +74,23 @@ export function useSetupComplete() {
   });
 }
 
-/** Every configured storage provider plus the types an admin can add, for System > General. */
+/** Every configured storage provider plus the types an admin can add, for System > Storage. */
 export function useAdminProviders() {
   return useQuery({
     queryKey: queryKeys.admin.providers(),
     queryFn: () => apiClient.adminProviders(),
+  });
+}
+
+/** Adds a provider (the API stores it without probing) and refreshes the cached list. */
+export function useAdminCreateProvider() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: AdminProviderCreateRequest) => apiClient.adminCreateProvider(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.providers() });
+    },
   });
 }
 
@@ -88,6 +101,18 @@ export function useAdminUpdateProvider() {
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
       apiClient.adminUpdateProvider(id, patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.providers() });
+    },
+  });
+}
+
+/** Removes a provider and refreshes the cached list. Refused while logins still use it. */
+export function useAdminDeleteProvider() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => apiClient.adminDeleteProvider(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.providers() });
     },

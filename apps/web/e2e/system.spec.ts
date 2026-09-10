@@ -3,11 +3,11 @@ import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 
 /**
- * Clicks the General page's Save button by dispatching the click event
+ * Clicks a settings sheet's Save button by dispatching the click event
  * directly on the element rather than simulating a real pointer click.
  * Earlier specs in a full run can leave finished jobs in the account-wide
  * Activity panel (fixed bottom-right on every page), which can visually
- * overlap this card's bottom-right Save button; a real mouse click would
+ * overlap that bottom-right Save button; a real mouse click would
  * land on whichever element is topmost at that point, which is unrelated
  * to this page's own behaviour and not what this test means to exercise.
  */
@@ -15,42 +15,55 @@ async function clickSave(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Save", exact: true }).dispatchEvent("click");
 }
 
-test("alice (admin) sees System > General with a reachable host and can change the home template", async ({
+test("alice (admin) sees the env-managed provider on System > Storage and can change its home template", async ({
   page,
 }) => {
   await page.goto("/files");
 
-  await expect(page.getByRole("link", { name: "General" })).toBeVisible();
-  await page.getByRole("link", { name: "General" }).click();
-  await expect(page).toHaveURL(/\/system\/general$/);
+  await expect(page.getByRole("link", { name: "Storage" })).toBeVisible();
+  await page.getByRole("link", { name: "Storage" }).click();
+  await expect(page).toHaveURL(/\/system\/storage$/);
 
-  await expect(page.getByText("Host", { exact: true })).toBeVisible();
+  // The seeded provider is pinned by SFTPGO_URL, so it reports the
+  // environment as its source and refuses both address edits and removal.
   await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Environment (locked)", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Remove / })).toBeDisabled();
 
-  const templateInput = page.getByLabel("Template");
-  const originalTemplate = await templateInput.inputValue();
+  await page.getByRole("button", { name: /^Edit / }).click();
+  let dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Address")).toBeDisabled();
+
+  const originalTemplate = await dialog.getByLabel("Home template").inputValue();
   const updatedTemplate = "sftpgo:/updated/{username}";
-
-  await templateInput.fill(updatedTemplate);
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
-  await clickSave(page);
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Home template").fill(updatedTemplate);
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toBeHidden();
 
   await page.reload();
-  await expect(page.getByLabel("Template")).toHaveValue(updatedTemplate);
+  await page.getByRole("button", { name: /^Edit / }).click();
+  dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Home template")).toHaveValue(updatedTemplate);
 
   // Restore the original template so this test stays idempotent across
   // repeated local runs against the same environment.
-  await page.getByLabel("Template").fill(originalTemplate);
-  await clickSave(page);
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Home template").fill(originalTemplate);
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  // The connection card moved off General with the rest of the storage
+  // settings; only a pointer to this page is left there.
+  await page.goto("/system/general");
+  await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
+  await expect(page.getByText("SFTPGo connection")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Storage" }).first()).toBeVisible();
 });
 
 test("the retired /system/connection route redirects to General", async ({ page }) => {
   await page.goto("/system/connection");
 
   await expect(page).toHaveURL(/\/system\/general$/);
-  await expect(page.getByText("SFTPGo connection", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
 });
 
 test("alice (admin) sees the Search embedding server and OCR as not configured in the e2e stack", async ({
