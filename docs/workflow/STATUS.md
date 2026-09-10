@@ -1,6 +1,21 @@
 # Current handoff
 
-Updated: 2026-09-09. Owner: primary agent.
+Updated: 2026-09-10. Owner: primary agent.
+
+## P10 storage providers (specs written 2026-09-10, no code)
+
+- Investigation of multi-provider support (WebDAV first, S3 later) done against the code;
+  findings and decisions in [P10-STORAGE-PROVIDERS.md](P10-STORAGE-PROVIDERS.md), PLAN §4.3 and
+  §14 decision 21. Chunk specs: [P10-REGISTRY-API.md](P10-REGISTRY-API.md) (A1),
+  [P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md) (A2), [P10-WEBDAV.md](P10-WEBDAV.md) (B),
+  [P10-SHARES.md](P10-SHARES.md) (D). B and D run in parallel after A1; A2 after the A1 contracts
+  are agreed. S3 has no chunk yet.
+- Key facts for whoever starts A1: `StorageProvider` and `principal.storage` are already the
+  seam; the only structural blockers are `connection/store.ts` plus its seven `type === "sftpgo"`
+  and base-URL comparison sites, verify-and-mint login in `accounts/credentials.ts` and
+  `auth/token-source.ts`, and shares owned by SFTPGo. Two memory fakes disagree and there is no
+  conformance suite. The web gates only Trash, search modes and Office today.
+- Nothing implemented or committed. Worktree: main checkout, branch `main`.
 
 ## P9 System settings restructure and event log (committed 2026-09-09)
 
