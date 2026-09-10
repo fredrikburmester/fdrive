@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/context-menu";
 import {
   type BrowserSelection,
-  browserActions,
+  canDownload,
   DEFAULT_CAPABILITIES,
   selectionOf,
 } from "@/lib/identity/capabilities";
@@ -139,7 +139,6 @@ export function FileContextMenu({
   const group = selection ?? selectionOf([entry]);
   const selectionCount = group.files + group.folders;
   const includesFolder = group.folders > 0;
-  const available = browserActions(capabilities, group);
   const trashAvailable = capabilities.trash;
   const isMultiSelection = selectionCount > 1;
   const archiveKind = entry.kind !== "dir" ? detectArchiveKind(entry.name) : null;
@@ -149,7 +148,7 @@ export function FileContextMenu({
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        {available.has("share") && (
+        {capabilities.shares && (
           <ContextMenuItem onClick={() => onAction("share", entry)}>
             <Link2Icon />
             Share
@@ -159,9 +158,8 @@ export function FileContextMenu({
           <ExternalLinkIcon />
           Open
         </ContextMenuItem>
-        {officeModesFor(entry, officeStatus, selectionCount)
-          .filter((mode) => available.has(`office:${mode}`))
-          .map((mode) => (
+        {capabilities.office &&
+          officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
             <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
               <ExternalLinkIcon />
               {OFFICE_MODE_LABELS[mode]}
@@ -255,7 +253,7 @@ export function FileContextMenu({
             )}
           </>
         )}
-        {available.has("download") && (
+        {canDownload(capabilities, group) && (
           <>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onAction("download", entry)}>

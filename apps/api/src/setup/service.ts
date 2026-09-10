@@ -1,10 +1,9 @@
 import type { ConnectionTestResponse, SetupStatusResponse } from "@fdrive/contracts";
 import { CoreError, parseHomeTemplate } from "@fdrive/core";
-import type { AccountRepo, Provider } from "@fdrive/db";
+import type { AccountRepo, Provider, SettingsRepo } from "@fdrive/db";
 import type { AuthService, LoginInput, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
 import type { ProviderService } from "../providers/service.js";
-import type { SetupClaimStore } from "./claim.js";
 
 export interface SetupCompleteInput {
   readonly baseUrl: string;
@@ -29,7 +28,7 @@ export interface CreateSetupServiceDeps {
   >;
   readonly authService: Pick<AuthService, "loginCandidate" | "me">;
   readonly accounts: Pick<AccountRepo, "setAdmin">;
-  readonly claims: SetupClaimStore;
+  readonly settings: SettingsRepo;
   /** Whether `SFTPGO_URL` is set by environment; surfaced on `status()` for the setup UI. */
   readonly hasEnvUrl: boolean;
 }
@@ -52,6 +51,30 @@ function assertValidHomeTemplate(homeTemplate: string): void {
   }
 }
 
+const SETUP_OWNER_KEY = "setup.owner.v1";
+const SETUP_INIT_KEY = "setup.initialized.v1";
+
+interface SetupOwnerState {
+  readonly version: 1;
+  readonly state: "claiming" | "complete";
+  readonly accountId: string;
+  readonly baseUrl: string;
+}
+
+function parseOwnerState(value: unknown): SetupOwnerState | null {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    (value as { version?: unknown }).version !== 1 ||
+    typeof (value as { accountId?: unknown }).accountId !== "string" ||
+    typeof (value as { baseUrl?: unknown }).baseUrl !== "string"
+  ) {
+    return null;
+  }
+  const state = (value as { state?: unknown }).state;
+  return state === "claiming" || state === "complete" ? (value as SetupOwnerState) : null;
+}
+
 /**
  * Builds the `SetupService` backing `/api/v1/setup/*`: reports whether
  * setup is required, probes a candidate SFTPGo, and completes setup by
@@ -61,6 +84,10 @@ function assertValidHomeTemplate(homeTemplate: string): void {
  * types are added from System > Storage afterwards.
  */
 export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
+  const { settings } = deps;
+  const currentClaim = async () => parseOwnerState(await settings.get(SETUP_OWNER_KEY));
+  const wasInitialized = async () => (await settings.get<boolean>(SETUP_INIT_KEY)) === true;
+
   async function envProvider(): Promise<Provider | null> {
     return (
       (await deps.providers.list()).find(
@@ -71,12 +98,12 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
 
   return {
     async status() {
-      const claim = await deps.claims.current();
-      if (claim === null && !(await deps.claims.wasInitialized())) {
+      const claim = await currentClaim();
+      if (claim === null && !(await wasInitialized())) {
         const configured = (await deps.providers.list()).some(
           (row) => row.enabled || row.managedByEnv,
         );
-        if (configured) await deps.claims.markInitialized();
+        if (configured) await settings.set(SETUP_INIT_KEY, true);
       }
       // Existing env/settings deployments predate the owner record. Treat an
       // already-enabled provider as complete so upgrades never lock users
@@ -86,7 +113,7 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
           ? false
           : claim?.state === "claiming"
             ? true
-            : !(await deps.claims.wasInitialized());
+            : !(await wasInitialized());
       return { required, hasEnvUrl: deps.hasEnvUrl };
     },
 
@@ -153,12 +180,21 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
         throw error;
       }
 
-      const claim = await deps.claims.claim({
-        accountId: loginResult.me.account.id,
-        baseUrl,
-      });
-      if (claim === "taken") {
-        throw new ApiHttpError("conflict", "this server has already been claimed by another owner");
+      const ownerInput = { accountId: loginResult.me.account.id, baseUrl };
+      const desiredClaim: SetupOwnerState = { version: 1, state: "claiming", ...ownerInput };
+      const claimed = await settings.compareAndSet(SETUP_OWNER_KEY, null, desiredClaim);
+      if (!claimed) {
+        const existingClaim = await currentClaim();
+        const isResumed =
+          existingClaim?.state === "claiming" &&
+          existingClaim.accountId === ownerInput.accountId &&
+          existingClaim.baseUrl === ownerInput.baseUrl;
+        if (!isResumed) {
+          throw new ApiHttpError(
+            "conflict",
+            "this server has already been claimed by another owner",
+          );
+        }
       }
 
       // A crash after the claim is recoverable: the same verified identity
@@ -171,12 +207,12 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
       });
 
       await deps.accounts.setAdmin(loginResult.me.account.id, true);
-      if (
-        !(await deps.claims.finalize({
-          accountId: loginResult.me.account.id,
-          baseUrl,
-        }))
-      ) {
+      const finalized = await settings.compareAndSet(SETUP_OWNER_KEY, desiredClaim, {
+        version: 1,
+        state: "complete",
+        ...ownerInput,
+      });
+      if (!finalized) {
         throw new ApiHttpError("conflict", "setup ownership changed; retry setup login");
       }
       const me = await deps.authService.me(

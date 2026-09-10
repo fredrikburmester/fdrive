@@ -116,12 +116,9 @@ export const AdminProviderCreateRequest = z.strictObject({
 export type AdminProviderCreateRequest = z.infer<typeof AdminProviderCreateRequest>;
 
 /** Partial update; `baseUrl` is refused with `forbidden` for an env-managed provider. */
-export const AdminProviderUpdateRequest = z.strictObject({
-  label: z.string().min(1).max(120).optional(),
-  baseUrl: HttpUrl.optional(),
-  config: ProviderFieldValues.optional(),
-  enabled: z.boolean().optional(),
-});
+export const AdminProviderUpdateRequest = AdminProviderCreateRequest.omit({ type: true })
+  .partial()
+  .extend({ enabled: z.boolean().optional() });
 export type AdminProviderUpdateRequest = z.infer<typeof AdminProviderUpdateRequest>;
 
 /**
@@ -129,9 +126,5 @@ export type AdminProviderUpdateRequest = z.infer<typeof AdminProviderUpdateReque
  * Probing a saved provider uses `POST /api/v1/admin/providers/:id/test`
  * with no body.
  */
-export const AdminProviderTestRequest = z.strictObject({
-  type: ProviderType,
-  baseUrl: HttpUrl,
-  config: ProviderFieldValues.optional(),
-});
+export const AdminProviderTestRequest = AdminProviderCreateRequest.omit({ label: true });
 export type AdminProviderTestRequest = z.infer<typeof AdminProviderTestRequest>;

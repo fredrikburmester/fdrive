@@ -4,7 +4,6 @@ import {
   isHttpUrl,
   type ProviderCapabilities,
   type ProviderField,
-  type ProviderFieldKind,
 } from "@fdrive/contracts";
 import { CAPABILITY_KEYS, type CapabilityKey } from "@/lib/identity/capabilities";
 
@@ -48,14 +47,6 @@ export interface ProviderDraft {
   readonly baseUrl: string;
   /** Configuration field values by field name, as typed. */
   readonly config: Readonly<Record<string, string>>;
-}
-
-/** The `<input type>` for one provider field kind. */
-export function providerInputType(kind: ProviderFieldKind): string {
-  if (kind === "password") {
-    return "password";
-  }
-  return kind === "url" ? "url" : "text";
 }
 
 /**

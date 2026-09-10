@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   allCapabilities,
   anyLoginCan,
-  browserActions,
   CAPABILITY_KEYS,
   CAPABILITY_LABELS,
   canDownload,
@@ -89,35 +88,6 @@ describe("selectionOf and downloads", () => {
     expect(canDownload({ zip: false }, { files: 2, folders: 0 })).toBe(true);
     expect(canDownload({ zip: true }, { files: 0, folders: 1 })).toBe(true);
     expect(canDownload({ zip: true }, NO_SELECTION)).toBe(false);
-  });
-});
-
-describe("browserActions", () => {
-  const oneFile = { files: 1, folders: 0 };
-
-  it("keeps the ungated actions whatever the capabilities", () => {
-    const none = browserActions(allCapabilities(false), oneFile);
-    for (const id of ["open", "rename", "moveTo", "copyTo", "delete", "compress", "download"]) {
-      expect(none.has(id as "open")).toBe(true);
-    }
-    expect(none.has("share")).toBe(false);
-    expect(none.has("office:view")).toBe(false);
-    expect(none.has("office:edit")).toBe(false);
-  });
-
-  it("adds Share and the Office items with their capabilities", () => {
-    const all = browserActions(allCapabilities(true), oneFile);
-    expect(all.has("share")).toBe(true);
-    expect(all.has("office:convert")).toBe(true);
-  });
-
-  it("hides Download for a folder without zip", () => {
-    expect(browserActions(allCapabilities(false), { files: 0, folders: 1 }).has("download")).toBe(
-      false,
-    );
-    expect(browserActions(allCapabilities(true), { files: 0, folders: 1 }).has("download")).toBe(
-      true,
-    );
   });
 });
 

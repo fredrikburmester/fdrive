@@ -2,6 +2,29 @@
 
 Updated: 2026-09-10. Owner: primary agent.
 
+## P10 PR reduction (2026-09-10, verified)
+
+- Implemented directly on `claude/p10-storage-providers`; existing isolation and pentest
+  edits preserved. Refactor committed on request; no push requested.
+- Canonical memory storage lives at `@fdrive/core/testing`, re-exported by testkit; its
+  tests moved with it. Shared HTTP dispatch, derived request schemas, SFTPGo user runner,
+  setup guard/claim persistence, provider fixtures, mutation invalidation and field inputs
+  replace repetition. Removed unused browser action sets; table-driven form tests.
+- Recovery fixed unfinished JSX/type errors and restored memory move conflicts, bounded
+  probe streaming, setup race/restart tests, and unchanged query invalidation behavior.
+- Plan adjustments: kept endpoint comparisons and post-login ownership rechecks (isolation),
+  the explicit setup login entry point, and capability props (avoid a query subscription
+  per file row). Kept separate conformance cases and simple dialog state/copy; extra helpers
+  there add indirection without meaningful savings. Kept typed repository patches and config
+  copying. Configuration validation moved to service.
+- Passed: application (lint, types, all coverage); final API/core package rechecks;
+  integration (DB 267, API 35, SFTPGo 72, testkit 9); affected production browser 16/16;
+  real Next dev storage flows 3/3. No gates lowered.
+- Evidence: `.fdrive-workflow/logs/step.6shFUF/` (application coverage), `step.7cJuDQ/`
+  (final API), `step.ZJmbzL/` (final core), `step.qGPRxL/` (integration), `step.BSK3fD/`
+  (production browser), `step.U16joC/` (dev browser). Roughly 1,100 net application/package
+  lines removed versus HEAD, counting new shared fixture/tests and existing follow-up edits.
+
 ## P10 provider isolation review fixes (2026-09-10)
 
 - Branch `claude/p10-storage-providers`: env administrator grants now require the configured

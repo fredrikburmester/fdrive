@@ -1,46 +1,20 @@
 import { AdminProvider, AdminProvidersResponse, ProvidersResponse } from "@fdrive/contracts";
-import type { StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import { fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
 import { registerProviderRoutes } from "./routes.js";
 import { createProviderService, type ProviderService } from "./service.js";
-import { seedSftpgoProvider } from "./test-fixtures/index.ts";
+import { probeFetch, seedSftpgoProvider } from "./test-fixtures/index.ts";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 4).toString("base64"),
 };
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-} as StorageProvider;
-
-function probeFetch(reachable = true): typeof globalThis.fetch {
-  return vi.fn(async (url: unknown) => {
-    if (!reachable) return new Response("boom", { status: 500 });
-    return String(url).endsWith("/healthz")
-      ? new Response("ok", { status: 200 })
-      : new Response("unauthorized", { status: 401 });
-  }) as unknown as typeof globalThis.fetch;
-}
+const FAKE_STORAGE = fakeStorageProvider();
 
 function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: ProviderService }) {
   const config = loadConfig(REQUIRED_ENV);

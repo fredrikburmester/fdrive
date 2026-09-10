@@ -216,10 +216,6 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     }
   }
 
-  async function login(input: LoginInput): Promise<LoginResult> {
-    return loginAt(input, null);
-  }
-
   async function resolvePrincipal(c: Context): Promise<Principal | null> {
     const rawSessionId = getCookie(c, COOKIE_NAME);
     if (rawSessionId === undefined) {
@@ -332,7 +328,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   }
 
   return {
-    login: (input) => accountRepositoryCall(() => login(input)),
+    login: (input) => accountRepositoryCall(() => loginAt(input, null)),
     loginCandidate: (input, providerId) => accountRepositoryCall(() => loginAt(input, providerId)),
     resolvePrincipal,
     me,

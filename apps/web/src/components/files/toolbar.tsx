@@ -64,7 +64,7 @@ import { toolbarVisibility } from "@/lib/files/toolbar-visibility";
 import type { ViewMode } from "@/lib/files/view-mode";
 import {
   type BrowserSelection,
-  browserActions,
+  canDownload,
   DEFAULT_CAPABILITIES,
 } from "@/lib/identity/capabilities";
 import { OFFICE_DOCUMENT_LABELS, type OfficeDocumentKind } from "@/lib/office/new-document";
@@ -470,7 +470,7 @@ export function FilesToolbarActions({
   const { inline, overflow } = toolbarVisibility(isMobile);
   const inOverflow = overflow.length > 0;
   const selectedCount = selection.files + selection.folders;
-  const downloadAvailable = browserActions(capabilities, selection).has("download");
+  const downloadAvailable = canDownload(capabilities, selection);
   const newOfficeDocument = capabilities.office ? onNewOfficeDocument : undefined;
   const ViewIcon = VIEW_MODE_ICONS[viewMode];
   const detailsLabel = detailsOpen ? "Hide details" : "Show details";

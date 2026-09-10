@@ -4,7 +4,6 @@ import { createApp } from "../app.ts";
 import { createAuthModule } from "../auth/index.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
 import { fakeStorageProvider, fileEntry } from "../scoping/test-fixtures/index.ts";
-import { createSetupClaimStore } from "../setup/claim.ts";
 import { createSetupService } from "../setup/service.ts";
 
 it("does not grant an env administrator username on a second provider", async () => {
@@ -50,7 +49,7 @@ it("keeps env setup complete and sessions usable after disabling its last provid
     providers: h.providers,
     authService: h.auth.service,
     accounts: h.repos.accounts,
-    claims: createSetupClaimStore(h.repos.settings),
+    settings: h.repos.settings,
     hasEnvUrl: true,
   });
   const app = createApp({

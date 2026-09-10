@@ -3,14 +3,7 @@ import { createSftpgoModule, sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
 import type { SystemEventLog } from "../system/event-log.js";
 import { createProviderService, hostLabel } from "./service.js";
-
-function probeFetch(): typeof globalThis.fetch {
-  return vi.fn(async (url: unknown) =>
-    String(url).endsWith("/healthz")
-      ? new Response("ok", { status: 200 })
-      : new Response("unauthorized", { status: 401 }),
-  ) as unknown as typeof globalThis.fetch;
-}
+import { probeFetch } from "./test-fixtures/index.ts";
 
 function harness(
   options: {

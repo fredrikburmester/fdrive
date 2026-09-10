@@ -8,7 +8,7 @@ import type {
   PublicProvider,
 } from "@fdrive/contracts";
 import type { ProbeResult, ProviderInstance, ProviderModule } from "@fdrive/core";
-import { validateFields } from "@fdrive/core";
+import { CoreError, parseHomeTemplate, validateFields } from "@fdrive/core";
 import type { Identity, Provider, ProviderRepo, Repos } from "@fdrive/db";
 import { ConflictError } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
@@ -80,8 +80,8 @@ export interface ProviderService {
    * empty, never the host: this is served to anonymous callers.
    */
   publicView(provider: Provider): PublicProvider | null;
-  /** The admin view of a row, including a fresh reachability probe. */
-  adminView(provider: Provider): Promise<AdminProvider | null>;
+  /** The admin view of a row, including a fresh reachability probe unless provided. */
+  adminView(provider: Provider, probeResult?: { ok: boolean }): Promise<AdminProvider | null>;
   types(): AdminProviderType[];
   /**
    * Runs once at startup: creates or pins the SFTPGo provider named by
@@ -112,6 +112,18 @@ function assertValidConfig(module: ProviderModule, config: unknown): Record<stri
     throw new ApiHttpError("bad_request", "invalid provider configuration", {
       issues: result.issues,
     });
+  }
+  const homeTemplate = result.value.homeTemplate;
+  if (module.type === "sftpgo" && homeTemplate) {
+    try {
+      parseHomeTemplate(homeTemplate);
+    } catch (error) {
+      throw new ApiHttpError(
+        "bad_request",
+        error instanceof CoreError ? error.message : "invalid home template",
+        error instanceof CoreError ? error.details : undefined,
+      );
+    }
   }
   return result.value;
 }
@@ -338,18 +350,15 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         credentialFields: [...module.credentialFields],
       };
     },
-    async adminView(provider) {
+    async adminView(provider, probeResult) {
       const module = moduleForType(provider.type);
       if (module === null) {
         return null;
       }
-      const config: Record<string, string> = {};
-      for (const [key, value] of Object.entries(provider.config)) {
-        if (typeof value === "string") {
-          config[key] = value;
-        }
-      }
-      const probe = await probeInstance(module, instanceOf(provider));
+      const config = Object.fromEntries(
+        Object.entries(provider.config).filter(([_, v]) => typeof v === "string"),
+      ) as Record<string, string>;
+      const probe = probeResult ?? (await probeInstance(module, instanceOf(provider)));
       return {
         id: provider.id,
         type: module.type as AdminProvider["type"],

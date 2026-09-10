@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createMemoryStorage } from "../../test/fixtures/memory-storage.ts";
 import { isStorageError, StorageError } from "../errors.ts";
+import { createMemoryStorage } from "../testing/memory-storage.ts";
 import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
 
 const TRASH_PATH = "/.trash";

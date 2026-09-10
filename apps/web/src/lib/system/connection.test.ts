@@ -10,7 +10,6 @@ import {
   providerAddressLock,
   providerConfigDraft,
   providerFormError,
-  providerInputType,
   providerRemoveBlock,
   providerUpdatePatch,
 } from "./connection";
@@ -53,61 +52,26 @@ describe("connectionSourceLabel", () => {
 });
 
 describe("isPlausibleHomeTemplate", () => {
-  it("accepts the default template", () => {
-    expect(isPlausibleHomeTemplate("sftpgo:/{username}")).toBe(true);
-  });
-
-  it("accepts a template without the placeholder", () => {
-    expect(isPlausibleHomeTemplate("sftpgo:/shared")).toBe(true);
-  });
-
-  it("rejects a missing colon", () => {
-    expect(isPlausibleHomeTemplate("sftpgo/{username}")).toBe(false);
-  });
-
-  it("rejects an empty root name", () => {
-    expect(isPlausibleHomeTemplate(":/{username}")).toBe(false);
-  });
-
-  it("rejects an uppercase root name", () => {
-    expect(isPlausibleHomeTemplate("SFTPgo:/{username}")).toBe(false);
-  });
-
-  it("rejects a path that does not start with a slash", () => {
-    expect(isPlausibleHomeTemplate("sftpgo:home/{username}")).toBe(false);
+  it.each([
+    ["sftpgo:/{username}", true],
+    ["sftpgo:/shared", true],
+    ["sftpgo/{username}", false],
+    [":/{username}", false],
+    ["SFTPgo:/{username}", false],
+    ["sftpgo:home/{username}", false],
+  ])("template %s -> %s", (template, expected) => {
+    expect(isPlausibleHomeTemplate(template)).toBe(expected);
   });
 });
 
 describe("homeTemplatePreview", () => {
-  it("substitutes the given username", () => {
-    expect(homeTemplatePreview("sftpgo:/{username}", "carol")).toBe("carol → sftpgo:/carol");
-  });
-
-  it("falls back to a placeholder username when blank", () => {
-    expect(homeTemplatePreview("sftpgo:/{username}", "  ")).toBe("alice → sftpgo:/alice");
-  });
-
-  it("trims surrounding whitespace from the username", () => {
-    expect(homeTemplatePreview("sftpgo:/{username}", "  carol  ")).toBe("carol → sftpgo:/carol");
-  });
-
-  it("leaves a template with no placeholder unchanged", () => {
-    expect(homeTemplatePreview("sftpgo:/shared", "carol")).toBe("carol → sftpgo:/shared");
-  });
-});
-
-describe("providerInputType", () => {
-  it("maps password fields to a masked input", () => {
-    expect(providerInputType("password")).toBe("password");
-  });
-
-  it("maps url fields to a url input", () => {
-    expect(providerInputType("url")).toBe("url");
-  });
-
-  it("falls back to text for the remaining kinds", () => {
-    expect(providerInputType("text")).toBe("text");
-    expect(providerInputType("otp")).toBe("text");
+  it.each([
+    ["sftpgo:/{username}", "carol", "carol → sftpgo:/carol"],
+    ["sftpgo:/{username}", "  ", "alice → sftpgo:/alice"],
+    ["sftpgo:/{username}", "  carol  ", "carol → sftpgo:/carol"],
+    ["sftpgo:/shared", "carol", "carol → sftpgo:/shared"],
+  ])("preview for %s with user %s", (template, user, expected) => {
+    expect(homeTemplatePreview(template, user)).toBe(expected);
   });
 });
 
@@ -180,46 +144,35 @@ describe("providerUpdatePatch", () => {
     config: { homeTemplate: "sftpgo:/{username}" },
   };
 
-  it("sends nothing when nothing changed", () => {
-    expect(providerUpdatePatch(PROVIDER, draft, true)).toEqual({});
-  });
-
-  it("sends only the trimmed label when only the name changed", () => {
-    expect(providerUpdatePatch(PROVIDER, { ...draft, label: "  Renamed  " }, true)).toEqual({
-      label: "Renamed",
-    });
-  });
-
-  it("sends the address when it changed and the form may edit it", () => {
-    expect(providerUpdatePatch(PROVIDER, { ...draft, baseUrl: "http://other:8080" }, true)).toEqual(
-      {
-        baseUrl: "http://other:8080",
-      },
-    );
-  });
-
-  it("omits the address when the form may not edit it", () => {
-    expect(
-      providerUpdatePatch(PROVIDER, { ...draft, baseUrl: "http://other:8080" }, false),
-    ).toEqual({});
-  });
-
-  it("sends the whole configuration when one field changed", () => {
-    expect(
-      providerUpdatePatch(
-        PROVIDER,
-        { ...draft, config: { homeTemplate: "sftpgo:/h/{username}" } },
-        true,
-      ),
-    ).toEqual({ config: { homeTemplate: "sftpgo:/h/{username}" } });
-  });
-
-  it("sends an empty configuration when an optional field was cleared", () => {
-    expect(providerUpdatePatch(PROVIDER, { ...draft, config: { homeTemplate: "" } }, true)).toEqual(
-      {
-        config: {},
-      },
-    );
+  it.each([
+    ["sends nothing when nothing changed", draft, true, {}],
+    [
+      "sends trimmed label when name changed",
+      { ...draft, label: "  Renamed  " },
+      true,
+      { label: "Renamed" },
+    ],
+    [
+      "sends address when allowed",
+      { ...draft, baseUrl: "http://other:8080" },
+      true,
+      { baseUrl: "http://other:8080" },
+    ],
+    ["omits address when not allowed", { ...draft, baseUrl: "http://other:8080" }, false, {}],
+    [
+      "sends whole configuration on field change",
+      { ...draft, config: { homeTemplate: "sftpgo:/h/{username}" } },
+      true,
+      { config: { homeTemplate: "sftpgo:/h/{username}" } },
+    ],
+    [
+      "sends empty configuration on optional field clear",
+      { ...draft, config: { homeTemplate: "" } },
+      true,
+      { config: {} },
+    ],
+  ])("%s", (_name, modifiedDraft, allowEdit, expected) => {
+    expect(providerUpdatePatch(PROVIDER, modifiedDraft, allowEdit)).toEqual(expected);
   });
 });
 
