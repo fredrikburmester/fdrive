@@ -172,6 +172,27 @@ describe("observed feature status", () => {
     }).service.status();
     expect(result.statuses.every((s) => s.state === "failed")).toBe(true);
   });
+  it("carries the controller's reason into a failed feature's detail", async () => {
+    const result = await fixture({
+      raw: config,
+      fetch: async (input) =>
+        String(input).includes(":8099/")
+          ? Response.json({ status: "failed", error: "worker exceeded bounded startup retries" })
+          : Response.json({
+              ok: true,
+              status: "ready",
+              features: { revision: 1, values: enabled },
+            }),
+    }).service.status();
+    const semantic = result.statuses.find((s) => s.id === "semanticSearch");
+    expect(semantic).toEqual({
+      id: "semanticSearch",
+      state: "failed",
+      detail:
+        "Worker preparation failed: worker exceeded bounded startup retries. Check its System page and retry.",
+    });
+    expect(result.statuses.find((s) => s.id === "imageSearch")?.state).toBe("ready");
+  });
   it("blocks local processing without configured roots", async () => {
     const result = await fixture({ raw: config, config: base }).service.status();
     expect(result.statuses.every((s) => s.state === "blocked")).toBe(true);

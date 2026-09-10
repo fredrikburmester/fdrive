@@ -27,6 +27,16 @@ describe("HealthResponse", () => {
     expect(HealthResponse.parse(payload)).toEqual(payload);
   });
 
+  it("accepts a failed subsystem carrying its controller's reason", () => {
+    const parsed = HealthSubsystemStatus.parse({
+      status: "failed",
+      missing: [],
+      detail: "worker exceeded bounded startup retries",
+    });
+    expect(parsed.detail).toBe("worker exceeded bounded startup retries");
+    expect(HealthSubsystemStatus.safeParse({ status: "broken", missing: [] }).success).toBe(false);
+  });
+
   it("accepts an uptime of exactly zero", () => {
     const payload = {
       status: "ok",

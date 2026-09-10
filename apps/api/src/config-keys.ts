@@ -387,29 +387,42 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
 
 /** A subsystem's status once a liveness probe (where one exists) has been applied. */
 export interface HealthSubsystem {
-  readonly status: "configured" | "not_configured" | "unreachable";
+  readonly status: "configured" | "not_configured" | "unreachable" | "failed";
   readonly missing: readonly string[];
+  /** The bundled controller's literal reason when `status` is `failed`. */
+  readonly detail?: string;
 }
 
 /**
- * Layers reachability results (indexer, embed/search, OCR, office; `true`
- * reachable, `false` unreachable, absent means no probe was run for that
- * subsystem, for example because it is not configured) on top of
- * `subsystemsStatus`'s config-only result. A subsystem already
- * `not_configured` never becomes `unreachable`: there is nothing to reach.
+ * One liveness probe's outcome: `true` reachable, `false` unreachable, or
+ * `{ failed }` when the subsystem's bundled controller answered and reports
+ * that the worker it manages could not start. `failed` carries the
+ * controller's own fixed reason so a latched worker is distinguishable from
+ * a network problem on the public health endpoint.
+ */
+export type SubsystemProbe = boolean | { readonly failed: string };
+
+/**
+ * Layers reachability results (indexer, embed/search, OCR, office; absent
+ * means no probe was run for that subsystem, for example because it is not
+ * configured) on top of `subsystemsStatus`'s config-only result. A subsystem
+ * already `not_configured` never becomes `unreachable` or `failed`: there is
+ * nothing to reach.
  */
 export function applyReachability(
   base: Record<Subsystem, SubsystemStatus>,
-  reachable: Partial<Record<Subsystem, boolean>>,
+  reachable: Partial<Record<Subsystem, SubsystemProbe>>,
 ): Record<Subsystem, HealthSubsystem> {
   const result = {} as Record<Subsystem, HealthSubsystem>;
   for (const subsystem of SUBSYSTEMS) {
     const entry = base[subsystem];
     const probe = reachable[subsystem];
     result[subsystem] =
-      entry.status === "configured" && probe === false
-        ? { status: "unreachable", missing: [] }
-        : { status: entry.status, missing: entry.missing };
+      entry.status !== "configured" || probe === undefined || probe === true
+        ? { status: entry.status, missing: entry.missing }
+        : probe === false
+          ? { status: "unreachable", missing: [] }
+          : { status: "failed", missing: [], detail: probe.failed };
   }
   return result;
 }

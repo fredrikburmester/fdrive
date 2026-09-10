@@ -31,7 +31,7 @@ import {
 import { createIdentityClientResolver } from "./auth/provider-client.ts";
 import { createIdentityStorageFactory, trashSettingsForStorage } from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
-import { type Subsystem, startupSummaryLines } from "./config-keys.js";
+import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createConnectionStore } from "./connection/store.js";
 import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
@@ -89,6 +89,7 @@ import { createOcrClient } from "./system/ocr-client.js";
 import { createPublicUrlService } from "./system/public-url.js";
 import { registerPublicUrlRoutes } from "./system/public-url-routes.js";
 import { registerSystemRoutes } from "./system/routes.js";
+import { fetchRuntimeStatus, runtimeFailure } from "./system/runtime-status.js";
 import { createThumbnailsRepo } from "./system/thumbnails-repo.js";
 import { registerThumbRoutes } from "./thumbs/routes.js";
 import { createResolveTokenPrincipal } from "./tokens/principal.js";
@@ -349,6 +350,16 @@ export async function composeApp(
   );
   const officeProduct = configuredOfficeProduct(config);
   const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
+  /** Only the compose-bundled ONLYOFFICE image runs a controller with a `/runtime` status document. */
+  const isBundledOfficeController = (resolved: { product: string; serverUrl: string }): boolean => {
+    const server = new URL(resolved.serverUrl);
+    return (
+      resolved.product === "onlyoffice" &&
+      server.protocol === "http:" &&
+      server.hostname === "onlyoffice" &&
+      (server.port === "" || server.port === "80")
+    );
+  };
   const officeRuntimeFor = async (configuration: {
     enabled: boolean;
   }): Promise<{
@@ -374,13 +385,7 @@ export async function composeApp(
     probeStatus: async (configuration) => {
       const runtime = await officeRuntimeFor(configuration);
       if (runtime === null) return "unavailable";
-      const server = new URL(runtime.config.serverUrl);
-      const bundledController =
-        runtime.config.product === "onlyoffice" &&
-        server.protocol === "http:" &&
-        server.hostname === "onlyoffice" &&
-        (server.port === "" || server.port === "80");
-      if (!bundledController) {
+      if (!isBundledOfficeController(runtime.config)) {
         await createDiscoveryCache({
           serverUrl: runtime.config.serverUrl,
           fetch: fetchImpl,
@@ -527,9 +532,25 @@ export async function composeApp(
   // The fan-out is cached for HEALTH_PROBE_TTL_MS and shared between
   // concurrent requests, so anonymous health polling cannot be turned into
   // load at the sidecars.
+  // A worker that is down is asked one more question through its bundled
+  // controller (`GET /runtime` on the controller's status port): a controller
+  // that answers "failed" turns the entry from `unreachable` into `failed`
+  // with the controller's fixed reason, so a worker the controller gave up
+  // on is self-diagnosing from this endpoint rather than looking like a
+  // network problem. The controller is only consulted when the worker itself
+  // did not answer, so a healthy stack costs no extra request.
+  const controllerVerdict = async (
+    reachable: boolean,
+    controllerUrl: string | null,
+    port: string,
+  ): Promise<SubsystemProbe> => {
+    if (reachable || controllerUrl === null) return reachable;
+    const failure = runtimeFailure(await fetchRuntimeStatus(controllerUrl, port, fetchImpl));
+    return failure === null ? false : { failed: failure };
+  };
   const probeSubsystems = async (
     forConfig: AppConfig,
-  ): Promise<Partial<Record<Subsystem, boolean>>> => {
+  ): Promise<Partial<Record<Subsystem, SubsystemProbe>>> => {
     const [indexResult, searchStatus, imageSearchResult, ocrResult, officeReachable] =
       await Promise.all([
         indexerClient === null ? Promise.resolve(null) : indexerClient.health(),
@@ -547,17 +568,38 @@ export async function composeApp(
               ),
         ),
       ]);
-    return {
-      ...(indexResult === null ? {} : { index: indexResult.ok }),
-      ...(searchStatus === null ? {} : { search: searchStatus.healthy }),
+    const [search, imageSearch, office] = await Promise.all([
+      searchStatus === null
+        ? null
+        : controllerVerdict(searchStatus.healthy, forConfig.fdriveEmbedUrl ?? null, "8099"),
       // A sidecar that answered but is still loading its model is treated as
       // unreachable here: it cannot yet serve an embedding, so it is not
       // usefully "up" from the health endpoint's point of view.
-      ...(imageSearchResult === null
-        ? {}
-        : { imageSearch: imageSearchResult.ok && imageSearchResult.data.status === "ok" }),
+      imageSearchResult === null
+        ? null
+        : controllerVerdict(
+            imageSearchResult.ok && imageSearchResult.data.status === "ok",
+            forConfig.fdriveImageEmbedUrl ?? null,
+            "8013",
+          ),
+      officeReachable === null
+        ? null
+        : resolveOfficeRuntime().then((runtime) =>
+            controllerVerdict(
+              officeReachable,
+              runtime !== null && isBundledOfficeController(runtime.config)
+                ? runtime.config.serverUrl
+                : null,
+              "8099",
+            ),
+          ),
+    ]);
+    return {
+      ...(indexResult === null ? {} : { index: indexResult.ok }),
+      ...(search === null ? {} : { search }),
+      ...(imageSearch === null ? {} : { imageSearch }),
       ...(ocrResult === null ? {} : { ocr: ocrResult.ok }),
-      ...(officeReachable === null ? {} : { office: officeReachable }),
+      ...(office === null ? {} : { office }),
     };
   };
   const cachedProbe = createCachedProbe(() => probeSubsystems(config), {

@@ -168,6 +168,21 @@ describe("applyReachability", () => {
   it("never marks a not_configured subsystem unreachable, even if a probe result is (incorrectly) supplied", () => {
     const result = applyReachability(base, { search: false });
     expect(result.search).toEqual({ status: "not_configured", missing: ["FDRIVE_EMBED_URL"] });
+    const failed = applyReachability(base, {
+      search: { failed: "worker exceeded bounded startup retries" },
+    });
+    expect(failed.search).toEqual({ status: "not_configured", missing: ["FDRIVE_EMBED_URL"] });
+  });
+
+  it("reports a configured subsystem whose controller gave up as failed, with the controller's reason", () => {
+    const result = applyReachability(base, {
+      imageSearch: { failed: "worker exceeded bounded startup retries" },
+    });
+    expect(result.imageSearch).toEqual({
+      status: "failed",
+      missing: [],
+      detail: "worker exceeded bounded startup retries",
+    });
   });
 });
 
