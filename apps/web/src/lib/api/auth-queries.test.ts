@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 
 const routerPush = vi.fn();
 
@@ -24,19 +26,13 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const ME_RESPONSE: MeResponse = {
+const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
   identities: [
-    {
-      id: "00000000-0000-0000-0000-000000000001",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "SFTPGo",
-    },
+    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "SFTPGo" }),
   ],
   activeIdentityId: "00000000-0000-0000-0000-000000000001",
-  isAdmin: false,
-};
+});
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -100,7 +96,7 @@ describe("useLogin", () => {
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useLogin(), { wrapper: createWrapper(queryClient) });
-    result.current.mutate({ username: "ada", password: "secret" });
+    result.current.mutate({ credential: { username: "ada", password: "secret" } });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(queryClient.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);

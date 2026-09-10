@@ -61,7 +61,7 @@ it("hides office items when unavailable or acting on multiple files", async () =
       <FileContextMenu
         entry={entry}
         officeStatus={{ ...status, available }}
-        selectionCount={selectionCount}
+        selection={{ files: selectionCount, folders: 0 }}
         onAction={vi.fn()}
       >
         <span>File</span>
@@ -86,7 +86,7 @@ it("adds Document, Spreadsheet and Presentation only when office creation is ava
     onUploadFolder: vi.fn(),
     detailsOpen: false,
     onToggleDetails: vi.fn(),
-    selectedCount: 0,
+    selection: { files: 0, folders: 0 },
     onClearSelection: vi.fn(),
     onDuplicateSelection: vi.fn(),
     onCompressSelection: vi.fn(),
@@ -121,7 +121,7 @@ it("renders download action in toolbar selection pill and calls onDownloadSelect
     onUploadFolder: vi.fn(),
     detailsOpen: false,
     onToggleDetails: vi.fn(),
-    selectedCount: 2,
+    selection: { files: 2, folders: 0 },
     onClearSelection: vi.fn(),
     onDuplicateSelection: vi.fn(),
     onCompressSelection: vi.fn(),
@@ -148,7 +148,7 @@ it("renders Show thumbnails option in View menu and toggles it", async () => {
     onUploadFolder: vi.fn(),
     detailsOpen: false,
     onToggleDetails: vi.fn(),
-    selectedCount: 0,
+    selection: { files: 0, folders: 0 },
     onClearSelection: vi.fn(),
     onDuplicateSelection: vi.fn(),
     onCompressSelection: vi.fn(),

@@ -23,6 +23,27 @@ import type { Identity, Session } from "./types.js";
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
+async function lockVerifiedProvider(
+  tx: Transaction,
+  input: Pick<LinkVerifiedInput, "providerId" | "verifiedProvider">,
+): Promise<void> {
+  const [provider] = await tx
+    .select()
+    .from(providers)
+    .where(eq(providers.id, input.providerId))
+    .for("share");
+  if (!provider) throw new IdentityLinksError("missing_provider");
+  const expected = input.verifiedProvider;
+  if (
+    expected !== undefined &&
+    (provider.type !== expected.type ||
+      provider.baseUrl !== expected.baseUrl ||
+      (!provider.enabled && !expected.allowDisabled))
+  ) {
+    throw new IdentityLinksError("invalid_session");
+  }
+}
+
 async function lockLocation(tx: Transaction, providerId: string, username: string): Promise<void> {
   const key = JSON.stringify(["identity-links", providerId, username]);
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
@@ -130,11 +151,7 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
       validateLoginVerified(input);
       return db.transaction(async (tx) => {
         await lockLocation(tx, input.providerId, input.username);
-        const [provider] = await tx
-          .select({ id: providers.id })
-          .from(providers)
-          .where(eq(providers.id, input.providerId));
-        if (!provider) throw new IdentityLinksError("missing_provider");
+        await lockVerifiedProvider(tx, input);
         const [existing] = await tx
           .select()
           .from(identities)
@@ -234,11 +251,7 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
           tx,
           existing ? [input.accountId, existing.accountId] : [input.accountId],
         );
-        const [provider] = await tx
-          .select({ id: providers.id })
-          .from(providers)
-          .where(eq(providers.id, input.providerId));
-        if (!provider) throw new IdentityLinksError("missing_provider");
+        await lockVerifiedProvider(tx, input);
         if (input.requestingSessionIdHash !== undefined)
           await requireLiveSession(tx, input.accountId, input.requestingSessionIdHash, input.at);
         let identity: Identity;

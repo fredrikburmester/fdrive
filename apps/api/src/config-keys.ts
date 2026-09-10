@@ -98,7 +98,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "SFTPGO_URL",
     description:
-      "Base URL of the SFTPGo instance fdrive proxies. Unset means setup happens through /setup.",
+      "Base URL of the SFTPGo instance fdrive proxies; seeds and pins that storage provider at startup. Unset means setup happens through /setup.",
     default: null,
     example: "http://sftpgo:8080",
     secret: false,

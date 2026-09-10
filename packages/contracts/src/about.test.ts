@@ -4,8 +4,8 @@ import { AboutResponse } from "./about";
 describe("AboutResponse", () => {
   const valid = {
     version: "1.0.0",
-    builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-    provider: { type: "sftpgo", label: "localhost:8080" },
+    builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+    providers: [{ type: "sftpgo", label: "localhost:8080" }],
     setupRequired: false,
   };
 
@@ -13,23 +13,18 @@ describe("AboutResponse", () => {
     expect(AboutResponse.parse(valid)).toEqual(valid);
   });
 
-  it("parses a payload with a null provider and setupRequired true", () => {
-    const payload = { ...valid, provider: null, setupRequired: true };
+  it("parses a payload with no providers and setupRequired true", () => {
+    const payload = { ...valid, builtOn: [], providers: [], setupRequired: true };
     expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 
   it("parses a payload where setup is complete but the caller is anonymous (null label)", () => {
-    const payload = { ...valid, provider: { type: "sftpgo" as const, label: null } };
+    const payload = { ...valid, providers: [{ type: "sftpgo" as const, label: null }] };
     expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 
-  it("rejects a builtOn.name other than SFTPGo", () => {
-    const payload = { ...valid, builtOn: { ...valid.builtOn, name: "Other" } };
-    expect(AboutResponse.safeParse(payload).success).toBe(false);
-  });
-
   it("rejects a non-url sourceUrl", () => {
-    const payload = { ...valid, builtOn: { ...valid.builtOn, sourceUrl: "not-a-url" } };
+    const payload = { ...valid, builtOn: [{ name: "SFTPGo", sourceUrl: "not-a-url" }] };
     expect(AboutResponse.safeParse(payload).success).toBe(false);
   });
 
@@ -38,13 +33,13 @@ describe("AboutResponse", () => {
     expect(AboutResponse.safeParse(rest).success).toBe(false);
   });
 
-  it("rejects a provider.type other than sftpgo", () => {
-    const payload = { ...valid, provider: { ...valid.provider, type: "other" } };
+  it("rejects an unknown provider type", () => {
+    const payload = { ...valid, providers: [{ type: "other", label: null }] };
     expect(AboutResponse.safeParse(payload).success).toBe(false);
   });
 
-  it("rejects a missing provider field", () => {
-    const { provider: _drop, ...rest } = valid;
+  it("rejects a missing providers field", () => {
+    const { providers: _drop, ...rest } = valid;
     expect(AboutResponse.safeParse(rest).success).toBe(false);
   });
 

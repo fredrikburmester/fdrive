@@ -7,8 +7,8 @@ import {
 } from "@fdrive/contracts";
 import { StorageError } from "@fdrive/core";
 import type { Identity } from "@fdrive/db";
+import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
-import { createMemoryStorage } from "../../test/fixtures/memory-storage.js";
 import { ApiHttpError } from "../errors.js";
 import { accountsHarness, cookieFrom } from "./test-fixtures/index.ts";
 import { mapAccountIdentities } from "./views.ts";
@@ -33,7 +33,10 @@ async function linkedHarness() {
   const response = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
-    body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+    body: {
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "alice-pass" },
+    },
   });
   const me = MeResponse.parse(await response.json());
   return {

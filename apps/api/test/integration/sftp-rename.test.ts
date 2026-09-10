@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { parseHomeTemplate, type StorageProvider, scopesFor } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
-import { createSftpgoClient } from "@fdrive/sftpgo";
+import { createSftpgoClient, createSftpgoStorageProvider } from "@fdrive/sftpgo";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type BusEvent, createEventBus } from "../../src/events/bus.js";
@@ -10,7 +10,6 @@ import {
   createPgNotificationClient,
 } from "../../src/events/indexer-listener.js";
 import { createMetadataService } from "../../src/metadata/service.js";
-import { createSftpgoStorageProvider } from "../../src/storage/sftpgo-provider.js";
 import { SftpIndexerStack } from "./helpers/sftp-indexer-stack.js";
 
 const SFTP_PASSWORD = "disposable-test-password";

@@ -14,14 +14,17 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   apiClient,
+  capabilitiesFor,
   DeleteDialog,
   describeFsError,
   PageHeader,
   pathToHref,
   RenameDialog,
   type RowContextAction,
+  trashAvailabilityFor,
   useDelete,
   useDuplicate,
+  useMe,
   useRename,
   useTrashStatus,
   viewHref,
@@ -69,6 +72,8 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const remove = useDelete();
   const duplicate = useDuplicate();
   const { data: trashStatus } = useTrashStatus();
+  const { data: me } = useMe();
+  const capabilities = capabilitiesFor(me);
 
   const liveEntries = useMemo(
     () => resolved.flatMap((item) => (item.entry !== null ? [item.entry] : [])),
@@ -198,7 +203,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
-                  trashAvailable={trashStatus?.available === true}
+                  capabilities={capabilities}
                 />
               </div>
             )}
@@ -246,7 +251,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashStatus ?? null}
+        trash={trashAvailabilityFor(capabilities, trashStatus)}
       />
     </>
   );

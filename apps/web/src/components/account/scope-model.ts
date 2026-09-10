@@ -16,15 +16,15 @@ export type AdminScopeStatus = Extract<IdentityScopeResponse, { isAdmin: true }>
 /** One sentence per `IdentityScopeReason`, for the status line under a login. */
 export const SCOPE_REASON_TEXT: Record<IdentityScopeReason, string> = {
   ok: "Search, thumbnails, and other index-backed features are available.",
-  no_connection: "No SFTPGo connection is configured.",
-  provider_mismatch: "This login belongs to a different SFTPGo server than the one configured.",
+  no_connection: "No storage provider is configured.",
+  provider_mismatch: "This login belongs to a different server than the one configured.",
   invalid_configuration: "The home template cannot be applied to this login.",
   no_roots: "None of this login's folders are on an indexed root.",
-  mismatch: "The files SFTPGo shows do not match what the indexer sees at the mapped location.",
+  mismatch: "The files this login shows do not match what the indexer sees at the mapped location.",
   overflow: "The mapped directory has too many entries to verify.",
   indexer_unreachable: "The indexer is not reachable right now.",
   unmapped_mount:
-    "A folder SFTPGo shows is not indexed. Map it, or mark it not indexed, to restore search for this login.",
+    "A folder this login shows is not indexed. Map it, or mark it not indexed, to restore search for this login.",
 };
 
 /** A mapping the editor is about to add for an unmapped mount. */

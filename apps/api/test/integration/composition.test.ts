@@ -127,7 +127,7 @@ describe("composeApp", () => {
           "content-type": "application/json",
           "x-requested-with": "fdrive",
         },
-        body: JSON.stringify({ username: "alice", password: "alice-password" }),
+        body: JSON.stringify({ credential: { username: "alice", password: "alice-password" } }),
       });
       expect(loginRes.status).toBe(200);
       const cookie = extractCookie(loginRes);
@@ -167,9 +167,12 @@ describe("composeApp", () => {
     });
     const fetchImpl = withHealthz(server.fetch);
 
-    // No SFTPGO_URL: the connection must come from `/setup`.
+    // No SFTPGO_URL and a database no earlier test seeded a provider into:
+    // the provider must come from `/setup`. Providers are rows now, so the
+    // env-seeded row of the previous test would otherwise count as set up.
+    const ownPostgres = await startPostgres();
     const config = loadConfig({
-      DATABASE_URL: postgres.connectionString,
+      DATABASE_URL: ownPostgres.connectionString,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 6).toString("base64"),
     });
 
@@ -179,7 +182,7 @@ describe("composeApp", () => {
     try {
       const aboutRes = await composed.app.request("/api/v1/about");
       expect(aboutRes.status).toBe(200);
-      expect(await aboutRes.json()).toMatchObject({ setupRequired: true, provider: null });
+      expect(await aboutRes.json()).toMatchObject({ setupRequired: true, providers: [] });
 
       const blockedRes = await composed.app.request("/api/v1/fs/list?path=/");
       expect(blockedRes.status).toBe(503);
@@ -243,7 +246,7 @@ describe("composeApp", () => {
       const aboutAfterRes = await composed.app.request("/api/v1/about");
       expect(await aboutAfterRes.json()).toMatchObject({
         setupRequired: false,
-        provider: { type: "sftpgo" },
+        providers: [{ type: "sftpgo" }],
       });
 
       const listRes = await composed.app.request("/api/v1/fs/list?path=/", {
@@ -256,6 +259,7 @@ describe("composeApp", () => {
       expect(await meRes.json()).toMatchObject({ isAdmin: true });
     } finally {
       await composed.close();
+      await ownPostgres.stop();
     }
   });
 

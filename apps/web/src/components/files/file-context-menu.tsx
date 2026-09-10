@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
 import { detectArchiveKind } from "@fdrive/core";
 import {
   CopyIcon,
@@ -30,6 +30,12 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  type BrowserSelection,
+  canDownload,
+  DEFAULT_CAPABILITIES,
+  selectionOf,
+} from "@/lib/identity/capabilities";
 import { tagDotClassName } from "@/lib/metadata/colors";
 import type { TagCheckState } from "@/lib/metadata/tag-set";
 import { OFFICE_MODE_LABELS, officeModesFor } from "@/lib/office/capabilities";
@@ -58,21 +64,22 @@ export interface FileContextMenuProps {
   children: ReactNode;
   onAction: (action: RowContextAction, entry: FsEntry) => void;
   /**
-   * How many entries this menu's actions would apply to: the whole
-   * selection's size when `entry` is part of a multi-entry selection, else
-   * 1. Defaults to 1 (acting on just this entry). Disables "Duplicate" and
-   * hides "Extract here"/"Extract to" for a multi-entry selection, since
-   * both only ever make sense for a single entry.
+   * How many files and folders this menu's actions would apply to: the
+   * whole selection when `entry` is part of a multi-entry selection, else
+   * just `entry`. Defaults to `entry` alone. A multi-entry selection
+   * disables "Duplicate" and hides "Extract here"/"Extract to", since both
+   * only ever make sense for a single entry; a selection with a folder
+   * makes the download item read "Download as zip" (see `capabilities`).
    */
-  selectionCount?: number;
+  selection?: BrowserSelection;
   /**
-   * Whether the group of entries this menu's download action would apply to
-   * (see `selectionCount`) includes at least one folder. Folders have no
-   * direct download of their own, so the download item reads "Download as
-   * zip" and zips the group instead of streaming a single file. Defaults to
-   * whether `entry` itself is a folder.
+   * What the active login's storage can do (see `browserActions`): hides
+   * Share without `shares`, the Office items without `office`, and Download
+   * when the selection needs a zip the provider cannot build; labels the
+   * last item "Move to Trash" with `trash`. Defaults to
+   * `DEFAULT_CAPABILITIES`.
    */
-  includesFolder?: boolean;
+  capabilities?: ProviderCapabilities;
   /**
    * Hides "Move to" and "Copy to", for a read-only "virtual listing"
    * (favorites, recents, a tag's files) where the entries do not live in
@@ -93,7 +100,7 @@ export interface FileContextMenuProps {
    * none, so a caller that has not wired up tags yet still renders. */
   tags?: readonly Tag[];
   /** The check state of `tagId` across the group of entries this menu's
-   * actions apply to (see `selectionCount`), for that tag's checkbox.
+   * actions apply to (see `selection`), for that tag's checkbox.
    * Defaults to always "unchecked". */
   tagCheckState?: (tagId: string) => TagCheckState;
   /** Adds or removes `tagId` on every entry in the group. Defaults to a no-op. */
@@ -105,10 +112,6 @@ export interface FileContextMenuProps {
   favorite?: boolean;
   /** Favorites (or unfavorites) every entry in the group. Defaults to a no-op. */
   onToggleFavorite?: (next: boolean) => void;
-  /** Whether the active identity's storage provider exposes a trash: when
-   * true, the last item reads "Move to Trash" instead of "Delete" (the
-   * icon stays the same either way). Defaults to `false`. */
-  trashAvailable?: boolean;
 }
 
 const DEFAULT_TAGS: readonly Tag[] = [];
@@ -121,8 +124,8 @@ export function FileContextMenu({
   officeStatus,
   children,
   onAction,
-  selectionCount = 1,
-  includesFolder = entry.kind === "dir",
+  selection,
+  capabilities = DEFAULT_CAPABILITIES,
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
@@ -132,8 +135,11 @@ export function FileContextMenu({
   onOpenTagsEditor = DEFAULT_NO_OP,
   favorite = false,
   onToggleFavorite = DEFAULT_NO_OP,
-  trashAvailable = false,
 }: FileContextMenuProps) {
+  const group = selection ?? selectionOf([entry]);
+  const selectionCount = group.files + group.folders;
+  const includesFolder = group.folders > 0;
+  const trashAvailable = capabilities.trash;
   const isMultiSelection = selectionCount > 1;
   const archiveKind = entry.kind !== "dir" ? detectArchiveKind(entry.name) : null;
   const canExtract = !isMultiSelection && archiveKind !== null;
@@ -142,20 +148,23 @@ export function FileContextMenu({
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem onClick={() => onAction("share", entry)}>
-          <Link2Icon />
-          Share
-        </ContextMenuItem>
+        {capabilities.shares && (
+          <ContextMenuItem onClick={() => onAction("share", entry)}>
+            <Link2Icon />
+            Share
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onClick={() => onAction("open", entry)}>
           <ExternalLinkIcon />
           Open
         </ContextMenuItem>
-        {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
-          <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
-            <ExternalLinkIcon />
-            {OFFICE_MODE_LABELS[mode]}
-          </ContextMenuItem>
-        ))}
+        {capabilities.office &&
+          officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
+            <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
+              <ExternalLinkIcon />
+              {OFFICE_MODE_LABELS[mode]}
+            </ContextMenuItem>
+          ))}
         {showReveal && (
           <ContextMenuItem onClick={() => onAction("revealInFolder", entry)}>
             <FolderSearchIcon />
@@ -244,11 +253,15 @@ export function FileContextMenu({
             )}
           </>
         )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => onAction("download", entry)}>
-          <DownloadIcon />
-          {includesFolder ? "Download as zip" : "Download"}
-        </ContextMenuItem>
+        {canDownload(capabilities, group) && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onAction("download", entry)}>
+              <DownloadIcon />
+              {includesFolder && capabilities.zip ? "Download as zip" : "Download"}
+            </ContextMenuItem>
+          </>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem
           variant={trashAvailable ? "default" : "destructive"}

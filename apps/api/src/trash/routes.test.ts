@@ -7,7 +7,13 @@ import {
 } from "@fdrive/contracts";
 import { normalizePath, StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
+import {
+  createFakeSftpgoServer,
+  createSftpgoClient,
+  createSftpgoStorageProvider,
+  type FakeSeed,
+  type WithToken,
+} from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -16,7 +22,6 @@ import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerTrashRoutes, type TrashRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
@@ -359,6 +364,7 @@ describe("POST /trash/restore", () => {
       // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
       // against the fake below); statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
+      stat: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
       upload: () => Promise.reject(new Error("not implemented")),
       mkdir: () => Promise.reject(new Error("not implemented")),
@@ -417,6 +423,7 @@ describe("POST /trash/restore", () => {
       // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
       // against the fake below); statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
+      stat: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
       upload: () => Promise.reject(new Error("not implemented")),
       mkdir: () => Promise.reject(new Error("not implemented")),

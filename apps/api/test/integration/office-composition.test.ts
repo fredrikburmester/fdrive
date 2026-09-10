@@ -74,7 +74,10 @@ it("composes persisted editor admission, advanced policy and explicit server inj
         const login = await composed.app.request("/api/v1/auth/login", {
           method: "POST",
           headers,
-          body: JSON.stringify({ username: "alice", password: "alice-password" }),
+          body: JSON.stringify({
+            providerId: provider.id,
+            credential: { username: "alice", password: "alice-password" },
+          }),
         });
         expect(login.status).toBe(200);
         const cookie = login.headers.get("set-cookie")?.split(";")[0];

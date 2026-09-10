@@ -1,29 +1,28 @@
-import { SftpgoError } from "@fdrive/sftpgo";
-import { requireCurrentConnection } from "../auth/provider-client.ts";
+import type { ProviderCredential, ProviderToken } from "@fdrive/core";
+import { isStorageError, stripTransientFields, validateFields } from "@fdrive/core";
 import { ApiHttpError } from "../errors.js";
+import type { ResolvedProvider } from "../providers/service.js";
 import type { VerifiedCredentialDeps } from "./types.ts";
 
-/** Shared verification and limiter, with no account/session writes before success. */
-export async function verifyAccountCredentials(
-  deps: VerifiedCredentialDeps,
-  input: { username: string; password: string; otp?: string | undefined; ip: string },
-) {
-  const connection = await deps.connectionStore.current();
-  if (connection === null)
-    throw new ApiHttpError("setup_required", "no SFTPGo connection is configured yet");
-  return verifyCredentialsAt(deps, input, connection.baseUrl, true);
+export interface VerifyCredentialInput {
+  /** Omitted when exactly one provider is enabled. */
+  readonly providerId?: string | undefined;
+  /** Values for the provider's `credentialFields`. */
+  readonly credential: Readonly<Record<string, string>>;
+  readonly ip: string;
+  /**
+   * The username of the login being re-proved (link and unlink confirm the
+   * signed-in login with its own credential). The module fills a missing
+   * username field from it and refuses a credential naming someone else.
+   */
+  readonly expectedUsername?: string | undefined;
 }
 
-/**
- * Verifies a setup candidate without consulting or changing the active
- * connection. The resulting provider remains permanently bound to this URL.
- */
-export async function verifyCandidateCredentials(
-  deps: Pick<VerifiedCredentialDeps, "repos" | "clientForBaseUrl" | "limiter">,
-  input: { username: string; password: string; otp?: string | undefined; ip: string },
-  baseUrl: string,
-) {
-  return verifyCredentialsAt(deps, input, baseUrl, false);
+export interface VerifiedCredential extends ResolvedProvider {
+  readonly externalUsername: string;
+  /** The credential as it is stored: validated, transient fields removed. */
+  readonly stored: ProviderCredential;
+  readonly token: ProviderToken | undefined;
 }
 
 /** The limiter key shared by every login attempt from one address, distinct from `ip|username` and setup's `setup|ip`. */
@@ -31,15 +30,57 @@ export function loginIpKey(ip: string): string {
   return `login-ip|${ip}`;
 }
 
-async function verifyCredentialsAt(
-  deps: Pick<VerifiedCredentialDeps, "repos" | "clientForBaseUrl" | "limiter"> &
-    Partial<Pick<VerifiedCredentialDeps, "connectionStore">>,
-  input: { username: string; password: string; otp?: string | undefined; ip: string },
-  baseUrl: string,
-  requireActiveConnection: boolean,
-) {
-  const client = deps.clientForBaseUrl(baseUrl);
-  const key = `${input.ip}|${input.username}`;
+/**
+ * Picks the provider a credential is meant for: the requested one, else the
+ * only enabled one. `setup_required` before any provider exists,
+ * `bad_request` when several are enabled and none was named.
+ */
+async function targetProvider(
+  deps: Pick<VerifiedCredentialDeps, "providers">,
+  providerId: string | undefined,
+  allowDisabled: boolean,
+): Promise<ResolvedProvider> {
+  if (providerId !== undefined) {
+    return deps.providers.resolve(providerId, { allowDisabled });
+  }
+  const enabled = await deps.providers.enabled();
+  const [only] = enabled;
+  if (only === undefined) {
+    throw new ApiHttpError("setup_required", "no storage provider is configured yet");
+  }
+  if (enabled.length > 1) {
+    throw new ApiHttpError("bad_request", "providerId is required when several providers exist");
+  }
+  return deps.providers.resolve(only.id);
+}
+
+/**
+ * Verifies a credential against its provider through the provider module,
+ * behind the login rate limiter. Performs no account or session writes;
+ * the caller decides what a success means. `allowDisabled` lets setup
+ * verify against a provider that is not yet enabled.
+ */
+export async function verifyCredentials(
+  deps: VerifiedCredentialDeps,
+  input: VerifyCredentialInput,
+  opts: { allowDisabled?: boolean } = {},
+): Promise<VerifiedCredential> {
+  const target = await targetProvider(deps, input.providerId, opts.allowDisabled ?? false);
+  const fields = target.module.credentialFields;
+  const hasUsernameField = fields.some((field) => field.name === "username");
+  const raw =
+    input.expectedUsername !== undefined &&
+    hasUsernameField &&
+    input.credential.username === undefined
+      ? { ...input.credential, username: input.expectedUsername }
+      : input.credential;
+  const validated = validateFields(fields, raw);
+  if (!validated.ok) {
+    throw new ApiHttpError("bad_request", "invalid credential", { issues: validated.issues });
+  }
+
+  const usernameHint = validated.value.username ?? input.expectedUsername ?? "";
+  const key = `${input.ip}|${target.provider.id}|${usernameHint}`;
   // An independent per-address bucket bounds password spraying: without it
   // one address gets a fresh allowance for every username it tries. It is
   // never cleared by a success, so knowing one valid login cannot reset it.
@@ -50,37 +91,46 @@ async function verifyCredentialsAt(
     throw new ApiHttpError("rate_limited", "too many failed login attempts", {
       retryAfterMs: Math.max(status.retryAfterMs ?? 0, ipStatus.retryAfterMs ?? 0),
     });
-  let token: { accessToken: string; expiresAt: Date };
+
+  let result: Awaited<ReturnType<ResolvedProvider["module"]["authenticate"]>>;
   try {
-    token = await client.login({
-      username: input.username,
-      password: input.password,
-      ...(input.otp === undefined ? {} : { otp: input.otp }),
+    result = await target.module.authenticate(target.instance, validated.value, {
+      fetch: deps.fetch,
+      ...(input.expectedUsername === undefined ? {} : { expectedUsername: input.expectedUsername }),
     });
   } catch (error) {
-    if (error instanceof SftpgoError) {
+    if (isStorageError(error)) {
       if (error.kind === "unauthorized") {
         deps.limiter.recordFailure(key);
         deps.limiter.recordFailure(ipKey);
         throw new ApiHttpError("unauthorized", "invalid username or password");
       }
-      if (error.kind === "forbidden")
-        throw new ApiHttpError("forbidden", error.detail ?? "forbidden");
+      if (error.kind === "forbidden") {
+        const detail = error.details?.detail;
+        throw new ApiHttpError("forbidden", typeof detail === "string" ? detail : "forbidden");
+      }
     }
-    throw new ApiHttpError("upstream_unavailable", "SFTPGo is unavailable");
+    throw new ApiHttpError("upstream_unavailable", "storage provider is unavailable");
   }
-  if (requireActiveConnection) {
-    const current = await deps.connectionStore?.current();
-    if (current?.baseUrl !== baseUrl)
-      throw new ApiHttpError("unauthorized", "storage connection changed; sign in again");
+  // The provider must still be what it was when the credential was sent:
+  // a row disabled, removed or re-addressed while the upstream login was in
+  // flight must not gain an identity (and a sealed credential) bound to a
+  // server that never verified it.
+  const current = await deps.providers
+    .resolve(target.provider.id, { allowDisabled: opts.allowDisabled ?? false })
+    .catch(() => null);
+  if (
+    current === null ||
+    current.provider.type !== target.provider.type ||
+    current.provider.baseUrl !== target.provider.baseUrl
+  ) {
+    throw new ApiHttpError("unauthorized", "storage provider changed; sign in again");
   }
   deps.limiter.recordSuccess(key);
-  const provider = await deps.repos.providers.ensure({
-    type: "sftpgo",
-    baseUrl,
-  });
-  if (requireActiveConnection && deps.connectionStore !== undefined) {
-    await requireCurrentConnection(deps.connectionStore, baseUrl);
-  }
-  return { provider, token };
+  return {
+    ...target,
+    externalUsername: result.externalUsername,
+    stored: stripTransientFields(fields, validated.value),
+    token: result.token,
+  };
 }

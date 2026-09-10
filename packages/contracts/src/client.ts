@@ -6,7 +6,6 @@ import {
   type LinkIdentityRequest,
   type UnlinkIdentityRequest,
 } from "./accounts.ts";
-import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./admin.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
@@ -46,9 +45,19 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import {
+  AdminProvider,
+  type AdminProviderCreateRequest,
+  AdminProvidersResponse,
+  type AdminProviderTestRequest,
+  type AdminProviderUpdateRequest,
+  ProvidersResponse,
+} from "./providers.ts";
 import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
   accountTokenRoute,
+  adminProviderRoute,
+  adminProviderTestRoute,
   IDENTITY_HEADER,
   identityScopeRoute,
   identityScopeSuggestionsRoute,
@@ -258,9 +267,14 @@ export interface ApiClient {
   setupStatus(): Promise<SetupStatusResponse>;
   setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
-  adminConnection(): Promise<AdminConnectionResponse>;
-  adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse>;
-  adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse>;
+  /** Public: the enabled providers with their credential forms, for the login page. */
+  providers(): Promise<ProvidersResponse>;
+  adminProviders(): Promise<AdminProvidersResponse>;
+  adminCreateProvider(req: AdminProviderCreateRequest): Promise<AdminProvider>;
+  adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
+  adminDeleteProvider(id: string): Promise<OkResponse>;
+  /** Probes a saved provider (`id`) or an unsaved candidate (`req`). */
+  adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
   systemIndexer(): Promise<SystemIndexerResponse>;
@@ -477,60 +491,48 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     identityId: options.identityId,
   };
 
+  const method =
+    (verb: RequestOptions["method"]) =>
+    <T>(path: string, schema: z.ZodType<T>, opts: Omit<RequestOptions, "method" | "path"> = {}) =>
+      requestJson(ctx, { ...opts, method: verb, path }, schema);
+  const get = method("GET");
+  const post = method("POST");
+  const patch = method("PATCH");
+  const del = method("DELETE");
+  const put = method("PUT");
+
   return {
     listShares() {
-      return requestJson(ctx, { method: "GET", path: ROUTES.shares }, SharesResponse);
+      return get(ROUTES.shares, SharesResponse);
     },
     createShare(input) {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.shares, jsonBody: input },
-        ManagedShare,
-      );
+      return post(ROUTES.shares, ManagedShare, { jsonBody: input });
     },
     getShare(id) {
-      return requestJson(ctx, { method: "GET", path: shareRoute(id) }, ManagedShare);
+      return get(shareRoute(id), ManagedShare);
     },
     updateShare(id, input) {
-      return requestJson(
-        ctx,
-        { method: "PATCH", path: shareRoute(id), jsonBody: input },
-        ManagedShare,
-      );
+      return patch(shareRoute(id), ManagedShare, { jsonBody: input });
     },
     deleteShare(id) {
-      return requestJson(ctx, { method: "DELETE", path: shareRoute(id) }, OkResponse);
+      return del(shareRoute(id), OkResponse);
     },
     publicShare(id) {
-      return requestJson(ctx, { method: "GET", path: publicShareRoute(id) }, PublicShare);
+      return get(publicShareRoute(id), PublicShare);
     },
     setSharePassword(id, password) {
-      return requestJson(
-        ctx,
-        { method: "POST", path: `${publicShareRoute(id)}/credentials`, jsonBody: { password } },
-        OkResponse,
-      );
+      return post(`${publicShareRoute(id)}/credentials`, OkResponse, { jsonBody: { password } });
     },
     clearSharePassword(id) {
-      return requestJson(
-        ctx,
-        { method: "DELETE", path: `${publicShareRoute(id)}/credentials` },
-        OkResponse,
-      );
+      return del(`${publicShareRoute(id)}/credentials`, OkResponse);
     },
     shareEntries(id, path = "/") {
-      return requestJson(
-        ctx,
-        { method: "GET", path: `${publicShareRoute(id)}/entries`, query: { path } },
-        ShareEntriesResponse,
-      );
+      return get(`${publicShareRoute(id)}/entries`, ShareEntriesResponse, { query: { path } });
     },
     shareArchiveEntries(id, path = "/") {
-      return requestJson(
-        ctx,
-        { method: "GET", path: `${publicShareRoute(id)}/archive-entries`, query: { path } },
-        ArchiveEntriesResponse,
-      );
+      return get(`${publicShareRoute(id)}/archive-entries`, ArchiveEntriesResponse, {
+        query: { path },
+      });
     },
     shareDownloadUrl(id, path = "/") {
       return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/download`, { path });
@@ -545,174 +547,92 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
     shareUpload(id, path, body, signal) {
-      return requestJson(
-        ctx,
-        {
-          method: "PUT",
-          path: `${publicShareRoute(id)}/upload`,
-          query: { path },
-          rawBody: body,
-          signal,
-        },
-        OkResponse,
-      );
+      return put(`${publicShareRoute(id)}/upload`, OkResponse, {
+        query: { path },
+        rawBody: body,
+        signal,
+      });
     },
     login(req: LoginRequest): Promise<MeResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.auth.login, jsonBody: req },
-        MeResponse,
-      );
+      return post(ROUTES.auth.login, MeResponse, { jsonBody: req });
     },
 
     logout(): Promise<OkResponse> {
-      return requestJson(ctx, { method: "POST", path: ROUTES.auth.logout }, OkResponse);
+      return post(ROUTES.auth.logout, OkResponse);
     },
 
     linkIdentity(input) {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.account.identities, jsonBody: input },
-        MeResponse,
-      );
+      return post(ROUTES.account.identities, MeResponse, { jsonBody: input });
     },
     unlinkIdentity(id, input) {
-      return requestJson(
-        ctx,
-        {
-          method: "DELETE",
-          path: `${ROUTES.account.identities}/${encodeURIComponent(id)}`,
-          jsonBody: input,
-        },
-        MeResponse,
-      );
+      return del(`${ROUTES.account.identities}/${encodeURIComponent(id)}`, MeResponse, {
+        jsonBody: input,
+      });
     },
     switchIdentity(id) {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.account.activeIdentity, jsonBody: { identityId: id } },
-        MeResponse,
-      );
+      return post(ROUTES.account.activeIdentity, MeResponse, { jsonBody: { identityId: id } });
     },
     accountFavorites() {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.account.favorites },
-        AccountFavoritesResponse,
-      );
+      return get(ROUTES.account.favorites, AccountFavoritesResponse);
     },
     identityScope(id) {
-      return requestJson(
-        ctx,
-        { method: "GET", path: identityScopeRoute(id) },
-        IdentityScopeResponse,
-      );
+      return get(identityScopeRoute(id), IdentityScopeResponse);
     },
     setIdentityScope(id, body) {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: identityScopeRoute(id), jsonBody: body },
-        IdentityScopeResponse,
-      );
+      return put(identityScopeRoute(id), IdentityScopeResponse, { jsonBody: body });
     },
     identityScopeSuggestions(id) {
-      return requestJson(
-        ctx,
-        { method: "GET", path: identityScopeSuggestionsRoute(id) },
-        IdentityScopeSuggestionsResponse,
-      );
+      return get(identityScopeSuggestionsRoute(id), IdentityScopeSuggestionsResponse);
     },
     mountMappings() {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.system.mountMappings },
-        MountMappingsResponse,
-      );
+      return get(ROUTES.system.mountMappings, MountMappingsResponse);
     },
     setMountMappings(body) {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.mountMappings, jsonBody: body },
-        MountMappingsResponse,
-      );
+      return put(ROUTES.system.mountMappings, MountMappingsResponse, { jsonBody: body });
     },
     accountSearch(query, opts) {
-      return requestJson(
-        ctx,
-        {
-          method: "GET",
-          path: ROUTES.account.search,
-          query: {
-            q: query,
-            limit: opts?.limit === undefined ? undefined : String(opts.limit),
-            ext: opts?.ext,
-            folder: opts?.folder,
-            after: opts?.after,
-            before: opts?.before,
-          },
+      return get(ROUTES.account.search, AccountSearchResponse, {
+        query: {
+          q: query,
+          limit: opts?.limit === undefined ? undefined : String(opts.limit),
+          ext: opts?.ext,
+          folder: opts?.folder,
+          after: opts?.after,
+          before: opts?.before,
         },
-        AccountSearchResponse,
-      );
+      });
     },
 
     me(): Promise<MeResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.auth.me }, MeResponse);
+      return get(ROUTES.auth.me, MeResponse);
     },
 
     list(path: string): Promise<ListResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.fs.list, query: { path } },
-        ListResponse,
-      );
+      return get(ROUTES.fs.list, ListResponse, { query: { path } });
     },
 
     stat(path: string): Promise<FsEntry> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.fs.stat, query: { path } },
-        EntryResponse,
-      );
+      return get(ROUTES.fs.stat, EntryResponse, { query: { path } });
     },
 
     mkdir(path: string): Promise<FsEntry> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.mkdir, jsonBody: { path } },
-        EntryResponse,
-      );
+      return post(ROUTES.fs.mkdir, EntryResponse, { jsonBody: { path } });
     },
 
     move(path: string, target: string): Promise<FsEntry> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.move, jsonBody: { path, target } },
-        EntryResponse,
-      );
+      return post(ROUTES.fs.move, EntryResponse, { jsonBody: { path, target } });
     },
 
     copy(path: string, target: string): Promise<FsEntry> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.copy, jsonBody: { path, target } },
-        EntryResponse,
-      );
+      return post(ROUTES.fs.copy, EntryResponse, { jsonBody: { path, target } });
     },
 
     rename(path: string, newName: string): Promise<FsEntry> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.rename, jsonBody: { path, newName } },
-        EntryResponse,
-      );
+      return post(ROUTES.fs.rename, EntryResponse, { jsonBody: { path, newName } });
     },
 
     remove(items: DeleteRequest["items"]): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.delete, jsonBody: { items } },
-        OkResponse,
-      );
+      return post(ROUTES.fs.delete, OkResponse, { jsonBody: { items } });
     },
 
     zip(paths: string[], name?: string): Promise<Response> {
@@ -740,117 +660,79 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         extraHeaders["content-length"] = String(opts.contentLength);
       }
 
-      return requestJson(
-        ctx,
-        {
-          method: "PUT",
-          path: ROUTES.fs.upload,
-          query: {
-            path,
-            mkdirParents:
-              opts?.mkdirParents === undefined ? undefined : opts.mkdirParents ? "true" : "false",
-          },
-          rawBody: body,
-          extraHeaders,
-          signal: opts?.signal,
+      return put(ROUTES.fs.upload, EntryResponse, {
+        query: {
+          path,
+          mkdirParents:
+            opts?.mkdirParents === undefined ? undefined : opts.mkdirParents ? "true" : "false",
         },
-        EntryResponse,
-      );
+        rawBody: body,
+        extraHeaders,
+        signal: opts?.signal,
+      });
     },
 
     duplicate(path: string): Promise<FsEntry> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.duplicate, jsonBody: { path } },
-        EntryResponse,
-      );
+      return post(ROUTES.fs.duplicate, EntryResponse, { jsonBody: { path } });
     },
 
     compress(req: CompressRequest): Promise<JobAccepted> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.compress, jsonBody: req },
-        JobAccepted,
-      );
+      return post(ROUTES.fs.compress, JobAccepted, { jsonBody: req });
     },
 
     extract(req: ExtractRequest): Promise<JobAccepted> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.fs.extract, jsonBody: req },
-        JobAccepted,
-      );
+      return post(ROUTES.fs.extract, JobAccepted, { jsonBody: req });
     },
 
     archiveEntries(path: string): Promise<ArchiveEntriesResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.fs.archiveEntries, query: { path } },
-        ArchiveEntriesResponse,
-      );
+      return get(ROUTES.fs.archiveEntries, ArchiveEntriesResponse, { query: { path } });
     },
 
     folderSize(path: string): Promise<FolderSizeResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.fs.folderSize, query: { path } },
-        FolderSizeResponse,
-      );
+      return get(ROUTES.fs.folderSize, FolderSizeResponse, { query: { path } });
     },
 
     async jobs(): Promise<JobStatus[]> {
-      const res = await requestJson(ctx, { method: "GET", path: ROUTES.fs.jobs }, JobsResponse);
+      const res = await get(ROUTES.fs.jobs, JobsResponse);
       return res.jobs;
     },
 
     job(id: string): Promise<JobStatus> {
-      return requestJson(ctx, { method: "GET", path: jobRoute(id) }, JobStatus);
+      return get(jobRoute(id), JobStatus);
     },
 
     cancelJob(id: string): Promise<JobStatus> {
-      return requestJson(ctx, { method: "POST", path: jobCancelRoute(id) }, JobStatus);
+      return post(jobCancelRoute(id), JobStatus);
     },
 
     about(): Promise<AboutResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.about }, AboutResponse);
+      return get(ROUTES.about, AboutResponse);
     },
 
     search(query: string, opts?: ApiClientSearchOptions): Promise<SearchResponse> {
-      return requestJson(
-        ctx,
-        {
-          method: "GET",
-          path: ROUTES.search.query,
-          query: {
-            q: query,
-            limit: opts?.limit === undefined ? undefined : String(opts.limit),
-            ext: opts?.ext,
-            folder: opts?.folder,
-            after: opts?.after,
-            before: opts?.before,
-          },
+      return get(ROUTES.search.query, SearchResponse, {
+        query: {
+          q: query,
+          limit: opts?.limit === undefined ? undefined : String(opts.limit),
+          ext: opts?.ext,
+          folder: opts?.folder,
+          after: opts?.after,
+          before: opts?.before,
         },
-        SearchResponse,
-      );
+      });
     },
 
     searchStatus(): Promise<SearchStatusResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.search.status }, SearchStatusResponse);
+      return get(ROUTES.search.status, SearchStatusResponse);
     },
 
     searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse> {
-      return requestJson(
-        ctx,
-        {
-          method: "GET",
-          path: ROUTES.search.images,
-          query: {
-            q: query,
-            limit: opts?.limit === undefined ? undefined : String(opts.limit),
-          },
+      return get(ROUTES.search.images, ImageSearchResponse, {
+        query: {
+          q: query,
+          limit: opts?.limit === undefined ? undefined : String(opts.limit),
         },
-        ImageSearchResponse,
-      );
+      });
     },
 
     thumbUrl(path: string, size: ThumbSize): string {
@@ -858,392 +740,246 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
 
     setupStatus(): Promise<SetupStatusResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.setup.status }, SetupStatusResponse);
+      return get(ROUTES.setup.status, SetupStatusResponse);
     },
 
     setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse> {
-      return requestJson(
-        ctx,
-        {
-          method: "POST",
-          path: ROUTES.setup.test,
-          jsonBody: { baseUrl },
-          extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
-        },
-        ConnectionTestResponse,
-      );
+      return post(ROUTES.setup.test, ConnectionTestResponse, {
+        jsonBody: { baseUrl },
+        extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
+      });
     },
 
     setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse> {
-      return requestJson(
-        ctx,
-        {
-          method: "POST",
-          path: ROUTES.setup.complete,
-          jsonBody: req,
-          extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
-        },
-        MeResponse,
-      );
+      return post(ROUTES.setup.complete, MeResponse, {
+        jsonBody: req,
+        extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
+      });
     },
 
-    adminConnection(): Promise<AdminConnectionResponse> {
-      return requestJson(
+    providers: () => get(ROUTES.providers, ProvidersResponse),
+    adminProviders: () => get(ROUTES.admin.providers, AdminProvidersResponse),
+    adminCreateProvider: (req: AdminProviderCreateRequest) =>
+      post(ROUTES.admin.providers, AdminProvider, { jsonBody: req }),
+    adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
+      patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
+    adminDeleteProvider: (id: string) => del(adminProviderRoute(id), OkResponse),
+    adminTestProvider: (target: string | AdminProviderTestRequest) =>
+      requestJson(
         ctx,
-        { method: "GET", path: ROUTES.admin.connection },
-        AdminConnectionResponse,
-      );
-    },
-
-    adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.admin.connectionUpdate, jsonBody: patch },
-        AdminConnectionResponse,
-      );
-    },
-
-    adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse> {
-      return requestJson(
-        ctx,
-        {
-          method: "POST",
-          path: ROUTES.admin.connectionTest,
-          jsonBody: baseUrl !== undefined ? { baseUrl } : {},
-        },
+        typeof target === "string"
+          ? { method: "POST", path: adminProviderTestRoute(target) }
+          : { method: "POST", path: ROUTES.admin.providersTest, jsonBody: target },
         ConnectionTestResponse,
-      );
-    },
+      ),
 
     systemFeatures(): Promise<SystemFeaturesResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.system.features },
-        SystemFeaturesResponse,
-      );
+      return get(ROUTES.system.features, SystemFeaturesResponse);
     },
     systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.features, jsonBody: input },
-        SystemFeaturesResponse,
-      );
+      return put(ROUTES.system.features, SystemFeaturesResponse, { jsonBody: input });
     },
     systemPublicUrl(): Promise<PublicUrlSettings> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.system.publicUrl }, PublicUrlSettings);
+      return get(ROUTES.system.publicUrl, PublicUrlSettings);
     },
     systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.publicUrl, jsonBody: input },
-        PublicUrlSettings,
-      );
+      return put(ROUTES.system.publicUrl, PublicUrlSettings, { jsonBody: input });
     },
     systemOffice(): Promise<SystemOfficeResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.system.office }, SystemOfficeResponse);
+      return get(ROUTES.system.office, SystemOfficeResponse);
     },
     systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.office, jsonBody: input },
-        SystemOfficeResponse,
-      );
+      return put(ROUTES.system.office, SystemOfficeResponse, { jsonBody: input });
     },
     systemTrash(): Promise<TrashSettings> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.system.trash }, TrashSettings);
+      return get(ROUTES.system.trash, TrashSettings);
     },
     systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.trash, jsonBody: input },
-        TrashSettings,
-      );
+      return put(ROUTES.system.trash, TrashSettings, { jsonBody: input });
     },
     systemIndexer(): Promise<SystemIndexerResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.system.indexer },
-        SystemIndexerResponse,
-      );
+      return get(ROUTES.system.indexer, SystemIndexerResponse);
     },
 
     systemUpdateIndexerSettings(
       settings: IndexerSettingsUpdateRequest,
     ): Promise<IndexerSettingsResponse> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.indexerSettings, jsonBody: settings },
-        IndexerSettingsResponse,
-      );
+      return put(ROUTES.system.indexerSettings, IndexerSettingsResponse, { jsonBody: settings });
     },
 
     systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.indexerClear, jsonBody: req ?? {} },
-        IndexerClearResponse,
-      );
+      return post(ROUTES.system.indexerClear, IndexerClearResponse, { jsonBody: req ?? {} });
     },
 
     systemClearThumbnails(): Promise<IndexerClearResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.thumbnailsClear, jsonBody: {} },
-        IndexerClearResponse,
-      );
+      return post(ROUTES.system.thumbnailsClear, IndexerClearResponse, { jsonBody: {} });
     },
 
     systemReindex(req: IndexerReindexRequest): Promise<IndexerActionResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.indexerReindex, jsonBody: req },
-        IndexerActionResponse,
-      );
+      return post(ROUTES.system.indexerReindex, IndexerActionResponse, { jsonBody: req });
     },
 
     systemRebuildIndexerThumbnails(
       req?: IndexerThumbnailsRebuildRequest,
     ): Promise<IndexerThumbnailsRebuildResponse> {
-      return requestJson(
-        ctx,
-        {
-          method: "POST",
-          path: ROUTES.system.indexerThumbnailsRebuild,
-          jsonBody: req ?? {},
-        },
-        IndexerThumbnailsRebuildResponse,
-      );
+      return post(ROUTES.system.indexerThumbnailsRebuild, IndexerThumbnailsRebuildResponse, {
+        jsonBody: req ?? {},
+      });
     },
 
     systemSearch(): Promise<SystemSearchResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.system.search }, SystemSearchResponse);
+      return get(ROUTES.system.search, SystemSearchResponse);
     },
 
     systemReembed(): Promise<SystemReembedResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.searchReembed },
-        SystemReembedResponse,
-      );
+      return post(ROUTES.system.searchReembed, SystemReembedResponse);
     },
 
     systemImageSearch(): Promise<SystemImageSearchResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.system.imageSearch },
-        SystemImageSearchResponse,
-      );
+      return get(ROUTES.system.imageSearch, SystemImageSearchResponse);
     },
 
     systemImageSearchRebuild(
       req?: IndexerThumbnailsRebuildRequest,
     ): Promise<IndexerThumbnailsRebuildResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.imageSearchRebuild, jsonBody: req ?? {} },
-        IndexerThumbnailsRebuildResponse,
-      );
+      return post(ROUTES.system.imageSearchRebuild, IndexerThumbnailsRebuildResponse, {
+        jsonBody: req ?? {},
+      });
     },
 
     systemImageSearchClear(): Promise<IndexerClearResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.imageSearchClear, jsonBody: {} },
-        IndexerClearResponse,
-      );
+      return post(ROUTES.system.imageSearchClear, IndexerClearResponse, { jsonBody: {} });
     },
 
     systemOcr(): Promise<SystemOcrResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.system.ocr }, SystemOcrResponse);
+      return get(ROUTES.system.ocr, SystemOcrResponse);
     },
 
     systemUpdateOcrSettings(settings: OcrSettingsUpdateRequest): Promise<OcrSettingsResponse> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.system.ocrSettings, jsonBody: settings },
-        OcrSettingsResponse,
-      );
+      return put(ROUTES.system.ocrSettings, OcrSettingsResponse, { jsonBody: settings });
     },
 
     systemRunOcr(): Promise<OcrRunResponse> {
-      return requestJson(ctx, { method: "POST", path: ROUTES.system.ocrRun }, OcrRunResponse);
+      return post(ROUTES.system.ocrRun, OcrRunResponse);
     },
 
     systemThumbnails(): Promise<SystemThumbnailsResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.system.thumbnails },
-        SystemThumbnailsResponse,
-      );
+      return get(ROUTES.system.thumbnails, SystemThumbnailsResponse);
     },
 
     systemRebuildThumbnails(): Promise<IndexerThumbnailsRebuildResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.system.thumbnailsRebuild },
-        IndexerThumbnailsRebuildResponse,
-      );
+      return post(ROUTES.system.thumbnailsRebuild, IndexerThumbnailsRebuildResponse);
     },
 
     systemLogs(subsystem, query = {}) {
-      return requestJson(
-        ctx,
-        {
-          method: "GET",
-          path: systemLogsRoute(subsystem),
-          query: {
-            limit: query.limit === undefined ? undefined : String(query.limit),
-            level: query.level,
-            before: query.before,
-          },
+      return get(systemLogsRoute(subsystem), SystemLogsResponse, {
+        query: {
+          limit: query.limit === undefined ? undefined : String(query.limit),
+          level: query.level,
+          before: query.before,
         },
-        SystemLogsResponse,
-      );
+      });
     },
 
     officeStatus() {
-      return requestJson(ctx, { method: "GET", path: ROUTES.office.status }, OfficeStatusResponse);
+      return get(ROUTES.office.status, OfficeStatusResponse);
     },
     officeOpen(req) {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.office.open, jsonBody: req },
-        OfficeOpenResponse,
-      );
+      return post(ROUTES.office.open, OfficeOpenResponse, { jsonBody: req });
     },
     officeCreateDocument(req) {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.office.documents, jsonBody: req },
-        OfficeCreateDocumentResponse,
-      );
+      return post(ROUTES.office.documents, OfficeCreateDocumentResponse, { jsonBody: req });
     },
     listApiTokens(): Promise<ApiTokensResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.account.tokens }, ApiTokensResponse);
+      return get(ROUTES.account.tokens, ApiTokensResponse);
     },
 
     createApiToken(req: CreateApiTokenRequest): Promise<CreateApiTokenResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.account.tokens, jsonBody: req },
-        CreateApiTokenResponse,
-      );
+      return post(ROUTES.account.tokens, CreateApiTokenResponse, { jsonBody: req });
     },
 
     revokeApiToken(id: string): Promise<OkResponse> {
-      return requestJson(ctx, { method: "DELETE", path: accountTokenRoute(id) }, OkResponse);
+      return del(accountTokenRoute(id), OkResponse);
     },
 
     listTags(): Promise<TagsResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.tags }, TagsResponse);
+      return get(ROUTES.tags, TagsResponse);
     },
 
     createTag(req: CreateTagRequest): Promise<Tag> {
-      return requestJson(ctx, { method: "POST", path: ROUTES.tags, jsonBody: req }, Tag);
+      return post(ROUTES.tags, Tag, { jsonBody: req });
     },
 
     updateTag(id: string, req: UpdateTagRequest): Promise<Tag> {
-      return requestJson(ctx, { method: "PATCH", path: tagRoute(id), jsonBody: req }, Tag);
+      return patch(tagRoute(id), Tag, { jsonBody: req });
     },
 
     deleteTag(id: string): Promise<OkResponse> {
-      return requestJson(ctx, { method: "DELETE", path: tagRoute(id) }, OkResponse);
+      return del(tagRoute(id), OkResponse);
     },
 
     tagFiles(id: string): Promise<TagFilesResponse> {
-      return requestJson(ctx, { method: "GET", path: tagFilesRoute(id) }, TagFilesResponse);
+      return get(tagFilesRoute(id), TagFilesResponse);
     },
 
     setFileTags(req: SetFileTagsRequest): Promise<OkResponse> {
-      return requestJson(ctx, { method: "PUT", path: ROUTES.fs.tags, jsonBody: req }, OkResponse);
+      return put(ROUTES.fs.tags, OkResponse, { jsonBody: req });
     },
 
     listFavorites(): Promise<FavoritesResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.favorites.base }, FavoritesResponse);
+      return get(ROUTES.favorites.base, FavoritesResponse);
     },
 
     addFavorite(req: FavoriteRequest): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.favorites.base, jsonBody: req },
-        OkResponse,
-      );
+      return post(ROUTES.favorites.base, OkResponse, { jsonBody: req });
     },
 
     removeFavorite(req: FavoriteRequest): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "DELETE", path: ROUTES.favorites.base, jsonBody: req },
-        OkResponse,
-      );
+      return del(ROUTES.favorites.base, OkResponse, { jsonBody: req });
     },
 
     getFolderView(path: string): Promise<FolderViewResponse> {
-      return requestJson(
-        ctx,
-        { method: "GET", path: ROUTES.folderViews.base, query: { path } },
-        FolderViewResponse,
-      );
+      return get(ROUTES.folderViews.base, FolderViewResponse, { query: { path } });
     },
 
     setFolderView(req: SetFolderViewRequest): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "PUT", path: ROUTES.folderViews.base, jsonBody: req },
-        OkResponse,
-      );
+      return put(ROUTES.folderViews.base, OkResponse, { jsonBody: req });
     },
 
     removeFolderView(req: RemoveFolderViewRequest): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "DELETE", path: ROUTES.folderViews.base, jsonBody: req },
-        OkResponse,
-      );
+      return del(ROUTES.folderViews.base, OkResponse, { jsonBody: req });
     },
 
     resetFolderViews(): Promise<OkResponse> {
-      return requestJson(ctx, { method: "DELETE", path: ROUTES.folderViews.all }, OkResponse);
+      return del(ROUTES.folderViews.all, OkResponse);
     },
 
     listRecents(): Promise<RecentsResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.recents.list }, RecentsResponse);
+      return get(ROUTES.recents.list, RecentsResponse);
     },
 
     touchRecent(req: RecentTouchRequest): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.recents.touch, jsonBody: req },
-        OkResponse,
-      );
+      return post(ROUTES.recents.touch, OkResponse, { jsonBody: req });
     },
 
     trashStatus(): Promise<TrashStatusResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.trash.status }, TrashStatusResponse);
+      return get(ROUTES.trash.status, TrashStatusResponse);
     },
 
     trashList(): Promise<TrashListResponse> {
-      return requestJson(ctx, { method: "GET", path: ROUTES.trash.list }, TrashListResponse);
+      return get(ROUTES.trash.list, TrashListResponse);
     },
 
     trashRestore(req: TrashRestoreRequest): Promise<TrashRestoreResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.trash.restore, jsonBody: req },
-        TrashRestoreResponse,
-      );
+      return post(ROUTES.trash.restore, TrashRestoreResponse, { jsonBody: req });
     },
 
     trashPurge(req: TrashPurgeRequest): Promise<OkResponse> {
-      return requestJson(
-        ctx,
-        { method: "POST", path: ROUTES.trash.purge, jsonBody: req },
-        OkResponse,
-      );
+      return post(ROUTES.trash.purge, OkResponse, { jsonBody: req });
     },
 
     trashEmpty(): Promise<OkResponse> {
-      return requestJson(ctx, { method: "POST", path: ROUTES.trash.empty }, OkResponse);
+      return post(ROUTES.trash.empty, OkResponse);
     },
   };
 }

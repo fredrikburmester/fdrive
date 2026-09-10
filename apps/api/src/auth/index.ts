@@ -2,10 +2,9 @@ import type { Repos } from "@fdrive/db";
 import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
-import type { ConnectionStore } from "../connection/store.js";
+import type { ProviderService } from "../providers/service.js";
 import { createLoginLimiter, type LoginLimiter } from "./login-limiter.js";
 import type { PrincipalResolver } from "./principal.js";
-import type { ClientForBaseUrl, ClientForIdentity } from "./provider-client.ts";
 import { registerAuthRoutes } from "./routes.js";
 import { createAuthService } from "./service.js";
 import type { IdentityStorageFactory } from "./storage-factory.ts";
@@ -34,33 +33,31 @@ const LOGIN_BLOCK_MS = 60_000;
 export interface CreateAuthModuleDeps {
   readonly repos: Repos;
   readonly identityLinks: AccountIdentityOperations;
-  readonly clientForBaseUrl: ClientForBaseUrl;
-  readonly clientForIdentity: ClientForIdentity;
+  readonly providers: ProviderService;
+  readonly fetch: typeof globalThis.fetch;
   readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly storageFactory: IdentityStorageFactory;
   readonly limiter?: LoginLimiter;
-  /** Resolves the active SFTPGo connection for `providers.ensure` and the provider label. */
-  readonly connectionStore: ConnectionStore;
   /**
-   * SFTPGo usernames always treated as admins, in addition to
-   * `accounts.is_admin`. Defaults to `config.fdriveAdminUsers`.
+   * Usernames always treated as admins, in addition to `accounts.is_admin`.
+   * Defaults to `config.fdriveAdminUsers`.
    */
   readonly adminUsernames?: readonly string[];
   /**
-   * The `TokenSource` the auth service uses to prime and re-mint SFTPGo
-   * JWTs. Defaults to a freshly built one when omitted; a caller that also
-   * needs a `TokenSource` elsewhere (for example to build the storage
-   * provider passed as `storageFactory`) should build it once and pass it
-   * here so both share the same in-process token cache.
+   * The `TokenSource` the auth service primes upstream tokens into.
+   * Defaults to a freshly built one when omitted; a caller that also needs
+   * a `TokenSource` elsewhere (for example to build the storage provider
+   * passed as `storageFactory`) should build it once and pass it here so
+   * both share the same in-process token cache.
    */
   readonly tokenSource?: TokenSource;
 }
 
 export interface AuthModule {
   readonly service: ReturnType<typeof createAuthService>;
-  readonly tokenSource: ReturnType<typeof createTokenSource>;
+  readonly tokenSource: TokenSource;
   readonly principalResolver: PrincipalResolver;
   registerRoutes(groups: { public: AppHono; authed: AuthedHono }): void;
 }
@@ -84,22 +81,23 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
     deps.tokenSource ??
     createTokenSource({
       repos: deps.repos,
-      clientForIdentity: deps.clientForIdentity,
+      providers: deps.providers,
       master: deps.master,
       clock: deps.clock,
+      fetch: deps.fetch,
     });
 
   const service = createAuthService({
     repos: deps.repos,
     identityLinks: deps.identityLinks,
-    clientForBaseUrl: deps.clientForBaseUrl,
+    providers: deps.providers,
+    fetch: deps.fetch,
     master: deps.master,
     clock: deps.clock,
     config: deps.config,
     limiter,
     tokenSource,
     storageFactory: deps.storageFactory,
-    connectionStore: deps.connectionStore,
     adminUsernames: deps.adminUsernames ?? deps.config.fdriveAdminUsers,
   });
 

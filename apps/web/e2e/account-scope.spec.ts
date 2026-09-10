@@ -18,7 +18,7 @@ test("an administrator maps an unmapped virtual folder from a suggestion and sea
   await page.goto("/account");
   const scope = page.getByLabel("Index status for scope_admin");
   await expect(scope.getByText("Unavailable")).toBeVisible();
-  await expect(scope.getByText(/A folder SFTPGo shows is not indexed/)).toBeVisible();
+  await expect(scope.getByText(/A folder this login shows is not indexed/)).toBeVisible();
   await expect(
     scope.getByRole("listitem").filter({ hasText: "/shared is not indexed." }),
   ).toBeVisible();

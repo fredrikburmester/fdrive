@@ -1,0 +1,63 @@
+import { describe, expect, it } from "vitest";
+import type { ProviderField } from "./ports/provider.ts";
+import { sameCredential, stripTransientFields, validateFields } from "./provider-fields.ts";
+
+const FIELDS: readonly ProviderField[] = [
+  { name: "username", label: "Username", kind: "text", required: true, maxLength: 10 },
+  { name: "password", label: "Password", kind: "password", required: true },
+  { name: "otp", label: "Code", kind: "otp", required: false, transient: true },
+];
+
+describe("validateFields", () => {
+  it("accepts a complete credential and drops nothing declared", () => {
+    const result = validateFields(FIELDS, { username: "alice", password: "pw", otp: "123" });
+    expect(result).toEqual({ ok: true, value: { username: "alice", password: "pw", otp: "123" } });
+  });
+
+  it("treats an empty string as absent", () => {
+    const result = validateFields(FIELDS, { username: "alice", password: "pw", otp: "" });
+    expect(result).toEqual({ ok: true, value: { username: "alice", password: "pw" } });
+  });
+
+  it("reports missing required, unknown, non-string, NUL and overlong values", () => {
+    const result = validateFields(FIELDS, {
+      username: "much-too-long-name",
+      password: 7,
+      otp: "1\x002",
+      extra: "x",
+    });
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        { field: "extra", message: "unknown field" },
+        { field: "username", message: "too long" },
+        { field: "password", message: "expected a string" },
+        { field: "otp", message: "must not contain NUL" },
+      ],
+    });
+    expect(validateFields(FIELDS, { username: "a" })).toEqual({
+      ok: false,
+      issues: [{ field: "password", message: "required" }],
+    });
+  });
+
+  it("rejects anything that is not an object", () => {
+    for (const input of [null, "x", 3, ["a"]]) {
+      expect(validateFields(FIELDS, input)).toEqual({
+        ok: false,
+        issues: [{ field: "", message: "expected an object" }],
+      });
+    }
+  });
+});
+
+describe("stripTransientFields and sameCredential", () => {
+  it("drops one-time codes and compares the rest", () => {
+    const stored = stripTransientFields(FIELDS, { username: "alice", password: "pw", otp: "1" });
+    expect(stored).toEqual({ username: "alice", password: "pw" });
+    expect(sameCredential(FIELDS, stored, { username: "alice", password: "pw", otp: "9" })).toBe(
+      true,
+    );
+    expect(sameCredential(FIELDS, stored, { username: "alice", password: "other" })).toBe(false);
+  });
+});

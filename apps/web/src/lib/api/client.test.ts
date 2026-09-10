@@ -65,10 +65,9 @@ it("never falls back after an identity becomes unlinked and leaves login/logout 
   );
   await expect(tab.client.me()).rejects.toHaveProperty("status", 403);
   expect(owners).toEqual(["removed", "removed"]);
-  await expect(tab.client.login({ username: "a", password: "test" })).rejects.toHaveProperty(
-    "status",
-    403,
-  );
+  await expect(
+    tab.client.login({ credential: { username: "a", password: "test" } }),
+  ).rejects.toHaveProperty("status", 403);
   await expect(tab.client.logout()).rejects.toHaveProperty("status", 403);
   expect(owners.slice(2)).toEqual([null, null]);
   tab.pinIdentity(undefined);

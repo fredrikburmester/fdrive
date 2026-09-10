@@ -234,36 +234,16 @@ export function serializeEntry(entry: FileEntry): FsEntry {
  * listing the parent directory and finding the matching entry there.
  */
 export async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
-  try {
-    const stat = await storage.statFile(path);
-    return {
-      name: baseName(path),
-      path,
-      kind: "file",
-      size: stat.size,
-      modifiedAt: stat.modifiedAt ?? new Date(0),
-      ext: extensionOf(baseName(path)),
-    };
-  } catch (error) {
-    if (isStorageError(error) && error.kind === "bad_request") {
-      return statViaParentListing(storage, path);
-    }
-    if (isStorageError(error)) {
-      throw toApiHttpError(error);
-    }
-    throw error;
-  }
-}
-
-async function statViaParentListing(storage: StorageProvider, path: string): Promise<FileEntry> {
-  const parent = parentPath(path);
+  const stat = await runStorageCall(() => storage.stat(path));
   const name = baseName(path);
-  const entries = await runStorageCall(() => storage.list(parent));
-  const match = entries.find((entry) => entry.name === name);
-  if (match === undefined) {
-    throw new ApiHttpError("not_found", `path not found: ${path}`);
-  }
-  return match;
+  return {
+    name,
+    path,
+    kind: stat.kind,
+    size: stat.size,
+    modifiedAt: stat.modifiedAt ?? new Date(0),
+    ext: stat.kind === "dir" ? "" : extensionOf(name),
+  };
 }
 
 export function publishFsEvent(
@@ -461,7 +441,13 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(ZipRequest, c, jsonMaxBytes);
     const paths = body.paths.map((p) => normalizeOrThrow(p));
-    const stream = await runStorageCall(() => principal.storage.zip(paths));
+    const zip = principal.storage.zip;
+    if (zip === undefined) {
+      throw new ApiHttpError("unsupported", "this storage cannot build zip archives", {
+        capability: "zip",
+      });
+    }
+    const stream = await runStorageCall(() => zip(paths));
     // `ZipRequest.paths` has `.min(1)`, so `paths[0]` always exists here.
     const firstPath = paths[0] as string;
     const derivedName = baseName(firstPath);

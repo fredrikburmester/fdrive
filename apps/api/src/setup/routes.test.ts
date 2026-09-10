@@ -14,7 +14,25 @@ const REQUIRED_ENV = {
 
 const ME: MeResponse = {
   account: { id: "account-1", displayName: "alice" },
-  identities: [{ id: "identity-1", username: "alice", providerType: "sftpgo", providerLabel: "x" }],
+  identities: [
+    {
+      id: "identity-1",
+      username: "alice",
+      providerId: "123e4567-e89b-42d3-a456-426614174000",
+      providerType: "sftpgo",
+      providerLabel: "x",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: false,
+        scopeMapping: false,
+      },
+    },
+  ],
   activeIdentityId: "identity-1",
   isAdmin: true,
 };
@@ -48,7 +66,7 @@ function buildApp(
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: true, host: null }),
+    connectionStatus: async () => ({ required: true, providers: [] }),
     registerRoutes: (groups) => {
       registerSetupRoutes(groups, { service, tokenGuard, limiter, config });
     },

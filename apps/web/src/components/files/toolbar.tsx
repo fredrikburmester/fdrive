@@ -1,5 +1,6 @@
 "use client";
 
+import type { ProviderCapabilities } from "@fdrive/contracts";
 import type { SortDirection, SortKey } from "@fdrive/core";
 import {
   ChevronDownIcon,
@@ -61,6 +62,11 @@ import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { SortSpec } from "@/lib/files/sorting";
 import { toolbarVisibility } from "@/lib/files/toolbar-visibility";
 import type { ViewMode } from "@/lib/files/view-mode";
+import {
+  type BrowserSelection,
+  canDownload,
+  DEFAULT_CAPABILITIES,
+} from "@/lib/identity/capabilities";
 import { OFFICE_DOCUMENT_LABELS, type OfficeDocumentKind } from "@/lib/office/new-document";
 import { cn } from "@/lib/utils";
 
@@ -245,8 +251,15 @@ export interface FilesToolbarActionsProps {
   onUploadFolder: () => void;
   detailsOpen: boolean;
   onToggleDetails: () => void;
-  /** Number of currently selected rows; shows an "N selected" pill when > 0. */
-  selectedCount: number;
+  /** The files and folders currently selected; shows an "N selected" pill when any. */
+  selection: BrowserSelection;
+  /**
+   * What the active login's storage can do: hides Download when the
+   * selection needs a zip the provider cannot build (`zip`), the Office
+   * document kinds under New without `office`, and "Show thumbnails"
+   * without `index`. Defaults to `DEFAULT_CAPABILITIES`.
+   */
+  capabilities?: ProviderCapabilities | undefined;
   onClearSelection: () => void;
   /** Duplicates the single selected entry. Only enabled for a one-entry selection. */
   onDuplicateSelection: () => void;
@@ -261,6 +274,8 @@ export interface FilesToolbarActionsProps {
 }
 
 interface ViewSortMenuItemsProps {
+  /** Whether the login's provider is indexed, so thumbnails can exist at all. */
+  thumbnailsAvailable: boolean;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   folderView?: FolderViewActions | undefined;
@@ -274,6 +289,7 @@ interface ViewSortMenuItemsProps {
  * dropdown's content on desktop, and the "View" submenu's content inside
  * the mobile "More" overflow menu. */
 function ViewSortMenuItems({
+  thumbnailsAvailable,
   viewMode,
   onViewModeChange,
   folderView,
@@ -345,19 +361,23 @@ function ViewSortMenuItems({
           )}
         </>
       )}
-      <DropdownMenuSeparator />
-      <DropdownMenuGroup>
-        <DropdownMenuCheckboxItem
-          checked={showThumbnails}
-          onCheckedChange={(checked) => onShowThumbnailsChange(checked)}
-          className="flex flex-col items-start gap-0.5"
-        >
-          <span>Show thumbnails</span>
-          <span className="font-normal text-muted-foreground text-xs">
-            Preview images directly inside the list row
-          </span>
-        </DropdownMenuCheckboxItem>
-      </DropdownMenuGroup>
+      {thumbnailsAvailable && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            <DropdownMenuCheckboxItem
+              checked={showThumbnails}
+              onCheckedChange={(checked) => onShowThumbnailsChange(checked)}
+              className="flex flex-col items-start gap-0.5"
+            >
+              <span>Show thumbnails</span>
+              <span className="font-normal text-muted-foreground text-xs">
+                Preview images directly inside the list row
+              </span>
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuGroup>
+        </>
+      )}
       <DropdownMenuSeparator />
       <DropdownMenuGroup>
         <DropdownMenuLabel>Sort by</DropdownMenuLabel>
@@ -437,7 +457,8 @@ export function FilesToolbarActions({
   onUploadFolder,
   detailsOpen,
   onToggleDetails,
-  selectedCount,
+  selection,
+  capabilities = DEFAULT_CAPABILITIES,
   onClearSelection,
   onDuplicateSelection,
   onCompressSelection,
@@ -448,6 +469,9 @@ export function FilesToolbarActions({
   const isMobile = useIsMobile();
   const { inline, overflow } = toolbarVisibility(isMobile);
   const inOverflow = overflow.length > 0;
+  const selectedCount = selection.files + selection.folders;
+  const downloadAvailable = canDownload(capabilities, selection);
+  const newOfficeDocument = capabilities.office ? onNewOfficeDocument : undefined;
   const ViewIcon = VIEW_MODE_ICONS[viewMode];
   const detailsLabel = detailsOpen ? "Hide details" : "Show details";
 
@@ -462,6 +486,7 @@ export function FilesToolbarActions({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-48">
             <ViewSortMenuItems
+              thumbnailsAvailable={capabilities.index}
               viewMode={viewMode}
               onViewModeChange={onViewModeChange}
               folderView={folderView}
@@ -497,11 +522,11 @@ export function FilesToolbarActions({
             <FileCodeIcon />
             Markdown file
           </DropdownMenuItem>
-          {onNewOfficeDocument && (
+          {newOfficeDocument && (
             <>
               <DropdownMenuSeparator />
               {(["document", "spreadsheet", "presentation"] as const).map((kind) => (
-                <DropdownMenuItem key={kind} onClick={() => onNewOfficeDocument(kind)}>
+                <DropdownMenuItem key={kind} onClick={() => newOfficeDocument(kind)}>
                   <FileTextIcon />
                   {OFFICE_DOCUMENT_LABELS[kind]}
                 </DropdownMenuItem>
@@ -558,7 +583,7 @@ export function FilesToolbarActions({
             </TooltipTrigger>
             <TooltipContent>Compress</TooltipContent>
           </Tooltip>
-          {inline.includes("download") && (
+          {inline.includes("download") && downloadAvailable && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -636,6 +661,7 @@ export function FilesToolbarActions({
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <ViewSortMenuItems
+                  thumbnailsAvailable={capabilities.index}
                   viewMode={viewMode}
                   onViewModeChange={onViewModeChange}
                   folderView={folderView}
@@ -664,7 +690,7 @@ export function FilesToolbarActions({
               <FileArchiveIcon />
               Compress
             </DropdownMenuItem>
-            {overflow.includes("download") && (
+            {overflow.includes("download") && downloadAvailable && (
               <DropdownMenuItem disabled={selectedCount === 0} onClick={onDownloadSelection}>
                 <DownloadIcon />
                 Download

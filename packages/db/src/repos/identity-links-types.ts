@@ -22,6 +22,12 @@ export interface LinkVerifiedInput {
   readonly accountId: string;
   readonly providerId: string;
   readonly username: string;
+  /** Endpoint authenticated upstream, checked under a shared provider row lock. */
+  readonly verifiedProvider?: {
+    readonly type: string;
+    readonly baseUrl: string;
+    readonly allowDisabled?: boolean;
+  };
   readonly at: Date;
   readonly sealCredential: (identityId: string) => SealedIdentityCredential;
 }

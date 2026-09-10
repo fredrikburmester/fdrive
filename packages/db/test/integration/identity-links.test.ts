@@ -5,6 +5,7 @@ import {
   type CreateDbResult,
   createDb,
   createIdentityLinksRepo,
+  createRepos,
   IdentityLinksError,
   type IdentityLinksRepo,
   migrate,
@@ -502,4 +503,67 @@ it("provides typed missing-resource errors and validates before touching a close
   await expect(
     repo.switchActive({ accountId: accountA, identityId: missing, sessionIdHash: "bad", at }),
   ).rejects.toThrow(TypeError);
+});
+
+describe("provider endpoint binding", () => {
+  it.each(["login", "link"] as const)(
+    "rejects %s verified against an endpoint that changed before persistence",
+    async (operation) => {
+      const repos = createRepos(first.db);
+      const row = await repos.providers.ensure({
+        type: "sftpgo",
+        baseUrl: `http://stale-${operation}`,
+      });
+      const input = {
+        ...base,
+        providerId: row.id,
+        verifiedProvider: { type: row.type, baseUrl: row.baseUrl },
+      };
+      await repos.providers.update(row.id, { baseUrl: `http://replacement-${operation}` });
+      const result =
+        operation === "link"
+          ? a.linkVerified(input)
+          : a.loginVerified({
+              ...input,
+              session: { idHash: "e".repeat(64), expiresAt: expiry, userAgent: null, ip: null },
+            });
+      await expect(result).rejects.toMatchObject({ code: "invalid_session" });
+      expect(await repos.identities.countByProvider(row.id)).toBe(0);
+    },
+  );
+
+  it.each(["login", "link"] as const)(
+    "serializes a racing address update and first %s",
+    async (operation) => {
+      const repos = createRepos(second.db);
+      const row = await repos.providers.ensure({
+        type: "sftpgo",
+        baseUrl: `http://race-${operation}`,
+      });
+      const input = {
+        ...base,
+        providerId: row.id,
+        verifiedProvider: { type: row.type, baseUrl: row.baseUrl },
+      };
+      const [identityResult, addressResult] = await Promise.allSettled([
+        operation === "link"
+          ? a.linkVerified(input)
+          : a.loginVerified({
+              ...input,
+              session: { idHash: "e".repeat(64), expiresAt: expiry, userAgent: null, ip: null },
+            }),
+        repos.providers.update(row.id, { baseUrl: `http://raced-${operation}` }),
+      ]);
+      expect(
+        [identityResult, addressResult].filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      if (identityResult.status === "fulfilled") {
+        expect(await repos.providers.get(row.id)).toMatchObject({ baseUrl: row.baseUrl });
+        expect(await repos.identities.countByProvider(row.id)).toBe(1);
+      } else {
+        expect(identityResult.reason).toMatchObject({ code: "invalid_session" });
+        expect(await repos.identities.countByProvider(row.id)).toBe(0);
+      }
+    },
+  );
 });

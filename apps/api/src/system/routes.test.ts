@@ -135,6 +135,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     username: "alice",
     storage: {
       list: notImplemented,
+      stat: notImplemented,
       statFile: notImplemented,
       download: notImplemented,
       upload: notImplemented,
@@ -161,7 +162,10 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: false, host: "sftpgo:8080" }),
+    connectionStatus: async () => ({
+      required: false,
+      providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+    }),
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
       registerSystemRoutes(groups, deps);

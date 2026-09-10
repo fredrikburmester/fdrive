@@ -11,7 +11,7 @@ export type { Scope } from "@fdrive/core";
  */
 export type ConfiguredUnavailableReason = Extract<
   IdentityScopeReason,
-  "no_connection" | "provider_mismatch" | "invalid_configuration"
+  "no_connection" | "provider_mismatch" | "invalid_configuration" | "no_roots"
 >;
 
 /**

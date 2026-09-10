@@ -1,22 +1,22 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { IdentitiesCard } from "./identities-card";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [
-    { id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" },
-    { id: "two", username: "bob", providerType: "sftpgo", providerLabel: "Other" },
+    makeIdentity(),
+    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
   ],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 afterEach(() => {
   cleanup();
   accountTransition.finish(false);
@@ -49,12 +49,31 @@ it("confirms the exact login, explains retained files, and reports unlink confli
   fireEvent.change(screen.getByLabelText("Your current password"), { target: { value: "mine" } });
   fireEvent.click(screen.getByRole("button", { name: "Remove login" }));
   await waitFor(() => expect(screen.getByText("Login changed elsewhere")).toBeDefined());
-  expect(unlink).toHaveBeenCalledWith("two", { currentPassword: "mine" });
+  expect(unlink).toHaveBeenCalledWith("two", { currentCredential: { password: "mine" } });
   expect((screen.getByLabelText("Your current password") as HTMLInputElement).value).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(screen.getByRole("button", { name: "Add login" }));
   expect(screen.getByRole("dialog", { name: "Add login" })).toBeDefined();
+});
+
+it("shows the index status only for logins whose provider maps virtual folders", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const [ada, bob] = me.identities;
+  if (ada === undefined || bob === undefined) throw new Error("fixture");
+  client.setQueryData(["auth", "me"], {
+    ...me,
+    identities: [ada, { ...bob, capabilities: { ...bob.capabilities, scopeMapping: false } }],
+  });
+  const scope = vi.mocked(apiClient.identityScope);
+  render(
+    <QueryClientProvider client={client}>
+      <IdentitiesCard />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(scope).toHaveBeenCalledTimes(1));
+  expect(scope.mock.calls[0]?.[0]).toBe("one");
+  expect(screen.getAllByRole("img", { name: "SFTPGo" })).toHaveLength(2);
 });
 
 it("keeps the last identity linked, and disables controls while loading", async () => {

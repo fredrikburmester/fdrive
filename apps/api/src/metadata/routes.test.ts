@@ -1,6 +1,12 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
+import {
+  createFakeSftpgoServer,
+  createSftpgoClient,
+  createSftpgoStorageProvider,
+  type FakeSeed,
+  type WithToken,
+} from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -9,7 +15,6 @@ import { loadConfig } from "../config.js";
 import { createEventBus } from "../events/bus.js";
 import { registerFsRoutes } from "../fs/routes.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
-import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerMetadataRoutes } from "./routes.js";
 import type { MetadataService } from "./service.js";
 import { createMetadataService } from "./service.js";
@@ -506,7 +511,7 @@ describe("tag CRUD: error mapping", () => {
     const metadata = createMetadataService(repos);
     await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", "grid");
     const storage = {
-      statFile: async () => {
+      stat: async () => {
         throw new StorageError(kind, "unavailable");
       },
     } as unknown as StorageProvider;

@@ -1,37 +1,58 @@
 "use client";
 
+import type { PublicProvider } from "@fdrive/contracts";
 import { type FormEvent, useState } from "react";
+import { ProviderFieldInputs } from "@/components/identity/provider-fields";
+import { ProviderPicker } from "@/components/identity/provider-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { Field, FieldError, FieldGroup } from "@/components/ui/field";
 import { useLogin } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
+import {
+  buildCredential,
+  credentialComplete,
+  credentialFieldsFor,
+  loginSubtitle,
+  selectProvider,
+} from "@/lib/auth/login-model";
 
 export interface LoginFormProps {
-  /** Subtitle shown under the "Sign in" title, naming the SFTPGo host. */
-  subtitle: string;
+  /** The enabled providers, resolved server-side by the page; empty when the API was unreachable. */
+  readonly providers: readonly PublicProvider[];
 }
 
+const EMPTY_VALUES: Readonly<Record<string, string>> = {};
+const NONE_REVEALED: ReadonlySet<string> = new Set();
+
 /**
- * The login form: username, password, and an optional one-time code field
- * revealed on demand. `subtitle` is resolved server-side (by the page) from
- * the `/about` endpoint's provider label, since this client component has
- * no server-side access.
+ * The login form: the chosen provider's credential fields, rendered from
+ * the API's own field list. With several enabled providers a picker sits
+ * above the fields; with one, the subtitle names it. Without any (the API
+ * could not be reached while rendering the page) the SFTPGo-shaped
+ * defaults render and the server picks its only enabled provider.
  */
-export function LoginForm({ subtitle }: LoginFormProps) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [otp, setOtp] = useState("");
-  const [showOtp, setShowOtp] = useState(false);
+export function LoginForm({ providers }: LoginFormProps) {
+  const [providerId, setProviderId] = useState<string | null>(null);
+  const [values, setValues] = useState(EMPTY_VALUES);
+  const [revealed, setRevealed] = useState(NONE_REVEALED);
   const login = useLogin();
+  const provider = selectProvider(providers, providerId);
+  const fields = credentialFieldsFor(provider);
+
+  function choose(id: string) {
+    setProviderId(id);
+    setValues(EMPTY_VALUES);
+    setRevealed(NONE_REVEALED);
+    login.reset();
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (!credentialComplete(fields, values)) return;
     login.mutate({
-      username,
-      password,
-      ...(showOtp && otp.length > 0 ? { otp } : {}),
+      ...(provider === undefined ? {} : { providerId: provider.id }),
+      credential: buildCredential(fields, values),
     });
   }
 
@@ -41,57 +62,32 @@ export function LoginForm({ subtitle }: LoginFormProps) {
         <CardHeader className="items-center gap-1 text-center">
           <span className="text-lg font-semibold tracking-tight">fdrive</span>
           <CardTitle>Sign in</CardTitle>
-          <CardDescription>{subtitle}</CardDescription>
+          <CardDescription>{loginSubtitle(providers)}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="username">Username</FieldLabel>
-                <Input
-                  id="username"
-                  name="username"
-                  autoComplete="username"
-                  autoFocus
-                  required
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
+              {providers.length > 1 && provider !== undefined && (
+                <ProviderPicker
+                  id="login-provider"
+                  providers={providers}
+                  value={provider.id}
+                  onChange={choose}
+                  disabled={login.isPending}
                 />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="password">Password</FieldLabel>
-                <Input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </Field>
-              {showOtp ? (
-                <Field>
-                  <FieldLabel htmlFor="otp">One-time code</FieldLabel>
-                  <Input
-                    id="otp"
-                    name="otp"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    value={otp}
-                    onChange={(event) => setOtp(event.target.value)}
-                  />
-                </Field>
-              ) : (
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto w-fit justify-start p-0 text-muted-foreground"
-                  onClick={() => setShowOtp(true)}
-                >
-                  Use a one-time code
-                </Button>
               )}
+              <ProviderFieldInputs
+                key={provider?.id ?? "default"}
+                fields={fields}
+                values={values}
+                onChange={(name, value) => setValues((prev) => ({ ...prev, [name]: value }))}
+                idPrefix="login"
+                autoFocus
+                revealOptionalCode
+                revealed={revealed}
+                onReveal={(name) => setRevealed((prev) => new Set(prev).add(name))}
+                disabled={login.isPending}
+              />
               {login.isError ? <FieldError>{describeApiError(login.error)}</FieldError> : null}
               <Field>
                 <Button type="submit" className="w-full" disabled={login.isPending}>
