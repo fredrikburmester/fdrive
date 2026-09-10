@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -13,8 +13,9 @@ import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/fi
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
+import { contextEntries } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
+import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
@@ -74,13 +75,15 @@ export interface FileGridProps {
   showReveal?: boolean;
   /** Hides archive actions for a virtual listing. */
   hideArchive?: boolean;
-  /** Whether the active identity's storage provider exposes a trash, for
-   * every tile's context menu (see `FileContextMenu`). Defaults to `false`. */
-  trashAvailable?: boolean;
+  /** What the active login's storage can do, for every tile's context menu
+   * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
+  capabilities?: ProviderCapabilities;
   /** A request to scroll a specific entry into view, identified by unique token. */
   scrollRequest?: ScrollRequest | null;
   /** Callback fired after the virtualizer has scrolled to the requested entry. */
   onScrollConsumed?: (token: number) => void;
+  /** Whether tiles may show image thumbnails at all; false for a login whose provider is not indexed. Defaults to true. */
+  thumbnails?: boolean;
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
@@ -109,12 +112,12 @@ const GRID_THUMBNAIL_SIZE = 256;
  * by `entry.path` via `key` on the caller, so navigating to a different entry
  * at the same tile position starts from the thumbnail again.
  */
-function GridTileIcon({ entry }: { entry: FsEntry }) {
+function GridTileIcon({ entry, thumbnails }: { entry: FsEntry; thumbnails: boolean }) {
   const [errored, setErrored] = useState(false);
 
   // The slot is a fixed 56px square so tiles with an icon and tiles with a
   // picture line up; the icon keeps its 32px size centred inside it.
-  if (errored || !wantsGridThumbnail(entry)) {
+  if (errored || !thumbnails || !wantsGridThumbnail(entry)) {
     return (
       <span className="flex size-14 shrink-0 items-center justify-center">
         <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} className="size-8" />
@@ -155,9 +158,10 @@ export function FileGrid({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
-  trashAvailable = false,
+  capabilities = DEFAULT_CAPABILITIES,
   scrollRequest = null,
   onScrollConsumed,
+  thumbnails = true,
 }: FileGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const lastConsumedTokenRef = useRef<number | null>(null);
@@ -343,8 +347,7 @@ export function FileGrid({
                         key={entry.path}
                         entry={entry}
                         onAction={onContextAction}
-                        selectionCount={contextSelectionCount(entry.path, selected)}
-                        includesFolder={group.some((candidate) => candidate.kind === "dir")}
+                        selection={selectionOf(group)}
                         hideMoveCopy={hideMoveCopy}
                         showReveal={showReveal}
                         hideArchive={hideArchive}
@@ -359,7 +362,7 @@ export function FileGrid({
                         onOpenTagsEditor={() => onOpenTagsEditor(group)}
                         favorite={groupFavorite(group)}
                         onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-                        trashAvailable={trashAvailable}
+                        capabilities={capabilities}
                       >
                         {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
                         {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
@@ -383,7 +386,7 @@ export function FileGrid({
                             "data-[selected=true]:bg-primary/10",
                           )}
                         >
-                          <GridTileIcon key={entry.path} entry={entry} />
+                          <GridTileIcon key={entry.path} entry={entry} thumbnails={thumbnails} />
                           <span className="line-clamp-2 w-full break-words text-xs">
                             {entry.name}
                           </span>

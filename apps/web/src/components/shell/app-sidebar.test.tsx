@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AppSidebar } from "./app-sidebar";
 
 vi.mock("next/navigation", () => ({
@@ -23,12 +25,20 @@ vi.mock("@/components/shell/folder-tree", () => ({
   ),
 }));
 
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
-  identities: [{ id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" }],
+const ada: MeResponse["identities"][number] = makeIdentity({ capabilities: { trash: true } });
+
+const me = makeMe({
+  identities: [ada],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
+
+/** `me` with its only login's capabilities overridden. */
+function withCapabilities(overrides: Partial<MeResponse["identities"][number]["capabilities"]>) {
+  return {
+    ...me,
+    identities: [{ ...ada, capabilities: { ...ada.capabilities, ...overrides } }],
+  };
+}
 
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -82,22 +92,35 @@ it("orders navigation as Files tree, metadata sections, then Shares and Trash at
   expect(isBefore(sharesLink, trashLink)).toBe(true);
 });
 
-it("hides Trash when the provider has none", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(["auth", "me"], me);
-  client.setQueryData(["trash", "status"], { available: false, path: null, retentionHours: null });
-  client.setQueryData(["favorites", "list"], []);
-  client.setQueryData(["recents", "list"], []);
-  client.setQueryData(["tags", "list"], []);
-  render(
-    <QueryClientProvider client={client}>
-      <SidebarProvider>
-        <AppSidebar />
-      </SidebarProvider>
-    </QueryClientProvider>,
-  );
+it("hides Trash when no linked login has one", async () => {
+  renderSidebar(withCapabilities({ trash: false }));
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
+});
+
+it("hides Shares when no linked login can share", async () => {
+  renderSidebar(withCapabilities({ shares: false }));
+  await screen.findByRole("link", { name: "Files" });
+  expect(screen.queryByRole("link", { name: "Shares" })).toBeNull();
+});
+
+it("shows Shares and Trash when any linked login has them, and names each login's provider type", async () => {
+  renderSidebar({
+    ...me,
+    identities: [
+      { ...ada, capabilities: { ...ada.capabilities, shares: false, trash: false } },
+      {
+        ...ada,
+        id: "two",
+        username: "bob",
+        providerLabel: "Other",
+        capabilities: { ...ada.capabilities, trash: true, shares: true },
+      },
+    ],
+  });
+  await screen.findByRole("link", { name: "Shares" });
+  expect(screen.getByRole("link", { name: "Trash" })).toBeTruthy();
+  expect(screen.getByRole("img", { name: "SFTPGo" })).toBeTruthy();
 });
 
 it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
@@ -115,6 +138,7 @@ it("lists the System pages in order, each as its own menu item", async () => {
   const expected = [
     ["Features", "/system/features"],
     ["General", "/system/general"],
+    ["Storage", "/system/storage"],
     ["Shared folders", "/system/shared-folders"],
     ["Thumbnails", "/system/thumbnails"],
     ["Indexer", "/system/indexer"],

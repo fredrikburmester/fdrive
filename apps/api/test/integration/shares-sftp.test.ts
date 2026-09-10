@@ -87,7 +87,7 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
   async function login(username: string) {
     const res = await call("/api/v1/auth/login", {
       method: "POST",
-      body: { username, password: `${username}-pass` },
+      body: { credential: { username, password: `${username}-pass` } },
     });
     expect(res.status).toBe(200);
     MeResponse.parse(await res.json());

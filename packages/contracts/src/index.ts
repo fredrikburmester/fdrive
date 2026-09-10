@@ -8,12 +8,6 @@ export {
   SwitchIdentityRequest,
   UnlinkIdentityRequest,
 } from "./accounts.ts";
-export {
-  AdminConnectionResponse,
-  AdminConnectionTestRequest,
-  AdminConnectionUpdateRequest,
-  ConnectionSource,
-} from "./admin.ts";
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export type {
   ApiClient,
@@ -107,6 +101,21 @@ export {
   SystemOfficeResponse,
 } from "./office.ts";
 export {
+  AdminProvider,
+  AdminProviderCreateRequest,
+  AdminProvidersResponse,
+  AdminProviderTestRequest,
+  AdminProviderType,
+  AdminProviderUpdateRequest,
+  ProviderCapabilities,
+  ProviderField,
+  ProviderFieldKind,
+  ProviderFieldValues,
+  ProvidersResponse,
+  ProviderType,
+  PublicProvider,
+} from "./providers.ts";
+export {
   HttpOrigin,
   PUBLIC_URL_SETTINGS_KEY,
   PublicUrlSettings,
@@ -115,6 +124,8 @@ export {
 export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
+  adminProviderRoute,
+  adminProviderTestRoute,
   IDENTITY_HEADER,
   identityScopeRoute,
   identityScopeSuggestionsRoute,

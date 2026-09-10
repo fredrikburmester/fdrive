@@ -776,6 +776,7 @@ describe("SystemLogsResponse", () => {
   it("rejects an unknown subsystem or source", async () => {
     const { SystemLogsResponse, SystemLogSubsystem } = await import("./index.ts");
     expect(SystemLogSubsystem.options).toEqual([
+      "general",
       "indexer",
       "search",
       "ocr",

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { FavoritesPage } from "./favorites-page";
 
 const push = vi.fn();
@@ -12,12 +14,10 @@ vi.mock("@/components/shell/page-header", async () => {
   const { useMe } = await import("@/lib/api/auth-queries");
   return { useShellMe: useMe, PageHeader: () => <span>Favorites</span> };
 });
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
-  identities: [{ id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" }],
+const me = makeMe({
+  identities: [makeIdentity()],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

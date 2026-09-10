@@ -18,6 +18,7 @@ import {
   subsystemsStatus,
 } from "./config-keys.js";
 import { ApiHttpError, toApiError } from "./errors.js";
+import { moduleFor } from "./providers/registry.js";
 
 export type AppVariables = {
   requestId: string;
@@ -29,13 +30,13 @@ export type AppHono = Hono<{ Variables: AppVariables }>;
 export type AuthedHono = Hono<{ Variables: AppVariables & PrincipalVariables }>;
 
 /**
- * Whether fdrive setup is still required, and the SFTPGo host to show on
- * the public `/about` route when it is not. `host` is null exactly when
- * `required` is true.
+ * Whether fdrive setup is still required, and the enabled providers to
+ * show on the public `/about` route when it is not. `providers` is empty
+ * exactly when `required` is true.
  */
 export interface ConnectionStatus {
   readonly required: boolean;
-  readonly host: string | null;
+  readonly providers: readonly { readonly type: string; readonly host: string }[];
 }
 
 export interface AppDeps {
@@ -51,11 +52,11 @@ export interface AppDeps {
    */
   readonly principalResolver?: PrincipalResolver;
   /**
-   * Reports whether fdrive setup is required and the SFTPGo host to show on
-   * `/about`. Defaults to deriving this from `config.sftpgoUrl` alone
-   * (required when unset), which is enough for tests that do not exercise
-   * the `settings`-backed connection; `composeApp` wires the real
-   * `ConnectionStore`-backed version.
+   * Reports whether fdrive setup is required and the enabled providers to
+   * show on `/about`. Defaults to deriving this from `config.sftpgoUrl`
+   * alone (required when unset), which is enough for tests that do not
+   * exercise provider rows; `composeApp` wires the real
+   * `ProviderService`-backed version.
    */
   readonly connectionStatus?: () => Promise<ConnectionStatus>;
   /**
@@ -80,7 +81,6 @@ export interface AppDeps {
 }
 
 const REQUEST_ID_HEADER = "X-Request-Id";
-const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
 
 /** Path prefixes reachable even while `ConnectionStatus.required` is true. */
 const SETUP_EXEMPT_PREFIXES = [
@@ -133,8 +133,11 @@ export function createApp(deps: AppDeps): AppHono {
     deps.connectionStatus ??
     (async () =>
       deps.config.sftpgoUrl === undefined
-        ? { required: true, host: null }
-        : { required: false, host: sftpgoHostLabel(deps.config.sftpgoUrl) });
+        ? { required: true, providers: [] }
+        : {
+            required: false,
+            providers: [{ type: "sftpgo", host: sftpgoHostLabel(deps.config.sftpgoUrl) }],
+          });
   const app: AppHono = new Hono();
 
   app.use("*", requestIdMiddleware({ headerName: REQUEST_ID_HEADER }));
@@ -189,19 +192,24 @@ export function createApp(deps: AppDeps): AppHono {
   v1.get("/about", async (c) => {
     const status = await connectionStatus();
     // `/about` is reachable without a session (see SETUP_EXEMPT_PREFIXES),
-    // so an anonymous caller must not learn the configured SFTPGo host: only
-    // reveal `provider.label` once `principalResolver` confirms a valid
-    // session. `provider.type` still tells an anonymous caller setup is
-    // complete, which the login page needs to decide whether to redirect to
-    // `/setup`.
-    const principal = status.host === null ? null : await principalResolver(c);
+    // so an anonymous caller must not learn the configured storage hosts:
+    // only reveal each provider's label once `principalResolver` confirms a
+    // valid session. The provider types still tell an anonymous caller setup
+    // is complete, which the login page needs to decide whether to redirect
+    // to `/setup`.
+    const principal = status.providers.length === 0 ? null : await principalResolver(c);
+    const attributions = new Map<string, { name: string; sourceUrl: string }>();
+    for (const provider of status.providers) {
+      const attribution = moduleFor(provider.type)?.attribution;
+      if (attribution !== undefined) attributions.set(attribution.name, attribution);
+    }
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
-      builtOn: { name: "SFTPGo", sourceUrl: SFTPGO_SOURCE_URL },
-      provider:
-        status.host === null
-          ? null
-          : { type: "sftpgo", label: principal === null ? null : status.host },
+      builtOn: [...attributions.values()],
+      providers: status.providers.map((provider) => ({
+        type: provider.type,
+        label: principal === null ? null : provider.host,
+      })),
       setupRequired: status.required,
     });
     return c.json(body);

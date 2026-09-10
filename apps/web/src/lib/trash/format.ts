@@ -38,6 +38,21 @@ export interface TrashAvailability {
   readonly retentionHours: number | null;
 }
 
+/**
+ * What the delete confirmation should promise. The login's `trash`
+ * capability decides between "Move to Trash" and a permanent delete, the
+ * same source the row menu labels read, so the two never disagree; the
+ * separately cached trash status only contributes its retention note.
+ */
+export function trashAvailabilityFor(
+  capabilities: { readonly trash: boolean },
+  status: { readonly retentionHours: number | null } | null | undefined,
+): TrashAvailability | null {
+  return capabilities.trash
+    ? { available: true, retentionHours: status?.retentionHours ?? null }
+    : null;
+}
+
 export interface DeleteDialogCopy {
   readonly title: string;
   readonly description: string;

@@ -1,6 +1,161 @@
 # Current handoff
 
-Updated: 2026-09-09. Owner: primary agent.
+Updated: 2026-09-10. Owner: primary agent.
+
+## P10 prerequisite merged and PR rebased (2026-09-10)
+
+- PR #3 merged into main (`46228b5`); PR #1 rebased onto that main revision.
+  The obsolete migration-squash commit was dropped; the final rebased Git tree exactly
+  matches the previously verified PR tree. Application/integration/browser checks remain
+  applicable; no application code or migration content changed.
+- PR #3's CI application job had an unrelated failure in the unchanged session maximum-age
+  test (`expected true to be false`); local schema and DB checks passed. Normal merge used,
+  without overriding branch protections. PR #1 now targets main.
+- Local uncommitted edits preserved byte-for-byte; pre-rebase history retained on
+  `codex/p10-before-rebase`. Publication uses a lease against the previous remote PR head.
+
+## P10 PR reduction follow-up (2026-09-10)
+
+- Prerequisite [PR #3](https://github.com/fredrikburmester/fdrive-web/pull/3),
+  `codex/migration-baseline`, squashes only the existing main schema. P10 is stacked on it;
+  `0001_storage_providers` contains four provider columns and the Office FK cascade.
+  Merge the prerequisite first, then retarget PR #1 to main.
+- Shared web identity/account fixtures, provider-service fixtures and named route rejection
+  cases remove another 218 net application lines; existing refactor included. Combined
+  reduction: 1,433 net application/package lines versus published revision `4ffd14b`.
+- Exact PostgreSQL schema comparisons pass for old main versus baseline and old P10 versus
+  baseline plus delta (column order ignored); custom indexes and schema version preserved.
+  Baseline workflow and DB integration pass (259 tests).
+- Clean committed P10 checks pass: application, integration (DB 267, API 35, SFTPGo 72,
+  testkit 9), production browser 29/29, actual Next dev storage flows 3/3. Workflow passes.
+  One initial integration run hit a Docker port-binding timeout; serialized rerun passed
+  without changing limits. Logs in `.worktrees/p10-reduction-check/.fdrive-workflow/logs/`:
+  `step.UKxwAQ` (coverage), `step.YLUGwZ` (integration), `step.IVR2EN` (production browser),
+  `step.AIvzaX` (dev browser); initial timeout `step.u9KrXC`.
+  Schema-comparison artifacts: `/private/tmp/fdrive-pr-reduction/`.
+- Pre-existing isolation, Playwright and pentest edits remain uncommitted and unchanged.
+  Checkouts: `.worktrees/migration-baseline`, `.worktrees/p10-reduction-check`.
+
+## P10 PR reduction (2026-09-10, verified)
+
+- Implemented directly on `claude/p10-storage-providers`; existing isolation and pentest
+  edits preserved. Refactor committed on request; no push requested.
+- Canonical memory storage lives at `@fdrive/core/testing`, re-exported by testkit; its
+  tests moved with it. Shared HTTP dispatch, derived request schemas, SFTPGo user runner,
+  setup guard/claim persistence, provider fixtures, mutation invalidation and field inputs
+  replace repetition. Removed unused browser action sets; table-driven form tests.
+- Recovery fixed unfinished JSX/type errors and restored memory move conflicts, bounded
+  probe streaming, setup race/restart tests, and unchanged query invalidation behavior.
+- Plan adjustments: kept endpoint comparisons and post-login ownership rechecks (isolation),
+  the explicit setup login entry point, and capability props (avoid a query subscription
+  per file row). Kept separate conformance cases and simple dialog state/copy; extra helpers
+  there add indirection without meaningful savings. Kept typed repository patches and config
+  copying. Configuration validation moved to service.
+- Passed: application (lint, types, all coverage); final API/core package rechecks;
+  integration (DB 267, API 35, SFTPGo 72, testkit 9); affected production browser 16/16;
+  real Next dev storage flows 3/3. No gates lowered.
+- Evidence: `.fdrive-workflow/logs/step.6shFUF/` (application coverage), `step.7cJuDQ/`
+  (final API), `step.ZJmbzL/` (final core), `step.qGPRxL/` (integration), `step.BSK3fD/`
+  (production browser), `step.U16joC/` (dev browser). Roughly 1,100 net application/package
+  lines removed versus HEAD, counting new shared fixture/tests and existing follow-up edits.
+
+## P10 provider isolation review fixes (2026-09-10)
+
+- Branch `claude/p10-storage-providers`: env administrator grants now require the configured
+  SFTPGo endpoint; remote providers require explicit index mappings; PostgreSQL row locks
+  serialize address changes with verified login/link persistence; a durable setup marker
+  preserves access after disabling the final provider.
+- Regression coverage includes all four findings, stale verified credentials and concurrent
+  first login/link versus address changes on real PostgreSQL, plus disable/reload/re-enable
+  through the storage UI. Provider-binding integration fixtures now declare their env admin
+  endpoint and indexed scope explicitly (mock indexer directory; two distinct HTTP upstreams).
+- Passed: workflow, final lint/typecheck; coverage for all eight packages and Office/perf/deploy tools;
+  integration suites (SFTPGo 72, testkit 9, DB 267, API 35); affected production browser flows
+  12/12 and real dev-app storage flows 3/3. Initial parallel coverage timed out in a large-trash fixture; serial package runs
+  passed with existing thresholds/timeouts. Integration fixture failures passed after correction
+  in a targeted 14/14 provider-binding rerun.
+- Evidence: `.fdrive-workflow/logs/step.Zmlmif/` (web coverage), `step.t6aNoB/` (other coverage),
+  `step.tgdZzi/` (integration), `step.bPWhf5/` (binding rerun), `step.2CEHHN/` (browser),
+  `step.Gp718l/` (dev browser).
+- Unrelated pentest edits and `PR-REVIEW-FINDINGS.md` remain outside this change.
+
+## P10 storage providers: A2 capabilities in the web (implemented 2026-09-10)
+
+- Spec [P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md), "As implemented" section lists the
+  deviations. The file browser, login and account halves were done in the main checkout
+  (commit `9b89489`); System > Storage came from one `implementer` worktree
+  (`claude/p10-system-storage`) transferred with `transfer-checkout.sh` after rebasing it onto
+  that commit.
+- Delivered: `lib/identity/capabilities.ts` (`capabilitiesFor`, `anyLoginCan`, `browserActions`,
+  `planDownload` in `lib/files/download.ts`); one `capabilities` prop on the context menu,
+  toolbar, list, grid, virtual listings and Inspector; sidebar Shares/Trash as the union across
+  logins with a per-type `ProviderIcon`; login page over `GET /providers` with
+  `ProviderFieldInputs` and a `ProviderPicker` for several providers; Add/Remove login dialogs
+  rendering the provider's fields with relabelled confirmation fields; scope card gated on
+  `scopeMapping`; provider-neutral scope copy; `/system/storage` (list, add, test, edit,
+  enable/disable, remove) and General reduced to server address + Trash; Trash settings save
+  now invalidates `auth.me` so the capability follows the setting.
+- Passed on `main`: web unit suite with coverage; `application` for the first half; browser
+  (`--workers=1`) `auth`, `login-providers`, `about`, `account-identities`, `account-scope`,
+  `smoke`, `file-controls`, `trash` 21/21 on the first half, and in the worker worktree
+  `system` + `system-storage` 13/13 (real API and SFTPGo). After the transfer, on `main`:
+  `application` (lint, typecheck, coverage) and browser `system`, `system-storage`,
+  `login-providers`, `features` with `--workers=1`, all passing; `workflow`.
+- Known: no capability can be false for an SFTPGo login except `trash`/`office`/`index`/
+  `scopeMapping` through configuration, so the per-flag hiding is covered by component tests
+  (`capability-gating.test.tsx`), not browser specs. Next: B (WebDAV, [P10-WEBDAV.md](P10-WEBDAV.md))
+  and D (owned shares, [P10-SHARES.md](P10-SHARES.md)) in parallel.
+- Worktree: main checkout, branch `main`; the `p10-system-storage` worktree can be removed once
+  the transfer commit is in.
+- Review (PR #1, `claude/p10-storage-providers`): ten confirmed findings fixed on 2026-09-10,
+  listed under "Review fixes" in [P10-REGISTRY-API.md](P10-REGISTRY-API.md) (disabled provider
+  keeps sessions alive, public label never the host, setup writes config after login, address
+  equality after upstream login, seed keeps/retires rows, duplicate address 409, office_files
+  cascade, per-row `index`, delete dialog reads the capability).
+
+## P10 storage providers: A1 registry and generic auth (implemented 2026-09-10)
+
+- Design [P10-STORAGE-PROVIDERS.md](P10-STORAGE-PROVIDERS.md); chunk spec
+  [P10-REGISTRY-API.md](P10-REGISTRY-API.md) with an "As implemented" section listing the
+  deviations. Implemented directly in the main checkout, no worker worktrees.
+- Delivered: `ProviderModule` port and field validation in core, `stat`/`ifRange`/optional
+  `zip`+`setModifiedAt` on `StorageProvider`, `withMoveToTrash`; `app.providers` gains
+  `label`/`config`/`enabled`/`managed_by_env`; `SFTPGO_URL` seeds
+  and pins the SFTPGo row at startup (`ProviderService.seedFromEnvironment`), nothing else is
+  migrated (pre-release, no compatibility with the old `connection.sftpgo` setting);
+  `packages/sftpgo` exports `sftpgoModule` (adapter, probe and 401 retry moved in from the API);
+  `@fdrive/testkit` exports the canonical `createMemoryStorage` and `describeStorageProvider`
+  (runs against memory, the SFTPGo fake, and the real SFTPGo container in
+  `packages/sftpgo/test/integration/container.contract.test.ts`, 72/72); API: `providers/{registry,service,routes}`, generic
+  `TokenSource`, `verifyCredentials`, `createPinnedStorageFactory` for Office, `unsupported`
+  error kind, `/providers` and `/admin/providers*` routes replacing `/admin/connection`;
+  contracts: `LoginRequest { providerId?, credential }`, `LinkIdentityRequest { providerId?,
+  credential, currentCredential }`, `IdentitySummary.capabilities`, `AboutResponse.builtOn[]`
+  and `providers[]`, `AdminProvider*`; web: minimal adaptation only (login form, link/unlink
+  dialogs, About, System > General over `/admin/providers`); A2 followed the same day.
+- Passed on `main` checkout: `application` (lint, typecheck, coverage: api 99.03% statements),
+  `workflow`, `integration` for all files except the two known pre-existing failures
+  (`sftp-rename.test.ts` Docker pull of `python:3.12-slim` hangs; `provider-binding.test.ts`
+  "api-token: isolates mutation" barrier flake, also on unchanged `main`). The other eight
+  provider-binding cases pass against two live upstreams with provider rows disabled/added through
+  `/admin/providers`. Browser (production build, `--workers=1`): `system`, `auth`,
+  `account-identities`, `about`, `smoke` specs 21/21.
+- Semantics to know: a stored credential never follows a configuration change because identities
+  are bound to rows; re-addressing a row that logins use is refused (`conflict`), env-managed rows
+  refuse address changes and deletion, and `verifyCredentials` re-checks the row after the
+  upstream login. With several enabled providers a login must name `providerId` (400 otherwise);
+  setup creates the SFTPGo row disabled and enables it after the owner login.
+- Not done in A1: `roots[].sftpgoPath` keeps its name; core keeps its own memory fake (cannot
+  depend on testkit); no page shows the new `general` event log subsystem; the conformance
+  suite accepts `upstream_unavailable` as well as `bad_request` for listing a file, because real
+  SFTPGo 2.7.5 drops the connection there. Next: A2 ([P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md)), then B and
+  D in parallel.
+- Migrations squashed (2026-09-10): `packages/db/drizzle` now holds one `0000_init` migration
+  regenerated from the schema plus the hand-written extension, gin/hnsw index and
+  `idx.schema_version = 1` statements. Verified by applying the old ten-file chain and the new
+  file to two fresh pgvector containers and diffing `pg_dump --schema-only`: identical apart from
+  column order. Existing dev databases must be dropped and recreated (no users yet).
+- Worktree: main checkout, branch `main`.
 
 ## P9 System settings restructure and event log (committed 2026-09-09)
 

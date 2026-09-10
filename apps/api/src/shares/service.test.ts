@@ -124,7 +124,8 @@ it("reports failed compensation, ownership change, unavailable upstream and layo
   }));
   expect((await h.request(`/api/v1/public/shares/${share.id}`)).status).toBe(403);
   layoutFailure.mockRestore();
-  vi.spyOn(h.connectionStore, "current").mockResolvedValue(null);
+  for (const provider of await h.repos.providers.list())
+    await h.repos.providers.update(provider.id, { enabled: false });
   await expect(h.service.publicMetadata(share.id, undefined)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
@@ -204,13 +205,13 @@ it("pins share clients to the checked provider and refuses changes before owner 
   const factory = vi.spyOn(h.deps, "clientFor");
   await h.service.publicAccess(id, undefined, "read");
   expect(factory).toHaveBeenCalledWith("http://storage.test");
-  const current = await h.connectionStore.current();
-  if (!current) throw new Error("missing connection");
   vi.spyOn(h.deps, "clientFor").mockImplementation(() => {
-    vi.spyOn(h.connectionStore, "current").mockResolvedValue({
-      ...current,
-      baseUrl: "http://other.test",
-    });
+    // The provider is disabled between the ownership check and the token use.
+    void h.repos.providers
+      .list()
+      .then((rows) =>
+        Promise.all(rows.map((row) => h.repos.providers.update(row.id, { enabled: false }))),
+      );
     return h.client;
   });
   const user = vi.spyOn(h.client, "user");

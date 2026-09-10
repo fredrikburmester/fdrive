@@ -5,6 +5,7 @@ import {
   Database,
   FileText,
   FolderSymlink,
+  HardDrive,
   Image,
   Images,
   Link2,
@@ -24,6 +25,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
+import { ProviderIcon } from "@/components/identity/provider-icon";
 import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
@@ -58,8 +60,8 @@ import {
 } from "@/components/ui/sidebar";
 import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
+import { anyLoginCan } from "@/lib/identity/capabilities";
 import { FEATURE_PAGES, OFFICE_PAGE } from "@/lib/system/pages";
-import { useTrashStatus } from "@/lib/trash/queries";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light", Icon: Sun },
@@ -99,6 +101,7 @@ const ACCOUNT_ROUTE = "/account" as Route;
 const SYSTEM_NAV_ITEMS = [
   { href: "/system/features" as Route, label: "Features", Icon: ToggleRight },
   { href: "/system/general" as Route, label: "General", Icon: Settings2 },
+  { href: "/system/storage" as Route, label: "Storage", Icon: HardDrive },
   { href: "/system/shared-folders" as Route, label: "Shared folders", Icon: FolderSymlink },
   { href: FEATURE_PAGES.thumbnails.href, label: "Thumbnails", Icon: Image },
   { href: FEATURE_PAGES.textSearch.href, label: "Indexer", Icon: Database },
@@ -114,7 +117,6 @@ export function AppSidebar() {
   const logout = useLogout();
   const identityActions = useIdentityActions();
   const pathname = usePathname();
-  const { data: trashStatus } = useTrashStatus();
 
   const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
 
@@ -141,16 +143,18 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={pathname === "/shares"}
-                  render={<Link href={"/shares" as Route} />}
-                >
-                  <Link2 />
-                  <span>Shares</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              {trashStatus?.available === true && (
+              {anyLoginCan(me, "shares") && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={pathname === "/shares"}
+                    render={<Link href={"/shares" as Route} />}
+                  >
+                    <Link2 />
+                    <span>Shares</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {anyLoginCan(me, "trash") && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     isActive={isTrashRoute(pathname)}
@@ -196,8 +200,9 @@ export function AppSidebar() {
                   <span className="truncate text-sm font-medium">
                     {activeIdentity?.username ?? "..."}
                   </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {activeIdentity?.providerLabel ?? ""}
+                  <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+                    {activeIdentity && <ProviderIcon type={activeIdentity.providerType} />}
+                    <span className="truncate">{activeIdentity?.providerLabel ?? ""}</span>
                   </span>
                 </div>
                 <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
@@ -224,8 +229,9 @@ export function AppSidebar() {
                   >
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate">{identity.username}</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {identity.providerLabel}
+                      <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+                        <ProviderIcon type={identity.providerType} />
+                        <span className="truncate">{identity.providerLabel}</span>
                       </span>
                     </span>
                   </DropdownMenuRadioItem>

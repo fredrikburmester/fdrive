@@ -19,8 +19,12 @@ export const queryKeys = {
   setup: {
     status: () => ["setup", "status"] as const,
   },
+  providers: {
+    /** The enabled providers and their credential forms (public). */
+    list: () => ["providers"] as const,
+  },
   admin: {
-    connection: () => ["admin", "connection"] as const,
+    providers: () => ["admin", "providers"] as const,
   },
   system: {
     publicUrl: () => ["system", "public-url"] as const,

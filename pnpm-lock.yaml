@@ -374,6 +374,10 @@ importers:
         version: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
   packages/sftpgo:
+    dependencies:
+      '@fdrive/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@fdrive/config':
         specifier: workspace:*
@@ -393,6 +397,9 @@ importers:
 
   packages/testkit:
     dependencies:
+      '@fdrive/core':
+        specifier: workspace:*
+        version: link:../core
       '@testcontainers/postgresql':
         specifier: ^12.1.0
         version: 12.1.0

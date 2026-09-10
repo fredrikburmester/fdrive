@@ -20,6 +20,8 @@ export interface RenameDialogProps {
   onOpenChange: (open: boolean) => void;
   onRename: (newName: string) => void;
   pending?: boolean;
+  /** A caution shown under the description, e.g. that this provider renames a folder by copying it. */
+  warning?: string | null;
 }
 
 /** Prompts for a new name for `entry`, pre-selecting the name without its extension. */
@@ -28,6 +30,7 @@ export function RenameDialog({
   onOpenChange,
   onRename,
   pending = false,
+  warning = null,
 }: RenameDialogProps) {
   const [name, setName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -65,6 +68,7 @@ export function RenameDialog({
           <DialogHeader>
             <DialogTitle>Rename</DialogTitle>
             <DialogDescription>Choose a new name for "{entry?.name}".</DialogDescription>
+            {warning !== null && <p className="text-sm text-muted-foreground">{warning}</p>}
           </DialogHeader>
           <Field className="py-4">
             <Input

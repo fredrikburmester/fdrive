@@ -1,7 +1,9 @@
 "use client";
 
 import type {
-  AdminConnectionUpdateRequest,
+  AdminProviderCreateRequest,
+  AdminProviderTestRequest,
+  AdminProviderUpdateRequest,
   FeaturesUpdateRequest,
   IndexerClearRequest,
   IndexerReindexRequest,
@@ -72,30 +74,55 @@ export function useSetupComplete() {
   });
 }
 
-/** The active SFTPGo connection, for the admin System > Connection page. */
-export function useAdminConnection() {
+/** Every configured storage provider plus the types an admin can add, for System > Storage. */
+export function useAdminProviders() {
   return useQuery({
-    queryKey: queryKeys.admin.connection(),
-    queryFn: () => apiClient.adminConnection(),
+    queryKey: queryKeys.admin.providers(),
+    queryFn: () => apiClient.adminProviders(),
   });
 }
 
-/** Updates the connection (base URL and/or home template) and refreshes the cached summary. */
-export function useAdminUpdateConnection() {
+function useInvalidatingMutation<TInput, TOutput>(
+  mutationFn: (input: TInput) => Promise<TOutput>,
+  ...keys: readonly (readonly unknown[])[]
+) {
   const queryClient = useQueryClient();
-
   return useMutation({
-    mutationFn: (patch: AdminConnectionUpdateRequest) => apiClient.adminUpdateConnection(patch),
-    onSuccess: (connection) => {
-      queryClient.setQueryData(queryKeys.admin.connection(), connection);
+    mutationFn,
+    onSuccess: () => {
+      for (const key of keys) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
     },
   });
 }
 
-/** Probes the active connection, or a candidate `baseUrl` when given, without saving anything. */
-export function useAdminTestConnection() {
+/** Adds a provider (the API stores it without probing) and refreshes the cached list. */
+export const useAdminCreateProvider = () =>
+  useInvalidatingMutation(
+    (input: AdminProviderCreateRequest) => apiClient.adminCreateProvider(input),
+    queryKeys.admin.providers(),
+  );
+
+/** Updates one provider (label, address, configuration, enabled) and refreshes the cached list. */
+export const useAdminUpdateProvider = () =>
+  useInvalidatingMutation(
+    ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
+      apiClient.adminUpdateProvider(id, patch),
+    queryKeys.admin.providers(),
+  );
+
+/** Removes a provider and refreshes the cached list. Refused while logins still use it. */
+export const useAdminDeleteProvider = () =>
+  useInvalidatingMutation(
+    (id: string) => apiClient.adminDeleteProvider(id),
+    queryKeys.admin.providers(),
+  );
+
+/** Probes a saved provider (by id) or an unsaved candidate, without saving anything. */
+export function useAdminTestProvider() {
   return useMutation({
-    mutationFn: (baseUrl?: string) => apiClient.adminTestConnection(baseUrl),
+    mutationFn: (target: string | AdminProviderTestRequest) => apiClient.adminTestProvider(target),
   });
 }
 
@@ -109,29 +136,18 @@ export function useSystemIndexer() {
 }
 
 /** Saves the indexer's settings and refreshes the `System > Indexer` cache. */
-export function useUpdateIndexerSettings() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (settings: IndexerSettingsUpdateRequest) =>
-      apiClient.systemUpdateIndexerSettings(settings),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
-    },
-  });
-}
+export const useUpdateIndexerSettings = () =>
+  useInvalidatingMutation(
+    (settings: IndexerSettingsUpdateRequest) => apiClient.systemUpdateIndexerSettings(settings),
+    queryKeys.system.indexer(),
+  );
 
 /** Marks a root (or one path within it) pending on the indexer. */
-export function useReindex() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (req: IndexerReindexRequest) => apiClient.systemReindex(req),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
-    },
-  });
-}
+export const useReindex = () =>
+  useInvalidatingMutation(
+    (req: IndexerReindexRequest) => apiClient.systemReindex(req),
+    queryKeys.system.indexer(),
+  );
 
 /** Starts a background preview rebuild for all roots or one selected scope. */
 export function useRebuildIndexerThumbnails() {
@@ -159,17 +175,12 @@ export function useSystemSearch() {
 }
 
 /** Triggers a full re-extraction and re-embed of every configured root. */
-export function useReembed() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: () => apiClient.systemReembed(),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.system.search() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.system.indexer() });
-    },
-  });
-}
+export const useReembed = () =>
+  useInvalidatingMutation(
+    () => apiClient.systemReembed(),
+    queryKeys.system.search(),
+    queryKeys.system.indexer(),
+  );
 
 /** OCR schedule, last run, and settings for `System > OCR`. Polls every 5s while mounted. */
 export function useSystemOcr() {
@@ -181,16 +192,11 @@ export function useSystemOcr() {
 }
 
 /** Saves the OCR service's settings and refreshes the `System > OCR` cache. */
-export function useUpdateOcrSettings() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (settings: OcrSettingsUpdateRequest) => apiClient.systemUpdateOcrSettings(settings),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
-    },
-  });
-}
+export const useUpdateOcrSettings = () =>
+  useInvalidatingMutation(
+    (settings: OcrSettingsUpdateRequest) => apiClient.systemUpdateOcrSettings(settings),
+    queryKeys.system.ocr(),
+  );
 
 /** Runs the OCR pass now. */
 export function useRunOcr() {

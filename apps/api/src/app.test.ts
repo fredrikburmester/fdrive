@@ -12,6 +12,7 @@ function notImplemented(): never {
 
 const FAKE_STORAGE: StorageProvider = {
   list: notImplemented,
+  stat: notImplemented,
   statFile: notImplemented,
   download: notImplemented,
   upload: notImplemented,
@@ -233,8 +234,8 @@ describe("createApp about route", () => {
     expect(AboutResponse.safeParse(body).success).toBe(true);
     expect(body).toEqual({
       version: "1.2.3",
-      builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-      provider: { type: "sftpgo", label: null },
+      builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+      providers: [{ type: "sftpgo", label: null }],
       setupRequired: false,
     });
   });
@@ -253,7 +254,7 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ provider: { type: "sftpgo", label: "localhost:8080" } });
+    expect(body).toMatchObject({ providers: [{ type: "sftpgo", label: "localhost:8080" }] });
   });
 
   it("derives the provider label from the SFTPGo URL's host, dropping scheme and path, for an authenticated caller", async () => {
@@ -271,7 +272,9 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ provider: { type: "sftpgo", label: "sftpgo.internal:9443" } });
+    expect(body).toMatchObject({
+      providers: [{ type: "sftpgo", label: "sftpgo.internal:9443" }],
+    });
   });
 
   it("keeps the label redacted for an anonymous caller even with a custom SFTPGo host", async () => {
@@ -282,19 +285,19 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ provider: { type: "sftpgo", label: null } });
+    expect(body).toMatchObject({ providers: [{ type: "sftpgo", label: null }] });
   });
 
   it("reports setupRequired and a null provider when connectionStatus says so", async () => {
     const { app } = buildApp({
-      connectionStatus: async () => ({ required: true, host: null }),
+      connectionStatus: async () => ({ required: true, providers: [] }),
     });
 
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
     expect(AboutResponse.safeParse(body).success).toBe(true);
-    expect(body).toMatchObject({ provider: null, setupRequired: true });
+    expect(body).toMatchObject({ providers: [], setupRequired: true });
   });
 
   it("defaults to setupRequired when config.sftpgoUrl is undefined and no connectionStatus is given", async () => {
@@ -304,7 +307,7 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ provider: null, setupRequired: true });
+    expect(body).toMatchObject({ providers: [], setupRequired: true });
   });
 });
 
@@ -326,7 +329,7 @@ describe("isSetupExempt", () => {
 describe("createApp setup gate", () => {
   it("responds 503 setup_required for a non-exempt route while setup is required", async () => {
     const { app } = buildApp({
-      connectionStatus: async () => ({ required: true, host: null }),
+      connectionStatus: async () => ({ required: true, providers: [] }),
       registerRoutes: ({ public: pub }) => {
         pub.get("/ping", (c) => c.json({ ok: true }));
       },
@@ -340,7 +343,7 @@ describe("createApp setup gate", () => {
   });
 
   it("still serves health and about while setup is required", async () => {
-    const { app } = buildApp({ connectionStatus: async () => ({ required: true, host: null }) });
+    const { app } = buildApp({ connectionStatus: async () => ({ required: true, providers: [] }) });
 
     expect((await app.request("/api/v1/health")).status).toBe(200);
     expect((await app.request("/api/v1/about")).status).toBe(200);
@@ -348,7 +351,10 @@ describe("createApp setup gate", () => {
 
   it("serves non-exempt routes normally once setup is not required", async () => {
     const { app } = buildApp({
-      connectionStatus: async () => ({ required: false, host: "sftpgo:8080" }),
+      connectionStatus: async () => ({
+        required: false,
+        providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+      }),
       registerRoutes: ({ public: pub }) => {
         pub.get("/ping", (c) => c.json({ ok: true }));
       },

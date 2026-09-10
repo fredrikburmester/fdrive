@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   accountTokenRoute,
+  adminProviderRoute,
+  adminProviderTestRoute,
   IDENTITY_HEADER,
   identityScopeRoute,
   jobCancelRoute,
@@ -102,10 +104,12 @@ describe("ROUTES", () => {
 
   it("defines every admin route under /api/v1/admin", () => {
     expect(ROUTES.admin).toEqual({
-      connection: "/api/v1/admin/connection",
-      connectionUpdate: "/api/v1/admin/connection",
-      connectionTest: "/api/v1/admin/connection/test",
+      providers: "/api/v1/admin/providers",
+      providersTest: "/api/v1/admin/providers/test",
     });
+    expect(ROUTES.providers).toBe("/api/v1/providers");
+    expect(adminProviderRoute("a b")).toBe("/api/v1/admin/providers/a%20b");
+    expect(adminProviderTestRoute("p1")).toBe("/api/v1/admin/providers/p1/test");
   });
 
   it("defines every system route under /api/v1/system", () => {

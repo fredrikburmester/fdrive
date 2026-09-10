@@ -1,6 +1,6 @@
 import { parseHomeTemplate, scopesFor } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
-import { startPostgres } from "@fdrive/testkit";
+import { createMemoryStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type BusEvent, createEventBus } from "../../src/events/bus.js";
@@ -10,7 +10,6 @@ import {
   type IndexerListenerLogger,
 } from "../../src/events/indexer-listener.js";
 import { createMetadataService } from "../../src/metadata/service.js";
-import { createMemoryStorage } from "../fixtures/memory-storage.js";
 
 function createSilentLogger(): IndexerListenerLogger {
   return { warn: () => undefined };

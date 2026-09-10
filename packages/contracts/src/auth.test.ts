@@ -2,74 +2,67 @@ import { describe, expect, it } from "vitest";
 import { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth";
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
+const CAPABILITIES = {
+  zip: true,
+  setModifiedAt: true,
+  atomicMove: true,
+  trash: false,
+  shares: true,
+  office: true,
+  index: true,
+  scopeMapping: true,
+};
 
 describe("LoginRequest", () => {
-  it("accepts username and password without otp", () => {
-    const result = LoginRequest.safeParse({ username: "alice", password: "hunter2" });
+  it("accepts a credential without a provider id", () => {
+    const result = LoginRequest.safeParse({ credential: { username: "alice", password: "pw" } });
     expect(result.success).toBe(true);
   });
 
-  it("accepts an otp", () => {
+  it("accepts a provider id and any string fields", () => {
     const result = LoginRequest.safeParse({
-      username: "alice",
-      password: "hunter2",
-      otp: "123456",
+      providerId: VALID_UUID,
+      credential: { username: "alice", password: "hunter2", otp: "123456" },
     });
     expect(result.success).toBe(true);
   });
 
-  it("rejects an empty username", () => {
-    expect(LoginRequest.safeParse({ username: "", password: "hunter2" }).success).toBe(false);
+  it("rejects a non-string field value, an overlong value and unknown top-level keys", () => {
+    expect(LoginRequest.safeParse({ credential: { username: 1 } }).success).toBe(false);
+    expect(LoginRequest.safeParse({ credential: { password: "x".repeat(4097) } }).success).toBe(
+      false,
+    );
+    expect(LoginRequest.safeParse({ credential: {}, username: "alice" }).success).toBe(false);
+    expect(LoginRequest.safeParse({ providerId: "nope", credential: {} }).success).toBe(false);
   });
 
-  it("rejects a username over 255 characters", () => {
-    const result = LoginRequest.safeParse({
-      username: "a".repeat(256),
-      password: "hunter2",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects an empty password", () => {
-    expect(LoginRequest.safeParse({ username: "alice", password: "" }).success).toBe(false);
-  });
-
-  it("rejects a missing username", () => {
-    expect(LoginRequest.safeParse({ password: "hunter2" }).success).toBe(false);
+  it("rejects a missing credential", () => {
+    expect(LoginRequest.safeParse({}).success).toBe(false);
   });
 });
 
 describe("IdentitySummary", () => {
+  const valid = {
+    id: VALID_UUID,
+    username: "alice",
+    providerId: VALID_UUID,
+    providerType: "sftpgo",
+    providerLabel: "Home SFTPGo",
+    capabilities: CAPABILITIES,
+  };
+
   it("parses a valid identity", () => {
-    const payload = {
-      id: VALID_UUID,
-      username: "alice",
-      providerType: "sftpgo",
-      providerLabel: "Home SFTPGo",
-    };
-    expect(IdentitySummary.parse(payload)).toEqual(payload);
+    expect(IdentitySummary.parse(valid)).toEqual(valid);
   });
 
   it("rejects a non-uuid id", () => {
-    expect(
-      IdentitySummary.safeParse({
-        id: "not-a-uuid",
-        username: "alice",
-        providerType: "sftpgo",
-        providerLabel: "Home SFTPGo",
-      }).success,
-    ).toBe(false);
+    expect(IdentitySummary.safeParse({ ...valid, id: "not-a-uuid" }).success).toBe(false);
   });
 
-  it("rejects an unknown providerType", () => {
-    expect(
-      IdentitySummary.safeParse({
-        id: VALID_UUID,
-        username: "alice",
-        providerType: "gdrive",
-        providerLabel: "Home SFTPGo",
-      }).success,
-    ).toBe(false);
+  it("rejects an unknown providerType and missing capabilities", () => {
+    expect(IdentitySummary.safeParse({ ...valid, providerType: "gdrive" }).success).toBe(false);
+    const { capabilities: _drop, ...rest } = valid;
+    expect(IdentitySummary.safeParse(rest).success).toBe(false);
   });
 });
 
@@ -80,8 +73,10 @@ describe("MeResponse", () => {
       {
         id: VALID_UUID,
         username: "alice",
+        providerId: VALID_UUID,
         providerType: "sftpgo",
         providerLabel: "Home SFTPGo",
+        capabilities: CAPABILITIES,
       },
     ],
     activeIdentityId: VALID_UUID,

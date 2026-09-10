@@ -8,6 +8,11 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./src/testing/memory-storage.ts",
+      "development": "./src/testing/memory-storage.ts",
+      "default": "./dist/testing/memory-storage.js"
     }
   },
   "scripts": {

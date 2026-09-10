@@ -2,39 +2,40 @@ import type { MeResponse } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthService, LoginResult } from "../auth/service.js";
-import type { Connection, ConnectionStore } from "../connection/store.js";
 import { ApiHttpError } from "../errors.js";
-import { createSetupClaimStore } from "./claim.js";
+import {
+  memoryProviderService,
+  probeFetch,
+  seedSftpgoProvider,
+} from "../providers/test-fixtures/index.ts";
 import { createSetupService } from "./service.js";
 
-function textResponse(status: number, body: string): Response {
-  return new Response(body, { status });
-}
-
-function okProbeFetch(): typeof globalThis.fetch {
-  return vi
-    .fn()
-    .mockResolvedValueOnce(textResponse(200, "ok"))
-    .mockResolvedValueOnce(textResponse(401, "unauthorized")) as unknown as typeof globalThis.fetch;
-}
-
+const CAPABILITIES = {
+  zip: true,
+  setModifiedAt: true,
+  atomicMove: true,
+  trash: false,
+  shares: true,
+  office: true,
+  index: false,
+  scopeMapping: false,
+};
+const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const ME: MeResponse = {
   account: { id: "account-1", displayName: "alice" },
-  identities: [{ id: "identity-1", username: "alice", providerType: "sftpgo", providerLabel: "x" }],
+  identities: [
+    {
+      id: "identity-1",
+      username: "alice",
+      providerId: PROVIDER_ID,
+      providerType: "sftpgo",
+      providerLabel: "x",
+      capabilities: CAPABILITIES,
+    },
+  ],
   activeIdentityId: "identity-1",
   isAdmin: false,
 };
-
-function buildConnectionStore(current: Connection | null = null): ConnectionStore {
-  return {
-    current: vi.fn().mockResolvedValue(current),
-    update: vi.fn().mockResolvedValue({
-      baseUrl: "http://sftpgo:8080",
-      homeTemplate: "sftpgo:/{username}",
-      source: "settings",
-    }),
-  };
-}
 
 function buildAuthService(loginResult: LoginResult): Pick<AuthService, "loginCandidate" | "me"> {
   return {
@@ -43,248 +44,237 @@ function buildAuthService(loginResult: LoginResult): Pick<AuthService, "loginCan
   };
 }
 
-function buildClaims() {
-  return createSetupClaimStore(createMemoryRepos().settings);
+function harness(options: { fetch?: typeof globalThis.fetch; hasEnvUrl?: boolean } = {}) {
+  const repos = createMemoryRepos();
+  const fetchImpl = options.fetch ?? probeFetch();
+  const providers = memoryProviderService(repos, { fetch: fetchImpl });
+  const authService = buildAuthService({ sessionId: "session-1", me: ME });
+  const setAdmin = vi.fn();
+  const service = createSetupService({
+    providers,
+    authService,
+    accounts: { setAdmin },
+    settings: repos.settings,
+    hasEnvUrl: options.hasEnvUrl ?? false,
+  });
+  return { repos, providers, authService, setAdmin, service, fetch: fetchImpl };
 }
 
-describe("createSetupService: status", () => {
-  it("reports required true when no connection is configured", async () => {
-    const service = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService: buildAuthService({ sessionId: "s", me: ME }),
-      accounts: { setAdmin: vi.fn() },
-      claims: buildClaims(),
-      fetch: okProbeFetch(),
-      hasEnvUrl: false,
-    });
+const COMPLETE_INPUT = {
+  baseUrl: "http://sftpgo:8080",
+  homeTemplate: "sftpgo:/{username}",
+  username: "alice",
+  password: "hunter2",
+  userAgent: "vitest",
+  ip: "127.0.0.1",
+};
 
-    expect(await service.status()).toEqual({ required: true, hasEnvUrl: false });
+describe("createSetupService: status", () => {
+  it("reports required true when no provider is configured", async () => {
+    const h = harness();
+    expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
   });
 
-  it("reports required false and hasEnvUrl when a connection exists", async () => {
-    const service = createSetupService({
-      connectionStore: buildConnectionStore({
-        baseUrl: "http://sftpgo:8080",
-        homeTemplate: "sftpgo:/{username}",
-        source: "env",
-      }),
-      authService: buildAuthService({ sessionId: "s", me: ME }),
-      accounts: { setAdmin: vi.fn() },
-      claims: buildClaims(),
-      fetch: okProbeFetch(),
-      hasEnvUrl: true,
-    });
+  it("reports required false and hasEnvUrl when an enabled provider exists", async () => {
+    const h = harness({ hasEnvUrl: true });
+    await seedSftpgoProvider(h.repos, "http://sftpgo:8080", { managedByEnv: true });
+    expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: true });
+  });
 
-    expect(await service.status()).toEqual({ required: false, hasEnvUrl: true });
+  it("keeps setup required while a provider exists but is disabled", async () => {
+    const h = harness();
+    await seedSftpgoProvider(h.repos, "http://sftpgo:8080", { enabled: false });
+    expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
   });
 });
 
 describe("createSetupService: test", () => {
-  it("delegates to probeConnection", async () => {
-    const service = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService: buildAuthService({ sessionId: "s", me: ME }),
-      accounts: { setAdmin: vi.fn() },
-      claims: buildClaims(),
-      fetch: okProbeFetch(),
-      hasEnvUrl: false,
-    });
-
-    const result = await service.test("http://sftpgo:8080");
-
+  it("probes the candidate as an SFTPGo provider", async () => {
+    const h = harness();
+    const result = await h.service.test("http://sftpgo:8080");
     expect(result).toEqual({ ok: true, detail: "SFTPGo is reachable" });
+    expect(h.fetch).toHaveBeenCalledWith(
+      "http://sftpgo:8080/healthz",
+      expect.objectContaining({ redirect: "error" }),
+    );
   });
 });
 
 describe("createSetupService: complete", () => {
-  it("stores the connection, logs in, and marks the account admin", async () => {
-    const connectionStore = buildConnectionStore(null);
-    const authService = buildAuthService({ sessionId: "session-1", me: ME });
-    const setAdmin = vi.fn();
-
-    const service = createSetupService({
-      connectionStore,
-      authService,
-      accounts: { setAdmin },
-      claims: buildClaims(),
-      fetch: okProbeFetch(),
-      hasEnvUrl: false,
+  it("creates the provider disabled, logs in against it, then enables it and marks the account admin", async () => {
+    const h = harness();
+    let enabledDuringLogin: boolean | undefined;
+    vi.mocked(h.authService.loginCandidate).mockImplementation(async (_input, providerId) => {
+      enabledDuringLogin = (await h.repos.providers.get(providerId))?.enabled;
+      return { sessionId: "session-1", me: ME };
     });
 
-    const result = await service.complete({
+    const result = await h.service.complete(COMPLETE_INPUT);
+
+    const [provider] = await h.repos.providers.list();
+    expect(provider).toMatchObject({
+      type: "sftpgo",
       baseUrl: "http://sftpgo:8080",
-      homeTemplate: "sftpgo:/{username}",
-      username: "alice",
-      password: "hunter2",
-      userAgent: "vitest",
-      ip: "127.0.0.1",
+      label: "",
+      enabled: true,
+      config: { homeTemplate: "sftpgo:/{username}" },
     });
-
-    expect(connectionStore.update).toHaveBeenCalledWith({
-      baseUrl: "http://sftpgo:8080",
-      homeTemplate: "sftpgo:/{username}",
-    });
-    expect(authService.loginCandidate).toHaveBeenCalledWith(
+    expect(enabledDuringLogin).toBe(false);
+    expect(h.authService.loginCandidate).toHaveBeenCalledWith(
       {
-        username: "alice",
-        password: "hunter2",
+        providerId: provider?.id,
+        credential: { username: "alice", password: "hunter2" },
         userAgent: "vitest",
         ip: "127.0.0.1",
       },
-      "http://sftpgo:8080",
+      provider?.id,
     );
-    expect(setAdmin).toHaveBeenCalledWith("account-1", true);
+    expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
     expect(result.sessionId).toBe("session-1");
     expect(result.me.isAdmin).toBe(true);
+    expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
+  });
+
+  it("reuses the environment-pinned provider and sets its home template only after the login", async () => {
+    const h = harness({ hasEnvUrl: true });
+    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
+      managedByEnv: true,
+      enabled: false,
+      homeTemplate: "old:/{username}",
+    });
+    let templateDuringLogin: unknown;
+    vi.mocked(h.authService.loginCandidate).mockImplementation(async (_input, providerId) => {
+      templateDuringLogin = (await h.repos.providers.get(providerId))?.config.homeTemplate;
+      return { sessionId: "session-1", me: ME };
+    });
+    await h.service.complete({ ...COMPLETE_INPUT, baseUrl: "http://ignored:1" });
+    expect(templateDuringLogin).toBe("old:/{username}");
+    expect(await h.repos.providers.list()).toHaveLength(1);
+    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
+      baseUrl: "http://env:8080",
+      enabled: true,
+      config: { homeTemplate: "sftpgo:/{username}" },
+    });
+    expect(h.authService.loginCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: pinned.id }),
+      pinned.id,
+    );
+  });
+
+  it("leaves an existing row's configuration untouched when the candidate login fails", async () => {
+    const h = harness({ hasEnvUrl: true });
+    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
+      managedByEnv: true,
+      enabled: false,
+      homeTemplate: "old:/{username}",
+    });
+    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
+      new ApiHttpError("unauthorized", "invalid username or password"),
+    );
+    await expect(
+      h.service.complete({ ...COMPLETE_INPUT, homeTemplate: "bogus:/x" }),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
+      enabled: false,
+      config: { homeTemplate: "old:/{username}" },
+    });
   });
 
   it("passes otp through to the login flow when given", async () => {
-    const authService = buildAuthService({ sessionId: "session-1", me: ME });
-    const service = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService,
-      accounts: { setAdmin: vi.fn() },
-      claims: buildClaims(),
-      fetch: okProbeFetch(),
-      hasEnvUrl: false,
-    });
-
-    await service.complete({
-      baseUrl: "http://sftpgo:8080",
-      homeTemplate: "sftpgo:/{username}",
-      username: "alice",
-      password: "hunter2",
-      otp: "123456",
-      userAgent: null,
-      ip: "127.0.0.1",
-    });
-
-    expect(authService.loginCandidate).toHaveBeenCalledWith(
-      expect.objectContaining({ otp: "123456" }),
-      "http://sftpgo:8080",
+    const h = harness();
+    await h.service.complete({ ...COMPLETE_INPUT, otp: "123456" });
+    expect(h.authService.loginCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: { username: "alice", password: "hunter2", otp: "123456" },
+      }),
+      expect.any(String),
     );
   });
 
   it("rejects an invalid home template before probing", async () => {
-    const fetchImpl = vi.fn();
-    const service = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService: buildAuthService({ sessionId: "s", me: ME }),
-      accounts: { setAdmin: vi.fn() },
-      claims: buildClaims(),
-      fetch: fetchImpl as unknown as typeof globalThis.fetch,
-      hasEnvUrl: false,
-    });
-
+    const h = harness();
     await expect(
-      service.complete({
-        baseUrl: "http://sftpgo:8080",
-        homeTemplate: "not-a-template",
-        username: "alice",
-        password: "hunter2",
-        userAgent: null,
-        ip: "127.0.0.1",
-      }),
-    ).rejects.toBeInstanceOf(ApiHttpError);
-    expect(fetchImpl).not.toHaveBeenCalled();
+      h.service.complete({ ...COMPLETE_INPUT, homeTemplate: "no-colon" }),
+    ).rejects.toMatchObject({ kind: "bad_request" });
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect(await h.repos.providers.list()).toEqual([]);
   });
 
-  it("rejects when the candidate SFTPGo does not probe ok", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(textResponse(500, "boom"));
-    const service = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService: buildAuthService({ sessionId: "s", me: ME }),
-      accounts: { setAdmin: vi.fn() },
-      claims: buildClaims(),
-      fetch: fetchImpl as unknown as typeof globalThis.fetch,
-      hasEnvUrl: false,
+  it("rejects when the candidate SFTPGo does not probe ok, creating nothing", async () => {
+    const h = harness({
+      fetch: probeFetch(false),
     });
-
-    await expect(
-      service.complete({
-        baseUrl: "http://sftpgo:8080",
-        homeTemplate: "sftpgo:/{username}",
-        username: "alice",
-        password: "hunter2",
-        userAgent: null,
-        ip: "127.0.0.1",
-      }),
-    ).rejects.toMatchObject({ kind: "bad_request" });
+    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    expect(h.authService.loginCandidate).not.toHaveBeenCalled();
+    expect(await h.repos.providers.list()).toEqual([]);
   });
 
   it("keeps setup required after a rejected candidate login, so the owner can retry", async () => {
-    const connectionStore = buildConnectionStore(null);
-    const authService: Pick<AuthService, "loginCandidate" | "me"> = {
-      loginCandidate: vi.fn().mockRejectedValue(new ApiHttpError("unauthorized", "bad login")),
-      me: vi.fn(),
-    };
-    const claims = buildClaims();
-    const service = createSetupService({
-      connectionStore,
-      authService,
-      accounts: { setAdmin: vi.fn() },
-      claims,
-      fetch: okProbeFetch(),
+    const h = harness();
+    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
+      new ApiHttpError("unauthorized", "invalid username or password"),
+    );
+    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
+      kind: "unauthorized",
+    });
+    expect(await h.repos.providers.list()).toEqual([]);
+    expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
+    expect(h.setAdmin).not.toHaveBeenCalled();
+    await h.service.complete(COMPLETE_INPUT);
+    expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
+  });
+
+  it("resumes the verified owner's pending claim after restart", async () => {
+    const h = harness();
+    h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
+    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toThrow("interrupted");
+    const restarted = createSetupService({
+      providers: h.providers,
+      authService: h.authService,
+      accounts: { setAdmin: h.setAdmin },
+      settings: h.repos.settings,
       hasEnvUrl: false,
     });
+    expect((await restarted.status()).required).toBe(true);
+    await restarted.complete(COMPLETE_INPUT);
+    expect((await restarted.status()).required).toBe(false);
+  });
 
-    await expect(
-      service.complete({
-        baseUrl: "http://sftpgo:8080",
-        homeTemplate: "sftpgo:/{username}",
-        username: "alice",
-        password: "wrong",
-        userAgent: null,
-        ip: "127.0.0.1",
-      }),
-    ).rejects.toMatchObject({ kind: "unauthorized" });
-
-    expect(connectionStore.update).not.toHaveBeenCalled();
-    expect(await claims.current()).toBeNull();
-    expect(await service.status()).toEqual({ required: true, hasEnvUrl: false });
+  it("reports a conflict when the claim cannot be finalized by the same owner", async () => {
+    const h = harness();
+    vi.spyOn(h.repos.settings, "compareAndSet")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({ kind: "conflict" });
   });
 
   it("allows only one owner when two verified users race to claim setup", async () => {
-    const claims = buildClaims();
-    const alice = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService: buildAuthService({ sessionId: "alice", me: ME }),
-      accounts: { setAdmin: vi.fn() },
-      claims,
-      fetch: okProbeFetch(),
-      hasEnvUrl: false,
-    });
-    const bobMe: MeResponse = {
+    const h = harness();
+    const bob: MeResponse = {
       ...ME,
       account: { id: "account-2", displayName: "bob" },
-      identities: [
-        { id: "identity-2", username: "bob", providerType: "sftpgo", providerLabel: "x" },
-      ],
+      identities: ME.identities.map((identity) => ({
+        ...identity,
+        id: "identity-2",
+        username: "bob",
+      })),
       activeIdentityId: "identity-2",
     };
-    const bob = createSetupService({
-      connectionStore: buildConnectionStore(null),
-      authService: buildAuthService({ sessionId: "bob", me: bobMe }),
-      accounts: { setAdmin: vi.fn() },
-      claims,
-      fetch: okProbeFetch(),
-      hasEnvUrl: false,
-    });
-    const input = {
-      baseUrl: "http://sftpgo:8080",
-      homeTemplate: "sftpgo:/{username}",
-      password: "secret",
-      userAgent: null,
-      ip: "127.0.0.1",
-    };
-
+    vi.mocked(h.authService.loginCandidate)
+      .mockResolvedValueOnce({ sessionId: "session-1", me: ME })
+      .mockResolvedValueOnce({ sessionId: "session-2", me: bob });
+    await seedSftpgoProvider(h.repos, COMPLETE_INPUT.baseUrl, { enabled: false });
     const results = await Promise.allSettled([
-      alice.complete({ ...input, username: "alice" }),
-      bob.complete({ ...input, username: "bob" }),
+      h.service.complete(COMPLETE_INPUT),
+      h.service.complete({ ...COMPLETE_INPUT, username: "bob", password: "builder" }),
     ]);
-
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-    expect((await claims.current())?.state).toBe("complete");
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { kind: "conflict" },
+    });
+    expect(h.setAdmin).toHaveBeenCalledTimes(1);
+    expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
   });
 });

@@ -20,3 +20,11 @@ export {
   TRASH_EVENT_ACTION_NAME,
   TRASH_EVENT_RULE_NAME,
 } from "./sftpgo-dump.js";
+export type {
+  StorageConformanceOptions,
+  StorageFactory,
+  StorageFactoryResult,
+} from "./storage/conformance.js";
+export { describeStorageProvider } from "./storage/conformance.js";
+export type { MemoryStorage, MemoryStorageOptions } from "./storage/memory-storage.js";
+export { createMemoryStorage } from "./storage/memory-storage.js";

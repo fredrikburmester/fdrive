@@ -15,6 +15,7 @@ export { FileIcon } from "@/components/files/file-icon";
 export { FileList } from "@/components/files/file-list";
 export { RenameDialog } from "@/components/files/rename-dialog";
 export { PageHeader } from "@/components/shell/page-header";
+export { useMe } from "@/lib/api/auth-queries";
 export { apiClient, snapshotTabApiClient } from "@/lib/api/client";
 export { queryKeys } from "@/lib/api/keys";
 export { pathToHref, viewHref } from "@/lib/files/path-url";
@@ -29,5 +30,7 @@ export {
   selectionReducer,
 } from "@/lib/files/selection";
 export { readJson, type StorageLike, writeJson } from "@/lib/files/storage";
+export { capabilitiesFor } from "@/lib/identity/capabilities";
+export { trashAvailabilityFor } from "@/lib/trash/format";
 export { useTrashStatus } from "@/lib/trash/queries";
 export type { ApiClient };

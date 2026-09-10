@@ -17,6 +17,7 @@ function notImplemented(): never {
 
 const FAKE_STORAGE: StorageProvider = {
   list: notImplemented,
+  stat: notImplemented,
   statFile: notImplemented,
   download: notImplemented,
   upload: notImplemented,

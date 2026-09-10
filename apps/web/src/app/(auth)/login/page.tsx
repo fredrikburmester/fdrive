@@ -1,37 +1,32 @@
+import type { PublicProvider } from "@fdrive/contracts";
 import { redirect } from "next/navigation";
 import { serverApiClient } from "@/lib/api/server";
 import { LoginForm } from "./login-form";
 
-const DEFAULT_SUBTITLE = "Sign in with your SFTPGo account";
-
 /**
- * Builds the login subtitle from the public `/about` endpoint's provider
- * label. Never throws: an unreachable API, a `null` provider (setup not
- * completed yet), or a `null` label (the API only reveals the SFTPGo host
- * to an authenticated caller, and this page is always rendered anonymous)
- * all fall back to a generic subtitle rather than breaking the login page.
+ * Loads the enabled providers and their credential forms from the public
+ * `/providers` endpoint. Never throws: an unreachable API returns no
+ * providers, and the form then falls back to the SFTPGo-shaped default
+ * fields and lets the server pick its only enabled provider, rather than
+ * breaking the login page.
  */
-export async function resolveLoginSubtitle(
+export async function resolveLoginProviders(
   getClient: typeof serverApiClient = serverApiClient,
-): Promise<string> {
+): Promise<PublicProvider[]> {
   try {
     const client = await getClient();
-    const about = await client.about();
-    if (about.provider === null || about.provider.label === null) {
-      return DEFAULT_SUBTITLE;
-    }
-    return `Sign in with your SFTPGo account on ${about.provider.label}`;
+    return (await client.providers()).providers;
   } catch {
-    return DEFAULT_SUBTITLE;
+    return [];
   }
 }
 
 /**
  * True when the public `/about` endpoint reports setup is still required,
  * in which case the login page sends the visitor to `/setup` instead:
- * there is no SFTPGo connection to sign in against yet. Fails open to
+ * there is no storage provider to sign in against yet. Fails open to
  * `false` (stay on the login page) when the API cannot be reached at all,
- * matching `resolveLoginSubtitle`'s own fail-open behaviour.
+ * matching `resolveLoginProviders`'s own fail-open behaviour.
  */
 export async function shouldRedirectToSetup(
   getClient: typeof serverApiClient = serverApiClient,
@@ -49,6 +44,6 @@ export default async function LoginPage() {
   if (await shouldRedirectToSetup()) {
     redirect("/setup");
   }
-  const subtitle = await resolveLoginSubtitle();
-  return <LoginForm subtitle={subtitle} />;
+  const providers = await resolveLoginProviders();
+  return <LoginForm providers={providers} />;
 }

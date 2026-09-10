@@ -1,30 +1,31 @@
-import { IDENTITY_HEADER, type MeResponse } from "@fdrive/contracts";
+import { IDENTITY_HEADER, type IdentitySummary, type MeResponse } from "@fdrive/contracts";
+import { type StorageProvider, sameCredential } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
-import { verifyAccountCredentials, verifyCandidateCredentials } from "../accounts/credentials.ts";
+import { verifyCredentials } from "../accounts/credentials.ts";
 import { accountRepositoryCall } from "../accounts/errors.ts";
 import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppConfig } from "../config.js";
-import type { ConnectionStore } from "../connection/store.js";
 import { ApiHttpError } from "../errors.js";
+import type { ProviderService } from "../providers/service.js";
 import { KEY_ID, open, seal } from "./crypto.js";
 import type { LoginLimiter } from "./login-limiter.js";
 import type { Principal } from "./principal.js";
-import { type ClientForBaseUrl, requireCurrentConnection } from "./provider-client.ts";
 import { COOKIE_NAME, generateSessionId, hashSessionId } from "./sessions.js";
-import type { IdentityStorageFactory } from "./storage-factory.ts";
-import type { TokenSource } from "./token-source.js";
+import { type IdentityStorageFactory, unavailableStorage } from "./storage-factory.ts";
+import { parseStoredCredential, type TokenSource } from "./token-source.js";
 
 /** How stale a session's `lastSeenAt` must be before `resolvePrincipal` slides its expiry. */
 const SLIDING_TOUCH_THRESHOLD_MS = 5 * 60 * 1000;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export interface LoginInput {
-  readonly username: string;
-  readonly password: string;
-  readonly otp?: string;
+  /** Omitted when exactly one provider is enabled. */
+  readonly providerId?: string | undefined;
+  /** Values for the provider's `credentialFields`. */
+  readonly credential: Readonly<Record<string, string>>;
   readonly userAgent: string | null;
   readonly ip: string;
 }
@@ -36,8 +37,8 @@ export interface LoginResult {
 
 export interface AuthService {
   login(input: LoginInput): Promise<LoginResult>;
-  /** Verifies and creates a session bound to a setup candidate without activating it. */
-  loginCandidate(input: LoginInput, baseUrl: string): Promise<LoginResult>;
+  /** Verifies against a provider that may not be enabled yet and creates a session bound to it. */
+  loginCandidate(input: LoginInput, providerId: string): Promise<LoginResult>;
   resolvePrincipal(c: Context): Promise<Principal | null>;
   me(accountId: string, activeIdentityId: string): Promise<MeResponse>;
   logout(sessionId: string): Promise<void>;
@@ -46,26 +47,57 @@ export interface AuthService {
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;
   readonly identityLinks: AccountIdentityOperations;
-  readonly clientForBaseUrl: ClientForBaseUrl;
+  readonly providers: Pick<
+    ProviderService,
+    "resolve" | "enabled" | "get" | "capabilitiesFor" | "labelFor"
+  >;
+  readonly fetch: typeof globalThis.fetch;
   readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly limiter: LoginLimiter;
-  readonly tokenSource: TokenSource;
+  readonly tokenSource: Pick<TokenSource, "prime">;
   readonly storageFactory: IdentityStorageFactory;
-  /** Resolves the active SFTPGo connection: its base URL for `providers.ensure` and its label. */
-  readonly connectionStore: ConnectionStore;
-  /** SFTPGo usernames always treated as admins, in addition to `accounts.is_admin`. */
+  /** Usernames always treated as admins, in addition to `accounts.is_admin`. */
   readonly adminUsernames: readonly string[];
-}
-
-/** The host portion of a SFTPGo base URL, used as `IdentitySummary.providerLabel`. */
-function providerLabelFor(baseUrl: string): string {
-  return new URL(baseUrl).host;
 }
 
 /** Builds the `AuthService`, the credential-mode login/session/identity flow for the API. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
+  async function isEnvironmentAdmin(identity: {
+    providerId: string;
+    externalUsername: string;
+  }): Promise<boolean> {
+    if (
+      !deps.adminUsernames.includes(identity.externalUsername) ||
+      deps.config.sftpgoUrl === undefined
+    )
+      return false;
+    const resolved = await deps.providers.get(identity.providerId);
+    return (
+      resolved?.provider.type === "sftpgo" && resolved.provider.baseUrl === deps.config.sftpgoUrl
+    );
+  }
+
+  async function summarize(identity: {
+    id: string;
+    providerId: string;
+    externalUsername: string;
+  }): Promise<IdentitySummary> {
+    const resolved = await deps.providers.get(identity.providerId);
+    if (resolved === null) {
+      throw new ApiHttpError("unauthorized", "storage provider no longer exists");
+    }
+    return {
+      id: identity.id,
+      username: identity.externalUsername,
+      providerId: resolved.provider.id,
+      providerType: resolved.module.type as IdentitySummary["providerType"],
+      providerLabel: deps.providers.labelFor(resolved.provider),
+      capabilities: await deps.providers.capabilitiesFor(resolved),
+    };
+  }
+
   async function me(accountId: string, activeIdentityId: string): Promise<MeResponse> {
     const account = await deps.repos.accounts.get(accountId);
     if (!account) {
@@ -75,21 +107,8 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const activeIdentity = identities.find((identity) => identity.id === activeIdentityId);
     if (activeIdentity === undefined)
       throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
-    const summaries = await Promise.all(
-      identities.map(async (identity) => {
-        const provider = await deps.repos.providers.get(identity.providerId);
-        if (provider === null)
-          throw new ApiHttpError("unauthorized", "storage provider no longer exists");
-        return {
-          id: identity.id,
-          username: identity.externalUsername,
-          providerType: "sftpgo" as const,
-          providerLabel: providerLabelFor(provider.baseUrl),
-        };
-      }),
-    );
-    const isAdmin =
-      account.isAdmin || deps.adminUsernames.includes(activeIdentity.externalUsername);
+    const summaries = await Promise.all(identities.map(summarize));
+    const isAdmin = account.isAdmin || (await isEnvironmentAdmin(activeIdentity));
 
     if ((await deps.repos.identities.get(activeIdentityId))?.accountId !== accountId)
       throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
@@ -102,62 +121,64 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   }
 
   /**
-   * True when `password` differs from the credential already stored for the
+   * True when `stored` differs from the credential already kept for the
    * identity `username` resolves to, or that credential is missing or
-   * unreadable: the user replaced their SFTPGo password, so sessions issued
-   * under the old one must not outlive this login. A first login has nothing
-   * to compare against and revokes nothing.
+   * unreadable: the user replaced their password, so sessions issued under
+   * the old one must not outlive this login. A first login has nothing to
+   * compare against and revokes nothing.
    */
   async function credentialReplaced(
-    providerId: string,
-    username: string,
-    password: string,
+    verified: Awaited<ReturnType<typeof verifyCredentials>>,
   ): Promise<boolean> {
-    const identity = await deps.repos.identities.findByProviderUsername(providerId, username);
+    const identity = await deps.repos.identities.findByProviderUsername(
+      verified.provider.id,
+      verified.externalUsername,
+    );
     if (identity === null) return false;
     const credential = await deps.repos.credentials.get(identity.id);
     if (credential === null) return true;
     try {
-      const stored: unknown = JSON.parse(
-        new TextDecoder().decode(open(deps.master, credential.ciphertext, identity.id)),
-      );
-      return (
-        typeof stored !== "object" ||
-        stored === null ||
-        (stored as { password?: unknown }).password !== password
-      );
+      const previous = parseStoredCredential(open(deps.master, credential.ciphertext, identity.id));
+      return !sameCredential(verified.module.credentialFields, previous, verified.stored);
     } catch {
       // Undecryptable (rotated master key) or malformed: nothing usable was
-      // stored, so the verified password is by definition a replacement.
+      // stored, so the verified credential is by definition a replacement.
       return true;
     }
   }
 
-  async function loginAt(input: LoginInput, candidateBaseUrl: string | null): Promise<LoginResult> {
-    const { provider, token } =
-      candidateBaseUrl === null
-        ? await verifyAccountCredentials(deps, input)
-        : await verifyCandidateCredentials(deps, input, candidateBaseUrl);
+  async function loginAt(
+    input: LoginInput,
+    candidateProviderId: string | null,
+  ): Promise<LoginResult> {
+    const verified = await verifyCredentials(
+      { repos: deps.repos, providers: deps.providers, limiter: deps.limiter, fetch: deps.fetch },
+      {
+        providerId: candidateProviderId ?? input.providerId,
+        credential: input.credential,
+        ip: input.ip,
+      },
+      { allowDisabled: candidateProviderId !== null },
+    );
     const rawSessionId = generateSessionId();
     const idHash = hashSessionId(rawSessionId);
     const at = deps.clock();
-    if (candidateBaseUrl === null)
-      await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
-    const revokeOtherSessions = await credentialReplaced(
-      provider.id,
-      input.username,
-      input.password,
-    );
+    const revokeOtherSessions = await credentialReplaced(verified);
     const result = await accountRepositoryCall(() =>
       deps.identityLinks.loginVerified({
-        providerId: provider.id,
-        username: input.username,
+        providerId: verified.provider.id,
+        verifiedProvider: {
+          type: verified.provider.type,
+          baseUrl: verified.provider.baseUrl,
+          allowDisabled: candidateProviderId !== null,
+        },
+        username: verified.externalUsername,
         at,
         revokeOtherSessions,
         sealCredential: (identityId) => ({
           ciphertext: seal(
             deps.master,
-            new TextEncoder().encode(JSON.stringify({ password: input.password })),
+            new TextEncoder().encode(JSON.stringify(verified.stored)),
             identityId,
           ),
           keyId: KEY_ID,
@@ -171,9 +192,9 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       }),
     );
     try {
-      if (candidateBaseUrl === null)
-        await requireCurrentConnection(deps.connectionStore, provider.baseUrl);
-      await deps.tokenSource.prime(result.identity.id, token);
+      if (verified.token !== undefined) {
+        await deps.tokenSource.prime(result.identity.id, verified.token);
+      }
     } catch (error) {
       await deps.repos.sessions.delete(idHash);
       throw error;
@@ -193,10 +214,6 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       await deps.repos.sessions.delete(idHash);
       throw error;
     }
-  }
-
-  async function login(input: LoginInput): Promise<LoginResult> {
-    return loginAt(input, null);
   }
 
   async function resolvePrincipal(c: Context): Promise<Principal | null> {
@@ -268,8 +285,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     }
 
     const account = await deps.repos.accounts.get(session.accountId);
-    const isAdmin =
-      (account?.isAdmin ?? false) || deps.adminUsernames.includes(identity.externalUsername);
+    const isAdmin = (account?.isAdmin ?? false) || (await isEnvironmentAdmin(identity));
 
     const verifyAuthority = async (): Promise<boolean> => {
       const at = deps.clock();
@@ -285,11 +301,23 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       return owned !== null && owned.accountId === current.accountId;
     };
 
+    // A provider an admin disabled must not take the session down with it:
+    // the account's own routes keep working and only storage calls fail.
+    let storage: StorageProvider;
+    try {
+      storage = await deps.storageFactory(identity.id);
+    } catch (error) {
+      if (!(error instanceof ApiHttpError && error.kind === "upstream_unavailable")) {
+        throw error;
+      }
+      storage = unavailableStorage(error);
+    }
+
     return {
       accountId: session.accountId,
       identityId: identity.id,
       username: identity.externalUsername,
-      storage: await deps.storageFactory(identity.id),
+      storage,
       isAdmin,
       verifyAuthority,
     };
@@ -300,8 +328,8 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   }
 
   return {
-    login: (input) => accountRepositoryCall(() => login(input)),
-    loginCandidate: (input, baseUrl) => accountRepositoryCall(() => loginAt(input, baseUrl)),
+    login: (input) => accountRepositoryCall(() => loginAt(input, null)),
+    loginCandidate: (input, providerId) => accountRepositoryCall(() => loginAt(input, providerId)),
     resolvePrincipal,
     me,
     logout,

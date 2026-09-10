@@ -18,6 +18,7 @@ function notImplemented(): never {
 
 const FAKE_STORAGE: StorageProvider = {
   list: notImplemented,
+  stat: notImplemented,
   statFile: notImplemented,
   download: notImplemented,
   upload: notImplemented,
@@ -67,7 +68,10 @@ async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: false, host: "sftpgo:8080" }),
+    connectionStatus: async () => ({
+      required: false,
+      providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+    }),
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
       registerTokenRoutes(groups, { service });

@@ -1,10 +1,9 @@
 import type { LinkIdentityRequest, MeResponse, UnlinkIdentityRequest } from "@fdrive/contracts";
 import type { Session } from "@fdrive/db";
 import { KEY_ID, seal } from "../auth/crypto.js";
-import { requireCurrentConnection } from "../auth/provider-client.ts";
 import { generateSessionId, hashSessionId } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
-import { verifyAccountCredentials } from "./credentials.ts";
+import { verifyCredentials } from "./credentials.ts";
 import { accountRepositoryCall } from "./errors.ts";
 import type { AccountRequestContext, AccountsDeps } from "./types.ts";
 
@@ -59,28 +58,31 @@ export function createAccountsService(deps: AccountsDeps) {
    * Linking plants a durable login path on the account and unlinking detaches
    * one (signing out its sessions), so a cookie alone is not enough for
    * either: the owner re-proves the session's active login with its own
-   * password (and TOTP when SFTPGo demands it) through the same limiter as
-   * login, so a hijacked session cannot guess it freely either.
+   * credential (password, and one-time code when the provider demands it)
+   * through the same limiter as login, so a hijacked session cannot guess it
+   * freely either. The active login's provider and username are fixed; the
+   * credential may not name anyone else.
    */
   async function reauthenticate(
     session: Session & { activeIdentityId: string },
-    credentials: Pick<LinkIdentityRequest, "currentPassword" | "currentOtp"> & { ip: string },
-  ): Promise<void> {
+    credentials: Pick<LinkIdentityRequest, "currentCredential"> & { ip: string },
+  ): Promise<{ providerId: string }> {
     const active = await deps.repos.identities.get(session.activeIdentityId);
     if (active?.accountId !== session.accountId)
       throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
     try {
-      await verifyAccountCredentials(deps, {
-        username: active.externalUsername,
-        password: credentials.currentPassword,
-        otp: credentials.currentOtp,
+      await verifyCredentials(deps, {
+        providerId: active.providerId,
+        credential: credentials.currentCredential,
         ip: credentials.ip,
+        expectedUsername: active.externalUsername,
       });
     } catch (error) {
       if (error instanceof ApiHttpError && error.kind === "unauthorized")
         throw new ApiHttpError("unauthorized", "current password is incorrect");
       throw error;
     }
+    return { providerId: active.providerId };
   }
   return {
     async link(
@@ -88,21 +90,25 @@ export function createAccountsService(deps: AccountsDeps) {
       credentials: LinkIdentityRequest & { ip: string },
     ): Promise<AccountRotation> {
       const current = await liveAccountSession(deps, input);
-      await reauthenticate(current, credentials);
-      const verified = await verifyAccountCredentials(deps, credentials);
+      const active = await reauthenticate(current, credentials);
+      const verified = await verifyCredentials(deps, {
+        providerId: credentials.providerId ?? active.providerId,
+        credential: credentials.credential,
+        ip: credentials.ip,
+      });
       const session = await liveAccountSession(deps, input);
-      await requireCurrentConnection(deps.connectionStore, verified.provider.baseUrl);
       const identity = await accountRepositoryCall(() =>
         deps.links.linkVerified({
           accountId: session.accountId,
           providerId: verified.provider.id,
-          username: credentials.username,
+          verifiedProvider: { type: verified.provider.type, baseUrl: verified.provider.baseUrl },
+          username: verified.externalUsername,
           requestingSessionIdHash: session.idHash,
           at: deps.clock(),
           sealCredential: (id) => ({
             ciphertext: seal(
               deps.master,
-              new TextEncoder().encode(JSON.stringify({ password: credentials.password })),
+              new TextEncoder().encode(JSON.stringify(verified.stored)),
               id,
             ),
             keyId: KEY_ID,
@@ -110,8 +116,9 @@ export function createAccountsService(deps: AccountsDeps) {
         }),
       );
       await deps.tokenSource.invalidate(identity.id);
-      await requireCurrentConnection(deps.connectionStore, verified.provider.baseUrl);
-      await deps.tokenSource.prime(identity.id, verified.token);
+      if (verified.token !== undefined) {
+        await deps.tokenSource.prime(identity.id, verified.token);
+      }
       return rotate(session, identity.id);
     },
     async unlink(

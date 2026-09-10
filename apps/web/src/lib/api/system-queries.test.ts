@@ -1,18 +1,22 @@
 // @vitest-environment jsdom
-import type { AdminConnectionResponse, IndexerStats, MeResponse } from "@fdrive/contracts";
+
+import type { AdminProvidersResponse, IndexerStats, MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 
 const setupStatusMock = vi.fn();
 const systemFeaturesMock = vi.fn();
 const systemUpdateFeaturesMock = vi.fn();
 const setupTestMock = vi.fn();
 const setupCompleteMock = vi.fn();
-const adminConnectionMock = vi.fn();
-const adminUpdateConnectionMock = vi.fn();
-const adminTestConnectionMock = vi.fn();
+const adminProvidersMock = vi.fn();
+const adminCreateProviderMock = vi.fn();
+const adminUpdateProviderMock = vi.fn();
+const adminDeleteProviderMock = vi.fn();
+const adminTestProviderMock = vi.fn();
 const systemIndexerMock = vi.fn();
 const systemUpdateIndexerSettingsMock = vi.fn();
 const systemReindexMock = vi.fn();
@@ -37,9 +41,11 @@ vi.mock("./client.js", () => ({
     setupStatus: (...args: unknown[]) => setupStatusMock(...args),
     setupTest: (...args: unknown[]) => setupTestMock(...args),
     setupComplete: (...args: unknown[]) => setupCompleteMock(...args),
-    adminConnection: (...args: unknown[]) => adminConnectionMock(...args),
-    adminUpdateConnection: (...args: unknown[]) => adminUpdateConnectionMock(...args),
-    adminTestConnection: (...args: unknown[]) => adminTestConnectionMock(...args),
+    adminProviders: (...args: unknown[]) => adminProvidersMock(...args),
+    adminCreateProvider: (...args: unknown[]) => adminCreateProviderMock(...args),
+    adminUpdateProvider: (...args: unknown[]) => adminUpdateProviderMock(...args),
+    adminDeleteProvider: (...args: unknown[]) => adminDeleteProviderMock(...args),
+    adminTestProvider: (...args: unknown[]) => adminTestProviderMock(...args),
     systemIndexer: (...args: unknown[]) => systemIndexerMock(...args),
     systemUpdateIndexerSettings: (...args: unknown[]) => systemUpdateIndexerSettingsMock(...args),
     systemReindex: (...args: unknown[]) => systemReindexMock(...args),
@@ -60,19 +66,14 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const ME_RESPONSE: MeResponse = {
+const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
   identities: [
-    {
-      id: "00000000-0000-0000-0000-000000000001",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "SFTPGo",
-    },
+    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "SFTPGo" }),
   ],
   activeIdentityId: "00000000-0000-0000-0000-000000000001",
   isAdmin: true,
-};
+});
 
 describe("feature queries", () => {
   it("fetches choices and updates caches after saving a revision", async () => {
@@ -109,14 +110,20 @@ describe("feature queries", () => {
   });
 });
 
-const CONNECTION_RESPONSE: AdminConnectionResponse = {
+const PROVIDER = {
+  id: "00000000-0000-4000-8000-000000000009",
+  type: "sftpgo" as const,
+  label: "sftpgo:8080",
   baseUrl: "http://sftpgo:8080",
-  host: "sftpgo:8080",
-  homeTemplate: "sftpgo:/{username}",
-  source: "env",
+  config: { homeTemplate: "sftpgo:/{username}" },
+  enabled: true,
+  managedByEnv: true,
+  identityCount: 1,
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
+  createdAt: "2026-01-01T00:00:00.000Z",
 };
+const PROVIDERS_RESPONSE: AdminProvidersResponse = { providers: [PROVIDER], types: [] };
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -128,9 +135,11 @@ beforeEach(() => {
   setupStatusMock.mockReset();
   setupTestMock.mockReset();
   setupCompleteMock.mockReset();
-  adminConnectionMock.mockReset();
-  adminUpdateConnectionMock.mockReset();
-  adminTestConnectionMock.mockReset();
+  adminProvidersMock.mockReset();
+  adminCreateProviderMock.mockReset();
+  adminUpdateProviderMock.mockReset();
+  adminDeleteProviderMock.mockReset();
+  adminTestProviderMock.mockReset();
   systemIndexerMock.mockReset();
   systemUpdateIndexerSettingsMock.mockReset();
   systemReindexMock.mockReset();
@@ -199,64 +208,117 @@ describe("useSetupComplete", () => {
   });
 });
 
-describe("useAdminConnection", () => {
-  it("fetches the active connection", async () => {
-    adminConnectionMock.mockResolvedValue(CONNECTION_RESPONSE);
-    const { useAdminConnection } = await import("./system-queries.js");
+describe("useAdminProviders", () => {
+  it("fetches the configured providers", async () => {
+    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
+    const { useAdminProviders } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
-    const { result } = renderHook(() => useAdminConnection(), {
+    const { result } = renderHook(() => useAdminProviders(), {
       wrapper: createWrapper(queryClient),
     });
 
-    await waitFor(() => expect(result.current.data).toEqual(CONNECTION_RESPONSE));
+    await waitFor(() => expect(result.current.data).toEqual(PROVIDERS_RESPONSE));
   });
 });
 
-describe("useAdminUpdateConnection", () => {
-  it("updates the connection and refreshes the cached summary", async () => {
-    const updated = { ...CONNECTION_RESPONSE, homeTemplate: "sftpgo:/new/{username}" };
-    adminUpdateConnectionMock.mockResolvedValue(updated);
-    const { useAdminUpdateConnection } = await import("./system-queries.js");
+describe("useAdminCreateProvider", () => {
+  it("adds a provider and invalidates the cached list", async () => {
+    adminCreateProviderMock.mockResolvedValue(PROVIDER);
+    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
+    const { useAdminCreateProvider } = await import("./system-queries.js");
     const queryClient = new QueryClient();
+    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
 
-    const { result } = renderHook(() => useAdminUpdateConnection(), {
+    const { result } = renderHook(() => useAdminCreateProvider(), {
       wrapper: createWrapper(queryClient),
     });
-    result.current.mutate({ homeTemplate: "sftpgo:/new/{username}" });
+    result.current.mutate({ type: "sftpgo", label: "Second", baseUrl: "http://other:8080" });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(queryClient.getQueryData(["admin", "connection"])).toEqual(updated);
+    expect(adminCreateProviderMock).toHaveBeenCalledWith({
+      type: "sftpgo",
+      label: "Second",
+      baseUrl: "http://other:8080",
+    });
+    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
   });
 });
 
-describe("useAdminTestConnection", () => {
-  it("probes the active connection when no baseUrl is given", async () => {
-    adminTestConnectionMock.mockResolvedValue({ ok: true, detail: "reachable" });
-    const { useAdminTestConnection } = await import("./system-queries.js");
+describe("useAdminDeleteProvider", () => {
+  it("removes a provider and invalidates the cached list", async () => {
+    adminDeleteProviderMock.mockResolvedValue({ ok: true });
+    adminProvidersMock.mockResolvedValue({ providers: [], types: [] });
+    const { useAdminDeleteProvider } = await import("./system-queries.js");
     const queryClient = new QueryClient();
+    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
 
-    const { result } = renderHook(() => useAdminTestConnection(), {
+    const { result } = renderHook(() => useAdminDeleteProvider(), {
       wrapper: createWrapper(queryClient),
     });
-    result.current.mutate(undefined);
+    result.current.mutate(PROVIDER.id);
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminTestConnectionMock).toHaveBeenCalledWith(undefined);
+    expect(adminDeleteProviderMock).toHaveBeenCalledWith(PROVIDER.id);
+    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useAdminUpdateProvider", () => {
+  it("updates a provider and invalidates the cached list", async () => {
+    const updated = { ...PROVIDER, config: { homeTemplate: "sftpgo:/new/{username}" } };
+    adminUpdateProviderMock.mockResolvedValue(updated);
+    adminProvidersMock.mockResolvedValue({ providers: [updated], types: [] });
+    const { useAdminUpdateProvider } = await import("./system-queries.js");
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
+
+    const { result } = renderHook(() => useAdminUpdateProvider(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate({
+      id: PROVIDER.id,
+      patch: { config: { homeTemplate: "sftpgo:/new/{username}" } },
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, {
+      config: { homeTemplate: "sftpgo:/new/{username}" },
+    });
+    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useAdminTestProvider", () => {
+  it("probes a saved provider by id", async () => {
+    adminTestProviderMock.mockResolvedValue({ ok: true, detail: "reachable" });
+    const { useAdminTestProvider } = await import("./system-queries.js");
+    const queryClient = new QueryClient();
+
+    const { result } = renderHook(() => useAdminTestProvider(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate(PROVIDER.id);
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(adminTestProviderMock).toHaveBeenCalledWith(PROVIDER.id);
   });
 
-  it("probes a candidate baseUrl when given", async () => {
-    adminTestConnectionMock.mockResolvedValue({ ok: false, detail: "unreachable" });
-    const { useAdminTestConnection } = await import("./system-queries.js");
+  it("probes an unsaved candidate", async () => {
+    adminTestProviderMock.mockResolvedValue({ ok: false, detail: "unreachable" });
+    const { useAdminTestProvider } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
-    const { result } = renderHook(() => useAdminTestConnection(), {
+    const { result } = renderHook(() => useAdminTestProvider(), {
       wrapper: createWrapper(queryClient),
     });
-    result.current.mutate("http://other:8080");
+    result.current.mutate({ type: "sftpgo", baseUrl: "http://other:8080" });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminTestConnectionMock).toHaveBeenCalledWith("http://other:8080");
+    expect(adminTestProviderMock).toHaveBeenCalledWith({
+      type: "sftpgo",
+      baseUrl: "http://other:8080",
+    });
   });
 });
 

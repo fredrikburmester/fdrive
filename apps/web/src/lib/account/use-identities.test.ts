@@ -31,10 +31,8 @@ afterEach(() => {
 
 it("links without storing request credentials in either cache", async () => {
   const request = {
-    username: "ada",
-    password: "sensitive test value",
-    otp: "123456",
-    currentPassword: "owner value",
+    credential: { username: "ada", password: "sensitive test value", otp: "123456" },
+    currentCredential: { password: "owner value" },
   };
   const link = vi.spyOn(apiClient, "linkIdentity").mockResolvedValue(me);
   const { result, client } = setup();
@@ -43,7 +41,9 @@ it("links without storing request credentials in either cache", async () => {
   });
   expect(link).toHaveBeenCalledWith(request);
   expect(client.getMutationCache().getAll()).toEqual([]);
-  expect(JSON.stringify(client.getQueryCache().getAll())).not.toContain(request.password);
+  expect(JSON.stringify(client.getQueryCache().getAll())).not.toContain(
+    request.credential.password,
+  );
   expect(push).toHaveBeenCalledWith("/files");
 });
 
@@ -54,9 +54,8 @@ it("reports failures, clears feedback and preserves old cache", async () => {
   await act(async () => {
     expect(
       await result.current.link({
-        username: "ada",
-        password: "temporary",
-        currentPassword: "mine",
+        credential: { username: "ada", password: "temporary" },
+        currentCredential: { password: "mine" },
       }),
     ).toBe(false);
   });
@@ -75,13 +74,15 @@ it("cancels removed identity uploads only after successful unlink", async () => 
   const cancel = vi.spyOn(useUploadStore.getState(), "cancelIdentity");
   const { result } = setup();
   await act(async () => {
-    await result.current.unlink("removed", { currentPassword: "mine" });
+    await result.current.unlink("removed", { currentCredential: { password: "mine" } });
   });
   expect(cancel).not.toHaveBeenCalled();
   await act(async () => {
-    expect(await result.current.unlink("removed", { currentPassword: "mine" })).toBe(true);
+    expect(
+      await result.current.unlink("removed", { currentCredential: { password: "mine" } }),
+    ).toBe(true);
   });
-  expect(unlink).toHaveBeenCalledWith("removed", { currentPassword: "mine" });
+  expect(unlink).toHaveBeenCalledWith("removed", { currentCredential: { password: "mine" } });
   expect(cancel).toHaveBeenCalledWith("removed");
 });
 

@@ -1,6 +1,6 @@
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import type { SftpgoClient } from "@fdrive/sftpgo";
+import { sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
 
 const NON_CRYPTO_ERROR = new Error("boom, not a CryptoError");
@@ -40,12 +40,19 @@ describe("openOrReauth: non-CryptoError rethrow", () => {
     );
     await repos.credentials.put({ identityId: identity.id, ciphertext, keyId: "master-v1" });
 
-    const sftpgo = { login: vi.fn() } as unknown as SftpgoClient;
     const tokenSource = createTokenSource({
       repos,
-      clientForIdentity: async () => sftpgo,
+      providers: {
+        forIdentity: async () => ({
+          identity,
+          provider,
+          module: sftpgoModule,
+          instance: { id: provider.id, baseUrl: provider.baseUrl, config: {} },
+        }),
+      },
       master: MASTER,
       clock: () => new Date(),
+      fetch: vi.fn(),
     });
 
     await expect(tokenSource.get(identity.id)).rejects.toBe(NON_CRYPTO_ERROR);

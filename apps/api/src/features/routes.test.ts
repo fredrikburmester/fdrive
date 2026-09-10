@@ -50,7 +50,7 @@ function fixture({
     principalResolver: async () => principal,
     connectionStatus: async () => ({
       required: setupRequired,
-      host: setupRequired ? null : "sftpgo",
+      providers: setupRequired ? [] : [{ type: "sftpgo", host: "sftpgo" }],
     }),
     registerRoutes(groups) {
       registerFeatureAdmission(groups.authed, service);

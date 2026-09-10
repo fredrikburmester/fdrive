@@ -1,18 +1,18 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AccountFavoritesList } from "./account-favorites-list";
 
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [
-    { id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" },
-    { id: "two", username: "bob", providerType: "sftpgo", providerLabel: "Other" },
+    makeIdentity(),
+    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
   ],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 afterEach(cleanup);
 it("renders both duplicate paths with ownership, partial errors, and explicit navigation targets", () => {
   const onNavigate = vi.fn();

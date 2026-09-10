@@ -103,7 +103,7 @@ describe("trash against real PostgreSQL and SFTPGo", () => {
   async function login(username: string) {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { username, password: `${username}-pass` },
+      body: { credential: { username, password: `${username}-pass` } },
     });
     expect(response.status).toBe(200);
     return { cookie: cookieFrom(response), me: MeResponse.parse(await response.json()) };

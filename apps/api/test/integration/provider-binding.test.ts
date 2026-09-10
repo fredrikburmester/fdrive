@@ -3,7 +3,7 @@ import { createDb, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { verifyAccountCredentials } from "../../src/accounts/credentials.ts";
+import { verifyCredentials } from "../../src/accounts/credentials.ts";
 import { createLoginLimiter } from "../../src/auth/login-limiter.js";
 import { hashSessionId } from "../../src/auth/sessions.js";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
@@ -109,14 +109,23 @@ describe("provider binding over two HTTP upstreams", () => {
     const h = await fixture();
     const gate = createBarrier();
     const factory = createIdentityStorageFactory({
-      clientForIdentity: h.clientForIdentity,
+      providers: h.providers,
       tokenSource: {
-        withToken: (id, fn) =>
-          h.tokens.withToken(id, async (token) => {
-            await gate.block();
-            return fn(token);
-          }),
+        ...h.tokens,
+        sessionFor: (id, externalUsername) => {
+          const session = h.tokens.sessionFor(id, externalUsername);
+          return {
+            ...session,
+            getToken: async () => {
+              const token = await session.getToken();
+              await gate.block();
+              return token;
+            },
+          };
+        },
       },
+      fetch: globalThis.fetch,
+      clock: h.clock,
     });
     const storage = await factory(h.identity.id);
     const write = storage.upload(SHARED_PATH, new TextEncoder().encode("A changed"));
@@ -141,18 +150,22 @@ describe("provider binding over two HTTP upstreams", () => {
     }
   });
 
-  it("rejects initial credential verification if the connection changes during the HTTP login", async () => {
+  it("rejects initial credential verification if the provider is disabled during the HTTP login", async () => {
     const h = await providerFixture();
     onTestFinished(() => h.close());
     const gate = h.a.pause("GET", "/api/v2/user/token");
-    const verification = verifyAccountCredentials(
+    const verification = verifyCredentials(
       {
         repos: h.repos,
-        connectionStore: h.connections,
-        clientForBaseUrl: h.clientForBaseUrl,
+        providers: h.providers,
+        fetch: globalThis.fetch,
         limiter: createLoginLimiter({ clock: h.clock }),
       },
-      { username: USERNAME, password: h.a.password, ip: "127.0.0.1" },
+      {
+        providerId: h.providerA.id,
+        credential: { username: USERNAME, password: h.a.password },
+        ip: "127.0.0.1",
+      },
     );
     const rejection = expect(verification).rejects.toMatchObject({ kind: "unauthorized" });
     try {
@@ -187,12 +200,23 @@ describe("composed native identity and API-token provider binding", () => {
     const login = await h.app.request("/api/v1/auth/login", {
       method: "POST",
       headers: jsonHeaders,
-      body: JSON.stringify({ username: USERNAME, password: h.a.password }),
+      body: JSON.stringify({
+        providerId: h.providerA.id,
+        credential: { username: USERNAME, password: h.a.password },
+      }),
     });
     expect(login.status).toBe(200);
     const cookie = login.headers.get("set-cookie")?.split(";")[0];
     if (!cookie) throw new Error("login did not create a session cookie");
     const me = MeResponse.parse(await login.json());
+    // Prove the explicitly mapped scope before measuring credential-bearing
+    // calls. MCP writes require it; without a configured root this test never
+    // reached the mutation barrier and only exercised write admission denial.
+    const scope = await h.app.request(`/api/v1/account/identities/${me.activeIdentityId}/scope`, {
+      headers: { cookie },
+    });
+    expect(scope.status).toBe(200);
+    expect(await scope.json()).toMatchObject({ status: "available" });
     const response = await h.app.request("/api/v1/account/tokens", {
       method: "POST",
       headers: { ...jsonHeaders, cookie },
@@ -215,10 +239,12 @@ describe("composed native identity and API-token provider binding", () => {
       at: h.clock(),
     });
     async function switchToB() {
-      const result = await h.app.request("/api/v1/admin/connection", {
-        method: "PUT",
+      // Disabling A through the admin API is the runtime configuration
+      // change; B already exists as its own enabled provider row.
+      const result = await h.app.request(`/api/v1/admin/providers/${h.providerA.id}`, {
+        method: "PATCH",
         headers: { ...jsonHeaders, cookie, [IDENTITY_HEADER]: me.activeIdentityId },
-        body: JSON.stringify({ baseUrl: h.b.baseUrl }),
+        body: JSON.stringify({ enabled: false }),
       });
       expect(result.status).toBe(200);
     }
@@ -314,7 +340,7 @@ describe("composed native identity and API-token provider binding", () => {
         expect(after.bearers - before.bearers).toBe(phase === "cached" ? 0 : 1);
         expect(after.mutations - before.mutations).toBe(phase === "mutation" ? 1 : 0);
         expect(after.foreignCredentials).toBe(0);
-        // The admin update probes B's health. It never authenticates to B.
+        // Nothing ever authenticates to B.
         expect(h.b.counts()).toMatchObject({
           passwords: 0,
           bearers: 0,

@@ -1,16 +1,15 @@
 import type { MeResponse } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { accountItemHref, accountItemKey, identityLabel, navigateAccountItem } from "./identities";
 
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [
-    { id: "one", username: "ada", providerType: "sftpgo", providerLabel: "Main" },
-    { id: "two", username: "bob", providerType: "sftpgo", providerLabel: "Other" },
+    makeIdentity(),
+    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
   ],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 
 describe("account identity results", () => {
   it("labels unavailable identities and separates duplicate paths", () => {

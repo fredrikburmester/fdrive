@@ -1,33 +1,30 @@
 import type { TrashSettings } from "@fdrive/contracts";
-import { createRecycleFolderTrash, isStorageError, type StorageProvider } from "@fdrive/core";
-import { createSftpgoStorageProvider } from "../storage/sftpgo-provider.js";
-import type { ClientForIdentity } from "./provider-client.ts";
+import {
+  createRecycleFolderTrash,
+  isStorageError,
+  type StorageProvider,
+  withMoveToTrash,
+} from "@fdrive/core";
+import type { ProviderService } from "../providers/service.js";
 import type { TokenSource } from "./token-source.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
+
+/**
+ * Storage for `identityId` bound to `providerId`, with its upstream token
+ * resolved up front and never refreshed: for callers that must not touch
+ * the database again while they hold a write transaction (Office).
+ */
+export type PinnedStorageFactory = (
+  identityId: string,
+  providerId: string,
+) => Promise<StorageProvider>;
 
 const trashSettingsByStorage = new WeakMap<StorageProvider, TrashSettings>();
 
 /** Returns the provider-bound Trash revision captured with this request's storage. */
 export function trashSettingsForStorage(storage: StorageProvider): TrashSettings | null {
   return trashSettingsByStorage.get(storage) ?? null;
-}
-
-/**
- * True when `statFile(path)` reports `bad_request`, the convention this
- * codebase uses for "this path is a directory" (see `fs/routes.ts`'s
- * `statEntry`). Real SFTPGo has no "stat a path of unknown kind" endpoint,
- * so this is the only safe way to tell a directory from a nonexistent path
- * without calling `list` on a path that might be a file: doing that against
- * a real SFTPGo 2.7.5 server drops the connection instead of erroring.
- */
-async function isExistingDirectory(storage: StorageProvider, path: string): Promise<boolean> {
-  try {
-    await storage.statFile(path);
-    return false;
-  } catch (error) {
-    return isStorageError(error) && error.kind === "bad_request";
-  }
 }
 
 /**
@@ -47,7 +44,11 @@ export function withIdempotentMkdir(storage: StorageProvider): StorageProvider {
       try {
         await storage.mkdir(path, opts);
       } catch (error) {
-        if (!isStorageError(error) || !(await isExistingDirectory(storage, path))) {
+        if (!isStorageError(error)) {
+          throw error;
+        }
+        const existing = await storage.stat(path).catch(() => null);
+        if (existing?.kind !== "dir") {
           throw error;
         }
       }
@@ -72,25 +73,93 @@ export function withRecycleFolderTrash(
 }
 
 /**
- * Delayed jobs retain this client; token validation can deny execution but
- * cannot retarget it. Trash settings are resolved once while constructing
- * each request's provider snapshot, so runtime changes apply without restart.
+ * Storage for an identity whose provider cannot be used right now (an admin
+ * disabled it, or its row is gone): every call rejects with `error`, and
+ * there is no trash. The session itself stays valid, so `/auth/me`,
+ * logout, switching to another login and the admin routes keep working
+ * while only file operations fail.
  */
-export function createIdentityStorageFactory(deps: {
-  clientForIdentity: ClientForIdentity;
-  tokenSource: Pick<TokenSource, "withToken">;
-  resolveTrashSettings?: (identityId: string) => Promise<TrashSettings>;
-}): IdentityStorageFactory {
+export function unavailableStorage(error: Error): StorageProvider {
+  const fail = (): Promise<never> => Promise.reject(error);
+  return {
+    list: fail,
+    stat: fail,
+    statFile: fail,
+    download: fail,
+    upload: fail,
+    mkdir: fail,
+    move: fail,
+    copy: fail,
+    deleteFile: fail,
+    deleteDir: fail,
+  };
+}
+
+export interface CreateStorageFactoryDeps {
+  readonly providers: Pick<ProviderService, "forIdentity">;
+  readonly tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential">;
+  readonly fetch: typeof globalThis.fetch;
+  readonly clock: () => Date;
+  readonly resolveTrashSettings?: (identityId: string) => Promise<TrashSettings>;
+}
+
+/**
+ * Builds the per-request `StorageProvider` for an identity through its
+ * provider module. Delayed jobs retain the result; token validation can
+ * deny execution but never retarget it, because the module only ever sees
+ * the provider row the identity is bound to. Trash settings are resolved
+ * once while constructing each request's provider snapshot, so runtime
+ * changes apply without restart: a provider whose module moves deleted
+ * files itself (`trash: "move"`) gets that wrapper underneath the recycle
+ * folder view; a native one (SFTPGo's event rule) gets only the view.
+ */
+export function createIdentityStorageFactory(
+  deps: CreateStorageFactoryDeps,
+): IdentityStorageFactory {
   return async (identityId) => {
-    const client = await deps.clientForIdentity(identityId);
-    const storage = createSftpgoStorageProvider({
-      client,
-      withToken: (fn) => deps.tokenSource.withToken(identityId, fn),
-    });
+    const { identity, module, instance } = await deps.providers.forIdentity(identityId);
+    const storage = module.createStorage(
+      instance,
+      deps.tokenSource.sessionFor(identityId, identity.externalUsername),
+      { fetch: deps.fetch },
+    );
     const settings = await deps.resolveTrashSettings?.(identityId);
-    const result =
-      settings?.enabled === true ? withRecycleFolderTrash(storage, settings.path) : storage;
+    let result = storage;
+    if (settings?.enabled === true && module.trash !== "none") {
+      const base =
+        module.trash === "move"
+          ? withMoveToTrash({ storage, trashPath: settings.path, clock: deps.clock })
+          : storage;
+      result = withRecycleFolderTrash(base, settings.path);
+    }
     if (settings !== undefined) trashSettingsByStorage.set(result, settings);
     return result;
+  };
+}
+
+/**
+ * Builds storage whose upstream token is fetched now and pinned for the
+ * storage's lifetime. Throws `upstream_unavailable` when the identity is
+ * not bound to `providerId`.
+ */
+export function createPinnedStorageFactory(
+  deps: Omit<CreateStorageFactoryDeps, "resolveTrashSettings" | "clock">,
+): PinnedStorageFactory {
+  return async (identityId, providerId) => {
+    const { identity, provider, module, instance } = await deps.providers.forIdentity(identityId);
+    if (provider.id !== providerId) {
+      throw new Error("identity is not bound to the requested provider");
+    }
+    const token = await deps.tokenSource.get(identityId);
+    return module.createStorage(
+      instance,
+      {
+        externalUsername: identity.externalUsername,
+        getCredential: () => deps.tokenSource.credential(identityId),
+        getToken: async () => token,
+        invalidateToken: async () => {},
+      },
+      { fetch: deps.fetch },
+    );
   };
 }

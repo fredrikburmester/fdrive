@@ -1,11 +1,20 @@
 # Authentication
 
-fdrive authenticates against SFTPGo in credential mode: a user signs in with
-their SFTPGo username and password, and fdrive keeps that password (and the
-short-lived JWT SFTPGo issues for it) so it can act on the user's behalf for
-every subsequent storage call, without asking them to log in again on every
-request. This document describes that design as implemented in
-`apps/api/src/auth/`.
+fdrive authenticates against the storage provider in credential mode: a user
+signs in with the credential their provider's module asks for (for SFTPGo:
+username, password and an optional one-time code, sent as
+`{ providerId?, credential: { username, password, otp? } }`), and fdrive keeps
+that credential (and, for SFTPGo, the short-lived JWT it issues) so it can act
+on the user's behalf for every subsequent storage call, without asking them
+to log in again on every request. Providers are rows in `app.providers`; an
+identity is bound to one row and a stored credential is only ever sent to
+that row's endpoint (`docs/workflow/P10-STORAGE-PROVIDERS.md`). This
+document describes that design as implemented in `apps/api/src/auth/` and
+`apps/api/src/providers/`.
+
+`FDRIVE_ADMIN_USERS` grants apply only to usernames on the SFTPGo endpoint named
+by `SFTPGO_URL`. The same username on another provider gains no administrator
+access. Persisted `accounts.is_admin` grants remain account-wide.
 
 ## What is stored, and how it is encrypted
 
@@ -97,11 +106,16 @@ currently-valid SFTPGo JWT for an identity:
    re-minting once fewer than 2 minutes remain before it expires, not only
    once it has actually expired, so a request in flight does not race an
    expiry.
-2. `withToken(identityId, fn)` runs `fn` with a valid token and, if `fn`
-   fails with a `401` from SFTPGo, invalidates the cached token, mints a
-   fresh one, and retries `fn` exactly once. This is what lets fdrive
-   recover transparently from SFTPGo revoking a token early (for example,
-   an admin forcing a logout) without surfacing an error to the user.
+2. `sessionFor(identityId, username)` hands the provider module a
+   `StorageSession` with `getToken`, `invalidateToken` and `getCredential`.
+   The SFTPGo module's storage runs each call with the current token and,
+   on a `401` from SFTPGo, invalidates the cached token, mints a fresh one,
+   and retries exactly once (`packages/sftpgo/src/module.ts`). This is what
+   lets fdrive recover transparently from SFTPGo revoking a token early (for
+   example, an admin forcing a logout) without surfacing an error to the
+   user. Minting itself is the module's `mint`; a provider module without
+   one (a backend that signs every request from the credential) gets `null`
+   tokens and never touches this cache.
 3. `prime(identityId, token)` seals and stores a token the caller already
    has, without minting a new one. `authService.login` calls `prime` with
    the token its own `sftpgo.login` call just returned, so a fresh fdrive
