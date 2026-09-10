@@ -1,1 +1,0 @@
-ALTER TABLE "app"."shares" ADD COLUMN "presentation" text DEFAULT 'auto' NOT NULL;
