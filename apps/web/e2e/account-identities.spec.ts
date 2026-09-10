@@ -9,13 +9,13 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test("links, switches, finds both owners of one path, and unlinks a login", async ({ page }) => {
   await loginAs(page, "account_left", "account-left-test-password");
   await page.goto("/account");
-  await expect(page.getByRole("button", { name: "Unlink account_left" })).toBeDisabled();
-  await page.getByRole("button", { name: "Link login", exact: true }).click();
-  const link = page.getByRole("dialog", { name: "Link login" });
+  await expect(page.getByRole("button", { name: "Remove account_left" })).toBeDisabled();
+  await page.getByRole("button", { name: "Add login", exact: true }).click();
+  const link = page.getByRole("dialog", { name: "Add login" });
   await link.getByLabel("Username").fill("account_right");
   await link.getByLabel("Password", { exact: true }).fill("account-right-test-password");
   await link.getByLabel("Your current password").fill("account-left-test-password");
-  await link.getByRole("button", { name: "Link login" }).click();
+  await link.getByRole("button", { name: "Add login" }).click();
   await expect(page).toHaveURL(/\/files$/);
   await expect(page.getByText("right-only.txt", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /account_right/ }).click();
@@ -86,17 +86,17 @@ test("links, switches, finds both owners of one path, and unlinks a login", asyn
   expect(await untouched.text()).toBe("Left account file");
   await secondTab.close();
   await page.goto("/account");
-  await page.getByRole("button", { name: "Unlink account_right", exact: true }).click();
-  const unlink = page.getByRole("dialog", { name: "Unlink account_right?", exact: true });
+  await page.getByRole("button", { name: "Remove account_right", exact: true }).click();
+  const unlink = page.getByRole("dialog", { name: "Remove account_right?", exact: true });
   await expect(unlink.getByText(/Files remain on the server/)).toBeVisible();
   // The tab switched back to account_left above, so that login confirms the unlink.
   await unlink.getByLabel("Your current password").fill("account-left-test-password");
-  await unlink.getByRole("button", { name: "Unlink login", exact: true }).click();
+  await unlink.getByRole("button", { name: "Remove login", exact: true }).click();
   await expect(page).toHaveURL(/\/files$/);
   await expect(page.getByText("left-only.txt", { exact: true })).toBeVisible();
   await page.goto("/account");
-  await expect(page.getByRole("button", { name: "Unlink account_left" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Unlink account_right" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Remove account_left" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove account_right" })).toHaveCount(0);
 });
 
 test.describe("initial account shell", () => {

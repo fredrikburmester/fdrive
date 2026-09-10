@@ -56,7 +56,7 @@ export function UnlinkLoginDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Unlink {identity?.username}?</DialogTitle>
+            <DialogTitle>Remove {identity?.username}?</DialogTitle>
             <DialogDescription>
               {identity?.providerLabel}. Files remain on the server. This login becomes a separate
               account and its sessions are signed out.
@@ -100,7 +100,7 @@ export function UnlinkLoginDialog({
               Cancel
             </Button>
             <Button type="submit" variant="destructive" disabled={actions.pending || !valid}>
-              {actions.pending ? "Unlinking…" : "Unlink login"}
+              {actions.pending ? "Removing…" : "Remove login"}
             </Button>
           </DialogFooter>
         </form>

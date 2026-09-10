@@ -70,7 +70,7 @@ export function LinkLoginDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Link login</DialogTitle>
+            <DialogTitle>Add login</DialogTitle>
             <DialogDescription>
               Add another SFTPGo login to this account and make it active.
             </DialogDescription>
@@ -151,7 +151,7 @@ export function LinkLoginDialog({
           </FieldGroup>
           <DialogFooter>
             <Button type="submit" disabled={!valid || actions.pending}>
-              {actions.pending ? "Linking…" : "Link login"}
+              {actions.pending ? "Adding…" : "Add login"}
             </Button>
           </DialogFooter>
         </form>

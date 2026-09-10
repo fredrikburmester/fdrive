@@ -22,8 +22,8 @@ export function IdentitiesCard() {
   return (
     <Card className="w-full max-w-2xl">
       <CardHeader>
-        <CardTitle>Identities</CardTitle>
-        <CardDescription>SFTPGo logins linked to this account.</CardDescription>
+        <CardTitle>Logins</CardTitle>
+        <CardDescription>Every SFTPGo login you can use from this account.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {isLoading || !me ? (
@@ -48,9 +48,9 @@ export function IdentitiesCard() {
                     size="sm"
                     disabled={pending || me.identities.length < 2}
                     onClick={() => setUnlink(identity)}
-                    aria-label={`Unlink ${identity.username}`}
+                    aria-label={`Remove ${identity.username}`}
                   >
-                    Unlink
+                    Remove
                   </Button>
                 </div>
               </div>
@@ -58,16 +58,14 @@ export function IdentitiesCard() {
             </div>
           ))
         )}
-        <p className="text-xs text-muted-foreground">
-          Keep at least one login linked to this account.
-        </p>
+        <p className="text-xs text-muted-foreground">Keep at least one login on this account.</p>
         <Button
           variant="outline"
           className="self-start"
           disabled={!me || pending}
           onClick={() => setLinkOpen(true)}
         >
-          Link login
+          Add login
         </Button>
         <LinkLoginDialog open={linkOpen} onOpenChange={setLinkOpen} />
         <UnlinkLoginDialog identity={unlink} onClose={() => setUnlink(null)} />
