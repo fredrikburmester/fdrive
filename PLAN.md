@@ -207,11 +207,14 @@ paths before they leave core. Route handlers never see fs paths. This is also wh
 "Notes and keystore folders are searchable by anyone with the token" problem: a token belongs to
 an identity, and the identity's scope is enforced in core.
 
-Provider abstraction for later: `StorageProvider` port with `list`, `stat`, `read(range)`,
-`write(stream)`, `mkdir`, `move`, `copy`, `delete`, `zip`. `SftpgoProvider` is the only
-implementation. A future Drive or S3 provider implements the same port and gets its own
-`identities` rows; the index needs a `changes since cursor` source per root, which the disk
-watcher is one implementation of.
+Provider abstraction: `StorageProvider` port with `list`, `stat`, `read(range)`,
+`write(stream)`, `mkdir`, `move`, `copy`, `delete`, optional `zip` and `setModifiedAt`.
+`SftpgoProvider` is the first implementation. Since 2026-09-10 a provider is a package exporting
+a `ProviderModule` (config and credential schemas, capabilities, `authenticate`, `createStorage`)
+registered in the API; identities carry a capability list the web and the routes both honour.
+Design and chunks: `docs/workflow/P10-STORAGE-PROVIDERS.md`. The index needs a `changes since
+cursor` source per root, which the disk watcher is one implementation of; remote providers ship
+without index-backed features until a remote walker exists.
 
 ---
 
@@ -661,7 +664,8 @@ management, zero-copy download path if the budget demands it, perf budgets becom
 **Phase 6 — Recovery and extensions (scheduled 2026-09-07)**
 Trash, snapshot versions, similar-image comparison/dedupe, admin settings UI for index rules,
 and a WebDAV storage provider. Scheduled by the latest all-phases instruction; architectural
-contract and sequencing: `docs/workflow/P6-DESIGN.md`. Configurable embeddings remain deferred.
+contract and sequencing: `docs/workflow/P6-DESIGN.md`. The second-provider item is superseded by
+P10 (`docs/workflow/P10-STORAGE-PROVIDERS.md`, 2026-09-10). Configurable embeddings remain deferred.
 Done when: owned recovery/restore, image comparison, rules and second-provider browse/transfer
 flows pass real storage integration, browser acceptance and required quality gates.
 
@@ -739,6 +743,18 @@ flows pass real storage integration, browser acceptance and required quality gat
     preferences can clear all pins across linked identities. Metadata tracks folder moves
     and deletes; confirmed missing folders lose stale pins, transient/permission failures
     retain them.
+
+21. Storage providers (2026-09-10): one fdrive instance serves several providers; a provider is
+    a package exporting a `ProviderModule` plus one registry line, verified by a shared
+    conformance suite. Operators configure endpoints, users supply credentials only. Features
+    have generic defaults in core (trash by move, fdrive-owned shares, archive jobs) and a
+    provider overrides only what is native; no per-feature connector layer. WebDAV first, S3
+    designed for and built later, local disk and OAuth drives not planned. Remote providers
+    ship without thumbnails, search, virtual folder mapping or Office; the identity's
+    capability list hides those controls and the API refuses the routes. Sharing is in the
+    first version for every provider; SFTPGo keeps native shares. The connection singleton
+    folds into provider rows, `SFTPGO_URL` seeds and pins the first one.
+    Design: `docs/workflow/P10-STORAGE-PROVIDERS.md`.
 
 ## 15. Resolved questions (2026-09-06)
 
