@@ -124,7 +124,7 @@ describe("createSetupService: complete", () => {
     expect(provider).toMatchObject({
       type: "sftpgo",
       baseUrl: "http://sftpgo:8080",
-      label: "sftpgo:8080",
+      label: "",
       enabled: true,
       config: { homeTemplate: "sftpgo:/{username}" },
     });
@@ -144,10 +144,20 @@ describe("createSetupService: complete", () => {
     expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
   });
 
-  it("reuses the environment-pinned provider and only sets its home template", async () => {
+  it("reuses the environment-pinned provider and sets its home template only after the login", async () => {
     const h = harness({ hasEnvUrl: true });
-    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", { managedByEnv: true });
+    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
+      managedByEnv: true,
+      enabled: false,
+      homeTemplate: "old:/{username}",
+    });
+    let templateDuringLogin: unknown;
+    vi.mocked(h.authService.loginCandidate).mockImplementation(async (_input, providerId) => {
+      templateDuringLogin = (await h.repos.providers.get(providerId))?.config.homeTemplate;
+      return { sessionId: "session-1", me: ME };
+    });
     await h.service.complete({ ...COMPLETE_INPUT, baseUrl: "http://ignored:1" });
+    expect(templateDuringLogin).toBe("old:/{username}");
     expect(await h.repos.providers.list()).toHaveLength(1);
     expect(await h.repos.providers.get(pinned.id)).toMatchObject({
       baseUrl: "http://env:8080",
@@ -158,6 +168,25 @@ describe("createSetupService: complete", () => {
       expect.objectContaining({ providerId: pinned.id }),
       pinned.id,
     );
+  });
+
+  it("leaves an existing row's configuration untouched when the candidate login fails", async () => {
+    const h = harness({ hasEnvUrl: true });
+    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
+      managedByEnv: true,
+      enabled: false,
+      homeTemplate: "old:/{username}",
+    });
+    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
+      new ApiHttpError("unauthorized", "invalid username or password"),
+    );
+    await expect(
+      h.service.complete({ ...COMPLETE_INPUT, homeTemplate: "bogus:/x" }),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
+      enabled: false,
+      config: { homeTemplate: "old:/{username}" },
+    });
   });
 
   it("passes otp through to the login flow when given", async () => {

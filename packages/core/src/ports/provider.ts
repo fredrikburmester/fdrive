@@ -131,6 +131,14 @@ export interface ProviderModule {
   readonly credentialFields: readonly ProviderField[];
   readonly capabilities: ProviderCapabilities;
   readonly trash: TrashStrategy;
+  /**
+   * The name of the index root `instance`'s files live under, when the
+   * deployment's indexer can read them at all; `null` when the instance
+   * names no root or an unparsable one. Absent for providers the indexer
+   * never reads. `index` and `scopeMapping` hold for an instance only when
+   * this names a configured root.
+   */
+  indexRootName?(instance: ProviderInstance): string | null;
   /** Checks that `instance` is reachable and looks like this kind of server. */
   probe(instance: ProviderInstance, ctx: ProviderContext): Promise<ProbeResult>;
   /**

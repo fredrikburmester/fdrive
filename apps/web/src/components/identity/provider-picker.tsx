@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { providerDisplayName } from "@/lib/auth/login-model";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 
 export interface ProviderPickerProps {
@@ -41,10 +42,12 @@ export function ProviderPicker({ providers, value, onChange, id, disabled }: Pro
         <SelectContent>
           {providers.map((provider) => (
             <SelectItem key={provider.id} value={provider.id}>
-              {provider.label}
-              <span className="ml-1 text-muted-foreground text-xs">
-                {providerTypeLabel(provider.type)}
-              </span>
+              {providerDisplayName(provider)}
+              {provider.label.length > 0 && (
+                <span className="ml-1 text-muted-foreground text-xs">
+                  {providerTypeLabel(provider.type)}
+                </span>
+              )}
             </SelectItem>
           ))}
         </SelectContent>

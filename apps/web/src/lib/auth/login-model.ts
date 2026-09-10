@@ -53,11 +53,23 @@ export function confirmationFieldsFor(fields: readonly ProviderField[]): readonl
     );
 }
 
+/**
+ * What to call a provider in front of someone who is not signed in: the
+ * name an admin gave it, else the product name. The public list never
+ * carries the host, so there is nothing else to fall back to.
+ */
+export function providerDisplayName(provider: Pick<PublicProvider, "type" | "label">): string {
+  return provider.label.length > 0 ? provider.label : providerTypeLabel(provider.type);
+}
+
 /** The subtitle under "Sign in" on the login page. */
 export function loginSubtitle(providers: readonly PublicProvider[]): string {
   const [only] = providers;
   if (providers.length === 1 && only !== undefined) {
-    return `Sign in with your ${providerTypeLabel(only.type)} account on ${only.label}`;
+    const product = providerTypeLabel(only.type);
+    return only.label.length > 0
+      ? `Sign in with your ${product} account on ${only.label}`
+      : `Sign in with your ${product} account`;
   }
   if (providers.length > 1) {
     return "Choose a server and sign in";

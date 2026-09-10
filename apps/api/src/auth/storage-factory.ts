@@ -72,6 +72,29 @@ export function withRecycleFolderTrash(
   };
 }
 
+/**
+ * Storage for an identity whose provider cannot be used right now (an admin
+ * disabled it, or its row is gone): every call rejects with `error`, and
+ * there is no trash. The session itself stays valid, so `/auth/me`,
+ * logout, switching to another login and the admin routes keep working
+ * while only file operations fail.
+ */
+export function unavailableStorage(error: Error): StorageProvider {
+  const fail = (): Promise<never> => Promise.reject(error);
+  return {
+    list: fail,
+    stat: fail,
+    statFile: fail,
+    download: fail,
+    upload: fail,
+    mkdir: fail,
+    move: fail,
+    copy: fail,
+    deleteFile: fail,
+    deleteDir: fail,
+  };
+}
+
 export interface CreateStorageFactoryDeps {
   readonly providers: Pick<ProviderService, "forIdentity">;
   readonly tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential">;

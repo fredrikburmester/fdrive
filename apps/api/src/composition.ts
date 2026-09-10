@@ -168,7 +168,7 @@ export async function composeApp(
     environment: {
       sftpgoUrl: config.sftpgoUrl,
       homeTemplate: config.fdriveHomeTemplate,
-      indexRootCount: (config.fdriveIndexRoots ?? []).length,
+      indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
     },
     trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
   });

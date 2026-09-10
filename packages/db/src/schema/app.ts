@@ -257,14 +257,18 @@ export const settings = appSchema.table("settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** Shared office identity survives index clears and user-specific scopes. */
+/**
+ * Shared office identity survives index clears and user-specific scopes.
+ * Rows go with their provider: once a provider row is removed (which
+ * requires that no login uses it) nothing can open the documents it named.
+ */
 export const officeFiles = appSchema.table(
   "office_files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     providerId: uuid("provider_id")
       .notNull()
-      .references(() => providers.id),
+      .references(() => providers.id, { onDelete: "cascade" }),
     rootName: text("root_name").notNull(),
     path: text("path").notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

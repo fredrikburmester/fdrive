@@ -31,5 +31,6 @@ export {
 } from "@/lib/files/selection";
 export { readJson, type StorageLike, writeJson } from "@/lib/files/storage";
 export { capabilitiesFor } from "@/lib/identity/capabilities";
+export { trashAvailabilityFor } from "@/lib/trash/format";
 export { useTrashStatus } from "@/lib/trash/queries";
 export type { ApiClient };

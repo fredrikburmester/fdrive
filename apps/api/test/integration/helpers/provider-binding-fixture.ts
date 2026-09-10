@@ -32,7 +32,7 @@ export async function providerFixture(repos: Repos = createMemoryRepos()) {
       repos,
       fetch: globalThis.fetch,
       clock,
-      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootCount: 0 },
+      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootNames: [] },
     });
     const providerA = await repos.providers.ensure({ type: "sftpgo", baseUrl: a.baseUrl });
     const tokenDeps = { repos, providers, master, clock, fetch: globalThis.fetch };
