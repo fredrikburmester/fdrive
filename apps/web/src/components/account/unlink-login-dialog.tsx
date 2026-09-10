@@ -2,6 +2,7 @@
 
 import { UnlinkIdentityRequest } from "@fdrive/contracts";
 import { useState } from "react";
+import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,11 +12,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { FieldError, FieldGroup } from "@/components/ui/field";
 import type { AccountIdentity } from "@/lib/account/identities";
 import { useIdentityActions } from "@/lib/account/use-identities";
+import { useMe } from "@/lib/api/auth-queries";
+import { useProviders } from "@/lib/api/provider-queries";
+import {
+  buildCredential,
+  confirmationFieldsFor,
+  credentialComplete,
+  credentialFieldsFor,
+} from "@/lib/auth/login-model";
 
+const EMPTY_VALUES: Readonly<Record<string, string>> = {};
+
+/**
+ * Removes a login from the account after the person confirms the login
+ * they are signed in with, using that login's provider's secret fields.
+ */
 export function UnlinkLoginDialog({
   identity,
   onClose,
@@ -23,24 +37,29 @@ export function UnlinkLoginDialog({
   identity: AccountIdentity | null;
   onClose: () => void;
 }) {
+  const { data: me } = useMe();
+  const { data: providerList } = useProviders();
   const actions = useIdentityActions();
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [currentOtp, setCurrentOtp] = useState("");
-  const request = {
-    currentCredential: { password: currentPassword, ...(currentOtp ? { otp: currentOtp } : {}) },
-  };
-  const valid = currentPassword.length > 0 && UnlinkIdentityRequest.safeParse(request).success;
+  const [current, setCurrent] = useState(EMPTY_VALUES);
+
+  const activeIdentity = me?.identities.find((candidate) => candidate.id === me.activeIdentityId);
+  const activeProvider = providerList?.providers.find(
+    (candidate) => candidate.id === activeIdentity?.providerId,
+  );
+  const confirmFields = confirmationFieldsFor(credentialFieldsFor(activeProvider));
+  const request = { currentCredential: buildCredential(confirmFields, current) };
+  const valid =
+    credentialComplete(confirmFields, current) && UnlinkIdentityRequest.safeParse(request).success;
+
   function close() {
-    setCurrentPassword("");
-    setCurrentOtp("");
+    setCurrent(EMPTY_VALUES);
     actions.resetError();
     onClose();
   }
   async function submit() {
     if (!identity || !valid || actions.pending) return;
     const parsed = UnlinkIdentityRequest.parse(request);
-    setCurrentPassword("");
-    setCurrentOtp("");
+    setCurrent(EMPTY_VALUES);
     if (await actions.unlink(identity.id, parsed)) onClose();
   }
   return (
@@ -65,36 +84,13 @@ export function UnlinkLoginDialog({
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
-            <Field>
-              <FieldLabel htmlFor="unlink-current-password">Your current password</FieldLabel>
-              <Input
-                id="unlink-current-password"
-                type="password"
-                autoComplete="current-password"
-                maxLength={4096}
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-                disabled={actions.pending}
-                required
-              />
-              <FieldDescription>
-                The password of the login you are signed in with, to confirm this change.
-              </FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="unlink-current-otp">Your one-time code</FieldLabel>
-              <Input
-                id="unlink-current-otp"
-                autoComplete="one-time-code"
-                maxLength={32}
-                value={currentOtp}
-                onChange={(event) => setCurrentOtp(event.target.value)}
-                disabled={actions.pending}
-              />
-              <FieldDescription>
-                Optional. Enter it if your current login uses two-factor authentication.
-              </FieldDescription>
-            </Field>
+            <ProviderFieldInputs
+              fields={confirmFields}
+              values={current}
+              onChange={(name, value) => setCurrent((prev) => ({ ...prev, [name]: value }))}
+              idPrefix="unlink-current"
+              disabled={actions.pending}
+            />
             {actions.error ? <FieldError>{actions.error}</FieldError> : null}
           </FieldGroup>
           <DialogFooter>

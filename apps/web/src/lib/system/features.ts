@@ -40,7 +40,8 @@ export const FEATURE_DESCRIPTIONS: Record<
   },
   pdfOcr: {
     title: "Searchable PDFs",
-    description: "Add a searchable text layer to PDFs stored in SFTPGo, for use in any PDF reader.",
+    description:
+      "Add a searchable text layer to PDFs in mounted storage, for use in any PDF reader.",
     cost: "Modifies original PDFs and keeps backup originals by default, using additional disk space.",
     dependency: "Requires writable mounted storage. This is independent of search OCR.",
   },

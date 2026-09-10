@@ -7,6 +7,7 @@ import {
   downloadMany,
   downloadSingle,
   needsZipDownload,
+  planDownload,
 } from "./download";
 
 function fakeDocument() {
@@ -77,6 +78,34 @@ describe("needsZipDownload", () => {
 
   it("is true for an empty selection", () => {
     expect(needsZipDownload([])).toBe(true);
+  });
+});
+
+describe("planDownload", () => {
+  const file = { kind: "file", path: "/a.txt" };
+  const other = { kind: "file", path: "/b.txt" };
+  const dir = { kind: "dir", path: "/d" };
+
+  it("streams a single file directly whatever the capability", () => {
+    expect(planDownload([file], false)).toEqual({ kind: "single", path: "/a.txt" });
+    expect(planDownload([file], true)).toEqual({ kind: "single", path: "/a.txt" });
+  });
+
+  it("zips anything else when the provider can", () => {
+    expect(planDownload([file, dir], true)).toEqual({ kind: "zip", paths: ["/a.txt", "/d"] });
+    expect(planDownload([dir], true)).toEqual({ kind: "zip", paths: ["/d"] });
+  });
+
+  it("downloads each file on its own and skips folders without zip", () => {
+    expect(planDownload([file, dir, other], false)).toEqual({
+      kind: "each",
+      paths: ["/a.txt", "/b.txt"],
+    });
+    expect(planDownload([dir], false)).toBeNull();
+  });
+
+  it("is null for an empty selection", () => {
+    expect(planDownload([], true)).toBeNull();
   });
 });
 

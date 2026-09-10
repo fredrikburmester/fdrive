@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -17,9 +17,10 @@ import {
 } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries, contextSelectionCount } from "@/lib/files/selection";
+import { contextEntries } from "@/lib/files/selection";
 import { wantsThumbnail } from "@/lib/files/thumbnail";
 import { formatBytes, formatDate } from "@/lib/format";
+import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
@@ -118,9 +119,9 @@ export interface FileListProps {
    * a "virtual listing" that does not run the archive jobs. Defaults to
    * `false`. */
   hideArchive?: boolean;
-  /** Whether the active identity's storage provider exposes a trash, for
-   * every row's context menu (see `FileContextMenu`). Defaults to `false`. */
-  trashAvailable?: boolean;
+  /** What the active login's storage can do, for every row's context menu
+   * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
+  capabilities?: ProviderCapabilities;
   /** A request to scroll a specific entry into view, identified by unique token. */
   scrollRequest?: ScrollRequest | null;
   /** Callback fired after the virtualizer has scrolled to the requested entry. */
@@ -169,7 +170,7 @@ export function FileList({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
-  trashAvailable = false,
+  capabilities = DEFAULT_CAPABILITIES,
   scrollRequest = null,
   onScrollConsumed,
   showThumbnails = false,
@@ -318,8 +319,7 @@ export function FileList({
               key={entry.path}
               entry={entry}
               onAction={onContextAction}
-              selectionCount={contextSelectionCount(entry.path, selected)}
-              includesFolder={group.some((candidate) => candidate.kind === "dir")}
+              selection={selectionOf(group)}
               hideMoveCopy={hideMoveCopy}
               showReveal={showReveal}
               hideArchive={hideArchive}
@@ -334,7 +334,7 @@ export function FileList({
               onOpenTagsEditor={() => onOpenTagsEditor(group)}
               favorite={groupFavorite(group)}
               onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-              trashAvailable={trashAvailable}
+              capabilities={capabilities}
             >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
               {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}

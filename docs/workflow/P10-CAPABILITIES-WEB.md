@@ -66,3 +66,41 @@ in `components/account/scope-model.ts` becomes provider-neutral.
 menu and toolbar with each capability false in turn, `account-scope` hidden without
 `scopeMapping`, `system-storage` add/test/edit/remove, `about`. Real dev app pass with the
 migrated SFTPGo row. `workflow`.
+
+## As implemented (2026-09-10)
+
+- `lib/identity/capabilities.ts`: `capabilitiesFor(me, identityId?)`, `anyLoginCan(me, key)`,
+  `browserActions(capabilities, selection)` over a `BrowserSelection { files, folders }`, plus
+  `canDownload`/`downloadNeedsZip`, `DEFAULT_CAPABILITIES` (everything true except `trash`, so
+  nothing flickers before `/auth/me` answers and the pre-capability behaviour is kept) and the
+  chip labels. The context menu, toolbar and list/grid take one `capabilities` prop;
+  `trashAvailable` is gone. `hideMoveCopy`/`hideArchive`/`showReveal` stay: they describe the
+  listing kind (favorites, recents, a tag), not the provider, and the spec's "on top" rule needs
+  them. `selectionCount`/`includesFolder` on the context menu became `selection`.
+- `zip`: `planDownload(entries, zip)` in `lib/files/download.ts` streams one file directly, zips
+  anything else when the provider can, and otherwise downloads each file on its own, skipping
+  folders; the menu, toolbar and ⌘D all go through it, so a folder-only selection has no
+  Download without `zip` and a mixed one reads "Download" (not "as zip").
+- `atomicMove`: no job with progress (there is no job endpoint for a move); the rename dialog and
+  the Move-to picker show a caution line for a folder instead. `setModifiedAt`: the Inspector
+  adds an upload-time note. `index`: the Inspector reports "Not indexed" for a folder without a
+  request, the "Show thumbnails" toggle and list thumbnails are off, grid tiles fall back to icons.
+  `office`: the Office items and the New document kinds are hidden even while Office is enabled.
+  `trash`: the label and the sidebar entry read the capability; `DeleteDialog` keeps
+  `TrashStatusResponse` for its retention sentence.
+- Sidebar Shares and Trash are the union across linked logins (`anyLoginCan`); the switcher and
+  the Logins card show a per-type `ProviderIcon` (labelled with the product name).
+- Login page: the server component loads `GET /providers`; `LoginForm` renders
+  `credentialFields` through the shared `ProviderFieldInputs` (an optional one-time code stays
+  behind "Use a one-time code" as before) and a `ProviderPicker` when more than one provider is
+  enabled; `providerId` is sent whenever a provider is known. With no providers (API unreachable)
+  the SFTPGo-shaped `DEFAULT_CREDENTIAL_FIELDS` render and the server picks its only provider.
+- Add and Remove login dialogs: fields from the chosen provider, confirmation fields from the
+  active login's provider filtered to secret kinds and relabelled "Your current password" / "Your
+  one-time code" (`confirmationFieldsFor`). The identity scope card renders only with
+  `scopeMapping`. Scope error copy is provider-neutral; copy that names SFTPGo the product
+  (trash rules, Office user lists, virtual folders, setup) stays.
+- Browser specs: `login-providers.spec.ts` adds a second SFTPGo provider through the admin API,
+  checks the picker appears only then, and signs in through the seeded one with its
+  `providerId`; `about.spec.ts` unchanged (attribution list already rendered).
+- System > Storage: see the section below once merged.

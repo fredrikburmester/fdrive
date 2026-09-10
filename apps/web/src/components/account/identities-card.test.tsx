@@ -89,6 +89,25 @@ it("confirms the exact login, explains retained files, and reports unlink confli
   expect(screen.getByRole("dialog", { name: "Add login" })).toBeDefined();
 });
 
+it("shows the index status only for logins whose provider maps virtual folders", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const [ada, bob] = me.identities;
+  if (ada === undefined || bob === undefined) throw new Error("fixture");
+  client.setQueryData(["auth", "me"], {
+    ...me,
+    identities: [ada, { ...bob, capabilities: { ...bob.capabilities, scopeMapping: false } }],
+  });
+  const scope = vi.mocked(apiClient.identityScope);
+  render(
+    <QueryClientProvider client={client}>
+      <IdentitiesCard />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(scope).toHaveBeenCalledTimes(1));
+  expect(scope.mock.calls[0]?.[0]).toBe("one");
+  expect(screen.getAllByRole("img", { name: "SFTPGo" })).toHaveLength(2);
+});
+
 it("keeps the last identity linked, and disables controls while loading", async () => {
   vi.spyOn(apiClient, "me").mockImplementation(() => new Promise(() => {}));
   const client = new QueryClient();

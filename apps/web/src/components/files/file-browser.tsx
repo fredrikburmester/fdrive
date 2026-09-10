@@ -43,7 +43,7 @@ import {
   type DownloadDeps,
   downloadMany,
   downloadSingle,
-  needsZipDownload,
+  planDownload,
 } from "@/lib/files/download";
 import { useFolderView } from "@/lib/files/folder-view-queries";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
@@ -103,6 +103,7 @@ import {
   type TypeAheadBuffer,
   typeAheadMatch,
 } from "@/lib/files/type-ahead";
+import { capabilitiesFor, selectionOf } from "@/lib/identity/capabilities";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
 import type { JobRequest } from "@/lib/jobs/types";
@@ -215,7 +216,10 @@ export function FileBrowser({
   const { data, isLoading, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const { data: trashStatus } = useTrashStatus();
-  const trashAvailable = trashStatus?.available === true;
+  const capabilities = capabilitiesFor(me);
+  const slowMoveWarning = capabilities.atomicMove
+    ? null
+    : "This server cannot move a folder in one step: it copies the folder and then deletes the original, which can take a while for a large one.";
 
   const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
   const folderView = useFolderView(path, me?.activeIdentityId);
@@ -370,20 +374,36 @@ export function FileBrowser({
     router.replace(toRoute(cleanHref));
   }, [selectName, isLoading, orderedPaths, path, searchParams, router]);
 
-  function handleDownloadSelection() {
-    if (selectedEntries.length === 0) {
+  /**
+   * Downloads `targets` the way the login's provider allows: one file
+   * streams directly, a provider with `zip` archives anything else, and one
+   * without hands out each file on its own (folders are skipped there).
+   */
+  function runDownload(targets: readonly FsEntry[]) {
+    const plan = planDownload(targets, capabilities.zip);
+    if (plan === null) {
       return;
     }
     const deps = buildDownloadDeps(getAnchorDownloader());
-    const first = selectedEntries[0];
-    const paths = selectedEntries.map((selectedEntry) => selectedEntry.path);
-    if (!needsZipDownload(selectedEntries) && first !== undefined) {
-      downloadSingle(first.path, deps);
-    } else {
-      downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`).catch(() =>
-        toast.error("Could not download the selection."),
-      );
+    switch (plan.kind) {
+      case "single":
+        downloadSingle(plan.path, deps);
+        break;
+      case "zip":
+        downloadMany(plan.paths, deps, `${defaultArchiveName(plan.paths)}.zip`).catch(() =>
+          toast.error("Could not download the selection."),
+        );
+        break;
+      case "each":
+        for (const target of plan.paths) {
+          downloadSingle(target, deps);
+        }
+        break;
     }
+  }
+
+  function handleDownloadSelection() {
+    runDownload(selectedEntries);
   }
 
   function getAnchorDownloader(): AnchorDownloader {
@@ -534,19 +554,9 @@ export function FileBrowser({
       case "open":
         handleOpen(entry);
         break;
-      case "download": {
-        const paths = pathsForAction(entry);
-        const deps = buildDownloadDeps(getAnchorDownloader());
-        const first = paths[0];
-        if (!needsZipDownload(entriesForAction(entry)) && first !== undefined) {
-          downloadSingle(first, deps);
-        } else {
-          downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`).catch(() =>
-            toast.error("Could not download the selection."),
-          );
-        }
+      case "download":
+        runDownload(entriesForAction(entry));
         break;
-      }
       case "rename":
         setRenameTarget(entry);
         break;
@@ -869,12 +879,13 @@ export function FileBrowser({
             onUploadFolder={handleUploadFolder}
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
-            selectedCount={selection.selected.size}
+            selection={selectionOf(selectedEntries)}
+            capabilities={capabilities}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
             onDownloadSelection={handleDownloadSelection}
-            showThumbnails={showThumbnails}
+            showThumbnails={showThumbnails && capabilities.index}
             onShowThumbnailsChange={setShowThumbnails}
           />
         }
@@ -942,10 +953,10 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trashAvailable={trashAvailable}
+                capabilities={capabilities}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails}
+                showThumbnails={showThumbnails && capabilities.index}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -964,9 +975,10 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trashAvailable={trashAvailable}
+                capabilities={capabilities}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
+                thumbnails={capabilities.index}
               />
             ) : (
               <FileList
@@ -988,17 +1000,21 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trashAvailable={trashAvailable}
+                capabilities={capabilities}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails}
+                showThumbnails={showThumbnails && capabilities.index}
               />
             )}
           </div>
           <DropOverlay visible={isDraggingOver} destinationName={destinationName} />
         </div>
         {detailsOpen && (
-          <Inspector entries={selectedEntries} onClose={() => setDetailsOpen(false)} />
+          <Inspector
+            entries={selectedEntries}
+            onClose={() => setDetailsOpen(false)}
+            capabilities={capabilities}
+          />
         )}
       </div>
 
@@ -1040,6 +1056,7 @@ export function FileBrowser({
         }}
         onRename={handleRenameSubmit}
         pending={rename.isPending}
+        warning={renameTarget?.kind === "dir" ? slowMoveWarning : null}
       />
       <DeleteDialog
         entries={deleteTargets}
@@ -1063,6 +1080,14 @@ export function FileBrowser({
             }
           }}
           onConfirm={handleDestinationConfirm}
+          warning={
+            destinationPicker.mode === "move" &&
+            destinationPicker.paths.some(
+              (target) => entries.find((entry) => entry.path === target)?.kind === "dir",
+            )
+              ? slowMoveWarning
+              : null
+          }
           pending={
             destinationPicker.mode === "move"
               ? move.isPending

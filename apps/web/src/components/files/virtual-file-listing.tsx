@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, Tag } from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useTreeChildren } from "@/lib/files/queries";
 import {
@@ -19,6 +19,7 @@ import {
 } from "@/lib/files/tree";
 import { flattenTree } from "@/lib/files/tree-rows";
 import { useDefaultView } from "@/lib/files/use-default-view";
+import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import type { RowContextAction } from "./file-context-menu";
 import { FileGrid } from "./file-grid";
 import { type ClickModifierKeys, FileList } from "./file-list";
@@ -41,7 +42,8 @@ export interface VirtualFileListingProps {
   readonly hideMoveCopy?: boolean | undefined;
   readonly hideArchive?: boolean | undefined;
   readonly showReveal?: boolean | undefined;
-  readonly trashAvailable?: boolean | undefined;
+  /** What the active login's storage can do, for every row's context menu. */
+  readonly capabilities?: ProviderCapabilities | undefined;
 }
 
 /**
@@ -61,7 +63,7 @@ export function VirtualFileListing({
   hideMoveCopy = false,
   hideArchive = false,
   showReveal = false,
-  trashAvailable = false,
+  capabilities = DEFAULT_CAPABILITIES,
 }: VirtualFileListingProps) {
   const [viewMode] = useDefaultView();
   const [treeState, setTreeState] = useState<TreeState>(EMPTY_TREE_STATE);
@@ -156,7 +158,7 @@ export function VirtualFileListing({
     hideMoveCopy,
     hideArchive,
     showReveal,
-    trashAvailable,
+    capabilities,
   };
 
   if (viewMode === "grid") {
