@@ -2,6 +2,28 @@
 
 Updated: 2026-09-10. Owner: primary agent.
 
+## P10 PR reduction follow-up (2026-09-10)
+
+- Prerequisite [PR #3](https://github.com/fredrikburmester/fdrive-web/pull/3),
+  `codex/migration-baseline`, squashes only the existing main schema. P10 is stacked on it;
+  `0001_storage_providers` contains four provider columns and the Office FK cascade.
+  Merge the prerequisite first, then retarget PR #1 to main.
+- Shared web identity/account fixtures, provider-service fixtures and named route rejection
+  cases remove another 218 net application lines; existing refactor included. Combined
+  reduction: 1,433 net application/package lines versus published revision `4ffd14b`.
+- Exact PostgreSQL schema comparisons pass for old main versus baseline and old P10 versus
+  baseline plus delta (column order ignored); custom indexes and schema version preserved.
+  Baseline workflow and DB integration pass (259 tests).
+- Clean committed P10 checks pass: application, integration (DB 267, API 35, SFTPGo 72,
+  testkit 9), production browser 29/29, actual Next dev storage flows 3/3. Workflow passes.
+  One initial integration run hit a Docker port-binding timeout; serialized rerun passed
+  without changing limits. Logs in `.worktrees/p10-reduction-check/.fdrive-workflow/logs/`:
+  `step.UKxwAQ` (coverage), `step.YLUGwZ` (integration), `step.IVR2EN` (production browser),
+  `step.AIvzaX` (dev browser); initial timeout `step.u9KrXC`.
+  Schema-comparison artifacts: `/private/tmp/fdrive-pr-reduction/`.
+- Pre-existing isolation, Playwright and pentest edits remain uncommitted and unchanged.
+  Checkouts: `.worktrees/migration-baseline`, `.worktrees/p10-reduction-check`.
+
 ## P10 PR reduction (2026-09-10, verified)
 
 - Implemented directly on `claude/p10-storage-providers`; existing isolation and pentest
