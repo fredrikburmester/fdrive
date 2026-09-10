@@ -23,7 +23,7 @@ it("clears password and OTP on close, rejects empty credentials, and never cache
       <LinkLoginDialog open onOpenChange={onOpenChange} />
     </QueryClientProvider>,
   );
-  const submit = screen.getByRole("button", { name: "Link login" });
+  const submit = screen.getByRole("button", { name: "Add login" });
   expect(submit.hasAttribute("disabled")).toBe(true);
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ada" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "private-password" } });
@@ -76,9 +76,9 @@ it("disables repeated submission while pending and closes on success", async () 
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "ada" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret" } });
   fireEvent.change(screen.getByLabelText("Your current password"), { target: { value: "mine" } });
-  fireEvent.click(screen.getByRole("button", { name: "Link login" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add login" }));
   await waitFor(() => expect(link).toHaveBeenCalledTimes(1));
-  expect(screen.getByRole("button", { name: "Linking…" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Adding…" }).hasAttribute("disabled")).toBe(true);
   await act(async () => {
     resolve?.({
       account: { id: "a", displayName: "Ada" },

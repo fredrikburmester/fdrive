@@ -41,20 +41,20 @@ it("confirms the exact login, explains retained files, and reports unlink confli
     </QueryClientProvider>,
   );
   expect(screen.getByText("Active")).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "Unlink bob" }));
-  expect(screen.getByRole("dialog", { name: "Unlink bob?" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Remove bob" }));
+  expect(screen.getByRole("dialog", { name: "Remove bob?" })).toBeDefined();
   expect(screen.getByText(/Other. Files remain on the server/)).toBeDefined();
   // Unlinking re-authenticates: the button stays disabled until the owner's password is entered.
-  expect(screen.getByRole("button", { name: "Unlink login" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Remove login" }).hasAttribute("disabled")).toBe(true);
   fireEvent.change(screen.getByLabelText("Your current password"), { target: { value: "mine" } });
-  fireEvent.click(screen.getByRole("button", { name: "Unlink login" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove login" }));
   await waitFor(() => expect(screen.getByText("Login changed elsewhere")).toBeDefined());
   expect(unlink).toHaveBeenCalledWith("two", { currentPassword: "mine" });
   expect((screen.getByLabelText("Your current password") as HTMLInputElement).value).toBe("");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  fireEvent.click(screen.getByRole("button", { name: "Link login" }));
-  expect(screen.getByRole("dialog", { name: "Link login" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Add login" }));
+  expect(screen.getByRole("dialog", { name: "Add login" })).toBeDefined();
 });
 
 it("keeps the last identity linked, and disables controls while loading", async () => {
@@ -65,12 +65,12 @@ it("keeps the last identity linked, and disables controls while loading", async 
       <IdentitiesCard />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("button", { name: "Link login" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Add login" }).hasAttribute("disabled")).toBe(true);
   client.setQueryData(["auth", "me"], { ...me, identities: me.identities.slice(0, 1) });
   rerender(
     <QueryClientProvider client={client}>
       <IdentitiesCard />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("button", { name: "Unlink ada" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Remove ada" }).hasAttribute("disabled")).toBe(true);
 });
