@@ -78,6 +78,11 @@ export async function startProviderServer(label: "A" | "B", clock: () => Date) {
       port: 0,
       async fetch(request) {
         const pathname = new URL(request.url).pathname;
+        // Disposable indexer directory fixture for the composed MCP write
+        // admission check. Upstream credentials still travel over real TCP.
+        if (pathname === "/directory") {
+          return Response.json({ items: [{ name: "same.txt", kind: "file" }], overflow: false });
+        }
         calls.requests++;
         const authorization = request.headers.get("authorization");
         if (authorization?.startsWith("Basic ")) {

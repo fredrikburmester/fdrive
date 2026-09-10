@@ -95,3 +95,30 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     await removeSpareProviders(page);
   }
 });
+
+test("an admin can disable the last provider, reload, and enable it again", async ({ page }) => {
+  const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
+  if (seeded === undefined) throw new Error("missing environment provider");
+  try {
+    await page.goto("/system/storage");
+    const toggle = page.getByRole("switch", { name: `Enable ${seeded.label}`, exact: true });
+    await toggle.click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Disable", exact: true })
+      .click();
+    await expect(toggle).not.toBeChecked();
+    await page.reload();
+    await expect(toggle).toBeVisible();
+    await expect(toggle).not.toBeChecked();
+    expect((await page.request.get("/api/v1/auth/me")).ok()).toBe(true);
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+  } finally {
+    const restored = await page.request.patch(`/api/v1/admin/providers/${seeded.id}`, {
+      headers: { "x-requested-with": "fdrive" },
+      data: { enabled: true },
+    });
+    expect(restored.ok()).toBe(true);
+  }
+});

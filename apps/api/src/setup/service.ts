@@ -72,6 +72,12 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
   return {
     async status() {
       const claim = await deps.claims.current();
+      if (claim === null && !(await deps.claims.wasInitialized())) {
+        const configured = (await deps.providers.list()).some(
+          (row) => row.enabled || row.managedByEnv,
+        );
+        if (configured) await deps.claims.markInitialized();
+      }
       // Existing env/settings deployments predate the owner record. Treat an
       // already-enabled provider as complete so upgrades never lock users
       // into bootstrap. Fresh setup keeps the provider disabled until login.
@@ -80,7 +86,7 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
           ? false
           : claim?.state === "claiming"
             ? true
-            : (await deps.providers.enabled()).length === 0;
+            : !(await deps.claims.wasInitialized());
       return { required, hasEnvUrl: deps.hasEnvUrl };
     },
 

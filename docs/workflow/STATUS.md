@@ -2,6 +2,26 @@
 
 Updated: 2026-09-10. Owner: primary agent.
 
+## P10 provider isolation review fixes (2026-09-10)
+
+- Branch `claude/p10-storage-providers`: env administrator grants now require the configured
+  SFTPGo endpoint; remote providers require explicit index mappings; PostgreSQL row locks
+  serialize address changes with verified login/link persistence; a durable setup marker
+  preserves access after disabling the final provider.
+- Regression coverage includes all four findings, stale verified credentials and concurrent
+  first login/link versus address changes on real PostgreSQL, plus disable/reload/re-enable
+  through the storage UI. Provider-binding integration fixtures now declare their env admin
+  endpoint and indexed scope explicitly (mock indexer directory; two distinct HTTP upstreams).
+- Passed: workflow, final lint/typecheck; coverage for all eight packages and Office/perf/deploy tools;
+  integration suites (SFTPGo 72, testkit 9, DB 267, API 35); affected production browser flows
+  12/12 and real dev-app storage flows 3/3. Initial parallel coverage timed out in a large-trash fixture; serial package runs
+  passed with existing thresholds/timeouts. Integration fixture failures passed after correction
+  in a targeted 14/14 provider-binding rerun.
+- Evidence: `.fdrive-workflow/logs/step.Zmlmif/` (web coverage), `step.t6aNoB/` (other coverage),
+  `step.tgdZzi/` (integration), `step.bPWhf5/` (binding rerun), `step.2CEHHN/` (browser),
+  `step.Gp718l/` (dev browser).
+- Unrelated pentest edits and `PR-REVIEW-FINDINGS.md` remain outside this change.
+
 ## P10 storage providers: A2 capabilities in the web (implemented 2026-09-10)
 
 - Spec [P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md), "As implemented" section lists the

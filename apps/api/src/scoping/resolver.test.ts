@@ -109,7 +109,7 @@ describe("configuredMappings", () => {
     });
   });
 
-  it("uses the default home template when the provider has none configured", async () => {
+  it("leaves a provider without an explicit home template unindexed", async () => {
     const repos = createMemoryRepos();
     const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://other:8080" });
     const identity = buildIdentity({ providerId: provider.id });
@@ -123,8 +123,8 @@ describe("configuredMappings", () => {
       clock: () => new Date(),
     });
     expect(await resolver.configuredMappings(identity)).toMatchObject({
-      available: true,
-      homeTemplateRaw: "sftpgo:/{username}",
+      available: false,
+      reason: "no_roots",
     });
   });
 

@@ -27,7 +27,7 @@ export function buildProvider(
     type: "sftpgo",
     baseUrl: "http://sftpgo.test",
     label: "",
-    config: homeTemplate === undefined ? {} : { homeTemplate },
+    config: { homeTemplate: homeTemplate ?? "sftpgo:/{username}" },
     enabled: true,
     managedByEnv: false,
     createdAt: new Date("2024-01-01T00:00:00Z"),

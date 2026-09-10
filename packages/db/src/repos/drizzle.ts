@@ -143,19 +143,35 @@ function createProviderRepo(db: Db): ProviderRepo {
     },
     async update(id, patch) {
       validateIdentityLinkId(id);
-      const set = {
-        ...(patch.label !== undefined ? { label: patch.label } : {}),
-        ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-        ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
-        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-        ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
-      };
-      if (Object.keys(set).length === 0) {
-        const [row] = await db.select().from(providers).where(eq(providers.id, id));
+      return db.transaction(async (tx) => {
+        const [current] = await tx
+          .select()
+          .from(providers)
+          .where(eq(providers.id, id))
+          .for("update");
+        if (!current) return null;
+        if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl) {
+          const [used] = await tx
+            .select({ count: sql<number>`count(*)::int` })
+            .from(identities)
+            .where(eq(identities.providerId, id));
+          if ((used?.count ?? 0) > 0)
+            throw new ConflictError("provider is still used by identities");
+        }
+        const set = {
+          ...(patch.label !== undefined ? { label: patch.label } : {}),
+          ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+          ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
+          ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+          ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
+        };
+        if (Object.keys(set).length === 0) {
+          const [row] = await tx.select().from(providers).where(eq(providers.id, id));
+          return row ? toProvider(row) : null;
+        }
+        const [row] = await tx.update(providers).set(set).where(eq(providers.id, id)).returning();
         return row ? toProvider(row) : null;
-      }
-      const [row] = await db.update(providers).set(set).where(eq(providers.id, id)).returning();
-      return row ? toProvider(row) : null;
+      });
     },
     async delete(id) {
       validateIdentityLinkId(id);

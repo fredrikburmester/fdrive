@@ -2,6 +2,7 @@ import { createMemoryOfficeFileRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it, vi } from "vitest";
 import { createMetadataService } from "../metadata/service.js";
+import { seedSftpgoProvider } from "../providers/test-fixtures/index.ts";
 import { createInMemoryMountMappingStore } from "../scoping/mount-mapping-store.ts";
 import { createInMemoryScopeOverrideStore } from "../scoping/override-store.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
@@ -49,7 +50,7 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
+  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -81,7 +82,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
+  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -110,7 +111,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
 it("tombstones an old mapping if the configured root changes during move resolution", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
+  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -146,7 +147,7 @@ it("tombstones an old mapping if the configured root changes during move resolut
 it("tombstones the source when the move target becomes unmapped", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
+  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,

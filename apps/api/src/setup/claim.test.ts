@@ -37,3 +37,13 @@ describe("createSetupClaimStore", () => {
     expect(await afterRestart.finalize(ALICE)).toBe(true);
   });
 });
+
+it("retains initialization across process restarts without claiming an owner", async () => {
+  const settings = createMemoryRepos().settings;
+  const first = createSetupClaimStore(settings);
+  expect(await first.wasInitialized()).toBe(false);
+  await first.markInitialized();
+  const restarted = createSetupClaimStore(settings);
+  expect(await restarted.wasInitialized()).toBe(true);
+  expect(await restarted.current()).toBeNull();
+});

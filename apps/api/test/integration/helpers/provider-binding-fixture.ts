@@ -99,6 +99,11 @@ export async function composedProviderFixture(connectionString: string) {
   try {
     const config = loadConfig({
       DATABASE_URL: connectionString,
+      SFTPGO_URL: h.a.baseUrl,
+      FDRIVE_INDEX_ROOTS: JSON.stringify([
+        { name: "sftpgo", sftpgoPath: "/srv/users", indexerPath: "/data" },
+      ]),
+      FDRIVE_INDEXER_URL: h.a.baseUrl,
       FDRIVE_MASTER_KEY: h.master.toString("base64"),
       FDRIVE_ADMIN_USERS: USERNAME,
       FDRIVE_MCP_WRITES: "true",

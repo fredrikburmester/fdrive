@@ -209,6 +209,14 @@ describe("composed native identity and API-token provider binding", () => {
     const cookie = login.headers.get("set-cookie")?.split(";")[0];
     if (!cookie) throw new Error("login did not create a session cookie");
     const me = MeResponse.parse(await login.json());
+    // Prove the explicitly mapped scope before measuring credential-bearing
+    // calls. MCP writes require it; without a configured root this test never
+    // reached the mutation barrier and only exercised write admission denial.
+    const scope = await h.app.request(`/api/v1/account/identities/${me.activeIdentityId}/scope`, {
+      headers: { cookie },
+    });
+    expect(scope.status).toBe(200);
+    expect(await scope.json()).toMatchObject({ status: "available" });
     const response = await h.app.request("/api/v1/account/tokens", {
       method: "POST",
       headers: { ...jsonHeaders, cookie },

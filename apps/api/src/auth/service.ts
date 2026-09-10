@@ -64,6 +64,21 @@ export interface CreateAuthServiceDeps {
 
 /** Builds the `AuthService`, the credential-mode login/session/identity flow for the API. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
+  async function isEnvironmentAdmin(identity: {
+    providerId: string;
+    externalUsername: string;
+  }): Promise<boolean> {
+    if (
+      !deps.adminUsernames.includes(identity.externalUsername) ||
+      deps.config.sftpgoUrl === undefined
+    )
+      return false;
+    const resolved = await deps.providers.get(identity.providerId);
+    return (
+      resolved?.provider.type === "sftpgo" && resolved.provider.baseUrl === deps.config.sftpgoUrl
+    );
+  }
+
   async function summarize(identity: {
     id: string;
     providerId: string;
@@ -93,8 +108,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     if (activeIdentity === undefined)
       throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
     const summaries = await Promise.all(identities.map(summarize));
-    const isAdmin =
-      account.isAdmin || deps.adminUsernames.includes(activeIdentity.externalUsername);
+    const isAdmin = account.isAdmin || (await isEnvironmentAdmin(activeIdentity));
 
     if ((await deps.repos.identities.get(activeIdentityId))?.accountId !== accountId)
       throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
@@ -153,6 +167,11 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const result = await accountRepositoryCall(() =>
       deps.identityLinks.loginVerified({
         providerId: verified.provider.id,
+        verifiedProvider: {
+          type: verified.provider.type,
+          baseUrl: verified.provider.baseUrl,
+          allowDisabled: candidateProviderId !== null,
+        },
         username: verified.externalUsername,
         at,
         revokeOtherSessions,
@@ -270,8 +289,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     }
 
     const account = await deps.repos.accounts.get(session.accountId);
-    const isAdmin =
-      (account?.isAdmin ?? false) || deps.adminUsernames.includes(identity.externalUsername);
+    const isAdmin = (account?.isAdmin ?? false) || (await isEnvironmentAdmin(identity));
 
     const verifyAuthority = async (): Promise<boolean> => {
       const at = deps.clock();

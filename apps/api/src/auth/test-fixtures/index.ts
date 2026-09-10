@@ -59,9 +59,25 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
       if (token.identityId === identity.id)
         await repos.apiTokens.delete(token.id, identity.accountId);
   }
+  async function verifyProvider(input: {
+    providerId: string;
+    verifiedProvider?: { type: string; baseUrl: string; allowDisabled?: boolean };
+  }) {
+    const provider = await repos.providers.get(input.providerId);
+    if (!provider) throw new IdentityLinksError("missing_provider");
+    const expected = input.verifiedProvider;
+    if (
+      expected !== undefined &&
+      (provider.type !== expected.type ||
+        provider.baseUrl !== expected.baseUrl ||
+        (!provider.enabled && !expected.allowDisabled))
+    )
+      throw new IdentityLinksError("invalid_session");
+  }
   return {
     loginVerified: (input) =>
       atomic(async () => {
+        await verifyProvider(input);
         let identity = await repos.identities.findByProviderUsername(
           input.providerId,
           input.username,
@@ -97,6 +113,7 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
       }),
     linkVerified: (input) =>
       atomic(async () => {
+        await verifyProvider(input);
         if (input.requestingSessionIdHash)
           await live(input.accountId, input.requestingSessionIdHash, input.at);
         let identity = await repos.identities.findByProviderUsername(

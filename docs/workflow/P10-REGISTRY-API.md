@@ -122,3 +122,20 @@ provider rows of the same type, identity A never reaches row B. `workflow`.
   SFTPGo-specific configuration); the two memory fakes are merged into `@fdrive/testkit` except
   for core's private copy, because core cannot depend on testkit. A `general` log subsystem
   records provider changes; no page shows it yet (A2).
+
+## Provider isolation corrections (2026-09-10)
+
+- `FDRIVE_ADMIN_USERS` applies only to the SFTPGo endpoint named by `SFTPGO_URL`.
+  Administrators on other providers use the account's persisted admin flag; matching a
+  username on another server grants no installation privileges.
+- A missing or blank provider `homeTemplate` means no index mapping. Only environment
+  seeding and setup explicitly supply the deployment default; added remote providers do
+  not inherit the local index. Explicit mappings retain their existing trust boundary.
+- Provider updates lock the row, then check its identity count before changing the address.
+  Login/link persistence holds a shared row lock and rechecks the authenticated type,
+  endpoint and enabled state before storing credentials. Thus either the identity is
+  committed and the update conflicts, or the address changes and the stale login fails.
+- Setup remembers an initialized deployment independently of provider availability in
+  `setup.initialized.v1`. Disabling/unpinning providers cannot reopen bootstrap or block
+  session/admin routes. Pending owner claims still take precedence; disabled setup
+  candidates alone never mark the deployment initialized.

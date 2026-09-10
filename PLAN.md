@@ -753,7 +753,9 @@ flows pass real storage integration, browser acceptance and required quality gat
     ship without thumbnails, search, virtual folder mapping or Office; the identity's
     capability list hides those controls and the API refuses the routes. Sharing is in the
     first version for every provider; SFTPGo keeps native shares. The connection singleton
-    folds into provider rows, `SFTPGO_URL` seeds and pins the first one.
+    folds into provider rows, `SFTPGO_URL` seeds and pins the first one. Env administrator
+    usernames apply only to that endpoint. Other rows require explicit index mappings;
+    credential persistence and endpoint changes serialize on the provider row.
     Design: `docs/workflow/P10-STORAGE-PROVIDERS.md`.
 
 ## 15. Resolved questions (2026-09-06)

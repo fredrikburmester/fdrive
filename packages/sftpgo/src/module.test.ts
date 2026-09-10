@@ -38,9 +38,9 @@ describe("sftpgoModule", () => {
     expect(sftpgoModule.capabilities).toMatchObject({ zip: true, shares: true, index: true });
   });
 
-  it("reads the home template from config with a default", () => {
-    expect(sftpgoHomeTemplate({ config: {} })).toBe("sftpgo:/{username}");
-    expect(sftpgoHomeTemplate({ config: { homeTemplate: "" } })).toBe("sftpgo:/{username}");
+  it("requires an explicit home template for index mapping", () => {
+    expect(sftpgoHomeTemplate({ config: {} })).toBeNull();
+    expect(sftpgoHomeTemplate({ config: { homeTemplate: "" } })).toBeNull();
     expect(sftpgoHomeTemplate({ config: { homeTemplate: "x:/{username}" } })).toBe("x:/{username}");
   });
 

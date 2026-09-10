@@ -294,7 +294,12 @@ describe("createProviderService: rows", () => {
       indexRootNames: ["sftpgo", "photos"],
       trashEnabled: async () => true,
     });
-    const row = await withRoots.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" });
+    const row = await withRoots.service.create({
+      type: "sftpgo",
+      label: "x",
+      baseUrl: "http://a",
+      config: { homeTemplate: "sftpgo:/{username}" },
+    });
     expect(
       await withRoots.service.capabilitiesFor(await withRoots.service.resolve(row.id)),
     ).toEqual({ ...sftpgoModule.capabilities, trash: true, index: true, scopeMapping: true });
