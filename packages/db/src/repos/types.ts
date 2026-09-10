@@ -153,8 +153,6 @@ export interface SettingsRepo {
    * structurally by the database, so this is safe for cross-process claims.
    */
   compareAndSet(key: string, expected: unknown | null, value: unknown): Promise<boolean>;
-  /** Removes the setting at `key`; a no-op when it does not exist. */
-  delete(key: string): Promise<void>;
   /** Returns every setting as a plain object keyed by its setting key. */
   all(): Promise<Record<string, unknown>>;
 }

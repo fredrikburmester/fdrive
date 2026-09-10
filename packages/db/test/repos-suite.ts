@@ -726,13 +726,6 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.settings.get("connection.sftpgo")).toBeNull();
       });
 
-      it("deletes a key and tolerates deleting a missing one", async () => {
-        await repos.settings.set("gone", { a: 1 });
-        await repos.settings.delete("gone");
-        await repos.settings.delete("never");
-        expect(await repos.settings.get("gone")).toBeNull();
-      });
-
       it("stores and retrieves a JSON value", async () => {
         const value = { baseUrl: "http://sftpgo:8080", homeTemplate: "sftpgo:/{username}" };
 

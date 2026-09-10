@@ -425,9 +425,6 @@ function createSettingsRepo(db: Db): SettingsRepo {
         .returning({ key: settings.key });
       return rows.length === 1;
     },
-    async delete(key) {
-      await db.delete(settings).where(eq(settings.key, key));
-    },
     async all() {
       const rows = await db.select().from(settings);
       const result: Record<string, unknown> = {};

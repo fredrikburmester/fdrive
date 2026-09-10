@@ -157,8 +157,7 @@ export async function composeApp(
     identities: repos.identities,
   });
   // Storage providers are rows: the SFTPGo named by `SFTPGO_URL` is seeded
-  // and pinned at startup, and the pre-row `connection.sftpgo` setting is
-  // folded into its row. Every credential-bearing call resolves an
+  // and pinned at startup. Every credential-bearing call resolves an
   // identity's own row first, so nothing ever follows a configuration
   // change to another server.
   const providerService = createProviderService({

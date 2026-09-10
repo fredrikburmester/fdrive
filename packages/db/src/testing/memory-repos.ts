@@ -340,9 +340,6 @@ function createMemorySettingsRepo(): SettingsRepo {
       byKey.set(key, value);
       return true;
     },
-    async delete(key) {
-      byKey.delete(key);
-    },
     async all() {
       return Object.fromEntries(byKey.entries());
     },
