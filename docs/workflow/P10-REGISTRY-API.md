@@ -20,8 +20,9 @@ SFTPGo becomes the first registered module and every existing behaviour stays by
 
 ## Database
 
-- Migration `0009_providers`: `label`, `config jsonb not null default '{}'`, `enabled boolean
-  not null default true`, `managed_by_env boolean not null default false` on `app.providers`.
+- `app.providers` gains `label`, `config jsonb not null default '{}'`, `enabled boolean not null
+  default true`, `managed_by_env boolean not null default false` (in the single `0000_init`
+  migration; the chain was squashed since fdrive has no installs).
 - Startup seed in composition: if `SFTPGO_URL` is set and no row exists, create it, pinned and
   enabled, with `FDRIVE_HOME_TEMPLATE` as its home template. Idempotent. No data migration:
   fdrive is pre-release and the old `connection.sftpgo` setting is simply ignored.

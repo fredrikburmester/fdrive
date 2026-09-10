@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AppSidebar } from "./app-sidebar";
 
 vi.mock("next/navigation", () => ({
@@ -23,30 +25,12 @@ vi.mock("@/components/shell/folder-tree", () => ({
   ),
 }));
 
-const ada: MeResponse["identities"][number] = {
-  id: "one",
-  username: "ada",
-  providerType: "sftpgo",
-  providerLabel: "Main",
-  providerId: "00000000-0000-4000-8000-000000000009",
-  capabilities: {
-    zip: true,
-    setModifiedAt: true,
-    atomicMove: true,
-    trash: true,
-    shares: true,
-    office: true,
-    index: true,
-    scopeMapping: true,
-  },
-};
+const ada: MeResponse["identities"][number] = makeIdentity({ capabilities: { trash: true } });
 
-const me: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
+const me = makeMe({
   identities: [ada],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 
 /** `me` with its only login's capabilities overridden. */
 function withCapabilities(overrides: Partial<MeResponse["identities"][number]["capabilities"]>) {

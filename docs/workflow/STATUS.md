@@ -86,7 +86,7 @@ Updated: 2026-09-10. Owner: primary agent.
   deviations. Implemented directly in the main checkout, no worker worktrees.
 - Delivered: `ProviderModule` port and field validation in core, `stat`/`ifRange`/optional
   `zip`+`setModifiedAt` on `StorageProvider`, `withMoveToTrash`; `app.providers` gains
-  `label`/`config`/`enabled`/`managed_by_env` (migration `0009_providers`); `SFTPGO_URL` seeds
+  `label`/`config`/`enabled`/`managed_by_env`; `SFTPGO_URL` seeds
   and pins the SFTPGo row at startup (`ProviderService.seedFromEnvironment`), nothing else is
   migrated (pre-release, no compatibility with the old `connection.sftpgo` setting);
   `packages/sftpgo` exports `sftpgoModule` (adapter, probe and 401 retry moved in from the API);
@@ -116,6 +116,11 @@ Updated: 2026-09-10. Owner: primary agent.
   suite accepts `upstream_unavailable` as well as `bad_request` for listing a file, because real
   SFTPGo 2.7.5 drops the connection there. Next: A2 ([P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md)), then B and
   D in parallel.
+- Migrations squashed (2026-09-10): `packages/db/drizzle` now holds one `0000_init` migration
+  regenerated from the schema plus the hand-written extension, gin/hnsw index and
+  `idx.schema_version = 1` statements. Verified by applying the old ten-file chain and the new
+  file to two fresh pgvector containers and diffing `pg_dump --schema-only`: identical apart from
+  column order. Existing dev databases must be dropped and recreated (no users yet).
 - Worktree: main checkout, branch `main`.
 
 ## P9 System settings restructure and event log (committed 2026-09-09)

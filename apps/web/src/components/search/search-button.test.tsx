@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
+
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
 import { SearchShortcutProvider } from "@/lib/search/shortcut";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { SearchButton } from "./search-button";
 
 vi.mock("next/navigation", () => ({
@@ -12,30 +14,10 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/files",
 }));
 
-const singleIdentityMe: MeResponse = {
-  account: { id: "a", displayName: "Ada" },
-  identities: [
-    {
-      id: "one",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "Main",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
-  ],
+const singleIdentityMe = makeMe({
+  identities: [makeIdentity()],
   activeIdentityId: "one",
-  isAdmin: false,
-};
+});
 
 function renderButton(me: MeResponse) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+
 import { ApiClientError, type MeResponse, type OfficeOpenResponse } from "@fdrive/contracts";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { OfficePage } from "./office-page";
 
 const mocks = vi.hoisted(() => ({ me: vi.fn(), open: vi.fn(), client: vi.fn(), push: vi.fn() }));
@@ -17,30 +19,11 @@ vi.mock("@/components/shell/page-header", () => ({
     </header>
   ),
 }));
-const me: MeResponse = {
+const me = makeMe({
   account: { id: "account", displayName: "Ada" },
-  identities: [
-    {
-      id: "identity",
-      username: "ada",
-      providerType: "sftpgo",
-      providerLabel: "Storage",
-      providerId: "00000000-0000-4000-8000-000000000009",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        scopeMapping: true,
-      },
-    },
-  ],
+  identities: [makeIdentity({ id: "identity", providerLabel: "Storage" })],
   activeIdentityId: "identity",
-  isAdmin: false,
-};
+});
 const descriptor: OfficeOpenResponse = {
   fileId: "file",
   identityId: "identity",
