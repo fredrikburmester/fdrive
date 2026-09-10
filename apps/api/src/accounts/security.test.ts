@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { ROUTES } from "@fdrive/contracts";
 import { SftpgoError } from "@fdrive/sftpgo";
+import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
-import { createMemoryStorage } from "../../test/fixtures/memory-storage.js";
 import { hashSessionId } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
-import { verifyAccountCredentials } from "./credentials.ts";
+import { verifyCredentials } from "./credentials.ts";
 import { accountRepositoryCall } from "./errors.ts";
 import { liveAccountSession } from "./service.ts";
 import { accountsHarness } from "./test-fixtures/index.ts";
@@ -74,9 +74,8 @@ it("rechecks session after upstream verification and revokes rotated sessions if
   const link = vi.spyOn(h.links, "linkVerified");
   await expect(
     h.service.link(input, {
-      username: "bob",
-      password: "bob-pass",
-      currentPassword: "alice-pass",
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "alice-pass" },
       ip: "test",
     }),
   ).rejects.toMatchObject({ kind: "unauthorized" });
@@ -89,9 +88,8 @@ it("rechecks session after upstream verification and revokes rotated sessions if
   );
   await expect(
     other.service.link(own, {
-      username: "bob",
-      password: "bob-pass",
-      currentPassword: "alice-pass",
+      credential: { username: "bob", password: "bob-pass" },
+      currentCredential: { password: "alice-pass" },
       ip: "test",
     }),
   ).rejects.toMatchObject({ kind: "unauthorized" });
@@ -118,7 +116,7 @@ it("rejects login sessions raced by identity transfer, revocation, or final me l
     });
     const response = await h.call(ROUTES.auth.login, {
       method: "POST",
-      body: { username: "alice", password: "alice-pass" },
+      body: { credential: { username: "alice", password: "alice-pass" } },
     });
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toBeNull();
@@ -154,31 +152,34 @@ it("labels each actual provider and validates final identity ownership before re
     h.auth.service.me(input.principal.accountId, input.principal.identityId),
   ).rejects.toMatchObject({ kind: "unauthorized" });
 });
-it("fails closed on connection changes and maps verification errors without database mutation", async () => {
+it("fails closed on provider changes and maps verification errors without database mutation", async () => {
   const h = accountsHarness();
-  const input = { username: "alice", password: "alice-pass", ip: "test" };
-  const connection = await h.connectionStore.current();
-  vi.spyOn(h.connectionStore, "current")
-    .mockResolvedValueOnce(connection)
-    .mockResolvedValueOnce(null);
-  await expect(verifyAccountCredentials(h.deps, input)).rejects.toMatchObject({
+  await h.seeded;
+  const input = { credential: { username: "alice", password: "alice-pass" }, ip: "test" };
+  const resolve = h.providers.resolve.bind(h.providers);
+  vi.spyOn(h.providers, "resolve")
+    .mockImplementationOnce(resolve)
+    .mockRejectedValueOnce(
+      new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
+    );
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "unauthorized",
   });
   expect(await h.repos.identities.listAll()).toEqual([]);
   vi.spyOn(h.limiter, "check").mockReturnValueOnce({ allowed: false });
-  await expect(verifyAccountCredentials(h.deps, input)).rejects.toMatchObject({
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "rate_limited",
     details: { retryAfterMs: 0 },
   });
   vi.spyOn(h.client, "login").mockRejectedValueOnce(
     new SftpgoError("secret", "forbidden", 403, null),
   );
-  await expect(verifyAccountCredentials(h.deps, input)).rejects.toMatchObject({
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "forbidden",
     message: "forbidden",
   });
   vi.spyOn(h.client, "login").mockRejectedValueOnce(new Error("private upstream"));
-  await expect(verifyAccountCredentials(h.deps, input)).rejects.toMatchObject({
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
   const expected = new ApiHttpError("unauthorized", "safe");
@@ -187,4 +188,37 @@ it("fails closed on connection changes and maps verification errors without data
       throw expected;
     }),
   ).rejects.toBe(expected);
+});
+
+it("requires a provider id once several providers are enabled", async () => {
+  const h = accountsHarness();
+  await h.seeded;
+  await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://second.test" });
+  await expect(
+    verifyCredentials(h.deps, {
+      credential: { username: "alice", password: "alice-pass" },
+      ip: "test",
+    }),
+  ).rejects.toMatchObject({ kind: "bad_request" });
+  expect(
+    (
+      await h.call(ROUTES.auth.login, {
+        method: "POST",
+        body: { credential: { username: "alice", password: "alice-pass" } },
+      })
+    ).status,
+  ).toBe(400);
+});
+
+it("drops the new session when priming the upstream token fails after login", async () => {
+  const h = accountsHarness();
+  await h.seeded;
+  vi.spyOn(h.tokenSource, "prime").mockRejectedValueOnce(new Error("token store down"));
+  const remove = vi.spyOn(h.repos.sessions, "delete");
+  const res = await h.call(ROUTES.auth.login, {
+    method: "POST",
+    body: { credential: { username: "alice", password: "alice-pass" } },
+  });
+  expect(res.status).toBe(500);
+  expect(remove).toHaveBeenCalledTimes(1);
 });

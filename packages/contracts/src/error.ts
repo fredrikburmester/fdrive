@@ -17,6 +17,7 @@ export const ApiErrorKind = z.enum([
   "internal",
   "upstream_unavailable",
   "setup_required",
+  "unsupported",
 ]);
 
 export type ApiErrorKind = z.infer<typeof ApiErrorKind>;
@@ -44,6 +45,7 @@ const STATUS_BY_KIND: Record<ApiErrorKind, number> = {
   internal: 500,
   upstream_unavailable: 502,
   setup_required: 503,
+  unsupported: 400,
 };
 
 /**

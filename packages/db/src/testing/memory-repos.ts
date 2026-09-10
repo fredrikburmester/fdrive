@@ -38,30 +38,63 @@ export interface CreateMemoryReposOptions {
   readonly ids?: () => string;
 }
 
-function createMemoryProviderRepo(ids: () => string): ProviderRepo {
-  const byKey = new Map<string, Provider>();
+function createMemoryProviderRepo(
+  ids: () => string,
+  identityCount: (providerId: string) => number,
+): ProviderRepo {
   const byId = new Map<string, Provider>();
+  const keyOf = (type: string, baseUrl: string) => `${type}\0${baseUrl}`;
 
   return {
     async get(id) {
       validateIdentityLinkId(id);
       return byId.get(id) ?? null;
     },
+    async list() {
+      return [...byId.values()];
+    },
     async ensure(input) {
-      const key = `${input.type}\0${input.baseUrl}`;
-      const existing = byKey.get(key);
-      if (existing) {
-        return existing;
+      for (const provider of byId.values()) {
+        if (keyOf(provider.type, provider.baseUrl) === keyOf(input.type, input.baseUrl)) {
+          return provider;
+        }
       }
       const provider: Provider = {
         id: ids(),
         type: input.type,
         baseUrl: input.baseUrl,
+        label: "",
+        config: {},
+        enabled: true,
+        managedByEnv: false,
         createdAt: new Date(),
       };
-      byKey.set(key, provider);
       byId.set(provider.id, provider);
       return provider;
+    },
+    async update(id, patch) {
+      validateIdentityLinkId(id);
+      const existing = byId.get(id);
+      if (!existing) {
+        return null;
+      }
+      const next: Provider = {
+        ...existing,
+        ...(patch.label !== undefined ? { label: patch.label } : {}),
+        ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+        ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
+      };
+      byId.set(id, next);
+      return next;
+    },
+    async delete(id) {
+      validateIdentityLinkId(id);
+      if (identityCount(id) > 0) {
+        throw new ConflictError("provider is still used by identities");
+      }
+      byId.delete(id);
     },
   };
 }
@@ -93,7 +126,9 @@ function createMemoryAccountRepo(ids: () => string): AccountRepo {
   };
 }
 
-function createMemoryIdentityRepo(ids: () => string): IdentityRepo {
+function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
+  countByProviderSync(providerId: string): number;
+} {
   const byId = new Map<string, Identity>();
 
   function findByProviderUsername(providerId: string, username: string): Identity | null {
@@ -132,6 +167,14 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo {
     },
     async listByAccount(accountId) {
       return Array.from(byId.values()).filter((identity) => identity.accountId === accountId);
+    },
+    countByProviderSync(providerId) {
+      return Array.from(byId.values()).filter((identity) => identity.providerId === providerId)
+        .length;
+    },
+    async countByProvider(providerId) {
+      return Array.from(byId.values()).filter((identity) => identity.providerId === providerId)
+        .length;
     },
     async touchLogin(id, at) {
       const existing = byId.get(id);
@@ -296,6 +339,9 @@ function createMemorySettingsRepo(): SettingsRepo {
       }
       byKey.set(key, value);
       return true;
+    },
+    async delete(key) {
+      byKey.delete(key);
     },
     async all() {
       return Object.fromEntries(byKey.entries());
@@ -721,11 +767,14 @@ function createMemorySystemEventRepo(): SystemEventRepo {
 export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const ids = opts.ids ?? randomUUID;
   const fileTags = createMemoryFileTagRepo();
+  const identities = createMemoryIdentityRepo(ids);
 
   return {
-    providers: createMemoryProviderRepo(ids),
+    providers: createMemoryProviderRepo(ids, (providerId) =>
+      identities.countByProviderSync(providerId),
+    ),
     accounts: createMemoryAccountRepo(ids),
-    identities: createMemoryIdentityRepo(ids),
+    identities,
     credentials: createMemoryCredentialRepo(),
     sessions: createMemorySessionRepo(),
     settings: createMemorySettingsRepo(),

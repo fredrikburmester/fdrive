@@ -2,20 +2,43 @@
 
 Updated: 2026-09-10. Owner: primary agent.
 
-## P10 storage providers (specs written 2026-09-10, no code)
+## P10 storage providers: A1 registry and generic auth (implemented 2026-09-10)
 
-- Investigation of multi-provider support (WebDAV first, S3 later) done against the code;
-  findings and decisions in [P10-STORAGE-PROVIDERS.md](P10-STORAGE-PROVIDERS.md), PLAN §4.3 and
-  §14 decision 21. Chunk specs: [P10-REGISTRY-API.md](P10-REGISTRY-API.md) (A1),
-  [P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md) (A2), [P10-WEBDAV.md](P10-WEBDAV.md) (B),
-  [P10-SHARES.md](P10-SHARES.md) (D). B and D run in parallel after A1; A2 after the A1 contracts
-  are agreed. S3 has no chunk yet.
-- Key facts for whoever starts A1: `StorageProvider` and `principal.storage` are already the
-  seam; the only structural blockers are `connection/store.ts` plus its seven `type === "sftpgo"`
-  and base-URL comparison sites, verify-and-mint login in `accounts/credentials.ts` and
-  `auth/token-source.ts`, and shares owned by SFTPGo. Two memory fakes disagree and there is no
-  conformance suite. The web gates only Trash, search modes and Office today.
-- Nothing implemented or committed. Worktree: main checkout, branch `main`.
+- Design [P10-STORAGE-PROVIDERS.md](P10-STORAGE-PROVIDERS.md); chunk spec
+  [P10-REGISTRY-API.md](P10-REGISTRY-API.md) with an "As implemented" section listing the
+  deviations. Implemented directly in the main checkout, no worker worktrees.
+- Delivered: `ProviderModule` port and field validation in core, `stat`/`ifRange`/optional
+  `zip`+`setModifiedAt` on `StorageProvider`, `withMoveToTrash`; `app.providers` gains
+  `label`/`config`/`enabled`/`managed_by_env` (migration `0009_providers`) and the
+  `connection.sftpgo` setting is folded into a row at startup (`ProviderService.seedFromEnvironment`);
+  `packages/sftpgo` exports `sftpgoModule` (adapter, probe and 401 retry moved in from the API);
+  `@fdrive/testkit` exports the canonical `createMemoryStorage` and `describeStorageProvider`
+  (runs against memory, the SFTPGo fake, and the real SFTPGo container in
+  `packages/sftpgo/test/integration/container.contract.test.ts`, 72/72); API: `providers/{registry,service,routes}`, generic
+  `TokenSource`, `verifyCredentials`, `createPinnedStorageFactory` for Office, `unsupported`
+  error kind, `/providers` and `/admin/providers*` routes replacing `/admin/connection`;
+  contracts: `LoginRequest { providerId?, credential }`, `LinkIdentityRequest { providerId?,
+  credential, currentCredential }`, `IdentitySummary.capabilities`, `AboutResponse.builtOn[]`
+  and `providers[]`, `AdminProvider*`; web: minimal adaptation only (login form, link/unlink
+  dialogs, About, System > General over `/admin/providers`). A2 is still open.
+- Passed on `main` checkout: `application` (lint, typecheck, coverage: api 99.03% statements),
+  `workflow`, `integration` for all files except the two known pre-existing failures
+  (`sftp-rename.test.ts` Docker pull of `python:3.12-slim` hangs; `provider-binding.test.ts`
+  "api-token: isolates mutation" barrier flake, also on unchanged `main`). The other eight
+  provider-binding cases pass against two live upstreams with provider rows disabled/added through
+  `/admin/providers`. Browser (production build, `--workers=1`): `system`, `auth`,
+  `account-identities`, `about`, `smoke` specs 21/21.
+- Semantics to know: a stored credential never follows a configuration change because identities
+  are bound to rows; re-addressing a row that logins use is refused (`conflict`), env-managed rows
+  refuse address changes and deletion, and `verifyCredentials` re-checks the row after the
+  upstream login. With several enabled providers a login must name `providerId` (400 otherwise);
+  setup creates the SFTPGo row disabled and enables it after the owner login.
+- Not done in A1: `roots[].sftpgoPath` keeps its name; core keeps its own memory fake (cannot
+  depend on testkit); no page shows the new `general` event log subsystem; the conformance
+  suite accepts `upstream_unavailable` as well as `bad_request` for listing a file, because real
+  SFTPGo 2.7.5 drops the connection there. Next: A2 ([P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md)), then B and
+  D in parallel.
+- Worktree: main checkout, branch `main`.
 
 ## P9 System settings restructure and event log (committed 2026-09-09)
 

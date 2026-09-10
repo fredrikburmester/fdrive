@@ -1,10 +1,9 @@
 import type { ConnectionTestResponse, SetupStatusResponse } from "@fdrive/contracts";
 import { CoreError, parseHomeTemplate } from "@fdrive/core";
-import type { AccountRepo } from "@fdrive/db";
+import type { AccountRepo, Provider } from "@fdrive/db";
 import type { AuthService, LoginInput, LoginResult } from "../auth/service.js";
-import { probeConnection } from "../connection/probe.js";
-import type { ConnectionStore } from "../connection/store.js";
 import { ApiHttpError } from "../errors.js";
+import { hostLabel, type ProviderService } from "../providers/service.js";
 import type { SetupClaimStore } from "./claim.js";
 
 export interface SetupCompleteInput {
@@ -24,11 +23,13 @@ export interface SetupService {
 }
 
 export interface CreateSetupServiceDeps {
-  readonly connectionStore: ConnectionStore;
+  readonly providers: Pick<
+    ProviderService,
+    "list" | "enabled" | "create" | "update" | "remove" | "probe"
+  >;
   readonly authService: Pick<AuthService, "loginCandidate" | "me">;
   readonly accounts: Pick<AccountRepo, "setAdmin">;
   readonly claims: SetupClaimStore;
-  readonly fetch: typeof globalThis.fetch;
   /** Whether `SFTPGO_URL` is set by environment; surfaced on `status()` for the setup UI. */
   readonly hasEnvUrl: boolean;
 }
@@ -43,64 +44,103 @@ function assertValidHomeTemplate(homeTemplate: string): void {
   try {
     parseHomeTemplate(homeTemplate);
   } catch (err) {
-    if (err instanceof CoreError) {
-      throw new ApiHttpError("bad_request", err.message, err.details);
-    }
-    throw err;
+    throw new ApiHttpError(
+      "bad_request",
+      err instanceof CoreError ? err.message : "invalid home template",
+      err instanceof CoreError ? err.details : undefined,
+    );
   }
 }
 
 /**
  * Builds the `SetupService` backing `/api/v1/setup/*`: reports whether
  * setup is required, probes a candidate SFTPGo, and completes setup by
- * validating a candidate before it is active, then atomically claiming its
- * owner state before storing the connection and marking that account admin.
+ * validating a candidate provider before it is enabled, then atomically
+ * claiming its owner state before enabling the provider and marking that
+ * account admin. The wizard creates SFTPGo providers only; other provider
+ * types are added from System > Storage afterwards.
  */
 export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
+  async function envProvider(): Promise<Provider | null> {
+    return (
+      (await deps.providers.list()).find(
+        (provider) => provider.managedByEnv && provider.type === "sftpgo",
+      ) ?? null
+    );
+  }
+
   return {
     async status() {
-      const connection = await deps.connectionStore.current();
       const claim = await deps.claims.current();
       // Existing env/settings deployments predate the owner record. Treat an
-      // already-active connection as complete so upgrades never lock users
-      // into bootstrap. Fresh setup keeps the connection absent until login.
+      // already-enabled provider as complete so upgrades never lock users
+      // into bootstrap. Fresh setup keeps the provider disabled until login.
       const required =
         claim?.state === "complete"
           ? false
           : claim?.state === "claiming"
             ? true
-            : connection === null;
+            : (await deps.providers.enabled()).length === 0;
       return { required, hasEnvUrl: deps.hasEnvUrl };
     },
 
     async test(baseUrl) {
-      return probeConnection(baseUrl, { fetch: deps.fetch });
+      return deps.providers.probe({ type: "sftpgo", baseUrl });
     },
 
     async complete(input) {
       assertValidHomeTemplate(input.homeTemplate);
 
-      const active = await deps.connectionStore.current();
-      const candidateBaseUrl = active?.source === "env" ? active.baseUrl : input.baseUrl;
-      const probe = await probeConnection(candidateBaseUrl, { fetch: deps.fetch });
+      const pinned = await envProvider();
+      const baseUrl = pinned?.baseUrl ?? input.baseUrl;
+      const probe = await deps.providers.probe({ type: "sftpgo", baseUrl });
       if (!probe.ok) {
         throw new ApiHttpError("bad_request", `SFTPGo is not reachable: ${probe.detail}`);
       }
 
+      const existing =
+        pinned ??
+        (await deps.providers.list()).find(
+          (provider) => provider.type === "sftpgo" && provider.baseUrl === baseUrl,
+        ) ??
+        null;
+      const created =
+        existing === null
+          ? await deps.providers.create(
+              { type: "sftpgo", label: hostLabel(baseUrl), baseUrl },
+              { enabled: false },
+            )
+          : null;
+      const candidate = existing ?? (created as Provider);
+      await deps.providers.update(candidate.id, {
+        config: { ...stringConfig(candidate.config), homeTemplate: input.homeTemplate },
+      });
+
       const loginInput: LoginInput = {
-        username: input.username,
-        password: input.password,
-        ...(input.otp !== undefined ? { otp: input.otp } : {}),
+        providerId: candidate.id,
+        credential: {
+          username: input.username,
+          password: input.password,
+          ...(input.otp !== undefined ? { otp: input.otp } : {}),
+        },
         userAgent: input.userAgent,
         ip: input.ip,
       };
-      // This performs upstream authentication and provider-bound credential
-      // creation against the candidate URL, without making it active.
-      const loginResult = await deps.authService.loginCandidate(loginInput, candidateBaseUrl);
+      let loginResult: LoginResult;
+      try {
+        // Upstream authentication and provider-bound credential creation
+        // against the candidate, which is not enabled for anyone else yet.
+        loginResult = await deps.authService.loginCandidate(loginInput, candidate.id);
+      } catch (error) {
+        if (created !== null) {
+          await deps.providers.remove(created.id).catch(() => undefined);
+        }
+        throw error;
+      }
 
       const claim = await deps.claims.claim({
         accountId: loginResult.me.account.id,
-        baseUrl: candidateBaseUrl,
+        baseUrl,
       });
       if (claim === "taken") {
         throw new ApiHttpError("conflict", "this server has already been claimed by another owner");
@@ -108,16 +148,13 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
 
       // A crash after the claim is recoverable: the same verified identity
       // resumes the pending claim, while another process cannot overwrite it.
-      await deps.connectionStore.update({
-        ...(active?.source === "env" ? {} : { baseUrl: candidateBaseUrl }),
-        homeTemplate: input.homeTemplate,
-      });
+      await deps.providers.update(candidate.id, { enabled: true });
 
       await deps.accounts.setAdmin(loginResult.me.account.id, true);
       if (
         !(await deps.claims.finalize({
           accountId: loginResult.me.account.id,
-          baseUrl: candidateBaseUrl,
+          baseUrl,
         }))
       ) {
         throw new ApiHttpError("conflict", "setup ownership changed; retry setup login");
@@ -130,4 +167,14 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
       return { sessionId: loginResult.sessionId, me };
     },
   };
+}
+
+function stringConfig(config: Readonly<Record<string, unknown>>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (typeof value === "string") {
+      result[key] = value;
+    }
+  }
+  return result;
 }

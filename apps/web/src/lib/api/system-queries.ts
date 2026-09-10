@@ -1,7 +1,8 @@
 "use client";
 
 import type {
-  AdminConnectionUpdateRequest,
+  AdminProviderTestRequest,
+  AdminProviderUpdateRequest,
   FeaturesUpdateRequest,
   IndexerClearRequest,
   IndexerReindexRequest,
@@ -72,30 +73,31 @@ export function useSetupComplete() {
   });
 }
 
-/** The active SFTPGo connection, for the admin System > Connection page. */
-export function useAdminConnection() {
+/** Every configured storage provider plus the types an admin can add, for System > General. */
+export function useAdminProviders() {
   return useQuery({
-    queryKey: queryKeys.admin.connection(),
-    queryFn: () => apiClient.adminConnection(),
+    queryKey: queryKeys.admin.providers(),
+    queryFn: () => apiClient.adminProviders(),
   });
 }
 
-/** Updates the connection (base URL and/or home template) and refreshes the cached summary. */
-export function useAdminUpdateConnection() {
+/** Updates one provider (label, address, configuration, enabled) and refreshes the cached list. */
+export function useAdminUpdateProvider() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (patch: AdminConnectionUpdateRequest) => apiClient.adminUpdateConnection(patch),
-    onSuccess: (connection) => {
-      queryClient.setQueryData(queryKeys.admin.connection(), connection);
+    mutationFn: ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
+      apiClient.adminUpdateProvider(id, patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.admin.providers() });
     },
   });
 }
 
-/** Probes the active connection, or a candidate `baseUrl` when given, without saving anything. */
-export function useAdminTestConnection() {
+/** Probes a saved provider (by id) or an unsaved candidate, without saving anything. */
+export function useAdminTestProvider() {
   return useMutation({
-    mutationFn: (baseUrl?: string) => apiClient.adminTestConnection(baseUrl),
+    mutationFn: (target: string | AdminProviderTestRequest) => apiClient.adminTestProvider(target),
   });
 }
 

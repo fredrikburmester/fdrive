@@ -1,4 +1,4 @@
-import type { FileEntry } from "../entries.ts";
+import type { EntryKind, FileEntry } from "../entries.ts";
 
 /** One deleted item still recoverable from a provider's recycle folder. */
 export interface TrashEntry {
@@ -38,14 +38,38 @@ export interface TrashProvider {
   empty(): Promise<void>;
 }
 
+/** What `StorageProvider.stat` reports for any existing path. */
+export interface EntryStat {
+  readonly kind: EntryKind;
+  readonly size: number;
+  readonly modifiedAt: Date | null;
+  readonly contentType: string | null;
+}
+
 /**
- * Provider-neutral storage port. `apps/api` implements this over the
- * SFTPGo HTTP client; a future Drive or S3 backend implements the same
- * port. All paths are the provider's own paths, already resolved from a
- * scope by the caller: this interface does no scoping of its own.
+ * Provider-neutral storage port. Each provider package implements it over
+ * its own client (SFTPGo's REST API, WebDAV, S3). All paths are the
+ * provider's own paths, already resolved from a scope by the caller: this
+ * interface does no scoping of its own.
+ *
+ * Contract clauses every implementation honours (checked by
+ * `describeStorageProvider` in `@fdrive/testkit`):
+ *
+ * - `statFile` on a directory throws `StorageError("bad_request")`; on a
+ *   missing path `not_found`. `stat` reports either kind.
+ * - `move`, `copy` and `upload` overwrite an existing target unless the
+ *   provider can refuse it (`overwrite: false`); callers that need a
+ *   conflict pre-check the target.
+ * - `download` honours `range` with status 206 and a `Content-Range`, and
+ *   `ifRange` when given.
+ * - Optional methods are absent, not throwing, when the backend cannot
+ *   offer them; `ProviderCapabilities` says which.
  */
 export interface StorageProvider {
   list(path: string): Promise<FileEntry[]>;
+
+  /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */
+  stat(path: string): Promise<EntryStat>;
 
   /**
    * Live read proof for the directory at `path`. Confirms that the caller can
@@ -64,6 +88,8 @@ export interface StorageProvider {
     path: string,
     opts?: {
       range?: { start: number; end?: number };
+      /** A validator (ETag or HTTP date) the range only applies to; else the full body is sent. */
+      ifRange?: string;
       signal?: AbortSignal;
     },
   ): Promise<{
@@ -82,23 +108,27 @@ export interface StorageProvider {
       mkdirParents?: boolean;
       modifiedAt?: Date;
       contentLength?: number;
+      /** False asks the provider to refuse an existing target with `conflict`, where it can. */
+      overwrite?: boolean;
       signal?: AbortSignal;
     },
   ): Promise<void>;
 
   mkdir(path: string, opts?: { parents?: boolean }): Promise<void>;
 
-  move(path: string, target: string): Promise<void>;
+  move(path: string, target: string, opts?: { overwrite?: boolean }): Promise<void>;
 
-  copy(path: string, target: string): Promise<void>;
+  copy(path: string, target: string, opts?: { overwrite?: boolean }): Promise<void>;
 
   deleteFile(path: string): Promise<void>;
 
   deleteDir(path: string): Promise<void>;
 
-  setModifiedAt(path: string, modifiedAt: Date): Promise<void>;
+  /** Absent when the backend cannot keep a client-supplied modification time. */
+  setModifiedAt?(path: string, modifiedAt: Date): Promise<void>;
 
-  zip(paths: readonly string[]): Promise<ReadableStream<Uint8Array>>;
+  /** Absent when the backend has no server-side zip. */
+  zip?(paths: readonly string[]): Promise<ReadableStream<Uint8Array>>;
 
   /** Present only when this provider exposes a recoverable recycle folder. */
   readonly trash?: TrashProvider;

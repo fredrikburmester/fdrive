@@ -83,3 +83,29 @@ Web (A2), WebDAV (B), owned shares (D), any S3 code. No change to the indexer.
 `application`, `integration` (auth, provider-binding, scopes, shares, Office with the migrated
 row), `package sftpgo`, `package core`, `package testkit`. Provider-binding test extended: two
 provider rows of the same type, identity A never reaches row B. `workflow`.
+
+## As implemented (2026-09-10)
+
+- Field metadata is a plain `ProviderField[]` (`configFields`, `credentialFields`) validated by
+  `validateFields` in core, not zod schemas on the module: no zod dependency for provider
+  packages and the same list renders the web form. Transient fields (one-time codes) are
+  stripped before sealing; the sealed credential is the full field record (`{ username,
+  password }` for SFTPGo), and `sameCredential` decides whether a login replaced it.
+- `StorageProvider.stat` was added and `statFile` kept; `statEntry` and the trash mkdir shim
+  use `stat`. The "statFile throws bad_request for a directory" clause stays a documented
+  contract rule checked by the conformance suite rather than being removed.
+- `ProviderModule.mint` is optional; the SFTPGo module's storage does its own 401 retry
+  through the `StorageSession`. `TokenSource.withToken` is gone; shares keep an SFTPGo-specific
+  retry of their own.
+- `createSftpgoModule({ clientFor })` exists so tests can share one client; production uses
+  `sftpgoModule`. `ProviderServiceDeps.modules` overrides the registry for the same reason.
+- `verifyCredentials` re-resolves the provider after the upstream login and refuses with
+  `unauthorized` when the row was disabled meanwhile, matching the old connection-change rule.
+  Re-addressing a provider that logins use is refused with `conflict`; env-managed rows refuse
+  address changes and deletion.
+- `AdminProvider` carries `reachable`/`checkedAt` from a probe taken when the view is built, so
+  System > General keeps its reachability badge without a second request.
+- Not done here: `SystemFeaturesResponse.roots[].sftpgoPath` keeps its name (index roots are
+  SFTPGo-specific configuration); the two memory fakes are merged into `@fdrive/testkit` except
+  for core's private copy, because core cannot depend on testkit. A `general` log subsystem
+  records provider changes; no page shows it yet (A2).

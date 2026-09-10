@@ -1,7 +1,7 @@
 import { AccountFavoritesResponse, MeResponse, ROUTES } from "@fdrive/contracts";
 import { parseHomeTemplate, scopesFor } from "@fdrive/core";
 import { createDb, createRepos } from "@fdrive/db";
-import { startPostgres, startSftpgo } from "@fdrive/testkit";
+import { createMemoryStorage, startPostgres, startSftpgo } from "@fdrive/testkit";
 import type { Logger } from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hashSessionId } from "../../src/auth/sessions.js";
@@ -10,7 +10,6 @@ import { loadConfig } from "../../src/config.js";
 import { officeActor } from "../../src/office/auth.ts";
 import { createResolveTokenPrincipal } from "../../src/tokens/principal.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
-import { createMemoryStorage } from "../fixtures/memory-storage.js";
 import { officeHarness } from "../fixtures/office/harness.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -79,7 +78,7 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
   async function login(username: string) {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { username, password: `${username}-pass` },
+      body: { credential: { username, password: `${username}-pass` } },
     });
     expect(response.status).toBe(200);
     return { cookie: cookieFrom(response), me: MeResponse.parse(await response.json()) };
@@ -130,7 +129,10 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
     const linked = await call(ROUTES.account.identities, {
       method: "POST",
       cookie: a.cookie,
-      body: { username: "bob", password: "bob-pass", currentPassword: "alice-pass" },
+      body: {
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
     });
     expect(linked.status).toBe(200);
     const cookie = cookieFrom(linked);
@@ -167,7 +169,7 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
     const unlinked = await call(`${ROUTES.account.identities}/${b.me.activeIdentityId}`, {
       method: "DELETE",
       cookie,
-      body: { currentPassword: "bob-pass" },
+      body: { currentCredential: { password: "bob-pass" } },
     });
     expect(unlinked.status).toBe(200);
     const remaining = MeResponse.parse(await unlinked.json());
@@ -201,12 +203,15 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
       call(ROUTES.account.identities, {
         method: "POST",
         cookie: d.cookie,
-        body: { username: "carol", password: "carol-pass", currentPassword: "dave-pass" },
+        body: {
+          credential: { username: "carol", password: "carol-pass" },
+          currentCredential: { password: "dave-pass" },
+        },
       }),
       ...Array.from({ length: 8 }, () =>
         call(ROUTES.auth.login, {
           method: "POST",
-          body: { username: "carol", password: "carol-pass" },
+          body: { credential: { username: "carol", password: "carol-pass" } },
         }),
       ),
     ]);

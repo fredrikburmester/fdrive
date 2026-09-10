@@ -40,9 +40,8 @@ export function registerAuthRoutes(
     const userAgent = c.req.header("user-agent") ?? null;
 
     const result = await deps.service.login({
-      username: parsed.data.username,
-      password: parsed.data.password,
-      ...(parsed.data.otp !== undefined ? { otp: parsed.data.otp } : {}),
+      ...(parsed.data.providerId !== undefined ? { providerId: parsed.data.providerId } : {}),
+      credential: parsed.data.credential,
       userAgent,
       ip,
     });

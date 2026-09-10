@@ -29,9 +29,11 @@ export function LoginForm({ subtitle }: LoginFormProps) {
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     login.mutate({
-      username,
-      password,
-      ...(showOtp && otp.length > 0 ? { otp } : {}),
+      credential: {
+        username,
+        password,
+        ...(showOtp && otp.length > 0 ? { otp } : {}),
+      },
     });
   }
 

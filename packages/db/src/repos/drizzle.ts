@@ -74,7 +74,16 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 function toProvider(row: typeof providers.$inferSelect): Provider {
-  return { id: row.id, type: row.type, baseUrl: row.baseUrl, createdAt: row.createdAt };
+  return {
+    id: row.id,
+    type: row.type,
+    baseUrl: row.baseUrl,
+    label: row.label,
+    config: row.config,
+    enabled: row.enabled,
+    managedByEnv: row.managedByEnv,
+    createdAt: row.createdAt,
+  };
 }
 
 function toAccount(row: typeof accounts.$inferSelect): Account {
@@ -127,6 +136,37 @@ function createProviderRepo(db: Db): ProviderRepo {
       validateIdentityLinkId(id);
       const [row] = await db.select().from(providers).where(eq(providers.id, id));
       return row ? toProvider(row) : null;
+    },
+    async list() {
+      const rows = await db.select().from(providers).orderBy(providers.createdAt, providers.id);
+      return rows.map(toProvider);
+    },
+    async update(id, patch) {
+      validateIdentityLinkId(id);
+      const set = {
+        ...(patch.label !== undefined ? { label: patch.label } : {}),
+        ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+        ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
+      };
+      if (Object.keys(set).length === 0) {
+        const [row] = await db.select().from(providers).where(eq(providers.id, id));
+        return row ? toProvider(row) : null;
+      }
+      const [row] = await db.update(providers).set(set).where(eq(providers.id, id)).returning();
+      return row ? toProvider(row) : null;
+    },
+    async delete(id) {
+      validateIdentityLinkId(id);
+      const [used] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(identities)
+        .where(eq(identities.providerId, id));
+      if ((used?.count ?? 0) > 0) {
+        throw new ConflictError("provider is still used by identities");
+      }
+      await db.delete(providers).where(eq(providers.id, id));
     },
     async ensure(input) {
       const [row] = await db
@@ -199,6 +239,13 @@ function createIdentityRepo(db: Db): IdentityRepo {
     async listByAccount(accountId) {
       const rows = await db.select().from(identities).where(eq(identities.accountId, accountId));
       return rows.map(toIdentity);
+    },
+    async countByProvider(providerId) {
+      const [row] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(identities)
+        .where(eq(identities.providerId, providerId));
+      return row?.count ?? 0;
     },
     async touchLogin(id, at) {
       await db.update(identities).set({ lastLoginAt: at }).where(eq(identities.id, id));
@@ -377,6 +424,9 @@ function createSettingsRepo(db: Db): SettingsRepo {
         )
         .returning({ key: settings.key });
       return rows.length === 1;
+    },
+    async delete(key) {
+      await db.delete(settings).where(eq(settings.key, key));
     },
     async all() {
       const rows = await db.select().from(settings);

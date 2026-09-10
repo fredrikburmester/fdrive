@@ -1,7 +1,6 @@
 import { createMemoryOfficeFileRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it, vi } from "vitest";
-import { createConnectionStore } from "../connection/store.js";
 import { createMetadataService } from "../metadata/service.js";
 import { createInMemoryMountMappingStore } from "../scoping/mount-mapping-store.ts";
 import { createInMemoryScopeOverrideStore } from "../scoping/override-store.ts";
@@ -11,16 +10,12 @@ import { applyOfficeStorageEvent, withOfficeMetadata } from "./registry-events.t
 
 const now = new Date("2026-09-06T00:00:00Z");
 
-/** Builds a real `ScopeResolver.configuredMappings` (no overrides, no index roots) over `connection`. */
-function configuredMappingsFrom(
-  repos: ReturnType<typeof createMemoryRepos>,
-  connection: ReturnType<typeof createConnectionStore>,
-) {
+/** Builds a real `ScopeResolver.configuredMappings` (no overrides, no index roots) over the repos' provider rows. */
+function configuredMappingsFrom(repos: ReturnType<typeof createMemoryRepos>) {
   return createScopeResolver({
     providers: repos.providers,
     overrides: createInMemoryScopeOverrideStore(),
     mountMappings: createInMemoryMountMappingStore(),
-    connection,
     indexRoots: [],
     indexer: fakeIndexerDirectory(new Map()),
     storageForIdentity: async () => fakeStorageProvider(),
@@ -54,11 +49,6 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const connection = createConnectionStore({
-    settings: repos.settings,
-    envUrl: "http://sftpgo",
-    defaultHomeTemplate: "sftpgo:/{username}",
-  });
   const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
@@ -70,7 +60,7 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
     metadata,
     files,
     repos.identities,
-    configuredMappingsFrom(repos, connection),
+    configuredMappingsFrom(repos),
     () => now,
   );
   const file = await files.ensure({
@@ -84,18 +74,13 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   expect(await files.get(file.id)).toBeNull();
   await wrapped.onMoved("missing", "/x", "/y", false);
   await wrapped.onDeleted("missing", "/x", false);
-  vi.spyOn(connection, "current").mockResolvedValue(null);
+  await repos.providers.update(provider.id, { enabled: false });
   await wrapped.onDeleted(identity.id, "/x", false);
 });
 it("passes onTrashed through unchanged: office registrations are untouched, recents are dropped", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const connection = createConnectionStore({
-    settings: repos.settings,
-    envUrl: "http://sftpgo",
-    defaultHomeTemplate: "sftpgo:/{username}",
-  });
   const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
@@ -107,7 +92,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
     metadata,
     files,
     repos.identities,
-    configuredMappingsFrom(repos, connection),
+    configuredMappingsFrom(repos),
     () => now,
   );
   expect(wrapped.onTrashed).toBe(metadata.onTrashed);
@@ -138,21 +123,21 @@ it("tombstones an old mapping if the configured root changes during move resolut
     path: "alice/a.docx",
   });
   let calls = 0;
-  const connection = createConnectionStore({
-    settings: repos.settings,
-    envUrl: "http://sftpgo",
-    defaultHomeTemplate: "sftpgo:/{username}",
+  const get = repos.providers.get.bind(repos.providers);
+  vi.spyOn(repos.providers, "get").mockImplementation(async (id) => {
+    const row = await get(id);
+    return row === null
+      ? null
+      : {
+          ...row,
+          config: { homeTemplate: ++calls === 1 ? "sftpgo:/{username}" : "other:/{username}" },
+        };
   });
-  vi.spyOn(connection, "current").mockImplementation(async () => ({
-    baseUrl: "http://sftpgo",
-    source: "env",
-    homeTemplate: ++calls === 1 ? "sftpgo:/{username}" : "other:/{username}",
-  }));
   await withOfficeMetadata(
     createMetadataService(repos),
     files,
     repos.identities,
-    configuredMappingsFrom(repos, connection),
+    configuredMappingsFrom(repos),
     () => now,
   ).onMoved(identity.id, "/a.docx", "/b.docx", false);
   expect(await files.get(file.id)).toBeNull();
@@ -173,23 +158,18 @@ it("tombstones the source when the move target becomes unmapped", async () => {
     rootName: "sftpgo",
     path: "alice/a.docx",
   });
-  const connection = createConnectionStore({
-    settings: repos.settings,
-    envUrl: "http://sftpgo",
-    defaultHomeTemplate: "sftpgo:/{username}",
-  });
-  vi.spyOn(connection, "current")
-    .mockResolvedValueOnce({
-      baseUrl: "http://sftpgo",
-      source: "env",
-      homeTemplate: "sftpgo:/{username}",
-    })
-    .mockResolvedValue(null);
+  const get = repos.providers.get.bind(repos.providers);
+  vi.spyOn(repos.providers, "get")
+    .mockImplementationOnce(get)
+    .mockImplementation(async (id) => {
+      const row = await get(id);
+      return row === null ? null : { ...row, enabled: false };
+    });
   await withOfficeMetadata(
     createMetadataService(repos),
     files,
     repos.identities,
-    configuredMappingsFrom(repos, connection),
+    configuredMappingsFrom(repos),
     () => now,
   ).onMoved(identity.id, "/a.docx", "/elsewhere.docx", false);
   expect(await files.get(file.id)).toBeNull();

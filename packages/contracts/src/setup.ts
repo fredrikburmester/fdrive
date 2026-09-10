@@ -24,7 +24,7 @@ export type SetupTestRequest = z.infer<typeof SetupTestRequest>;
 
 /**
  * Result of probing a candidate SFTPGo base URL, shared by
- * `POST /api/v1/setup/test` and `POST /api/v1/admin/connection/test`.
+ * `POST /api/v1/setup/test` and the admin provider probe routes.
  */
 export const ConnectionTestResponse = z.object({
   ok: z.boolean(),

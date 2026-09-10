@@ -178,6 +178,23 @@ export function createMemoryStorage(
       return { size: file.content.length, modifiedAt: file.mtime, contentType: null };
     },
 
+    async stat(path: string) {
+      const normalized = normalizePath(path);
+      const file = fileMap.get(normalized);
+      if (file !== undefined) {
+        return {
+          kind: "file" as const,
+          size: file.content.length,
+          modifiedAt: file.mtime,
+          contentType: null,
+        };
+      }
+      if (dirs.has(normalized)) {
+        return { kind: "dir" as const, size: 0, modifiedAt: null, contentType: null };
+      }
+      throw new StorageError("not_found", `not found: ${path}`);
+    },
+
     async download(path: string) {
       const normalized = normalizePath(path);
       const file = fileMap.get(normalized);
@@ -219,16 +236,45 @@ export function createMemoryStorage(
     async move(path: string, target: string): Promise<void> {
       const normalizedSource = normalizePath(path);
       const normalizedTarget = normalizePath(target);
-      const file = fileMap.get(normalizedSource);
-      if (file === undefined) {
-        throw new StorageError("not_found", `not found: ${path}`);
-      }
       if (fileMap.has(normalizedTarget) || dirs.has(normalizedTarget)) {
         throw new StorageError("conflict", `target exists: ${target}`);
       }
-      fileMap.delete(normalizedSource);
-      removeChild(parentPath(normalizedSource), normalizedSource);
-      putFile(normalizedTarget, file.content, file.mtime);
+      const file = fileMap.get(normalizedSource);
+      if (file !== undefined) {
+        fileMap.delete(normalizedSource);
+        removeChild(parentPath(normalizedSource), normalizedSource);
+        putFile(normalizedTarget, file.content, file.mtime);
+        return;
+      }
+      if (!dirs.has(normalizedSource) || normalizedSource === "/") {
+        throw new StorageError("not_found", `not found: ${path}`);
+      }
+      const prefix = `${normalizedSource}/`;
+      const movedFiles = [...fileMap.entries()].filter(([filePath]) => filePath.startsWith(prefix));
+      const movedDirs = [...dirs].filter(
+        (dirPath) => dirPath === normalizedSource || dirPath.startsWith(prefix),
+      );
+      for (const [filePath] of movedFiles) {
+        fileMap.delete(filePath);
+        removeChild(parentPath(filePath), filePath);
+      }
+      for (const dirPath of movedDirs) {
+        dirs.delete(dirPath);
+        removeChild(parentPath(dirPath), dirPath);
+        childrenOf.delete(dirPath);
+      }
+      ensureDirsFor(parentPath(normalizedTarget));
+      addDir(normalizedTarget);
+      for (const dirPath of movedDirs) {
+        addDir(`${normalizedTarget}${dirPath.slice(normalizedSource.length)}`);
+      }
+      for (const [filePath, entry] of movedFiles) {
+        putFile(
+          `${normalizedTarget}${filePath.slice(normalizedSource.length)}`,
+          entry.content,
+          entry.mtime,
+        );
+      }
     },
 
     async copy(path: string, target: string): Promise<void> {

@@ -14,6 +14,7 @@ const MESSAGE_BY_KIND: Record<ApiErrorKind, string> = {
   internal: "Something went wrong on the server. Please try again.",
   upstream_unavailable: "fdrive can't reach the server. Check your connection and try again.",
   setup_required: "fdrive has not been set up yet.",
+  unsupported: "This storage doesn't support that.",
 };
 
 /**

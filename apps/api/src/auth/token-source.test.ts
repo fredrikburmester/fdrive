@@ -1,15 +1,16 @@
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import type { SftpgoClient } from "@fdrive/sftpgo";
-import { createFakeSftpgoServer, createSftpgoClient, SftpgoError } from "@fdrive/sftpgo";
-import { beforeEach, describe, expect, it } from "vitest";
+import { createFakeSftpgoServer, sftpgoModule } from "@fdrive/sftpgo";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors";
+import { memoryProviderService } from "../providers/test-fixtures/index.ts";
 import { parseMasterKey, seal } from "./crypto";
-import { createTokenSource } from "./token-source";
+import { createTokenSource, parseStoredCredential } from "./token-source";
 
 const MASTER = parseMasterKey(Buffer.alloc(32, 3).toString("base64"));
 const USERNAME = "alice";
 const PASSWORD = "correct-horse";
+const BASE_URL = "http://sftpgo.fake";
 
 function createClock(startMs: number) {
   let now = startMs;
@@ -21,8 +22,8 @@ function createClock(startMs: number) {
   };
 }
 
-async function seedIdentity(repos: Repos): Promise<string> {
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo.fake" });
+async function seedIdentity(repos: Repos, master = MASTER): Promise<string> {
+  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
   const account = await repos.accounts.create({ displayName: USERNAME });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -30,7 +31,7 @@ async function seedIdentity(repos: Repos): Promise<string> {
     externalUsername: USERNAME,
   });
   const ciphertext = seal(
-    MASTER,
+    master,
     new TextEncoder().encode(JSON.stringify({ password: PASSWORD })),
     identity.id,
   );
@@ -50,340 +51,209 @@ describe("createTokenSource", () => {
   let repos: Repos;
   let clockCtl: ReturnType<typeof createClock>;
   let server: ReturnType<typeof buildFakeServer>;
-  let sftpgo: SftpgoClient;
   let identityId: string;
+
+  function build(fetchImpl: typeof globalThis.fetch = server.fetch, master = MASTER) {
+    const providers = memoryProviderService(repos, { fetch: fetchImpl, clock: clockCtl.clock });
+    return createTokenSource({ repos, providers, master, clock: clockCtl.clock, fetch: fetchImpl });
+  }
 
   beforeEach(async () => {
     repos = createMemoryRepos();
     clockCtl = createClock(Date.parse("2026-01-01T00:00:00.000Z"));
     server = buildFakeServer(20 * 60 * 1000, clockCtl.clock);
-    sftpgo = createSftpgoClient({ baseUrl: "http://sftpgo.fake", fetch: server.fetch });
     identityId = await seedIdentity(repos);
   });
 
   it("mints a token on first use and stores it sealed in the database", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
+    const tokenSource = build();
 
     const token = await tokenSource.get(identityId);
 
-    expect(typeof token).toBe("string");
+    expect(token).toEqual(expect.any(String));
+    expect(server.state.tokens.size).toBe(1);
     const credential = await repos.credentials.get(identityId);
-    expect(credential?.cachedToken).not.toBeNull();
-    expect(credential?.cachedTokenExpiresAt).not.toBeNull();
+    expect(credential?.cachedToken).toEqual(expect.any(String));
+    expect(credential?.cachedToken).not.toBe(token);
+    expect(credential?.cachedTokenExpiresAt).toBeInstanceOf(Date);
   });
 
   it("reuses the in-process cache while more than the refresh margin remains", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
+    const tokenSource = build();
     const first = await tokenSource.get(identityId);
+    clockCtl.advance(10 * 60 * 1000);
     const second = await tokenSource.get(identityId);
-
     expect(second).toBe(first);
+    expect(server.state.tokens.size).toBe(1);
   });
 
   it("re-mints once the cached token is within the refresh margin", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
+    const tokenSource = build();
     const first = await tokenSource.get(identityId);
-    clockCtl.advance(20 * 60 * 1000 - 60 * 1000); // 1 minute left: inside the 2-minute margin
-
+    clockCtl.advance(19 * 60 * 1000);
     const second = await tokenSource.get(identityId);
-
     expect(second).not.toBe(first);
+    expect(server.state.tokens.size).toBe(2);
   });
 
   it("reads a still-fresh token from the database when the in-process cache is empty", async () => {
-    const first = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-    const mintedToken = await first.get(identityId);
-
-    // A second token source (e.g. a second API process) sharing the same
-    // repos should reuse the DB-cached token instead of minting a new one.
-    const second = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
+    const first = build();
+    const minted = await first.get(identityId);
+    const second = build();
     const reused = await second.get(identityId);
-
-    expect(reused).toBe(mintedToken);
+    expect(reused).toBe(minted);
+    expect(server.state.tokens.size).toBe(1);
   });
 
   it("invalidate forgets both the in-process cache and the database record", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-    await tokenSource.get(identityId);
-
+    const tokenSource = build();
+    const first = await tokenSource.get(identityId);
     await tokenSource.invalidate(identityId);
-
-    const credential = await repos.credentials.get(identityId);
-    expect(credential?.cachedToken).toBeNull();
-    expect(credential?.cachedTokenExpiresAt).toBeNull();
+    expect((await repos.credentials.get(identityId))?.cachedToken).toBeNull();
+    const second = await tokenSource.get(identityId);
+    expect(second).not.toBe(first);
+    expect(server.state.tokens.size).toBe(2);
   });
 
-  it("withToken runs fn with a valid token and returns its result", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
-    const result = await tokenSource.withToken(identityId, async (token) => {
-      const entries = await sftpgo.user(token).list("/");
-      return entries.length;
-    });
-
-    expect(result).toBe(0);
+  it("builds a session whose token, credential and invalidation reach the same source", async () => {
+    const tokenSource = build();
+    const session = tokenSource.sessionFor(identityId, USERNAME);
+    expect(session.externalUsername).toBe(USERNAME);
+    const token = await session.getToken();
+    expect(token).toEqual(expect.any(String));
+    expect(await session.getCredential()).toEqual({ password: PASSWORD });
+    await session.invalidateToken();
+    expect((await repos.credentials.get(identityId))?.cachedToken).toBeNull();
+    expect(await session.getToken()).not.toBe(token);
   });
 
-  it("withToken retries exactly once after a 401, minting a fresh token", async () => {
+  it("returns null tokens for a provider module that does not mint", async () => {
+    const resolved = await memoryProviderService(repos, { fetch: server.fetch }).forIdentity(
+      identityId,
+    );
+    const { mint: _mint, ...tokenless } = sftpgoModule;
     const tokenSource = createTokenSource({
       repos,
-      clientForIdentity: async () => sftpgo,
+      providers: { forIdentity: async () => ({ ...resolved, module: tokenless }) },
       master: MASTER,
       clock: clockCtl.clock,
+      fetch: server.fetch,
     });
-    const staleToken = await tokenSource.get(identityId);
-    // Simulate the token being revoked server-side without our knowledge.
-    server.state.tokens.delete(staleToken);
-
-    let attempt = 0;
-    const result = await tokenSource.withToken(identityId, async (token) => {
-      attempt += 1;
-      return sftpgo.user(token).list("/");
-    });
-
-    expect(result).toEqual([]);
-    expect(attempt).toBe(2);
-  });
-
-  it("withToken lets a non-unauthorized SftpgoError propagate without retrying", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
-    let attempt = 0;
-    await expect(
-      tokenSource.withToken(identityId, async () => {
-        attempt += 1;
-        throw new SftpgoError("boom", "not_found", 404, null);
-      }),
-    ).rejects.toThrow(SftpgoError);
-    expect(attempt).toBe(1);
-  });
-
-  it("withToken lets a non-SftpgoError propagate without retrying", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
-    await expect(
-      tokenSource.withToken(identityId, async () => {
-        throw new Error("unrelated failure");
-      }),
-    ).rejects.toThrow("unrelated failure");
+    expect(await tokenSource.get(identityId)).toBeNull();
+    expect(await tokenSource.sessionFor(identityId, USERNAME).getToken()).toBeNull();
+    expect(server.state.tokens.size).toBe(0);
   });
 
   it("throws reauth_required when the stored password is rejected by SFTPGo", async () => {
-    // The user's real password changed; the sealed credential is now stale.
-    const existingUser = server.state.users.get(USERNAME);
-    if (!existingUser) {
-      throw new Error("test setup error: expected the seeded user to exist");
-    }
-    server.state.users.set(USERNAME, { ...existingUser, password: "a-new-password" });
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
-    await expect(tokenSource.get(identityId)).rejects.toMatchObject({
-      kind: "reauth_required",
-    });
+    const ciphertext = seal(
+      MASTER,
+      new TextEncoder().encode(JSON.stringify({ password: "wrong" })),
+      identityId,
+    );
+    await repos.credentials.put({ identityId, ciphertext, keyId: "master-v1" });
+    const tokenSource = build();
+    await expect(tokenSource.get(identityId)).rejects.toMatchObject({ kind: "reauth_required" });
   });
 
   it("throws reauth_required when the identity no longer exists", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
+    const tokenSource = build();
     await expect(tokenSource.get("00000000-0000-0000-0000-000000000000")).rejects.toMatchObject({
       kind: "reauth_required",
     });
   });
 
   it("throws reauth_required when there is no stored credential", async () => {
-    const provider = await repos.providers.ensure({
-      type: "sftpgo",
-      baseUrl: "http://sftpgo.fake",
-    });
-    const account = await repos.accounts.create({ displayName: "no-creds" });
-    const identity = await repos.identities.create({
+    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
+    const account = await repos.accounts.create({ displayName: "bob" });
+    const bob = await repos.identities.create({
       accountId: account.id,
       providerId: provider.id,
-      externalUsername: "no-creds",
+      externalUsername: "bob",
     });
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
-    await expect(tokenSource.get(identity.id)).rejects.toMatchObject({
+    const tokenSource = build();
+    await expect(tokenSource.get(bob.id)).rejects.toMatchObject({ kind: "reauth_required" });
+    await expect(tokenSource.credential(bob.id)).rejects.toMatchObject({
       kind: "reauth_required",
     });
   });
 
-  it("maps a network failure while minting to upstream_unavailable", async () => {
-    const throwingFetch: typeof fetch = async (input, init) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/api/v2/user/token")) {
-        throw new Error("connection refused");
-      }
-      return server.fetch(input, init);
-    };
-    const throwingClient = createSftpgoClient({
-      baseUrl: "http://sftpgo.fake",
-      fetch: throwingFetch,
+  it("throws upstream_unavailable when the identity's provider is disabled", async () => {
+    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
+    await repos.providers.update(provider.id, { enabled: false });
+    const tokenSource = build();
+    await expect(tokenSource.get(identityId)).rejects.toMatchObject({
+      kind: "upstream_unavailable",
     });
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => throwingClient,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
+  });
 
+  it("maps a network failure while minting to upstream_unavailable", async () => {
+    const failing: typeof globalThis.fetch = async () => {
+      throw new TypeError("fetch failed");
+    };
+    const tokenSource = build(failing);
     await expect(tokenSource.get(identityId)).rejects.toMatchObject({
       kind: "upstream_unavailable",
     });
   });
 
   it("maps a server error while minting to upstream_unavailable", async () => {
-    const failingFetch: typeof fetch = async (input, init) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/api/v2/user/token")) {
-        return new Response(JSON.stringify({ error: "boom" }), { status: 500 });
-      }
-      return server.fetch(input, init);
-    };
-    const failingClient = createSftpgoClient({
-      baseUrl: "http://sftpgo.fake",
-      fetch: failingFetch,
-    });
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => failingClient,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
+    const failing: typeof globalThis.fetch = async () => new Response("boom", { status: 500 });
+    const tokenSource = build(failing);
     await expect(tokenSource.get(identityId)).rejects.toMatchObject({
       kind: "upstream_unavailable",
     });
   });
 
   it("propagates an ApiHttpError instance for reauth_required", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-
-    await expect(tokenSource.get("00000000-0000-0000-0000-000000000000")).rejects.toBeInstanceOf(
-      ApiHttpError,
+    const ciphertext = seal(
+      MASTER,
+      new TextEncoder().encode(JSON.stringify({ password: "wrong" })),
+      identityId,
     );
+    await repos.credentials.put({ identityId, ciphertext, keyId: "master-v1" });
+    const tokenSource = build();
+    await expect(tokenSource.get(identityId)).rejects.toBeInstanceOf(ApiHttpError);
   });
 
   it("throws reauth_required (not a raw CryptoError) when the stored password was sealed under a different master key", async () => {
-    const rotatedMaster = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: rotatedMaster,
-      clock: clockCtl.clock,
-    });
-
-    await expect(tokenSource.get(identityId)).rejects.toMatchObject({
+    const other = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
+    const tokenSource = build(server.fetch, other);
+    await expect(tokenSource.get(identityId)).rejects.toMatchObject({ kind: "reauth_required" });
+    await expect(tokenSource.credential(identityId)).rejects.toMatchObject({
       kind: "reauth_required",
-      message: expect.stringContaining("cannot be decrypted"),
     });
   });
 
   it("throws reauth_required when a fresh DB-cached token was sealed under a different master key", async () => {
-    const firstSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-    await firstSource.get(identityId);
-
-    const rotatedMaster = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
-    const secondSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: rotatedMaster,
-      clock: clockCtl.clock,
-    });
-
-    await expect(secondSource.get(identityId)).rejects.toMatchObject({
-      kind: "reauth_required",
-    });
+    await build().get(identityId);
+    const other = parseMasterKey(Buffer.alloc(32, 9).toString("base64"));
+    const tokenSource = build(server.fetch, other);
+    await expect(tokenSource.get(identityId)).rejects.toMatchObject({ kind: "reauth_required" });
   });
 
   it("prime seals and stores a caller-supplied token without minting a new one", async () => {
-    const tokenSource = createTokenSource({
-      repos,
-      clientForIdentity: async () => sftpgo,
-      master: MASTER,
-      clock: clockCtl.clock,
-    });
-    const expiresAt = new Date(clockCtl.clock().getTime() + 20 * 60 * 1000);
-
-    await tokenSource.prime(identityId, { accessToken: "primed-token", expiresAt });
-
-    expect(await tokenSource.get(identityId)).toBe("primed-token");
-    const credential = await repos.credentials.get(identityId);
-    expect(credential?.cachedToken).not.toBeNull();
-    expect(credential?.cachedTokenExpiresAt).toEqual(expiresAt);
-    // No SFTPGo login happened: `prime` only seals and caches what it is given.
+    const tokenSource = build();
+    const expiresAt = new Date(clockCtl.clock().getTime() + 10 * 60 * 1000);
+    await tokenSource.prime(identityId, { token: "primed", expiresAt });
+    expect(await tokenSource.get(identityId)).toBe("primed");
     expect(server.state.tokens.size).toBe(0);
+    const credential = await repos.credentials.get(identityId);
+    expect(credential?.cachedToken).toEqual(expect.any(String));
+    expect(credential?.cachedTokenExpiresAt?.getTime()).toBe(expiresAt.getTime());
+  });
+
+  it("parseStoredCredential tolerates malformed stored blobs", () => {
+    const encode = (value: string) => new TextEncoder().encode(value);
+    expect(parseStoredCredential(encode("not json"))).toEqual({});
+    expect(parseStoredCredential(encode("[1]"))).toEqual({});
+    expect(parseStoredCredential(encode('{"a":"b","n":1}'))).toEqual({ a: "b" });
+  });
+
+  it("resolves the provider before touching credentials on a cache hit", async () => {
+    const tokenSource = build();
+    await tokenSource.get(identityId);
+    const get = vi.spyOn(repos.identities, "get").mockResolvedValue(null);
+    await expect(tokenSource.get(identityId)).rejects.toMatchObject({ kind: "reauth_required" });
+    get.mockRestore();
   });
 });

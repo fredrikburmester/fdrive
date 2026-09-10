@@ -30,14 +30,18 @@ export function LinkLoginDialog({
   const actions = useIdentityActions();
   function request() {
     return {
-      username,
-      password,
-      ...(otp ? { otp } : {}),
-      currentPassword,
-      ...(currentOtp ? { currentOtp } : {}),
+      credential: { username, password, ...(otp ? { otp } : {}) },
+      currentCredential: { password: currentPassword, ...(currentOtp ? { otp: currentOtp } : {}) },
     };
   }
-  const valid = LinkIdentityRequest.safeParse(request()).success;
+  // The contract only shapes the request; which fields a provider needs is
+  // the API's call. Until the form renders from the provider's own field
+  // list, require the SFTPGo essentials here.
+  const valid =
+    username.length > 0 &&
+    password.length > 0 &&
+    currentPassword.length > 0 &&
+    LinkIdentityRequest.safeParse(request()).success;
 
   function close(next: boolean) {
     if (actions.pending) return;

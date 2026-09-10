@@ -115,6 +115,7 @@ function fakeDownloadResult(): Awaited<ReturnType<StorageProvider["download"]>> 
 function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider {
   return {
     list: overrides.list ?? (async () => []),
+    stat: overrides.stat ?? notImplemented,
     statFile: overrides.statFile ?? notImplemented,
     download: overrides.download ?? (async () => fakeDownloadResult()),
     upload: overrides.upload ?? notImplemented,

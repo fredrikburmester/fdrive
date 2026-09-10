@@ -6,7 +6,6 @@ import {
   type LinkIdentityRequest,
   type UnlinkIdentityRequest,
 } from "./accounts.ts";
-import { AdminConnectionResponse, type AdminConnectionUpdateRequest } from "./admin.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
@@ -46,9 +45,19 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import {
+  AdminProvider,
+  type AdminProviderCreateRequest,
+  AdminProvidersResponse,
+  type AdminProviderTestRequest,
+  type AdminProviderUpdateRequest,
+  ProvidersResponse,
+} from "./providers.ts";
 import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
   accountTokenRoute,
+  adminProviderRoute,
+  adminProviderTestRoute,
   IDENTITY_HEADER,
   identityScopeRoute,
   identityScopeSuggestionsRoute,
@@ -258,9 +267,14 @@ export interface ApiClient {
   setupStatus(): Promise<SetupStatusResponse>;
   setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
-  adminConnection(): Promise<AdminConnectionResponse>;
-  adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse>;
-  adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse>;
+  /** Public: the enabled providers with their credential forms, for the login page. */
+  providers(): Promise<ProvidersResponse>;
+  adminProviders(): Promise<AdminProvidersResponse>;
+  adminCreateProvider(req: AdminProviderCreateRequest): Promise<AdminProvider>;
+  adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
+  adminDeleteProvider(id: string): Promise<OkResponse>;
+  /** Probes a saved provider (`id`) or an unsaved candidate (`req`). */
+  adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
   systemIndexer(): Promise<SystemIndexerResponse>;
@@ -887,30 +901,44 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       );
     },
 
-    adminConnection(): Promise<AdminConnectionResponse> {
+    providers(): Promise<ProvidersResponse> {
+      return requestJson(ctx, { method: "GET", path: ROUTES.providers }, ProvidersResponse);
+    },
+
+    adminProviders(): Promise<AdminProvidersResponse> {
       return requestJson(
         ctx,
-        { method: "GET", path: ROUTES.admin.connection },
-        AdminConnectionResponse,
+        { method: "GET", path: ROUTES.admin.providers },
+        AdminProvidersResponse,
       );
     },
 
-    adminUpdateConnection(patch: AdminConnectionUpdateRequest): Promise<AdminConnectionResponse> {
+    adminCreateProvider(req: AdminProviderCreateRequest): Promise<AdminProvider> {
       return requestJson(
         ctx,
-        { method: "PUT", path: ROUTES.admin.connectionUpdate, jsonBody: patch },
-        AdminConnectionResponse,
+        { method: "POST", path: ROUTES.admin.providers, jsonBody: req },
+        AdminProvider,
       );
     },
 
-    adminTestConnection(baseUrl?: string): Promise<ConnectionTestResponse> {
+    adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider> {
       return requestJson(
         ctx,
-        {
-          method: "POST",
-          path: ROUTES.admin.connectionTest,
-          jsonBody: baseUrl !== undefined ? { baseUrl } : {},
-        },
+        { method: "PATCH", path: adminProviderRoute(id), jsonBody: patch },
+        AdminProvider,
+      );
+    },
+
+    adminDeleteProvider(id: string): Promise<OkResponse> {
+      return requestJson(ctx, { method: "DELETE", path: adminProviderRoute(id) }, OkResponse);
+    },
+
+    adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse> {
+      return requestJson(
+        ctx,
+        typeof target === "string"
+          ? { method: "POST", path: adminProviderTestRoute(target) }
+          : { method: "POST", path: ROUTES.admin.providersTest, jsonBody: target },
         ConnectionTestResponse,
       );
     },

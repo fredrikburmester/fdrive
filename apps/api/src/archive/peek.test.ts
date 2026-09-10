@@ -1,8 +1,8 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/testkit";
 import * as tar from "tar-stream";
 import { describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
-import { createMemoryStorage } from "../../test/fixtures/memory-storage.js";
 import { peekArchive, UnreadableArchiveError, UnsupportedPeekFormatError } from "./peek.js";
 
 /**
@@ -18,6 +18,7 @@ function createRangeAwareStorage(files: Record<string, Buffer>): StorageProvider
 
   return {
     list: notImplemented,
+    stat: notImplemented,
     async statFile(path: string) {
       const content = files[path];
       if (content === undefined) {

@@ -32,6 +32,17 @@ const ME_RESPONSE: MeResponse = {
       username: "ada",
       providerType: "sftpgo",
       providerLabel: "SFTPGo",
+      providerId: "00000000-0000-4000-8000-000000000009",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: true,
+      },
     },
   ],
   activeIdentityId: "00000000-0000-0000-0000-000000000001",
@@ -100,7 +111,7 @@ describe("useLogin", () => {
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useLogin(), { wrapper: createWrapper(queryClient) });
-    result.current.mutate({ username: "ada", password: "secret" });
+    result.current.mutate({ credential: { username: "ada", password: "secret" } });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(queryClient.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);

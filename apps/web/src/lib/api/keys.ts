@@ -20,7 +20,7 @@ export const queryKeys = {
     status: () => ["setup", "status"] as const,
   },
   admin: {
-    connection: () => ["admin", "connection"] as const,
+    providers: () => ["admin", "providers"] as const,
   },
   system: {
     publicUrl: () => ["system", "public-url"] as const,

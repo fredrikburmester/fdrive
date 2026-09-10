@@ -7,8 +7,8 @@ describe("resolveLoginSubtitle", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-        provider: { type: "sftpgo", label: "127.0.0.1:58080" },
+        builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+        providers: [{ type: "sftpgo", label: "127.0.0.1:58080" }],
         setupRequired: false,
       }),
     } as unknown as ApiClient;
@@ -22,8 +22,8 @@ describe("resolveLoginSubtitle", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-        provider: { type: "sftpgo", label: null },
+        builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+        providers: [{ type: "sftpgo", label: null }],
         setupRequired: false,
       }),
     } as unknown as ApiClient;
@@ -33,12 +33,12 @@ describe("resolveLoginSubtitle", () => {
     expect(subtitle).toBe("Sign in with your SFTPGo account");
   });
 
-  it("falls back to a generic subtitle when the provider is null", async () => {
+  it("falls back to a generic subtitle when there are no providers", async () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-        provider: null,
+        builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+        providers: [],
         setupRequired: true,
       }),
     } as unknown as ApiClient;
@@ -72,8 +72,8 @@ describe("shouldRedirectToSetup", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-        provider: null,
+        builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+        providers: [],
         setupRequired: true,
       }),
     } as unknown as ApiClient;
@@ -85,8 +85,8 @@ describe("shouldRedirectToSetup", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: { name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" },
-        provider: { type: "sftpgo", label: "127.0.0.1:58080" },
+        builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+        providers: [{ type: "sftpgo", label: "127.0.0.1:58080" }],
         setupRequired: false,
       }),
     } as unknown as ApiClient;

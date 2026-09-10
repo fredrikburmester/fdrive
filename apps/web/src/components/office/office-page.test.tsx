@@ -20,7 +20,23 @@ vi.mock("@/components/shell/page-header", () => ({
 const me: MeResponse = {
   account: { id: "account", displayName: "Ada" },
   identities: [
-    { id: "identity", username: "ada", providerType: "sftpgo", providerLabel: "Storage" },
+    {
+      id: "identity",
+      username: "ada",
+      providerType: "sftpgo",
+      providerLabel: "Storage",
+      providerId: "00000000-0000-4000-8000-000000000009",
+      capabilities: {
+        zip: true,
+        setModifiedAt: true,
+        atomicMove: true,
+        trash: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: true,
+      },
+    },
   ],
   activeIdentityId: "identity",
   isAdmin: false,

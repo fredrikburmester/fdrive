@@ -8,7 +8,14 @@ import { createSharesService } from "../service.ts";
 export function sharesHarness() {
   const h = accountsHarness();
   const shares = createMemoryShareRepo();
-  const deps = { ...h.deps, shares, logger: h.logger, clientFor: (_baseUrl: string) => h.client };
+  const deps = {
+    ...h.deps,
+    tokenSource: h.tokenSource,
+    providers: h.providers,
+    shares,
+    logger: h.logger,
+    clientFor: (_baseUrl: string) => h.client,
+  };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);
   const limiter = createShareLimiter(h.clock);
@@ -65,7 +72,7 @@ export function sharesHarness() {
   async function login(username = "alice") {
     const res = await request("/api/v1/auth/login", {
       method: "POST",
-      body: { username, password: `${username}-pass` },
+      body: { credential: { username, password: `${username}-pass` } },
     });
     return cookieFrom(res);
   }

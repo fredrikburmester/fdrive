@@ -1,8 +1,6 @@
-import type { ConnectionSource } from "@fdrive/contracts";
-
-/** Human-readable label for where the active connection's base URL comes from. */
-export function connectionSourceLabel(source: ConnectionSource): string {
-  return source === "env" ? "Environment (locked)" : "Settings";
+/** Human-readable label for where a provider's address comes from. */
+export function connectionSourceLabel(managedByEnv: boolean): string {
+  return managedByEnv ? "Environment (locked)" : "Settings";
 }
 
 /**

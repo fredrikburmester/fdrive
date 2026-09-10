@@ -47,7 +47,9 @@ installation, reuse its `.env`; do not run initialization again or regenerate se
 
 Optional: set `FDRIVE_DATA_DIR` in `.env` to an absolute persistent directory before
 first startup. It stores fdrive state; **it does not point the workers at SFTPGo files**.
-Keep the same value on updates. Leave `SFTPGO_URL` unset for web onboarding.
+Keep the same value on updates. Leave `SFTPGO_URL` unset for web onboarding; when it is
+set, it seeds the SFTPGo storage provider at startup and pins its address, so the address
+can only be changed by changing the variable.
 
 ## 3. Prepare file access before offering processing features
 

@@ -1,7 +1,6 @@
 import type { IndexerDirectoryResponse } from "@fdrive/contracts";
 import { type FileEntry, makeEntry, type StorageProvider } from "@fdrive/core";
-import type { Identity } from "@fdrive/db";
-import type { Connection, ConnectionStore } from "../../connection/store.ts";
+import type { Identity, Provider, ProviderRepo } from "@fdrive/db";
 import type { IndexerClient } from "../../system/indexer-client.ts";
 import type { SidecarResult } from "../../system/sidecar-client.ts";
 
@@ -18,11 +17,30 @@ export function buildIdentity(overrides: Partial<Identity> = {}): Identity {
   };
 }
 
-/** A `ConnectionStore` (or its `current`-only slice) always returning `connection`. */
-export function fakeConnectionStore(
-  connection: Connection | null,
-): Pick<ConnectionStore, "current"> {
-  return { current: async () => connection };
+/** Builds an SFTPGo provider row, enabled by default, with `homeTemplate` in its config. */
+export function buildProvider(
+  overrides: Partial<Provider> & { homeTemplate?: string } = {},
+): Provider {
+  const { homeTemplate, ...rest } = overrides;
+  return {
+    id: "provider-1",
+    type: "sftpgo",
+    baseUrl: "http://sftpgo.test",
+    label: "",
+    config: homeTemplate === undefined ? {} : { homeTemplate },
+    enabled: true,
+    managedByEnv: false,
+    createdAt: new Date("2024-01-01T00:00:00Z"),
+    ...rest,
+  };
+}
+
+/** A `ProviderRepo` slice over a fixed list of rows. */
+export function fakeProviderRepo(rows: readonly Provider[]): Pick<ProviderRepo, "get" | "list"> {
+  return {
+    get: async (id) => rows.find((row) => row.id === id) ?? null,
+    list: async () => [...rows],
+  };
 }
 
 /**
@@ -51,6 +69,7 @@ export function fakeStorageProvider(overrides: Partial<StorageProvider> = {}): S
   };
   return {
     list: overrides.list ?? ((async () => []) as StorageProvider["list"]),
+    stat: overrides.stat ?? (boom as StorageProvider["stat"]),
     statFile: overrides.statFile ?? (boom as StorageProvider["statFile"]),
     download: overrides.download ?? (boom as StorageProvider["download"]),
     upload: overrides.upload ?? (boom as StorageProvider["upload"]),
@@ -59,8 +78,9 @@ export function fakeStorageProvider(overrides: Partial<StorageProvider> = {}): S
     copy: overrides.copy ?? (boom as StorageProvider["copy"]),
     deleteFile: overrides.deleteFile ?? (boom as StorageProvider["deleteFile"]),
     deleteDir: overrides.deleteDir ?? (boom as StorageProvider["deleteDir"]),
-    setModifiedAt: overrides.setModifiedAt ?? (boom as StorageProvider["setModifiedAt"]),
-    zip: overrides.zip ?? (boom as StorageProvider["zip"]),
+    setModifiedAt:
+      overrides.setModifiedAt ?? (boom as NonNullable<StorageProvider["setModifiedAt"]>),
+    zip: overrides.zip ?? (boom as NonNullable<StorageProvider["zip"]>),
   };
 }
 

@@ -1,6 +1,12 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient, type FakeSeed } from "@fdrive/sftpgo";
+import {
+  createFakeSftpgoServer,
+  createSftpgoClient,
+  createSftpgoStorageProvider,
+  type FakeSeed,
+  type WithToken,
+} from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -10,7 +16,6 @@ import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { createSftpgoStorageProvider, type WithToken } from "../storage/sftpgo-provider.js";
 import { registerFsRoutes, requireTargetFree } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
@@ -150,6 +155,7 @@ function notImplemented(): never {
 function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
   return {
     list: notImplemented,
+    stat: notImplemented,
     statFile: notImplemented,
     download: notImplemented,
     upload: notImplemented,
@@ -161,7 +167,7 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     setModifiedAt: notImplemented,
     zip: notImplemented,
     ...overrides,
-  };
+  } as StorageProvider;
 }
 
 function makeDownloadResult(
@@ -1120,7 +1126,12 @@ describe("shared body/query parsing", () => {
   it("accepts a body at or under the configured jsonMaxBytes cap", async () => {
     const storage = makeStubStorage({
       mkdir: async () => undefined,
-      statFile: async () => ({ size: 0, modifiedAt: new Date(CLOCK_ISO), contentType: null }),
+      stat: async () => ({
+        kind: "dir",
+        size: 0,
+        modifiedAt: new Date(CLOCK_ISO),
+        contentType: null,
+      }),
     });
     const { app } = await buildHarnessWithStorage(storage, { jsonMaxBytes: 4096 });
 
@@ -1179,17 +1190,45 @@ describe("unmapped errors pass through unchanged", () => {
     expect(res.status).toBe(500);
   });
 
-  it("returns not_found when a directory reported via bad_request is missing from its own parent listing", async () => {
+  it("refuses a zip download as unsupported when the storage has no zip", async () => {
+    const { zip: _zip, ...withoutZip } = makeStubStorage({});
+    const { app } = await buildHarnessWithStorage(withoutZip as StorageProvider);
+
+    const res = await app.request(
+      "/api/v1/fs/zip",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ paths: ["/a.txt"] }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await readJson<ErrorJson>(res)).toMatchObject({
+      error: { kind: "unsupported", details: { capability: "zip" } },
+    });
+  });
+
+  it("returns not_found when stat reports nothing at the path", async () => {
     const storage = makeStubStorage({
-      statFile: async () => {
-        throw new StorageError("bad_request", "is a directory");
+      stat: async () => {
+        throw new StorageError("not_found", "not found");
       },
-      list: async () => [],
     });
     const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request("/api/v1/fs/stat?path=/dir");
     expect(res.status).toBe(404);
+  });
+
+  it("reports a directory from stat with no extension", async () => {
+    const storage = makeStubStorage({
+      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request("/api/v1/fs/stat?path=/docs.d");
+    expect(res.status).toBe(200);
+    expect(await readJson<FsEntryJson>(res)).toMatchObject({ kind: "dir", ext: "" });
   });
 
   it("maps a StorageError of kind unauthorized to reauth_required", async () => {
@@ -1208,7 +1247,7 @@ describe("unmapped errors pass through unchanged", () => {
 
   it("defaults modifiedAt to the epoch when the provider reports none", async () => {
     const storage = makeStubStorage({
-      statFile: async () => ({ size: 5, modifiedAt: null, contentType: null }),
+      stat: async () => ({ kind: "file", size: 5, modifiedAt: null, contentType: null }),
     });
     const { app } = await buildHarnessWithStorage(storage);
 

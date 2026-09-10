@@ -77,6 +77,63 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
         expect(second.id).not.toBe(first.id);
       });
+
+      it("defaults label, config, enabled and managedByEnv, and lists oldest first", async () => {
+        const first = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+        const second = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://b" });
+        expect(first).toMatchObject({ label: "", config: {}, enabled: true, managedByEnv: false });
+        expect((await repos.providers.list()).map((row) => row.id)).toEqual([first.id, second.id]);
+      });
+
+      it("updates fields without touching the rest and keeps ensure from resetting them", async () => {
+        const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+        const updated = await repos.providers.update(provider.id, {
+          label: "Home",
+          config: { homeTemplate: "sftpgo:/{username}" },
+          enabled: false,
+          managedByEnv: true,
+        });
+        expect(updated).toMatchObject({
+          id: provider.id,
+          label: "Home",
+          config: { homeTemplate: "sftpgo:/{username}" },
+          enabled: false,
+          managedByEnv: true,
+        });
+        expect(await repos.providers.update(provider.id, {})).toEqual(updated);
+        expect(await repos.providers.update(provider.id, { baseUrl: "http://c" })).toMatchObject({
+          baseUrl: "http://c",
+          label: "Home",
+        });
+        expect(await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://c" })).toMatchObject(
+          {
+            id: provider.id,
+            label: "Home",
+            enabled: false,
+          },
+        );
+        expect(
+          await repos.providers.update("00000000-0000-0000-0000-000000000099", { label: "x" }),
+        ).toBeNull();
+      });
+
+      it("deletes an unused provider and refuses one that identities use", async () => {
+        const unused = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://unused" });
+        const used = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://used" });
+        const account = await repos.accounts.create({ displayName: null });
+        await repos.identities.create({
+          accountId: account.id,
+          providerId: used.id,
+          externalUsername: "alice",
+        });
+        expect(await repos.identities.countByProvider(used.id)).toBe(1);
+        expect(await repos.identities.countByProvider(unused.id)).toBe(0);
+        await repos.providers.delete(unused.id);
+        expect(await repos.providers.get(unused.id)).toBeNull();
+        await expect(repos.providers.delete(used.id)).rejects.toThrow(ConflictError);
+        await repos.providers.delete("00000000-0000-0000-0000-000000000099");
+        expect(await repos.providers.get(used.id)).not.toBeNull();
+      });
     });
 
     describe("accounts", () => {
@@ -667,6 +724,13 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("settings", () => {
       it("returns null for a key that was never set", async () => {
         expect(await repos.settings.get("connection.sftpgo")).toBeNull();
+      });
+
+      it("deletes a key and tolerates deleting a missing one", async () => {
+        await repos.settings.set("gone", { a: 1 });
+        await repos.settings.delete("gone");
+        await repos.settings.delete("never");
+        expect(await repos.settings.get("gone")).toBeNull();
       });
 
       it("stores and retrieves a JSON value", async () => {
