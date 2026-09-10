@@ -103,4 +103,20 @@ migrated SFTPGo row. `workflow`.
 - Browser specs: `login-providers.spec.ts` adds a second SFTPGo provider through the admin API,
   checks the picker appears only then, and signs in through the seeded one with its
   `providerId`; `about.spec.ts` unchanged (attribution list already rendered).
-- System > Storage: see the section below once merged.
+- System > Storage (`/system/storage`, worker worktree `claude/p10-system-storage`, transferred):
+  one `SystemSection` per provider with type icon and product name, address, Enabled switch,
+  reachability badge with a per-row Test, Source badge, login count, capability chips from the
+  matching `types[].capabilities`, Edit and Remove; Remove is disabled with the reason as helper
+  text for env-pinned rows and rows with logins, and disabling the last enabled provider asks for
+  confirmation. `ProviderDialog` adds and edits: type picker (locked on edit), Name, Address
+  (read-only with the reason when env-pinned or in use), the type's `configFields` rendered
+  generically, a Test against the unsaved candidate, and an update patch of changed fields only
+  (`providerUpdatePatch`). The home template is edited there as the SFTPGo config field.
+  System > General keeps the server address and Trash cards plus a pointer to Storage;
+  `hasHomeTemplateChanged` and `primarySftpgoProvider` are gone. `shared-folders-card.tsx` was
+  untouched (it reads mount mappings only). `system-storage.spec.ts` adds, tests, renames,
+  disables and removes a second SFTPGo row; `system.spec.ts` edits the home template through the
+  Storage dialog. Known: while that spec's second row exists, `/login` shows the picker, so the
+  storage and login specs run with `--workers=1`.
+- Not done: no job with progress for non-atomic folder moves (caution copy only); the walkthrough's
+  Office step label is still the literal "ONLYOFFICE"; the `general` log subsystem still has no page.

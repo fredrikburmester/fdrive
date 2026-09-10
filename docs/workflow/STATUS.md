@@ -2,6 +2,35 @@
 
 Updated: 2026-09-10. Owner: primary agent.
 
+## P10 storage providers: A2 capabilities in the web (implemented 2026-09-10)
+
+- Spec [P10-CAPABILITIES-WEB.md](P10-CAPABILITIES-WEB.md), "As implemented" section lists the
+  deviations. The file browser, login and account halves were done in the main checkout
+  (commit `9b89489`); System > Storage came from one `implementer` worktree
+  (`claude/p10-system-storage`) transferred with `transfer-checkout.sh` after rebasing it onto
+  that commit.
+- Delivered: `lib/identity/capabilities.ts` (`capabilitiesFor`, `anyLoginCan`, `browserActions`,
+  `planDownload` in `lib/files/download.ts`); one `capabilities` prop on the context menu,
+  toolbar, list, grid, virtual listings and Inspector; sidebar Shares/Trash as the union across
+  logins with a per-type `ProviderIcon`; login page over `GET /providers` with
+  `ProviderFieldInputs` and a `ProviderPicker` for several providers; Add/Remove login dialogs
+  rendering the provider's fields with relabelled confirmation fields; scope card gated on
+  `scopeMapping`; provider-neutral scope copy; `/system/storage` (list, add, test, edit,
+  enable/disable, remove) and General reduced to server address + Trash; Trash settings save
+  now invalidates `auth.me` so the capability follows the setting.
+- Passed on `main`: web unit suite with coverage; `application` for the first half; browser
+  (`--workers=1`) `auth`, `login-providers`, `about`, `account-identities`, `account-scope`,
+  `smoke`, `file-controls`, `trash` 21/21 on the first half, and in the worker worktree
+  `system` + `system-storage` 13/13 (real API and SFTPGo). After the transfer, on `main`:
+  `application` (lint, typecheck, coverage) and browser `system`, `system-storage`,
+  `login-providers`, `features` with `--workers=1`, all passing; `workflow`.
+- Known: no capability can be false for an SFTPGo login except `trash`/`office`/`index`/
+  `scopeMapping` through configuration, so the per-flag hiding is covered by component tests
+  (`capability-gating.test.tsx`), not browser specs. Next: B (WebDAV, [P10-WEBDAV.md](P10-WEBDAV.md))
+  and D (owned shares, [P10-SHARES.md](P10-SHARES.md)) in parallel.
+- Worktree: main checkout, branch `main`; the `p10-system-storage` worktree can be removed once
+  the transfer commit is in.
+
 ## P10 storage providers: A1 registry and generic auth (implemented 2026-09-10)
 
 - Design [P10-STORAGE-PROVIDERS.md](P10-STORAGE-PROVIDERS.md); chunk spec
@@ -21,7 +50,7 @@ Updated: 2026-09-10. Owner: primary agent.
   contracts: `LoginRequest { providerId?, credential }`, `LinkIdentityRequest { providerId?,
   credential, currentCredential }`, `IdentitySummary.capabilities`, `AboutResponse.builtOn[]`
   and `providers[]`, `AdminProvider*`; web: minimal adaptation only (login form, link/unlink
-  dialogs, About, System > General over `/admin/providers`). A2 is still open.
+  dialogs, About, System > General over `/admin/providers`); A2 followed the same day.
 - Passed on `main` checkout: `application` (lint, typecheck, coverage: api 99.03% statements),
   `workflow`, `integration` for all files except the two known pre-existing failures
   (`sftp-rename.test.ts` Docker pull of `python:3.12-slim` hangs; `provider-binding.test.ts`
