@@ -123,6 +123,55 @@ def test_lifecycle_bounds_failed_starts_until_a_new_revision() -> None:
     assert attempts == 3
 
 
+def test_lifecycle_retries_exhausted_starts_once_the_retry_window_elapses() -> None:
+    attempts = 0
+    now = 0.0
+
+    def broken(*_args: object, **_kwargs: object) -> FakeProcess:
+        nonlocal attempts
+        attempts += 1
+        raise OSError("no executable")
+
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"semanticSearch"}),
+        popen=broken,
+        max_attempts=2,
+        retry_after_seconds=60,
+        clock=lambda: now,
+    )
+    enabled = snapshot(1, semanticSearch=True)
+    for _ in range(4):
+        lifecycle.reconcile(enabled)
+    assert attempts == 2
+    assert lifecycle.status()["status"] == "failed"
+    assert lifecycle.status()["error"] == "worker exceeded bounded startup retries"
+
+    now = 59.0
+    lifecycle.reconcile(enabled)
+    assert attempts == 2
+    assert lifecycle.status()["status"] == "failed"
+
+    now = 60.0
+    lifecycle.reconcile(enabled)
+    assert attempts == 3
+    assert lifecycle.status()["attempts"] == 1
+    lifecycle.reconcile(enabled)
+    lifecycle.reconcile(enabled)
+    assert attempts == 4
+    assert lifecycle.status()["status"] == "failed"
+    now = 200.0
+    lifecycle.reconcile(enabled)
+    assert attempts == 5
+
+
+def test_parse_retry_after_defaults_and_rejects_non_positive() -> None:
+    assert controller.parse_retry_after("") == controller.DEFAULT_RETRY_AFTER_SECONDS
+    assert controller.parse_retry_after("12.5") == 12.5
+    with pytest.raises(ValueError, match="must be positive"):
+        controller.parse_retry_after("0")
+
+
 def test_lifecycle_retries_an_exited_child_and_escalates_to_kill_on_timeout() -> None:
     processes = [FakeProcess(exit_code=1), FakeProcess()]
     signals: list[signal.Signals] = []

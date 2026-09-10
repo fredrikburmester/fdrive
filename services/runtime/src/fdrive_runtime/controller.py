@@ -24,6 +24,14 @@ from typing import Protocol
 
 FEATURE_KEYS = frozenset({"thumbnails", "textSearch", "searchOcr", "semanticSearch", "imageSearch", "pdfOcr"})
 DEFAULT_FEATURES_URL = "http://api:3001/api/v1/internal/features"
+DEFAULT_RETRY_AFTER_SECONDS = 300.0
+
+
+def parse_retry_after(raw: str) -> float:
+    value = float(raw) if raw else DEFAULT_RETRY_AFTER_SECONDS
+    if value <= 0:
+        raise ValueError("FDRIVE_RUNTIME_RETRY_AFTER_SECONDS must be positive")
+    return value
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -101,6 +109,8 @@ class WorkerLifecycle:
         popen: Callable[..., Process] = subprocess.Popen,
         killpg: Callable[[int, signal.Signals], None] = os.killpg,
         max_attempts: int = 3,
+        retry_after_seconds: float = DEFAULT_RETRY_AFTER_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not command:
             raise ValueError("worker command is required")
@@ -111,9 +121,12 @@ class WorkerLifecycle:
         self._popen = popen
         self._killpg = killpg
         self._max_attempts = max_attempts
+        self._retry_after_seconds = retry_after_seconds
+        self._clock = clock
         self._process: Process | None = None
         self._revision: int | None = None
         self._attempts = 0
+        self._exhausted_at: float | None = None
         self._status = "preparing"
         self._error: str | None = None
         self._ready_url = os.environ.get("FDRIVE_RUNTIME_READY_URL", "")
@@ -127,8 +140,7 @@ class WorkerLifecycle:
             return
         if snapshot.revision != self._revision:
             self._revision = snapshot.revision
-            self._attempts = 0
-            self._error = None
+            self._reset_attempts()
         if not self.desired(snapshot):
             self.stop(None)
             return
@@ -137,9 +149,11 @@ class WorkerLifecycle:
             return
         self._process = None
         if self._attempts >= self._max_attempts:
-            self._status = "failed"
-            self._error = "worker exceeded bounded startup retries"
-            return
+            if not self._retry_window_elapsed():
+                self._status = "failed"
+                self._error = "worker exceeded bounded startup retries"
+                return
+            self._reset_attempts()
         self._attempts += 1
         try:
             self._process = self._popen(self.command, start_new_session=True)
@@ -147,6 +161,23 @@ class WorkerLifecycle:
         except OSError as error:
             self._status = "failed"
             self._error = f"worker start failed: {type(error).__name__}"
+
+    def _reset_attempts(self) -> None:
+        self._attempts = 0
+        self._exhausted_at = None
+        self._error = None
+
+    def _retry_window_elapsed(self) -> bool:
+        """Bounded retries latch the worker off only for `retry_after_seconds`.
+
+        A revision bump still clears them immediately; without this window an
+        API restart under load could leave an enabled feature dead until an
+        owner happened to save settings again.
+        """
+        if self._exhausted_at is None:
+            self._exhausted_at = self._clock()
+            return False
+        return self._clock() - self._exhausted_at >= self._retry_after_seconds
 
     def stop(self, error: str | None) -> None:
         process = self._process
@@ -245,7 +276,11 @@ def main() -> None:
     # Docker appends CMD after ENTRYPOINT. Treat it verbatim as the child
     # command so model-server flags are never parsed as controller flags.
     command = sys.argv[1:]
-    lifecycle = WorkerLifecycle(command, parse_features(os.environ.get("FDRIVE_RUNTIME_FEATURES", "")))
+    lifecycle = WorkerLifecycle(
+        command,
+        parse_features(os.environ.get("FDRIVE_RUNTIME_FEATURES", "")),
+        retry_after_seconds=parse_retry_after(os.environ.get("FDRIVE_RUNTIME_RETRY_AFTER_SECONDS", "")),
+    )
     client = FeatureClient(
         os.environ.get("FDRIVE_FEATURES_URL", DEFAULT_FEATURES_URL),
         os.environ.get("FDRIVE_WORKER_TOKEN", ""),
@@ -255,6 +290,7 @@ def main() -> None:
     stale_seconds = float(os.environ.get("FDRIVE_RUNTIME_STALE_SECONDS", "9"))
     if interval <= 0 or stale_seconds < interval:
         raise ValueError("runtime polling intervals must be positive and stale window >= poll interval")
+
     def stop_handler(_signum: int, _frame: object) -> None:
         lifecycle.stop(None)
         raise SystemExit(0)

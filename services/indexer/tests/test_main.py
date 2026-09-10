@@ -244,3 +244,25 @@ def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest
 
     assert "app" in served
     assert served["kwargs"]["port"] == 0  # type: ignore[index]
+
+
+def test_shared_connection_reopens_after_postgres_goes_away(postgres_dsn: str) -> None:
+    first = db.connect(postgres_dsn)
+    shared = main.SharedConnection(postgres_dsn, first)
+    assert shared.get() is first
+
+    # Simulate the `db` container being recreated under a live indexer: the
+    # cached socket is dead, and the next handler call must get a fresh one.
+    first.close()
+    second = shared.get()
+    assert second is not first
+    assert db.read_schema_version(second) is not None
+    assert shared.get() is second
+
+
+def test_shared_connection_fails_fast_when_postgres_is_still_down(postgres_dsn: str) -> None:
+    first = db.connect(postgres_dsn)
+    shared = main.SharedConnection("postgresql://fdrive:x@127.0.0.1:1/fdrive?connect_timeout=1", first)
+    first.close()
+    with pytest.raises(RuntimeError, match="could not connect to postgres"):
+        shared.get()

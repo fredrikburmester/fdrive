@@ -105,7 +105,7 @@ def test_lifecycle_starts_checks_readiness_and_stops_daemon_services() -> None:
     )
     lifecycle.reconcile(OfficeSnapshot(1, True))
     lifecycle.reconcile(OfficeSnapshot(1, True))
-    assert starts == [(('start-office',), {"start_new_session": True})]
+    assert starts == [(("start-office",), {"start_new_session": True})]
     assert lifecycle.status()["status"] == "ready"
 
     lifecycle.reconcile(OfficeSnapshot(2, False))
@@ -155,6 +155,36 @@ def test_lifecycle_cleans_up_daemons_after_unexpected_exit_and_bounds_retries() 
     assert failed_cleanup.status()["status"] == "failed"
     assert failed_cleanup.status()["attempts"] == 3
     assert failed_cleanup.status()["error"] == "Office service shutdown exited 1"
+
+
+def test_lifecycle_retries_exhausted_office_starts_once_the_retry_window_elapses() -> None:
+    starts = 0
+    now = 0.0
+
+    def start(*_args: object, **_kwargs: object) -> FakeProcess:
+        nonlocal starts
+        starts += 1
+        return FakeProcess(exit_code=1)
+
+    lifecycle = OfficeLifecycle(
+        ("start",),
+        ("stop",),
+        "http://ready",
+        popen=start,
+        run_command=lambda *_args, **_kwargs: completed(),
+        max_attempts=2,
+        retry_after_seconds=60,
+        clock=lambda: now,
+    )
+    enabled = OfficeSnapshot(1, True)
+    for _ in range(4):
+        lifecycle.reconcile(enabled)
+    assert starts == 2
+    assert lifecycle.status()["status"] == "failed"
+    now = 60.0
+    lifecycle.reconcile(enabled)
+    assert starts == 3
+    assert lifecycle.status()["attempts"] == 1
 
 
 def test_lifecycle_fails_closed_and_reports_cleanup_failure() -> None:

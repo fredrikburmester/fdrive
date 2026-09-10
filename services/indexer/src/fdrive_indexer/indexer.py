@@ -310,6 +310,10 @@ def embed_thumbnail(ctx: RootContext, sha256: str) -> bool:
     try:
         with open(thumb_path, "rb") as fh:
             data = fh.read()
+    except FileNotFoundError:
+        # Thumbnailing already logged why nothing was written (unsupported
+        # format, over budget); a second error for the same file is noise.
+        return False
     except OSError as e:
         log(f"image embed: cannot read thumbnail {thumb_path}: {type(e).__name__}: {e}")
         return False
