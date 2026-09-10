@@ -46,8 +46,9 @@ Additionally, images, the first page of PDFs, and one frame of videos (via
 ffmpeg, at 1 second in) get thumbnails at 256px and 1024px on the longest side,
 written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 `app.thumbnails`, keyed by the file's sha256 so identical files never generate
-the same thumbnail twice. Thumbnail failures are logged and never fail the
-file's own indexing.
+the same thumbnail twice. Thumbnail failures are logged once and never fail the
+file's own indexing; the image-embedding pass that follows skips a file whose
+256px thumbnail was never written without logging a second error for it.
 
 The api serves this same cache twice: `GET /api/v1/thumb` for the logged-in
 file browser, and `GET /api/v1/public/shares/:id/thumb` for a public share's
@@ -166,7 +167,7 @@ a published port in the non-dev compose file.
 
 | Endpoint | Method | Body | Returns |
 | --- | --- | --- | --- |
-| `/health` | GET | None | `{ ok, roots, watcher, embed_ok, schema_version }` |
+| `/health` | GET | None | `{ ok, roots, watcher, embed_ok, schema_version }`. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
 | `/stats` | GET | None | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, started_at, finished_at, errors }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract` | POST | `{ root, path, offset?, max_chars? }` | Live text extraction for one file (not persisted), sliced by `offset`/`max_chars`. Used for the web app's live text preview. |
 | `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
