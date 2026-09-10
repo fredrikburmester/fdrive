@@ -282,6 +282,22 @@ Updated: 2026-09-09. Owner: primary agent.
 - Complete. Worker checkout removed after exact file comparison and target gates.
   Unrelated concurrent workflow changes preserved.
 
+## Tester report: self-recovering workers and health (2026-09-10)
+
+- External tester reported four defects; three reproduced from code, `init-env.sh`
+  overwriting `.env` did not (script refuses to overwrite; awaiting their exact command).
+- Runtime and Office controllers clear exhausted startup attempts after
+  `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` (default 300) instead of only on a revision change,
+  so an api restart under load no longer leaves an enabled feature dead (`467fe17`).
+- Indexer health/stats handlers reopen their postgres connection after `db` is recreated;
+  image embedding no longer logs a second error for a thumbnail that was never written.
+- `GET /api/v1/health` gains subsystem status `failed` with the controller's reason in
+  `detail`; the same reason is carried into the feature detail on System > Features
+  (`ab5f9fa`). Docs: `deploy/REFERENCE.md`, `deploy/README.md`, `docs/INDEXER.md`,
+  `docs/OFFICE.md`.
+- Gates: runtime 27, indexer 483 (coverage gate at 83.8% fails on untouched main too),
+  contracts 631, api 1959, repo typecheck and lint clean. Committed directly to main.
+
 ## Product state
 
 - Latest search/file-browser UX merged and verified; no outstanding UX work. Prior target

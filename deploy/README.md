@@ -194,6 +194,8 @@ requires container recreation, not merely `docker restart`.
 | Files browse but search/thumbnails do not work | Confirm the feature is enabled, worker readiness, and the account's verified directory. Mapping exceptions belong in Account settings, not onboarding. |
 | Account status says a folder "is not indexed" | An SFTPGo virtual folder has no fdrive mapping. Map it (or mark it not indexed) in Account; its `mapped_path` must be inside an indexed root first. See [SFTPGo virtual folders](REFERENCE.md#sftpgo-virtual-folders). |
 | PDF conversion blocked | Its worker needs readable and writable file access. Normal search/indexing needs only read access. |
+| Feature shows "failed" while every container looks healthy | The worker's controller gave up starting it; the reason is in the feature's detail line on **System > Features** and under `detail` in `GET /api/v1/health`. The controller retries on its own after `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` (default 300), and saving features retries at once. If it keeps failing, read that worker's container logs. See [optional-worker controllers](REFERENCE.md#subsystem-health--self-diagnostics). |
+| Indexer unhealthy after the database container was recreated | Expected while postgres is starting; the indexer reconnects on its next health probe once postgres accepts connections. No restart is needed. If it stays unhealthy, postgres itself is not up. |
 
 For further diagnostics, inspect `docker compose -f compose.yaml logs --tail=100 indexer`
 and **System** in fdrive. Include configured `-f` overlays when targeting services that

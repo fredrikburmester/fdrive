@@ -23,6 +23,11 @@ starts only when enabled and uses additional memory. Secrets are generated autom
 its volume preserves proof keys across restarts. Close open documents before disabling
 ONLYOFFICE so that unsaved work is not interrupted.
 
+Engine startup is bounded: after three failed starts the controller reports `failed`
+with its reason, visible in the Office settings and as the `office` entry of
+`GET /api/v1/health`, then tries again after `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS`
+(default 300). Saving the Office settings retries immediately.
+
 ## Editing permissions
 
 Editing defaults off. The allowed-user list belongs to the configured SFTPGo provider;
