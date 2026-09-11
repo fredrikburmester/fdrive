@@ -31,6 +31,8 @@ export interface ProviderRepo {
    * return the same row, and never change an existing row's other fields.
    */
   ensure(input: { type: string; baseUrl: string }): Promise<Provider>;
+  /** Atomic insert-only creation; duplicate endpoint throws ConflictError. */
+  create(input: { type: string; baseUrl: string } & ProviderPatch): Promise<Provider>;
   /** Applies `patch` and returns the row, or `null` when no such provider exists. */
   update(id: string, patch: ProviderPatch): Promise<Provider | null>;
   /**

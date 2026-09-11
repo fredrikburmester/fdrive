@@ -132,6 +132,15 @@ function toSession(row: typeof sessions.$inferSelect): Session {
 
 function createProviderRepo(db: Db): ProviderRepo {
   return {
+    async create(input) {
+      const [row] = await db
+        .insert(providers)
+        .values({ ...input, config: { ...input.config } })
+        .onConflictDoNothing({ target: [providers.type, providers.baseUrl] })
+        .returning();
+      if (!row) throw new ConflictError("provider endpoint already exists");
+      return toProvider(row);
+    },
     async get(id) {
       validateIdentityLinkId(id);
       const [row] = await db.select().from(providers).where(eq(providers.id, id));
@@ -143,46 +152,57 @@ function createProviderRepo(db: Db): ProviderRepo {
     },
     async update(id, patch) {
       validateIdentityLinkId(id);
-      return db.transaction(async (tx) => {
+      return db
+        .transaction(async (tx) => {
+          const [current] = await tx
+            .select()
+            .from(providers)
+            .where(eq(providers.id, id))
+            .for("update");
+          if (!current) return null;
+          if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl) {
+            const [used] = await tx
+              .select({ count: sql<number>`count(*)::int` })
+              .from(identities)
+              .where(eq(identities.providerId, id));
+            if ((used?.count ?? 0) > 0)
+              throw new ConflictError("provider is still used by identities");
+          }
+          const set = {
+            ...(patch.label !== undefined ? { label: patch.label } : {}),
+            ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+            ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
+            ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+            ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
+          };
+          if (Object.keys(set).length === 0) {
+            const [row] = await tx.select().from(providers).where(eq(providers.id, id));
+            return row ? toProvider(row) : null;
+          }
+          const [row] = await tx.update(providers).set(set).where(eq(providers.id, id)).returning();
+          return row ? toProvider(row) : null;
+        })
+        .catch((error: unknown) => {
+          if (isUniqueViolation(error)) throw new ConflictError("provider endpoint already exists");
+          throw error;
+        });
+    },
+    async delete(id) {
+      validateIdentityLinkId(id);
+      await db.transaction(async (tx) => {
         const [current] = await tx
           .select()
           .from(providers)
           .where(eq(providers.id, id))
           .for("update");
-        if (!current) return null;
-        if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl) {
-          const [used] = await tx
-            .select({ count: sql<number>`count(*)::int` })
-            .from(identities)
-            .where(eq(identities.providerId, id));
-          if ((used?.count ?? 0) > 0)
-            throw new ConflictError("provider is still used by identities");
-        }
-        const set = {
-          ...(patch.label !== undefined ? { label: patch.label } : {}),
-          ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-          ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
-          ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-          ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
-        };
-        if (Object.keys(set).length === 0) {
-          const [row] = await tx.select().from(providers).where(eq(providers.id, id));
-          return row ? toProvider(row) : null;
-        }
-        const [row] = await tx.update(providers).set(set).where(eq(providers.id, id)).returning();
-        return row ? toProvider(row) : null;
+        if (!current) return;
+        const [used] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(identities)
+          .where(eq(identities.providerId, id));
+        if ((used?.count ?? 0) > 0) throw new ConflictError("provider is still used by identities");
+        await tx.delete(providers).where(eq(providers.id, id));
       });
-    },
-    async delete(id) {
-      validateIdentityLinkId(id);
-      const [used] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(identities)
-        .where(eq(identities.providerId, id));
-      if ((used?.count ?? 0) > 0) {
-        throw new ConflictError("provider is still used by identities");
-      }
-      await db.delete(providers).where(eq(providers.id, id));
     },
     async ensure(input) {
       const [row] = await db

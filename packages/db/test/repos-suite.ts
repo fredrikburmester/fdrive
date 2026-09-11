@@ -17,6 +17,48 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("providers", () => {
+      it("atomically creates one provider with final fields and never overwrites it", async () => {
+        const results = await Promise.allSettled(
+          ["first", "second"].map((label) =>
+            repos.providers.create({
+              type: "sftpgo",
+              baseUrl: "http://race",
+              label,
+              enabled: false,
+              config: { root: label },
+            }),
+          ),
+        );
+        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+        const loser = results.find((result) => result.status === "rejected");
+        expect(loser).toMatchObject({ reason: expect.any(ConflictError) });
+        const winner = results.find((result) => result.status === "fulfilled");
+        if (winner?.status !== "fulfilled") throw new Error("missing winner");
+        expect(await repos.providers.list()).toEqual([winner.value]);
+        expect(winner.value).toMatchObject({
+          enabled: false,
+          config: { root: winner.value.label },
+        });
+      });
+
+      it("reports racing readdresses as conflicts and preserves the losing row", async () => {
+        const rows = await Promise.all(
+          ["a", "b"].map((host) =>
+            repos.providers.ensure({ type: "sftpgo", baseUrl: `http://${host}` }),
+          ),
+        );
+        const results = await Promise.allSettled(
+          rows.map((row) => repos.providers.update(row.id, { baseUrl: "http://shared" })),
+        );
+        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+        expect(results.find((result) => result.status === "rejected")).toMatchObject({
+          reason: expect.any(ConflictError),
+        });
+        expect(
+          (await repos.providers.list()).filter((row) => row.baseUrl === "http://shared"),
+        ).toHaveLength(1);
+      });
+
       it("looks up a provider by canonical UUID and rejects invalid IDs", async () => {
         const provider = await repos.providers.ensure({
           type: "sftpgo",

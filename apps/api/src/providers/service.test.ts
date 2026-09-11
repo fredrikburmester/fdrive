@@ -129,17 +129,33 @@ describe("createProviderService: rows", () => {
     ).rejects.toMatchObject({ kind: "conflict" });
   });
 
-  it("reports a row that vanishes between insert and update", async () => {
+  it("propagates creation failures and reports a missing update target", async () => {
     const h = harness();
-    vi.spyOn(h.repos.providers, "update").mockResolvedValueOnce(null);
+    vi.spyOn(h.repos.providers, "create").mockRejectedValueOnce(new Error("insert failed"));
     await expect(
       h.service.create({ type: "sftpgo", label: "x", baseUrl: "http://a" }),
-    ).rejects.toMatchObject({ kind: "internal" });
+    ).rejects.toThrow("insert failed");
     const row = await h.service.create({ type: "sftpgo", label: "y", baseUrl: "http://b" });
     vi.spyOn(h.repos.providers, "update").mockResolvedValueOnce(null);
     await expect(h.service.update(row.id, { label: "z" })).rejects.toMatchObject({
       kind: "not_found",
     });
+  });
+
+  it("allows only one concurrent create without overwriting the winner", async () => {
+    const h = harness();
+    const results = await Promise.allSettled(
+      ["first", "second"].map((label) =>
+        h.service.create({ type: "sftpgo", label, baseUrl: "http://racing" }),
+      ),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { kind: "conflict" },
+    });
+    const winner = results.find((result) => result.status === "fulfilled");
+    if (winner?.status !== "fulfilled") throw new Error("missing winner");
+    expect(await h.repos.providers.get(winner.value.id)).toEqual(winner.value);
   });
 
   it("hides rows of a type this build does not know", async () => {
