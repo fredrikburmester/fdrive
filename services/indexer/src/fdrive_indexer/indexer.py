@@ -5,9 +5,11 @@ that reconciles anything the watcher could not see.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import mimetypes
 import os
+import stat
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -35,6 +37,8 @@ mimetypes.add_type("application/vnd.apple.pages", ".pages")
 mimetypes.add_type("application/vnd.apple.numbers", ".numbers")
 mimetypes.add_type("application/vnd.apple.keynote", ".key")
 
+_FILE_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+
 
 def log(msg: str) -> None:
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
@@ -42,12 +46,18 @@ def log(msg: str) -> None:
 
 def sha256_of(path: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb", buffering=0) as fh:
-        while True:
-            block = fh.read(4 * 1024 * 1024)
-            if not block:
-                break
-            h.update(block)
+    descriptor = os.open(path, _FILE_READ_FLAGS)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", path)
+        with os.fdopen(descriptor, "rb", buffering=0, closefd=False) as fh:
+            while True:
+                block = fh.read(4 * 1024 * 1024)
+                if not block:
+                    break
+                h.update(block)
+    finally:
+        os.close(descriptor)
     return h.hexdigest()
 
 
