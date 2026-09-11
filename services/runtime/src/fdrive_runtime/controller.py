@@ -131,6 +131,7 @@ class WorkerLifecycle:
         self._status = "preparing"
         self._error: str | None = None
         self._ready_url = os.environ.get("FDRIVE_RUNTIME_READY_URL", "")
+        self._publish_status()
 
     def desired(self, snapshot: FeatureSnapshot) -> bool:
         return any(snapshot.values[key] for key in self.features)
@@ -147,12 +148,14 @@ class WorkerLifecycle:
             return
         if self._process is not None and self._process.poll() is None:
             self._status = "ready" if self._child_ready() else "preparing"
+            self._publish_status()
             return
         self._process = None
         if self._attempts >= self._max_attempts:
             if not self._retry_window_elapsed():
                 self._status = "failed"
                 self._error = "worker exceeded bounded startup retries"
+                self._publish_status()
                 return
             self._reset_attempts()
         self._attempts += 1
@@ -162,6 +165,7 @@ class WorkerLifecycle:
         except OSError as error:
             self._status = "failed"
             self._error = f"worker start failed: {type(error).__name__}"
+        self._publish_status()
 
     def _reset_attempts(self) -> None:
         self._attempts = 0
@@ -185,6 +189,7 @@ class WorkerLifecycle:
         self._process = None
         if process is not None and process.poll() is None:
             self._status = "stopping"
+            self._publish_status()
             try:
                 self._killpg(process.pid, signal.SIGTERM)
                 process.wait(timeout=10)
@@ -199,6 +204,18 @@ class WorkerLifecycle:
                     pass
         self._status = "off" if error is None else "failed"
         self._error = error
+        self._publish_status()
+
+    def _publish_status(self) -> None:
+        # HTTP handlers run on separate threads. Publish one immutable object so
+        # a handler never combines fields from different lifecycle transitions.
+        self._reported_status = (
+            self._status,
+            self._revision,
+            self._attempts,
+            self._process,
+            self._error,
+        )
 
     def _child_ready(self) -> bool:
         if not self._ready_url:
@@ -210,14 +227,19 @@ class WorkerLifecycle:
             return False
 
     def status(self) -> dict[str, object]:
-        return {
-            "status": self._status,
-            "revision": self._revision,
-            "features": sorted(self.features),
-            "attempts": self._attempts,
-            "child": self._process is not None and self._process.poll() is None,
-            "error": self._error,
-        }
+        while True:
+            snapshot = self._reported_status
+            status, revision, attempts, process, error = snapshot
+            child = process is not None and process.poll() is None
+            if snapshot is self._reported_status:
+                return {
+                    "status": status,
+                    "revision": revision,
+                    "features": sorted(self.features),
+                    "attempts": attempts,
+                    "child": child,
+                    "error": error,
+                }
 
 
 class RuntimeServer(ThreadingHTTPServer):

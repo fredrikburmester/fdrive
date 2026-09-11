@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import signal
 import subprocess
+import threading
 from typing import Any
 
 import pytest
@@ -226,6 +227,49 @@ def test_lifecycle_ignores_an_already_gone_process_and_kill_errors() -> None:
     lifecycle.reconcile(snapshot(thumbnails=True))
     lifecycle.reconcile(snapshot())
     assert lifecycle.status()["status"] == "off"
+
+
+def test_lifecycle_status_retries_if_stop_changes_state_during_child_poll() -> None:
+    class PausedStatusPoll(FakeProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.status_poll_started = threading.Event()
+            self.resume_status_poll = threading.Event()
+
+        def poll(self) -> int | None:
+            if threading.current_thread().name == "status-reader":
+                self.status_poll_started.set()
+                assert self.resume_status_poll.wait(2)
+            return super().poll()
+
+    process = PausedStatusPoll()
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"thumbnails"}),
+        popen=lambda *_args, **_kwargs: process,
+        killpg=lambda *_args: None,
+    )
+    lifecycle.reconcile(snapshot(thumbnails=True))
+
+    result: list[dict[str, object]] = []
+    reader = threading.Thread(target=lambda: result.append(lifecycle.status()), name="status-reader")
+    reader.start()
+    assert process.status_poll_started.wait(2)
+    lifecycle.stop("feature document unavailable")
+    process.resume_status_poll.set()
+    reader.join(2)
+
+    assert not reader.is_alive()
+    assert result == [
+        {
+            "status": "failed",
+            "revision": 1,
+            "features": ["thumbnails"],
+            "attempts": 1,
+            "child": False,
+            "error": "feature document unavailable",
+        }
+    ]
 
 
 def test_lifecycle_treats_http_protocol_errors_as_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
