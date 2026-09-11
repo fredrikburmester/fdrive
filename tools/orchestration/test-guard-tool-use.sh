@@ -91,4 +91,15 @@ run_guard Bash '{"command": 123}'
 printf 'not json' | bash "$GUARD" >/dev/null || fail 'malformed payload must not block'
 pass 'guard fails open on unrelated tools and malformed input'
 
+# Codex names its tools differently; dispatch must fall back to the payload shape.
+expect_blocked shell "$(bash_input 'git reset --hard HEAD~1')" 'unnamed shell tool'
+expect_allowed shell "$(bash_input 'git status')" 'unnamed shell tool, ordinary command'
+write_input() {
+  python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "content": "x"}))' "$1"
+}
+expect_blocked apply_patch "$(write_input 'pnpm-lock.yaml')" 'unnamed edit tool on the lockfile'
+expect_allowed apply_patch "$(write_input 'apps/api/src/app.ts')" 'unnamed edit tool on a source file'
+expect_allowed read_file "$(path_input 'pnpm-lock.yaml')" 'path without content is not an edit'
+pass 'payload-shape dispatch covers tools this guard does not know by name'
+
 printf '%s guard regression groups passed.\n' "$PASSES"

@@ -1,8 +1,12 @@
 """PreToolUse guard: refuses the few actions WORKING.md treats as never-safe.
 
-Reads a Claude Code PreToolUse payload on stdin. Exits 2 with a deny decision to
-block the call, or 0 to leave the normal permission flow untouched. Enforcement
-only; the same rules are stated in WORKING.md so they are known before an attempt.
+Reads a PreToolUse payload on stdin. Exits 2 with a deny decision to block the
+call, or 0 to leave the normal permission flow untouched. Enforcement only; the
+same rules are stated in WORKING.md so they are known before an attempt.
+
+Claude Code and Codex both send this shape, but they name their tools
+differently, so dispatch falls back to the payload shape when the name is
+unknown: a `command` string is treated as a shell call, a file path as an edit.
 """
 
 import json
@@ -17,6 +21,11 @@ ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+"
 GIT_GLOBAL_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
 SESSION_LINK = re.compile(r"claude\.ai/code/session", re.I)
 LOCKFILE = "pnpm-lock.yaml"
+EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
+PATH_FIELDS = ("file_path", "notebook_path", "path")
+# A path alone does not mean a write: reading the lockfile is allowed. Under an unknown
+# tool name, only payloads that also carry replacement content count as an edit.
+WRITE_FIELDS = ("content", "contents", "new_string", "new_str", "patch", "edits")
 
 
 def segments(command):
@@ -109,7 +118,7 @@ def bash_violation(command):
 
 
 def edit_violation(tool_input):
-    path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+    path = next((tool_input.get(field) for field in PATH_FIELDS if tool_input.get(field)), "")
     if path.endswith(LOCKFILE):
         return (
             f"{LOCKFILE} must never be hand-edited. Change the manifest and let pnpm regenerate it."
@@ -127,9 +136,14 @@ def main():
     if not isinstance(tool_input, dict):
         return 0
 
-    if tool_name == "Bash":
-        reason = bash_violation(str(tool_input.get("command", "")))
-    elif tool_name in ("Edit", "Write", "NotebookEdit"):
+    command = tool_input.get("command")
+    if tool_name in EDIT_TOOLS:
+        reason = edit_violation(tool_input)
+    elif tool_name == "Bash" or isinstance(command, str):
+        reason = bash_violation(command if isinstance(command, str) else "")
+    elif any(tool_input.get(field) for field in PATH_FIELDS) and any(
+        field in tool_input for field in WRITE_FIELDS
+    ):
         reason = edit_violation(tool_input)
     else:
         reason = None

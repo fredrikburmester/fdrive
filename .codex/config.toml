@@ -1,0 +1,18 @@
+# Project configuration for Codex. Merged with ~/.codex/config.toml; hook paths must be
+# absolute because a session may start below this directory.
+
+# Subagents inherit the primary model unless pinned here. Keep workers on a fixed model and
+# effort so a delegated chunk does not silently run weaker than the policy in
+# docs/workflow/ORCHESTRATION.md. Override only with the user's approval for a named scope.
+[agents]
+default_subagent_model = "gpt-5.6-sol"
+default_subagent_reasoning_effort = "high"
+
+# The same never-safe guard Claude Code runs. The matcher is broad because Codex tool names
+# differ from Claude's; the guard dispatches on the payload shape and ignores the rest.
+[[hooks.PreToolUse]]
+matcher = ".*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "bash /Users/fredrikburmester/Documents/GitHub/fdrive-web/tools/orchestration/guard-tool-use.sh"
