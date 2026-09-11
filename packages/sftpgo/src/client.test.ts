@@ -664,6 +664,34 @@ describe("createSftpgoClient - setModifiedAt", () => {
 });
 
 describe("createSftpgoClient - zip", () => {
+  it("aborts the upstream zip request with the caller's signal", async () => {
+    let upstreamSignal: AbortSignal | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      upstreamSignal = init?.signal ?? undefined;
+      markStarted?.();
+      return new Promise<Response>((_resolve, reject) => {
+        upstreamSignal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("The operation was aborted.", "AbortError")),
+          { once: true },
+        );
+      });
+    };
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: fetchImpl });
+    const controller = new AbortController();
+
+    const request = client.user("token").zip(["/a.txt"], { signal: controller.signal });
+    await started;
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({ kind: "network" });
+    expect(upstreamSignal?.aborted).toBe(true);
+  });
+
   it("produces a downloadable zip stream containing the requested files", async () => {
     const { client } = setup({
       ...ALICE_SEED,

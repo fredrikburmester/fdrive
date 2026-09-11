@@ -124,6 +124,12 @@ export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): St
     deleteFile: (path) => runUser((u) => u.deleteFile(normalizePath(path))),
     deleteDir: (path) => runUser((u) => u.deleteDir(normalizePath(path))),
     setModifiedAt: (path, at) => runUser((u) => u.setModifiedAt(normalizePath(path), at)),
-    zip: (paths) => runUser((u) => u.zip(paths.map((p) => normalizePath(p)))),
+    zip: (paths, opts) =>
+      runUser((u) =>
+        u.zip(
+          paths.map((p) => normalizePath(p)),
+          opts ?? {},
+        ),
+      ),
   };
 }

@@ -448,7 +448,7 @@ export function registerFsRoutes(
         capability: "zip",
       });
     }
-    const stream = await runStorageCall(() => zip(paths));
+    const stream = await runStorageCall(() => zip(paths, { signal: c.req.raw.signal }));
     // `ZipRequest.paths` has `.min(1)`, so `paths[0]` always exists here.
     const firstPath = paths[0] as string;
     const derivedName = baseName(firstPath);

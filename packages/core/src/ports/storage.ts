@@ -128,7 +128,10 @@ export interface StorageProvider {
   setModifiedAt?(path: string, modifiedAt: Date): Promise<void>;
 
   /** Absent when the backend has no server-side zip. */
-  zip?(paths: readonly string[]): Promise<ReadableStream<Uint8Array>>;
+  zip?(
+    paths: readonly string[],
+    opts?: { signal?: AbortSignal },
+  ): Promise<ReadableStream<Uint8Array>>;
 
   /** Present only when this provider exposes a recoverable recycle folder. */
   readonly trash?: TrashProvider;
