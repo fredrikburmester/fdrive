@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDatabaseUrl } from "./parseDatabaseUrl.js";
+import { parseDatabaseUrl } from "./parse-database-url.js";
 
 describe("parseDatabaseUrl", () => {
   it("accepts a postgres:// URL with a database name", () => {

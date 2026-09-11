@@ -1,9 +1,11 @@
 "use client";
 
 import type { FsEntry, ManagedShare } from "@fdrive/contracts";
-import { Copy, Link2, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
+import { Copy, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
+import { EmptyState } from "@/components/files/empty-state";
 import { PageHeader } from "@/components/shell/page-header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,11 +16,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { EmptyState } from "@/components/files/empty-state";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { describeApiError } from "@/lib/api/errors";
+import { FieldError } from "@/components/ui/field";
 import {
   Table,
   TableBody,
@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { describeApiError } from "@/lib/api/errors";
 import { useShareManagement } from "@/lib/shares/management";
 import { publicShareHref } from "@/lib/shares/paths";
 import { PRESENTATION_LABEL } from "@/lib/shares/presentation-label";
@@ -86,9 +87,7 @@ export function SharesPage() {
           <Alert variant="destructive">
             <TriangleAlertIcon />
             <AlertTitle>Could not load share links</AlertTitle>
-            <AlertDescription>
-              {error ?? describeApiError(management.query.error)}
-            </AlertDescription>
+            <AlertDescription>{error ?? describeApiError(management.query.error)}</AlertDescription>
           </Alert>
         )}
         {management.query.isPending ? (

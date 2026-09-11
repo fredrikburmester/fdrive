@@ -2,6 +2,7 @@
 
 import type { ApiTokenSummary } from "@fdrive/contracts";
 import { TriangleAlertIcon } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,7 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { claudeMcpAddCommand, connectorUrl } from "@/lib/account/connect-snippets";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CopyField } from "./copy-field";
 
 export interface CreatedToken {

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveMigrationsFolder } from "./migrationsPath.js";
+import { resolveMigrationsFolder } from "./migrations-path.js";
 
 describe("resolveMigrationsFolder", () => {
   it("resolves the drizzle folder one level above a source module", () => {
