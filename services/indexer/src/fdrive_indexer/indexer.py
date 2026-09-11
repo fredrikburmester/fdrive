@@ -30,7 +30,7 @@ from .image_embed import dimension_guard, embed_images, image_embed_health, is_i
 from .paths import ext_of
 from .rules import is_text_excluded, should_index_name, should_walk_dir
 from .settings import Settings
-from .thumbs import SIZES, kind_for_ext
+from .thumbs import SIZES, kind_for_ext, within_size_budget
 from .thumbs import storage_path as thumb_storage_path
 from .thumbs_io import generate as generate_thumbnails
 
@@ -212,18 +212,23 @@ def process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_res
         conn = ctx.conn()
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT size, mtime_ns, text_status, deleted_at FROM "idx"."files" WHERE root_id = %s AND path = %s',
+                'SELECT size, mtime_ns, text_status, deleted_at, sha256 FROM "idx"."files" WHERE root_id = %s AND path = %s',
                 (ctx.root_id, rel_path),
             )
             row = cur.fetchone()
         manifest_row = (row[0], row[1], row[2], row[3]) if row else None
         manifest_status = str(manifest_row[2]) if manifest_row is not None else ""
-        if unchanged_in_db(manifest_row, st) and not should_retry_unchanged(
+        unchanged = unchanged_in_db(manifest_row, st)
+        if unchanged and not should_retry_unchanged(
             manifest_status, ext_of(os.path.basename(rel_path)), ctx.feature_configuration().values
         ):
             return False
         was_new = manifest_row is None
-        _process_file(ctx, abs_path, rel_path, st)
+        # Feature transitions may re-extract an otherwise unchanged file. The
+        # existing digest is still valid under the same size+mtime contract that
+        # skips normal scans; new, changed, and explicitly pending rows rehash.
+        known_sha256 = str(row[4]) if unchanged and row is not None and row[4] is not None else None
+        _process_file(ctx, abs_path, rel_path, st, known_sha256)
         emit_event(ctx, "created" if was_new else "changed", rel_path)
         return True
 
@@ -243,12 +248,12 @@ def should_retry_unchanged(status: str, ext: str, features: FeatureValues) -> bo
     return status == "partial" and features.semantic_search
 
 
-def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result) -> None:
+def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result, known_sha256: str | None = None) -> None:
     conn = ctx.conn()
     name = os.path.basename(rel_path)
     ext = ext_of(name)
     mime = mimetypes.guess_type(name)[0]
-    sha = sha256_of(abs_path)
+    sha = known_sha256 or sha256_of(abs_path)
     file_id = db.upsert_file(conn, ctx.root_id, rel_path, name, ext, st.st_size, st.st_mtime_ns, sha, mime)
 
     from .chunking import is_image, is_textual
@@ -361,15 +366,18 @@ def backfill_media(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_r
     if not features.internal_thumbnails:
         return True
     ext = ext_of(os.path.basename(rel_path))
-    sha = sha256_of(abs_path)
+    sha = db.file_content_key(ctx.conn(), ctx.root_id, rel_path)
+    if sha is None:
+        return False
     ok = True
-    try:
-        thumbs = generate_thumbnails(abs_path, ext, sha, st.st_size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes, log=log)
-        for size, rel_thumb_path, width, height in thumbs:
-            db.upsert_thumbnail(ctx.conn(), sha, size, rel_thumb_path, width, height)
-    except Exception as e:  # noqa: BLE001
-        log(f"thumb backfill: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
-        ok = False
+    if kind_for_ext(ext) is not None and within_size_budget(st.st_size, ctx.cfg.thumb_max_bytes):
+        try:
+            thumbs = generate_thumbnails(abs_path, ext, sha, st.st_size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes, log=log)
+            for size, rel_thumb_path, width, height in thumbs:
+                db.upsert_thumbnail(ctx.conn(), sha, size, rel_thumb_path, width, height)
+        except Exception as e:  # noqa: BLE001
+            log(f"thumb backfill: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
+            ok = False
     if features.image_search and is_image_candidate(ext):
         try:
             ok = embed_thumbnail(ctx, sha) and ok
@@ -379,24 +387,34 @@ def backfill_media(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_r
     return ok
 
 
-def media_derivatives_missing(ctx: RootContext, rel_path: str) -> bool:
+def media_derivatives_missing(ctx: RootContext, rel_path: str, size_bytes: int, include_existing: bool = False) -> bool:
     """Whether a live file needs enabled, durable media output rebuilt.
 
     This predicate makes work survive an indexer restart and a failed first
     attempt: derivative files and image-embedding rows are the durable state,
-    while ``_backfill_media`` merely accelerates a feature transition.
+    while ``_backfill_media`` merely accelerates a feature transition. During
+    that transition, ``include_existing`` refreshes manifest rows for eligible
+    thumbnail files already on disk.
     """
     features = ctx.feature_configuration().values
     if not features.internal_thumbnails:
         return False
     ext = ext_of(os.path.basename(rel_path))
+    if kind_for_ext(ext) is None:
+        return False
     key = db.file_content_key(ctx.conn(), ctx.root_id, rel_path)
     if key is None:
         return False
-    if kind_for_ext(ext) is not None:
-        if any(not os.path.exists(os.path.join(ctx.cfg.thumbs_dir, thumb_storage_path(key, size))) for size in SIZES):
-            return True
-    return features.image_search and is_image_candidate(ext) and db.image_embedding_model(ctx.conn(), key) is None
+    can_generate = within_size_budget(size_bytes, ctx.cfg.thumb_max_bytes)
+    thumbnail_paths = [os.path.join(ctx.cfg.thumbs_dir, thumb_storage_path(key, size)) for size in SIZES]
+    if can_generate and (include_existing or any(not os.path.exists(path) for path in thumbnail_paths)):
+        return True
+    return (
+        features.image_search
+        and is_image_candidate(ext)
+        and os.path.exists(thumbnail_paths[0])
+        and db.image_embedding_model(ctx.conn(), key) is None
+    )
 
 
 def embed_missing(ctx: RootContext, rel_path: str) -> None:
@@ -558,7 +576,9 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
                 traversal_complete = False
                 break
             features = ctx.feature_configuration().values
-            media_needed = unchanged and (ctx.needs_media_backfill() or media_derivatives_missing(ctx, rel_path))
+            media_needed = unchanged and media_derivatives_missing(
+                ctx, rel_path, st.st_size, include_existing=ctx.needs_media_backfill()
+            )
             retry_unchanged = prev is not None and should_retry_unchanged(prev[2], ext_of(os.path.basename(rel_path)), features)
             if unchanged and prev is not None and prev[2] == "partial" and features.semantic_search:
                 pending.append(pool.submit(job, abs_path, rel_path, st, True, media_needed))

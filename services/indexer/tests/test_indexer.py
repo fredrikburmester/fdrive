@@ -275,6 +275,39 @@ def test_process_file_indexes_new_text_file(postgres_dsn: str, monkeypatch: pyte
 
     manifest = db.get_manifest(ctx.conn(), ctx.root_id)
     assert manifest["a.txt"][2] == "indexed"
+    import hashlib
+
+    assert db.file_content_key(ctx.conn(), ctx.root_id, "a.txt") == hashlib.sha256(b"hello").hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("status", "metadata_changed"),
+    [("indexed", True), ("pending", False)],
+)
+def test_process_file_rehashes_changed_and_pending_rows(
+    postgres_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: str,
+    metadata_changed: bool,
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    path = tmp_path / "a.txt"
+    path.write_text("hello")
+    st = os.stat(path)
+    stored_size = st.st_size - 1 if metadata_changed else st.st_size
+    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", stored_size, st.st_mtime_ns, "old", None)
+    db.update_file_status(ctx.conn(), file_id, status, 0, None)
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *_a, **_k: [])
+    monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
+    hashed: list[str] = []
+    monkeypatch.setattr(indexer, "sha256_of", lambda abs_path: hashed.append(abs_path) or "fresh")
+
+    assert indexer.process_file(ctx, str(path), "a.txt", st) is True
+
+    assert hashed == [str(path)]
+    assert db.file_content_key(ctx.conn(), ctx.root_id, "a.txt") == "fresh"
 
 
 def test_process_file_unchanged_returns_false(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -434,10 +467,34 @@ def test_enabling_thumbnails_backfills_unchanged_files_without_reextracting(
     ctx.features = FeatureConfiguration(2, FeatureValues(False, False, False, False, False, False))
     ctx.set_features(FeatureConfiguration(3, FeatureValues(True, False, False, False, False, False)))
     generated: list[str] = []
-    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *_a, **_k: generated.append("a") or [])
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda _a, _e, sha, *_args, **_kwargs: generated.append(sha) or [])
+    monkeypatch.setattr(indexer, "sha256_of", lambda _path: pytest.fail("unchanged backfill must reuse stored sha256"))
     monkeypatch.setattr(indexer, "safe_process", lambda *_a, **_k: pytest.fail("text extraction must not run"))
     indexer.scan_once(ctx)
-    assert generated == ["a"]
+    assert generated == ["sha"]
+
+
+def test_enabling_thumbnails_ignores_unchanged_non_media(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    path = tmp_path / "archive.bin"
+    path.write_bytes(b"binary")
+    st = os.stat(path)
+    file_id = db.upsert_file(
+        ctx.conn(), ctx.root_id, "archive.bin", "archive.bin", ".bin", st.st_size, st.st_mtime_ns, "sha", None
+    )
+    db.update_file_status(ctx.conn(), file_id, "indexed", 0, None)
+    ctx.features = FeatureConfiguration(2, FeatureValues(False, False, False, False, False, False))
+    ctx.set_features(FeatureConfiguration(3, FeatureValues(True, False, False, False, False, False)))
+    monkeypatch.setattr(indexer, "sha256_of", lambda _path: pytest.fail("non-media backfill must not hash"))
+    monkeypatch.setattr(indexer, "backfill_media", lambda *_a, **_k: pytest.fail("non-media backfill must not run"))
+
+    result = indexer.scan_once(ctx)
+
+    assert result["changed"] == 0
+    assert ctx.needs_media_backfill() is False
 
 
 def test_failed_media_backfill_remains_pending_for_unchanged_file(
@@ -476,10 +533,12 @@ def test_enabling_text_reprocesses_unchanged_disabled_row(
     ctx.features = FeatureConfiguration(2, FeatureValues(False, False, False, False, False, False))
     ctx.set_features(FeatureConfiguration(3, FeatureValues(False, True, False, False, False, False)))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *_a, **_k: [])
+    monkeypatch.setattr(indexer, "sha256_of", lambda _path: pytest.fail("unchanged feature retry must reuse stored sha256"))
 
     indexer.scan_once(ctx)
 
     assert db.get_manifest(ctx.conn(), ctx.root_id)["a.txt"][2] == "partial"
+    assert db.file_content_key(ctx.conn(), ctx.root_id, "a.txt") == "sha"
 
 
 def test_partial_row_retries_embeddings_without_reextracting(
@@ -541,6 +600,26 @@ def test_media_derivative_backfill_survives_restart_without_transition(
     indexer.scan_once(ctx)
 
     assert generated == ["a"]
+
+
+def test_over_budget_media_without_thumbnail_is_not_retried(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    cfg.thumb_max_bytes = 1
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    path = tmp_path / "large.jpg"
+    path.write_bytes(b"image")
+    st = os.stat(path)
+    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "large.jpg", "large.jpg", ".jpg", st.st_size, st.st_mtime_ns, "sha", None)
+    db.update_file_status(ctx.conn(), file_id, "indexed", 0, None)
+    ctx.features = FeatureConfiguration(7, FeatureValues(True, False, False, False, False, False))
+    monkeypatch.setattr(indexer, "sha256_of", lambda _path: pytest.fail("over-budget unchanged media must not hash"))
+    monkeypatch.setattr(indexer, "backfill_media", lambda *_a, **_k: pytest.fail("impossible derivative must not retry"))
+
+    result = indexer.scan_once(ctx)
+
+    assert result["changed"] == 0
 
 
 def test_process_file_thumbnail_failure_does_not_break_indexing(
