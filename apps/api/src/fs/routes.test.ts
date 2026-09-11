@@ -460,6 +460,18 @@ describe("GET/HEAD /fs/download", () => {
     expect(await res.text()).toBe("hello");
   });
 
+  it("ignores a valid multi-range request and downloads the whole file", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
+      headers: { range: "bytes=0-1,4-5", "if-range": "stale-validator" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-range")).toBeNull();
+    expect(await res.text()).toBe("hello world");
+  });
+
   it("returns 416 with Content-Range when the range is out of bounds and the size is known", async () => {
     const { app } = await buildHarness();
 
@@ -491,7 +503,7 @@ describe("GET/HEAD /fs/download", () => {
     const { app } = await buildHarness();
 
     const res = await app.request("/api/v1/fs/download?path=/does-not-exist.txt", {
-      headers: { range: "bytes=0-10,20-30" },
+      headers: { range: "bytes=10-5,20-30" },
     });
     expect(res.status).toBe(416);
     expect(res.headers.get("content-range")).toBeNull();

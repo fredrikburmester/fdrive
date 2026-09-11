@@ -41,8 +41,17 @@ describe("parseRangeHeader", () => {
     expect(parseRangeHeader("bytes=-0", 100)).toEqual({ kind: "invalid" });
   });
 
-  it("rejects a multi-range header", () => {
-    expect(parseRangeHeader("bytes=0-10,20-30", 100)).toEqual({ kind: "invalid" });
+  it("identifies a valid multi-range header for whole-response fallback", () => {
+    expect(parseRangeHeader("bytes=0-10, 20-30", 100)).toEqual({ kind: "multiple" });
+    expect(parseRangeHeader("bytes=7-7, -3, 20-", 100)).toEqual({ kind: "multiple" });
+  });
+
+  it("rejects a malformed multi-range header", () => {
+    expect(parseRangeHeader("bytes=10-5,20-30", 100)).toEqual({ kind: "invalid" });
+    expect(parseRangeHeader("bytes=9-8,20-30", 100)).toEqual({ kind: "invalid" });
+    expect(parseRangeHeader("bytes=0-10,nope", 100)).toEqual({ kind: "invalid" });
+    expect(parseRangeHeader("bytes=-,0-10", 100)).toEqual({ kind: "invalid" });
+    expect(parseRangeHeader("items=0-10,20-30", 100)).toEqual({ kind: "invalid" });
   });
 
   it("rejects a header with neither a start nor an end", () => {

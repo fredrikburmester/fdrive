@@ -10,7 +10,7 @@ import {
   type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
-import { toFsPath } from "@fdrive/core";
+import { parseRangeHeader, toFsPath } from "@fdrive/core";
 import type { IdentityRepo, IndexQueries } from "@fdrive/db";
 import type { DownloadOptions, DownloadResult } from "@fdrive/sftpgo";
 import { SftpgoError } from "@fdrive/sftpgo";
@@ -181,6 +181,7 @@ export function publicDownloadOptions(c: Context): DownloadOptions {
   const options: DownloadOptions = { signal: c.req.raw.signal };
   const range = c.req.header("range");
   if (range !== undefined) {
+    if (parseRangeHeader(range, null).kind === "multiple") return options;
     if (!/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(range))
       throw new ApiHttpError("bad_request", "Unsupported byte range");
     const [start, end] = range.slice(6).split("-");

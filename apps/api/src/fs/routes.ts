@@ -325,9 +325,14 @@ async function resolveDownload(
   if (parsed.kind === "invalid") {
     return { kind: "range-not-satisfiable", size: knownSize };
   }
+  if (parsed.kind === "multiple") {
+    const result = await runStorageCall(() => storage.download(path, { signal }));
+    return { kind: "stream", result };
+  }
 
   // `rangeHeader` is non-null here, so `parseRangeHeader` cannot have
-  // returned its "none" variant (that only happens for a null header).
+  // returned its "none" variant (that only happens for a null header), and
+  // the unsupported multi-range case returned the complete response above.
   const single = parsed as Extract<typeof parsed, { kind: "single" }>;
   const range =
     single.end !== undefined ? { start: single.start, end: single.end } : { start: single.start };
