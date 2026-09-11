@@ -1,12 +1,12 @@
 "use client";
 
+import { TriangleAlertIcon } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PageHeader, useShellMe } from "@/components/shell/page-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TriangleAlertIcon } from "lucide-react";
 import { accountItemHref, navigateAccountItem } from "@/lib/account/identities";
 import { useAccountFavorites } from "@/lib/account/queries";
 import { useIdentityActions } from "@/lib/account/use-identities";

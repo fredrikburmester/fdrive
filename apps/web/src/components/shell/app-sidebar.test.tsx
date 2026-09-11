@@ -149,7 +149,7 @@ it("lists the System pages in order, each as its own menu item", async () => {
   ] as const;
 
   const links = await Promise.all(
-    expected.map(([label]) => screen.findByRole("link", { name: label, exact: true })),
+    expected.map(([label]) => screen.findByRole("link", { name: label })),
   );
   for (const [index, link] of links.entries()) {
     expect(link.getAttribute("href")).toBe(expected[index]?.[1]);
