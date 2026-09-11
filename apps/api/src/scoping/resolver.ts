@@ -354,7 +354,17 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
     const allScopes = [...baseScopes, ...adopted];
     const candidates = allScopes.filter((scope) => indexRootNames.has(scope.rootName));
     const second = await verifyCandidates(identity, candidates, allScopes, unindexedPrefixes);
-    return { ...second, adopted };
+    const verifiedAdopted = second.available
+      ? adopted.filter((candidate) =>
+          second.scopes.some(
+            (scope) =>
+              scope.rootName === candidate.rootName &&
+              scope.fsPrefix === candidate.fsPrefix &&
+              scope.virtualPrefix === candidate.virtualPrefix,
+          ),
+        )
+      : [];
+    return { ...second, adopted: verifiedAdopted };
   }
 
   /** The cached per-scope verification outcome, or the configured-mapping failure that prevents one. */
