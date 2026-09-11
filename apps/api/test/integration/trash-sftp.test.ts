@@ -264,4 +264,49 @@ describe("trash against real PostgreSQL and SFTPGo", () => {
     const carolTrashAfterAliceEmpty = await listTrash(carol.cookie);
     expect(carolTrashAfterAliceEmpty.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
   }, 180000);
+
+  it("preserves and relocates retained metadata without taking it from replacement files", async () => {
+    const { cookie } = await login("alice");
+    await upload(cookie, "/metadata-restore.txt", "original");
+    expect(
+      (
+        await call("/api/v1/favorites", {
+          method: "POST",
+          cookie,
+          body: { path: "/metadata-restore.txt" },
+        })
+      ).status,
+    ).toBe(200);
+    const favoritePaths = async () => {
+      const response = await call("/api/v1/favorites", { cookie });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { items: Array<{ path: string }> };
+      return body.items.map((item) => item.path);
+    };
+    const restore = async (original: string, target?: string) => {
+      const entry = (await listTrash(cookie)).entries.find(
+        (item) => item.originalPath === original,
+      );
+      if (!entry) throw new Error("expected trash entry");
+      const response = await call(ROUTES.trash.restore, {
+        method: "POST",
+        cookie,
+        body: { ids: [entry.id], ...(target ? { target } : {}) },
+      });
+      expect(response.status).toBe(200);
+    };
+
+    await deleteItem(cookie, "/metadata-restore.txt", "file");
+    await restore("/metadata-restore.txt");
+    expect(await favoritePaths()).toEqual(["/metadata-restore.txt"]);
+
+    await deleteItem(cookie, "/metadata-restore.txt", "file");
+    await restore("/metadata-restore.txt", "/metadata-recovered.txt");
+    expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
+
+    await deleteItem(cookie, "/metadata-recovered.txt", "file");
+    await upload(cookie, "/metadata-recovered.txt", "replacement");
+    await restore("/metadata-recovered.txt", "/metadata-archive.txt");
+    expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
+  }, 180000);
 });

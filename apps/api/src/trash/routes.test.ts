@@ -5,7 +5,7 @@ import {
   TrashRestoreResponse,
   TrashStatusResponse,
 } from "@fdrive/contracts";
-import { normalizePath, StorageError, type StorageProvider } from "@fdrive/core";
+import { normalizePath, StorageError, type StorageProvider, withMoveToTrash } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import {
   createFakeSftpgoServer,
@@ -103,6 +103,7 @@ async function buildHarness(
     trashPathOverride?: string | null;
     retentionHours?: number | null;
     identityId?: string;
+    trashLayout?: "native" | "move";
   } = {},
 ): Promise<Harness> {
   const seed = opts.seed ?? SEED;
@@ -113,7 +114,15 @@ async function buildHarness(
   const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
   const withToken = await withTokenFor(client, username, password);
   const baseStorage = createSftpgoStorageProvider({ client, withToken });
-  const storage = withTrash ? withRecycleFolderTrash(baseStorage, TRASH_PATH) : baseStorage;
+  const clock = () => new Date(CLOCK_ISO);
+  const trashLayout = opts.trashLayout ?? "native";
+  const trashStorage =
+    trashLayout === "move"
+      ? withMoveToTrash({ storage: baseStorage, trashPath: TRASH_PATH, clock })
+      : baseStorage;
+  const storage = withTrash
+    ? withRecycleFolderTrash(trashStorage, TRASH_PATH, trashLayout)
+    : baseStorage;
 
   const identityId =
     opts.identityId ?? (username === "alice" ? ALICE_IDENTITY_ID : BOB_IDENTITY_ID);
@@ -130,7 +139,6 @@ async function buildHarness(
   bus.subscribe({ identityId }, (event) => events.push(event));
 
   const config = loadConfig(REQUIRED_ENV);
-  const clock = () => new Date(CLOCK_ISO);
   const metadata = createMetadataService(createMemoryRepos());
 
   const deps: TrashRoutesDeps = {
@@ -249,8 +257,10 @@ describe("GET /trash", () => {
 });
 
 describe("POST /trash/restore", () => {
-  it("restores to the original path, decorates metadata, and publishes one move event", async () => {
+  it("restores to the original path without relocating its retained metadata", async () => {
     const { app, storage, metadata, events } = await buildHarness();
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false);
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -270,12 +280,10 @@ describe("POST /trash/restore", () => {
     const body = TrashRestoreResponse.parse(await readJson(res));
     expect(body.restored).toHaveLength(1);
     expect(body.restored[0]?.path).toBe("/hello.txt");
-    expect(onMovedSpy).toHaveBeenCalledWith(
-      ALICE_IDENTITY_ID,
-      normalizePath(`${TRASH_PATH}/${id}`),
+    expect(onMovedSpy).not.toHaveBeenCalled();
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
       "/hello.txt",
-      false,
-    );
+    ]);
     expect(events).toEqual([
       {
         type: "fs",
@@ -289,8 +297,10 @@ describe("POST /trash/restore", () => {
     expect(await storage.statFile("/hello.txt")).toMatchObject({ size: 11 });
   });
 
-  it("restores to a new target under a new parent folder", async () => {
-    const { app, storage } = await buildHarness();
+  it("moves retained metadata to an explicit restore target", async () => {
+    const { app, storage, metadata } = await buildHarness();
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false);
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -308,6 +318,128 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(200);
     const body = TrashRestoreResponse.parse(await readJson(res));
     expect(body.restored[0]?.path).toBe("/restored/moved.txt");
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
+      "/restored/moved.txt",
+    ]);
+  });
+
+  it("preserves metadata and reports an unavailable original-path check", async () => {
+    const { app, storage, metadata } = await buildHarness();
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
+    await storage.deleteFile("/hello.txt");
+    const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
+    const id = listed.entries[0]?.id;
+    if (id === undefined) throw new Error("expected a trash entry");
+    const stat = storage.stat.bind(storage);
+    storage.stat = async (path) => {
+      if (path === "/hello.txt")
+        throw new StorageError("upstream_unavailable", "probe unavailable");
+      return stat(path);
+    };
+    const onMoved = vi.spyOn(metadata, "onMoved");
+    const res = await app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id], target: "/recovered.txt" }),
+      }),
+    );
+    expect(res.status).toBe(502);
+    expect(onMoved).not.toHaveBeenCalled();
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
+      "/hello.txt",
+    ]);
+    // Storage restore already succeeded; the metadata check failed safely afterward.
+    expect(await storage.statFile("/recovered.txt")).toMatchObject({ size: 11 });
+  });
+
+  it("keeps metadata on a replacement file at the original path", async () => {
+    const { app, storage, metadata } = await buildHarness();
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false);
+    await storage.deleteFile("/hello.txt");
+    const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
+    const id = listed.entries[0]?.id;
+    if (id === undefined) throw new Error("expected a trash entry");
+    await storage.upload("/hello.txt", new TextEncoder().encode("replacement contents"));
+    const onMoved = vi.spyOn(metadata, "onMoved");
+
+    const res = await app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id], target: "/recovered.txt" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(onMoved).not.toHaveBeenCalled();
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
+      "/hello.txt",
+    ]);
+    expect(await storage.statFile("/recovered.txt")).toMatchObject({ size: 11 });
+  });
+
+  it("uses the native provider's original path even when it resembles the move layout", async () => {
+    const originalPath = "/.fdrive-move-v1/dir/p/native/v";
+    const { app, storage, metadata } = await buildHarness({
+      seed: {
+        ...SEED,
+        files: { ...SEED.files, alice: { [originalPath]: "native content" } },
+      },
+    });
+    await metadata.addFavorite(ALICE_IDENTITY_ID, originalPath, "file");
+    await metadata.onTrashed(ALICE_IDENTITY_ID, originalPath, false);
+    await storage.deleteFile(originalPath);
+    const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
+    const id = listed.entries[0]?.id;
+    if (id === undefined) throw new Error("expected a trash entry");
+
+    const res = await app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id], target: "/restored-native" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
+      "/restored-native",
+    ]);
+  });
+
+  it("moves a restored directory's retained metadata subtree", async () => {
+    const { app, storage, metadata } = await buildHarness({ trashLayout: "move" });
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir/nested.txt", "file");
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", "grid");
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/dir", true);
+    await storage.deleteDir("/dir");
+    const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
+    const id = listed.entries[0]?.id;
+    if (id === undefined) throw new Error("expected a trash entry");
+    const onMovedSpy = vi.spyOn(metadata, "onMoved");
+
+    const res = await app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id], target: "/restored-dir" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(onMovedSpy).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/dir", "/restored-dir", true);
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
+      "/restored-dir/nested.txt",
+    ]);
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/dir")).resolves.toBeNull();
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/restored-dir")).resolves.toMatchObject(
+      { mode: "grid" },
+    );
   });
 
   it("returns 409 with details.failedId when the restore target already exists, via the real core-provided trash against the fake (not a mocked provider)", async () => {

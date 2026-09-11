@@ -282,6 +282,7 @@ describe("createRecycleFolderTrash: restore", () => {
     expect(restored.name).toBe("a.txt");
     expect(restored.kind).toBe("file");
     expect(restored.size).toBe(7);
+    expect(restored.originalPath).toBe("/docs/a.txt");
     expect(storage.dump()).toEqual({ "/docs/a.txt": "hello a" });
   });
 
@@ -292,6 +293,7 @@ describe("createRecycleFolderTrash: restore", () => {
     const restored = await trash.restore("docs/a.txt/1000000", { target: "/new/place/a.txt" });
 
     expect(restored.path).toBe("/new/place/a.txt");
+    expect(restored.originalPath).toBe("/docs/a.txt");
     expect(storage.dump()).toEqual({ "/new/place/a.txt": "hello a" });
   });
 
@@ -304,7 +306,13 @@ describe("createRecycleFolderTrash: restore", () => {
 
     const restored = await trash.restore(MOVE_DIR_ID);
 
-    expect(restored).toMatchObject({ path: "/docs", name: "docs", kind: "dir", size: 0 });
+    expect(restored).toMatchObject({
+      path: "/docs",
+      originalPath: "/docs",
+      name: "docs",
+      kind: "dir",
+      size: 0,
+    });
     expect(storage.dump()).toEqual({
       "/docs/a.txt": "a",
       "/docs/sub/b.txt": "b",

@@ -119,8 +119,8 @@ export interface MetadataService {
    * Drops only the recent-files entries after a delete that moved the item
    * into the storage provider's trash instead of removing it. Tags and
    * favorites are left in place (keyed at the original path) so a
-   * same-path restore recovers them; a restore to a different target
-   * without an index configured loses them.
+   * same-path restore recovers them. Alternate restores relocate surviving
+   * metadata only when no replacement entry occupies the original path.
    */
   onTrashed(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**

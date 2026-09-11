@@ -19,6 +19,15 @@ export interface TrashListing {
 }
 
 /**
+ * A restored entry plus the path encoded by its provider's trash layout.
+ * `originalPath` lets callers relocate metadata that survived deletion; it
+ * is not a snapshot and cannot recreate metadata already removed.
+ */
+export type TrashRestoreResult = FileEntry & {
+  readonly originalPath: string;
+};
+
+/**
  * Optional capability a `StorageProvider` may expose: a recoverable recycle
  * folder for deletes the provider itself performed (never fdrive moving
  * files into a trash folder on its own).
@@ -29,9 +38,10 @@ export interface TrashProvider {
    * Moves the leaf identified by `id` back to `target` (default: its
    * `originalPath`). Parent directories are created as needed. Checks the
    * target first and throws `StorageError("conflict")` when anything already
-   * exists there, because providers such as SFTPGo overwrite on move.
+   * exists there, because providers such as SFTPGo overwrite on move. Returns
+   * the provider-parsed original path together with the restored entry.
    */
-  restore(id: string, options?: { target?: string }): Promise<FileEntry>;
+  restore(id: string, options?: { target?: string }): Promise<TrashRestoreResult>;
   /** Permanently deletes the leaves identified by `ids`. Missing ids are ignored. */
   purge(ids: readonly string[]): Promise<void>;
   /** Permanently removes everything under the trash folder (never the folder itself). */

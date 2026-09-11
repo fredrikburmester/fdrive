@@ -8,6 +8,7 @@ import type {
   TrashEntry,
   TrashListing,
   TrashProvider,
+  TrashRestoreResult,
 } from "../ports/storage.ts";
 import {
   isUnderPath,
@@ -191,7 +192,7 @@ async function restoreLeaf(
   layout: RecycleFolderLayout,
   id: string,
   target: string | undefined,
-): Promise<FileEntry> {
+): Promise<TrashRestoreResult> {
   const leafPath = trashLeafPath(trashRoot, id);
   const parsed = parseLeaf(trashRoot, leafPath, layout);
   if (parsed === null) {
@@ -210,12 +211,15 @@ async function restoreLeaf(
   await storage.mkdir(parentPath(resolvedTarget), { parents: true });
   await storage.move(leafPath, resolvedTarget);
 
-  return makeEntry(parentPath(resolvedTarget), {
-    name: baseName(resolvedTarget),
-    kind: leafStat.kind,
-    size: leafStat.size,
-    modifiedAt: leafStat.modifiedAt ?? new Date(0),
-  });
+  return {
+    ...makeEntry(parentPath(resolvedTarget), {
+      name: baseName(resolvedTarget),
+      kind: leafStat.kind,
+      size: leafStat.size,
+      modifiedAt: leafStat.modifiedAt ?? new Date(0),
+    }),
+    originalPath: parsed.originalPath,
+  };
 }
 
 async function purgeLeaves(

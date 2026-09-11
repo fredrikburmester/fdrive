@@ -11,12 +11,12 @@ import {
   TrashStatusResponse,
 } from "@fdrive/contracts";
 import {
-  type FileEntry,
   isStorageError,
   parseTrashLeaf,
   type StorageProvider,
   type TrashEntry,
   type TrashProvider,
+  type TrashRestoreResult,
   trashLeafPath,
 } from "@fdrive/core";
 import type { AppHono, AuthedHono } from "../app.js";
@@ -100,12 +100,23 @@ function serializeTrashEntry(entry: TrashEntry): TrashEntryContract {
   };
 }
 
+/** Path-keyed metadata belongs to a replacement entry if the original path is live again. */
+async function originalPathIsMissing(storage: StorageProvider, path: string): Promise<boolean> {
+  try {
+    await storage.stat(path);
+    return false;
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "not_found") return true;
+    throw error;
+  }
+}
+
 /** Runs `trash.restore(id, ...)`, tagging any `StorageError` it throws with `failedId` before rethrowing. */
 async function restoreOne(
   trash: TrashProvider,
   id: string,
   target: string | undefined,
-): Promise<FileEntry> {
+): Promise<TrashRestoreResult> {
   const restoreOptions = target === undefined ? undefined : { target };
   try {
     return await trash.restore(id, restoreOptions);
@@ -167,8 +178,17 @@ export function registerTrashRoutes(
     for (const id of validated) {
       const entry = await restoreOne(trash, id, target);
       const trashVirtualPath = trashLeafPath(trashPath, id);
-      if (deps.metadata !== undefined) {
-        await deps.metadata.onMoved(principal.identityId, trashVirtualPath, entry.path, false);
+      if (
+        deps.metadata !== undefined &&
+        entry.originalPath !== entry.path &&
+        (await runStorageCall(() => originalPathIsMissing(principal.storage, entry.originalPath)))
+      ) {
+        await deps.metadata.onMoved(
+          principal.identityId,
+          entry.originalPath,
+          entry.path,
+          entry.kind === "dir",
+        );
       }
       restored.push(serializeEntry(entry));
       trashPaths.push(trashVirtualPath);
