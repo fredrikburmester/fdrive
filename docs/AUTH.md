@@ -78,7 +78,16 @@ with:
   - `"auto"` (default): set when the request arrived over https, judged from
     `X-Forwarded-Proto` (the bundled proxy passes an edge proxy's value through
     and otherwise sets it from the connection) or, without the header, from the
-    request's own URL scheme.
+    request's own URL scheme. Only the entry the outermost trusted proxy wrote
+    counts: `FDRIVE_TRUSTED_PROXY_HOPS` entries from the right of the header,
+    so a client prepending `http` cannot strip `Secure`. A chain shorter than
+    the trusted hop count clamps to the outermost entry present instead of
+    being ignored, which is where this differs from the `X-Forwarded-For` rule
+    in `extractClientIp`: proxies replace `X-Forwarded-Proto` (nginx's
+    `proxy_set_header`) rather than append to it, so one entry is what a
+    multi-hop deployment normally sends, and a client can only add entries to
+    the header, never remove them. `FDRIVE_TRUSTED_PROXY_HOPS=0` still ignores
+    the header entirely.
 
 State-changing requests under `/api/v1/*` (`POST`, `PUT`, `PATCH`, `DELETE`)
 must also pass a CSRF guard: `Sec-Fetch-Site` must be absent, `same-origin`,

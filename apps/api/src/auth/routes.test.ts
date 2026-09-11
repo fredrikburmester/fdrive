@@ -575,6 +575,28 @@ describe("auth routes: POST /auth/logout", () => {
     expect(meRes.status).toBe(401);
   });
 
+  it("clears with the same Secure attribute login set behind the trusted proxy", async () => {
+    // The forwarded chain carries a client-prepended "http" in front of the
+    // single trusted proxy's "https": both the cookie that is set and the
+    // cookie that clears it must still be Secure, or logout leaves the
+    // browser holding the session cookie it was meant to drop.
+    const { app } = buildTestApp({ clockCtl });
+    const forwarded = { "x-forwarded-proto": "http, https" };
+    const loginRes = await login(app, { username: "alice", password: "wonderland" }, forwarded);
+    expect(loginRes.headers.get("set-cookie")).toContain("Secure");
+    const cookie = extractCookie(loginRes);
+
+    const logoutRes = await app.request(ROUTES.auth.logout, {
+      method: "POST",
+      headers: { cookie, "x-requested-with": "fdrive", ...forwarded },
+    });
+
+    expect(logoutRes.status).toBe(200);
+    const setCookie = logoutRes.headers.get("set-cookie");
+    expect(setCookie).toContain("fdrive_session=;");
+    expect(setCookie).toContain("Secure");
+  });
+
   it("requires authentication to call logout at all", async () => {
     const { app } = buildTestApp({ clockCtl });
 
