@@ -5,6 +5,27 @@ function textResponse(status: number, body: string): Response {
   return new Response(body, { status });
 }
 
+function heldResponse(
+  status: number,
+  headers?: Record<string, string>,
+): {
+  readonly response: Response;
+  readonly cancel: ReturnType<typeof vi.fn>;
+} {
+  const cancel = vi.fn();
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("held"));
+        return new Promise<void>(() => undefined);
+      },
+      cancel,
+    }),
+    { status, ...(headers === undefined ? {} : { headers }) },
+  );
+  return { response, cancel };
+}
+
 describe("probeConnection", () => {
   it("succeeds when /healthz returns ok and the token endpoint returns 401", async () => {
     const fetchImpl = vi
@@ -25,6 +46,20 @@ describe("probeConnection", () => {
       "http://sftpgo:8080/api/v2/user/token",
       expect.objectContaining({ redirect: "error" }),
     );
+  });
+
+  it("cancels the unused token response body after a successful probe", async () => {
+    const token = heldResponse(401);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(200, "ok"))
+      .mockResolvedValueOnce(token.response);
+
+    await expect(probeConnection("http://sftpgo:8080", { fetch: fetchImpl })).resolves.toEqual({
+      ok: true,
+      detail: "SFTPGo is reachable",
+    });
+    expect(token.cancel).toHaveBeenCalledOnce();
   });
 
   it("strips a trailing slash before joining paths", async () => {
@@ -83,6 +118,18 @@ describe("probeConnection", () => {
     expect(result.detail).toContain("500");
   });
 
+  it("cancels an unused non-200 health response body", async () => {
+    const health = heldResponse(500);
+    const fetchImpl = vi.fn().mockResolvedValueOnce(health.response);
+
+    await expect(
+      probeConnection("http://sftpgo:8080", { fetch: fetchImpl }),
+    ).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(health.cancel).toHaveBeenCalledOnce();
+  });
+
   it("fails when /healthz returns an unexpected body", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(textResponse(200, "not ok"));
 
@@ -102,6 +149,18 @@ describe("probeConnection", () => {
       detail: "GET /healthz response could not be read safely",
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a health response rejected from its declared size", async () => {
+    const health = heldResponse(200, { "content-length": "1025" });
+    const fetchImpl = vi.fn().mockResolvedValueOnce(health.response);
+
+    await expect(
+      probeConnection("http://sftpgo:8080", { fetch: fetchImpl }),
+    ).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(health.cancel).toHaveBeenCalledOnce();
   });
 
   it("fails safely when reading the health response fails", async () => {
@@ -140,6 +199,21 @@ describe("probeConnection", () => {
 
     expect(result.ok).toBe(false);
     expect(result.detail).toContain("200");
+  });
+
+  it("cancels the unused body when the token endpoint returns an unexpected status", async () => {
+    const token = heldResponse(200);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(200, "ok"))
+      .mockResolvedValueOnce(token.response);
+
+    await expect(
+      probeConnection("http://sftpgo:8080", { fetch: fetchImpl }),
+    ).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(token.cancel).toHaveBeenCalledOnce();
   });
 
   it.each([

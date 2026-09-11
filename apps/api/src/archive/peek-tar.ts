@@ -62,6 +62,11 @@ export async function collectTarPeekEntries(
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
+    function stopStreams(): void {
+      nodeStream.destroy();
+      decompressor?.destroy();
+      extractStream.destroy();
+    }
     function finish(): void {
       if (!settled) {
         settled = true;
@@ -71,15 +76,14 @@ export async function collectTarPeekEntries(
     function fail(error: unknown): void {
       if (!settled) {
         settled = true;
+        stopStreams();
         reject(error);
       }
     }
     function stopEarly(): void {
       if (truncated) return;
       truncated = true;
-      nodeStream.destroy();
-      decompressor?.destroy();
-      extractStream.destroy();
+      stopStreams();
       finish();
     }
 
