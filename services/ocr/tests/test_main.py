@@ -257,6 +257,56 @@ def test_scheduler_loop_skips_initial_run_when_disabled(
     assert run_calls == []
 
 
+def test_scheduler_loop_logs_only_schedule_state_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeConnection:
+        def close(self) -> None:
+            pass
+
+    enabled_states = iter((False, False, True, True))
+
+    def read_settings(_conn: object) -> dict[str, object]:
+        values = {
+            "thumbnails": False,
+            "textSearch": False,
+            "searchOcr": False,
+            "semanticSearch": False,
+            "imageSearch": False,
+            "pdfOcr": next(enabled_states),
+        }
+        return {FEATURES_KEY: {"version": 1, "revision": 1, "values": values}}
+
+    monkeypatch.setattr(db, "read_settings", read_settings)
+
+    sleeps = 0
+
+    def fake_sleep(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 4:
+            raise StopLoop()
+
+    logs: list[str] = []
+    with pytest.raises(StopLoop):
+        main.scheduler_loop(
+            RunLock(),
+            FakeConnection,  # type: ignore[arg-type]
+            [],
+            DEFAULT_SETTINGS,
+            str(tmp_path),
+            30,
+            2,
+            run_on_start=False,
+            log_fn=logs.append,
+            now=lambda: FIXED_NOW,
+            sleep=fake_sleep,
+        )
+
+    assert logs == [
+        "OCR scheduler idle: PDF OCR disabled",
+        "next OCR pass at 2026-01-01T03:00:00+00:00",
+    ]
+
+
 def test_scheduler_loop_re_reads_settings_for_the_hour(
     postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
