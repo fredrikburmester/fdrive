@@ -241,6 +241,13 @@ fdrive_initialize_logs() {
       return 1
     fi
   fi
+  # Step logs are diagnostic, not history: keep a bounded window so a recent failure is
+  # findable. Override with FDRIVE_LOG_RETENTION_DAYS; 0 disables pruning.
+  local retention=${FDRIVE_LOG_RETENTION_DAYS:-7}
+  if [[ $retention =~ ^[0-9]+$ && $retention -gt 0 ]]; then
+    find "$log_path" -maxdepth 1 -type d -name 'step.*' -mtime "+$retention" \
+      -exec rm -rf {} + 2>/dev/null || true
+  fi
   FDRIVE_LOG_DIRECTORY=$log_path
 }
 

@@ -5,6 +5,24 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Agent configuration and guard
+
+- Added `CLAUDE.md` importing `AGENTS.md` and `WORKING.md`: Claude Code loads `CLAUDE.md`, not
+  `AGENTS.md`, so the working agreements were not reaching sessions before this.
+- `implementer` and `test-writer` carry tool allowlists; neither can delegate. Added read-only
+  `explorer` (sonnet, medium effort) for evidence gathering.
+- A PreToolUse guard (`tools/orchestration/guard-tool-use.{sh,py}`, registered in
+  `.claude/settings.json`) refuses SHA-less stash operations, `git reset --hard`,
+  `git clean -f`, `git push --force`, lockfile hand-edits and session links. Commit and merge
+  paths are untouched, so `merge-chunk.sh` is unaffected. The same rules stay stated in
+  WORKING.md so they are known before an attempt.
+- Step logs prune on a bounded window, `FDRIVE_LOG_RETENTION_DAYS` (default 7, `0` disables).
+  At the current rate that window settles near 28 MB; lower it or switch to a count cap if
+  that matters.
+- `verify workflow` passes, including the new `test-guard-tool-use.sh` regression group.
+  This change is configuration, documentation and workflow tooling only; no application,
+  browser or security verification is claimed.
+
 ## Documentation cleanup
 
 - Added the storage-provider developer guide; removed five obsolete P10 briefs.
