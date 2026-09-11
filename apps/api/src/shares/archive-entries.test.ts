@@ -128,5 +128,7 @@ describe("GET /api/v1/public/shares/:id/archive-entries", () => {
     const body = ArchiveEntriesResponse.parse(await response.json());
     expect(body.entries).toHaveLength(5000);
     expect(body.truncated).toBe(true);
-  });
+    // Building, uploading and peeking a 5001-entry zip is well under a second
+    // alone but has exceeded the default timeout under a full coverage run.
+  }, 20_000);
 });

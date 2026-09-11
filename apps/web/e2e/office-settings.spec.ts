@@ -1,5 +1,6 @@
 import type { SystemFeaturesResponse, SystemOfficeResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
+import { dismissActivityPanel } from "./support/activity.js";
 
 test("Office onboarding saves and resumes its choice before entering files", async ({ page }) => {
   const featuresUrl = "/api/v1/system/features";
@@ -40,6 +41,7 @@ test("Office onboarding saves and resumes its choice before entering files", asy
       "true",
     );
     await page.getByRole("switch", { name: "Enable ONLYOFFICE" }).click();
+    await dismissActivityPanel(page);
     await page.getByRole("button", { name: "Save ONLYOFFICE settings" }).click();
     await expect
       .poll(
