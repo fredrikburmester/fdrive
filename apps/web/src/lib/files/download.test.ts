@@ -5,20 +5,34 @@ import {
   type DocumentLike,
   type DownloadDeps,
   downloadMany,
+  downloadObjectUrl,
   downloadSingle,
   needsZipDownload,
   planDownload,
 } from "./download";
 
+/** Runs the macrotask the deferred object-URL release is scheduled in. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function fakeDocument() {
   const created: AnchorLike[] = [];
   const clicks: AnchorLike[] = [];
+  /** Whether the anchor was in the document each time it was clicked. */
+  const attachedAtClick: boolean[] = [];
+  let attached: AnchorLike | null = null;
   const anchor: AnchorLike = {
     href: "",
     rel: "",
     download: "",
     style: { display: "" },
-    click: () => clicks.push(anchor),
+    click: () => {
+      clicks.push(anchor);
+      attachedAtClick.push(attached === anchor);
+    },
   };
   const doc: DocumentLike = {
     createElement: () => {
@@ -26,16 +40,20 @@ function fakeDocument() {
       return anchor;
     },
     body: {
-      appendChild: vi.fn(),
-      removeChild: vi.fn(),
+      appendChild: vi.fn((node: AnchorLike) => {
+        attached = node;
+      }),
+      removeChild: vi.fn((node: AnchorLike) => {
+        if (attached === node) attached = null;
+      }),
     },
   };
-  return { doc, anchor, created, clicks };
+  return { doc, anchor, created, clicks, attachedAtClick, isAttached: () => attached !== null };
 }
 
 describe("createAnchorDownloader", () => {
   it("appends, clicks, and removes a hidden anchor", () => {
-    const { doc, anchor, clicks } = fakeDocument();
+    const { doc, anchor, clicks, attachedAtClick, isAttached } = fakeDocument();
     const downloader = createAnchorDownloader(doc);
 
     downloader.click("https://example.test/file.txt");
@@ -47,6 +65,10 @@ describe("createAnchorDownloader", () => {
     expect(clicks).toEqual([anchor]);
     expect(doc.body.appendChild).toHaveBeenCalledWith(anchor);
     expect(doc.body.removeChild).toHaveBeenCalledWith(anchor);
+    // A detached anchor is not reliably actionable: it has to be in the
+    // document when the click lands, and gone once it has.
+    expect(attachedAtClick).toEqual([true]);
+    expect(isAttached()).toBe(false);
   });
 
   it("sets the download filename when given", () => {
@@ -56,6 +78,49 @@ describe("createAnchorDownloader", () => {
     downloader.click("https://example.test/z.zip", "archive.zip");
 
     expect(anchor.download).toBe("archive.zip");
+  });
+});
+
+describe("downloadObjectUrl", () => {
+  it("keeps the object URL alive past the click and releases it one task later", async () => {
+    const revokeObjectUrl = vi.fn();
+    /** What had already been revoked when the click landed. */
+    const revokedAtClick: unknown[][] = [];
+    const anchor = {
+      click: vi.fn(() => {
+        revokedAtClick.push(revokeObjectUrl.mock.calls.flat());
+      }),
+    };
+
+    downloadObjectUrl("blob:one", "one.txt", { anchor, revokeObjectUrl });
+
+    expect(anchor.click).toHaveBeenCalledWith("blob:one", "one.txt");
+    expect(revokedAtClick).toEqual([[]]);
+    // Still live after the handler returns: the browser reads the blob
+    // while it processes the click, which is not over yet.
+    expect(revokeObjectUrl).not.toHaveBeenCalled();
+
+    await nextTask();
+
+    expect(revokeObjectUrl).toHaveBeenCalledOnce();
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:one");
+  });
+
+  it("releases the object URL even when the click throws", async () => {
+    const revokeObjectUrl = vi.fn();
+    const anchor = {
+      click: vi.fn(() => {
+        throw new Error("boom");
+      }),
+    };
+
+    expect(() => downloadObjectUrl("blob:two", "two.txt", { anchor, revokeObjectUrl })).toThrow(
+      "boom",
+    );
+
+    await nextTask();
+
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:two");
   });
 });
 
@@ -155,6 +220,10 @@ describe("downloadMany", () => {
     expect(d.zip).toHaveBeenCalledWith(["/a", "/b"], "export.zip");
     expect(d.createObjectUrl).toHaveBeenCalledOnce();
     expect(clickSpy).toHaveBeenCalledWith("blob:fake", "export.zip");
+    expect(d.revokeObjectUrl).not.toHaveBeenCalled();
+
+    await nextTask();
+
     expect(d.revokeObjectUrl).toHaveBeenCalledWith("blob:fake");
   });
 
@@ -184,6 +253,9 @@ describe("downloadMany", () => {
     const d = deps({ zip: vi.fn().mockResolvedValue(response), anchor: { click: clickSpy } });
 
     await expect(downloadMany(["/a"], d)).rejects.toThrow("boom");
+
+    await nextTask();
+
     expect(d.revokeObjectUrl).toHaveBeenCalledWith("blob:fake");
   });
 });

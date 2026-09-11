@@ -39,12 +39,60 @@ export function createAnchorDownloader(doc: DocumentLike): AnchorDownloader {
   };
 }
 
+/**
+ * Adapts the real, global `document` to the minimal `DocumentLike` above,
+ * so every caller clicks its download anchor the same way. The cast is
+ * confined to this one boundary: the downloader only ever calls the
+ * methods that narrow interface declares (create one anchor, append it,
+ * click it, remove it), so this is safe even though a real `Node` is
+ * structurally much larger than `AnchorLike`.
+ */
+export function adaptDocument(doc: Document): DocumentLike {
+  return {
+    createElement: (tag) => doc.createElement(tag),
+    body: {
+      appendChild: (node) => {
+        doc.body.appendChild(node as unknown as Node);
+      },
+      removeChild: (node) => {
+        doc.body.removeChild(node as unknown as Node);
+      },
+    },
+  };
+}
+
 export interface DownloadDeps {
   downloadUrl(path: string, opts?: { inline?: boolean }): string;
   zip(paths: string[], name?: string): Promise<Response>;
   anchor: AnchorDownloader;
   createObjectUrl(blob: Blob): string;
   revokeObjectUrl(url: string): void;
+}
+
+/** The `DownloadDeps` members a download from an object URL needs. */
+export type ObjectUrlDownloadDeps = Pick<DownloadDeps, "anchor" | "revokeObjectUrl">;
+
+/**
+ * Clicks a hidden anchor pointing at an object `url`, then releases that
+ * URL one task later. Clicking only *starts* the download: the browser
+ * reads the blob while handling the anchor's activation, which is not
+ * guaranteed to be finished when `click()` returns, so revoking in the
+ * same task risks a silently empty file. Waiting a task keeps the URL
+ * alive across the click without holding the blob any longer than that.
+ * The URL is released even when the click throws.
+ */
+export function downloadObjectUrl(
+  url: string,
+  filename: string,
+  deps: ObjectUrlDownloadDeps,
+): void {
+  try {
+    deps.anchor.click(url, filename);
+  } finally {
+    setTimeout(() => {
+      deps.revokeObjectUrl(url);
+    }, 0);
+  }
 }
 
 /**
@@ -93,7 +141,7 @@ const DEFAULT_ZIP_NAME = "download.zip";
 /**
  * Requests a zip of `paths` from the API, buffers it into a `Blob`, and
  * clicks a hidden anchor pointing at an object URL for it. The object URL
- * is always revoked, even if the click throws.
+ * is always released, even if the click throws.
  */
 export async function downloadMany(
   paths: string[],
@@ -106,10 +154,5 @@ export async function downloadMany(
   }
 
   const blob = await response.blob();
-  const url = deps.createObjectUrl(blob);
-  try {
-    deps.anchor.click(url, name ?? DEFAULT_ZIP_NAME);
-  } finally {
-    deps.revokeObjectUrl(url);
-  }
+  downloadObjectUrl(deps.createObjectUrl(blob), name ?? DEFAULT_ZIP_NAME, deps);
 }
