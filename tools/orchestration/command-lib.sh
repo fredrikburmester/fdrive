@@ -241,12 +241,30 @@ fdrive_initialize_logs() {
       return 1
     fi
   fi
-  # Step logs are diagnostic, not history: keep a bounded window so a recent failure is
-  # findable. Override with FDRIVE_LOG_RETENTION_DAYS; 0 disables pruning.
-  local retention=${FDRIVE_LOG_RETENTION_DAYS:-7}
+  # Step logs are diagnostic, not history: keep the newest FDRIVE_LOG_RETENTION_COUNT step
+  # directories so recent failures stay findable at a bounded size, independent of how fast
+  # they accumulate. 0 disables pruning; a malformed value prunes nothing.
+  local retention=${FDRIVE_LOG_RETENTION_COUNT:-300}
   if [[ $retention =~ ^[0-9]+$ && $retention -gt 0 ]]; then
-    find "$log_path" -maxdepth 1 -type d -name 'step.*' -mtime "+$retention" \
-      -exec rm -rf {} + 2>/dev/null || true
+    python3 - "$log_path" "$retention" <<'PRUNE' 2>/dev/null || true
+import os
+import shutil
+import sys
+
+directory, keep = sys.argv[1], int(sys.argv[2])
+entries = []
+with os.scandir(directory) as scan:
+    for entry in scan:
+        # follow_symlinks=False: a symlink named step.* is neither followed nor removed.
+        if entry.is_dir(follow_symlinks=False) and entry.name.startswith("step."):
+            try:
+                entries.append((entry.stat(follow_symlinks=False).st_mtime, entry.path))
+            except OSError:
+                continue
+entries.sort(reverse=True)
+for _, path in entries[keep:]:
+    shutil.rmtree(path, ignore_errors=True)
+PRUNE
   fi
   FDRIVE_LOG_DIRECTORY=$log_path
 }

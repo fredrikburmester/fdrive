@@ -16,9 +16,10 @@ not current instructions.
   `git clean -f`, `git push --force`, lockfile hand-edits and session links. Commit and merge
   paths are untouched, so `merge-chunk.sh` is unaffected. The same rules stay stated in
   WORKING.md so they are known before an attempt.
-- Step logs prune on a bounded window, `FDRIVE_LOG_RETENTION_DAYS` (default 7, `0` disables).
-  At the current rate that window settles near 28 MB; lower it or switch to a count cap if
-  that matters.
+- Step logs prune to a count cap, `FDRIVE_LOG_RETENTION_COUNT` (default 300, `0` disables,
+  malformed values prune nothing). An age window was tried first and did not bound size at
+  the rate these accumulate; the cap holds at roughly 4 MB regardless of rate. Covered by
+  `test-log-retention.sh`.
 - Added a `/fdrive-verify <profile>` skill that runs a profile in the current checkout. The
   name avoids a collision: a bundled Claude Code skill owns `/verify` and shadows a project
   skill of that name, which is not obvious from the failure. Agents may still call
