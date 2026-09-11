@@ -184,7 +184,7 @@ def process_file(
         db.record_ocr_log(conn, target.root_id, rel_path, size, mtime_ns, "too_big", None)
         return "too_big", False
 
-    fd, tmp_out = tempfile.mkstemp(suffix=".pdf")
+    fd, tmp_out = tempfile.mkstemp(prefix="._fdrive-ocr-", suffix=".pdf", dir=os.path.dirname(abs_path))
     os.close(fd)
     try:
         exit_code, stderr, timed_out = run_ocrmypdf(abs_path, tmp_out, settings.langs, settings.max_mb, timeout_seconds, jobs)
