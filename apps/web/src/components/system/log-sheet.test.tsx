@@ -37,6 +37,13 @@ const ENTRIES: SystemLogEntry[] = [
   },
 ];
 
+/** Runs the macrotask the deferred object-URL release is scheduled in. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function loaded(entries: SystemLogEntry[], extra: Record<string, unknown> = {}) {
   return {
     data: { pages: [{ subsystem: "indexer", entries }], pageParams: [undefined] },
@@ -119,11 +126,26 @@ describe("LogSheet", () => {
   });
 
   it("downloads a .txt and an .ndjson file through a temporary anchor", async () => {
-    const createObjectURL = vi.fn().mockReturnValue("blob:log");
+    let urls = 0;
+    const createObjectURL = vi.fn(() => {
+      urls += 1;
+      return `blob:log-${urls}`;
+    });
     const revokeObjectURL = vi.fn();
     Object.defineProperty(URL, "createObjectURL", { value: createObjectURL, configurable: true });
     Object.defineProperty(URL, "revokeObjectURL", { value: revokeObjectURL, configurable: true });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    /** What the anchor and its object URL looked like at the moment of the click. */
+    const clicked: { href: string; name: string; attached: boolean; revoked: unknown[] }[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push({
+        href: this.href,
+        name: this.download,
+        attached: document.body.contains(this),
+        revoked: revokeObjectURL.mock.calls.flat(),
+      });
+    });
     useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
     render(<LogSheet subsystem="thumbnails" />);
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
@@ -132,9 +154,25 @@ describe("LogSheet", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download .txt" }));
     fireEvent.click(screen.getByRole("button", { name: "Download .ndjson" }));
 
+    const today = new Date().toISOString().slice(0, 10);
     expect(click).toHaveBeenCalledTimes(2);
     expect(createObjectURL).toHaveBeenCalledTimes(2);
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:log");
+    expect(clicked.map((entry) => entry.name)).toEqual([
+      `fdrive-thumbnails-logs-${today}.txt`,
+      `fdrive-thumbnails-logs-${today}.ndjson`,
+    ]);
+    expect(clicked.map((entry) => entry.href)).toEqual(["blob:log-1", "blob:log-2"]);
+    // The anchor is in the document while it is clicked, and gone after.
+    expect(clicked.map((entry) => entry.attached)).toEqual([true, true]);
+    expect(document.body.querySelector("a[download]")).toBeNull();
+    // Its object URL outlives the click: revoking in the same task can
+    // leave the browser with nothing to save.
+    expect(clicked.map((entry) => entry.revoked)).toEqual([[], []]);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    await nextTask();
+
+    expect(revokeObjectURL.mock.calls).toEqual([["blob:log-1"], ["blob:log-2"]]);
     click.mockRestore();
   });
 

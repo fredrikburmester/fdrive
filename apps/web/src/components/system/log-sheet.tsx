@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/sheet";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useSystemLogs } from "@/lib/api/system-logs-queries";
+import { adaptDocument, createAnchorDownloader, downloadObjectUrl } from "@/lib/files/download";
 import {
   formatLogLines,
   formatLogTime,
@@ -72,14 +73,20 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
     }
   }
 
+  /**
+   * Hands the rendered log to the browser as a file through the shared
+   * anchor downloader, which attaches the anchor before clicking it and
+   * releases the object URL only after the browser has had the click.
+   */
   function download(format: "txt" | "ndjson") {
     const text = format === "txt" ? formatLogLines(entries).join("\n") : toNdjson(entries);
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = logFileName(subsystem, format, new Date());
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadObjectUrl(url, logFileName(subsystem, format, new Date()), {
+      anchor: createAnchorDownloader(adaptDocument(document)),
+      revokeObjectUrl: (objectUrl) => {
+        URL.revokeObjectURL(objectUrl);
+      },
+    });
   }
 
   return (
