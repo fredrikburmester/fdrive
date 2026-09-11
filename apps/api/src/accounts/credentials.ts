@@ -63,7 +63,10 @@ async function targetProvider(
 export async function verifyCredentials(
   deps: VerifiedCredentialDeps,
   input: VerifyCredentialInput,
-  opts: { allowDisabled?: boolean } = {},
+  opts: {
+    allowDisabled?: boolean;
+    beforeAuthenticate?: (providerId: string, username: string) => Promise<void>;
+  } = {},
 ): Promise<VerifiedCredential> {
   const target = await targetProvider(deps, input.providerId, opts.allowDisabled ?? false);
   const fields = target.module.credentialFields;
@@ -91,6 +94,8 @@ export async function verifyCredentials(
     throw new ApiHttpError("rate_limited", "too many failed login attempts", {
       retryAfterMs: Math.max(status.retryAfterMs ?? 0, ipStatus.retryAfterMs ?? 0),
     });
+
+  await opts.beforeAuthenticate?.(target.provider.id, usernameHint);
 
   let result: Awaited<ReturnType<ResolvedProvider["module"]["authenticate"]>>;
   try {

@@ -173,7 +173,14 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
             .returning();
           if (!updated) throw new IdentityLinksError("missing_identity");
           identity = updated;
-          if (input.revokeOtherSessions === true)
+          const [currentCredential] = await tx
+            .select()
+            .from(credentials)
+            .where(eq(credentials.identityId, identity.id));
+          const revoke =
+            input.compareCredential?.(identity.id, currentCredential ?? null) ??
+            input.revokeOtherSessions;
+          if (revoke === true)
             await tx.delete(sessions).where(eq(sessions.accountId, identity.accountId));
         } else {
           const [account] = await tx

@@ -1,6 +1,6 @@
 import { IDENTITY_HEADER, type IdentitySummary, type MeResponse } from "@fdrive/contracts";
 import { type StorageProvider, sameCredential } from "@fdrive/core";
-import type { Repos } from "@fdrive/db";
+import type { Credential, Repos } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
@@ -121,37 +121,11 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     };
   }
 
-  /**
-   * True when `stored` differs from the credential already kept for the
-   * identity `username` resolves to, or that credential is missing or
-   * unreadable: the user replaced their password, so sessions issued under
-   * the old one must not outlive this login. A first login has nothing to
-   * compare against and revokes nothing.
-   */
-  async function credentialReplaced(
-    verified: Awaited<ReturnType<typeof verifyCredentials>>,
-  ): Promise<boolean> {
-    const identity = await deps.repos.identities.findByProviderUsername(
-      verified.provider.id,
-      verified.externalUsername,
-    );
-    if (identity === null) return false;
-    const credential = await deps.repos.credentials.get(identity.id);
-    if (credential === null) return true;
-    try {
-      const previous = parseStoredCredential(open(deps.master, credential.ciphertext, identity.id));
-      return !sameCredential(verified.module.credentialFields, previous, verified.stored);
-    } catch {
-      // Undecryptable (rotated master key) or malformed: nothing usable was
-      // stored, so the verified credential is by definition a replacement.
-      return true;
-    }
-  }
-
   async function loginAt(
     input: LoginInput,
     candidateProviderId: string | null,
   ): Promise<LoginResult> {
+    let observed: Credential | null = null;
     const verified = await verifyCredentials(
       { repos: deps.repos, providers: deps.providers, limiter: deps.limiter, fetch: deps.fetch },
       {
@@ -159,12 +133,17 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
         credential: input.credential,
         ip: input.ip,
       },
-      { allowDisabled: candidateProviderId !== null },
+      {
+        allowDisabled: candidateProviderId !== null,
+        beforeAuthenticate: async (providerId, username) => {
+          const identity = await deps.repos.identities.findByProviderUsername(providerId, username);
+          observed = identity === null ? null : await deps.repos.credentials.get(identity.id);
+        },
+      },
     );
     const rawSessionId = generateSessionId();
     const idHash = hashSessionId(rawSessionId);
     const at = deps.clock();
-    const revokeOtherSessions = await credentialReplaced(verified);
     const result = await accountRepositoryCall(() =>
       deps.identityLinks.loginVerified({
         providerId: verified.provider.id,
@@ -175,7 +154,28 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
         },
         username: verified.externalUsername,
         at,
-        revokeOtherSessions,
+        compareCredential: (identityId, current) => {
+          if (current !== null) {
+            try {
+              const previous = parseStoredCredential(
+                open(deps.master, current.ciphertext, identityId),
+              );
+              if (sameCredential(verified.module.credentialFields, previous, verified.stored))
+                return false;
+            } catch {
+              // An unreadable credential is a replacement, provided it has not changed in flight.
+            }
+          }
+          const unchanged =
+            current === null
+              ? observed === null
+              : observed !== null &&
+                observed.identityId === identityId &&
+                Buffer.from(current.ciphertext).equals(Buffer.from(observed.ciphertext));
+          if (!unchanged)
+            throw new ApiHttpError("unauthorized", "credentials changed during sign-in; try again");
+          return true;
+        },
         sealCredential: (identityId) => ({
           ciphertext: seal(
             deps.master,

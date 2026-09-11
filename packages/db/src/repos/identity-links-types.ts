@@ -1,4 +1,4 @@
-import type { Identity, Session } from "./types.js";
+import type { Credential, Identity, Session } from "./types.js";
 
 export type IdentityLinksErrorCode =
   | "missing_account"
@@ -59,6 +59,8 @@ export interface LoginVerifiedInput
    * a login with replaced credentials must not leave older sessions alive.
    */
   readonly revokeOtherSessions?: boolean;
+  /** Called under identity/account locks, before any writes; may reject stale authentication. */
+  readonly compareCredential?: (identityId: string, current: Credential | null) => boolean;
 }
 export interface LoginVerifiedResult {
   readonly identity: Identity;

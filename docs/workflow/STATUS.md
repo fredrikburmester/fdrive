@@ -5,6 +5,16 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Issue #2: concurrency
+
+- #11 implemented: snapshot before upstream authentication; compare under persistence locks;
+  reject stale differing credentials without revoking newer sessions. Same-password concurrent
+  replacements retain both sessions. Memory fixture follows the same decision callback.
+- Deferred API regressions and real PostgreSQL concurrent replacement regression pass.
+  All application gates pass using reduced-concurrency coverage; integration passes.
+- Next commits, in order: provider races (#8–10), token/cache races (#3), setup cleanup (#7).
+  Acceptance criteria: [concurrency plan](../plans/CONCURRENCY.md).
+
 ## Issue #2: quick fixes
 
 - Items 2, 5, 12 and 13 implemented locally: uploads forward request cancellation;
@@ -19,7 +29,7 @@ not current instructions.
   (`.fdrive-workflow/logs/step.OvSddD/`). No gates or timeouts changed.
 - Integration passes against disposable SFTPGo/PostgreSQL. Storage browser tests pass
   with `E2E_DEV=1`, including the new leftover-provider cleanup regression. Tooling
-  coverage and workflow verification pass. Changes uncommitted on `main`.
+  coverage and workflow verification pass. Committed and pushed as `7b097d2`.
 
 ## Issue #2: descendant move/copy guard
 

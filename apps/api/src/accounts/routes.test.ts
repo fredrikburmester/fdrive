@@ -627,3 +627,52 @@ it("unlinking re-authenticates the signed-in login: missing or wrong owner passw
   expect(ok.status).toBe(200);
   expect(await h.repos.identities.listByAccount(a.me.account.id)).toHaveLength(1);
 });
+
+it.each(["alice-pass", "alice-rotated"])(
+  "handles a delayed verified login with %s after a password replacement",
+  async (delayedPassword) => {
+    const h = accountsHarness();
+    const originalSession = await h.login();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const original = h.client.login.bind(h.client);
+    let hold = true;
+    vi.spyOn(h.client, "login").mockImplementation(async (input) => {
+      const result = await original({ ...input, password: "alice-pass" });
+      if (hold) {
+        hold = false;
+        entered();
+        await gate;
+      }
+      return result;
+    });
+    const login = (password: string) =>
+      h.call(ROUTES.auth.login, {
+        method: "POST",
+        body: { credential: { username: "alice", password } },
+      });
+    const delayed = login(delayedPassword);
+    await started;
+    const fresh = await login("alice-rotated");
+    expect(fresh.status).toBe(200);
+    release();
+    const late = await delayed;
+    expect(late.status).toBe(delayedPassword === "alice-pass" ? 401 : 200);
+    expect((await h.call(ROUTES.auth.me, { cookie: cookieFrom(fresh) })).status).toBe(200);
+    expect((await h.call(ROUTES.auth.me, { cookie: originalSession.cookie })).status).toBe(401);
+    if (late.status === 200)
+      expect((await h.call(ROUTES.auth.me, { cookie: cookieFrom(late) })).status).toBe(200);
+    const stored = await h.repos.credentials.get(originalSession.me.activeIdentityId);
+    if (stored === null) throw new Error("missing credential");
+    expect(
+      JSON.parse(new TextDecoder().decode(open(h.master, stored.ciphertext, stored.identityId)))
+        .password,
+    ).toBe("alice-rotated");
+  },
+);
