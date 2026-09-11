@@ -47,6 +47,7 @@ import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
 import { createMetadataService } from "./metadata/service.js";
+import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { allowsOfficeEdit } from "./office/edit-policy.ts";
 import { WopiError } from "./office/errors.ts";
@@ -762,9 +763,14 @@ export async function composeApp(
 
   // Mounted directly on the top-level app, outside `/api/v1`: the MCP
   // endpoint is bearer- (or path-token-) authenticated, not session/CSRF
-  // guarded, and `resolveMcpPrincipal` never touches the session cookie.
+  // guarded, and `authenticateMcpRequest` never touches the session cookie.
+  // Its failed-authentication limiter is its own instance, so a flood of
+  // anonymous MCP attempts cannot exhaust the capacity login and setup
+  // share, or the other way round.
   registerMcpRoutes(app, {
     resolveToken: resolveTokenPrincipal,
+    limiter: createLoginLimiter({ clock }),
+    clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
     toolDeps: {
       indexQueries,
       searchService,
