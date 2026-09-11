@@ -318,6 +318,16 @@ export interface RecentRepo {
   prune(identityId: string, keep: number): Promise<void>;
 }
 
+/**
+ * Coordinates path changes across every metadata table. Implementations must
+ * apply each operation atomically: callers either observe all metadata moved
+ * or deleted, or none of it.
+ */
+export interface MetadataPathRepo {
+  movePrefix(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
+}
+
 /** Severity of one `SystemEvent`, ordered `info` < `warn` < `error`. */
 export type SystemEventLevel = "info" | "warn" | "error";
 
@@ -392,5 +402,6 @@ export interface Repos {
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
   readonly recents: RecentRepo;
+  readonly metadataPaths: MetadataPathRepo;
   readonly systemEvents: SystemEventRepo;
 }

@@ -148,12 +148,7 @@ describe("metadata prefix operations", () => {
         `${sibling}/child`,
       ]);
 
-      await Promise.all([
-        repos.fileTags.movePrefix(identity.id, source, target, true),
-        repos.favorites.movePrefix(identity.id, source, target, true),
-        repos.folderViews.movePrefix(identity.id, source, target, true),
-        repos.recents.movePrefix(identity.id, source, target, true),
-      ]);
+      await repos.metadataPaths.movePrefix(identity.id, source, target, true);
 
       const expected = [target, `${target}/child`, sibling, `${sibling}/child`].sort();
       expect(await metadataPaths(identity.id)).toEqual({
@@ -196,12 +191,7 @@ describe("metadata prefix operations", () => {
       .set({ openedAt: destinationOpenedAt })
       .where(and(eq(recents.identityId, identity.id), eq(recents.path, targetChild)));
 
-    await Promise.all([
-      repos.fileTags.movePrefix(identity.id, source, target, true),
-      repos.favorites.movePrefix(identity.id, source, target, true),
-      repos.folderViews.movePrefix(identity.id, source, target, true),
-      repos.recents.movePrefix(identity.id, source, target, true),
-    ]);
+    await repos.metadataPaths.movePrefix(identity.id, source, target, true);
 
     expect(await metadataPaths(identity.id)).toEqual({
       fileTags: [targetChild],
@@ -418,12 +408,7 @@ describe("metadata prefix operations", () => {
       .set({ updatedAt: pinnedAt })
       .where(and(eq(folderViews.identityId, identity.id), eq(folderViews.path, path)));
 
-    await Promise.all([
-      repos.fileTags.movePrefix(identity.id, path, path, true),
-      repos.favorites.movePrefix(identity.id, path, path, true),
-      repos.folderViews.movePrefix(identity.id, path, path, true),
-      repos.recents.movePrefix(identity.id, path, path, true),
-    ]);
+    await repos.metadataPaths.movePrefix(identity.id, path, path, true);
 
     expect(await metadataPaths(identity.id)).toEqual({
       fileTags: [path],
@@ -445,12 +430,7 @@ describe("metadata prefix operations", () => {
         `${sibling}/child`,
       ]);
 
-      await Promise.all([
-        repos.fileTags.deletePrefix(identity.id, source, true),
-        repos.favorites.deletePrefix(identity.id, source, true),
-        repos.folderViews.deletePrefix(identity.id, source, true),
-        repos.recents.deletePrefix(identity.id, source, true),
-      ]);
+      await repos.metadataPaths.deletePrefix(identity.id, source, true);
 
       const expected = [sibling, `${sibling}/child`].sort();
       expect(await metadataPaths(identity.id)).toEqual({
@@ -461,6 +441,58 @@ describe("metadata prefix operations", () => {
       });
     },
   );
+
+  it("rolls back every metadata table when the final table fails", async () => {
+    const { account, identity, repos } = await createIdentity("atomic-rollback");
+    const source = "/source";
+    await seedMetadataPaths(identity.id, account.id, [source]);
+    await db.execute(sql`
+      create function "app"."test_fail_metadata_path"() returns trigger
+      language plpgsql as $$
+      begin
+        raise exception 'forced metadata failure';
+      end
+      $$
+    `);
+    await db.execute(sql`
+      create trigger "test_fail_metadata_path_update"
+      before update on "app"."recents"
+      for each row execute function "app"."test_fail_metadata_path"()
+    `);
+    await db.execute(sql`
+      create trigger "test_fail_metadata_path_delete"
+      before delete on "app"."recents"
+      for each row execute function "app"."test_fail_metadata_path"()
+    `);
+
+    try {
+      await expect(
+        repos.metadataPaths.movePrefix(identity.id, source, "/target", false),
+      ).rejects.toThrow();
+      expect(await metadataPaths(identity.id)).toEqual({
+        fileTags: [source],
+        favorites: [source],
+        folderViews: [source],
+        recents: [source],
+      });
+
+      await expect(repos.metadataPaths.deletePrefix(identity.id, source, false)).rejects.toThrow();
+      expect(await metadataPaths(identity.id)).toEqual({
+        fileTags: [source],
+        favorites: [source],
+        folderViews: [source],
+        recents: [source],
+      });
+    } finally {
+      await db.execute(sql`
+        drop trigger if exists "test_fail_metadata_path_update" on "app"."recents"
+      `);
+      await db.execute(sql`
+        drop trigger if exists "test_fail_metadata_path_delete" on "app"."recents"
+      `);
+      await db.execute(sql`drop function if exists "app"."test_fail_metadata_path"()`);
+    }
+  });
 });
 
 // Office file rows go with their provider: a provider with no logins but

@@ -8,6 +8,7 @@ import type {
   FolderViewRepo,
   FolderViewSort,
   IdentityRepo,
+  MetadataPathRepo,
   RecentRepo,
   TagRepo,
 } from "@fdrive/db";
@@ -42,6 +43,7 @@ export interface MetadataServiceDeps {
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
   readonly identities: Pick<IdentityRepo, "listByAccount">;
+  readonly metadataPaths: MetadataPathRepo;
   readonly recents: RecentRepo;
 }
 
@@ -109,9 +111,9 @@ export interface MetadataService {
   resetFolderViews(accountId: string): Promise<void>;
   listRecents(identityId: string, limit?: number): Promise<MetadataRecentItem[]>;
   touchRecent(identityId: string, path: string): Promise<void>;
-  /** Rewrites tag, favorite, and recent paths after a move or rename made through fdrive or seen on disk. */
+  /** Atomically rewrites all path-keyed metadata after a move made through fdrive or seen on disk. */
   onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
-  /** Drops tag, favorite, and recent rows after a delete made through fdrive or seen on disk. */
+  /** Atomically drops all path-keyed metadata after a delete made through fdrive or seen on disk. */
   onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
    * Drops only the recent-files entries after a delete that moved the item
@@ -245,21 +247,11 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
     },
 
     async onMoved(identityId, oldPath, newPath, isDir) {
-      await Promise.all([
-        deps.fileTags.movePrefix(identityId, oldPath, newPath, isDir),
-        deps.favorites.movePrefix(identityId, oldPath, newPath, isDir),
-        deps.folderViews.movePrefix(identityId, oldPath, newPath, isDir),
-        deps.recents.movePrefix(identityId, oldPath, newPath, isDir),
-      ]);
+      await deps.metadataPaths.movePrefix(identityId, oldPath, newPath, isDir);
     },
 
     async onDeleted(identityId, path, isDir) {
-      await Promise.all([
-        deps.fileTags.deletePrefix(identityId, path, isDir),
-        deps.favorites.deletePrefix(identityId, path, isDir),
-        deps.folderViews.deletePrefix(identityId, path, isDir),
-        deps.recents.deletePrefix(identityId, path, isDir),
-      ]);
+      await deps.metadataPaths.deletePrefix(identityId, path, isDir);
     },
 
     async onTrashed(identityId, path, isDir) {

@@ -18,6 +18,7 @@ import type {
   FolderViewSort,
   Identity,
   IdentityRepo,
+  MetadataPathRepo,
   Provider,
   ProviderRepo,
   Recent,
@@ -443,6 +444,8 @@ function createMemoryTagRepo(ids: () => string, onDeleted: (tagId: string) => vo
 interface MemoryFileTagRepo extends FileTagRepo {
   /** Removes `tagId` from every path it is assigned to, across every identity. */
   removeTag(tagId: string): void;
+  snapshot(identityId: string): Map<string, Set<string>> | undefined;
+  restore(identityId: string, snapshot: Map<string, Set<string>> | undefined): void;
 }
 
 function createMemoryFileTagRepo(): MemoryFileTagRepo {
@@ -534,10 +537,25 @@ function createMemoryFileTagRepo(): MemoryFileTagRepo {
         }
       }
     },
+    snapshot(identityId) {
+      const byPath = byIdentity.get(identityId);
+      return byPath === undefined
+        ? undefined
+        : new Map([...byPath].map(([path, tagIds]) => [path, new Set(tagIds)]));
+    },
+    restore(identityId, snapshot) {
+      if (snapshot === undefined) byIdentity.delete(identityId);
+      else byIdentity.set(identityId, snapshot);
+    },
   };
 }
 
-function createMemoryFavoriteRepo(): FavoriteRepo {
+interface MemoryFavoriteRepo extends FavoriteRepo {
+  snapshot(identityId: string): Map<string, Favorite> | undefined;
+  restore(identityId: string, snapshot: Map<string, Favorite> | undefined): void;
+}
+
+function createMemoryFavoriteRepo(): MemoryFavoriteRepo {
   const byIdentity = new Map<string, Map<string, Favorite>>();
 
   function favoritesFor(identityId: string): Map<string, Favorite> {
@@ -606,10 +624,25 @@ function createMemoryFavoriteRepo(): FavoriteRepo {
         }
       }
     },
+    snapshot(identityId) {
+      const byPath = byIdentity.get(identityId);
+      return byPath === undefined
+        ? undefined
+        : new Map([...byPath].map(([path, favorite]) => [path, { ...favorite }]));
+    },
+    restore(identityId, snapshot) {
+      if (snapshot === undefined) byIdentity.delete(identityId);
+      else byIdentity.set(identityId, snapshot);
+    },
   };
 }
 
-function createMemoryFolderViewRepo(): FolderViewRepo {
+interface MemoryFolderViewRepo extends FolderViewRepo {
+  snapshot(identityId: string): Map<string, FolderView> | undefined;
+  restore(identityId: string, snapshot: Map<string, FolderView> | undefined): void;
+}
+
+function createMemoryFolderViewRepo(): MemoryFolderViewRepo {
   const byIdentity = new Map<string, Map<string, FolderView>>();
 
   function viewsFor(identityId: string): Map<string, FolderView> {
@@ -669,10 +702,30 @@ function createMemoryFolderViewRepo(): FolderViewRepo {
         if (matchesPrefix(existingPath, path, isDir)) byPath.delete(existingPath);
       }
     },
+    snapshot(identityId) {
+      const byPath = byIdentity.get(identityId);
+      return byPath === undefined
+        ? undefined
+        : new Map(
+            [...byPath].map(([path, view]) => [
+              path,
+              { ...view, sort: view.sort === null ? null : { ...view.sort } },
+            ]),
+          );
+    },
+    restore(identityId, snapshot) {
+      if (snapshot === undefined) byIdentity.delete(identityId);
+      else byIdentity.set(identityId, snapshot);
+    },
   };
 }
 
-function createMemoryRecentRepo(): RecentRepo {
+interface MemoryRecentRepo extends RecentRepo {
+  snapshot(identityId: string): Map<string, Recent> | undefined;
+  restore(identityId: string, snapshot: Map<string, Recent> | undefined): void;
+}
+
+function createMemoryRecentRepo(): MemoryRecentRepo {
   const byIdentity = new Map<string, Map<string, Recent>>();
 
   function recentsFor(identityId: string): Map<string, Recent> {
@@ -740,6 +793,86 @@ function createMemoryRecentRepo(): RecentRepo {
         byPath.delete(recent.path);
       }
     },
+    snapshot(identityId) {
+      const byPath = byIdentity.get(identityId);
+      return byPath === undefined
+        ? undefined
+        : new Map(
+            [...byPath].map(([path, recent]) => [
+              path,
+              { ...recent, openedAt: new Date(recent.openedAt) },
+            ]),
+          );
+    },
+    restore(identityId, snapshot) {
+      if (snapshot === undefined) byIdentity.delete(identityId);
+      else byIdentity.set(identityId, snapshot);
+    },
+  };
+}
+
+function createMemoryMetadataPathRepo(repos: {
+  fileTags: MemoryFileTagRepo;
+  favorites: MemoryFavoriteRepo;
+  folderViews: MemoryFolderViewRepo;
+  recents: MemoryRecentRepo;
+}): MetadataPathRepo {
+  const tails = new Map<string, Promise<void>>();
+
+  async function atomic(identityId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = tails.get(identityId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    tails.set(identityId, current);
+    await previous;
+
+    const snapshots = {
+      fileTags: repos.fileTags.snapshot(identityId),
+      favorites: repos.favorites.snapshot(identityId),
+      folderViews: repos.folderViews.snapshot(identityId),
+      recents: repos.recents.snapshot(identityId),
+    };
+    try {
+      await operation();
+    } catch (error) {
+      repos.fileTags.restore(identityId, snapshots.fileTags);
+      repos.favorites.restore(identityId, snapshots.favorites);
+      repos.folderViews.restore(identityId, snapshots.folderViews);
+      repos.recents.restore(identityId, snapshots.recents);
+      throw error;
+    } finally {
+      release();
+      if (tails.get(identityId) === current) tails.delete(identityId);
+    }
+  }
+
+  return {
+    movePrefix(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return Promise.resolve();
+      return atomic(identityId, async () => {
+        // These in-memory methods mutate synchronously before returning their
+        // promises. Invoke every one in this turn so a microtask reader cannot
+        // observe a successful operation between table updates.
+        await Promise.all([
+          repos.fileTags.movePrefix(identityId, oldPath, newPath, isDir),
+          repos.favorites.movePrefix(identityId, oldPath, newPath, isDir),
+          repos.folderViews.movePrefix(identityId, oldPath, newPath, isDir),
+          repos.recents.movePrefix(identityId, oldPath, newPath, isDir),
+        ]);
+      });
+    },
+    deletePrefix(identityId, path, isDir) {
+      return atomic(identityId, async () => {
+        await Promise.all([
+          repos.fileTags.deletePrefix(identityId, path, isDir),
+          repos.favorites.deletePrefix(identityId, path, isDir),
+          repos.folderViews.deletePrefix(identityId, path, isDir),
+          repos.recents.deletePrefix(identityId, path, isDir),
+        ]);
+      });
+    },
   };
 }
 
@@ -798,7 +931,10 @@ function createMemorySystemEventRepo(): SystemEventRepo {
 export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const ids = opts.ids ?? randomUUID;
   const fileTags = createMemoryFileTagRepo();
+  const favorites = createMemoryFavoriteRepo();
+  const folderViews = createMemoryFolderViewRepo();
   const identities = createMemoryIdentityRepo(ids);
+  const recents = createMemoryRecentRepo();
 
   return {
     providers: createMemoryProviderRepo(ids, (providerId) =>
@@ -812,9 +948,10 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     apiTokens: createMemoryApiTokenRepo(ids),
     tags: createMemoryTagRepo(ids, (tagId) => fileTags.removeTag(tagId)),
     fileTags,
-    favorites: createMemoryFavoriteRepo(),
-    folderViews: createMemoryFolderViewRepo(),
-    recents: createMemoryRecentRepo(),
+    favorites,
+    folderViews,
+    recents,
+    metadataPaths: createMemoryMetadataPathRepo({ fileTags, favorites, folderViews, recents }),
     systemEvents: createMemorySystemEventRepo(),
   };
 }
