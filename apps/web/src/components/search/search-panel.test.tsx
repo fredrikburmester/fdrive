@@ -101,7 +101,7 @@ function renderPanel(client: QueryClient) {
   );
 }
 
-it("defaults to current login, labels account duplicates and partial failures without thumbnails", async () => {
+it("defaults to current login, labels account duplicates and omissions without hiding results", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "same",
@@ -122,6 +122,7 @@ it("defaults to current login, labels account duplicates and partial failures wi
     },
     degraded: false,
     unavailable: false,
+    partial: true,
     tookMs: 1,
     unavailableIdentityIds: ["two"],
   });
@@ -137,7 +138,8 @@ it("defaults to current login, labels account duplicates and partial failures wi
   await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(2));
   expect(screen.getByText("ada · Main")).toBeDefined();
   expect(screen.getByText("bob · Other")).toBeDefined();
-  expect(screen.getByRole("status").textContent).toContain("Search unavailable for bob · Other");
+  expect(screen.getByText(/Search unavailable for bob · Other/)).toBeDefined();
+  expect(screen.getByText("Some text results omitted.")).toBeDefined();
   expect(document.querySelector("img")).toBeNull();
 });
 
@@ -740,7 +742,30 @@ it("starts visual search when transient status recovery enables images", async (
   await waitFor(() => expect(searchImages).toHaveBeenCalledWith("sunset", { limit: 24 }));
 });
 
-it("renders partial results notice even when visual hits count is zero", async () => {
+it("renders text partial notice without hiding usable results", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    partial: true,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "same" },
+  });
+
+  await waitFor(() => expect(screen.getByText("Some text results omitted.")).toBeDefined());
+  expect(screen.getByText("same.txt")).toBeDefined();
+});
+
+it("renders visual partial notice even when visual hits count is zero", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
@@ -769,7 +794,44 @@ it("renders partial results notice even when visual hits count is zero", async (
   const input = screen.getByPlaceholderText("Search files, content, and images...");
   fireEvent.change(input, { target: { value: "sunset" } });
 
-  await waitFor(() => expect(screen.getByText("Some results omitted.")).toBeDefined());
+  await waitFor(() => expect(screen.getByText("Some visual results omitted.")).toBeDefined());
+  expect(screen.getByText("same.txt")).toBeDefined();
+});
+
+it("identifies both result sources when text and visual search are partial", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: true,
+  });
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "sunset",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    partial: true,
+    tookMs: 1,
+  });
+  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
+    query: "sunset",
+    hits: [],
+    partial: true,
+    unavailable: false,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "sunset" },
+  });
+
+  await waitFor(() =>
+    expect(screen.getByText("Some text and visual results omitted.")).toBeDefined(),
+  );
   expect(screen.getByText("same.txt")).toBeDefined();
 });
 
@@ -942,7 +1004,33 @@ it("uses qualified no-results wording when visual results are partial", async ()
   await waitFor(() =>
     expect(screen.getByText('No results found in checked candidates for "nomatch".')).toBeDefined(),
   );
-  expect(screen.getByText("Some results omitted.")).toBeDefined();
+  expect(screen.getByText("Some visual results omitted.")).toBeDefined();
+});
+
+it("does not describe a partial empty text response as exhaustive", async () => {
+  stubMatchMedia(false);
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "nomatch",
+    sections: { folders: [], files: [], content: [] },
+    degraded: false,
+    unavailable: false,
+    partial: true,
+    tookMs: 1,
+  });
+
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "nomatch" },
+  });
+
+  await waitFor(() =>
+    expect(screen.getByText('No results found in checked candidates for "nomatch".')).toBeDefined(),
+  );
+  expect(screen.getByText("Some text results omitted.")).toBeDefined();
+  expect(screen.queryByText('No results for "nomatch".')).toBeNull();
 });
 
 it("renders visible File type label in the filter bar", async () => {

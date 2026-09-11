@@ -61,6 +61,7 @@ it("keeps same-path favorites and search hits separate by identity", async () =>
     sections: { folders: [], files: [hit()], content: [hit()] },
     degraded: identity.id === h.a,
     unavailable: false,
+    ...(identity.id === h.a ? { partial: true } : {}),
     tookMs: 1,
   }));
   const result = AccountSearchResponse.parse(
@@ -70,6 +71,7 @@ it("keeps same-path favorites and search hits separate by identity", async () =>
   expect(result.sections.content).toHaveLength(2);
   expect(result.degraded).toBe(true);
   expect(result.unavailable).toBe(false);
+  expect(result.partial).toBe(true);
   expect(search.mock.calls.every(([identity]) => identity.accountId === h.accountId)).toBe(true);
 });
 it("reports unavailable identities and omits their cached content on permission failure", async () => {
@@ -165,6 +167,7 @@ it("caps and deduplicates sections, sorts deterministically, and bounds favorite
   expect(result.sections.files).toHaveLength(50);
   expect(result.sections.content).toHaveLength(50);
   expect(result.sections.files[0]?.score).toBe(2);
+  expect(result.partial).toBe(true);
   expect(new Set(result.sections.files.map((item) => `${item.identityId}:${item.path}`)).size).toBe(
     50,
   );
@@ -185,6 +188,7 @@ it("sorts and authorizes folder results and reports no usable search scope", asy
     await (await h.call(`${ROUTES.account.search}?q=a`, { cookie: h.cookie })).json(),
   );
   expect(response.sections.folders.map((item) => item.path)).toEqual(["/a", "/a", "/z", "/z"]);
+  expect(response.partial).toBeUndefined();
   vi.spyOn(h.deps, "searchForIdentity").mockResolvedValue({
     query: "a",
     sections: { folders: [], files: [hit()], content: [hit()] },

@@ -32,6 +32,11 @@ export const AccountFavoritesResponse = z.object({
   unavailableIdentityIds: z.array(AccountIdentityId),
 });
 export type AccountFavoritesResponse = z.infer<typeof AccountFavoritesResponse>;
+/**
+ * Account-wide text search. `partial`, when true, means at least one identity
+ * returned partial results or the account-wide result bound omitted matches.
+ * Unavailable identities are reported separately in `unavailableIdentityIds`.
+ */
 export const AccountSearchResponse = z.object({
   query: z.string(),
   sections: z.object({
@@ -41,6 +46,7 @@ export const AccountSearchResponse = z.object({
   }),
   degraded: z.boolean(),
   unavailable: z.boolean(),
+  partial: z.boolean().optional(),
   tookMs: z.number().int().min(0),
   unavailableIdentityIds: z.array(AccountIdentityId),
 });

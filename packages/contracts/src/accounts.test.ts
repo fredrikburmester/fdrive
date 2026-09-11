@@ -57,8 +57,9 @@ it("requires identity provenance and exposes partial-result failures", () => {
       sections: { folders: [], files: [], content: [] },
       degraded: false,
       unavailable: true,
+      partial: true,
       tookMs: 0,
       unavailableIdentityIds: [identityId],
-    }).unavailableIdentityIds,
-  ).toEqual([identityId]);
+    }),
+  ).toMatchObject({ unavailableIdentityIds: [identityId], partial: true });
 });

@@ -1,14 +1,20 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 
 const SEARCH_INPUT_PLACEHOLDER = "Search files, content, and images...";
 
+async function openSearch(page: Page): Promise<void> {
+  // The shortcut listener exists only after the file shell has hydrated.
+  await page.getByRole("button", { name: "New", exact: true }).waitFor();
+  await page.keyboard.press("Control+k");
+}
+
 test("Cmd+K opens the panel and a filename query lists readme.md under Files", async ({ page }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -27,7 +33,7 @@ test("a content query for a word in the readme shows a highlighted content match
 }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("seeded");
 
@@ -35,10 +41,61 @@ test("a content query for a word in the readme shows a highlighted content match
   await expect(dialog.locator("mark", { hasText: "seeded" }).first()).toBeVisible();
 });
 
+test("a partial text response explains omissions and keeps returned results usable", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/search/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ available: true, semantic: true, images: false }),
+    });
+  });
+  await page.route(/\/api\/v1\/search(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        query: "partial-result",
+        sections: {
+          folders: [],
+          files: [
+            {
+              name: "partial-result.txt",
+              path: "/docs/partial-result.txt",
+              kind: "file",
+              ext: ".txt",
+              mime: "text/plain",
+              size: 42,
+              modifiedAt: "2026-01-01T00:00:00Z",
+              score: 1,
+              snippets: [],
+              hasThumbnail: false,
+            },
+          ],
+          content: [],
+        },
+        degraded: false,
+        unavailable: false,
+        partial: true,
+        tookMs: 1,
+      }),
+    });
+  });
+
+  await page.goto("/files");
+  await openSearch(page);
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("partial-result");
+
+  await expect(dialog.getByText("Some text results omitted.")).toBeVisible();
+  await expect(dialog.getByText("partial-result.txt", { exact: true })).toBeVisible();
+});
+
 test("Enter opens the preview", async ({ page }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
   await expect(dialog.getByText("readme.md").first()).toBeVisible();
@@ -58,7 +115,7 @@ test("clicking a Files result's reveal button opens its enclosing folder with it
 }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
 
@@ -75,7 +132,7 @@ test("switching the Enter preference to Enclosing folder makes Enter reveal inst
 }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
   await expect(dialog.getByText("readme.md").first()).toBeVisible();
@@ -95,7 +152,7 @@ test("switching the Enter preference to Enclosing folder makes Enter reveal inst
 test("reloading after a reveal shows nothing selected", async ({ page }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
 
@@ -115,7 +172,7 @@ test("a type filter other than Any type hides the Folders section, even though t
 }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
 
@@ -170,7 +227,7 @@ test("a long folder name and file path in a result row never spill past the sear
     item: recentItem,
   });
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -208,7 +265,7 @@ test("search dialog on desktop is roughly 800px wide and bounded in viewport hei
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -226,7 +283,7 @@ test("search panel presents unified filters with no manual Images mode toggle", 
 }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -241,7 +298,7 @@ test("search dialog stays bounded with accessible footer on a short 800x600 disp
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -265,7 +322,7 @@ test("search panel renders as full-screen sheet on 700px mobile viewport", async
   await page.setViewportSize({ width: 700, height: 800 });
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -284,7 +341,7 @@ test("search panel renders as full-screen sheet on 700px mobile viewport", async
 test("search panel presents visible File type label in filter bar", async ({ page }) => {
   await page.goto("/files");
 
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -356,7 +413,7 @@ test("a startup-unavailable query recovers without reloading the page", async ({
   });
 
   await page.goto("/files");
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("recovered");
 
@@ -441,7 +498,7 @@ test("concurrent search displays text and visual matches without manual toggle, 
   });
 
   await page.goto("/files");
-  await page.keyboard.press("Control+k");
+  await openSearch(page);
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
 
@@ -478,7 +535,7 @@ test.describe("scoping", () => {
     // guarantees the listener is already attached.
     await expect(page.getByRole("button", { name: "Search" })).toBeEnabled();
 
-    await page.keyboard.press("Control+k");
+    await openSearch(page);
     const dialog = page.getByRole("dialog");
     await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
 
