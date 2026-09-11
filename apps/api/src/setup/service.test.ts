@@ -37,9 +37,12 @@ const ME: MeResponse = {
   isAdmin: false,
 };
 
-function buildAuthService(loginResult: LoginResult): Pick<AuthService, "loginCandidate" | "me"> {
+function buildAuthService(
+  loginResult: LoginResult,
+): Pick<AuthService, "loginCandidate" | "me" | "logout"> {
   return {
     loginCandidate: vi.fn().mockResolvedValue(loginResult),
+    logout: vi.fn().mockResolvedValue(undefined),
     me: vi.fn().mockResolvedValue({ ...loginResult.me, isAdmin: true }),
   };
 }
@@ -128,6 +131,7 @@ describe("createSetupService: complete", () => {
         ip: "127.0.0.1",
       },
       provider?.id,
+      "setup.owner.v1",
     );
     expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
     expect(result.sessionId).toBe("session-1");
@@ -158,6 +162,7 @@ describe("createSetupService: complete", () => {
     expect(h.authService.loginCandidate).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: pinned.id }),
       pinned.id,
+      "setup.owner.v1",
     );
   });
 
@@ -188,6 +193,7 @@ describe("createSetupService: complete", () => {
         credential: { username: "alice", password: "hunter2", otp: "123456" },
       }),
       expect.any(String),
+      "setup.owner.v1",
     );
   });
 
@@ -211,25 +217,29 @@ describe("createSetupService: complete", () => {
     expect(await h.repos.providers.list()).toEqual([]);
   });
 
-  it("keeps setup required after a rejected candidate login, so the owner can retry", async () => {
-    const h = harness();
-    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
-      new ApiHttpError("unauthorized", "invalid username or password"),
-    );
-    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
-      kind: "unauthorized",
-    });
-    expect(await h.repos.providers.list()).toEqual([]);
-    expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
-    expect(h.setAdmin).not.toHaveBeenCalled();
-    await h.service.complete(COMPLETE_INPUT);
-    expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
-  });
+  it.each(["unauthorized", "conflict"] as const)(
+    "cleans a newly created candidate after %s",
+    async (kind) => {
+      const h = harness();
+      vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
+        new ApiHttpError(kind, "candidate rejected"),
+      );
+      await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
+        kind,
+      });
+      expect(await h.repos.providers.list()).toEqual([]);
+      expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
+      expect(h.setAdmin).not.toHaveBeenCalled();
+      await h.service.complete(COMPLETE_INPUT);
+      expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
+    },
+  );
 
   it("resumes the verified owner's pending claim after restart", async () => {
     const h = harness();
     h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
     await expect(h.service.complete(COMPLETE_INPUT)).rejects.toThrow("interrupted");
+    expect(h.authService.logout).toHaveBeenCalledWith("session-1");
     const restarted = createSetupService({
       providers: h.providers,
       authService: h.authService,
@@ -277,4 +287,13 @@ describe("createSetupService: complete", () => {
     expect(h.setAdmin).toHaveBeenCalledTimes(1);
     expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
   });
+});
+
+it("preserves the setup error and resumable claim when session cleanup also fails", async () => {
+  const h = harness();
+  h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
+  vi.mocked(h.authService.logout).mockRejectedValueOnce(new Error("database unavailable"));
+  await expect(h.service.complete(COMPLETE_INPUT)).rejects.toThrow("interrupted");
+  expect(h.authService.logout).toHaveBeenCalledWith("session-1");
+  expect((await h.service.status()).required).toBe(true);
 });

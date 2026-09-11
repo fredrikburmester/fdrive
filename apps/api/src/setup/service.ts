@@ -26,7 +26,7 @@ export interface CreateSetupServiceDeps {
     ProviderService,
     "list" | "enabled" | "create" | "update" | "remove" | "probe"
   >;
-  readonly authService: Pick<AuthService, "loginCandidate" | "me">;
+  readonly authService: Pick<AuthService, "loginCandidate" | "me" | "logout">;
   readonly accounts: Pick<AccountRepo, "setAdmin">;
   readonly settings: SettingsRepo;
   /** Whether `SFTPGO_URL` is set by environment; surfaced on `status()` for the setup UI. */
@@ -170,9 +170,13 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
       };
       let loginResult: LoginResult;
       try {
-        // Upstream authentication and provider-bound credential creation
-        // against the candidate, which is not enabled for anyone else yet.
-        loginResult = await deps.authService.loginCandidate(loginInput, candidate.id);
+        // Claim ownership in the same transaction as login persistence. A loser
+        // rolls back its auth records before cleanup of any provider created here.
+        loginResult = await deps.authService.loginCandidate(
+          loginInput,
+          candidate.id,
+          SETUP_OWNER_KEY,
+        );
       } catch (error) {
         if (created !== null) {
           await deps.providers.remove(created.id).catch(() => undefined);
@@ -180,47 +184,53 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
         throw error;
       }
 
-      const ownerInput = { accountId: loginResult.me.account.id, baseUrl };
-      const desiredClaim: SetupOwnerState = { version: 1, state: "claiming", ...ownerInput };
-      const claimed = await settings.compareAndSet(SETUP_OWNER_KEY, null, desiredClaim);
-      if (!claimed) {
-        const existingClaim = await currentClaim();
-        const isResumed =
-          existingClaim?.state === "claiming" &&
-          existingClaim.accountId === ownerInput.accountId &&
-          existingClaim.baseUrl === ownerInput.baseUrl;
-        if (!isResumed) {
-          throw new ApiHttpError(
-            "conflict",
-            "this server has already been claimed by another owner",
-          );
+      try {
+        const ownerInput = { accountId: loginResult.me.account.id, baseUrl };
+        const desiredClaim: SetupOwnerState = { version: 1, state: "claiming", ...ownerInput };
+        const claimed = await settings.compareAndSet(SETUP_OWNER_KEY, null, desiredClaim);
+        if (!claimed) {
+          const existingClaim = await currentClaim();
+          const isResumed =
+            existingClaim?.state === "claiming" &&
+            existingClaim.accountId === ownerInput.accountId &&
+            existingClaim.baseUrl === ownerInput.baseUrl;
+          if (!isResumed) {
+            throw new ApiHttpError(
+              "conflict",
+              "this server has already been claimed by another owner",
+            );
+          }
         }
+
+        // A crash after the claim is recoverable: the same verified identity
+        // resumes the pending claim, while another process cannot overwrite it.
+        await deps.providers.update(candidate.id, {
+          ...(existing === null
+            ? {}
+            : { config: { ...stringConfig(existing.config), homeTemplate: input.homeTemplate } }),
+          enabled: true,
+        });
+
+        await deps.accounts.setAdmin(loginResult.me.account.id, true);
+        const finalized = await settings.compareAndSet(SETUP_OWNER_KEY, desiredClaim, {
+          version: 1,
+          state: "complete",
+          ...ownerInput,
+        });
+        if (!finalized) {
+          throw new ApiHttpError("conflict", "setup ownership changed; retry setup login");
+        }
+        const me = await deps.authService.me(
+          loginResult.me.account.id,
+          loginResult.me.activeIdentityId,
+        );
+
+        return { sessionId: loginResult.sessionId, me };
+      } catch (error) {
+        // Discard this request's session while preserving resumable ownership.
+        await deps.authService.logout(loginResult.sessionId).catch(() => undefined);
+        throw error;
       }
-
-      // A crash after the claim is recoverable: the same verified identity
-      // resumes the pending claim, while another process cannot overwrite it.
-      await deps.providers.update(candidate.id, {
-        ...(existing === null
-          ? {}
-          : { config: { ...stringConfig(existing.config), homeTemplate: input.homeTemplate } }),
-        enabled: true,
-      });
-
-      await deps.accounts.setAdmin(loginResult.me.account.id, true);
-      const finalized = await settings.compareAndSet(SETUP_OWNER_KEY, desiredClaim, {
-        version: 1,
-        state: "complete",
-        ...ownerInput,
-      });
-      if (!finalized) {
-        throw new ApiHttpError("conflict", "setup ownership changed; retry setup login");
-      }
-      const me = await deps.authService.me(
-        loginResult.me.account.id,
-        loginResult.me.activeIdentityId,
-      );
-
-      return { sessionId: loginResult.sessionId, me };
     },
   };
 }

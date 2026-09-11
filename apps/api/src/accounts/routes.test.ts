@@ -676,3 +676,30 @@ it.each(["alice-pass", "alice-rotated"])(
     ).toBe("alice-rotated");
   },
 );
+
+it("claims setup through auth, preserves existing losers and creates no new losing identity", async () => {
+  const h = accountsHarness();
+  const bob = await h.login("bob");
+  const [provider] = await h.providers.list();
+  if (provider === undefined) throw new Error("missing provider");
+  const candidate = (username: string) =>
+    h.auth.service.loginCandidate(
+      {
+        credential: { username, password: `${username}-pass` },
+        ip: "127.0.0.1",
+        userAgent: "test",
+      },
+      provider.id,
+      "test.setup.owner",
+    );
+  const winner = await candidate("alice");
+  await expect(candidate("bob")).rejects.toMatchObject({ kind: "conflict" });
+  await expect(candidate("carol")).rejects.toMatchObject({ kind: "conflict" });
+  expect((await h.call(ROUTES.auth.me, { cookie: bob.cookie })).status).toBe(200);
+  expect((await h.repos.identities.listAll()).map((row) => row.externalUsername).sort()).toEqual([
+    "alice",
+    "bob",
+  ]);
+  const resumed = await candidate("alice");
+  expect(resumed.me.account.id).toBe(winner.me.account.id);
+});

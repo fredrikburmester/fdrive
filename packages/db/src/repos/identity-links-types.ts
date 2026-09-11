@@ -6,7 +6,8 @@ export type IdentityLinksErrorCode =
   | "missing_identity"
   | "forbidden"
   | "last_identity"
-  | "invalid_session";
+  | "invalid_session"
+  | "setup_claimed";
 export class IdentityLinksError extends Error {
   constructor(readonly code: IdentityLinksErrorCode) {
     super(code);
@@ -53,6 +54,8 @@ export interface LoginSessionInput {
 export interface LoginVerifiedInput
   extends Omit<LinkVerifiedInput, "accountId" | "requestingSessionIdHash"> {
   readonly session: LoginSessionInput;
+  /** Claim ownership atomically with login persistence; a losing claim rolls back all writes. */
+  readonly setupClaim?: { readonly key: string; readonly baseUrl: string };
   /**
    * Revokes every other session of the identity's account in the same
    * transaction. Set when the verified password differs from the stored one:

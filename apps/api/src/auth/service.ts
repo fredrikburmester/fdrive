@@ -38,7 +38,11 @@ export interface LoginResult {
 export interface AuthService {
   login(input: LoginInput): Promise<LoginResult>;
   /** Verifies against a provider that may not be enabled yet and creates a session bound to it. */
-  loginCandidate(input: LoginInput, providerId: string): Promise<LoginResult>;
+  loginCandidate(
+    input: LoginInput,
+    providerId: string,
+    setupClaimKey?: string,
+  ): Promise<LoginResult>;
   resolvePrincipal(c: Context): Promise<Principal | null>;
   me(accountId: string, activeIdentityId: string): Promise<MeResponse>;
   logout(sessionId: string): Promise<void>;
@@ -124,6 +128,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   async function loginAt(
     input: LoginInput,
     candidateProviderId: string | null,
+    setupClaimKey?: string,
   ): Promise<LoginResult> {
     let observed: Credential | null = null;
     const verified = await verifyCredentials(
@@ -153,6 +158,9 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
           allowDisabled: candidateProviderId !== null,
         },
         username: verified.externalUsername,
+        ...(setupClaimKey === undefined
+          ? {}
+          : { setupClaim: { key: setupClaimKey, baseUrl: verified.provider.baseUrl } }),
         at,
         compareCredential: (identityId, current) => {
           if (current !== null) {
@@ -330,7 +338,8 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
 
   return {
     login: (input) => accountRepositoryCall(() => loginAt(input, null)),
-    loginCandidate: (input, providerId) => accountRepositoryCall(() => loginAt(input, providerId)),
+    loginCandidate: (input, providerId, setupClaimKey) =>
+      accountRepositoryCall(() => loginAt(input, providerId, setupClaimKey)),
     resolvePrincipal,
     me,
     logout,
