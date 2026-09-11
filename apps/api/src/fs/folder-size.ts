@@ -2,9 +2,10 @@ import { FolderSizeResponse, PathQuery, ROUTES } from "@fdrive/contracts";
 import {
   type CoreError,
   isUnderPath,
+  joinPath,
   normalizePath,
+  type Scope,
   type StorageProvider,
-  toFsPath,
 } from "@fdrive/core";
 import type { IdentityRepo, IndexQueries } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
@@ -43,15 +44,82 @@ const NOT_INDEXED: Omit<FolderSizeResponse, "path"> = {
   indexed: false,
 };
 
+interface SizeRegion {
+  readonly scope: Scope;
+  readonly virtualPrefix: string;
+  readonly relativePrefix: string;
+  readonly excludedRelativePrefixes: readonly string[];
+}
+
+function containingScope(scopes: readonly Scope[], path: string): Scope | null {
+  let best: Scope | null = null;
+  for (const scope of scopes) {
+    if (path !== scope.virtualPrefix && !isUnderPath(scope.virtualPrefix, path)) continue;
+    if (best === null || scope.virtualPrefix.length > best.virtualPrefix.length) best = scope;
+  }
+  return best;
+}
+
+function mapThroughScope(scope: Scope, virtualPath: string): string {
+  if (virtualPath === scope.virtualPrefix) return scope.fsPrefix;
+  const relative =
+    scope.virtualPrefix === "/"
+      ? virtualPath.slice(1)
+      : virtualPath.slice(scope.virtualPrefix.length + 1);
+  return joinPath(scope.fsPrefix, relative);
+}
+
+function outermostBoundaries(paths: readonly string[]): string[] {
+  const sorted = [...new Set(paths)].sort((a, b) => a.length - b.length);
+  return sorted.filter((candidate, index) =>
+    sorted.slice(0, index).every((parent) => !isUnderPath(parent, candidate)),
+  );
+}
+
+/** Partitions a requested virtual subtree into its physical mapping regions. */
+function sizeRegions(
+  scopes: readonly Scope[],
+  path: string,
+  trashPath: string | null,
+): SizeRegion[] {
+  const owner = containingScope(scopes, path);
+  if (owner === null) return [];
+
+  const regionScopes = [
+    { scope: owner, virtualPrefix: path },
+    ...scopes
+      .filter((scope) => isUnderPath(path, scope.virtualPrefix))
+      .map((scope) => ({ scope, virtualPrefix: scope.virtualPrefix })),
+  ].filter(
+    (region) =>
+      trashPath === null ||
+      (region.virtualPrefix !== trashPath && !isUnderPath(trashPath, region.virtualPrefix)),
+  );
+
+  return regionScopes.map((region) => {
+    const boundaries = scopes
+      .filter((scope) => isUnderPath(region.virtualPrefix, scope.virtualPrefix))
+      .map((scope) => scope.virtualPrefix);
+    if (trashPath !== null && isUnderPath(region.virtualPrefix, trashPath))
+      boundaries.push(trashPath);
+
+    return {
+      ...region,
+      relativePrefix: toIndexRelativePath(mapThroughScope(region.scope, region.virtualPrefix)),
+      excludedRelativePrefixes: outermostBoundaries(boundaries).map((boundary) =>
+        toIndexRelativePath(mapThroughScope(region.scope, boundary)),
+      ),
+    };
+  });
+}
+
 /**
  * Registers `GET /fs/folder-size?path=`: resolves the virtual `path` to an
- * fs path via the caller's *verified* index scopes exactly like the thumb
- * route (`normalizePath`, identity, `verifiedIndexScopes`, `toFsPath`), then
- * proves the caller can still read that directory right now (a live
- * `authorizer.authorize({ kind: "dir" })` probe) *before* ever touching the
- * index, and only then sums every indexed file at or under that directory
- * (`IndexQueries.subtreeSize`), intersected with the caller's own verified
- * scope so a result never includes bytes outside it.
+ * physical regions via the caller's *verified* index scopes, then proves the
+ * caller can still read the requested directory and each nested mapped root
+ * before touching the index. Each physical aggregate excludes the trees
+ * shadowed by more-specific mappings and configured trash; separately mapped
+ * roots are added back after their own live read succeeds.
  *
  * Answers `200 { indexed: false, bytes: 0, files: 0 }` (never an error) for
  * a folder that is out of scope, not covered by any indexed root, or the
@@ -99,8 +167,9 @@ export function registerFolderSizeRoutes(
       return notIndexed();
     }
 
-    const resolved = toFsPath(verified.scopes, path);
-    if (resolved === null) {
+    const regions = sizeRegions(verified.scopes, path, trashPath ?? null);
+    const firstRegion = regions[0];
+    if (firstRegion === undefined) {
       return notIndexed();
     }
 
@@ -116,26 +185,45 @@ export function registerFolderSizeRoutes(
       throw new ApiHttpError(kind, "cannot read this folder");
     }
 
+    const authorizedRegions = [firstRegion];
+    for (const region of regions.slice(1)) {
+      const regionAuth = await authorizer.authorize({ path: region.virtualPrefix, kind: "dir" });
+      if (regionAuth.allowed) {
+        authorizedRegions.push(region);
+      } else if (regionAuth.reason === "unavailable") {
+        throw new ApiHttpError("upstream_unavailable", "cannot read mapped folder");
+      }
+    }
+
     const rootIds = await deps.indexQueries.rootIdsByName();
-    const rootId = rootIds[resolved.rootName];
-    if (rootId === undefined) {
+    const indexedRegions = authorizedRegions.flatMap((region) => {
+      const rootId = rootIds[region.scope.rootName];
+      return rootId === undefined ? [] : [{ ...region, rootId }];
+    });
+    if (indexedRegions.length === 0) {
       return notIndexed();
     }
 
-    const relativePrefix = toIndexRelativePath(resolved.fsPath);
-    // `subtreeSize` also ANDs an explicit `rootId` match itself, so scopes on
-    // other roots below are harmless noise, not a leak; they are kept
-    // (rather than pre-filtered to `rootId`) to reuse `verified.scopes`
-    // as-is.
     const scopePrefixes = verified.scopes.flatMap((scope) => {
       const scopeRootId = rootIds[scope.rootName];
       return scopeRootId === undefined ? [] : [{ rootId: scopeRootId, fsPrefix: scope.fsPrefix }];
     });
 
-    const { bytes, files } = await deps.indexQueries.subtreeSize(
-      scopePrefixes,
-      rootId,
-      relativePrefix,
+    const sizes = await Promise.all(
+      indexedRegions.map((region) =>
+        region.excludedRelativePrefixes.length === 0
+          ? deps.indexQueries.subtreeSize(scopePrefixes, region.rootId, region.relativePrefix)
+          : deps.indexQueries.subtreeSize(
+              scopePrefixes,
+              region.rootId,
+              region.relativePrefix,
+              region.excludedRelativePrefixes,
+            ),
+      ),
+    );
+    const { bytes, files } = sizes.reduce(
+      (total, size) => ({ bytes: total.bytes + size.bytes, files: total.files + size.files }),
+      { bytes: 0, files: 0 },
     );
 
     return c.json(FolderSizeResponse.parse({ path, bytes, files, indexed: true }));
