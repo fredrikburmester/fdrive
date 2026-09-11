@@ -110,6 +110,7 @@ def scheduler_loop(
         )
 
     refresh_wait_s = max(1, settings_refresh_seconds)
+    last_logged_schedule: tuple[bool, datetime | None] | None = None
     while True:
         try:
             conn = conn_factory()
@@ -121,22 +122,31 @@ def scheduler_loop(
                 conn.close()
         except Exception as e:  # noqa: BLE001
             log_fn(f"OCR scheduler settings refresh failed: {type(e).__name__}: {e}")
+            # Log the resolved state again after recovery, even when it matches
+            # the state from before the database failure.
+            last_logged_schedule = None
             sleep(refresh_wait_s)
             continue
         current = now()
         if not features.values.pdf_ocr:
-            target = current
+            target = None
             wait_s: float = refresh_wait_s
         else:
             target = next_run_at(current, hour)
             wait_s = min(seconds_until(current, target), refresh_wait_s)
-        log_fn(f"next OCR pass at {target.isoformat()}")
+        schedule = (features.values.pdf_ocr, target)
+        if schedule != last_logged_schedule:
+            if target is None:
+                log_fn("OCR scheduler idle: PDF OCR disabled")
+            else:
+                log_fn(f"next OCR pass at {target.isoformat()}")
+            last_logged_schedule = schedule
         sleep(wait_s)
         if not features.values.pdf_ocr:
             continue
         # Short waits are only for configuration polling. Do not turn a nightly
         # schedule into a five-second rewrite loop while PDF OCR is enabled.
-        if now() < target:
+        if target is None or now() < target:
             continue
         run_once(
             run_lock,
