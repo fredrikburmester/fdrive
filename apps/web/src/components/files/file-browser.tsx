@@ -38,13 +38,14 @@ import { defaultArchiveName, extractDestinationUnder } from "@/lib/files/archive
 import { apiClient, PageHeader, queryKeys } from "@/lib/files/deps";
 import {
   type AnchorDownloader,
+  adaptDocument,
   createAnchorDownloader,
-  type DocumentLike,
   type DownloadDeps,
   downloadMany,
   downloadSingle,
   planDownload,
 } from "@/lib/files/download";
+import { buildDownloadDeps } from "@/lib/files/download-deps";
 import { useFolderView } from "@/lib/files/folder-view-queries";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
@@ -156,40 +157,6 @@ function deleteItemKind(entry: FsEntry): "file" | "dir" {
  */
 function toRoute(href: string): Route {
   return href as Route;
-}
-
-/**
- * Adapts the real, global `document` to `download.ts`'s minimal
- * `DocumentLike`. The cast is confined to this one boundary: `download.ts`
- * only ever calls the methods its narrow interface declares (create one
- * anchor, append it, click it, remove it), so this is safe even though a
- * real `Node` is structurally much larger than `AnchorLike`.
- */
-function adaptDocument(doc: Document): DocumentLike {
-  return {
-    createElement: (tag) => doc.createElement(tag),
-    body: {
-      appendChild: (node) => {
-        doc.body.appendChild(node as unknown as Node);
-      },
-      removeChild: (node) => {
-        doc.body.removeChild(node as unknown as Node);
-      },
-    },
-  };
-}
-
-/** Builds a fresh `DownloadDeps` bound to the current `document`. Only ever
- * called from an event handler, never at render time, so it never runs
- * during server-side rendering. */
-function buildDownloadDeps(anchor: AnchorDownloader): DownloadDeps {
-  return {
-    downloadUrl: (downloadPath, opts) => apiClient.downloadUrl(downloadPath, opts),
-    zip: (paths, name) => apiClient.zip(paths, name),
-    anchor,
-    createObjectUrl: (blob) => URL.createObjectURL(blob),
-    revokeObjectUrl: (url) => URL.revokeObjectURL(url),
-  };
 }
 
 type DirectoryInputElement = HTMLInputElement & { webkitdirectory: boolean };
@@ -385,7 +352,7 @@ export function FileBrowser({
     if (plan === null) {
       return;
     }
-    const deps = buildDownloadDeps(getAnchorDownloader());
+    const deps = buildDownloadDeps(getAnchorDownloader(), apiClient);
     switch (plan.kind) {
       case "single":
         downloadSingle(plan.path, deps);
