@@ -27,6 +27,12 @@ describe("LoginRequest", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects a non-canonical provider id", () => {
+    expect(
+      LoginRequest.safeParse({ providerId: VALID_UUID.toUpperCase(), credential: {} }).success,
+    ).toBe(false);
+  });
+
   it("rejects a non-string field value, an overlong value and unknown top-level keys", () => {
     expect(LoginRequest.safeParse({ credential: { username: 1 } }).success).toBe(false);
     expect(LoginRequest.safeParse({ credential: { password: "x".repeat(4097) } }).success).toBe(

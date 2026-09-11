@@ -66,6 +66,15 @@ describe("CreateApiTokenRequest", () => {
     ).toBe(true);
   });
 
+  it("rejects a non-canonical identityId", () => {
+    expect(
+      CreateApiTokenRequest.safeParse({
+        name: "Claude",
+        identityId: VALID_IDENTITY_ID.toUpperCase(),
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects an empty name", () => {
     expect(CreateApiTokenRequest.safeParse({ name: "" }).success).toBe(false);
   });

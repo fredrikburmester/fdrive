@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CanonicalUuid } from "./canonical-uuid.ts";
 
 /**
  * The expiry choices offered on the account page's "create token" dialog:
@@ -39,7 +40,7 @@ export type ApiTokensResponse = z.infer<typeof ApiTokensResponse>;
  */
 export const CreateApiTokenRequest = z.object({
   name: z.string().min(1).max(200),
-  identityId: z.uuid().optional(),
+  identityId: CanonicalUuid.optional(),
   expiresInDays: ApiTokenExpiresInDays.optional(),
 });
 

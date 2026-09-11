@@ -18,6 +18,9 @@ it("bounds strict credential requests and canonical identity selection", () => {
     ...link,
     providerId: identityId,
   });
+  expect(
+    LinkIdentityRequest.safeParse({ ...link, providerId: identityId.toUpperCase() }).success,
+  ).toBe(false);
   for (const invalid of [
     { credential: { username: "a", password: "x".repeat(4097) }, currentCredential: {} },
     { credential: { username: 1 }, currentCredential: {} },
