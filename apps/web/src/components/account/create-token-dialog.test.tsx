@@ -105,7 +105,7 @@ it("does not send a second request while the first one is pending", async () => 
   fireEvent.change(input, { target: { value: "Claude" } });
   pressEnter(input);
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-  const pendingButton = screen.getByRole("button", { name: "Creating..." });
+  const pendingButton = screen.getByRole("button", { name: "Creating…" });
   expect(pendingButton.hasAttribute("disabled")).toBe(true);
   pressEnter(input);
   const form = input.form;

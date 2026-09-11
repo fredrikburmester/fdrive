@@ -4,7 +4,9 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PageHeader, useShellMe } from "@/components/shell/page-header";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TriangleAlertIcon } from "lucide-react";
 import { accountItemHref, navigateAccountItem } from "@/lib/account/identities";
 import { useAccountFavorites } from "@/lib/account/queries";
 import { useIdentityActions } from "@/lib/account/use-identities";
@@ -21,14 +23,20 @@ export function FavoritesPage() {
     <>
       <PageHeader breadcrumbs={<span className="text-sm font-medium">Favorites</span>} />
       {favorites.error ? (
-        <p role="alert" className="p-4 text-sm text-destructive">
-          {describeApiError(favorites.error)}
-        </p>
+        <div className="p-4">
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertDescription>{describeApiError(favorites.error)}</AlertDescription>
+          </Alert>
+        </div>
       ) : null}
       {actions.error || navigationError ? (
-        <p role="alert" className="p-4 text-sm text-destructive">
-          {actions.error ?? navigationError}
-        </p>
+        <div className="p-4">
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertDescription>{actions.error ?? navigationError}</AlertDescription>
+          </Alert>
+        </div>
       ) : null}
       {favorites.isLoading || !me ? (
         <Skeleton className="m-4 h-24" />

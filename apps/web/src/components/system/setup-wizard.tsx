@@ -158,7 +158,7 @@ export function SetupWizard() {
                 disabled={baseUrl.trim().length === 0 || setupTest.isPending}
                 onClick={handleTest}
               >
-                {setupTest.isPending ? "Testing..." : "Test connection"}
+                {setupTest.isPending ? "Testing…" : "Test connection"}
               </Button>
               {testResult?.ok && testedBaseUrl === baseUrl ? <Badge>Reachable</Badge> : null}
             </div>

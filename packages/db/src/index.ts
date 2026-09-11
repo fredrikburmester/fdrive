@@ -2,12 +2,12 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
-import { resolveMigrationsFolder } from "./migrationsPath.js";
+import { resolveMigrationsFolder } from "./migrations-path.js";
 import * as appSchema from "./schema/app.js";
 import * as idxSchema from "./schema/idx.js";
 
-export { resolveMigrationsFolder } from "./migrationsPath.js";
-export * from "./parseDatabaseUrl.js";
+export { resolveMigrationsFolder } from "./migrations-path.js";
+export * from "./parse-database-url.js";
 export { createRepos } from "./repos/drizzle.js";
 export { createIdentityLinksRepo } from "./repos/identity-links.js";
 export type {

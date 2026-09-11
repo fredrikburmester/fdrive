@@ -111,7 +111,7 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
           </FieldGroup>
           <DialogFooter>
             <Button type="submit" disabled={name.trim().length === 0 || createToken.isPending}>
-              {createToken.isPending ? "Creating..." : "Create token"}
+              {createToken.isPending ? "Creating…" : "Create token"}
             </Button>
           </DialogFooter>
         </form>

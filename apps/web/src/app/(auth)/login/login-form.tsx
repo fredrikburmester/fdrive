@@ -91,7 +91,7 @@ export function LoginForm({ providers }: LoginFormProps) {
               {login.isError ? <FieldError>{describeApiError(login.error)}</FieldError> : null}
               <Field>
                 <Button type="submit" className="w-full" disabled={login.isPending}>
-                  {login.isPending ? "Signing in..." : "Sign in"}
+                  {login.isPending ? "Signing in…" : "Sign in"}
                 </Button>
               </Field>
             </FieldGroup>

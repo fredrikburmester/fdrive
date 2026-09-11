@@ -90,6 +90,13 @@ describe("JobAccepted", () => {
     expect(JobAccepted.safeParse({ jobId: "job-1" }).success).toBe(true);
   });
 
+  it("parses both id and jobId", () => {
+    expect(JobAccepted.parse({ id: "job-1", jobId: "job-1" })).toEqual({
+      id: "job-1",
+      jobId: "job-1",
+    });
+  });
+
   it("rejects a missing jobId", () => {
     expect(JobAccepted.safeParse({}).success).toBe(false);
   });

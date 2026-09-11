@@ -72,8 +72,9 @@ function FeatureCard({
             onCheckedChange={(checked) => onChange(id, checked)}
           />
         </Field>
-        <FieldDescription>{info.cost}</FieldDescription>
-        <FieldDescription>{info.dependency}</FieldDescription>
+        <FieldDescription>
+          {[info.cost, info.dependency].filter(Boolean).join(" ")}
+        </FieldDescription>
         {status ? (
           <p className="text-xs text-muted-foreground" role="status">
             {status.detail}

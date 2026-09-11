@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { claudeMcpAddCommand, connectorUrl } from "@/lib/account/connect-snippets";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CopyField } from "./copy-field";
 
 export interface CreatedToken {
@@ -44,10 +45,12 @@ export function TokenCreatedDialog({ created, onClose }: TokenCreatedDialogProps
         </DialogHeader>
         {created ? (
           <div className="flex flex-col gap-4">
-            <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
-              <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
-              <span>This is the only time you will see this token. Store it somewhere safe.</span>
-            </div>
+            <Alert>
+              <TriangleAlertIcon />
+              <AlertDescription>
+                This is the only time you will see this token. Store it somewhere safe.
+              </AlertDescription>
+            </Alert>
             <CopyField label="API token" value={created.token} />
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium">Connect Claude</span>

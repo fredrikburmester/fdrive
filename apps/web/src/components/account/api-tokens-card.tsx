@@ -142,6 +142,7 @@ export function ApiTokensCard() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              variant="destructive"
               onClick={() => {
                 if (revokeTarget) {
                   revokeToken.mutate(revokeTarget.id);
