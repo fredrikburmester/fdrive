@@ -64,7 +64,7 @@ PLAIN_EXTS = frozenset(
     }
 )
 PDF_EXTS = frozenset({".pdf"})
-IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif"})
+IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif", ".heic", ".heif"})
 TIKA_EXTS = frozenset(
     {
         ".doc",

@@ -54,7 +54,8 @@ describe("buildContentSecurityPolicy", () => {
     const dev = buildContentSecurityPolicy({ officePublicUrl: undefined, development: true });
     expect(dev).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
     const prod = buildContentSecurityPolicy({ officePublicUrl: undefined, development: false });
-    expect(prod).not.toContain("unsafe-eval");
+    expect(prod).toContain("script-src 'self' 'unsafe-inline';");
+    expect(prod).not.toContain("eval");
   });
 
   it("keeps style-src permissive with 'unsafe-inline'", () => {

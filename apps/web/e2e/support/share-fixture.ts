@@ -28,6 +28,14 @@ export function shareImageFixture(): Buffer {
   );
 }
 
+/** A minimal decodable 1x1 HEIC, used to exercise HEIC previews and galleries. */
+export function shareHeicFixture(): Buffer {
+  return Buffer.from(
+    "AAAAGGZ0eXBoZWljAAAAAG1pZjFoZWljAAABfG1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAHBpY3QAAAAAAAAAAAAAAAAAAAAAImlsb2MAAAAAREAAAQABAAAAAAGcAAEAAAAAAAAANAAAACNpaW5mAAAAAAABAAAAFWluZmUCAAAAAAEAAGh2YzEAAAAADnBpdG0AAAAAAAEAAAD8aXBycAAAANxpcGNvAAAAdWh2Y0MBA3AAAAAAAAAAAAAe8AD8/fj4AAAPA2AAAQAYQAEMAf//A3AAAAMAkAAAAwAAAwAeugJAYQABAClCAQEDcAAAAwCQAAADAAADAB6gIIEFluqumubgIaDAgAAADIAAAAMAhGIAAQAGRAHBc8GJAAAAE2NvbHJuY2x4AAEADQAGgAAAABRpc3BlAAAAAAAAAEAAAABAAAAAKGNsYXAAAAABAAAAAQAAAAEAAAAB////wQAAAAL////BAAAAAgAAABBwaXhpAAAAAAMICAgAAAAYaXBtYQAAAAAAAAABAAEFgQIDBYQAAAA8bWRhdAAAADAoAa8TIWZjQPgQ92f/67wV/5VrP/M3senOyEdAwNIggJtASJNdUAsWEICHdqVW3Pg=",
+    "base64",
+  );
+}
+
 /**
  * Builds a minimal valid ZIP archive (stored, uncompressed entries only, no external library)
  * from `files`, so `shares.spec.ts` can peek a real archive through the public

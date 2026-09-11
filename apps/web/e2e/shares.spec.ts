@@ -3,7 +3,12 @@ import { ManagedShare } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
-import { shareAudioFixture, shareImageFixture, shareZipFixture } from "./support/share-fixture.js";
+import {
+  shareAudioFixture,
+  shareHeicFixture,
+  shareImageFixture,
+  shareZipFixture,
+} from "./support/share-fixture.js";
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
@@ -474,6 +479,33 @@ test("a shared ZIP can be peeked without extracting it, hidden on a limited link
     await visitor.goto(new URL(limitedShare.publicPath, single).href);
     await expect(visitor.getByRole("button", { name: "Peek", exact: true })).toHaveCount(0);
     expect(forbidden).toEqual([]);
+  } finally {
+    await context.close().catch(() => {});
+  }
+});
+
+test("a HEIC single-file share resolves to a gallery tile and opens the lightbox", async ({
+  page,
+  browser,
+}) => {
+  await loginAs(page, "share_owner", "share-owner-test-password");
+  const upload = await page.request.put("/api/v1/fs/upload?path=%2Fphoto.heic", {
+    headers: { "x-requested-with": "fdrive", "content-type": "image/heic" },
+    data: shareHeicFixture(),
+  });
+  expect(upload.ok()).toBe(true);
+
+  const url = await createLink(page, ["photo.heic"], "Shared HEIC");
+  const context = await browser.newContext();
+  const visitor = await context.newPage();
+  try {
+    await visitor.goto(url);
+    const tile = visitor.getByRole("button", { name: "photo.heic" });
+    await expect(tile).toBeVisible();
+    await tile.click();
+    const lightbox = visitor.getByRole("dialog");
+    await expect(lightbox).toBeVisible();
+    await expect(lightbox.locator('img[alt="photo.heic"]')).toBeVisible();
   } finally {
     await context.close().catch(() => {});
   }

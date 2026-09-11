@@ -42,7 +42,8 @@ export interface ContentSecurityPolicyOptions {
    * True under `next dev`. React's development build uses `eval` for its
    * debugging features (reconstructing call stacks), so `script-src` gets
    * `'unsafe-eval'` only then; production builds never use `eval` and never
-   * get it.
+   * get it. The HEIC decoder (`heic-to/csp`) is a wasm2js build that runs as
+   * plain JavaScript in a blob worker, so it needs no `'wasm-unsafe-eval'` either.
    */
   readonly development?: boolean;
 }

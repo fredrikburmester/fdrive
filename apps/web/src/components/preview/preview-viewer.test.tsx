@@ -29,3 +29,28 @@ it("renders ArchivePreview for the archive preview kind", () => {
 
   expect(screen.getByTestId("archive-preview").textContent).toBe("/docs.zip /download");
 });
+
+const heicEntry: FsEntry = {
+  name: "photo.heic",
+  path: "/photo.heic",
+  kind: "file",
+  ext: ".heic",
+  mime: "image/heic",
+  size: 500,
+  modifiedAt: "2026-09-07T00:00:00Z",
+};
+
+it("renders ImageViewer with thumb-first fallback for HEIC images", () => {
+  render(
+    <PreviewViewer
+      entry={heicEntry}
+      inlineUrl="/photo.heic"
+      downloadUrl="/download/photo.heic"
+      thumbUrl="/thumb/photo.heic"
+    />,
+  );
+
+  const img = screen.getByRole("img");
+  expect(img.getAttribute("src")).toBe("/thumb/photo.heic");
+  expect(img.getAttribute("alt")).toBe("photo.heic");
+});

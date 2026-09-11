@@ -24,6 +24,7 @@ import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import { useFolderSize } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
 import { describeEntry } from "@/lib/preview/describe";
+import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
 import { summarizeSelection } from "@/lib/preview/selection";
 
@@ -107,15 +108,22 @@ function SingleEntryBody({
   });
   const kind = previewKindFor(entry);
   const Icon = iconFor(entry);
+  // Browsers other than Safari cannot decode HEIC, so those show the indexer's
+  // thumbnail; any image that fails to load falls back to the kind icon.
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageSrc = isHeicExt(entry.ext)
+    ? apiClient.thumbUrl(entry.path, 256)
+    : apiClient.downloadUrl(entry.path, { inline: true });
 
   return (
     <div className="flex flex-col gap-4 p-4">
       <div className="flex flex-col items-center gap-3 py-2">
-        {kind === "image" ? (
+        {kind === "image" && !imageFailed ? (
           // biome-ignore lint/performance/noImgElement: thumbnail loads arbitrary API-served bytes, not a static asset next/image can optimize
           <img
-            src={apiClient.downloadUrl(entry.path, { inline: true })}
+            src={imageSrc}
             alt={entry.name}
+            onError={() => setImageFailed(true)}
             className="max-h-40 max-w-full rounded-lg object-contain ring-1 ring-border"
           />
         ) : (

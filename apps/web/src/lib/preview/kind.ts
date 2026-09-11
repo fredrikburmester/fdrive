@@ -29,6 +29,9 @@ export interface PreviewableEntry {
  */
 export const TEXT_LIMIT_BYTES = 2 * 1024 * 1024;
 
+/** Image extensions the browser cannot decode itself; `lib/preview/heic.ts` handles them. */
+export const HEIC_EXTENSIONS: ReadonlySet<string> = new Set([".heic", ".heif"]);
+
 const IMAGE_EXTENSIONS = new Set([
   ".png",
   ".jpg",
@@ -39,6 +42,7 @@ const IMAGE_EXTENSIONS = new Set([
   ".bmp",
   ".ico",
   ".svg",
+  ...HEIC_EXTENSIONS,
 ]);
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"]);

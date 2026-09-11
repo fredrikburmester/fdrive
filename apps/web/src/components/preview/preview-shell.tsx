@@ -220,6 +220,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
 
   const downloadUrl = apiClient.downloadUrl(path);
   const inlineUrl = apiClient.downloadUrl(path, { inline: true });
+  const thumbUrl = apiClient.thumbUrl(path, 1024);
 
   return (
     <TooltipProvider>
@@ -314,7 +315,13 @@ function PreviewShellContent({ path }: PreviewShellProps) {
               </div>
             )}
             {entryQuery.status === "success" && entry !== undefined && (
-              <PreviewViewer entry={entry} inlineUrl={inlineUrl} downloadUrl={downloadUrl} />
+              <PreviewViewer
+                key={path}
+                entry={entry}
+                inlineUrl={inlineUrl}
+                downloadUrl={downloadUrl}
+                thumbUrl={thumbUrl}
+              />
             )}
           </div>
 

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { shareHeicFixture } from "./support/share-fixture.js";
 
 test("opening readme.md renders it as markdown", async ({ page }) => {
   await page.goto("/view/docs/readme.md");
@@ -48,4 +49,23 @@ test("the Info button opens the inspector with size and modified rows", async ({
 
   await expect(page.getByText("Size", { exact: true })).toBeVisible();
   await expect(page.getByText("Modified", { exact: true })).toBeVisible();
+});
+
+test("photo.heic opens the image viewer and decodes via WASM on zoom", async ({ page }) => {
+  const name = "photo.heic";
+  const upload = await page.request.put(
+    `/api/v1/fs/upload?path=${encodeURIComponent(`/${name}`)}`,
+    {
+      headers: { "x-requested-with": "fdrive", "content-type": "image/heic" },
+      data: shareHeicFixture(),
+    },
+  );
+  expect(upload.ok()).toBe(true);
+
+  await page.goto(`/view/${name}`);
+  const img = page.locator(`img[alt="${name}"]`);
+  await expect(img).toBeVisible();
+
+  await img.click();
+  await expect(page.getByRole("button", { name: "Zoom out" })).toBeVisible({ timeout: 15_000 });
 });

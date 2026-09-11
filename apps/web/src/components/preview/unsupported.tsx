@@ -7,7 +7,8 @@ import type { PreviewKind } from "@/lib/preview/kind";
 
 export interface UnsupportedProps {
   readonly name: string;
-  readonly size: number;
+  /** The file size, omitted when the caller does not know it. */
+  readonly size?: number | undefined;
   readonly kind: PreviewKind;
   /** Why there is no inline preview, from `previewUnavailableReason`. */
   readonly reason: string | null;
@@ -32,7 +33,7 @@ export function Unsupported({ name, size, kind, reason, downloadUrl, action }: U
         <CardHeader className="items-center">
           <FileQuestion className="mx-auto mb-2 size-10 text-muted-foreground" strokeWidth={1.5} />
           <CardTitle className="break-all">{name}</CardTitle>
-          <CardDescription>{formatBytes(size)}</CardDescription>
+          {size !== undefined && <CardDescription>{formatBytes(size)}</CardDescription>}
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-4">
           <p className="text-sm text-muted-foreground">{message}</p>

@@ -146,7 +146,17 @@ describe("share contracts", () => {
     ).toBe(true);
   });
   it("recognizes image extensions case-insensitively and rejects names without one", () => {
-    for (const name of ["photo.png", "PHOTO.PNG", "a.b.JPEG", "x.webp", "x.gif", "x.bmp", "x.avif"])
+    for (const name of [
+      "photo.png",
+      "PHOTO.PNG",
+      "a.b.JPEG",
+      "x.webp",
+      "x.gif",
+      "x.bmp",
+      "x.avif",
+      "photo.heic",
+      "PHOTO.HEIF",
+    ])
       expect(isImageFileName(name)).toBe(true);
     for (const name of ["photo.svg", "photo", "photo.", "photo.txt", "photo.pdf"])
       expect(isImageFileName(name)).toBe(false);
