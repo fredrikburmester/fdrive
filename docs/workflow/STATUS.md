@@ -5,6 +5,20 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## HEIC/HEIF viewing and indexing support: complete
+
+- **Non-destructive storage**: Original `.heic` and `.heif` files remain bit-for-bit untouched in SFTPGo storage; no on-upload conversion.
+- **Backend & indexing**:
+  - `packages/contracts`: `.heic`/`.heif` added to `IMAGE_EXTENSIONS` (`isImageFileName`).
+  - `apps/api`: `.heif` added to `PRECOMPRESSED_EXTENSIONS` in archive stream utils.
+  - `services/indexer`: `pillow-heif>=0.18` added; registered opener idempotently before PIL reads; `.heic`/`.heif` added to `IMAGE_EXTS` in chunking (enabling 256/1024px WebP thumbnails, OCR, and SigLIP visual embeddings).
+- **Frontend & CSP compliance**:
+  - `apps/web`: Production CSP unchanged (`script-src 'self' 'unsafe-inline'`); `heic-to/csp` is a wasm2js build running in the existing `worker-src blob:` allowance, so no `'wasm-unsafe-eval'` is needed.
+  - `apps/web/src/lib/preview/heic.ts`: `fetchHeicAsJpeg` enforces the 50 MiB cap on the known size, `Content-Length`, and the streamed body (shared `boundedBody`) before `heic-to/csp` decodes.
+  - `ImageViewer`: derives HEIC from the file name, renders `<picture><source type="image/heic">` for native Safari decoding, shows the 1024px WebP thumbnail elsewhere, decodes on zoom or thumbnail 404, aborts an in-flight decode on unmount, keeps the thumbnail with an error pill when decoding fails, and reuses `Unsupported` when nothing can be shown. Inspector shows the 256px thumbnail for HEIC.
+  - Public shares & galleries: Single-file HEIC shares automatically present in gallery mode with lightbox viewing; directory listings expose the preview button.
+- **Verification**: `python indexer`, `package @fdrive/contracts`, `package @fdrive/web`, `application`, `workflow`, and `browser` (`preview.spec.ts`, `grid-thumbs.spec.ts`, `shares.spec.ts`) all pass.
+
 ## Beta field report (clean install, 2026-09-11): fixed
 
 - **No worker had a CPU bound** (addendum widened this from `embed` alone). `deploy/compose.yaml`

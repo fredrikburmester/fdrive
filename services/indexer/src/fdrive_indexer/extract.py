@@ -65,6 +65,9 @@ def extract_image(abs_path: str, langs: str, normalize: Normalizer) -> tuple[str
     import pytesseract
     from PIL import Image, ImageOps
 
+    from .heif import register_heif_opener
+
+    register_heif_opener()
     with Image.open(abs_path) as opened:
         picture: Image.Image = ImageOps.exif_transpose(opened) or opened
         if picture.mode not in ("L", "RGB"):

@@ -122,6 +122,7 @@ interface SelectedPreview {
   kind: Exclude<ReturnType<typeof publicPreviewKind>, "none">;
   generation: number;
   folder: string;
+  size?: number | undefined;
 }
 
 interface SelectedPeek {
@@ -161,7 +162,7 @@ function SharedContents({
   const [peek, setPeek] = useState<SelectedPeek | null>(null);
   function previewFile(name: string, filePath: string, size?: number) {
     const kind = publicPreviewKind(name, size);
-    if (kind !== "none") setPreview({ name, path: filePath, kind, generation, folder: path });
+    if (kind !== "none") setPreview({ name, path: filePath, kind, generation, folder: path, size });
   }
   function peekArchive(name: string, filePath: string, size?: number) {
     setPeek({ name, path: filePath, size, generation, folder: path });
@@ -255,6 +256,8 @@ function SharedContents({
           url={client.shareDownloadUrl(id, preview.path)}
           name={preview.name}
           kind={preview.kind}
+          thumbUrl={client.shareThumbUrl(id, preview.path, 1024)}
+          size={preview.size}
           onClose={() => setPreview(null)}
         />
       )}

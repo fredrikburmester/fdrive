@@ -28,6 +28,8 @@ vi.mock("@/lib/preview/deps", async () => {
       stat: (path: string) => mocks.stat(path),
       list: (path: string) => mocks.list(path),
       downloadUrl: (path: string) => `https://files.test${path}`,
+      thumbUrl: (path: string, size: number) =>
+        `https://files.test/thumb?path=${path}&size=${size}`,
     },
     useTouchRecent: () => ({ mutate: mocks.touchRecent }),
   };

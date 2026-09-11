@@ -22,11 +22,15 @@ export function PublicPreview({
   url,
   name,
   kind,
+  thumbUrl,
+  size,
   onClose,
 }: {
   url: string;
   name: string;
   kind: Exclude<PublicPreviewKind, "none">;
+  thumbUrl?: string | undefined;
+  size?: number | undefined;
   onClose: () => void;
 }) {
   const [state, setState] = useState<PreviewState>({ type: "loading" });
@@ -79,7 +83,14 @@ export function PublicPreview({
       ) : (
         <div className="h-[min(65vh,44rem)]">
           {kind === "image" ? (
-            <ImageViewer src={url} alt={name} onError={failed} />
+            <ImageViewer
+              src={url}
+              name={name}
+              thumbUrl={thumbUrl}
+              downloadUrl={url}
+              size={size}
+              onError={failed}
+            />
           ) : kind === "audio" ? (
             <AudioViewer src={url} onError={failed} />
           ) : kind === "video" ? (
