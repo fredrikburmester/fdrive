@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import errno
 import os
+import signal
 import stat
+import subprocess
+import sys
+import time
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -103,26 +108,118 @@ def test_run_ocrmypdf_has_text(tmp_path: Path) -> None:
 
 
 def test_run_ocrmypdf_timeout() -> None:
-    import subprocess
+    class FakeProcess:
+        pid = 123
+        returncode: int | None = None
 
-    def fake_run(*args: object, **kwargs: object) -> None:
-        raise subprocess.TimeoutExpired(cmd="ocrmypdf", timeout=1, output=None, stderr=b"partial output")
+        def __init__(self) -> None:
+            self.communicate_calls: list[int] = []
 
-    exit_code, stderr, timed_out = runner.run_ocrmypdf("/in.pdf", "/out.pdf", "eng", 200, 1, 2, run=fake_run)
+        def communicate(self, timeout: int) -> tuple[str, str]:
+            self.communicate_calls.append(timeout)
+            if len(self.communicate_calls) == 1:
+                raise subprocess.TimeoutExpired(cmd="ocrmypdf", timeout=timeout, output=None, stderr=b"partial output")
+            self.returncode = -signal.SIGKILL
+            return "", "partial output"
+
+        def kill(self) -> None:
+            raise AssertionError("process-group kill should succeed")
+
+    process = FakeProcess()
+    popen_kwargs: dict[str, object] = {}
+    signals: list[tuple[int, int]] = []
+
+    def fake_popen(*args: object, **kwargs: object) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return process
+
+    exit_code, stderr, timed_out = runner.run_ocrmypdf(
+        "/in.pdf",
+        "/out.pdf",
+        "eng",
+        200,
+        1,
+        2,
+        popen=fake_popen,  # type: ignore[arg-type]
+        killpg=lambda pid, sig: signals.append((pid, sig)),
+    )
     assert timed_out is True
     assert exit_code == -1
     assert stderr == "partial output"
+    assert popen_kwargs["start_new_session"] is True
+    assert signals == [(123, signal.SIGKILL)]
+    assert process.communicate_calls == [1, runner.PROCESS_GROUP_KILL_WAIT_SECONDS]
 
 
 def test_run_ocrmypdf_timeout_with_no_stderr_captured() -> None:
-    import subprocess
+    class FakeProcess:
+        pid = 123
+        returncode: int | None = None
+        stdout = StringIO()
+        stderr = StringIO()
+        polled = False
 
-    def fake_run(*args: object, **kwargs: object) -> None:
-        raise subprocess.TimeoutExpired(cmd="ocrmypdf", timeout=1)
+        def communicate(self, timeout: int) -> tuple[str, str]:
+            raise subprocess.TimeoutExpired(cmd="ocrmypdf", timeout=timeout)
 
-    _exit_code, stderr, timed_out = runner.run_ocrmypdf("/in.pdf", "/out.pdf", "eng", 200, 1, 2, run=fake_run)
+        def kill(self) -> None:
+            return None
+
+        def poll(self) -> int:
+            self.polled = True
+            return -signal.SIGKILL
+
+    process = FakeProcess()
+    _exit_code, stderr, timed_out = runner.run_ocrmypdf(
+        "/in.pdf",
+        "/out.pdf",
+        "eng",
+        200,
+        1,
+        2,
+        popen=lambda *_args, **_kwargs: process,  # type: ignore[arg-type]
+        killpg=lambda _pid, _sig: None,
+    )
     assert timed_out is True
     assert stderr == ""
+    assert process.stdout.closed and process.stderr.closed
+    assert process.polled
+
+
+def test_run_ocrmypdf_timeout_kills_descendant_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    release_marker = tmp_path / "release-descendant"
+    leak_marker = tmp_path / "descendant-survived"
+    child_code = (
+        "import time\n"
+        "from pathlib import Path\n"
+        f"release = Path({str(release_marker)!r})\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.01)\n"
+        f"Path({str(leak_marker)!r}).touch()\n"
+    )
+    executable = bin_dir / "ocrmypdf"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}])\n"
+        "print(child.pid, file=sys.stderr, flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    exit_code, stderr, timed_out = runner.run_ocrmypdf("/in.pdf", "/out.pdf", "eng", 200, 1, 2)
+
+    assert exit_code == -1
+    assert timed_out is True
+    assert stderr.strip().isdigit()
+    release_marker.touch()
+    time.sleep(0.5)
+    assert not leak_marker.exists()
 
 
 # -- apply_rewrite ---------------------------------------------------------------
