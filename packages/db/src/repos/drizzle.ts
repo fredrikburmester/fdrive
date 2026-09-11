@@ -575,13 +575,13 @@ function createFileTagRepo(db: Db): FileTagRepo {
             and f.path <> s.path
             and (
               (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
             )
         `);
         await tx.execute(sql`
           update "app"."file_tags"
           set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
+                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
           where identity_id = ${identityId}
             and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
         `);
@@ -648,13 +648,13 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
             and f.path <> s.path
             and (
               (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
             )
         `);
         await tx.execute(sql`
           update "app"."favorites"
           set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
+                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
           where identity_id = ${identityId}
             and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
         `);
@@ -786,13 +786,13 @@ function createRecentRepo(db: Db): RecentRepo {
             and f.path <> s.path
             and (
               (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
             )
         `);
         await tx.execute(sql`
           update "app"."recents"
           set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
+                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
           where identity_id = ${identityId}
             and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
         `);
