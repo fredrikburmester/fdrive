@@ -118,11 +118,14 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
     expect(
       (await call(path, { cookie: alice, headers: { authorization: "Bearer invalid" } })).status,
     ).toBe(403);
+    // The listing serves each row from one upstream `shares.list` call, so
+    // confirm real SFTPGo redacts the password on that endpoint exactly as it
+    // does on the single-share read: a protected share must not list as open.
     expect(
-      SharesResponse.parse(await (await call(base, { cookie: alice })).json()).items.some(
+      SharesResponse.parse(await (await call(base, { cookie: alice })).json()).items.find(
         (item) => item.id === share.id,
       ),
-    ).toBe(true);
+    ).toMatchObject({ id: share.id, hasPassword: true });
     // The link alone (or a wrong password) reveals nothing; the real SFTPGo
     // root listing verifies the correct one and unlocks the details.
     const withheld = { name: "", fileName: null, hasPassword: true, credentialPresent: false };

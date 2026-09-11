@@ -139,11 +139,36 @@ export function createSharesService(deps: SharesDeps) {
       throw error;
     }
   }
+  /** True when the stored row already holds everything `mirror` would write. */
+  function mirrored(
+    row: ShareRecord,
+    share: SftpgoShare,
+    presentation: ManagedShare["presentation"],
+  ) {
+    return (
+      row.sftpgoShareId === share.id &&
+      row.name === share.name &&
+      row.scope === share.scope &&
+      row.paths.length === share.paths.length &&
+      row.paths.every((path, index) => path === share.paths[index]) &&
+      row.hasPassword === share.hasPassword &&
+      (row.expiresAt?.getTime() ?? null) === (share.expiresAt?.getTime() ?? null) &&
+      row.views === share.usedTokens &&
+      row.presentation === presentation
+    );
+  }
+  /**
+   * Reconciles the local mirror with the live upstream share. `current` is the
+   * stored row when the caller already holds it: an unchanged row needs no
+   * write, which keeps listing N untouched shares at zero writes.
+   */
   async function mirror(
     identityId: string,
     share: SftpgoShare,
     presentation: ManagedShare["presentation"],
+    current?: ShareRecord,
   ) {
+    if (current !== undefined && mirrored(current, share, presentation)) return current;
     return deps.shares.upsert({
       identityId,
       sftpgoShareId: share.id,
@@ -157,21 +182,31 @@ export function createSharesService(deps: SharesDeps) {
       at: deps.clock(),
     });
   }
+  function supported(share: SftpgoShare) {
+    if (share.rawScope !== undefined && share.rawScope !== 1 && share.rawScope !== 2)
+      throw new ApiHttpError("bad_request", "This upstream share scope is unsupported");
+    return share;
+  }
+  /** Single-share read. The only call that may conclude a share is gone upstream. */
   async function getUpstream(row: ShareRecord, accountId?: string) {
     try {
-      const share = await withOwner(
-        row.identityId,
-        (api) => api.shares.get(row.sftpgoShareId),
-        accountId,
+      return supported(
+        await withOwner(row.identityId, (api) => api.shares.get(row.sftpgoShareId), accountId),
       );
-      if (share.rawScope !== undefined && share.rawScope !== 1 && share.rawScope !== 2)
-        throw new ApiHttpError("bad_request", "This upstream share scope is unsupported");
-      return share;
     } catch (error) {
       if (error instanceof SftpgoError && error.kind === "not_found")
         await deps.shares.removeOwned(row.identityId, row.id);
       throw error;
     }
+  }
+  /**
+   * One bulk upstream read for a whole listing, keyed by SFTPGo share id.
+   * SFTPGo caps this page (`SHARES_LIST_LIMIT`) below the local row limit, so
+   * absence from the map never proves deletion on its own.
+   */
+  async function listUpstream(identityId: string, accountId?: string) {
+    const shares = await withOwner(identityId, (api) => api.shares.list(), accountId);
+    return new Map(shares.map((share) => [share.id, share]));
   }
   async function managed(input: AccountRequestContext, id: string) {
     await liveAccountSession(deps, input);
@@ -247,10 +282,22 @@ export function createSharesService(deps: SharesDeps) {
       await owner(input.principal.identityId, input.principal.accountId);
       const rows = await deps.shares.listOwned(input.principal.identityId, { limit: 1000 });
       const items: ManagedShare[] = [];
+      if (rows.length === 0) return { items };
+      // One bulk read replaces the per-row upstream GET. The page is smaller
+      // than the row limit, so a row missing from it is either deleted
+      // upstream or merely past the page end; only the single-share read can
+      // tell those apart, and only it prunes.
+      const upstream = await listUpstream(input.principal.identityId, input.principal.accountId);
       for (const row of rows) {
         try {
-          const share = await getUpstream(row, input.principal.accountId);
-          items.push(managedShare(await mirror(row.identityId, share, row.presentation), share));
+          const listed = upstream.get(row.sftpgoShareId);
+          const share =
+            listed === undefined
+              ? await getUpstream(row, input.principal.accountId)
+              : supported(listed);
+          items.push(
+            managedShare(await mirror(row.identityId, share, row.presentation, row), share),
+          );
         } catch (error) {
           if (!(error instanceof SftpgoError) || error.kind !== "not_found") throw error;
         }
