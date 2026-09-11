@@ -8,8 +8,10 @@ from __future__ import annotations
 import errno
 import json
 import os
+import stat
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import psycopg
@@ -22,7 +24,7 @@ from starlette.routing import Route
 from . import db
 from .chunking import is_textual
 from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
-from .directory_listing import directory_query, list_directory
+from .directory_listing import directory_parts, directory_query, list_directory
 from .extract import embed_health
 from .features import FeatureConfiguration
 from .image_embed_rebuild import start_image_embed_rebuild
@@ -53,13 +55,51 @@ class ServerState:
         self.image_embed_clear_job.admission = self.thumbnail_job.admission
 
 
-def _safe_abs_path(ctx: RootContext, rel_path: str) -> str | None:
-    """Resolve `rel_path` under the root, refusing anything that escapes it."""
-    candidate = os.path.normpath(os.path.join(ctx.abs_path, rel_path.lstrip("/")))
-    root = os.path.normpath(ctx.abs_path)
-    if candidate != root and not candidate.startswith(root + os.sep):
-        return None
-    return candidate
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+
+
+def _extract_parts(path: str) -> list[str]:
+    """Validate the request path and return root-relative path components."""
+    if not path:
+        raise ValueError("invalid path")
+    return directory_parts(path if path.startswith("/") else f"/{path}")
+
+
+def _descriptor_path(descriptor: int) -> str:
+    """Return a pathname that reopens an already validated descriptor."""
+    for directory in ("/proc/self/fd", "/dev/fd"):
+        if os.path.isdir(directory):
+            return f"{directory}/{descriptor}"
+    raise OSError(errno.ENOSYS, "descriptor paths are unavailable")
+
+
+@contextmanager
+def _open_extraction_file(root: str, path: str) -> Iterator[tuple[str, int]]:
+    """Open a regular file beneath `root` without following descendant symlinks.
+
+    The descriptor-backed path keeps extractors bound to the opened inode if an
+    entry is renamed while extraction is in progress.
+    """
+    parts = _extract_parts(path)
+    if not parts:
+        raise ValueError("invalid path")
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        file_descriptor = os.open(parts[-1], _FILE_FLAGS, dir_fd=descriptor)
+        try:
+            metadata = os.fstat(file_descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise OSError(errno.ENOENT, "not a regular file")
+            yield _descriptor_path(file_descriptor), metadata.st_size
+        finally:
+            os.close(file_descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def storage_diagnostics(contexts: dict[str, RootContext]) -> dict[str, dict[str, bool]]:
@@ -161,20 +201,31 @@ async def extract_text(request: Request) -> JSONResponse:
     features = ctx.feature_configuration().values
     if not features.text_search:
         return JSONResponse({"text": None, "status": "disabled"})
-    abs_path = _safe_abs_path(ctx, path)
-    if abs_path is None:
-        return JSONResponse({"error": "path escapes root"}, status_code=400)
-    if not os.path.isfile(abs_path):
-        return JSONResponse({"error": "not found"}, status_code=404)
     ext = ext_of(os.path.basename(path))
     from .chunking import is_image
 
-    if is_image(ext) and not features.search_ocr:
-        return JSONResponse({"text": None, "status": "disabled"})
-    if not is_textual(ext):
-        return JSONResponse({"text": None, "status": "none"})
-    size = os.path.getsize(abs_path)
-    text, status = ctx.extractor.extract(abs_path, path, ext, size, search_ocr=ctx.feature_configuration().values.search_ocr)
+    try:
+        with _open_extraction_file(ctx.abs_path, path) as (opened_path, size):
+            if is_image(ext) and not features.search_ocr:
+                return JSONResponse({"text": None, "status": "disabled"})
+            if not is_textual(ext):
+                return JSONResponse({"text": None, "status": "none"})
+            text, status = ctx.extractor.extract(
+                opened_path, path, ext, size, search_ocr=ctx.feature_configuration().values.search_ocr
+            )
+    except ValueError:
+        return JSONResponse({"error": "invalid path"}, status_code=400)
+    except OSError as error:
+        statuses: dict[int | None, int] = {
+            errno.ENOENT: 404,
+            errno.ENOTDIR: 400,
+            errno.ELOOP: 400,
+            errno.EACCES: 403,
+            errno.EPERM: 403,
+        }
+        status_code = statuses.get(error.errno, 503)
+        message = "not found" if status_code == 404 else "path unavailable"
+        return JSONResponse({"error": message}, status_code=status_code)
     if text is None:
         return JSONResponse({"text": None, "status": status})
     offset = int(payload.get("offset") or 0)
