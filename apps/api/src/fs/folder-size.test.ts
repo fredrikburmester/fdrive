@@ -149,6 +149,192 @@ describe("GET /api/v1/fs/folder-size", () => {
     expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/" }], 1, "");
   });
 
+  it("excludes configured trash nested below the requested parent", async () => {
+    const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
+    const app = buildApp({
+      trashPathForStorage: () => "/photos/.trash",
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        subtreeSize,
+      }),
+    });
+
+    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ path: "/photos", bytes: 10, files: 1, indexed: true });
+    expect(subtreeSize).toHaveBeenCalledWith(
+      [{ rootId: 1, fsPrefix: "/alice" }],
+      1,
+      "alice/photos",
+      ["alice/photos/.trash"],
+    );
+  });
+
+  it("adds nested mapped roots while excluding their shadowed parent locations", async () => {
+    const subtreeSize = vi.fn(async (_scopes: unknown, rootId: number) =>
+      rootId === 1 ? { bytes: 100, files: 2 } : { bytes: 40, files: 3 },
+    );
+    const app = buildApp({
+      scopes: [
+        { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "team", fsPrefix: "/projects/team", virtualPrefix: "/shared" },
+      ],
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ home: 1, team: 2 }),
+        subtreeSize,
+      }),
+    });
+
+    const res = await app.request("/api/v1/fs/folder-size?path=/");
+
+    expect(await res.json()).toEqual({ path: "/", bytes: 140, files: 5, indexed: true });
+    expect(subtreeSize).toHaveBeenNthCalledWith(
+      1,
+      [
+        { rootId: 1, fsPrefix: "/alice" },
+        { rootId: 2, fsPrefix: "/projects/team" },
+      ],
+      1,
+      "alice",
+      ["alice/shared"],
+    );
+    expect(subtreeSize).toHaveBeenNthCalledWith(
+      2,
+      [
+        { rootId: 1, fsPrefix: "/alice" },
+        { rootId: 2, fsPrefix: "/projects/team" },
+      ],
+      2,
+      "projects/team",
+    );
+  });
+
+  it("maps a submount nested below a requested parent through both physical scopes", async () => {
+    const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
+    const app = buildApp({
+      scopes: [
+        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "sftpgo", fsPrefix: "/pool/trips", virtualPrefix: "/photos/trips" },
+      ],
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        subtreeSize,
+      }),
+    });
+
+    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
+
+    expect(await res.json()).toEqual({ path: "/photos", bytes: 10, files: 2, indexed: true });
+    expect(subtreeSize).toHaveBeenNthCalledWith(
+      1,
+      [
+        { rootId: 1, fsPrefix: "/alice" },
+        { rootId: 1, fsPrefix: "/pool/trips" },
+      ],
+      1,
+      "alice/photos",
+      ["alice/photos/trips"],
+    );
+    expect(subtreeSize).toHaveBeenNthCalledWith(
+      2,
+      [
+        { rootId: 1, fsPrefix: "/alice" },
+        { rootId: 1, fsPrefix: "/pool/trips" },
+      ],
+      1,
+      "pool/trips",
+    );
+  });
+
+  it("excludes trash inside a mapped root and avoids overlapping parent exclusions", async () => {
+    const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
+    const app = buildApp({
+      scopes: [
+        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
+      ],
+      trashPathForStorage: () => "/shared/.trash",
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ sftpgo: 1 }),
+        subtreeSize,
+      }),
+    });
+
+    const res = await app.request("/api/v1/fs/folder-size?path=/");
+
+    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 2, indexed: true });
+    expect(subtreeSize).toHaveBeenNthCalledWith(
+      1,
+      [
+        { rootId: 1, fsPrefix: "/alice" },
+        { rootId: 1, fsPrefix: "/pool/team" },
+      ],
+      1,
+      "alice",
+      ["alice/shared"],
+    );
+    expect(subtreeSize).toHaveBeenNthCalledWith(
+      2,
+      [
+        { rootId: 1, fsPrefix: "/alice" },
+        { rootId: 1, fsPrefix: "/pool/team" },
+      ],
+      1,
+      "pool/team",
+      ["pool/team/.trash"],
+    );
+  });
+
+  it("live-authorizes nested mappings and omits a mapping that is no longer readable", async () => {
+    const authorize = vi.fn(async ({ path }: { path: string }) =>
+      path === "/shared"
+        ? ({ allowed: false, reason: "denied" } as const)
+        : ({ allowed: true } as const),
+    );
+    const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
+    const app = buildApp({
+      scopes: [
+        { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "team", fsPrefix: "/projects/team", virtualPrefix: "/shared" },
+      ],
+      createAuthorizer: () => ({ authorize }),
+      indexQueries: fakeIndexQueries({
+        rootIdsByName: async () => ({ home: 1, team: 2 }),
+        subtreeSize,
+      }),
+    });
+
+    const res = await app.request("/api/v1/fs/folder-size?path=/");
+
+    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 1, indexed: true });
+    expect(authorize).toHaveBeenCalledWith({ path: "/", kind: "dir" });
+    expect(authorize).toHaveBeenCalledWith({ path: "/shared", kind: "dir" });
+    expect(subtreeSize).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 502 rather than a partial total when a nested mapping read is unavailable", async () => {
+    const authorize = vi.fn(async ({ path }: { path: string }) =>
+      path === "/shared"
+        ? ({ allowed: false, reason: "unavailable" } as const)
+        : ({ allowed: true } as const),
+    );
+    const rootIdsByName = vi.fn(async () => ({ home: 1, team: 2 }));
+    const app = buildApp({
+      scopes: [
+        { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "team", fsPrefix: "/projects/team", virtualPrefix: "/shared" },
+      ],
+      createAuthorizer: () => ({ authorize }),
+      indexQueries: fakeIndexQueries({ rootIdsByName }),
+    });
+
+    const res = await app.request("/api/v1/fs/folder-size?path=/");
+
+    expect(res.status).toBe(502);
+    expect(rootIdsByName).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for a missing path", async () => {
     const app = buildApp();
 

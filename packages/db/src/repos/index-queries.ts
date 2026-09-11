@@ -290,12 +290,16 @@ export interface IndexQueries {
    * exactly `relativePrefix` or nested under it (`""` matches the whole
    * root), intersected with `scopePrefixes` so a caller never sees bytes
    * from outside their own verified scope. `relativePrefix` is root-relative
-   * (see `toScopeClauses`), not the leading-slash virtual style.
+   * (see `toScopeClauses`), not the leading-slash virtual style. Optional
+   * `excludedRelativePrefixes` removes whole nested trees from the aggregate;
+   * this lets virtual mount consumers exclude the physical trees shadowed by
+   * more-specific mappings without reading their rows into application code.
    */
   subtreeSize(
     scopePrefixes: readonly ScopePrefix[],
     rootId: number,
     relativePrefix: string,
+    excludedRelativePrefixes?: readonly string[],
   ): Promise<SubtreeSize>;
   /**
    * Chunk counts restricted to exactly `fileIds` (capped defensively at
@@ -609,11 +613,16 @@ export function createIndexQueries(db: Db): IndexQueries {
       };
     },
 
-    async subtreeSize(scopePrefixes, rootId, relativePrefix) {
+    async subtreeSize(scopePrefixes, rootId, relativePrefix, excludedRelativePrefixes = []) {
       const pathCondition =
         relativePrefix === ""
           ? sql`true`
           : sql`(${files.path} = ${relativePrefix} OR ${files.path} LIKE ${`${escapeLikePattern(relativePrefix)}/%`} ESCAPE '\\')`;
+      const exclusionConditions = excludedRelativePrefixes.map((prefix) =>
+        prefix === ""
+          ? sql`false`
+          : sql`NOT (${files.path} = ${prefix} OR ${files.path} LIKE ${`${escapeLikePattern(prefix)}/%`} ESCAPE '\\')`,
+      );
 
       const [row] = await db
         .select({
@@ -627,6 +636,7 @@ export function createIndexQueries(db: Db): IndexQueries {
             isNull(files.deletedAt),
             eq(files.rootId, rootId),
             pathCondition,
+            ...exclusionConditions,
           ),
         );
 

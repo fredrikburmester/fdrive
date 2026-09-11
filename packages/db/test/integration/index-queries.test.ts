@@ -504,6 +504,23 @@ describe("index-queries", () => {
       expect(result).toEqual({ bytes: 100, files: 1 });
     });
 
+    it("excludes exact nested trees without treating LIKE characters as wildcards", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/a.txt", { size: 10 });
+      await insertFile(rootId, "alice/.trash_%/old.txt", { size: 20 });
+      await insertFile(rootId, "alice/team/a.txt", { size: 30 });
+      await insertFile(rootId, "alice/team/nested/b.txt", { size: 40 });
+      await insertFile(rootId, "alice/team_other/kept.txt", { size: 50 });
+      await insertFile(rootId, "alice/.trashXY/kept.txt", { size: 60 });
+
+      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/alice" }], rootId, "alice", [
+        "alice/.trash_%",
+        "alice/team",
+      ]);
+
+      expect(result).toEqual({ bytes: 120, files: 3 });
+    });
+
     it("intersects with scopePrefixes: a narrower scope never leaks bytes from outside it", async () => {
       const rootId = await insertRoot("primary");
       await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
