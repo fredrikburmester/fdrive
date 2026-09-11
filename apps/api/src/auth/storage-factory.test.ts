@@ -364,7 +364,7 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
     files: { alice: { "/shared/a.txt": "from sftpgo" } },
   });
   const dav = createFakeWebdavServer({
-    users: [{ username: "alice", password: "dav-pw" }],
+    users: [{ username: "alice", password: "teacup" }],
     origin: "http://dav.test",
     files: { "/shared/a.txt": "from webdav" },
   });
@@ -395,7 +395,7 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
       externalUsername,
       getCredential: async () => ({
         username: externalUsername,
-        password: identityId === "identity-dav" ? "dav-pw" : "pw",
+        password: identityId === "identity-dav" ? "teacup" : "pw",
       }),
       getToken: async () => (identityId === "identity-dav" ? null : sftpgoToken),
       invalidateToken: async () => {},
@@ -421,7 +421,7 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
     kind: "not_found",
   });
 
-  const basic = `Basic ${Buffer.from("alice:dav-pw").toString("base64")}`;
+  const basic = `Basic ${Buffer.from("alice:teacup").toString("base64")}`;
   const davRequests = requests.filter((request) => request.host === "dav.test");
   const sftpgoRequests = requests.filter((request) => request.host === "a.test");
   expect(davRequests.length).toBeGreaterThan(0);

@@ -937,7 +937,7 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
   it("binds the login to the WebDAV row, reports its capabilities and never touches SFTPGo", async () => {
     const clockCtl = createClock(Date.now());
     const dav = createFakeWebdavServer({
-      users: [{ username: "alice", password: "dav-pass" }],
+      users: [{ username: "alice", password: "looking-glass" }],
       origin: "http://dav.test",
       prefix: "/dav",
     });
@@ -981,7 +981,7 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
 
     const res = await login(app, {
       providerId: row.id,
-      credential: { username: "alice", password: "dav-pass" },
+      credential: { username: "alice", password: "looking-glass" },
     });
     expect(res.status).toBe(200);
     const me = MeResponse.parse(await readJson(res));
@@ -1006,7 +1006,7 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
     expect(dav.requests.at(-1)).toMatchObject({
       method: "PROPFIND",
       url: "http://dav.test/dav/",
-      headers: { authorization: `Basic ${Buffer.from("alice:dav-pass").toString("base64")}` },
+      headers: { authorization: `Basic ${Buffer.from("alice:looking-glass").toString("base64")}` },
     });
 
     const denied = await login(app, {
