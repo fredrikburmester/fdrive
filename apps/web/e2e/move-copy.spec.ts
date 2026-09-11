@@ -10,6 +10,7 @@ async function createFolder(page: Page, name: string): Promise<void> {
   await dialog.getByLabel("Folder name").fill(name);
   await dialog.getByRole("button", { name: "Create" }).click();
   await expect(dialog).toBeHidden();
+  await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 }
 
 async function uploadTextFile(page: Page, name: string, contents: string): Promise<void> {
@@ -70,6 +71,39 @@ test("Copy to leaves the original file in place", async ({ page }) => {
   await page.goto(`/files/${sandbox}/${destination}`);
   await expect(listing(page).getByText("copy-me.txt", { exact: true })).toBeVisible();
 });
+
+for (const operation of ["Move", "Copy"] as const) {
+  test(`${operation} picker excludes the source subtree and permits a sibling`, async ({
+    page,
+  }) => {
+    const sandbox = await createSandbox(page);
+    await createFolder(page, "source");
+    await createFolder(page, "source-other");
+    await listing(page).getByText("source", { exact: true }).dblclick();
+    await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/source$`));
+    await createFolder(page, "nested");
+    await uploadTextFile(page, "keep.txt", "preserve me");
+    await page.goto(`/files/${sandbox}`);
+    await listing(page).getByText("source", { exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: `${operation} to`, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("button", { name: "source", exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: `${operation} here` })).toBeDisabled();
+    await dialog.getByRole("button", { name: "source-other", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: `${operation} here` })).toBeEnabled();
+    const completed = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/v1/fs/${operation.toLowerCase()}`) &&
+        response.request().method() === "POST",
+    );
+    await dialog.getByRole("button", { name: `${operation} here` }).click();
+    await expect(dialog).toBeHidden();
+    expect((await completed).status()).toBe(200);
+    await page.goto(`/files/${sandbox}/source-other/source`);
+    await expect(listing(page).getByText("keep.txt", { exact: true })).toBeVisible();
+    await expect(listing(page).getByText("nested", { exact: true })).toBeVisible();
+  });
+}
 
 test("dragging a file row onto a folder row moves it there", async ({ page }) => {
   const sandbox = await createSandbox(page);

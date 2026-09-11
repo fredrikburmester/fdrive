@@ -1,4 +1,5 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import {
   createFakeSftpgoServer,
@@ -712,6 +713,54 @@ describe("POST /fs/mkdir", () => {
     expect(events).toEqual([
       { type: "fs", op: "mkdir", identityId: ALICE_IDENTITY_ID, paths: ["/newdir"], at: CLOCK_ISO },
     ]);
+  });
+});
+
+describe.each(["move", "copy"] as const)("POST /fs/%s subtree safety", (operation) => {
+  it.each(["/folder/folder", "/folder/sub/folder", "/folder//sub/folder", "/folder/sub/../folder"])(
+    "rejects descendant %s without storage, metadata, or event side effects",
+    async (target) => {
+      const files = { "/folder/a.txt": "a", "/folder/sub/b.txt": "b" };
+      const storage = createMemoryStorage(files);
+      const mutate = vi.spyOn(storage, operation);
+      const stat = vi.spyOn(storage, "statFile");
+      const metadata = createMetadataService(createMemoryRepos());
+      const onMoved = vi.spyOn(metadata, "onMoved");
+      const onCopied = vi.spyOn(metadata, "onCopied");
+      const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+      const res = await app.request(
+        `/api/v1/fs/${operation}`,
+        requestedWith({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: "/folder/", target }),
+        }),
+      );
+
+      expect(res.status).toBe(400);
+      expect(mutate).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+      expect(onMoved).not.toHaveBeenCalled();
+      expect(onCopied).not.toHaveBeenCalled();
+      expect(storage.dump()).toEqual(files);
+      expect(events).toEqual([]);
+    },
+  );
+
+  it("allows a similarly prefixed sibling folder", async () => {
+    const storage = createMemoryStorage({ "/folder/a.txt": "a" });
+    const { app } = await buildHarnessWithStorage(storage);
+    const res = await app.request(
+      `/api/v1/fs/${operation}`,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/folder", target: "/folder-other" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(storage.dump()["/folder-other/a.txt"]).toBe("a");
+    expect(storage.dump()["/folder/a.txt"]).toBe(operation === "copy" ? "a" : undefined);
   });
 });
 

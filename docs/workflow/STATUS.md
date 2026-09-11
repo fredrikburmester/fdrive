@@ -5,6 +5,22 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Issue #2: descendant move/copy guard
+
+- Item 1 implemented locally: normalized descendant targets return 400 before storage,
+  metadata or events; equal-path API no-ops remain supported. Move/copy pickers exclude
+  selected subtrees and require a valid destination for every selected source.
+- Regression coverage checks preserved file contents, no mutation/event side effects,
+  normalized paths, sibling prefixes and both picker flows. Focused API tests, lint and
+  typecheck pass. Integration passes; all 9 move/copy browser tests pass against disposable
+  SFTPGo/PostgreSQL with `E2E_DEV=1`. Interactive dev check confirmed the selected folder
+  is hidden, same-parent confirmation disabled, and a valid sibling destination enabled.
+- Default parallel application coverage hit existing archive/trash test timeouts
+  (`.fdrive-workflow/logs/step.pkuX6l/`). All package coverage passes with
+  `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
+  (`.fdrive-workflow/logs/step.pmRLLk/`); no timeouts or thresholds changed.
+- Changes remain uncommitted on `main`; no other issue items changed.
+
 ## Agent configuration and guard
 
 - Instruction files are split by audience. `AGENTS.md` (read by Codex, and by Claude through

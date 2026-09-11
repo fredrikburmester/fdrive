@@ -700,6 +700,12 @@ export function FileBrowser({
     }
 
     const mutation = destinationPicker.mode === "move" ? move : copy;
+    if (
+      movablePaths(destinationPicker.paths, destinationDir).length !==
+      destinationPicker.paths.length
+    ) {
+      return;
+    }
     for (const source of destinationPicker.paths) {
       mutation.mutate({ path: source, target: joinPath(destinationDir, baseName(source)) });
     }
@@ -1074,6 +1080,11 @@ export function FileBrowser({
         <DestinationPicker
           open
           mode={destinationPicker.mode}
+          sourcePaths={
+            destinationPicker.mode === "move" || destinationPicker.mode === "copy"
+              ? destinationPicker.paths
+              : []
+          }
           initialPath={path}
           onOpenChange={(open) => {
             if (!open) {
