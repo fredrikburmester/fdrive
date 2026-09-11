@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FileEntry } from "../entries.ts";
 import { isStorageError, StorageError } from "../errors.ts";
 import { createMemoryStorage } from "../testing/memory-storage.ts";
 import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
@@ -224,17 +225,43 @@ describe("createRecycleFolderTrash: list", () => {
   });
 
   it("truncates once the directory-visit bound is hit", async () => {
-    const files: Record<string, string> = {};
-    for (let i = 0; i < 10_005; i += 1) {
-      files[`${TRASH_PATH}/d${i}/f.txt/1000000`] = "x";
-    }
-    const storage = createMemoryStorage(files);
+    // Synthesize the listing instead of materializing 10,005 files: the walk
+    // only calls list, and building that many entries in memory storage was
+    // slow enough to time out under coverage on a loaded CI runner.
+    const dirCount = 10_005;
+    const dirEntry = (path: string, name: string): FileEntry => ({
+      name,
+      path,
+      kind: "dir",
+      size: 0,
+      modifiedAt: new Date(0),
+      ext: "",
+    });
+    const storage = createMemoryStorage();
+    storage.list = async (path: string): Promise<FileEntry[]> => {
+      if (path === TRASH_PATH) {
+        return Array.from({ length: dirCount }, (_, i) => dirEntry(`${TRASH_PATH}/d${i}`, `d${i}`));
+      }
+      if (path.endsWith("/f.txt")) {
+        return [
+          {
+            name: "1000000",
+            path: `${path}/1000000`,
+            kind: "file",
+            size: 1,
+            modifiedAt: new Date(0),
+            ext: "",
+          },
+        ];
+      }
+      return [dirEntry(`${path}/f.txt`, "f.txt")];
+    };
     const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
 
     const listing = await trash.list({ limit: 1_000_000 });
 
     expect(listing.truncated).toBe(true);
-    expect(listing.entries.length).toBeLessThan(10_005);
+    expect(listing.entries.length).toBeLessThan(dirCount);
   });
 
   it("throws AbortError immediately for an already-aborted signal", async () => {
