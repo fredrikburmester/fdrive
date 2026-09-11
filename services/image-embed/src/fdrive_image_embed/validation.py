@@ -4,7 +4,7 @@ strings, or a JSON-decoded text request body) and raises `RequestError` for
 `server.py` to translate into an HTTP response.
 
 Bounds are fixed by the HTTP contract in
-`docs/workflow/P7-IMAGE-SEARCH-BUILD.md`: at most 32 images or 64 texts per
+`services/image-embed/README.md`: at most 32 images or 64 texts per
 request, an image part at most 8 MiB, a text at most 512 characters. All
 bound violations are 413; a missing or malformed request body is 400.
 """

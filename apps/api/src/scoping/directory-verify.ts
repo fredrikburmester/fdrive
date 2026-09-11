@@ -21,7 +21,7 @@ function firstSegmentBelow(prefix: string, path: string): string | null {
  * user sees there comes from the more specific mapping, never from
  * `scope`'s own disk location, so a mismatch there is expected and must
  * not be treated as an inconsistency. See the "shadowed same-name files"
- * case in `docs/workflow/P5-SCOPES.md`.
+ * case in `docs/SCOPING.md`.
  *
  * `unindexedPrefixes` (virtual prefixes an administrator has acknowledged
  * as present but not indexed) shadow a child name the same way; they grant

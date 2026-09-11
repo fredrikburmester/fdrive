@@ -12,7 +12,7 @@ never creates or migrates its own schema: `packages/db`'s Drizzle migrations
 own `idx.ocr_log` and `idx.ocr_runs`, and the service waits for
 `idx.schema_version` to report the version it expects before doing anything.
 
-See `PLAN.md` §2.2 and §7 for how this fits into the rest of fdrive.
+See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 ## What it does, and what it refuses to touch
 

@@ -47,7 +47,7 @@ export interface IdentityScopeProps {
  * the unmapped mount itself ("Map it" or "Not indexed") rather than a blank
  * form. "Map it" offers index-derived suggestions and, by default, saves a
  * folder-level mapping that every login mounting the folder adopts
- * (`docs/workflow/P8-FOLDER-MAPPINGS.md`). Physical prefixes and root
+ * (`docs/SCOPING.md`). Physical prefixes and root
  * names only ever come from the administrator response, so a
  * non-administrator never sees them.
  */

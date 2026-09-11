@@ -29,7 +29,7 @@ import { createSearchService } from "../../src/search/service.ts";
 
 /**
  * Real isolated SFTPGo and Postgres coverage for the MCP tools'
- * scope-and-authorization wiring (`docs/workflow/P5-SCOPE-CONSUMERS.md`'s
+ * scope-and-authorization wiring (`docs/SCOPING.md`'s
  * "MCP chunk"). As in `scopes-sftp.test.ts`, no real indexer container runs:
  * `verifiedIndexScopes`'s directory-verification step uses
  * `fakeIndexerDirectory`, seeded to mirror exactly what the real SFTP

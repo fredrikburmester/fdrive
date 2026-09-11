@@ -31,7 +31,7 @@ function fsPrefixFor(directory: string): string {
 
 /**
  * Proposes where an unmapped SFTPGo virtual folder physically lives
- * (`docs/workflow/P8-FOLDER-MAPPINGS.md`): the mount is listed over SFTP,
+ * (`docs/SCOPING.md`): the mount is listed over SFTP,
  * the index is asked for directories whose direct files carry every file
  * name seen there, and each candidate is then confirmed with the same
  * directory comparison verification uses. A suggestion grants nothing; the

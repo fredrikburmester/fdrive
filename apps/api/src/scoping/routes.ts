@@ -54,7 +54,7 @@ async function ownedIdentity(deps: ScopeRoutesDeps, accountId: string, rawId: st
  * Registers `GET`/`PUT /api/v1/account/identities/:id/scope`, the
  * administrator-only `GET .../scope/suggestions`, and the
  * administrator-only `GET`/`PUT /api/v1/system/mount-mappings` (folder-level
- * mappings, see `docs/workflow/P8-FOLDER-MAPPINGS.md`). The scope routes require
+ * mappings, see `docs/SCOPING.md`). The scope routes require
  * a cookie session that owns `:id`; a bearer/API-token principal is
  * rejected on both, since a token carries no session (`accountContext`
  * throws when an `authorization` header is present). `PUT` additionally

@@ -7,7 +7,7 @@ calls into it.
 
 Excluded from coverage: exercising this for real means loading actual model
 weights, which the test suite deliberately never does (see the
-"Testability" requirement in `docs/workflow/P7-IMAGE-SEARCH-BUILD.md`). The
+test setup in `services/image-embed/README.md`). The
 `Embedder` protocol plus `tests/conftest.py`'s `FakeEmbedder` cover
 everything downstream of it (`server.py`, request validation, batching,
 normalization) without touching torch at all.

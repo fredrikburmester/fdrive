@@ -1,12 +1,14 @@
 # fdrive
 
+Current design: [Architecture](docs/ARCHITECTURE.md). Unfinished work: [Plans](docs/plans/README.md).
+
 **fdrive** is a clean, fast web drive for your home server. It connects to your existing [SFTPGo](https://github.com/drakkan/sftpgo) storage so you can browse, upload, preview, and share your files from any browser on your home network, without moving your data into a database or giving up control.
 
 Think of it like Google Drive or iCloud Drive, but running completely on your own hardware, right over your existing files.
 
 ![fdrive file browser in dark mode, with folders, favorites, tags, and file details](docs/screenshots/files-list-only-overview.png)
 
-[Explore the screenshots](#screenshots) · [Get started](#2-minute-quickstart-home-server--lan)
+[Explore the screenshots](#screenshots) · [Get started](#quickstart-home-server--lan)
 
 ---
 
@@ -154,6 +156,7 @@ fdrive is designed to be lightweight by default. You only pay for what you use:
 - 🤖 **[AI Assistant Integration (MCP)](docs/MCP.md)**: Connect Claude or Raycast to search and read your files.
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
+- **[Adding a Storage Provider](docs/STORAGE-PROVIDERS.md)**: Implement, register and test a backend.
 
 ---
 

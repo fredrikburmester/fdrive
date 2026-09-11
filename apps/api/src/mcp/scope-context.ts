@@ -8,7 +8,7 @@ import { roundTripVirtualPath } from "../scoping/round-trip.ts";
  * paths and the index's (rootId, fs path) rows, resolved once per tool call
  * from the caller's `ScopeResolver.verifiedIndexScopes(identity)` result.
  * Never built from a username/template fallback; see
- * `docs/workflow/P5-SCOPE-CONSUMERS.md`'s "MCP chunk" section.
+ * `docs/SCOPING.md`.
  */
 export interface ScopeContext {
   readonly scopes: readonly Scope[];

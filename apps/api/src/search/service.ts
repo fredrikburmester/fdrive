@@ -28,7 +28,7 @@ import { dateFromMtimeNs } from "./scopes.js";
 const CONTENT_FANOUT_LIMIT = 60;
 /** filesai's filename query caps at `LIMIT 25`. */
 const FILENAME_FANOUT_LIMIT = 25;
-/** At most this many derived folders are shown, per PLAN.md §7/§9. */
+/** At most this many derived folders are shown. */
 const MAX_FOLDERS = 5;
 /** At most this many hits are shown in the "content matches" section. */
 const MAX_CONTENT_HITS = 10;

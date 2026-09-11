@@ -11,7 +11,7 @@ its own schema: `packages/db`'s Drizzle migrations own `idx.*` and
 `app.thumbnails` / `app.settings`, and the indexer waits for `idx.schema_version`
 to report the version it expects before doing anything else.
 
-See `PLAN.md` §2.2, §4.2, and §7 for how this fits into the rest of fdrive.
+See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 ## What is indexed
 
@@ -177,13 +177,10 @@ a published port in the non-dev compose file.
 
 ## Image embeddings
 
-`services/image-embed` is a separate, optional sidecar (same `index` profile)
-that turns images and search queries into SigLIP 2 vectors for image search.
-See `docs/workflow/P7-IMAGE-SEARCH.md` for why it exists as its own service
-rather than reusing the text `embed` container (CLIP-style image towers are
-not part of that deployment), and `docs/workflow/P7-IMAGE-SEARCH-BUILD.md`
-for its fixed HTTP contract and the orchestrator's decisions (model choice,
-1024-dimensional vectors, content-keyed by sha256, L2-normalized output).
+`services/image-embed` is a separate sidecar that turns images and search queries into
+SigLIP 2 vectors. Its activation is managed through persisted feature settings. See the
+[service reference](../services/image-embed/README.md) for the model and bounded HTTP contract:
+1024-dimensional, L2-normalized vectors; image records are keyed by content sha256.
 
 The sidecar itself has no database access and does no indexing: it only
 embeds bytes or text it is handed and normalizes the result. The indexer

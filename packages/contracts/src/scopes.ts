@@ -112,7 +112,7 @@ export type SetIdentityScopeRequestInput = z.input<typeof SetIdentityScopeReques
  * they are available. Distinct reasons let the UI explain the failure
  * (misconfiguration vs. a transient outage) without ever claiming that
  * matching root/path names prove two storage locations are identical; see
- * `docs/workflow/P5-SCOPES.md`. `unmapped_mount` is reported instead of
+ * `docs/SCOPING.md`. `unmapped_mount` is reported instead of
  * `mismatch` when every entry SFTP shows but the index lacks is a plausible
  * SFTPGo virtual-folder mount, i.e. a mapping is missing rather than wrong.
  */

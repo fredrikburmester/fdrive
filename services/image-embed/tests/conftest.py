@@ -1,7 +1,7 @@
 """Shared test fixtures: a fake `Embedder` that never touches torch, so the
 whole HTTP surface (and `main.py`'s wiring) is testable without the
 `runtime` extra installed, per the "Testability" requirement in
-`docs/workflow/P7-IMAGE-SEARCH-BUILD.md`.
+`services/image-embed/README.md`.
 """
 
 from __future__ import annotations

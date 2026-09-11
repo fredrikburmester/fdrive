@@ -22,7 +22,7 @@ import { createSearchService } from "../../src/search/service.ts";
 
 /**
  * Real isolated SFTPGo integration coverage for the scope engine's HTTP
- * consumers (`docs/workflow/P5-SCOPE-CONSUMERS.md`). This does not run a
+ * consumers (`docs/SCOPING.md`). This does not run a
  * real indexer container: the resolver's directory-verification step is
  * exercised against `fakeIndexerDirectory`, seeded to mirror exactly what
  * the real SFTP listings below produce, which the chunk spec explicitly

@@ -5,7 +5,7 @@ import {
   type SidecarResult,
 } from "../system/sidecar-client.js";
 
-/** 5 seconds, per `docs/workflow/P7-IMAGE-SEARCH-API.md` decision 6 for the image-embed query call. */
+/** Timeout for the image-embedding query call. */
 export const DEFAULT_IMAGE_EMBED_TIMEOUT_MS = 5000;
 
 /** The sidecar rejects a `q` longer than this; truncated before sending rather than left to error. */

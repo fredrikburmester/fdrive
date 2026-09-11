@@ -1,13 +1,8 @@
 # fdrive-image-embed
 
 A small FastAPI-shaped (Starlette) sidecar that turns images and text into
-SigLIP 2 embeddings for image search. See
-[`docs/workflow/P7-IMAGE-SEARCH.md`](../../docs/workflow/P7-IMAGE-SEARCH.md)
-and
-[`docs/workflow/P7-IMAGE-SEARCH-BUILD.md`](../../docs/workflow/P7-IMAGE-SEARCH-BUILD.md)
-for why it exists, its fixed HTTP contract, and how the indexer and API use
-it. Modelled on `services/ocr` for structure, packaging, and test
-configuration; this service is its sibling, not a new pattern.
+SigLIP 2 embeddings for image search. The HTTP contract below is implemented by this
+service; [search](../../docs/SEARCH-AND-AI.md) describes how it fits into the application.
 
 ## Quick local setup (tests only, no model)
 

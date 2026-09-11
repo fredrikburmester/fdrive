@@ -1,6 +1,11 @@
 # Developer Guide
 
+Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/README.md).
+
 This guide covers running fdrive locally for development with hot reloading, seeded test accounts, and integration test environments.
+
+For backend extensions, see [Adding a storage provider](STORAGE-PROVIDERS.md): package setup,
+module contracts, registration, capability limits and verification.
 
 ---
 
