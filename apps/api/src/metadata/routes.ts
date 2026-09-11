@@ -177,7 +177,8 @@ export function registerMetadataRoutes(
     } catch (error) {
       if (!(error instanceof ApiHttpError) || error.kind !== "not_found") throw error;
     }
-    await metadata.removeFolderView(principal.identityId, path);
+    // A read cannot tell a permanent deletion from a path or mount that is
+    // temporarily unavailable. Explicit filesystem mutations reconcile pins.
     const body: FolderViewResponse = { view: null };
     return c.json(body);
   });

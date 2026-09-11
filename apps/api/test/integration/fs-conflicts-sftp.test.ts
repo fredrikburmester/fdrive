@@ -6,6 +6,7 @@ import {
   TrashListResponse,
 } from "@fdrive/contracts";
 import { createDb, createRepos } from "@fdrive/db";
+import { createSftpgoClient } from "@fdrive/sftpgo";
 import { startPostgres, startSftpgo } from "@fdrive/testkit";
 import type { Logger } from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -208,5 +209,32 @@ describe("fs and trash conflict guards against a real SFTPGo container", () => {
     expect(await download(cookie, "/restore-target.txt")).toBe("occupies the target now");
     const trashListAfter = await listTrash(cookie);
     expect(trashListAfter.entries.map((candidate) => candidate.id)).toContain(entry.id);
+  }, 180000);
+
+  it("retains a folder view while its provider directory is temporarily missing", async () => {
+    const { cookie } = await login("alice");
+    await upload(cookie, "/pinned-view/keep.txt", "kept");
+    const saved = await call("/api/v1/folder-views", {
+      method: "PUT",
+      cookie,
+      body: { path: "/pinned-view", mode: "tree" },
+    });
+    expect(saved.status).toBe(200);
+
+    // Bypass application mutation hooks to model temporary provider visibility.
+    const client = createSftpgoClient({ baseUrl: sftp.baseUrl });
+    const token = await client.login({ username: "alice", password: "alice-pass" });
+    const user = client.user(token.accessToken);
+    await user.move("/pinned-view", "/temporarily-hidden-view");
+    const missing = await call("/api/v1/folder-views?path=/pinned-view", { cookie });
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toEqual({ view: null });
+
+    await user.move("/temporarily-hidden-view", "/pinned-view");
+    const returned = await call("/api/v1/folder-views?path=/pinned-view", { cookie });
+    expect(returned.status).toBe(200);
+    expect(await returned.json()).toEqual({
+      view: { path: "/pinned-view", mode: "tree", sort: null },
+    });
   }, 180000);
 });

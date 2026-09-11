@@ -374,7 +374,7 @@ describe("folder views", () => {
     });
   });
 
-  it("rejects file pins and prunes only a confirmed missing pin", async () => {
+  it("rejects file pins and preserves a pin while its directory is missing", async () => {
     const { app, metadata } = await buildHarness();
     const file = await app.request(
       "/api/v1/folder-views",
@@ -399,7 +399,34 @@ describe("folder views", () => {
     expect(await (await app.request("/api/v1/folder-views?path=/gone")).json()).toEqual({
       view: null,
     });
-    expect(await metadata.getFolderView(ALICE_IDENTITY_ID, "/gone")).toBeNull();
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/gone")).resolves.toMatchObject({
+      mode: "tree",
+    });
+
+    const mkdir = await app.request(
+      "/api/v1/fs/mkdir",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/gone" }),
+      }),
+    );
+    expect(mkdir.status).toBe(201);
+    expect(await (await app.request("/api/v1/folder-views?path=/gone")).json()).toEqual({
+      view: { path: "/gone", mode: "tree", sort: null },
+    });
+  });
+
+  it("does not delete a persisted pin when the path is currently a file", async () => {
+    const { app, metadata } = await buildHarness();
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/hello.txt", "grid");
+
+    expect(await (await app.request("/api/v1/folder-views?path=/hello.txt")).json()).toEqual({
+      view: null,
+    });
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/hello.txt")).resolves.toMatchObject({
+      mode: "grid",
+    });
   });
 
   it("resets pins across every identity linked to the calling account", async () => {
