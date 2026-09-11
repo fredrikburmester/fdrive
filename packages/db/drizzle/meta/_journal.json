@@ -22,6 +22,13 @@
       "when": 1789119256586,
       "tag": "0002_foreign_key_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789133411800,
+      "tag": "0003_index_query_hot_paths",
+      "breakpoints": true
     }
   ]
 }
