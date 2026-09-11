@@ -231,8 +231,20 @@ Test server-side refusals as well as hidden controls; a stale client can still m
 The factory then attaches `createRecycleFolderTrash` for listing, restore, purge and empty.
 Do not apply these wrappers a second time in the module.
 
+Native SFTPGo directory deletes create one ordinary timestamp file leaf for each nested file.
+Generic `"move"` providers use a separate `.fdrive-move-v1` namespace. Alternating structural
+markers and raw path segments keep long, numeric, Unicode and literal-percent names reversible
+without expanding a provider filename. File and directory leaves also occupy separate branches,
+so a whole-directory move cannot merge with ordinary file-leaf scaffolding. Legacy generic
+entries outside this namespace are not inferred automatically; in particular, an unmarked
+timestamp directory is never treated as a deleted directory. Restores and purges may leave empty
+path containers under the recycle root; Trash listing ignores them and **Empty Trash** removes
+them. This preserves empty directories without an unsafe list-then-recursive-delete cleanup.
+A recycle root belongs to one configured provider strategy; do not share it between native
+and generic move layouts. Native providers reserve no original filename for the generic layout.
+
 Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
-`provider.config.trash`. They default to disabled with path `/.trash`. The layout is
+`provider.config.trash`. They default to disabled with path `/.trash`. The native layout is
 `<trashPath>/<original directory>/<original filename>/<nanosecond timestamp>`; deleting inside
 the trash permanently deletes so purge/empty work. The native option is not an arbitrary
 upstream recycle-bin API hook.

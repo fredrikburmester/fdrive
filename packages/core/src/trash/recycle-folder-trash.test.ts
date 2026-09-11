@@ -4,6 +4,8 @@ import { createMemoryStorage } from "../testing/memory-storage.ts";
 import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
 
 const TRASH_PATH = "/.trash";
+const MOVE_DIR_ID = ".fdrive-move-v1/dir/p/docs/v/1000000";
+const MOVE_DIR_PATH = `${TRASH_PATH}/${MOVE_DIR_ID}`;
 
 describe("createRecycleFolderTrash: list", () => {
   it("returns an empty, non-truncated listing for an empty trash", async () => {
@@ -14,6 +16,24 @@ describe("createRecycleFolderTrash: list", () => {
     const listing = await trash.list();
 
     expect(listing).toEqual({ entries: [], truncated: false });
+  });
+
+  it("returns an empty move-layout listing before its namespace exists", async () => {
+    const storage = createMemoryStorage();
+    await storage.mkdir(TRASH_PATH);
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    await expect(trash.list()).resolves.toEqual({ entries: [], truncated: false });
+  });
+
+  it("propagates a move-layout namespace listing failure", async () => {
+    const storage = createMemoryStorage();
+    storage.list = async () => {
+      throw new StorageError("forbidden", "no trash access");
+    };
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    await expect(trash.list()).rejects.toMatchObject({ kind: "forbidden" });
   });
 
   it("lists a top-level and a nested leaf, parsing name, originalPath, size, and deletedAt", async () => {
@@ -40,6 +60,62 @@ describe("createRecycleFolderTrash: list", () => {
       name: "a.txt",
       size: 7,
     });
+  });
+
+  it("lists a deleted directory as one leaf without walking its contents", async () => {
+    const storage = createMemoryStorage({
+      [`${MOVE_DIR_PATH}/sub/file.txt`]: "inside",
+    });
+    const listedPaths: string[] = [];
+    const originalList = storage.list.bind(storage);
+    storage.list = async (path: string) => {
+      listedPaths.push(path);
+      return originalList(path);
+    };
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    const listing = await trash.list();
+
+    expect(listing).toMatchObject({
+      entries: [
+        {
+          id: MOVE_DIR_ID,
+          originalPath: "/docs",
+          name: "docs",
+          size: 0,
+        },
+      ],
+      truncated: false,
+    });
+    expect(listedPaths).not.toContain(MOVE_DIR_PATH);
+  });
+
+  it("walks an unmarked numeric original directory and lists its file leaf", async () => {
+    const storage = createMemoryStorage({
+      [`${TRASH_PATH}/docs/2026/report.txt/1000000`]: "report",
+    });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    const listing = await trash.list();
+
+    expect(listing.entries).toMatchObject([
+      {
+        id: "docs/2026/report.txt/1000000",
+        originalPath: "/docs/2026/report.txt",
+        name: "report.txt",
+      },
+    ]);
+  });
+
+  it("preserves a native original directory named like the generic namespace", async () => {
+    const storage = createMemoryStorage({
+      [`${TRASH_PATH}/.fdrive-move-v1/a.txt/1000000`]: "native",
+    });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+    const [entry] = (await trash.list()).entries;
+    expect(entry?.originalPath).toBe("/.fdrive-move-v1/a.txt");
+    await trash.restore(entry?.id ?? "missing");
+    expect(storage.dump()).toEqual({ "/.fdrive-move-v1/a.txt": "native" });
   });
 
   it("sorts by deletedAt descending, then by id", async () => {
@@ -219,6 +295,63 @@ describe("createRecycleFolderTrash: restore", () => {
     expect(storage.dump()).toEqual({ "/new/place/a.txt": "hello a" });
   });
 
+  it("restores a directory leaf with its contents", async () => {
+    const storage = createMemoryStorage({
+      [`${MOVE_DIR_PATH}/a.txt`]: "a",
+      [`${MOVE_DIR_PATH}/sub/b.txt`]: "b",
+    });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    const restored = await trash.restore(MOVE_DIR_ID);
+
+    expect(restored).toMatchObject({ path: "/docs", name: "docs", kind: "dir", size: 0 });
+    expect(storage.dump()).toEqual({
+      "/docs/a.txt": "a",
+      "/docs/sub/b.txt": "b",
+    });
+    expect((await trash.list()).entries).toEqual([]);
+  });
+
+  it("rejects an unmarked numeric directory before mutating it or its inferred target", async () => {
+    const storage = createMemoryStorage({
+      [`${TRASH_PATH}/docs/2026/report.txt/1000000`]: "report",
+    });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    await expect(trash.restore("docs/2026")).rejects.toMatchObject({ kind: "bad_request" });
+    expect(storage.dump()).toEqual({
+      [`${TRASH_PATH}/docs/2026/report.txt/1000000`]: "report",
+    });
+    expect(storage.dirs()).not.toContain("/docs");
+  });
+
+  it("move layout rejects legacy leaves before mutation", async () => {
+    const legacyPath = `${TRASH_PATH}/docs/a.txt/1000000`;
+    const storage = createMemoryStorage({ [legacyPath]: "legacy" });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    await expect(trash.restore("docs/a.txt/1000000")).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    expect(storage.dump()).toEqual({ [legacyPath]: "legacy" });
+  });
+
+  it("rejects a non-file, non-directory leaf before mutation", async () => {
+    const leafPath = `${TRASH_PATH}/docs/link/1000000`;
+    const storage = createMemoryStorage({ [leafPath]: "link" });
+    const originalStat = storage.stat.bind(storage);
+    storage.stat = async (path: string) => {
+      const stat = await originalStat(path);
+      return path === leafPath ? { ...stat, kind: "symlink" } : stat;
+    };
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    await expect(trash.restore("docs/link/1000000")).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    expect(storage.dump()).toEqual({ [leafPath]: "link" });
+  });
+
   it("falls back to a zero mtime when the provider reports none", async () => {
     const storage = createMemoryStorage(
       { [`${TRASH_PATH}/docs/a.txt/1000000`]: "hello a" },
@@ -231,13 +364,15 @@ describe("createRecycleFolderTrash: restore", () => {
     expect(restored.modifiedAt).toEqual(new Date(0));
   });
 
-  it("removes the now-empty <name> directory after restoring the only version", async () => {
+  it("leaves the now-empty <name> directory after restoring the only version", async () => {
     const storage = createMemoryStorage({ [`${TRASH_PATH}/docs/a.txt/1000000`]: "hello a" });
     const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
 
     await trash.restore("docs/a.txt/1000000");
 
-    expect(storage.dirs()).not.toContain(`${TRASH_PATH}/docs/a.txt`);
+    // StorageProvider.deleteDir is recursive, so pruning after an empty-list
+    // check could destroy a version created concurrently after that check.
+    expect(storage.dirs()).toContain(`${TRASH_PATH}/docs/a.txt`);
   });
 
   it("keeps the <name> directory when a sibling version is still trashed", async () => {
@@ -330,6 +465,41 @@ describe("createRecycleFolderTrash: purge", () => {
     expect(listing.entries.map((entry) => entry.id)).toEqual(["top.txt/2000000"]);
   });
 
+  it("permanently deletes a directory leaf and its contents", async () => {
+    const storage = createMemoryStorage({
+      [`${MOVE_DIR_PATH}/sub/file.txt`]: "inside",
+    });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    await trash.purge([MOVE_DIR_ID]);
+
+    expect(storage.dump()).toEqual({});
+    expect((await trash.list()).entries).toEqual([]);
+  });
+
+  it("refuses to purge an unmarked numeric directory", async () => {
+    const storage = createMemoryStorage({
+      [`${TRASH_PATH}/docs/2026/report.txt/1000000`]: "report",
+    });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    await expect(trash.purge(["docs/2026"])).rejects.toMatchObject({ kind: "bad_request" });
+    expect(storage.dump()).toEqual({
+      [`${TRASH_PATH}/docs/2026/report.txt/1000000`]: "report",
+    });
+  });
+
+  it("move layout refuses to purge a legacy leaf", async () => {
+    const legacyPath = `${TRASH_PATH}/docs/a.txt/1000000`;
+    const storage = createMemoryStorage({ [legacyPath]: "legacy" });
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH, layout: "move" });
+
+    await expect(trash.purge(["docs/a.txt/1000000"])).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    expect(storage.dump()).toEqual({ [legacyPath]: "legacy" });
+  });
+
   it("ignores ids that are already gone", async () => {
     const storage = createMemoryStorage({ [`${TRASH_PATH}/top.txt/1000000`]: "top" });
     const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
@@ -337,13 +507,30 @@ describe("createRecycleFolderTrash: purge", () => {
     await expect(trash.purge(["docs/missing.txt/9999999"])).resolves.toBeUndefined();
   });
 
-  it("removes the now-empty <name> directory", async () => {
+  it("ignores a file leaf that disappears between stat and deletion", async () => {
+    const leafPath = `${TRASH_PATH}/top.txt/1000000`;
+    const storage = createMemoryStorage({ [leafPath]: "top" });
+    const originalStat = storage.stat.bind(storage);
+    const originalDeleteFile = storage.deleteFile.bind(storage);
+    storage.stat = async (path: string) => {
+      const stat = await originalStat(path);
+      if (path === leafPath) {
+        await originalDeleteFile(path);
+      }
+      return stat;
+    };
+    const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
+
+    await expect(trash.purge(["top.txt/1000000"])).resolves.toBeUndefined();
+  });
+
+  it("leaves the now-empty <name> directory after purging the only version", async () => {
     const storage = createMemoryStorage({ [`${TRASH_PATH}/docs/a.txt/1000000`]: "hello a" });
     const trash = createRecycleFolderTrash({ storage, trashPath: TRASH_PATH });
 
     await trash.purge(["docs/a.txt/1000000"]);
 
-    expect(storage.dirs()).not.toContain(`${TRASH_PATH}/docs/a.txt`);
+    expect(storage.dirs()).toContain(`${TRASH_PATH}/docs/a.txt`);
   });
 
   it("propagates a deleteFile failure that is not a not_found StorageError", async () => {

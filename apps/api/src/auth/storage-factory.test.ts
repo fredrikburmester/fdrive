@@ -1,4 +1,9 @@
-import { type ProviderModule, StorageError, type StorageProvider } from "@fdrive/core";
+import {
+  moveTrashLeafPath,
+  type ProviderModule,
+  StorageError,
+  type StorageProvider,
+} from "@fdrive/core";
 import type { Identity, Provider } from "@fdrive/db";
 import { sftpgoModule } from "@fdrive/sftpgo";
 import { createMemoryStorage } from "@fdrive/testkit";
@@ -208,8 +213,10 @@ it("moves deletes into the recycle folder for a module whose trash strategy is m
   const storage = await factory("identity-a");
   await storage.deleteFile("/docs/a.txt");
   const leaf = (BigInt(at.getTime()) * BigInt(1_000_000)).toString();
-  expect(memory.dump()).toEqual({ [`/.trash/docs/a.txt/${leaf}`]: "x" });
-  expect((await storage.trash?.list())?.entries).toHaveLength(1);
+  expect(memory.dump()).toEqual({
+    [moveTrashLeafPath("/.trash", "/docs/a.txt", "file", leaf)]: "x",
+  });
+  expect((await storage.trash?.list())?.entries).toMatchObject([{ originalPath: "/docs/a.txt" }]);
 });
 
 it("adds no trash for a module without one even when settings enable it", async () => {

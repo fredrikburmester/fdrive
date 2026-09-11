@@ -1,7 +1,14 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { isSafeSegment, normalizePath } from "../paths.ts";
-import { isUnderPath, parseTrashLeaf, trashLeafPath } from "./recycle-folder.ts";
+import {
+  isUnderPath,
+  moveTrashLeafPath,
+  moveTrashRootPath,
+  parseMoveTrashLeaf,
+  parseTrashLeaf,
+  trashLeafPath,
+} from "./recycle-folder.ts";
 
 describe("isUnderPath", () => {
   it("is true for a path nested below the prefix", () => {
@@ -32,6 +39,47 @@ describe("trashLeafPath", () => {
 
   it("normalizes the trash root's trailing slash", () => {
     expect(trashLeafPath("/.trash/", "top.txt/123")).toBe("/.trash/top.txt/123");
+  });
+});
+
+describe("generic move layout", () => {
+  it("keeps raw path segments in unambiguous structural pairs", () => {
+    const leaf = moveTrashLeafPath("/.trash", "/docs/p/v/2026", "dir", "123");
+    expect(leaf).toBe("/.trash/.fdrive-move-v1/dir/p/docs/p/p/p/v/p/2026/v/123");
+    expect(moveTrashRootPath("/.trash/")).toBe("/.trash/.fdrive-move-v1");
+  });
+
+  it("parses the original path, kind, and timestamp", () => {
+    const leaf = moveTrashLeafPath("/.trash", "/docs/2026/Å %20.txt", "file", "1000000");
+
+    expect(parseMoveTrashLeaf("/.trash", leaf)).toEqual({
+      kind: "file",
+      originalPath: "/docs/2026/Å %20.txt",
+      name: "Å %20.txt",
+      deletedAt: new Date(1),
+    });
+  });
+
+  it("round-trips a maximum-length segment without expanding it", () => {
+    const segment = "x".repeat(255);
+    const leaf = moveTrashLeafPath("/.trash", `/${segment}`, "dir", "1000000");
+
+    expect(leaf).toContain(`/p/${segment}/v/1000000`);
+    expect(parseMoveTrashLeaf("/.trash", leaf)?.originalPath).toBe(`/${segment}`);
+  });
+
+  it("rejects paths outside the namespace and malformed structural paths", () => {
+    for (const path of [
+      "/.trash/docs/a.txt/123",
+      "/.trash/.fdrive-move-v1/other/p/docs/v/123",
+      "/.trash/.fdrive-move-v1/file/docs/v/123",
+      "/.trash/.fdrive-move-v1/file/x/docs/v/123",
+      "/.trash/.fdrive-move-v1/file/p/docs/x/123",
+      "/.trash/.fdrive-move-v1/file/p/docs/v/not-a-time",
+      "/.trash/.fdrive-move-v1/file/v/123",
+    ]) {
+      expect(parseMoveTrashLeaf("/.trash", path)).toBeNull();
+    }
   });
 });
 
