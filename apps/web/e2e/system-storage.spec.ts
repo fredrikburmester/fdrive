@@ -21,7 +21,10 @@ async function listProviders(page: Page): Promise<ProviderRow[]> {
 async function removeSpareProviders(page: Page): Promise<void> {
   for (const provider of await listProviders(page)) {
     if (SPARE_LABELS.includes(provider.label)) {
-      await page.request.delete(`/api/v1/admin/providers/${provider.id}`);
+      const response = await page.request.delete(`/api/v1/admin/providers/${provider.id}`, {
+        headers: { "x-requested-with": "fdrive" },
+      });
+      expect(response.ok(), `remove spare provider ${provider.label}`).toBeTruthy();
     }
   }
 }
@@ -42,6 +45,26 @@ function otherSpelling(baseUrl: string): string {
   }
   return url.origin;
 }
+
+test("cleanup removes a spare provider left by an interrupted run", async ({ page }) => {
+  await removeSpareProviders(page);
+  const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
+  if (seeded === undefined) throw new Error("missing environment provider");
+  try {
+    const response = await page.request.post("/api/v1/admin/providers", {
+      headers: { "x-requested-with": "fdrive" },
+      data: { type: "sftpgo", label: "Second", baseUrl: otherSpelling(seeded.baseUrl) },
+    });
+    expect(response.ok()).toBe(true);
+    expect((await listProviders(page)).some((provider) => provider.label === "Second")).toBe(true);
+    await removeSpareProviders(page);
+    expect(
+      (await listProviders(page)).some((provider) => SPARE_LABELS.includes(provider.label)),
+    ).toBe(false);
+  } finally {
+    await removeSpareProviders(page);
+  }
+});
 
 test("alice (admin) can add, test, rename, disable and remove a storage provider", async ({
   page,

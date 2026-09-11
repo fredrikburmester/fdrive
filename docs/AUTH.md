@@ -163,11 +163,11 @@ fdrive's current single-instance deployment shape.
 ## Re-authentication and session revocation
 
 Linking another SFTPGo login (`POST /api/v1/account/identities`) requires
-the signed-in login's own password (`currentPassword`, plus `currentOtp`
-when SFTPGo enforces TOTP for it) in addition to the new login's
+the signed-in login's own credential (`currentCredential: { password, otp? }`,
+with `otp` when SFTPGo enforces TOTP) in addition to the new login's
 credentials, and unlinking one (`DELETE /api/v1/account/identities/:id`)
-requires the same fields as its JSON body. A stolen cookie is therefore not
-enough to plant a durable login path on the account, nor to detach and sign
+requires `{ currentCredential: { password, otp? } }` as its JSON body. A stolen
+cookie is therefore not enough to plant a durable login path on the account, nor to detach and sign
 out the owner's other logins.
 
 Two events revoke sessions server-side:

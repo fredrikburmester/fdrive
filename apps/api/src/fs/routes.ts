@@ -468,7 +468,8 @@ export function registerFsRoutes(
       mkdirParents?: boolean;
       modifiedAt?: Date;
       contentLength?: number;
-    } = {};
+      signal?: AbortSignal;
+    } = { signal: c.req.raw.signal };
     if (query.mkdirParents !== undefined) {
       uploadOpts.mkdirParents = query.mkdirParents === "true";
     }
