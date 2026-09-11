@@ -202,6 +202,26 @@ describe("createSftpgoStorageProvider - happy paths against the fake server", ()
     expect(stat.size).toBe(4);
   });
 
+  it("passes an AbortSignal through to a zip", async () => {
+    const server = createFakeSftpgoServer(ALICE_SEED);
+    let zipSignal: AbortSignal | undefined;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes("/streamzip")) {
+        zipSignal = init?.signal ?? undefined;
+      }
+      return server.fetch(input, init);
+    };
+    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: fetchImpl });
+    const withToken = await withTokenFor(client, "alice", "secret");
+    const provider = createSftpgoStorageProvider({ client, withToken });
+    const controller = new AbortController();
+
+    await provider.zip?.(["/hello.txt"], { signal: controller.signal });
+    controller.abort();
+
+    expect(zipSignal?.aborted).toBe(true);
+  });
+
   it("creates a directory", async () => {
     const { client } = setup(ALICE_SEED);
     const withToken = await withTokenFor(client, "alice", "secret");

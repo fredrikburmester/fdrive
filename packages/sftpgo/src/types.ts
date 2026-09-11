@@ -122,7 +122,10 @@ export interface SftpgoUserApi {
   deleteFile(path: string): Promise<void>;
   deleteDir(path: string): Promise<void>;
   setModifiedAt(path: string, modifiedAt: Date): Promise<void>;
-  zip(paths: readonly string[]): Promise<ReadableStream<Uint8Array>>;
+  zip(
+    paths: readonly string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<ReadableStream<Uint8Array>>;
   profile(): Promise<SftpgoProfile>;
   shares: SftpgoUserShares;
 }

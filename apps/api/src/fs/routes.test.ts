@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
@@ -8,6 +9,7 @@ import {
   type FakeSeed,
   type WithToken,
 } from "@fdrive/sftpgo";
+import { getRequestListener } from "@hono/node-server";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -563,6 +565,90 @@ describe("GET/HEAD /fs/download", () => {
 });
 
 describe("POST /fs/zip", () => {
+  it("closes the upstream HTTP request when the client cancels before ZIP headers", async () => {
+    let upstreamClosed = false;
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const upstream = createServer((request, response) => {
+      request.resume();
+      response.on("close", () => {
+        upstreamClosed = true;
+      });
+      // Keep headers pending: no response stream exists yet for Hono to cancel.
+      markStarted();
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const upstreamAddress = upstream.address();
+    if (upstreamAddress === null || typeof upstreamAddress === "string")
+      throw new Error("no upstream port");
+    const client = createSftpgoClient({ baseUrl: `http://127.0.0.1:${upstreamAddress.port}` });
+    const storage = createSftpgoStorageProvider({ client, withToken: (fn) => fn("test-token") });
+    const { app } = await buildHarnessWithStorage(storage);
+    const api = createServer(getRequestListener(app.fetch));
+    await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
+    const apiAddress = api.address();
+    if (apiAddress === null || typeof apiAddress === "string") throw new Error("no API port");
+    const controller = new AbortController();
+    try {
+      const result = fetch(
+        `http://127.0.0.1:${apiAddress.port}/api/v1/fs/zip`,
+        requestedWith({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ paths: ["/hello.txt"] }),
+          signal: controller.signal,
+        }),
+      );
+      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+      await started;
+      controller.abort();
+      await rejected;
+      await vi.waitFor(() => expect(upstreamClosed).toBe(true), { timeout: 2000 });
+    } finally {
+      controller.abort();
+      api.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([
+        new Promise<void>((resolve) => api.close(() => resolve())),
+        new Promise<void>((resolve) => upstream.close(() => resolve())),
+      ]);
+    }
+  });
+
+  it("forwards request cancellation to storage", async () => {
+    let zipSignal: AbortSignal | undefined;
+    const storage = makeStubStorage({
+      zip: async (_paths, opts) => {
+        zipSignal = opts?.signal;
+        return new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("zip"));
+            controller.close();
+          },
+        });
+      },
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+    const controller = new AbortController();
+
+    const res = await app.request(
+      "/api/v1/fs/zip",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ paths: ["/hello.txt"] }),
+        signal: controller.signal,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(zipSignal?.aborted).toBe(false);
+
+    controller.abort();
+    expect(zipSignal?.aborted).toBe(true);
+  });
+
   it("streams a zip named after the request's name", async () => {
     const { app } = await buildHarness();
 

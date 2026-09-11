@@ -269,7 +269,10 @@ function createUserApi(ctx: ClientContext, token: string): SftpgoUserApi {
       });
     },
 
-    async zip(paths: readonly string[]): Promise<ReadableStream<Uint8Array>> {
+    async zip(
+      paths: readonly string[],
+      options?: { signal?: AbortSignal },
+    ): Promise<ReadableStream<Uint8Array>> {
       for (const path of paths) {
         assertValidPath(path);
       }
@@ -280,7 +283,7 @@ function createUserApi(ctx: ClientContext, token: string): SftpgoUserApi {
         method: "POST",
         headers,
         body: JSON.stringify(paths),
-        signal: combineSignals(undefined, null),
+        signal: combineSignals(options?.signal, null),
       });
       return response.body ?? emptyByteStream();
     },
