@@ -5,7 +5,7 @@ import { createShareCredentialCodec } from "../credentials.ts";
 import { createShareLimiter } from "../limiter.ts";
 import { registerSharesRoutes } from "../routes.ts";
 import { createSharesService } from "../service.ts";
-export function sharesHarness() {
+export function sharesHarness(options: { limiterCapacity?: number } = {}) {
   const h = accountsHarness();
   const shares = createMemoryShareRepo();
   const deps = {
@@ -18,7 +18,7 @@ export function sharesHarness() {
   };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);
-  const limiter = createShareLimiter(h.clock);
+  const limiter = createShareLimiter(h.clock, options.limiterCapacity);
   const app = createApp({
     config: h.config,
     logger: h.logger,

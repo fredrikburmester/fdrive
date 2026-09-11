@@ -237,6 +237,10 @@ export function createSharesService(deps: SharesDeps) {
     }
   }
   return {
+    /** Cheap local admission check for the public route limiter. */
+    async publicShareExists(id: string): Promise<boolean> {
+      return (await deps.shares.get(id)) !== null;
+    },
     async list(input: AccountRequestContext) {
       await liveAccountSession(deps, input);
       await owner(input.principal.identityId, input.principal.accountId);

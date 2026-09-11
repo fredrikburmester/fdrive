@@ -224,6 +224,67 @@ it("manages only selected session identity shares, preserves password, reconcile
       .read(),
   ).toBeDefined();
 });
+it("does not let unknown share IDs exhaust limiter capacity for a real share", async () => {
+  const h = sharesHarness({ limiterCapacity: 2 });
+  const cookie = await h.login();
+  const share = await h.create(cookie);
+
+  for (const unknownId of [
+    "00000000-0000-4000-8000-000000000002",
+    "00000000-0000-4000-8000-000000000003",
+  ]) {
+    expect((await h.request(publicBase(unknownId))).status).toBe(404);
+  }
+  expect(
+    (
+      await h.request("/api/v1/public/shares/00000000-0000-4000-8000-000000000004/credentials", {
+        method: "DELETE",
+      })
+    ).status,
+  ).toBe(200);
+
+  expect((await h.request(publicBase(share.id))).status).toBe(200);
+});
+it("checks cached limiter state before denied repository traffic and revalidates access", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const credentialShare = await h.create(cookie);
+  const revokedShare = await h.create(cookie);
+  const revokedRow = await h.shares.get(revokedShare.id);
+  if (revokedRow === null) throw new Error("missing share row");
+  const get = vi.spyOn(h.shares, "get");
+
+  const unknown = publicBase("00000000-0000-4000-8000-000000000005");
+  for (let request = 0; request < 120; request++) {
+    expect((await h.request(unknown)).status).toBe(404);
+  }
+  const afterUnknownLimit = get.mock.calls.length;
+  expect(afterUnknownLimit).toBe(121);
+  expect((await h.request(unknown)).status).toBe(429);
+  expect(get).toHaveBeenCalledTimes(afterUnknownLimit);
+
+  const credentials = `${publicBase(credentialShare.id)}/credentials`;
+  const beforeCredentials = get.mock.calls.length;
+  for (let request = 0; request < 10; request++) {
+    expect(
+      (await h.request(credentials, { method: "POST", body: { password: "guess" } })).status,
+    ).toBe(200);
+  }
+  expect(get.mock.calls.length - beforeCredentials).toBe(11);
+  const afterCredentialLimit = get.mock.calls.length;
+  expect(
+    (await h.request(credentials, { method: "POST", body: { password: "guess" } })).status,
+  ).toBe(429);
+  expect(get).toHaveBeenCalledTimes(afterCredentialLimit);
+
+  const revoked = publicBase(revokedShare.id);
+  const beforeRevocation = get.mock.calls.length;
+  expect((await h.request(revoked)).status).toBe(200);
+  expect(get.mock.calls.length - beforeRevocation).toBe(2);
+  await h.shares.removeOwned(revokedRow.identityId, revokedShare.id);
+  expect((await h.request(revoked)).status).toBe(404);
+  expect(get.mock.calls.length - beforeRevocation).toBe(3);
+});
 it("public password cookie is stored unverified, encrypted, scoped; metadata is withheld until it verifies; actual bytes enforce password and expiry", async () => {
   const h = sharesHarness();
   const cookie = await h.login();

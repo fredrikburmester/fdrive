@@ -286,11 +286,12 @@ export function registerSharesRoutes(
   groups.public.use(`${withoutApiV1Prefix(ROUTES.publicShares)}/*`, async (c, next) => {
     const id = shareId(c);
     if (
-      !deps.limiter.allow(
+      !(await deps.limiter.allow(
         extractClientIp(c, deps.config.fdriveTrustedProxyHops),
         id,
         c.req.method === "POST" && c.req.path.endsWith("/credentials"),
-      )
+        () => shareCall(() => deps.service.publicShareExists(id)),
+      ))
     )
       throw new ApiHttpError("rate_limited", "Too many share requests");
     await next();
