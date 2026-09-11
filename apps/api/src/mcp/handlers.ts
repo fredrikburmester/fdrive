@@ -45,7 +45,7 @@ import { fileUrl, folderUrl } from "./urls.js";
  * cap, a denial, or an unavailable probe reduces what a tool actually
  * examined below what the index reported, the response carries
  * `partial: true` rather than presenting a bounded, filtered count as an
- * exhaustive one. See `docs/workflow/P5-SCOPE-CONSUMERS.md`'s "MCP chunk".
+ * exhaustive one. See `docs/SCOPING.md`.
  */
 export const MAX_CANDIDATE_FILES = 2000;
 
@@ -56,7 +56,7 @@ export interface McpToolDeps {
   /**
    * Resolves each caller's *verified* index scopes, the only source of
    * index-backed authorization every tool in this file uses; there is no
-   * username/template fallback. See `docs/workflow/P5-SCOPE-CONSUMERS.md`.
+   * username/template fallback. See `docs/SCOPING.md`.
    */
   readonly scopeResolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly identities: Pick<IdentityRepo, "get">;

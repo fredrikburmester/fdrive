@@ -31,7 +31,7 @@ import { validateScopeOverrides } from "./validate-overrides.ts";
  * Administrator-controlled scope mappings are an authorization boundary,
  * not proof that two matching root or path names are the same storage; a
  * deliberately wrong mapping is not repaired by the checks in this module.
- * See `docs/workflow/P5-SCOPES.md`.
+ * See `docs/SCOPING.md`.
  */
 export const SCOPE_STATUS_WARNING =
   "Administrator-controlled scope mappings are an authorization boundary. Matching root or path names never prove two storage locations are identical, and this check cannot repair a deliberately wrong mapping.";
@@ -44,7 +44,7 @@ export interface ScopeResolver {
    * The identity's trusted, administrator-controlled scope mapping: the
    * home scope derived from the currently configured connection's home
    * template, any stored per-identity override, and every folder-level
-   * mapping adopted for this identity (see `docs/workflow/P8-FOLDER-MAPPINGS.md`).
+   * mapping adopted for this identity (see `docs/SCOPING.md`).
    * The template and override parts are available even when the indexer
    * is down; adoption needs verification evidence, so with the indexer
    * unreachable only those base scopes are returned.

@@ -30,8 +30,7 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
   registerMcpTools(server, principal, deps.toolDeps);
 
   // A fresh server and transport per request: the SDK's documented pattern
-  // for a stateless streamable-HTTP MCP server (PLAN.md §7 calls for
-  // "stateless, JSON responses").
+  // for a stateless streamable-HTTP MCP server with JSON responses.
   // Omitting `sessionIdGenerator` (rather than setting it to `undefined`)
   // is what puts the transport in stateless mode per its own docs.
   const transport = new WebStandardStreamableHTTPServerTransport({

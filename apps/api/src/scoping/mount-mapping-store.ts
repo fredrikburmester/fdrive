@@ -14,7 +14,7 @@ export interface MountMappingRecord {
 export const MOUNT_MAPPINGS_SETTINGS_KEY = "mount_mappings";
 
 /**
- * Persists the folder-level mappings (`docs/workflow/P8-FOLDER-MAPPINGS.md`):
+ * Persists the folder-level mappings (`docs/SCOPING.md`):
  * one list for the whole installation, keyed by the mount's virtual path.
  * Which logins a mapping applies to is decided per login at verification
  * time by the resolver, never stored here.

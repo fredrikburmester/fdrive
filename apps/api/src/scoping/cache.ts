@@ -1,7 +1,7 @@
-/** Default TTL for a resolved verification result, per `docs/workflow/P5-SCOPE-ENGINE.md`. */
+/** Default TTL for a resolved verification result, per `docs/SCOPING.md`. */
 export const DEFAULT_SCOPE_CACHE_TTL_MS = 30_000;
 
-/** Default cap on cached entries, per `docs/workflow/P5-SCOPE-ENGINE.md` ("at most 1000 identities"). */
+/** Default cap on cached entries, per `docs/SCOPING.md` ("at most 1000 identities"). */
 export const DEFAULT_SCOPE_CACHE_MAX_ENTRIES = 1000;
 
 export interface CreateScopeCacheDeps {

@@ -133,7 +133,7 @@ export async function composeApp(
   deps: ComposeAppDeps = {},
 ): Promise<ComposedApp> {
   // A misconfigured fdrive must say what is missing, by variable name, at
-  // startup: see docs/workflow/P7-CONFIG-LOUDNESS.md. One line per
+  // startup: see docs/INDEXER.md. One line per
   // subsystem, logged before anything else touches the network.
   for (const line of startupSummaryLines(config)) {
     logger.info(line);
@@ -251,7 +251,7 @@ export async function composeApp(
   // configured mappings (home template + per-identity overrides, available
   // even when the indexer is down) plus index-verified scopes (restricted
   // further by a live SFTP-vs-indexer directory check). See
-  // `docs/workflow/P5-SCOPES.md`.
+  // `docs/SCOPING.md`.
   const scopeResolver = createScopeResolver({
     providers: repos.providers,
     overrides: createSettingsScopeOverrideStore(repos.settings),
@@ -268,7 +268,7 @@ export async function composeApp(
   // verified index scopes are unavailable for any reason.
   const indexQueries = createIndexQueries(db);
   // Proposes physical locations for unmapped virtual folders from index rows
-  // (`docs/workflow/P8-FOLDER-MAPPINGS.md`); administrators confirm them.
+  // (`docs/SCOPING.md`); administrators confirm them.
   const scopeSuggester = createScopeSuggester({
     resolver: scopeResolver,
     storageForIdentity: (identity) => storageFactory(identity.id),

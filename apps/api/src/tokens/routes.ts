@@ -12,8 +12,7 @@ export interface RegisterTokenRoutesDeps {
  * Registers the account-page API token routes on the authed group: `GET`
  * and `POST /account/tokens`, `DELETE /account/tokens/:id`. These are only
  * ever reachable with a session cookie (the authed group's principal
- * resolver never resolves a bearer token), matching PLAN.md's "session
- * only, never token-authenticated" for token management itself.
+ * resolver never resolves a bearer token). Token management requires a session.
  */
 export function registerTokenRoutes(
   groups: { authed: AuthedHono },

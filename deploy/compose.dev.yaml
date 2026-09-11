@@ -159,7 +159,7 @@ services:
         condition: service_healthy
 
   # SigLIP 2 image/text embedding sidecar for image search (see
-  # docs/workflow/P7-IMAGE-SEARCH-BUILD.md), same `index` profile as the
+  # services/image-embed/README.md), same `index` profile as the
   # indexer. Published on the host, like `embed` above, so the api dev
   # server (running with `tsx watch` on the host) can reach it directly once
   # FDRIVE_IMAGE_EMBED_URL is wired up. The named volume at /models caches

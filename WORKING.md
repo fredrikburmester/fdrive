@@ -1,7 +1,8 @@
 # Working on fdrive
 
-Read relevant [PLAN.md](PLAN.md) decisions and current [STATUS.md](docs/workflow/STATUS.md)
-before implementation. Commands: [COMMANDS.md](docs/workflow/COMMANDS.md); load only relevant
+Read relevant [architecture](docs/ARCHITECTURE.md), [plans](docs/plans/README.md) and current
+[STATUS](docs/workflow/STATUS.md) before implementation. Commands:
+[COMMANDS](docs/workflow/COMMANDS.md); load only relevant
 recipes. Recovery: [TROUBLESHOOTING.md](docs/workflow/TROUBLESHOOTING.md). Product lessons:
 [PITFALLS.md](docs/workflow/PITFALLS.md).
 
@@ -24,8 +25,8 @@ recipes. Recovery: [TROUBLESHOOTING.md](docs/workflow/TROUBLESHOOTING.md). Produ
   Workers preserve others' changes, stay in scope, never delegate, stash, or mutate Git state.
 - Agree on shared interfaces before parallel work: state the settings/API shape and each
   worker's file ownership. Notify affected workers when either changes.
-- Use a formal spec for substantial or cross-interface work. Resolve architecture against
-  PLAN; record durable decisions there.
+- Use a formal spec for substantial or cross-interface work. Resolve changes against
+  the architecture references; record durable decisions in the relevant developer document.
 - Review actual diffs, including new files and sensitive boundaries. Transfer reviewed worker
   deltas with `transfer-checkout.sh`; commit/merge only when requested. Verify in the target.
   Keep the worker copy until transfer and verification succeed; never discard unreviewed work.

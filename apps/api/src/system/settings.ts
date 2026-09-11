@@ -33,8 +33,7 @@ export const INDEXER_SETTINGS_DEFAULTS = {
 };
 
 /**
- * The `app.settings` keys the OCR service reads. See PLAN.md §9 and the
- * chunk brief; the OCR service itself is being built in parallel.
+ * The `app.settings` keys the OCR service reads. See docs/OCR.md.
  */
 export const OCR_SETTINGS_KEYS = {
   hour: "ocr.hour",

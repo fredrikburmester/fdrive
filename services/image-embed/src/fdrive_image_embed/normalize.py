@@ -1,7 +1,7 @@
 """Pure L2 normalization. Every vector this service returns has unit length,
 so a caller's cosine distance in pgvector reduces to a plain dot product and
 no caller ever has to remember to normalize itself (orchestrator decision 4 in
-`docs/workflow/P7-IMAGE-SEARCH-BUILD.md`).
+`services/image-embed/README.md`).
 """
 
 from __future__ import annotations

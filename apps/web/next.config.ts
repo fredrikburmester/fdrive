@@ -27,7 +27,7 @@ export interface ContentSecurityPolicyOptions {
    * `apps/api/src/office/config.ts` reads for the office WOPI host's public
    * URL. Its origin is added to `frame-src` so the office editor iframe
    * (`src/components/office/office-frame.tsx`) is allowed to load. Office
-   * editing is opt-in (see PLAN.md): when this is absent or invalid,
+   * editing is opt-in (see docs/ARCHITECTURE.md): when this is absent or invalid,
    * `frame-src` stays at `'self'` only, so the feature fails closed instead
    * of the CSP silently allowing an arbitrary frame source.
    *
@@ -124,7 +124,7 @@ const nextConfig: NextConfig = {
   // curl) never sees an event until the connection closes. Disabling
   // compression here fixes that; the API's own responses are small JSON
   // payloads and file streams that do not need it either. Deployed behind
-  // Caddy (see PLAN.md §3), Caddy's own compression would have the same
+  // Caddy (see docs/ARCHITECTURE.md), Caddy's own compression would have the same
   // problem for this route and needs the same exclusion.
   compress: false,
   // The destination below is fixed at `next build` time (Next.js does not
@@ -133,7 +133,7 @@ const nextConfig: NextConfig = {
   // routes /api/* straight to the api service and this rewrite never runs;
   // the production proxy owns /api.
   // `System > Connection` became `System > General` (see
-  // `docs/workflow/P9-SYSTEM-SETTINGS.md`); bookmarks and links to the old
+  // `docs/ARCHITECTURE.md`); bookmarks and links to the old
   // route keep working.
   async redirects() {
     return [{ source: "/system/connection", destination: "/system/general", permanent: true }];
@@ -148,7 +148,7 @@ const nextConfig: NextConfig = {
   },
   // Applies to every route, including ones proxied through `rewrites()`
   // above: this app never needs a per-route exception. See
-  // `docs/workflow/HARDENING-REVIEW.md` item 6.
+  // `deploy/REFERENCE.md` item 6.
   async headers() {
     const csp = buildContentSecurityPolicy({
       officePublicUrl: process.env.FDRIVE_OFFICE_PUBLIC_URL,

@@ -60,7 +60,7 @@ class Config:
         # Env-only (not part of the app.settings-backed Settings an admin can
         # edit at runtime): lets a single-user instance restrict OCR to one
         # home, e.g. "fredrik/**", without changing the exclude template. See
-        # docs/workflow/P7-CONFIG-LOUDNESS.md and rules.is_excluded. Empty
+        # docs/INDEXER.md and rules.is_excluded. Empty
         # (the default) means no restriction, so no empty/absent distinction
         # is needed here the way OCR_EXCLUDE_GLOBS above needs one.
         self.include_globs = parse_glob_list(os.environ.get("OCR_INCLUDE_GLOBS", ""))

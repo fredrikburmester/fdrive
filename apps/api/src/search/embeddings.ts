@@ -1,4 +1,4 @@
-/** 5 seconds, matching the design note in PLAN.md §7/§9 for the TEI query call. */
+/** Timeout for the TEI query call. */
 export const DEFAULT_EMBED_TIMEOUT_MS = 5000;
 
 /**

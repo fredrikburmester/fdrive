@@ -73,7 +73,7 @@ export interface BuildSftpgoDumpOptions {
 
 /**
  * Builds the recycle-folder event action and rule described in
- * `docs/workflow/P6-TRASH.md`: a pre-delete filesystem event renames the
+ * `docs/TRASH.md`: a pre-delete filesystem event renames the
  * deleted path to `<trashPath>/<original dir>/<original name>/<timestamp>`,
  * except for deletes already under `trashPath` (which stay permanent).
  * Verified against the real `drakkan/sftpgo:v2.7.5` container: both keys

@@ -8,8 +8,8 @@ that credential (and, for SFTPGo, the short-lived JWT it issues) so it can act
 on the user's behalf for every subsequent storage call, without asking them
 to log in again on every request. Providers are rows in `app.providers`; an
 identity is bound to one row and a stored credential is only ever sent to
-that row's endpoint (`docs/workflow/P10-STORAGE-PROVIDERS.md`). This
-document describes that design as implemented in `apps/api/src/auth/` and
+that row's endpoint (see
+[Adding a storage provider](STORAGE-PROVIDERS.md#isolation-and-lifecycle-requirements)). This document describes that design as implemented in `apps/api/src/auth/` and
 `apps/api/src/providers/`.
 
 `FDRIVE_ADMIN_USERS` grants apply only to usernames on the SFTPGo endpoint named
