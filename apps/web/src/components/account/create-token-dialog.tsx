@@ -1,7 +1,7 @@
 "use client";
 
 import type { ApiTokenSummary } from "@fdrive/contracts";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -50,7 +50,11 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
     onOpenChange(nextOpen);
   }
 
-  function handleSubmit() {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (name.trim().length === 0 || createToken.isPending) {
+      return;
+    }
     const expiresInDays = expiresInDaysFromOptionValue(expiryValue);
     createToken.mutate(
       { name: name.trim(), ...(expiresInDays !== undefined ? { expiresInDays } : {}) },
@@ -61,58 +65,56 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create API token</DialogTitle>
-          <DialogDescription>
-            Used to connect Claude or Raycast. The token is shown once, right after you create it.
-          </DialogDescription>
-        </DialogHeader>
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="token-name">Name</FieldLabel>
-            <Input
-              id="token-name"
-              placeholder="Claude"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              autoFocus
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="token-expiry">Expires</FieldLabel>
-            <Select
-              value={expiryValue}
-              onValueChange={(value) => {
-                if (value !== null) {
-                  setExpiryValue(value);
-                }
-              }}
-            >
-              <SelectTrigger id="token-expiry" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {EXPIRY_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          {createToken.isError ? (
-            <FieldError>{describeApiError(createToken.error)}</FieldError>
-          ) : null}
-        </FieldGroup>
-        <DialogFooter>
-          <Button
-            type="button"
-            disabled={name.trim().length === 0 || createToken.isPending}
-            onClick={handleSubmit}
-          >
-            {createToken.isPending ? "Creating..." : "Create token"}
-          </Button>
-        </DialogFooter>
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <DialogTitle>Create API token</DialogTitle>
+            <DialogDescription>
+              Used to connect Claude or Raycast. The token is shown once, right after you create it.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup className="py-4">
+            <Field>
+              <FieldLabel htmlFor="token-name">Name</FieldLabel>
+              <Input
+                id="token-name"
+                placeholder="Claude"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoFocus
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="token-expiry">Expires</FieldLabel>
+              <Select
+                value={expiryValue}
+                onValueChange={(value) => {
+                  if (value !== null) {
+                    setExpiryValue(value);
+                  }
+                }}
+              >
+                <SelectTrigger id="token-expiry" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXPIRY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            {createToken.isError ? (
+              <FieldError>{describeApiError(createToken.error)}</FieldError>
+            ) : null}
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="submit" disabled={name.trim().length === 0 || createToken.isPending}>
+              {createToken.isPending ? "Creating..." : "Create token"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
