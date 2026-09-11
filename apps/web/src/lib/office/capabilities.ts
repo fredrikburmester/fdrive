@@ -2,8 +2,8 @@ import type { FsEntry, OfficeMode, OfficeStatusResponse } from "@fdrive/contract
 import { previewKindFor } from "@/lib/preview/kind";
 
 export const OFFICE_MODE_LABELS: Readonly<Record<OfficeMode, string>> = {
-  view: "View in office",
-  edit: "Edit in office",
+  view: "View in Office",
+  edit: "Edit in Office",
   convert: "Convert and edit",
 };
 

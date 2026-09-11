@@ -154,7 +154,7 @@ describe("feature walkthrough", () => {
     expect(screen.getByRole("link", { name: "Open Thumbnails" }).getAttribute("href")).toBe(
       "/system/thumbnails",
     );
-    expect(screen.getByRole("link", { name: "Open Search" }).getAttribute("href")).toBe(
+    expect(screen.getByRole("link", { name: "Open Semantic search" }).getAttribute("href")).toBe(
       "/system/search",
     );
     fireEvent.click(screen.getByRole("button", { name: "Run walkthrough" }));
@@ -179,7 +179,7 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
   });
-  it("asks for the server address after Trash and before ONLYOFFICE", () => {
+  it("asks for the server address after Trash and before Office", () => {
     mount(7);
     expect(screen.getByText("Step 11 of 13 · Server address")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save and continue" })).toBeNull();
@@ -189,9 +189,9 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
   });
-  it("includes ONLYOFFICE after the address and before review", () => {
+  it("includes Office after the address and before review", () => {
     mount(8);
-    expect(screen.getByText("Step 12 of 13 · ONLYOFFICE")).toBeTruthy();
+    expect(screen.getByText("Step 12 of 13 · Office")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Office settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 9, values: off }),

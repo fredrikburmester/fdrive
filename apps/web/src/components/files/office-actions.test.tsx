@@ -36,8 +36,8 @@ afterEach(() => {
 });
 it("dispatches explicit office actions for a single file", async () => {
   for (const [label, mode] of [
-    ["View in office", "view"],
-    ["Edit in office", "edit"],
+    ["View in Office", "view"],
+    ["Edit in Office", "edit"],
     ["Convert and edit", "convert"],
   ] as const) {
     const action = vi.fn();
@@ -69,7 +69,7 @@ it("hides office items when unavailable or acting on multiple files", async () =
     );
     fireEvent.contextMenu(screen.getByText("File"));
     await screen.findByRole("menuitem", { name: "Open" });
-    expect(screen.queryByRole("menuitem", { name: "Edit in office" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Edit in Office" })).toBeNull();
     cleanup();
   }
 });

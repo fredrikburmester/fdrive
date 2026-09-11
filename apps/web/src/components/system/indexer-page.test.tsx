@@ -225,7 +225,7 @@ describe("IndexerPage", () => {
     fireEvent.change(workers, { target: { value: "7" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ workers: 7 }), expect.anything());
-    expect(successToast).toHaveBeenCalledWith("Indexer settings saved.");
+    expect(successToast).toHaveBeenCalledWith("Full-text search settings saved.");
   });
 
   it("keeps an edited draft when the 5-second poll returns new data", async () => {
@@ -261,7 +261,7 @@ describe("IndexerPage", () => {
     render(<IndexerPage />);
 
     expect(screen.getByTestId("system-page").dataset.feature).toBe(
-      "thumbnails,textSearch,imageSearch",
+      "thumbnails,textSearch,searchOcr,imageSearch",
     );
   });
 

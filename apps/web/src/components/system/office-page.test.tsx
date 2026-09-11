@@ -147,6 +147,6 @@ it("blocks a save that would enable Office without a server address", () => {
 
   expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   expect(
-    screen.getByText("Set the fdrive public address on System > General before enabling Office."),
+    screen.getByText("Set the server address on System > General before enabling Office."),
   ).toBeTruthy();
 });

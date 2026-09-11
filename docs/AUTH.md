@@ -24,7 +24,7 @@ On a successful login (`POST /api/v1/auth/login`, `apps/api/src/auth/service.ts`
   the SFTPGo username (one account can hold several identities, one per
   SFTPGo user it is linked to).
 - The plaintext password is sealed and written to the `credentials` table as
-  `{ identityId, ciphertext, keyId }`. It is never stored in plaintext and
+  `{ identityId, ciphertext, keyId, cachedToken, cachedTokenExpiresAt }`. It is never stored in plaintext and
   never logged.
 - The SFTPGo JWT that `sftpgo.login` already returned for this same call is
   sealed and cached on the same row (`prime`, see below), rather than being
@@ -112,7 +112,7 @@ Session rotation on link and unlink preserves `createdAt`.
 
 ## Token minting and re-minting
 
-fdrive never asks the browser for SFTPGo credentials outside of `/auth/login`.
+fdrive never asks the browser for SFTPGo credentials outside of `/auth/login` and identity link/unlink confirmation.
 Every storage call instead goes through a `TokenSource`
 (`apps/api/src/auth/token-source.ts`), which is responsible for producing a
 currently-valid SFTPGo JWT for an identity:

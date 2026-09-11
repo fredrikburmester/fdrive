@@ -44,7 +44,7 @@ export function SearchPage() {
 
   return (
     <SystemPage
-      title="Search"
+      title="Semantic search"
       description="Semantic embeddings and the hybrid search index."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature="semanticSearch"

@@ -66,7 +66,7 @@ it("shows Share, the Office items and Download as zip when the login can do ever
   expect(screen.getByRole("menuitem", { name: "Move to Trash" })).toBeTruthy();
   cleanup();
   await openMenu(file);
-  expect(screen.getByRole("menuitem", { name: "View in office" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "View in Office" })).toBeTruthy();
 });
 
 it("hides Share without shares", async () => {
@@ -76,8 +76,8 @@ it("hides Share without shares", async () => {
 
 it("hides the Office items without office even when Office itself is available", async () => {
   await openMenu(file, { ...everything, office: false });
-  expect(screen.queryByRole("menuitem", { name: "View in office" })).toBeNull();
-  expect(screen.queryByRole("menuitem", { name: "Edit in office" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "View in Office" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Edit in Office" })).toBeNull();
 });
 
 it("hides Download for a folder without zip but keeps a single file's download", async () => {

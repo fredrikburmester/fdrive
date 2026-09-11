@@ -143,7 +143,7 @@ export function IndexerPage() {
       return;
     }
     updateSettings.mutate(draftValues, {
-      onSuccess: () => toast.success("Indexer settings saved."),
+      onSuccess: () => toast.success("Full-text search settings saved."),
       onError: (err) => toast.error(describeApiError(err)),
     });
   }
@@ -196,10 +196,10 @@ export function IndexerPage() {
 
   return (
     <SystemPage
-      title="Indexer"
-      description="Roots, scan status, and extraction settings for the fdrive indexer."
+      title="Full-text search"
+      description="Roots, scan status, and extraction settings for full-text search."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
-      feature={["thumbnails", "textSearch", "imageSearch"]}
+      feature={["thumbnails", "textSearch", "searchOcr", "imageSearch"]}
       actions={
         <>
           <Button
@@ -311,7 +311,7 @@ export function IndexerPage() {
       )}
 
       <SettingsSheet
-        title="Indexer settings"
+        title="Full-text search settings"
         description="Applied on the indexer's next scan cycle."
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
