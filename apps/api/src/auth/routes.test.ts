@@ -248,6 +248,17 @@ describe("auth routes: POST /auth/login", () => {
     expect(server.state.tokens.size).toBe(1);
   });
 
+  it("rejects a non-canonical provider ID before repository access", async () => {
+    const { app } = buildTestApp({ clockCtl });
+    const res = await login(app, {
+      providerId: "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
+      credential: { username: "alice", password: "wonderland" },
+    });
+
+    expect(res.status).toBe(400);
+    expect(await readJson<ApiError>(res)).toMatchObject({ error: { kind: "bad_request" } });
+  });
+
   it("mints exactly one SFTPGo token per fdrive login, reused by the first authenticated request", async () => {
     const { app, server } = buildTestApp({ clockCtl });
 

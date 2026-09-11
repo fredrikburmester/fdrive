@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { CanonicalUuid } from "./canonical-uuid.ts";
 import { FsEntry } from "./fs.ts";
 import { FavoriteItem } from "./metadata.ts";
 import { ProviderFieldValues } from "./providers.ts";
 import { SearchHit } from "./search.ts";
 
-export const AccountIdentityId = z.uuid().regex(/^[0-9a-f-]+$/);
+export const AccountIdentityId = CanonicalUuid;
 /**
  * Body for `POST /api/v1/account/identities`. `credential` holds the new
  * login's values for its provider's `credentialFields`; `currentCredential`
@@ -13,7 +14,7 @@ export const AccountIdentityId = z.uuid().regex(/^[0-9a-f-]+$/);
  * durable login path on the account.
  */
 export const LinkIdentityRequest = z.strictObject({
-  providerId: z.uuid().optional(),
+  providerId: CanonicalUuid.optional(),
   credential: ProviderFieldValues,
   currentCredential: ProviderFieldValues,
 });

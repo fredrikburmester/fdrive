@@ -1,6 +1,6 @@
 import type { StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
@@ -173,6 +173,23 @@ describe("token routes: POST /account/tokens", () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-canonical identityId before service access", async () => {
+    const { app, service } = await buildApp();
+    const create = vi.spyOn(service, "create");
+
+    const res = await app.request("/api/v1/account/tokens", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({
+        name: "Claude",
+        identityId: "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

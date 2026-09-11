@@ -69,6 +69,21 @@ describe("identity account routes", () => {
     expect(own.status).toBe(200);
     expect(MeResponse.parse(await own.json()).identities).toHaveLength(2);
   });
+  it("rejects a non-canonical provider ID before repository access", async () => {
+    const h = accountsHarness();
+    const alice = await h.login();
+    const response = await h.call(ROUTES.account.identities, {
+      method: "POST",
+      cookie: alice.cookie,
+      body: {
+        providerId: "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
+        credential: { username: "bob", password: "bob-pass" },
+        currentCredential: { password: "alice-pass" },
+      },
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { kind: "bad_request" } });
+  });
   it("switches owned identities without rotation or expiry extension, and rejects foreign identity", async () => {
     const h = accountsHarness();
     const a = await h.login();

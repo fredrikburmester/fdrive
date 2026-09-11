@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CanonicalUuid } from "./canonical-uuid.ts";
 import { ProviderCapabilities, ProviderFieldValues, ProviderType } from "./providers.ts";
 
 /**
@@ -8,7 +9,7 @@ import { ProviderCapabilities, ProviderFieldValues, ProviderType } from "./provi
  * `providerId` may be omitted when exactly one provider is enabled.
  */
 export const LoginRequest = z.strictObject({
-  providerId: z.uuid().optional(),
+  providerId: CanonicalUuid.optional(),
   credential: ProviderFieldValues,
 });
 
