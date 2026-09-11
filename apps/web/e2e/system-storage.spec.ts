@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { dismissActivityPanel } from "./support/activity.js";
 
 /** The labels this spec creates; anything left over from an aborted run is removed first. */
 const SPARE_LABELS = ["Second", "Second renamed"];
@@ -26,18 +27,6 @@ async function removeSpareProviders(page: Page): Promise<void> {
       });
       expect(response.ok(), `remove spare provider ${provider.label}`).toBeTruthy();
     }
-  }
-}
-
-async function dismissActivityPanel(page: Page): Promise<void> {
-  const clear = page.getByRole("button", { name: "Clear" });
-  if (await clear.isVisible()) {
-    await clear.click();
-    return;
-  }
-  const collapse = page.getByRole("button", { name: "Collapse activity panel" });
-  if (await collapse.isVisible()) {
-    await collapse.click();
   }
 }
 
