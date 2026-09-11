@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
 import { createRepos } from "../../src/repos/drizzle.js";
+import { PATH_CHUNK_SIZE } from "../../src/repos/path-chunks.js";
 import { favorites, fileTags, folderViews, recents } from "../../src/schema/app.js";
 import { defineReposSuite } from "../repos-suite.js";
 
@@ -511,4 +512,119 @@ it("cascades office_files when their provider is deleted", async () => {
   await repos.providers.delete(provider.id);
   expect(await repos.providers.get(provider.id)).toBeNull();
   expect(await officeFiles.get(file.id)).toBeNull();
+});
+
+// A directory listing is unbounded, and `decorate` binds one parameter per
+// entry, so a folder filled outside fdrive over raw SFTP or WebDAV can push
+// these lookups past what one statement may carry. The listing below exceeds
+// the protocol's 65535-parameter cap, so it only reaches PostgreSQL as valid
+// messages at all because the repository splits it into bounded chunks.
+describe("metadata lookups for oversized directory listings", () => {
+  const listingSize = 66_000;
+  const pathAt = (index: number) => `/big/file-${index}.txt`;
+  const lastPath = pathAt(listingSize - 1);
+  const boundaryPath = pathAt(PATH_CHUNK_SIZE);
+
+  beforeEach(async () => {
+    await db.execute(sql`
+      truncate table
+        app.file_tags,
+        app.favorites,
+        app.tags,
+        app.identities,
+        app.accounts,
+        app.providers
+      cascade
+    `);
+  });
+
+  async function seedListing() {
+    const repos = createRepos(db);
+    const provider = await repos.providers.ensure({
+      type: "sftpgo",
+      baseUrl: "http://oversized",
+    });
+    const account = await repos.accounts.create({ displayName: "oversized" });
+    const identity = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "oversized",
+    });
+    const work = await repos.tags.create(account.id, { name: "Work", color: null });
+    const personal = await repos.tags.create(account.id, { name: "Personal", color: null });
+    const listing = Array.from({ length: listingSize }, (_, index) => pathAt(index));
+    // First, last, and both sides of a chunk boundary, so a merge that dropped
+    // or duplicated a chunk could not still produce the expected result.
+    const tagged = [pathAt(0), pathAt(PATH_CHUNK_SIZE - 1), boundaryPath, lastPath];
+    const favorited = [pathAt(1), boundaryPath, lastPath];
+    for (const path of tagged) {
+      await repos.fileTags.setTags(identity.id, path, [work.id]);
+    }
+    await repos.fileTags.setTags(identity.id, boundaryPath, [work.id, personal.id]);
+    for (const path of favorited) {
+      await repos.favorites.add(identity.id, path, "file");
+    }
+    return { favorited, identity, listing, personal, repos, tagged, work };
+  }
+
+  it("returns every tag across a listing larger than one statement can bind", async () => {
+    const { identity, listing, personal, repos, tagged, work } = await seedListing();
+
+    const result = await repos.fileTags.tagsForPaths(identity.id, listing);
+
+    expect(result.size).toBe(tagged.length);
+    expect(result.get(pathAt(0))).toEqual([work.id]);
+    expect(result.get(pathAt(PATH_CHUNK_SIZE - 1))).toEqual([work.id]);
+    expect([...(result.get(boundaryPath) ?? [])].sort()).toEqual([personal.id, work.id].sort());
+    expect(result.get(lastPath)).toEqual([work.id]);
+    expect(result.has(pathAt(2))).toBe(false);
+  });
+
+  it("returns the same tags chunked as a per-path lookup that never chunks", async () => {
+    const { identity, listing, repos, tagged } = await seedListing();
+
+    const chunked = await repos.fileTags.tagsForPaths(identity.id, listing);
+    const unchunked = new Map<string, string[]>();
+    for (const path of tagged) {
+      for (const [key, value] of await repos.fileTags.tagsForPaths(identity.id, [path])) {
+        unchunked.set(key, value);
+      }
+    }
+    const sorted = (byPath: Map<string, string[]>) =>
+      new Map([...byPath].map(([path, ids]) => [path, [...ids].sort()]));
+
+    expect(sorted(chunked)).toEqual(sorted(unchunked));
+  });
+
+  it("returns exactly the favorited subset of a listing larger than one statement", async () => {
+    const { favorited, identity, listing, repos } = await seedListing();
+
+    const result = await repos.favorites.has(identity.id, listing);
+
+    expect(result).toEqual(new Set(favorited));
+  });
+
+  it("counts a path repeated across chunks once and ignores paths it never lists", async () => {
+    const { favorited, identity, listing, repos, tagged, work } = await seedListing();
+    const repeated = [...listing, pathAt(0), "/big/absent.txt"];
+
+    const tags = await repos.fileTags.tagsForPaths(identity.id, repeated);
+
+    expect(tags.size).toBe(tagged.length);
+    expect(tags.get(pathAt(0))).toEqual([work.id]);
+    expect(tags.has("/big/absent.txt")).toBe(false);
+    expect(await repos.favorites.has(identity.id, repeated)).toEqual(new Set(favorited));
+  });
+
+  it("leaves an ordinary small listing and an empty one unchanged", async () => {
+    const { identity, listing, repos, work } = await seedListing();
+    const small = listing.slice(0, 4);
+
+    expect(await repos.fileTags.tagsForPaths(identity.id, small)).toEqual(
+      new Map([[pathAt(0), [work.id]]]),
+    );
+    expect(await repos.favorites.has(identity.id, small)).toEqual(new Set([pathAt(1)]));
+    expect(await repos.fileTags.tagsForPaths(identity.id, [])).toEqual(new Map());
+    expect(await repos.favorites.has(identity.id, [])).toEqual(new Set());
+  });
 });
