@@ -29,6 +29,10 @@ describe("parseRangeHeader", () => {
     expect(parseRangeHeader("bytes=-1000", 100)).toEqual({ kind: "single", start: 0, end: 99 });
   });
 
+  it("rejects a suffix range for an empty resource", () => {
+    expect(parseRangeHeader("bytes=-10", 0)).toEqual({ kind: "invalid" });
+  });
+
   it("rejects a suffix range when size is unknown", () => {
     expect(parseRangeHeader("bytes=-10", null)).toEqual({ kind: "invalid" });
   });

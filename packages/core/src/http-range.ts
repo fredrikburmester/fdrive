@@ -68,7 +68,7 @@ function parseSuffixRange(suffixText: string, size: number | null): RangeResult 
   if (suffixLength <= 0) {
     return { kind: "invalid" };
   }
-  if (size === null) {
+  if (size === null || size <= 0) {
     return { kind: "invalid" };
   }
   return { kind: "single", start: Math.max(0, size - suffixLength), end: size - 1 };

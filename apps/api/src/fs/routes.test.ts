@@ -468,6 +468,23 @@ describe("GET/HEAD /fs/download", () => {
     expect(res.headers.get("content-range")).toBe("bytes */11");
   });
 
+  it("returns 416 with the empty size for a suffix range on an empty file", async () => {
+    const download = vi.fn<StorageProvider["download"]>();
+    const storage = makeStubStorage({
+      statFile: async () => ({ size: 0, modifiedAt: null, contentType: null }),
+      download,
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request("/api/v1/fs/download?path=/empty.txt", {
+      headers: { range: "bytes=-10" },
+    });
+
+    expect(res.status).toBe(416);
+    expect(res.headers.get("content-range")).toBe("bytes */0");
+    expect(download).not.toHaveBeenCalled();
+  });
+
   it("returns a plain 416 when the range is invalid and the size cannot be determined", async () => {
     const { app } = await buildHarness();
 
