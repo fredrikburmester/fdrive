@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { AppConfig, CookieSecureMode } from "../config.js";
+import { parseForwardedEntries, trustedForwardedProtoEntry } from "../net.js";
 
 /** The cookie name the browser carries the raw (unhashed) session id in. */
 export const COOKIE_NAME = "fdrive_session";
@@ -59,15 +60,16 @@ export interface CookieSecureRequest {
  * - `"true"` always secure.
  * - `"false"` never secure.
  * - `"auto"` secure when the request arrived over https, judged either
- *   from `x-forwarded-proto` (set by a reverse proxy) or from the request
- *   URL's own protocol.
+ *   from `x-forwarded-proto` (only the entry a trusted proxy wrote, see
+ *   `cookieSecureForMode`) or from the request URL's own protocol.
  */
 export function cookieSecureFor(
-  config: Pick<AppConfig, "fdriveCookieSecure">,
+  config: Pick<AppConfig, "fdriveCookieSecure" | "fdriveTrustedProxyHops">,
   c: CookieSecureRequest,
 ): boolean {
   return cookieSecureForMode(config.fdriveCookieSecure, {
     forwardedProto: c.req.header("x-forwarded-proto"),
+    trustedProxyHops: config.fdriveTrustedProxyHops,
     url: c.req.url,
   });
 }
@@ -75,10 +77,21 @@ export function cookieSecureFor(
 /**
  * Pure decision function behind `cookieSecureFor`, taking the already-read
  * request signals so it is trivially testable without a Hono context.
+ *
+ * In `"auto"` mode `x-forwarded-proto` gets the same trust discipline as
+ * `x-forwarded-for` in `extractClientIp`: only the entry the outermost
+ * trusted proxy wrote counts (`trustedProxyHops` from the right), so a
+ * client that prepends `http` to the chain cannot talk an https deployment
+ * out of `Secure`. A chain shorter than the trusted hop count is not
+ * suspicious here, though — proxies replace this header instead of
+ * appending to it — so the selection clamps to the outermost entry present
+ * rather than failing closed; see `trustedForwardedProtoEntry`. Only with
+ * no trusted hops at all, or no entries, is the header ignored entirely and
+ * the request URL's own scheme decides, exactly as when it is absent.
  */
 export function cookieSecureForMode(
   mode: CookieSecureMode,
-  signals: { forwardedProto: string | undefined; url: string },
+  signals: { forwardedProto: string | undefined; trustedProxyHops: number; url: string },
 ): boolean {
   if (mode === "true") {
     return true;
@@ -86,8 +99,12 @@ export function cookieSecureForMode(
   if (mode === "false") {
     return false;
   }
-  if (signals.forwardedProto !== undefined) {
-    return signals.forwardedProto.split(",")[0]?.trim() === "https";
+  const forwardedProto = trustedForwardedProtoEntry(
+    parseForwardedEntries(signals.forwardedProto),
+    signals.trustedProxyHops,
+  );
+  if (forwardedProto !== undefined) {
+    return forwardedProto === "https";
   }
   try {
     return new URL(signals.url).protocol === "https:";
