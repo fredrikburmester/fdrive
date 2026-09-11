@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -210,6 +211,48 @@ def test_apply_rewrite_tolerates_chown_failure(tmp_path: Path, monkeypatch: pyte
 
 
 # -- process_file ----------------------------------------------------------------
+
+
+def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "mounted-root"
+    root.mkdir()
+    src = root / "a.pdf"
+    _write_pdf(src, "OK")
+    target = runner.RootTarget(name="sftpgo", root_id=1, abs_path=str(root))
+    settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=200, keep_originals=False)
+    real_replace = os.replace
+
+    def fake_run_ocrmypdf(
+        _src: str, dst: str, _langs: str, _max_mb: int, _timeout_seconds: int, _jobs: int
+    ) -> tuple[int, str, bool]:
+        Path(dst).write_bytes(b"rewritten")
+        return 0, "", False
+
+    def replace_across_mounts_fails(src_path: str, dst_path: str) -> None:
+        if os.path.dirname(src_path) != os.path.dirname(dst_path):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        real_replace(src_path, dst_path)
+
+    monkeypatch.setattr(runner, "run_ocrmypdf", fake_run_ocrmypdf)
+    monkeypatch.setattr(runner.db, "record_ocr_log", lambda *args: None)
+    monkeypatch.setattr(runner.os, "replace", replace_across_mounts_fails)
+
+    status, rewrite = runner.process_file(
+        object(),  # type: ignore[arg-type]
+        target,
+        str(src),
+        settings,
+        str(tmp_path / "state"),
+        30,
+        2,
+        set(),
+        lambda _message: None,
+    )
+
+    assert status == "ocred"
+    assert rewrite is True
+    assert src.read_bytes() == b"rewritten"
+    assert list(root.glob("._fdrive-ocr-*.pdf")) == []
 
 
 def test_process_file_skips_already_done(postgres_dsn: str, tmp_path: Path) -> None:
