@@ -7,7 +7,7 @@ not current instructions.
 
 ## WebDAV storage provider: slice 1 in progress
 
-Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/heic-support`, uncommitted.
+Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-provider`, PR #5.
 
 - **Done (slice 1)**: `packages/webdav` (`@fdrive/webdav`) with the protocol client
   (`PROPFIND`/`GET`/`PUT`/`MKCOL`/`MOVE`/`COPY`/`DELETE`, Basic auth per request, manual
