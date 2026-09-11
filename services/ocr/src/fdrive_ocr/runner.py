@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -31,6 +32,7 @@ from .rules import is_candidate_pdf, is_excluded, is_too_big
 from .settings import Settings
 
 SKIP_DIRS = frozenset({"@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
+PROCESS_GROUP_KILL_WAIT_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -94,37 +96,61 @@ def run_ocrmypdf(
     max_mb: int,
     timeout_seconds: int,
     jobs: int,
-    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
+    killpg: Callable[[int, int], None] = os.killpg,
 ) -> tuple[int, str, bool]:
     """Runs `ocrmypdf` without `--skip-text` / `--force-ocr`. Returns
     `(exit_code, stderr, timed_out)`."""
+    process = popen(
+        [
+            "ocrmypdf",
+            "--skip-big",
+            str(max_mb),
+            "-l",
+            langs,
+            "--output-type",
+            "pdf",
+            "--optimize",
+            "0",
+            "-j",
+            str(jobs),
+            "-q",
+            src,
+            dst,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
     try:
-        proc = run(
-            [
-                "ocrmypdf",
-                "--skip-big",
-                str(max_mb),
-                "-l",
-                langs,
-                "--output-type",
-                "pdf",
-                "--optimize",
-                "0",
-                "-j",
-                str(jobs),
-                "-q",
-                src,
-                dst,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-        return proc.returncode, proc.stderr, False
-    except subprocess.TimeoutExpired as e:
-        raw_stderr = e.stderr
-        stderr_text = raw_stderr.decode(errors="replace") if isinstance(raw_stderr, bytes) else (raw_stderr or "")
+        _stdout, stderr = process.communicate(timeout=timeout_seconds)
+        assert process.returncode is not None
+        return process.returncode, stderr, False
+    except subprocess.TimeoutExpired as error:
+        stderr_text = _stderr_text(error.stderr)
+        try:
+            killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            process.kill()
+        try:
+            _stdout, final_stderr = process.communicate(timeout=PROCESS_GROUP_KILL_WAIT_SECONDS)
+            stderr_text = final_stderr or stderr_text
+        except subprocess.TimeoutExpired as cleanup_error:
+            stderr_text = _stderr_text(cleanup_error.stderr) or stderr_text
+            # A descendant that left the group may still hold an inherited pipe.
+            # Drop our pipe handles and reap the parent without blocking again.
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+            process.poll()
         return -1, stderr_text, True
+
+
+def _stderr_text(raw_stderr: str | bytes | None) -> str:
+    return raw_stderr.decode(errors="replace") if isinstance(raw_stderr, bytes) else (raw_stderr or "")
 
 
 def apply_rewrite(
