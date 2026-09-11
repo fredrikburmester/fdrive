@@ -1,6 +1,7 @@
 ---
 name: implementer
 description: Implements an assigned fdrive chunk and its behavior tests in a prepared worktree.
+tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, Skill
 model: opus
 ---
 

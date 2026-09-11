@@ -37,6 +37,10 @@ recipes. Recovery: [TROUBLESHOOTING.md](docs/workflow/TROUBLESHOOTING.md). Produ
   Connecting to live user SFTPGo requires the user's decision; attribution only when requested.
 - The shared stash stack is unsafe across worktrees: prefer a temporary WIP commit; if a
   stash is unavoidable, push with a unique tag, apply by SHA, then drop it.
+- A PreToolUse guard enforces the subset of these rules that is never safe: untagged or
+  SHA-less stash operations, `git reset --hard`, `git clean -f`, `git push --force`,
+  lockfile hand-edits, and session links. These are refused outright rather than prompted,
+  so choose the alternative above from the start; the refusal names it if you forget.
 
 ## Verification
 

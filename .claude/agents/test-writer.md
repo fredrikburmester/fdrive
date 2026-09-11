@@ -1,6 +1,7 @@
 ---
 name: test-writer
 description: Writes fdrive tests and fixtures without changing production code.
+tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite
 model: opus
 ---
 
