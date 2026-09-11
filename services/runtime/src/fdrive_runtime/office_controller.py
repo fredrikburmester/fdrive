@@ -8,6 +8,7 @@ an explicit service shutdown after the entrypoint exits.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import signal
@@ -70,7 +71,7 @@ class OfficeClient:
                 if len(raw) > 64 * 1024:
                     raise ValueError("office endpoint response is too large")
                 return parse_office_snapshot(json.loads(raw))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             raise ValueError(f"office endpoint unavailable: {type(error).__name__}") from error
 
 
@@ -215,7 +216,7 @@ class OfficeLifecycle:
         try:
             with self._urlopen(self.ready_url, timeout=2) as response:  # type: ignore[attr-defined] # noqa: S310
                 return bool(response.status == 200)
-        except (urllib.error.URLError, TimeoutError):
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError):
             return False
 
     def status(self) -> Mapping[str, object]:

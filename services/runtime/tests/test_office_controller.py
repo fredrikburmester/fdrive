@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import signal
 import subprocess
@@ -80,6 +81,14 @@ def test_office_client_authenticates_and_rejects_bad_responses(monkeypatch: pyte
 
     monkeypatch.setattr(office_controller.urllib.request, "build_opener", lambda *_args: BrokenOpener())
     with pytest.raises(ValueError, match="unavailable"):
+        OfficeClient("http://api/office", "secret").fetch()
+
+    class MalformedOpener:
+        def open(self, *_args: object, **_kwargs: object) -> FakeResponse:
+            raise http.client.BadStatusLine("malformed")
+
+    monkeypatch.setattr(office_controller.urllib.request, "build_opener", lambda *_args: MalformedOpener())
+    with pytest.raises(ValueError, match="BadStatusLine"):
         OfficeClient("http://api/office", "secret").fetch()
 
 
@@ -240,6 +249,18 @@ def test_lifecycle_validates_configuration_and_reports_not_ready() -> None:
         popen=lambda *_args, **_kwargs: process,
         run_command=lambda *_args, **_kwargs: completed(),
         urlopen=lambda *_args, **_kwargs: (_ for _ in ()).throw(urllib.error.URLError("starting")),
+    )
+    lifecycle.reconcile(OfficeSnapshot(1, True))
+    lifecycle.reconcile(OfficeSnapshot(1, True))
+    assert lifecycle.status()["status"] == "starting"
+
+    lifecycle = OfficeLifecycle(
+        ("start",),
+        ("stop",),
+        "http://ready",
+        popen=lambda *_args, **_kwargs: process,
+        run_command=lambda *_args, **_kwargs: completed(),
+        urlopen=lambda *_args, **_kwargs: (_ for _ in ()).throw(http.client.BadStatusLine("malformed")),
     )
     lifecycle.reconcile(OfficeSnapshot(1, True))
     lifecycle.reconcile(OfficeSnapshot(1, True))
