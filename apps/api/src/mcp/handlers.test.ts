@@ -594,7 +594,7 @@ describe("runListDirectory", () => {
       },
     });
 
-    const result = await runListDirectory(fakePrincipal(storage), { path: "/docs" });
+    const result = await runListDirectory(baseDeps(), fakePrincipal(storage), { path: "/docs" });
 
     expect(result.path).toBe("/docs");
     expect(result.entries).toEqual([
@@ -627,11 +627,55 @@ describe("runListDirectory", () => {
       ],
     });
 
-    const result = await runListDirectory(fakePrincipal(storage), { limit: 1 });
+    const result = await runListDirectory(baseDeps(), fakePrincipal(storage), { limit: 1 });
 
     expect(result.path).toBe("/");
     expect(result.entries).toHaveLength(1);
     expect(result.truncated).toBe(true);
+  });
+
+  it("hides the configured Trash entry before pagination", async () => {
+    const modifiedAt = new Date();
+    const storage = fakeStorage({
+      list: async () => [
+        { name: ".trash", path: "/.trash", kind: "dir" as const, size: 0, modifiedAt, ext: "" },
+        { name: "a", path: "/a", kind: "file" as const, size: 1, modifiedAt, ext: "" },
+      ],
+    });
+    const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
+
+    const result = await runListDirectory(deps, fakePrincipal(storage), { limit: 1 });
+
+    expect(result.entries.map((entry) => entry.name)).toEqual(["a"]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
+    "rejects configured Trash path %s before touching storage",
+    async (path) => {
+      const list = vi.fn(async () => []);
+      const storage = fakeStorage({ list });
+      const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
+
+      await expect(runListDirectory(deps, fakePrincipal(storage), { path })).rejects.toThrow(
+        "configured Trash folder",
+      );
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a Trash-looking entry when Trash is disabled", async () => {
+    const modifiedAt = new Date();
+    const storage = fakeStorage({
+      list: async () => [
+        { name: ".trash", path: "/.trash", kind: "dir" as const, size: 0, modifiedAt, ext: "" },
+      ],
+    });
+    const deps = baseDeps({ trashPathForStorage: () => null });
+
+    const result = await runListDirectory(deps, fakePrincipal(storage), {});
+
+    expect(result.entries.map((entry) => entry.name)).toEqual([".trash"]);
   });
 });
 

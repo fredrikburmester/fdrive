@@ -2,6 +2,7 @@ import {
   baseName,
   extensionOf,
   isUnderPath,
+  normalizePath,
   parseSearchFilters,
   type Scope,
   toFsPath,
@@ -120,7 +121,9 @@ async function requireScope(deps: McpToolDeps, principal: Principal): Promise<Sc
   return { ctx, authorizer: createReadAuthorizer({ storage: principal.storage }) };
 }
 
-function currentTrashPath(deps: McpToolDeps, principal: Principal): string | null {
+type TrashPathDeps = Pick<McpToolDeps, "trashPath" | "trashPathForStorage">;
+
+function currentTrashPath(deps: TrashPathDeps, principal: Principal): string | null {
   return deps.trashPathForStorage?.(principal.storage) ?? deps.trashPath ?? null;
 }
 
@@ -343,13 +346,36 @@ export interface ListDirectoryArgs {
  * Lists a folder directly through `principal.storage`, authorized natively
  * by the storage provider itself (SFTPGo permissions), independent of index
  * availability: this tool never consults `ScopeResolver` or `IndexQueries`.
+ * A configured recycle folder is the one provider-backed location withheld
+ * from ordinary browsing; direct requests into it fail before storage is
+ * touched, and its entry is removed before pagination.
  */
-export async function runListDirectory(principal: Principal, args: ListDirectoryArgs) {
+export async function runListDirectory(
+  deps: TrashPathDeps,
+  principal: Principal,
+  args: ListDirectoryArgs,
+) {
   const path = args.path ?? "/";
+  const normalizedPath = normalizePath(path);
+  const trashPath = currentTrashPath(deps, principal);
+  if (
+    trashPath !== null &&
+    (normalizedPath === trashPath || isUnderPath(trashPath, normalizedPath))
+  ) {
+    throw new McpToolError("path is in the configured Trash folder");
+  }
+
   const limit = Math.max(1, Math.min(args.limit ?? 300, 2000));
   const entries = await principal.storage.list(path);
-  const truncated = entries.length > limit;
-  const sliced = entries.slice(0, limit);
+  const visible =
+    trashPath === null
+      ? entries
+      : entries.filter((entry) => {
+          const entryPath = normalizePath(entry.path);
+          return entryPath !== trashPath && !isUnderPath(trashPath, entryPath);
+        });
+  const truncated = visible.length > limit;
+  const sliced = visible.slice(0, limit);
 
   return {
     path,
