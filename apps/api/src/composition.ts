@@ -620,9 +620,11 @@ export async function composeApp(
     principalResolver: auth.principalResolver,
     connectionStatus: async () => {
       const setup = await setupService.status();
-      if (setup.required) return { required: true, providers: [] };
+      const configuredProviderTypes = (await providerService.list()).map((p) => p.type);
+      if (setup.required) return { required: true, providers: [], configuredProviderTypes };
       return {
         required: false,
+        configuredProviderTypes,
         providers: (await providerService.enabled()).map((provider) => ({
           type: provider.type,
           host: hostLabel(provider.baseUrl),

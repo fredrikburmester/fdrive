@@ -140,6 +140,21 @@ describe("composeApp", () => {
       const names = listBody.entries.map((entry) => entry.name).sort();
       expect(names).toEqual(["docs", "photo.jpg"]);
 
+      const storageDb = createDb(postgres.connectionString);
+      try {
+        await storageDb.db.execute(sql`update app.providers set enabled = false`);
+        const about = await composed.app.request("/api/v1/about");
+        expect(about.status).toBe(200);
+        expect(await about.json()).toMatchObject({
+          setupRequired: false,
+          providers: [],
+          builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+        });
+      } finally {
+        await storageDb.db.execute(sql`update app.providers set enabled = true`);
+        await storageDb.close();
+      }
+
       const eventsController = new AbortController();
       const eventsRes = await composed.app.request("/api/v1/events", {
         headers: { cookie },
