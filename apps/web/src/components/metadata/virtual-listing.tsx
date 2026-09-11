@@ -15,13 +15,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { defaultArchiveName } from "@/lib/files/archive";
 import {
   type AnchorDownloader,
+  adaptDocument,
   createAnchorDownloader,
-  type DocumentLike,
   type DownloadDeps,
   downloadMany,
   downloadSingle,
   planDownload,
 } from "@/lib/files/download";
+import { buildDownloadDeps } from "@/lib/files/download-deps";
 import {
   apiClient,
   capabilitiesFor,
@@ -49,39 +50,6 @@ import { toggleTagId } from "@/lib/metadata/tag-set";
 
 function toRoute(href: string): Route {
   return href as Route;
-}
-
-/**
- * Adapts the real, global `document` to `download.ts`'s minimal
- * `DocumentLike`, the same way the file browser does: the cast is confined
- * to this one boundary, since `download.ts` only ever creates, appends,
- * clicks and removes a single anchor.
- */
-function adaptDocument(doc: Document): DocumentLike {
-  return {
-    createElement: (tag) => doc.createElement(tag),
-    body: {
-      appendChild: (node) => {
-        doc.body.appendChild(node as unknown as Node);
-      },
-      removeChild: (node) => {
-        doc.body.removeChild(node as unknown as Node);
-      },
-    },
-  };
-}
-
-/** Builds a fresh `DownloadDeps` bound to the current `document`. Only ever
- * called from an event handler, never at render time, so it never runs
- * during server-side rendering. */
-function buildDownloadDeps(anchor: AnchorDownloader): DownloadDeps {
-  return {
-    downloadUrl: (downloadPath, opts) => apiClient.downloadUrl(downloadPath, opts),
-    zip: (paths, name) => apiClient.zip(paths, name),
-    anchor,
-    createObjectUrl: (blob) => URL.createObjectURL(blob),
-    revokeObjectUrl: (url) => URL.revokeObjectURL(url),
-  };
 }
 
 export interface VirtualListingProps {
@@ -151,7 +119,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     if (plan === null) {
       return;
     }
-    const deps = buildDownloadDeps(getAnchorDownloader());
+    const deps = buildDownloadDeps(getAnchorDownloader(), apiClient);
     switch (plan.kind) {
       case "single":
         downloadSingle(plan.path, deps);
