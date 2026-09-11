@@ -223,6 +223,34 @@ it("hides Peek on a download-limited share, even for an archive row or single-fi
   await screen.findByText("bundle.zip");
   expect(screen.queryByRole("button", { name: "Peek" })).toBeNull();
 });
+it("hides full-file previews on download-limited directory and single-file shares", async () => {
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    layout: "directory",
+    fileName: null,
+    maxDownloads: 1,
+  });
+  calls.entries.mockResolvedValue({
+    items: [{ name: "notes.txt", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" }],
+  });
+  const directory = setup();
+  await screen.findByText("notes.txt");
+  expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Download" })).toBeTruthy();
+  directory.unmount();
+
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    fileName: "notes.txt",
+    maxDownloads: 1,
+  });
+  setup();
+  await screen.findByText("notes.txt");
+  expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Download" })).toBeTruthy();
+});
 it("a single-file archive share shows Peek beside its download button", async () => {
   calls.metadata.mockResolvedValue({
     ...metadata,
