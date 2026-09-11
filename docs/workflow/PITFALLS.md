@@ -9,6 +9,23 @@ restricted environment. Use the [command helpers](COMMANDS.md#setup-and-runtime)
 an already-installed pinned pnpm. Set `FDRIVE_NODE` / `FDRIVE_PNPM` to explicit matching
 binaries if discovery fails; never disable signature checks or use the wrong manager version.
 
+## Deployment resources
+
+- A container limit on memory is not a limit on CPU, and every heavy worker sizes its own
+  concurrency from the host's visible cores. Capping one just moves the problem: capping
+  `embed` put the same host back at load 115 with the indexer's tesseract processes at 240%
+  each. Bound thread counts explicitly (`FDRIVE_EMBED_THREADS`, `FDRIVE_IMAGE_EMBED_THREADS`,
+  `OMP_THREAD_LIMIT=1` for the indexer's tesseract children); `cpus:` caps are opt-in because
+  Docker rejects a value above the host's core count. Treat the limits as one pass over
+  `compose.yaml`, not per-service tuning.
+- Green fdrive-side signals do not mean the operator still has a machine. When a feature costs
+  real resources, ask what the failure looks like from outside the stack.
+- Overload feeds back. A loaded host slows the api, a slow api fails the runtime controllers'
+  poll, and stopping a healthy child reloads its model — which loads the host further and makes
+  the indexer log a connection error per file against the worker it just killed. A watchdog
+  that reacts to "I could not reach the supervisor" the same way it reacts to "the supervisor
+  said stop" will amplify any load spike.
+
 ## Code and integration
 
 - Agents sometimes stash, edit outside their scope, or report gates they did not run; the review

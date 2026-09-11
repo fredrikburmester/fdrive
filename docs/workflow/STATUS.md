@@ -5,6 +5,51 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Beta field report (clean install, 2026-09-11): fixed
+
+- **No worker had a CPU bound** (addendum widened this from `embed` alone). `deploy/compose.yaml`
+  now sets thread counts explicitly where the amplification is thread-based —
+  `FDRIVE_EMBED_THREADS` / `FDRIVE_IMAGE_EMBED_THREADS` (default 4) and `OMP_THREAD_LIMIT=1`
+  on the indexer, whose `pytesseract` children each parallelised across every core on top of
+  `INDEX_WORKERS` — and exposes opt-in `cpus:`/`mem_limit:` knobs on `indexer`, `ocr`, `tika`,
+  `onlyoffice`, `embed` and `image-embed`. The hard caps default to 0/no limit because Docker
+  rejects a `cpus:` above the host's core count; `tika` also gained `FDRIVE_TIKA_JAVA_OPTS`.
+  Table in `deploy/REFERENCE.md#processing-worker-resource-limits`.
+- **Controllers served `ready` with a stale `error`.** Neither the restart path nor
+  `reconcile`'s ready branch cleared `_error`, so a worker stopped transiently (an api
+  recreate during `update.sh`) kept a resolved reason attached until the retry window elapsed.
+  Cleared on both paths in **both** `controller.py` and `office_controller.py`, which had the
+  identical bug; regressions in each controller's tests.
+- **Overload fed back into the controllers.** A loaded host slowed the api, the controller's
+  2 s poll timed out, and 9 s of that stopped a healthy model child — whose reload loaded the
+  host further and made the indexer log a connection error per file. `FeatureClient`/`OfficeClient`
+  timeouts are now 5 s, and the poll loop separates a rejected document (fails closed after
+  `FDRIVE_RUNTIME_STALE_SECONDS`, still 9 s) from an unreachable endpoint
+  (`FDRIVE_RUNTIME_UNREACHABLE_SECONDS`, default 60 s) via a new `EndpointUnavailable`. Both
+  still fail closed, and the stop reason now names which happened.
+- **Not a bug: the api's health derivation.** `runtimeFailure` already requires the controller's
+  `status` to be `failed` and never reads `error` on its own (`apps/api/src/system/runtime-status.ts:63`),
+  and `controllerVerdict` only consults a controller when the sidecar itself is unreachable.
+  The reported `search: failed` was accurate at probe time — the child really had been stopped
+  by the loop above — and `/health` caches a fan-out for 15 s, so a later `/runtime` read can
+  disagree with it.
+- **Indexer hammered an absent embed backend.** One connection error per file (176 lines in
+  one observed window). New `embed_backoff.py` gate: the first transport failure pauses
+  embedding for 60 s and logs once, files keep their FTS chunks as `partial`, recovery logs
+  once. `HTTPStatusError` and other answers from a live backend stay per-file.
+- **`deploy/README.md` step 2** told a first-time operator to clone a private repo over
+  anonymous HTTPS. Now the SSH form, with the access prerequisite stated.
+- **CI never built the deployment images.** New `images` job builds `apps/web/Dockerfile` and
+  `apps/api/Dockerfile`; both verified building locally. The two TypeScript errors the reporter
+  hit were caught by CI's existing typecheck, but only after the push to `main` — the window in
+  which an operator pulls a `main` that does not build is a direct-to-main consequence, not a
+  missing check.
+- Not reproduced: `docs/workflow/P10-WEBDAV.md` no longer exists, and `docs/STORAGE-PROVIDERS.md`
+  already states WebDAV is unimplemented.
+- Left alone: `indexer.wait_for_embed` is dead production code (tests only). The backoff gate
+  supersedes it; removal is a separate cleanup.
+- Gates: `workflow`, `python runtime`, `python indexer` all pass; both deployment images build. No application/browser change.
+
 ## 65-finding code audit: complete
 
 - All 65 user-supplied findings resolved on `main`, one dedicated subagent per finding and a
