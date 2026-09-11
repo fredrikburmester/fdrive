@@ -484,3 +484,20 @@ it("validates before IO and reports missing provider without a speculative accou
   ).rejects.toThrow(TypeError);
   await expect(createRepos(closed.db).providers.get("bad")).rejects.toThrow(TypeError);
 });
+
+it("compares credentials under the login lock so equal replacements retain both sessions", async () => {
+  await a.loginVerified(loginInput("a"));
+  const observed: number[] = [];
+  const replace = (hash: string): LoginVerifiedInput => ({
+    ...loginInput(hash),
+    compareCredential: (_id, current) => {
+      observed.push(current?.ciphertext[0] ?? 0);
+      return current?.ciphertext[0] !== 9;
+    },
+    sealCredential: () => ({ ciphertext: new Uint8Array([9]), keyId: "test" }),
+  });
+  await Promise.all([a.loginVerified(replace("b")), b.loginVerified(replace("c"))]);
+  expect(observed).toEqual([1, 9]);
+  const remaining = await first.db.select().from(sessions);
+  expect(remaining.map((row) => row.idHash).sort()).toEqual(["b".repeat(64), "c".repeat(64)]);
+});

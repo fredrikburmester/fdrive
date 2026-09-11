@@ -4,6 +4,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 
 | Document | Purpose |
 | --- | --- |
+| [Concurrency](CONCURRENCY.md) | Issue #2 race fixes and acceptance criteria |
 | [Roadmap](ROADMAP.md) | Remaining requested features and acceptance criteria |
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |

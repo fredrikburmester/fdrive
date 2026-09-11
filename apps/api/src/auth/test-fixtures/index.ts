@@ -93,13 +93,16 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
             externalUsername: input.username,
           });
         }
+        const revoke =
+          input.compareCredential?.(identity.id, await repos.credentials.get(identity.id)) ??
+          input.revokeOtherSessions;
         identity = { ...identity, lastLoginAt: input.at };
         changed.set(identity.id, identity);
         await repos.credentials.put({
           identityId: identity.id,
           ...input.sealCredential(identity.id),
         });
-        if (input.revokeOtherSessions === true)
+        if (revoke === true)
           for (const session of [...sessions.values()])
             if (session.accountId === identity.accountId)
               await repos.sessions.delete(session.idHash);
