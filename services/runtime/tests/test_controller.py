@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import signal
 import subprocess
 from typing import Any
@@ -61,6 +62,16 @@ def test_parse_features_rejects_empty_or_unknown_values(raw: str) -> None:
 def test_feature_client_requires_a_token_before_requesting_the_api() -> None:
     with pytest.raises(ValueError, match="WORKER_TOKEN"):
         FeatureClient("http://api", "").fetch()
+
+
+def test_feature_client_normalizes_http_protocol_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BrokenOpener:
+        def open(self, *_args: object, **_kwargs: object) -> object:
+            raise http.client.BadStatusLine("malformed")
+
+    monkeypatch.setattr(controller.urllib.request, "build_opener", lambda *_args: BrokenOpener())
+    with pytest.raises(ValueError, match="BadStatusLine"):
+        FeatureClient("http://api", "token").fetch()
 
 
 def test_lifecycle_rejects_invalid_configuration() -> None:
@@ -215,6 +226,17 @@ def test_lifecycle_ignores_an_already_gone_process_and_kill_errors() -> None:
     lifecycle.reconcile(snapshot(thumbnails=True))
     lifecycle.reconcile(snapshot())
     assert lifecycle.status()["status"] == "off"
+
+
+def test_lifecycle_treats_http_protocol_errors_as_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FDRIVE_RUNTIME_READY_URL", "http://worker/ready")
+    monkeypatch.setattr(
+        controller.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(http.client.BadStatusLine("malformed")),
+    )
+    lifecycle = WorkerLifecycle(("worker",), frozenset({"thumbnails"}))
+    assert lifecycle._child_ready() is False
 
 
 def test_main_always_starts_the_feature_polling_controller(monkeypatch: pytest.MonkeyPatch) -> None:

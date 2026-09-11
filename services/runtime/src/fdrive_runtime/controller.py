@@ -8,6 +8,7 @@ partial API outage cannot leave optional processing running unexpectedly.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import signal
@@ -95,7 +96,7 @@ class FeatureClient:
                 if len(raw) > 64 * 1024:
                     raise ValueError("feature endpoint response is too large")
                 return parse_feature_snapshot(json.loads(raw))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             raise ValueError(f"feature endpoint unavailable: {type(error).__name__}") from error
 
 
@@ -205,7 +206,7 @@ class WorkerLifecycle:
         try:
             with urllib.request.urlopen(self._ready_url, timeout=1) as response:  # noqa: S310 - compose localhost only
                 return bool(response.status == 200)
-        except (urllib.error.URLError, TimeoutError):
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError):
             return False
 
     def status(self) -> dict[str, object]:
