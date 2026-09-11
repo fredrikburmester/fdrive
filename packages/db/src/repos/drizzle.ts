@@ -15,6 +15,7 @@ import {
   tags,
 } from "../schema/app.js";
 import { validateIdentityLinkId } from "./identity-links-types.js";
+import { selectPathChunks } from "./path-chunks.js";
 import { createSystemEventRepo } from "./system-events.js";
 import type {
   Account,
@@ -581,13 +582,12 @@ function createFileTagRepo(db: Db): FileTagRepo {
   return {
     async tagsForPaths(identityId, paths) {
       const result = new Map<string, string[]>();
-      if (paths.length === 0) {
-        return result;
-      }
-      const rows = await db
-        .select({ path: fileTags.path, tagId: fileTags.tagId })
-        .from(fileTags)
-        .where(and(eq(fileTags.identityId, identityId), inArray(fileTags.path, [...paths])));
+      const rows = await selectPathChunks(paths, (chunk) =>
+        db
+          .select({ path: fileTags.path, tagId: fileTags.tagId })
+          .from(fileTags)
+          .where(and(eq(fileTags.identityId, identityId), inArray(fileTags.path, chunk))),
+      );
       for (const row of rows) {
         const existing = result.get(row.path);
         if (existing) {
@@ -706,13 +706,12 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
         .where(and(eq(favorites.identityId, identityId), eq(favorites.path, path)));
     },
     async has(identityId, paths) {
-      if (paths.length === 0) {
-        return new Set();
-      }
-      const rows = await db
-        .select({ path: favorites.path })
-        .from(favorites)
-        .where(and(eq(favorites.identityId, identityId), inArray(favorites.path, [...paths])));
+      const rows = await selectPathChunks(paths, (chunk) =>
+        db
+          .select({ path: favorites.path })
+          .from(favorites)
+          .where(and(eq(favorites.identityId, identityId), inArray(favorites.path, chunk))),
+      );
       return new Set(rows.map((row) => row.path));
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
