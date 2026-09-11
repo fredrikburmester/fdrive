@@ -1,5 +1,6 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { and, eq, sql } from "drizzle-orm";
+import type { Pool, PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
 import { createRepos } from "../../src/repos/drizzle.js";
@@ -8,6 +9,7 @@ import { defineReposSuite } from "../repos-suite.js";
 
 let container: StartedPostgreSqlContainer;
 let db: Db;
+let pool: Pool;
 let close: () => Promise<void>;
 
 beforeAll(async () => {
@@ -19,6 +21,7 @@ beforeAll(async () => {
 
   const created = createDb(container.getConnectionUri());
   db = created.db;
+  pool = created.pool;
   close = created.close;
   await migrate(db);
 }, 180_000);
@@ -84,6 +87,22 @@ async function metadataPaths(identityId: string): Promise<Record<string, string[
       (rows[index] ?? []).map((row) => row.path).sort(),
     ]),
   );
+}
+
+async function waitForLockWaiters(count = 1): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const rows = await db.execute<{ count: number }>(sql`
+          select count(*)::int as count
+          from pg_locks
+          where not granted
+        `);
+        return rows.rows[0]?.count;
+      },
+      { timeout: 2_000 },
+    )
+    .toBeGreaterThanOrEqual(count);
 }
 
 describe("metadata prefix operations", () => {
@@ -200,6 +219,219 @@ describe("metadata prefix operations", () => {
     expect(await repos.recents.list(identity.id, 10)).toEqual([
       expect.objectContaining({ path: targetChild, openedAt: sourceOpenedAt }),
     ]);
+  });
+
+  it("lets source metadata win when a destination insert is still uncommitted", async () => {
+    const { account, identity, repos } = await createIdentity("move-race");
+    const sourceTag = await repos.tags.create(account.id, { name: "source-race", color: null });
+    const destinationTag = await repos.tags.create(account.id, {
+      name: "destination-race",
+      color: null,
+    });
+    const sourceOpenedAt = new Date("2026-01-01T00:00:00.000Z");
+    const destinationOpenedAt = new Date("2026-02-01T00:00:00.000Z");
+
+    const cases: Array<{
+      label: string;
+      seedSource: (path: string) => Promise<void>;
+      insertDestination: (client: PoolClient, path: string) => Promise<unknown>;
+      move: (source: string, destination: string) => Promise<void>;
+      expectSourceAt: (path: string) => Promise<void>;
+    }> = [
+      {
+        label: "file-tags",
+        seedSource: (path) => repos.fileTags.setTags(identity.id, path, [sourceTag.id]),
+        insertDestination: (client, path) =>
+          client.query(
+            `insert into app.file_tags (identity_id, path, tag_id) values ($1, $2, $3), ($1, $2, $4)`,
+            [identity.id, path, sourceTag.id, destinationTag.id],
+          ),
+        move: (source, destination) =>
+          repos.fileTags.movePrefix(identity.id, source, destination, false),
+        expectSourceAt: async (path) => {
+          expect((await repos.fileTags.tagsForPaths(identity.id, [path])).get(path)).toEqual([
+            sourceTag.id,
+          ]);
+        },
+      },
+      {
+        label: "favorites",
+        seedSource: (path) => repos.favorites.add(identity.id, path, "file"),
+        insertDestination: (client, path) =>
+          client.query(
+            `insert into app.favorites (identity_id, path, kind) values ($1, $2, 'dir')`,
+            [identity.id, path],
+          ),
+        move: (source, destination) =>
+          repos.favorites.movePrefix(identity.id, source, destination, false),
+        expectSourceAt: async (path) => {
+          expect(await repos.favorites.list(identity.id)).toContainEqual(
+            expect.objectContaining({ path, kind: "file" }),
+          );
+        },
+      },
+      {
+        label: "folder-views",
+        seedSource: (path) => repos.folderViews.set(identity.id, path, "grid"),
+        insertDestination: (client, path) =>
+          client.query(
+            `insert into app.folder_views (identity_id, path, mode) values ($1, $2, 'list')`,
+            [identity.id, path],
+          ),
+        move: (source, destination) =>
+          repos.folderViews.movePrefix(identity.id, source, destination, false),
+        expectSourceAt: async (path) => {
+          expect(await repos.folderViews.get(identity.id, path)).toMatchObject({ mode: "grid" });
+        },
+      },
+      {
+        label: "recents",
+        seedSource: async (path) => {
+          await repos.recents.touch(identity.id, path);
+          await db
+            .update(recents)
+            .set({ openedAt: sourceOpenedAt })
+            .where(and(eq(recents.identityId, identity.id), eq(recents.path, path)));
+        },
+        insertDestination: (client, path) =>
+          client.query(
+            `insert into app.recents (identity_id, path, opened_at) values ($1, $2, $3)`,
+            [identity.id, path, destinationOpenedAt],
+          ),
+        move: (source, destination) =>
+          repos.recents.movePrefix(identity.id, source, destination, false),
+        expectSourceAt: async (path) => {
+          expect(await repos.recents.list(identity.id, 20)).toContainEqual(
+            expect.objectContaining({ path, openedAt: sourceOpenedAt }),
+          );
+        },
+      },
+    ];
+
+    for (const race of cases) {
+      const source = `/race-source-${race.label}`;
+      const destination = `/race-destination-${race.label}`;
+      await race.seedSource(source);
+      const client = await pool.connect();
+      let committed = false;
+      try {
+        await client.query("begin");
+        await race.insertDestination(client, destination);
+        const moveResult = race.move(source, destination).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        await waitForLockWaiters();
+        await client.query("commit");
+        committed = true;
+        const result = await moveResult;
+        if (!result.ok) throw result.error;
+      } finally {
+        if (!committed) await client.query("rollback");
+        client.release();
+      }
+      await race.expectSourceAt(destination);
+    }
+  });
+
+  it("avoids a lock inversion with an existing destination tag update", async () => {
+    const { account, identity, repos } = await createIdentity("move-tag-deadlock");
+    const source = "/deadlock-source";
+    const destination = "/deadlock-destination";
+    const sourceTag = await repos.tags.create(account.id, { name: "deadlock-source", color: null });
+    const oldDestinationTag = await repos.tags.create(account.id, {
+      name: "deadlock-old-destination",
+      color: null,
+    });
+    const newDestinationTag = await repos.tags.create(account.id, {
+      name: "deadlock-new-destination",
+      color: null,
+    });
+    await repos.fileTags.setTags(identity.id, source, [sourceTag.id]);
+    await repos.fileTags.setTags(identity.id, destination, [oldDestinationTag.id]);
+
+    await db.execute(sql`
+      create function "app"."test_pause_file_tag_delete"() returns trigger
+      language plpgsql as $$
+      begin
+        perform pg_advisory_xact_lock(94004);
+        return old;
+      end
+      $$
+    `);
+    await db.execute(sql`
+      create trigger "test_pause_file_tag_delete"
+      after delete on "app"."file_tags"
+      for each row execute function "app"."test_pause_file_tag_delete"()
+    `);
+
+    const blocker = await pool.connect();
+    let unlocked = false;
+    let setResult: Promise<{ ok: true } | { ok: false; error: unknown }> | null = null;
+    let moveResult: Promise<{ ok: true } | { ok: false; error: unknown }> | null = null;
+    try {
+      await blocker.query("select pg_advisory_lock(94004)");
+      setResult = repos.fileTags.setTags(identity.id, destination, [newDestinationTag.id]).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await waitForLockWaiters();
+
+      moveResult = repos.fileTags.movePrefix(identity.id, source, destination, false).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await waitForLockWaiters(2);
+      await blocker.query("select pg_advisory_unlock(94004)");
+      unlocked = true;
+
+      for (const result of await Promise.all([setResult, moveResult])) {
+        if (!result.ok) throw result.error;
+      }
+    } finally {
+      if (!unlocked) await blocker.query("select pg_advisory_unlock(94004)");
+      blocker.release();
+      if (setResult && moveResult) await Promise.allSettled([setResult, moveResult]);
+      await db.execute(sql`
+        drop trigger if exists "test_pause_file_tag_delete" on "app"."file_tags"
+      `);
+      await db.execute(sql`drop function if exists "app"."test_pause_file_tag_delete"()`);
+    }
+
+    expect(
+      (await repos.fileTags.tagsForPaths(identity.id, [destination])).get(destination),
+    ).toEqual([sourceTag.id]);
+    expect((await repos.fileTags.tagsForPaths(identity.id, [source])).has(source)).toBe(false);
+  });
+
+  it("treats a same-path metadata move as a no-op", async () => {
+    const { account, identity, repos } = await createIdentity("move-same-path");
+    const path = "/same";
+    const tag = await repos.tags.create(account.id, { name: "same-path", color: null });
+    const pinnedAt = new Date("2026-01-01T00:00:00.000Z");
+    await repos.fileTags.setTags(identity.id, path, [tag.id]);
+    await repos.favorites.add(identity.id, path, "file");
+    await repos.folderViews.set(identity.id, path, "grid");
+    await repos.recents.touch(identity.id, path);
+    await db
+      .update(folderViews)
+      .set({ updatedAt: pinnedAt })
+      .where(and(eq(folderViews.identityId, identity.id), eq(folderViews.path, path)));
+
+    await Promise.all([
+      repos.fileTags.movePrefix(identity.id, path, path, true),
+      repos.favorites.movePrefix(identity.id, path, path, true),
+      repos.folderViews.movePrefix(identity.id, path, path, true),
+      repos.recents.movePrefix(identity.id, path, path, true),
+    ]);
+
+    expect(await metadataPaths(identity.id)).toEqual({
+      fileTags: [path],
+      favorites: [path],
+      folderViews: [path],
+      recents: [path],
+    });
+    expect(await repos.folderViews.get(identity.id, path)).toMatchObject({ updatedAt: pinnedAt });
   });
 
   it.each(wildcardPrefixes)(
