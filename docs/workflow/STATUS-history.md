@@ -627,3 +627,62 @@ Implemented in order, with commits between groups:
   SFTPGo/PostgreSQL and a check that only one provider/account/identity/credential/session remains.
 - One token-group workflow run hit the environment-helper timing failure
   `missing pnpm <--filter> <@fdrive/api> <dev>`; the unchanged workflow gate passed on rerun.
+
+
+## Issue #2 handoffs archived 2026-09-11
+
+## Issue #2: concurrency
+
+- Completed in requested order: #11 (`f8b8b55`), #8–10 (`e413915`), #3/cache
+  (`a99204b`), then #7 setup rollback and failed-request session cleanup.
+- Application gates pass with reduced-concurrency coverage. Final full integration passes,
+  including deterministic real-SFTPGo setup competition with one remaining provider,
+  account, identity, credential and session, plus PostgreSQL preservation of existing losers.
+- Completion evidence is in [history](STATUS-history.md). No concurrency plan remains open.
+
+## Issue #2: quick fixes
+
+- Items 2, 5, 12 and 13 implemented locally: uploads forward request cancellation;
+  upstream 416 maps to `bad_request` (public shares return 400 instead of 502);
+  spare-provider E2E cleanup sends the CSRF header and checks success; auth docs use
+  `currentCredential`. The obsolete probe document was already removed.
+- Regressions cover cancellation with and without a body, client error classification
+  (412 stays unchanged), and removal of a provider left by an interrupted browser run.
+- Lint and typecheck pass. Default parallel coverage hit the two existing 5000ms archive
+  test timeouts (`.fdrive-workflow/logs/step.IIsiDj/`); all package coverage passes with
+  `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
+  (`.fdrive-workflow/logs/step.OvSddD/`). No gates or timeouts changed.
+- Integration passes against disposable SFTPGo/PostgreSQL. Storage browser tests pass
+  with `E2E_DEV=1`, including the new leftover-provider cleanup regression. Tooling
+  coverage and workflow verification pass. Committed and pushed as `7b097d2`.
+
+## Issue #2: descendant move/copy guard
+
+- Item 1 implemented locally: normalized descendant targets return 400 before storage,
+  metadata or events; equal-path API no-ops remain supported. Move/copy pickers exclude
+  selected subtrees and require a valid destination for every selected source.
+- Regression coverage checks preserved file contents, no mutation/event side effects,
+  normalized paths, sibling prefixes and both picker flows. Focused API tests, lint and
+  typecheck pass. Integration passes; all 9 move/copy browser tests pass against disposable
+  SFTPGo/PostgreSQL with `E2E_DEV=1`. Interactive dev check confirmed the selected folder
+  is hidden, same-parent confirmation disabled, and a valid sibling destination enabled.
+- Default parallel application coverage hit existing archive/trash test timeouts
+  (`.fdrive-workflow/logs/step.pkuX6l/`). All package coverage passes with
+  `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
+  (`.fdrive-workflow/logs/step.pmRLLk/`); no timeouts or thresholds changed.
+- Committed on `main` as `4d80db3` at the user's request.
+
+
+### Earlier checkout note (historical)
+
+## Existing checkout work
+
+- Provider/auth isolation edits and tests, Playwright configuration, pentest findings and
+  `PR-REVIEW-FINDINGS.md` predate this cleanup and remain uncommitted. The documentation
+  cleanup was moved to `main` for the requested commit; no push requested.
+- Detailed security followups: [pentest findings](SHANNON-PENTEST-FINDINGS.md).
+- This cleanup changes documentation and source comments only. It does not claim new
+  application, browser, performance or security verification.
+
+- Previous local main history is retained on `codex/main-before-docs-cleanup`; main now
+  starts from the merged PR #1. Its base tree matched the documentation checkout exactly.

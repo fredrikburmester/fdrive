@@ -5,46 +5,50 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
-## Issue #2: concurrency
+## 65-finding code audit: complete
 
-- Completed in requested order: #11 (`f8b8b55`), #8–10 (`e413915`), #3/cache
-  (`a99204b`), then #7 setup rollback and failed-request session cleanup.
-- Application gates pass with reduced-concurrency coverage. Final full integration passes,
-  including deterministic real-SFTPGo setup competition with one remaining provider,
-  account, identity, credential and session, plus PostgreSQL preservation of existing losers.
-- Completion evidence is in [history](STATUS-history.md). No concurrency plan remains open.
+- All 65 user-supplied findings resolved on `main`, one dedicated subagent per finding and a
+  separate commit per fix. 50 fixed, 12 rejected with evidence, DB-03 covered by DB-01/02,
+  SEC-08 real but deliberately unfixed, FS-06 an upstream limitation.
+- Per-finding verdicts, evidence and limits: [BUG-AUDIT-2026-09-11.md](BUG-AUDIT-2026-09-11.md).
+- Final gates on `main`: `application`, `integration` (real PostgreSQL and SFTPGo containers),
+  affected `browser` specs, and `workflow` all pass.
+- Two reported root causes were disproved rather than implemented: SEC-04's username fan-out
+  does not reproduce (the exhaustible axis is IPv6 /64 address supply), and DB-10's 32-bit
+  local column does not exist, since SFTPGo owns that value and the bundled SQLite provider
+  is unaffected.
+- Open for the maintainer: SEC-08 needs either edge rate limiting keyed by IPv6 /64 or a
+  minimum share-password strength; both are deployment or product decisions, not audit fixes.
+- Issue patches, the per-finding ledger and verification logs: `.fdrive-workflow/audit-20260911/`.
 
-## Issue #2: quick fixes
+## Issue #2: remaining findings
 
-- Items 2, 5, 12 and 13 implemented locally: uploads forward request cancellation;
-  upstream 416 maps to `bad_request` (public shares return 400 instead of 502);
-  spare-provider E2E cleanup sends the CSRF header and checks success; auth docs use
-  `currentCredential`. The obsolete probe document was already removed.
-- Regressions cover cancellation with and without a body, client error classification
-  (412 stays unchanged), and removal of a provider left by an interrupted browser run.
-- Lint and typecheck pass. Default parallel coverage hit the two existing 5000ms archive
-  test timeouts (`.fdrive-workflow/logs/step.IIsiDj/`); all package coverage passes with
-  `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
-  (`.fdrive-workflow/logs/step.OvSddD/`). No gates or timeouts changed.
-- Integration passes against disposable SFTPGo/PostgreSQL. Storage browser tests pass
-  with `E2E_DEV=1`, including the new leftover-provider cleanup regression. Tooling
-  coverage and workflow verification pass. Committed and pushed as `7b097d2`.
-
-## Issue #2: descendant move/copy guard
-
-- Item 1 implemented locally: normalized descendant targets return 400 before storage,
-  metadata or events; equal-path API no-ops remain supported. Move/copy pickers exclude
-  selected subtrees and require a valid destination for every selected source.
-- Regression coverage checks preserved file contents, no mutation/event side effects,
-  normalized paths, sibling prefixes and both picker flows. Focused API tests, lint and
-  typecheck pass. Integration passes; all 9 move/copy browser tests pass against disposable
-  SFTPGo/PostgreSQL with `E2E_DEV=1`. Interactive dev check confirmed the selected folder
-  is hidden, same-parent confirmation disabled, and a valid sibling destination enabled.
-- Default parallel application coverage hit existing archive/trash test timeouts
-  (`.fdrive-workflow/logs/step.pkuX6l/`). All package coverage passes with
-  `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
-  (`.fdrive-workflow/logs/step.pmRLLk/`); no timeouts or thresholds changed.
-- Committed on `main` as `4d80db3` at the user's request.
+- Findings 4, 6, 14 and 15 remained relevant and are now committed on `main`.
+- Added five non-partial FK indexes in migration `0002_foreign_key_indexes`; existing
+  primary/unique indexes already cover the other reported columns. PostgreSQL catalog
+  regression verifies a usable leading-column index for every app FK, including SET NULL.
+- Identity overrides accept only indexed roots plus their own provider's template root;
+  installation-wide shared mappings retain the union. Cross-provider regression passes.
+- About attribution includes disabled configured provider types; enabled login connections
+  and endpoint privacy remain separate. Unit, composed-app and browser regressions pass.
+- Auth fixtures preserve original session age across switch/rotate/unlink, keep lastSeenAt
+  consistent, clear cached tokens on verified login/link, and remap used tags on transfer/unlink
+  while retaining destination tag colors and other identities' metadata.
+- Application lint/typecheck and all package/tool coverage pass with bounded concurrency
+  (`.fdrive-workflow/logs/step.k5nzVY/`). The first default-worker coverage run failed with
+  `Streamable HTTP error: Error POSTing to endpoint: auth required` in the MCP fixture
+  (`step.VG6vco`); no production MCP change or relaxed gate was made.
+- Full integration passes (DB 274, API 35, SFTPGo 72, testkit 9; `step.6iyNZq`). About and
+  account-scope browser tests pass 6/6 on the disposable Next dev stack (`step.EKL5gx`).
+- Live Next dev inspection passed with disposable SFTPGo/Postgres: all providers disabled,
+  attribution visible, enabled-provider list empty and setup complete. Screenshot:
+  `.fdrive-workflow/evaluation/issue2-about-disabled.png`.
+- First workflow attempt hit the unchanged mock-startup regression assertion
+  `missing pnpm <--filter> <@fdrive/api> <dev>` (`step.TRXZTY`); full workflow rerun
+  passed unchanged, including lint and diff checks.
+- Committed and pushed as `df51078` (FK indexes), `dd7e781` (about attribution),
+  `2b9bedc` (identity override roots) and `093b71b` (auth fixtures); the first eleven
+  findings were already pushed. No GitHub issue closure performed.
 
 ## Agent configuration and guard
 
@@ -98,17 +102,12 @@ not current instructions.
   confirmed remaining requirements survived. Existing application/test/pentest diffs were
   preserved exactly. The earlier provider guide also passed its TypeScript example typecheck.
 
-## Existing checkout work
+## Checkout
 
-- Provider/auth isolation edits and tests, Playwright configuration, pentest findings and
-  `PR-REVIEW-FINDINGS.md` predate this cleanup and remain uncommitted. The documentation
-  cleanup was moved to `main` for the requested commit; no push requested.
-- Detailed security followups: [pentest findings](SHANNON-PENTEST-FINDINGS.md).
-- This cleanup changes documentation and source comments only. It does not claim new
-  application, browser, performance or security verification.
-
-- Previous local main history is retained on `codex/main-before-docs-cleanup`; main now
-  starts from the merged PR #1. Its base tree matched the documentation checkout exactly.
+- `main`; only the remaining issue #2 fixes and their verification notes are uncommitted.
+- Earlier provider/auth/pentest and documentation changes were committed and pushed before
+  this follow-up. Detailed historical security findings remain in
+  [pentest findings](SHANNON-PENTEST-FINDINGS.md).
 
 ## Established verification
 
