@@ -7,6 +7,8 @@ so these tests exercise the orchestration, not TEI/Tika/tesseract themselves.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -76,6 +78,31 @@ def test_sha256_of(tmp_path: Path) -> None:
     assert indexer.sha256_of(str(p)) == hashlib.sha256(b"hello world").hexdigest()
 
 
+def test_sha256_of_rejects_file_replaced_by_fifo_without_blocking(tmp_path: Path) -> None:
+    path = tmp_path / "replaced.txt"
+    path.write_text("regular when scanned")
+    path.unlink()
+    os.mkfifo(path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from fdrive_indexer.indexer import sha256_of; sha256_of(sys.argv[1])",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "not a regular file" in result.stderr
+    with pytest.raises(OSError, match="not a regular file"):
+        indexer.sha256_of(str(path))
+
+
 def test_walk_skips_junk_and_sorts(tmp_path: Path) -> None:
     (tmp_path / "b.txt").write_text("b")
     (tmp_path / "a.txt").write_text("a")
@@ -88,6 +115,12 @@ def test_walk_skips_junk_and_sorts(tmp_path: Path) -> None:
     results = list(indexer.walk(str(tmp_path), frozenset({".DS_Store"}), frozenset({"node_modules"})))
     rels = sorted(r[1] for r in results)
     assert rels == ["a.txt", "b.txt", "sub/c.txt"]
+
+
+def test_walk_skips_fifo(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "pipe")
+
+    assert list(indexer.walk(str(tmp_path), frozenset(), frozenset())) == []
 
 
 class _FakeEntry:
