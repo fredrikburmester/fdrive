@@ -1,5 +1,6 @@
 "use client";
 
+import { isWithin } from "@fdrive/core";
 import { useState } from "react";
 import {
   Breadcrumb,
@@ -19,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { movablePaths } from "@/lib/files/move-guard";
 import { buildBreadcrumbs } from "@/lib/files/path-url";
 import { useListing } from "@/lib/files/queries";
 import { FileIcon } from "./file-icon";
@@ -47,6 +49,8 @@ export interface DestinationPickerProps {
   open: boolean;
   mode: DestinationPickerMode;
   initialPath?: string;
+  /** Move/copy sources whose subtrees cannot be destinations. */
+  sourcePaths?: readonly string[];
   onOpenChange: (open: boolean) => void;
   onConfirm: (destination: string) => void;
   pending?: boolean;
@@ -63,6 +67,7 @@ export function DestinationPicker({
   open,
   mode,
   initialPath = "/",
+  sourcePaths = [],
   onOpenChange,
   onConfirm,
   pending = false,
@@ -70,7 +75,10 @@ export function DestinationPicker({
 }: DestinationPickerProps) {
   const [path, setPath] = useState(initialPath);
   const { data, isLoading } = useListing(path);
-  const folders = (data?.entries ?? []).filter((entry) => entry.kind === "dir");
+  const folders = (data?.entries ?? []).filter(
+    (entry) => entry.kind === "dir" && !sourcePaths.some((source) => isWithin(source, entry.path)),
+  );
+  const canConfirm = movablePaths(sourcePaths, path).length === sourcePaths.length;
   const crumbs = buildBreadcrumbs(path);
   const labels = LABELS[mode];
 
@@ -128,7 +136,7 @@ export function DestinationPicker({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" disabled={pending} onClick={() => onConfirm(path)}>
+          <Button type="button" disabled={pending || !canConfirm} onClick={() => onConfirm(path)}>
             {labels.confirmLabel}
           </Button>
         </DialogFooter>

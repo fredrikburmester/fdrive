@@ -25,6 +25,7 @@ import {
   type FileEntry,
   isInlinePreviewable,
   isStorageError,
+  isUnderPath,
   mimeFromExtension,
   normalizePath,
   parentPath,
@@ -512,6 +513,9 @@ export function registerFsRoutes(
     const body = await parseBody(MoveRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
+    if (isUnderPath(path, target)) {
+      throw new ApiHttpError("bad_request", "cannot move a path into its own descendant");
+    }
     // A target equal to the source is a no-op: skip both the conflict check (the source is not
     // a conflict with itself) and the storage call. The real drakkan/sftpgo:v2.7.5 container
     // rejects a move of a file onto itself with 400, verified against the container directly,
@@ -534,6 +538,9 @@ export function registerFsRoutes(
     const body = await parseBody(CopyRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
+    if (isUnderPath(path, target)) {
+      throw new ApiHttpError("bad_request", "cannot copy a path into its own descendant");
+    }
     // See the move handler above: a target equal to the source skips the conflict check and the
     // storage call itself, rather than asking the provider to copy something onto itself.
     if (target !== path) {
