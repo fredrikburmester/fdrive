@@ -7,6 +7,24 @@ not current instructions.
 
 ## Agent configuration and guard
 
+- Instruction files are split by audience. `AGENTS.md` (read by Codex, and by Claude through
+  `CLAUDE.md`) and `WORKING.md` are runtime-neutral; delegation, roles, model policy and
+  worktree handoffs moved to `docs/workflow/ORCHESTRATION.md`, which now has a section per
+  runtime. `CLAUDE.md` imports all three, so Claude Code sees what it did before.
+- Codex 0.153.4 does have subagents (`spawn_agent`; the `multi_agent` feature is stable and on,
+  `multi_agent_v2` is off, so V1 settings apply). Worker model and effort are pinned in
+  `.codex/config.toml` under `[agents]` to `gpt-5.6-sol` at `high`; without it subagents
+  inherit the primary model. The table name was confirmed by type-error probe, not docs.
+- `.codex/config.toml` also registers the same PreToolUse guard. Codex ships the matching
+  `PreToolUseHookSpecificOutputWire` schema, so the guard's deny payload is understood by both
+  runtimes; its matcher is `.*` because Codex tool names differ from Claude's.
+- The guard now dispatches on payload shape when it does not recognise the tool name: a
+  `command` string is a shell call, a path plus replacement content is an edit, a path alone is
+  not. Covered by new cases in `test-guard-tool-use.sh`.
+- Unverified: no Codex session has exercised the hook yet, so hook trust (Codex records a
+  `trusted_hash` per command) and the real tool-call payload shape are unconfirmed. The
+  lockfile rule may need a field name added once a Codex edit payload is observed.
+
 - Added `CLAUDE.md` importing `AGENTS.md` and `WORKING.md`: Claude Code loads `CLAUDE.md`, not
   `AGENTS.md`, so the working agreements were not reaching sessions before this.
 - `implementer` and `test-writer` carry tool allowlists; neither can delegate. Added read-only
