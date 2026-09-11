@@ -33,6 +33,7 @@ import type {
   FolderViewSort,
   Identity,
   IdentityRepo,
+  MetadataPathRepo,
   Provider,
   ProviderRepo,
   Recent,
@@ -45,6 +46,17 @@ import type {
   TagRepo,
 } from "./types.js";
 import { ConflictError } from "./types.js";
+
+type SqlExecutor = Pick<Db, "execute">;
+
+async function lockMetadataIdentity(db: SqlExecutor, identityId: string): Promise<void> {
+  // All metadata path moves take this lock first. Besides serializing moves,
+  // it waits for inserts holding the identity FK key-share lock to commit so
+  // the transaction sees their rows before it rewrites destination conflicts.
+  await db.execute(sql`
+    select id from "app"."identities" where id = ${identityId} for update
+  `);
+}
 
 /** The Postgres SQLSTATE for a unique-constraint violation. */
 const UNIQUE_VIOLATION_CODE = "23505";
@@ -523,6 +535,48 @@ function createTagRepo(db: Db): TagRepo {
   };
 }
 
+async function moveFileTagPrefix(
+  db: SqlExecutor,
+  identityId: string,
+  oldPath: string,
+  newPath: string,
+  isDir: boolean,
+): Promise<void> {
+  const oldPrefix = `${oldPath}/`;
+  const newPrefix = `${newPath}/`;
+  await db.execute(sql`
+    delete from "app"."file_tags" f
+    using "app"."file_tags" s
+    where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+      and f.path <> s.path
+      and (
+        (s.path = ${oldPath} and f.path = ${newPath})
+        or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
+      )
+  `);
+  await db.execute(sql`
+    update "app"."file_tags"
+    set path = case when path = ${oldPath} then ${newPath}
+                    else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
+    where identity_id = ${identityId}
+      and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
+  `);
+}
+
+async function deleteFileTagPrefix(
+  db: SqlExecutor,
+  identityId: string,
+  path: string,
+  isDir: boolean,
+): Promise<void> {
+  const prefix = `${path}/`;
+  await db.execute(sql`
+    delete from "app"."file_tags"
+    where identity_id = ${identityId}
+      and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
+  `);
+}
+
 function createFileTagRepo(db: Db): FileTagRepo {
   return {
     async tagsForPaths(identityId, paths) {
@@ -548,9 +602,7 @@ function createFileTagRepo(db: Db): FileTagRepo {
       await db.transaction(async (tx) => {
         // Match movePrefix's lock order before touching file_tags rows. Without
         // this, replacing an existing destination can deadlock with its move.
-        await tx.execute(sql`
-          select id from "app"."identities" where id = ${identityId} for update
-        `);
+        await lockMetadataIdentity(tx, identityId);
         await tx
           .delete(fileTags)
           .where(and(eq(fileTags.identityId, identityId), eq(fileTags.path, path)));
@@ -571,40 +623,13 @@ function createFileTagRepo(db: Db): FileTagRepo {
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
       if (oldPath === newPath) return;
-      const oldPrefix = `${oldPath}/`;
-      const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
-        // Inserts referencing this identity hold a conflicting key-share lock.
-        // Waiting here makes the following DELETE observe their committed rows.
-        await tx.execute(sql`
-          select id from "app"."identities" where id = ${identityId} for update
-        `);
-        await tx.execute(sql`
-          delete from "app"."file_tags" f
-          using "app"."file_tags" s
-          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
-            and f.path <> s.path
-            and (
-              (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
-            )
-        `);
-        await tx.execute(sql`
-          update "app"."file_tags"
-          set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
-          where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
-        `);
+        await lockMetadataIdentity(tx, identityId);
+        await moveFileTagPrefix(tx, identityId, oldPath, newPath, isDir);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const prefix = `${path}/`;
-      await db.execute(sql`
-        delete from "app"."file_tags"
-        where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
-      `);
+      await deleteFileTagPrefix(db, identityId, path, isDir);
     },
   };
 }
@@ -616,6 +641,48 @@ function toFavorite(row: typeof favorites.$inferSelect): Favorite {
     kind: row.kind as FavoriteKind,
     createdAt: row.createdAt,
   };
+}
+
+async function moveFavoritePrefix(
+  db: SqlExecutor,
+  identityId: string,
+  oldPath: string,
+  newPath: string,
+  isDir: boolean,
+): Promise<void> {
+  const oldPrefix = `${oldPath}/`;
+  const newPrefix = `${newPath}/`;
+  await db.execute(sql`
+    delete from "app"."favorites" f
+    using "app"."favorites" s
+    where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+      and f.path <> s.path
+      and (
+        (s.path = ${oldPath} and f.path = ${newPath})
+        or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
+      )
+  `);
+  await db.execute(sql`
+    update "app"."favorites"
+    set path = case when path = ${oldPath} then ${newPath}
+                    else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
+    where identity_id = ${identityId}
+      and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
+  `);
+}
+
+async function deleteFavoritePrefix(
+  db: SqlExecutor,
+  identityId: string,
+  path: string,
+  isDir: boolean,
+): Promise<void> {
+  const prefix = `${path}/`;
+  await db.execute(sql`
+    delete from "app"."favorites"
+    where identity_id = ${identityId}
+      and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
+  `);
 }
 
 function createFavoriteRepo(db: Db): FavoriteRepo {
@@ -650,38 +717,13 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
       if (oldPath === newPath) return;
-      const oldPrefix = `${oldPath}/`;
-      const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
-        await tx.execute(sql`
-          select id from "app"."identities" where id = ${identityId} for update
-        `);
-        await tx.execute(sql`
-          delete from "app"."favorites" f
-          using "app"."favorites" s
-          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
-            and f.path <> s.path
-            and (
-              (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
-            )
-        `);
-        await tx.execute(sql`
-          update "app"."favorites"
-          set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
-          where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
-        `);
+        await lockMetadataIdentity(tx, identityId);
+        await moveFavoritePrefix(tx, identityId, oldPath, newPath, isDir);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const prefix = `${path}/`;
-      await db.execute(sql`
-        delete from "app"."favorites"
-        where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
-      `);
+      await deleteFavoritePrefix(db, identityId, path, isDir);
     },
   };
 }
@@ -694,6 +736,49 @@ function toFolderView(row: typeof folderViews.$inferSelect): FolderView {
     sort: row.sort as FolderViewSort | null,
     updatedAt: row.updatedAt,
   };
+}
+
+async function moveFolderViewPrefix(
+  db: SqlExecutor,
+  identityId: string,
+  oldPath: string,
+  newPath: string,
+  isDir: boolean,
+): Promise<void> {
+  const oldPrefix = `${oldPath}/`;
+  const newPrefix = `${newPath}/`;
+  await db.execute(sql`
+    delete from "app"."folder_views" f
+    using "app"."folder_views" s
+    where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+      and f.path <> s.path
+      and (
+        (s.path = ${oldPath} and f.path = ${newPath})
+        or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
+      )
+  `);
+  await db.execute(sql`
+    update "app"."folder_views"
+    set path = case when path = ${oldPath} then ${newPath}
+                    else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end,
+        updated_at = now()
+    where identity_id = ${identityId}
+      and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
+  `);
+}
+
+async function deleteFolderViewPrefix(
+  db: SqlExecutor,
+  identityId: string,
+  path: string,
+  isDir: boolean,
+): Promise<void> {
+  const prefix = `${path}/`;
+  await db.execute(sql`
+    delete from "app"."folder_views"
+    where identity_id = ${identityId}
+      and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
+  `);
 }
 
 function createFolderViewRepo(db: Db): FolderViewRepo {
@@ -732,45 +817,61 @@ function createFolderViewRepo(db: Db): FolderViewRepo {
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
       if (oldPath === newPath) return;
-      const oldPrefix = `${oldPath}/`;
-      const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
-        await tx.execute(sql`
-          select id from "app"."identities" where id = ${identityId} for update
-        `);
-        await tx.execute(sql`
-          delete from "app"."folder_views" f
-          using "app"."folder_views" s
-          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
-            and f.path <> s.path
-            and (
-              (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
-            )
-        `);
-        await tx.execute(sql`
-          update "app"."folder_views"
-          set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end,
-              updated_at = now()
-          where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
-        `);
+        await lockMetadataIdentity(tx, identityId);
+        await moveFolderViewPrefix(tx, identityId, oldPath, newPath, isDir);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const prefix = `${path}/`;
-      await db.execute(sql`
-        delete from "app"."folder_views"
-        where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
-      `);
+      await deleteFolderViewPrefix(db, identityId, path, isDir);
     },
   };
 }
 
 function toRecent(row: typeof recents.$inferSelect): Recent {
   return { identityId: row.identityId, path: row.path, openedAt: row.openedAt };
+}
+
+async function moveRecentPrefix(
+  db: SqlExecutor,
+  identityId: string,
+  oldPath: string,
+  newPath: string,
+  isDir: boolean,
+): Promise<void> {
+  const oldPrefix = `${oldPath}/`;
+  const newPrefix = `${newPath}/`;
+  await db.execute(sql`
+    delete from "app"."recents" f
+    using "app"."recents" s
+    where f.identity_id = ${identityId} and s.identity_id = ${identityId}
+      and f.path <> s.path
+      and (
+        (s.path = ${oldPath} and f.path = ${newPath})
+        or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
+      )
+  `);
+  await db.execute(sql`
+    update "app"."recents"
+    set path = case when path = ${oldPath} then ${newPath}
+                    else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
+    where identity_id = ${identityId}
+      and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
+  `);
+}
+
+async function deleteRecentPrefix(
+  db: SqlExecutor,
+  identityId: string,
+  path: string,
+  isDir: boolean,
+): Promise<void> {
+  const prefix = `${path}/`;
+  await db.execute(sql`
+    delete from "app"."recents"
+    where identity_id = ${identityId}
+      and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
+  `);
 }
 
 function createRecentRepo(db: Db): RecentRepo {
@@ -796,38 +897,13 @@ function createRecentRepo(db: Db): RecentRepo {
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
       if (oldPath === newPath) return;
-      const oldPrefix = `${oldPath}/`;
-      const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
-        await tx.execute(sql`
-          select id from "app"."identities" where id = ${identityId} for update
-        `);
-        await tx.execute(sql`
-          delete from "app"."recents" f
-          using "app"."recents" s
-          where f.identity_id = ${identityId} and s.identity_id = ${identityId}
-            and f.path <> s.path
-            and (
-              (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, char_length(${oldPrefix}) + 1))
-            )
-        `);
-        await tx.execute(sql`
-          update "app"."recents"
-          set path = case when path = ${oldPath} then ${newPath}
-                          else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
-          where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
-        `);
+        await lockMetadataIdentity(tx, identityId);
+        await moveRecentPrefix(tx, identityId, oldPath, newPath, isDir);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const prefix = `${path}/`;
-      await db.execute(sql`
-        delete from "app"."recents"
-        where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
-      `);
+      await deleteRecentPrefix(db, identityId, path, isDir);
     },
     async prune(identityId, keep) {
       await db.execute(sql`
@@ -840,6 +916,30 @@ function createRecentRepo(db: Db): RecentRepo {
             limit ${keep}
           )
       `);
+    },
+  };
+}
+
+function createMetadataPathRepo(db: Db): MetadataPathRepo {
+  return {
+    async movePrefix(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return;
+      await db.transaction(async (tx) => {
+        await lockMetadataIdentity(tx, identityId);
+        await moveFileTagPrefix(tx, identityId, oldPath, newPath, isDir);
+        await moveFavoritePrefix(tx, identityId, oldPath, newPath, isDir);
+        await moveFolderViewPrefix(tx, identityId, oldPath, newPath, isDir);
+        await moveRecentPrefix(tx, identityId, oldPath, newPath, isDir);
+      });
+    },
+    async deletePrefix(identityId, path, isDir) {
+      await db.transaction(async (tx) => {
+        await lockMetadataIdentity(tx, identityId);
+        await deleteFileTagPrefix(tx, identityId, path, isDir);
+        await deleteFavoritePrefix(tx, identityId, path, isDir);
+        await deleteFolderViewPrefix(tx, identityId, path, isDir);
+        await deleteRecentPrefix(tx, identityId, path, isDir);
+      });
     },
   };
 }
@@ -859,6 +959,7 @@ export function createRepos(db: Db): Repos {
     favorites: createFavoriteRepo(db),
     folderViews: createFolderViewRepo(db),
     recents: createRecentRepo(db),
+    metadataPaths: createMetadataPathRepo(db),
     systemEvents: createSystemEventRepo(db),
   };
 }
