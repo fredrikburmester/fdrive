@@ -1,5 +1,4 @@
 import type { FsEntry } from "@fdrive/contracts";
-import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
 import { ArchivePreview } from "./archive-preview";
 import { AudioViewer } from "./audio-viewer";
@@ -33,8 +32,7 @@ export function PreviewViewer({ entry, inlineUrl, downloadUrl, thumbUrl }: Previ
           thumbUrl={thumbUrl}
           downloadUrl={downloadUrl}
           size={entry.size}
-          isHeic={isHeicExt(entry.ext)}
-          alt={entry.name}
+          name={entry.name}
         />
       );
     case "video":

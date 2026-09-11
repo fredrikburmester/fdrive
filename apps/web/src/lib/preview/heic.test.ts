@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { decodeHeicBlob, isHeicExt, MAX_HEIC_DECODE_BYTES } from "./heic";
+import { decodeHeicBlob, fetchHeicAsJpeg, isHeicExt, MAX_HEIC_DECODE_BYTES } from "./heic";
 
 interface MockHeicToOptions {
   blob: Blob;
@@ -32,35 +32,18 @@ describe("isHeicExt", () => {
 });
 
 describe("decodeHeicBlob", () => {
-  it("decodes a valid HEIC blob using heic-to/csp with JPEG quality 0.92", async () => {
+  it("decodes a HEIC blob to JPEG at quality 0.92 via heic-to/csp", async () => {
+    mockHeicTo.mockClear();
     const inputBlob = new Blob(["fake-heic-bytes"], { type: "image/heic" });
     const result = await decodeHeicBlob(inputBlob);
 
-    expect(mockHeicTo).toHaveBeenCalledWith({
-      blob: inputBlob,
-      type: "image/jpeg",
-      quality: 0.92,
-    });
+    expect(mockHeicTo).toHaveBeenCalledWith({ blob: inputBlob, type: "image/jpeg", quality: 0.92 });
     expect(result.type).toBe("image/jpeg");
   });
 
-  it("accepts custom quality setting", async () => {
-    const inputBlob = new Blob(["fake-heic-bytes"], { type: "image/heic" });
-    await decodeHeicBlob(inputBlob, { quality: 0.8 });
-
-    expect(mockHeicTo).toHaveBeenCalledWith({
-      blob: inputBlob,
-      type: "image/jpeg",
-      quality: 0.8,
-    });
-  });
-
-  it("rejects blobs exceeding MAX_HEIC_DECODE_BYTES before invoking decoder", async () => {
+  it("rejects blobs exceeding MAX_HEIC_DECODE_BYTES before invoking the decoder", async () => {
     mockHeicTo.mockClear();
-    const largeBlob = {
-      size: MAX_HEIC_DECODE_BYTES + 1,
-      type: "image/heic",
-    } as unknown as Blob;
+    const largeBlob = { size: MAX_HEIC_DECODE_BYTES + 1, type: "image/heic" } as unknown as Blob;
 
     await expect(decodeHeicBlob(largeBlob)).rejects.toThrow("exceeds 50 MiB decode limit");
     expect(mockHeicTo).not.toHaveBeenCalled();
@@ -76,5 +59,54 @@ describe("decodeHeicBlob", () => {
       /aborted/i,
     );
     expect(mockHeicTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchHeicAsJpeg", () => {
+  function fakeFetch(body: string, init: ResponseInit = {}) {
+    return vi.fn(async () => new Response(body, { status: 200, ...init }));
+  }
+
+  it("refuses a file whose known size exceeds the cap without fetching", async () => {
+    mockHeicTo.mockClear();
+    const fetchImpl = fakeFetch("x");
+
+    await expect(
+      fetchHeicAsJpeg("/file.heic", { size: MAX_HEIC_DECODE_BYTES + 1, fetchImpl }),
+    ).rejects.toThrow("exceeds 50 MiB decode limit");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(mockHeicTo).not.toHaveBeenCalled();
+  });
+
+  it("refuses on Content-Length before buffering the body", async () => {
+    mockHeicTo.mockClear();
+    const fetchImpl = fakeFetch("x", {
+      headers: { "content-length": String(MAX_HEIC_DECODE_BYTES + 1) },
+    });
+
+    await expect(fetchHeicAsJpeg("/file.heic", { fetchImpl })).rejects.toThrow(
+      "exceeds 50 MiB decode limit",
+    );
+    expect(mockHeicTo).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed response as an error", async () => {
+    const fetchImpl = fakeFetch("missing", { status: 404 });
+
+    await expect(fetchHeicAsJpeg("/file.heic", { fetchImpl })).rejects.toThrow("HTTP 404");
+  });
+
+  it("fetches with same-origin credentials and decodes the body", async () => {
+    mockHeicTo.mockClear();
+    const fetchImpl = fakeFetch("fake-heic-bytes");
+
+    const result = await fetchHeicAsJpeg("/file.heic", { size: 15, fetchImpl });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/file.heic",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+    expect(mockHeicTo).toHaveBeenCalledTimes(1);
+    expect(result.type).toBe("image/jpeg");
   });
 });

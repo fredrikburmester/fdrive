@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Inspector } from "./inspector";
 
@@ -15,7 +15,11 @@ vi.mock("@/components/metadata/entry-metadata-section", () => ({
 }));
 
 vi.mock("@/lib/preview/deps", () => ({
-  apiClient: { downloadUrl: (path: string) => `https://example.test${path}` },
+  apiClient: {
+    downloadUrl: (path: string) => `https://example.test${path}`,
+    thumbUrl: (path: string, size: number) =>
+      `https://example.test/thumb?path=${path}&size=${size}`,
+  },
 }));
 
 const DIR_ENTRY: FsEntry = {
@@ -92,5 +96,33 @@ describe("Inspector: folder size states", () => {
     render(<Inspector entries={[fileEntry]} onClose={() => {}} />);
 
     expect(useFolderSizeMock).toHaveBeenCalledWith("/report.pdf", { enabled: false });
+  });
+});
+
+describe("Inspector: image preview", () => {
+  const heicEntry: FsEntry = {
+    name: "photo.heic",
+    path: "/photo.heic",
+    kind: "file",
+    size: 500,
+    modifiedAt: "2024-06-14T09:00:00.000Z",
+    ext: ".heic",
+    mime: "image/heic",
+  };
+
+  it("shows the indexer thumbnail for a HEIC, not the raw file", () => {
+    render(<Inspector entries={[heicEntry]} onClose={() => {}} />);
+
+    expect(screen.getByRole("img", { name: "photo.heic" }).getAttribute("src")).toBe(
+      "https://example.test/thumb?path=/photo.heic&size=256",
+    );
+  });
+
+  it("falls back to the kind icon when the image fails to load", () => {
+    render(<Inspector entries={[heicEntry]} onClose={() => {}} />);
+
+    fireEvent.error(screen.getByRole("img", { name: "photo.heic" }));
+
+    expect(screen.queryByRole("img", { name: "photo.heic" })).toBeNull();
   });
 });

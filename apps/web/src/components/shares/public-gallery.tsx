@@ -212,8 +212,7 @@ function Lightbox({
           src={activeSrc}
           thumbUrl={thumbUrl(image.path, 1024)}
           downloadUrl={downloadUrl(image.path)}
-          isHeic={isHeic}
-          alt={image.name}
+          name={image.name}
           onError={() => setThumbFailed(true)}
         />
       </div>
