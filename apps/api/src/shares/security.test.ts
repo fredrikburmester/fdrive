@@ -1,5 +1,5 @@
 import { hkdfSync } from "node:crypto";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { seal } from "../auth/crypto.ts";
 import { createShareCredentialCodec } from "./credentials.ts";
 import { createShareLimiter } from "./limiter.ts";
@@ -39,14 +39,40 @@ it("purpose-separates, bounds, authenticates and expires credential envelopes", 
       ),
     ).toBeUndefined();
 });
-it("bounds per-IP/share requests, credentials, capacity and expiry", () => {
+it("bounds known and unknown requests independently, credentials, capacity and expiry", async () => {
   let now = new Date(0);
   const limiter = createShareLimiter(() => now, 2);
-  for (let i = 0; i < 120; i++) expect(limiter.allow("a", id, false)).toBe(true);
-  expect(limiter.allow("a", id, false)).toBe(false);
-  for (let i = 0; i < 10; i++) expect(limiter.allow("b", id, true)).toBe(true);
-  expect(limiter.allow("b", id, true)).toBe(false);
-  expect(limiter.allow("c", id, false)).toBe(false);
+  const classifyKnown = vi.fn(async () => true);
+  const classifyUnknown = vi.fn(async () => false);
+  for (let i = 0; i < 120; i++)
+    expect(await limiter.allow("a", id, false, classifyKnown)).toBe(true);
+  expect(await limiter.allow("a", id, false, classifyKnown)).toBe(false);
+  for (let i = 0; i < 10; i++) expect(await limiter.allow("b", id, true, classifyKnown)).toBe(true);
+  expect(await limiter.allow("b", id, true, classifyKnown)).toBe(false);
+  expect(await limiter.allow("c", id, false, classifyKnown)).toBe(false);
+  for (let i = 0; i < 120; i++)
+    expect(await limiter.allow("c", "unknown-1", false, classifyUnknown)).toBe(true);
+  expect(await limiter.allow("c", "unknown-1", false, classifyUnknown)).toBe(false);
+  expect(await limiter.allow("d", "unknown-2", false, classifyUnknown)).toBe(true);
+  expect(await limiter.allow("e", "unknown-3", false, classifyUnknown)).toBe(false);
+  expect(classifyKnown).toHaveBeenCalledTimes(1);
+  expect(classifyUnknown).toHaveBeenCalledTimes(3);
   now = new Date(60000);
-  expect(limiter.allow("c", id, false)).toBe(true);
+  expect(await limiter.allow("a", id, false, classifyKnown)).toBe(true);
+  expect(await limiter.allow("c", id, false, classifyKnown)).toBe(true);
+  expect(await limiter.allow("e", "unknown-3", false, classifyUnknown)).toBe(true);
+});
+
+it("deduplicates concurrent classification for one share", async () => {
+  const limiter = createShareLimiter(() => new Date(0));
+  let resolve!: (known: boolean) => void;
+  const pending = new Promise<boolean>((done) => {
+    resolve = done;
+  });
+  const classify = vi.fn(() => pending);
+  const first = limiter.allow("a", id, false, classify);
+  const second = limiter.allow("b", id, false, classify);
+  resolve(true);
+  expect(await Promise.all([first, second])).toEqual([true, true]);
+  expect(classify).toHaveBeenCalledTimes(1);
 });
