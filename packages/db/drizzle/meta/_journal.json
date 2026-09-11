@@ -15,6 +15,13 @@
       "when": 1789074492011,
       "tag": "0001_storage_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789119256586,
+      "tag": "0002_foreign_key_indexes",
+      "breakpoints": true
     }
   ]
 }
