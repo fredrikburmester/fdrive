@@ -139,7 +139,9 @@ describe("peekArchive: zip", () => {
 
     expect(result.entries).toHaveLength(5000);
     expect(result.truncated).toBe(true);
-  });
+    // The 5001-entry zip is fast alone but has taken seconds under a full
+    // coverage run, so give it the same headroom as the route-level test.
+  }, 20_000);
 
   it("returns no entries for an empty zip without a second Range read", async () => {
     const zipBytes = await buildZipBuffer(() => {});

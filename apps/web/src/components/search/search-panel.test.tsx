@@ -894,13 +894,13 @@ it("renders restrained independent loading status while searches are in flight",
   });
   let resolveSearch!: (value: SearchResponse) => void;
   let resolveImages!: (value: ImageSearchResponse) => void;
-  vi.spyOn(apiClient, "search").mockImplementation(
+  const search = vi.spyOn(apiClient, "search").mockImplementation(
     () =>
       new Promise<SearchResponse>((resolve) => {
         resolveSearch = resolve;
       }),
   );
-  vi.spyOn(apiClient, "searchImages").mockImplementation(
+  const searchImages = vi.spyOn(apiClient, "searchImages").mockImplementation(
     () =>
       new Promise<ImageSearchResponse>((resolve) => {
         resolveImages = resolve;
@@ -917,6 +917,10 @@ it("renders restrained independent loading status while searches are in flight",
   // While both are in flight and 0 results so far: Searching... in list
   await waitFor(() => expect(screen.getByText("Searching...")).toBeDefined());
   expect(screen.queryByText(/no results/i)).toBeNull();
+  // The fetching state renders optimistically before the query subscription
+  // invokes the mocks, so wait for both calls before resolving them.
+  await waitFor(() => expect(search).toHaveBeenCalled());
+  await waitFor(() => expect(searchImages).toHaveBeenCalled());
 
   // Resolve text search with results while images still in flight
   resolveSearch({
