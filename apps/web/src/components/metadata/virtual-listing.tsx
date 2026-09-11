@@ -5,13 +5,23 @@ import { baseName, parentPath } from "@fdrive/core";
 import { XIcon } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VirtualFileListing } from "@/components/files/virtual-file-listing";
 import { ShareDialog } from "@/components/shares/share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { defaultArchiveName } from "@/lib/files/archive";
+import {
+  type AnchorDownloader,
+  createAnchorDownloader,
+  type DocumentLike,
+  type DownloadDeps,
+  downloadMany,
+  downloadSingle,
+  planDownload,
+} from "@/lib/files/download";
 import {
   apiClient,
   capabilitiesFor,
@@ -39,6 +49,39 @@ import { toggleTagId } from "@/lib/metadata/tag-set";
 
 function toRoute(href: string): Route {
   return href as Route;
+}
+
+/**
+ * Adapts the real, global `document` to `download.ts`'s minimal
+ * `DocumentLike`, the same way the file browser does: the cast is confined
+ * to this one boundary, since `download.ts` only ever creates, appends,
+ * clicks and removes a single anchor.
+ */
+function adaptDocument(doc: Document): DocumentLike {
+  return {
+    createElement: (tag) => doc.createElement(tag),
+    body: {
+      appendChild: (node) => {
+        doc.body.appendChild(node as unknown as Node);
+      },
+      removeChild: (node) => {
+        doc.body.removeChild(node as unknown as Node);
+      },
+    },
+  };
+}
+
+/** Builds a fresh `DownloadDeps` bound to the current `document`. Only ever
+ * called from an event handler, never at render time, so it never runs
+ * during server-side rendering. */
+function buildDownloadDeps(anchor: AnchorDownloader): DownloadDeps {
+  return {
+    downloadUrl: (downloadPath, opts) => apiClient.downloadUrl(downloadPath, opts),
+    zip: (paths, name) => apiClient.zip(paths, name),
+    anchor,
+    createObjectUrl: (blob) => URL.createObjectURL(blob),
+    revokeObjectUrl: (url) => URL.revokeObjectURL(url),
+  };
 }
 
 export interface VirtualListingProps {
@@ -80,6 +123,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     [resolved],
   );
   const missing = useMemo(() => resolved.filter((item) => item.entry === null), [resolved]);
+  const anchorRef = useRef<AnchorDownloader | null>(null);
   const [sharing, setSharing] = useState<FsEntry[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
@@ -88,14 +132,41 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     router.push(toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path)));
   }
 
-  function handleDownload(entry: FsEntry) {
-    const url = apiClient.downloadUrl(entry.path);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = entry.name;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+  function getAnchorDownloader(): AnchorDownloader {
+    if (anchorRef.current === null) {
+      anchorRef.current = createAnchorDownloader(adaptDocument(document));
+    }
+    return anchorRef.current;
+  }
+
+  /**
+   * Downloads `targets` the way the login's provider allows, sharing the
+   * file browser's plan: one file streams directly, a provider with `zip`
+   * archives anything else (a folder has no byte stream of its own, so
+   * asking for it directly would only 400), and a provider without `zip`
+   * hands out each file on its own and skips folders.
+   */
+  function handleDownload(targets: readonly FsEntry[]) {
+    const plan = planDownload(targets, capabilities.zip);
+    if (plan === null) {
+      return;
+    }
+    const deps = buildDownloadDeps(getAnchorDownloader());
+    switch (plan.kind) {
+      case "single":
+        downloadSingle(plan.path, deps);
+        break;
+      case "zip":
+        downloadMany(plan.paths, deps, `${defaultArchiveName(plan.paths)}.zip`).catch(() =>
+          toast.error("Could not download the selection."),
+        );
+        break;
+      case "each":
+        for (const target of plan.paths) {
+          downloadSingle(target, deps);
+        }
+        break;
+    }
   }
 
   function handleContextAction(
@@ -114,7 +185,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         router.push(toRoute(pathToHref(parentPath(entry.path))));
         break;
       case "download":
-        handleDownload(entry);
+        handleDownload(context);
         break;
       case "rename":
         setRenameTarget(entry);
