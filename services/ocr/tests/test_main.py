@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from psycopg.types.json import Json
+from starlette.testclient import TestClient
 
 from fdrive_ocr import db, main
 from fdrive_ocr.features import FEATURES_KEY
@@ -317,3 +318,64 @@ def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest
     state = served["app"].state.server_state  # type: ignore[attr-defined]
     assert state.schema_ready() is True
     assert state.now().tzinfo is not None
+
+
+def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/fdrive")
+    monkeypatch.delenv("INDEX_ROOTS", raising=False)
+
+    class FakeConnection:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    bootstrap = FakeConnection("bootstrap")
+    settings_conn = FakeConnection("settings")
+    recovered = FakeConnection("recovered")
+    connections: list[FakeConnection | Exception] = [
+        bootstrap,
+        RuntimeError("database unavailable"),
+        settings_conn,
+        recovered,
+    ]
+    connect_kwargs: list[dict[str, object]] = []
+
+    def fake_connect(*_args: object, **kwargs: object) -> FakeConnection:
+        connect_kwargs.append(kwargs)
+        result = connections.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    class NoopThread:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    served: dict[str, object] = {}
+    monkeypatch.setattr(db, "connect", fake_connect)
+    monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: 1)
+    monkeypatch.setattr(db, "read_settings", lambda _conn: {})
+    monkeypatch.setattr(db, "read_schema_version", lambda conn: 1 if conn is recovered else None)
+    monkeypatch.setattr(main.threading, "Thread", NoopThread)
+    monkeypatch.setattr(main.uvicorn, "run", lambda app, **_kwargs: served.setdefault("app", app))
+
+    main.main()
+
+    client = TestClient(served["app"], raise_server_exceptions=False)  # type: ignore[arg-type]
+    unavailable = client.get("/health")
+    response = client.get("/health")
+    assert bootstrap.closed is True
+    assert unavailable.status_code == 500
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert settings_conn.closed is True
+    assert recovered.closed is True
+    assert connections == []
+    assert all(kwargs["retries"] == 1 for kwargs in connect_kwargs[1:])
+    assert all(callable(kwargs["sleep"]) for kwargs in connect_kwargs[1:])
