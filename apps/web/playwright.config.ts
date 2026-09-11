@@ -18,10 +18,11 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? getWebBaseUrl();
 // Playwright's built-in `webServer` option only manages one process.
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
+  // All specs share one database and mutate singleton settings/providers.
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: 2,
+  workers: 1,
   reporter: [["html", { open: "never" }]],
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
