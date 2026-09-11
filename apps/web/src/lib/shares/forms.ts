@@ -1,6 +1,7 @@
 import {
   CreateShareRequest,
   type FsEntry,
+  MAX_SHARE_DOWNLOADS,
   type ManagedShare,
   type SharePresentation,
   UpdateShareRequest,
@@ -78,7 +79,7 @@ export function shareRequest(
   if (fields.maxDownloads && !/^\d+$/.test(fields.maxDownloads))
     throw new Error("The download limit must be a whole number.");
   const maxDownloads = fields.maxDownloads ? Number(fields.maxDownloads) : 0;
-  if (!Number.isSafeInteger(maxDownloads)) throw new Error("The download limit is too large.");
+  if (maxDownloads > MAX_SHARE_DOWNLOADS) throw new Error("The download limit is too large.");
   const password =
     editing && fields.passwordAction === "keep"
       ? undefined
