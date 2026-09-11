@@ -364,7 +364,7 @@ describe("MCP tools against real SFTPGo and Postgres", () => {
     // 7. The list-only reader: verification and native `list_directory`
     // both succeed (an entirely independent SFTP call), but every
     // index-backed tool that would disclose content is denied.
-    const readerListing = await runListDirectory(readerPrincipal, {});
+    const readerListing = await runListDirectory(toolDeps, readerPrincipal, {});
     expect(readerListing.entries.map((e) => e.name)).toEqual(["notes.txt"]);
 
     const readerFiles = await runFindFiles(toolDeps, readerPrincipal, {});

@@ -114,7 +114,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
         limit: z.number().int().min(1).max(2000).optional().describe("Max entries, default 300."),
       },
     },
-    wrap((args) => runListDirectory(principal, args)),
+    wrap((args) => runListDirectory(deps, principal, args)),
   );
 
   server.registerTool(
