@@ -7,23 +7,12 @@ not current instructions.
 
 ## Issue #2: concurrency
 
-- #11 implemented: snapshot before upstream authentication; compare under persistence locks;
-  reject stale differing credentials without revoking newer sessions. Same-password concurrent
-  replacements retain both sessions. Memory fixture follows the same decision callback.
-- Deferred API regressions and real PostgreSQL concurrent replacement regression pass.
-  All application gates pass using reduced-concurrency coverage; integration passes.
-- #11 committed as `f8b8b55`.
-- #8–10 implemented: insert-only provider creation, uniqueness conflict translation,
-  and a provider row lock around deletion/checks. Matching memory repository behavior.
-  Concurrent create, readdress, and delete/login regressions pass on PostgreSQL;
-  application gates and full integration pass.
-- Provider fixes committed as `e413915`.
-- #3 implemented: per-identity coalescing, generation checks and ordered database writes
-  prevent stale mint results from surviving invalidate/prime. Scope cache completions
-  can only update/remove the in-flight entry they own. Deferred race regressions, all
-  application gates and full integration pass.
-- Remaining: setup cleanup (#7).
-  Acceptance criteria: [concurrency plan](../plans/CONCURRENCY.md).
+- Completed in requested order: #11 (`f8b8b55`), #8–10 (`e413915`), #3/cache
+  (`a99204b`), then #7 setup rollback and failed-request session cleanup.
+- Application gates pass with reduced-concurrency coverage. Final full integration passes,
+  including deterministic real-SFTPGo setup competition with one remaining provider,
+  account, identity, credential and session, plus PostgreSQL preservation of existing losers.
+- Completion evidence is in [history](STATUS-history.md). No concurrency plan remains open.
 
 ## Issue #2: quick fixes
 

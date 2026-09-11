@@ -54,6 +54,14 @@ rather than a crash, so the practical effect of a key rotation is that every
 signed-in user is asked to log in again the next time their cached token
 needs to be read or re-minted.
 
+## Setup ownership
+
+Setup claims ownership in the same database transaction that persists the candidate login.
+A losing claimant rolls back newly created auth records and preserves pre-existing ones;
+the setup service then removes its unused candidate provider. The pending owner can resume
+after a failure. Enabling the provider and granting administrator status still precede
+finalizing setup, so a partial failure does not leave a completed installation without an owner.
+
 ## Session cookie
 
 The session cookie (`apps/api/src/auth/sessions.ts`) is named

@@ -602,3 +602,28 @@ Updated: 2026-09-11. Owner: primary agent.
 - Earlier P5 worktrees were retained by the preceding task. Do not clean them without review.
 - Full prior evidence, performance work, and historical handoffs: earlier sections of this file.
   Product scope and architecture remain in [architecture](../ARCHITECTURE.md).
+
+
+## 2026-09-11: issue #2 concurrency fixes
+
+Implemented in order, with commits between groups:
+
+- #11, `f8b8b55`: credential snapshot before authentication and comparison under persistence
+  locks. Same-password replacements preserve both sessions; stale differing credentials
+  are rejected. Deferred API and PostgreSQL regressions pass.
+- #8–10, `e413915`: atomic insert-only provider creation; readdress conflicts translated;
+  provider deletion serialized with identity persistence. Concurrent repository and real
+  PostgreSQL tests pass.
+- #3/cache, `a99204b`: coalesced token misses, invalidation/prime generations and ordered
+  persistence; stale scope computations cannot replace cache or in-flight entries.
+- #7: setup claim shares the login transaction. Losing claims roll back auth changes;
+  unused newly created providers are removed. Later setup failures clean up their session
+  while preserving resumable ownership. Existing identities and sessions survive losing
+  claims. Finalization remains last.
+- All application gates pass using `--concurrency=1 -- --maxWorkers=2` for coverage.
+  API coverage initially reached 98.99% against 99%; added auth-claim and failed-cleanup
+  regressions, then passed without threshold changes. Full final integration passes
+  (`.fdrive-workflow/logs/step.tfMCpG/`), including the actual setup HTTP race on real
+  SFTPGo/PostgreSQL and a check that only one provider/account/identity/credential/session remains.
+- One token-group workflow run hit the environment-helper timing failure
+  `missing pnpm <--filter> <@fdrive/api> <dev>`; the unchanged workflow gate passed on rerun.

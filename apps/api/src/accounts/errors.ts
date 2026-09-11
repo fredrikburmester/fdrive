@@ -9,7 +9,7 @@ export async function accountRepositoryCall<T>(operation: () => Promise<T>): Pro
     if (error instanceof ApiHttpError) throw error;
     if (error instanceof IdentityLinksError) {
       const kind =
-        error.code === "last_identity"
+        error.code === "last_identity" || error.code === "setup_claimed"
           ? "conflict"
           : error.code === "forbidden"
             ? "forbidden"
@@ -20,7 +20,9 @@ export async function accountRepositoryCall<T>(operation: () => Promise<T>): Pro
         kind,
         error.code === "last_identity"
           ? "link another identity before removing this one"
-          : "account operation is not permitted",
+          : error.code === "setup_claimed"
+            ? "this server has already been claimed by another owner"
+            : "account operation is not permitted",
       );
     }
     throw new ApiHttpError("internal", "account operation failed");

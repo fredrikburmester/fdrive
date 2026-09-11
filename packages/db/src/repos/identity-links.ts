@@ -7,6 +7,7 @@ import {
   identities,
   providers,
   sessions,
+  settings,
 } from "../schema/app.js";
 import {
   IdentityLinksError,
@@ -200,6 +201,24 @@ export function createIdentityLinksRepo(db: Db): IdentityLinksRepo {
             .returning();
           if (!created) throw new IdentityLinksError("missing_identity");
           identity = created;
+        }
+        if (input.setupClaim !== undefined) {
+          const desired = {
+            version: 1,
+            state: "claiming",
+            accountId: identity.accountId,
+            baseUrl: input.setupClaim.baseUrl,
+          };
+          const [claim] = await tx
+            .insert(settings)
+            .values({ key: input.setupClaim.key, value: desired })
+            .onConflictDoUpdate({
+              target: settings.key,
+              set: { value: desired },
+              setWhere: sql`${settings.value} = ${JSON.stringify(desired)}::jsonb`,
+            })
+            .returning();
+          if (!claim) throw new IdentityLinksError("setup_claimed");
         }
         await storeCredential(tx, identity.id, input);
         const [session] = await tx

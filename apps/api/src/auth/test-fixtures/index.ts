@@ -85,6 +85,23 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
           input.providerId,
           input.username,
         );
+        const setupClaim = input.setupClaim;
+        if (setupClaim !== undefined) {
+          const current = await repos.settings.get(setupClaim.key);
+          if (current !== null) {
+            const desired = {
+              version: 1,
+              state: "claiming",
+              accountId: identity?.accountId,
+              baseUrl: setupClaim.baseUrl,
+            };
+            if (
+              identity === null ||
+              !(await repos.settings.compareAndSet(setupClaim.key, desired, desired))
+            )
+              throw new IdentityLinksError("setup_claimed");
+          }
+        }
         if (identity === null) {
           const account = await repos.accounts.create({ displayName: input.username });
           identity = await repos.identities.create({
@@ -96,6 +113,15 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
         const revoke =
           input.compareCredential?.(identity.id, await repos.credentials.get(identity.id)) ??
           input.revokeOtherSessions;
+        if (setupClaim !== undefined) {
+          const desired = {
+            version: 1,
+            state: "claiming",
+            accountId: identity.accountId,
+            baseUrl: setupClaim.baseUrl,
+          };
+          await repos.settings.compareAndSet(setupClaim.key, null, desired);
+        }
         identity = { ...identity, lastLoginAt: input.at };
         changed.set(identity.id, identity);
         await repos.credentials.put({

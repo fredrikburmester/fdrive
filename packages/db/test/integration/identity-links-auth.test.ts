@@ -518,3 +518,58 @@ it("serializes provider deletion with first login without raw database failures"
     expect(await repos.identities.countByProvider(row.id)).toBe(0);
   }
 });
+
+it("rolls back every new auth record for a losing setup claimant", async () => {
+  const repos = createRepos(second.db);
+  const other = await repos.providers.create({ type: "sftpgo", baseUrl: "http://other-setup" });
+  const key = "test.setup.race";
+  const existingAccounts = await first.db.select().from(accounts);
+  const results = await Promise.allSettled([
+    a.loginVerified({ ...loginInput("a"), setupClaim: { key, baseUrl: "http://provider" } }),
+    b.loginVerified({
+      ...loginInput("b", "bob"),
+      providerId: other.id,
+      setupClaim: { key, baseUrl: other.baseUrl },
+    }),
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.find((result) => result.status === "rejected")).toMatchObject({
+    reason: { code: "setup_claimed" },
+  });
+  expect(await first.db.select().from(accounts)).toHaveLength(existingAccounts.length + 1);
+  expect(await first.db.select().from(identities)).toHaveLength(1);
+  expect(await first.db.select().from(credentials)).toHaveLength(1);
+  expect(await first.db.select().from(sessions)).toHaveLength(1);
+});
+
+it("preserves existing records when setup loses and allows only the pending owner to resume", async () => {
+  const repos = createRepos(second.db);
+  const existing = await b.loginVerified(loginInput("b", "bob"));
+  const originalCredential = await repos.credentials.get(existing.identity.id);
+  const key = "test.setup.existing";
+  const setupClaim = { key, baseUrl: "http://provider" };
+  const winner = await a.loginVerified({ ...loginInput("a"), setupClaim });
+  await expect(
+    b.loginVerified({
+      ...loginInput("c", "bob"),
+      setupClaim,
+      revokeOtherSessions: true,
+      sealCredential: () => ({ ciphertext: new Uint8Array([9]), keyId: "new" }),
+    }),
+  ).rejects.toMatchObject({ code: "setup_claimed" });
+  expect(await repos.credentials.get(existing.identity.id)).toEqual(originalCredential);
+  expect(await repos.sessions.getByIdHash(existing.session.idHash, at)).toEqual(existing.session);
+  expect(await repos.identities.get(existing.identity.id)).toEqual(existing.identity);
+  const resumed = await a.loginVerified({ ...loginInput("d"), setupClaim });
+  expect(resumed.identity.accountId).toBe(winner.identity.accountId);
+  await repos.settings.set(key, {
+    version: 1,
+    state: "complete",
+    accountId: winner.identity.accountId,
+    baseUrl: setupClaim.baseUrl,
+  });
+  await expect(a.loginVerified({ ...loginInput("e"), setupClaim })).rejects.toMatchObject({
+    code: "setup_claimed",
+  });
+  expect(await first.db.select().from(sessions)).toHaveLength(3);
+});
