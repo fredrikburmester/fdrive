@@ -56,14 +56,15 @@ from other containers on the compose network.
 | `/embed/text` | POST | JSON `{"inputs": ["blue chair", ...]}` | Same response shape as `/embed/image`. |
 
 Bounds, all rejected with 413: more than 32 images or 64 texts per request,
-an image part over 8 MiB, a text over 512 characters. A missing or
-malformed request body is 400; so is an undecodable image. Any embed request
-before the model has loaded is 503 with a plain-text body.
+an image part over 8 MiB, a text over 512 characters. A missing or malformed
+request body is 400; so is an undecodable image or one over 16,777,216 decoded
+pixels. The pixel bound is checked from the image header before RGB conversion.
+Any embed request before the model has loaded is 503 with a plain-text body.
 
 ## Testing
 
-Every pure module (`config.py`, `device.py`, `validation.py`, `batching.py`,
-`normalize.py`, `shapes.py`) is covered at 100%. `server.py` and `main.py`
+Every pure module (`config.py`, `device.py`, `validation.py`, `image_decode.py`,
+`batching.py`, `normalize.py`, `shapes.py`) is covered at 100%. `server.py` and `main.py`
 are exercised through Starlette's `TestClient` and direct calls against
 `tests/conftest.py`'s `FakeEmbedder`, which never touches torch. The real
 model backend (`siglip.py`) is excluded from coverage (`# pragma: no cover`):

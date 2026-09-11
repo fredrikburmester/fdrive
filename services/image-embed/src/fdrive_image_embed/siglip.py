@@ -18,8 +18,9 @@ from __future__ import annotations
 from typing import Any
 
 from .batching import chunked
-from .embedder import Embedder, ImageDecodeError
+from .embedder import Embedder
 from .features import pooled_features
+from .image_decode import decode_rgb_image
 
 
 def load_embedder(model_id: str, device: str, threads: int | None, batch_size: int) -> Embedder:  # pragma: no cover
@@ -54,8 +55,6 @@ class SiglipEmbedder:  # pragma: no cover
         self._batch_size = batch_size
 
     def embed_images(self, images: list[bytes]) -> list[list[float]]:
-        import io
-
         import torch
         from PIL import Image
 
@@ -63,10 +62,7 @@ class SiglipEmbedder:  # pragma: no cover
         for batch in chunked(images, self._batch_size):
             pictures = []
             for raw in batch:
-                try:
-                    pictures.append(Image.open(io.BytesIO(raw)).convert("RGB"))
-                except Exception as e:
-                    raise ImageDecodeError(str(e)) from e
+                pictures.append(decode_rgb_image(raw, Image.open))
             inputs = self._processor(images=pictures, return_tensors="pt").to(self._device)
             with torch.inference_mode():
                 features = pooled_features(self._model.get_image_features(**inputs))
