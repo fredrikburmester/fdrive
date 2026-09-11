@@ -59,6 +59,15 @@ it("sanitizes errors without treating generic400 as successful password verifica
     );
     expect(publicDownloadOptions(ctx)).toMatchObject({ rangeHeader: range, ifRange: "etag" });
   }
+  const multiRange = new Context(
+    new Request("http://test/", {
+      headers: { range: "bytes=0-1, 4-5", "if-range": "etag" },
+    }),
+  );
+  expect(publicDownloadOptions(multiRange)).not.toMatchObject({
+    rangeHeader: expect.anything(),
+    ifRange: expect.anything(),
+  });
 });
 it("reports failed compensation, ownership change, unavailable upstream and layout failure", async () => {
   const h = sharesHarness();

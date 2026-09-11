@@ -356,7 +356,7 @@ it("rejects traversal, malformed ranges, CSRF, credentials and rate abuse withou
     );
   expect((await h.request(`${path}/download?path=/a&path=/b`)).status).toBe(400);
   for (const range of [
-    "bytes=1-2,4-5",
+    "bytes=4-2,6-7",
     "bytes=-0",
     "bytes=4-2",
     "bytes=9007199254740993-",
@@ -394,6 +394,22 @@ it("rejects traversal, malformed ranges, CSRF, credentials and rate abuse withou
   expect(
     (await h.request(`${path}/credentials`, { method: "POST", body: { password: "x" } })).status,
   ).toBe(429);
+});
+
+it("ignores a valid multi-range request while preserving public download accounting", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const { id } = await h.create(cookie, { maxDownloads: 2 });
+  const path = publicBase(id);
+
+  const response = await h.request(`${path}/download`, {
+    headers: { range: "bytes=0-1,6-7", "if-range": "stale-validator" },
+  });
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-range")).toBeNull();
+  expect(await response.text()).toBe("alice data");
+  expect(PublicShare.parse(await (await h.request(path)).json()).usedDownloads).toBe(1);
 });
 it("compensates persistence failure, sanitizes compensation failure and reconciles upstream deletions", async () => {
   const h = sharesHarness();

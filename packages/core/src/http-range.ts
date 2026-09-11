@@ -5,21 +5,52 @@
  * - `"none"`: no `Range` header was sent.
  * - `"single"`: a single satisfiable byte range, `end` present only when
  *   the header (or a known size) pinned one down.
+ * - `"multiple"`: a syntactically valid set of multiple byte ranges. The
+ *   storage contract only supports a single range, so callers ignore this
+ *   header and return the complete representation.
  * - `"invalid"`: the header was present but unusable, either because it
- *   could not be parsed, named more than one range, or (when `size` is
- *   known) fell outside the resource.
+ *   could not be parsed or (when `size` is known) fell outside the resource.
  */
 export type RangeResult =
   | { kind: "none" }
   | { kind: "single"; start: number; end?: number }
+  | { kind: "multiple" }
   | { kind: "invalid" };
 
 const SINGLE_RANGE_PATTERN = /^bytes=(\d*)-(\d*)$/;
+const BYTE_RANGE_SPEC_PATTERN = /^(\d*)-(\d*)$/;
+
+function compareDecimalIntegers(left: string, right: string): number {
+  const normalizedLeft = left.replace(/^0+/, "") || "0";
+  const normalizedRight = right.replace(/^0+/, "") || "0";
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return normalizedLeft.length - normalizedRight.length;
+  }
+  if (normalizedLeft < normalizedRight) return -1;
+  if (normalizedLeft > normalizedRight) return 1;
+  return 0;
+}
+
+function isValidByteRangeSpec(value: string): boolean {
+  const match = BYTE_RANGE_SPEC_PATTERN.exec(value.trim());
+  if (!match) return false;
+  const start = match[1] as string;
+  const end = match[2] as string;
+  if (start === "" && end === "") return false;
+  return start === "" || end === "" || compareDecimalIntegers(start, end) <= 0;
+}
+
+function isValidMultipleByteRange(header: string): boolean {
+  if (!header.startsWith("bytes=")) return false;
+  const ranges = header.slice(6).split(",");
+  return ranges.length > 1 && ranges.every(isValidByteRangeSpec);
+}
 
 /**
  * Parses an HTTP `Range` request header of the form `bytes=a-b`, `bytes=a-`,
- * or the suffix form `bytes=-n`. Multi-range headers (containing a comma)
- * are rejected as invalid, matching the plan's scope (single-range only).
+ * or the suffix form `bytes=-n`. Valid multi-range headers are identified
+ * separately so single-range-only callers can ignore them and return the
+ * complete representation.
  *
  * `size`, when known, is used to reject a range that starts at or beyond
  * the end of the resource and to clamp (or resolve, for the suffix form) an
@@ -32,7 +63,7 @@ export function parseRangeHeader(header: string | null, size: number | null): Ra
   }
 
   if (header.includes(",")) {
-    return { kind: "invalid" };
+    return isValidMultipleByteRange(header) ? { kind: "multiple" } : { kind: "invalid" };
   }
 
   const match = SINGLE_RANGE_PATTERN.exec(header);
