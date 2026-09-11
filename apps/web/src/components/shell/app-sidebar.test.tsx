@@ -141,9 +141,9 @@ it("lists the System pages in order, each as its own menu item", async () => {
     ["Storage", "/system/storage"],
     ["Shared folders", "/system/shared-folders"],
     ["Thumbnails", "/system/thumbnails"],
-    ["Indexer", "/system/indexer"],
-    ["Search", "/system/search"],
-    ["OCR", "/system/ocr"],
+    ["Full-text search", "/system/indexer"],
+    ["Semantic search", "/system/search"],
+    ["Searchable PDFs", "/system/ocr"],
     ["Image search", "/system/image-search"],
     ["Office", "/system/office"],
   ] as const;

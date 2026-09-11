@@ -64,7 +64,7 @@ export function PublicUrlCard({
       ) : saved ? (
         <>
           <Field>
-            <FieldLabel htmlFor="public-url">fdrive public address</FieldLabel>
+            <FieldLabel htmlFor="public-url">Server address</FieldLabel>
             <Input
               id="public-url"
               type="url"

@@ -21,8 +21,7 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
   ),
   { kind: "trash", label: "Trash" },
   { kind: "publicUrl", label: "Server address" },
-  // The e2e suite drives this step by name; the label is the product's own.
-  { kind: "office", label: "ONLYOFFICE" },
+  { kind: "office", label: "Office" },
   { kind: "review", label: "Review" },
 ];
 

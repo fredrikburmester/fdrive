@@ -130,8 +130,8 @@ export function OcrPage() {
   if (!isLoading && data !== undefined && !data.configured) {
     return (
       <SystemPage
-        title="OCR"
-        description="Scheduled OCR for scanned PDFs and images."
+        title="Searchable PDFs"
+        description="Scheduled OCR for scanned PDFs."
         lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
         feature="pdfOcr"
       >
@@ -150,8 +150,8 @@ export function OcrPage() {
 
   return (
     <SystemPage
-      title="OCR"
-      description="Scheduled OCR for scanned PDFs and images."
+      title="Searchable PDFs"
+      description="Scheduled OCR for scanned PDFs."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature="pdfOcr"
       actions={

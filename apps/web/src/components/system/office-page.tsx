@@ -133,7 +133,7 @@ export function OfficeSystemPage() {
         onReset={draft.reset}
         validationMessages={
           values?.enabled === true && addressMissing
-            ? ["Set the fdrive public address on System > General before enabling Office."]
+            ? ["Set the server address on System > General before enabling Office."]
             : []
         }
       >

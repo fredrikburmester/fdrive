@@ -35,7 +35,7 @@ describe("walkthrough steps", () => {
     expect(walkthroughLabel(2)).toBe("Step 6 of 13 · Search OCR");
     expect(walkthroughLabel(6)).toBe("Step 10 of 13 · Trash");
     expect(walkthroughLabel(7)).toBe("Step 11 of 13 · Server address");
-    expect(walkthroughLabel(8)).toBe("Step 12 of 13 · ONLYOFFICE");
+    expect(walkthroughLabel(8)).toBe("Step 12 of 13 · Office");
     expect(walkthroughLabel(9)).toBe("Step 13 of 13 · Review");
   });
 

@@ -8,6 +8,7 @@ import {
   HardDrive,
   Image,
   Images,
+  Info,
   Link2,
   LogOut,
   Monitor,
@@ -104,9 +105,9 @@ const SYSTEM_NAV_ITEMS = [
   { href: "/system/storage" as Route, label: "Storage", Icon: HardDrive },
   { href: "/system/shared-folders" as Route, label: "Shared folders", Icon: FolderSymlink },
   { href: FEATURE_PAGES.thumbnails.href, label: "Thumbnails", Icon: Image },
-  { href: FEATURE_PAGES.textSearch.href, label: "Indexer", Icon: Database },
-  { href: FEATURE_PAGES.semanticSearch.href, label: "Search", Icon: Search },
-  { href: FEATURE_PAGES.pdfOcr.href, label: "OCR", Icon: ScanText },
+  { href: FEATURE_PAGES.textSearch.href, label: "Full-text search", Icon: Database },
+  { href: FEATURE_PAGES.semanticSearch.href, label: "Semantic search", Icon: Search },
+  { href: FEATURE_PAGES.pdfOcr.href, label: "Searchable PDFs", Icon: ScanText },
   { href: FEATURE_PAGES.imageSearch.href, label: "Image search", Icon: Images },
   { href: OFFICE_PAGE.href, label: "Office", Icon: FileText },
 ] as const;
@@ -266,6 +267,10 @@ export function AppSidebar() {
               <DropdownMenuItem render={<Link href={ACCOUNT_ROUTE} />}>
                 <UserRound />
                 Account
+              </DropdownMenuItem>
+              <DropdownMenuItem render={<Link href={"/about" as Route} />}>
+                <Info />
+                About
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

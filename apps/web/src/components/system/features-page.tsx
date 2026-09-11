@@ -176,7 +176,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
             <CardTitle>Ready to use fdrive</CardTitle>
             <CardDescription>
               You can finish while optional features prepare. You can change your choices later in
-              System → Features.
+              System → Features and System → General.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

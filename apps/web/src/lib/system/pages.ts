@@ -16,11 +16,11 @@ export interface SystemPageLink {
  */
 export const FEATURE_PAGES: Record<FeatureId, SystemPageLink> = {
   thumbnails: { href: "/system/thumbnails" as Route, label: "Thumbnails" },
-  textSearch: { href: "/system/indexer" as Route, label: "Indexer" },
-  searchOcr: { href: "/system/indexer" as Route, label: "Indexer" },
-  semanticSearch: { href: "/system/search" as Route, label: "Search" },
+  textSearch: { href: "/system/indexer" as Route, label: "Full-text search" },
+  searchOcr: { href: "/system/indexer" as Route, label: "Full-text search" },
+  semanticSearch: { href: "/system/search" as Route, label: "Semantic search" },
   imageSearch: { href: "/system/image-search" as Route, label: "Image search" },
-  pdfOcr: { href: "/system/ocr" as Route, label: "OCR" },
+  pdfOcr: { href: "/system/ocr" as Route, label: "Searchable PDFs" },
 };
 
 /**

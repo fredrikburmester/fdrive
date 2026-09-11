@@ -11,9 +11,12 @@ describe("system page links", () => {
     }
   });
 
-  it("sends both indexer-backed text features to the Indexer page", () => {
+  it("sends both indexer-backed text features to the Indexer page with Full-text search label", () => {
     expect(FEATURE_PAGES.textSearch).toEqual(FEATURE_PAGES.searchOcr);
     expect(FEATURE_PAGES.textSearch.href).toBe("/system/indexer");
+    expect(FEATURE_PAGES.textSearch.label).toBe("Full-text search");
+    expect(FEATURE_PAGES.semanticSearch.label).toBe("Semantic search");
+    expect(FEATURE_PAGES.pdfOcr.label).toBe("Searchable PDFs");
   });
 
   it("keeps Office out of the feature table but on its own page", () => {

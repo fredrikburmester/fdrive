@@ -212,12 +212,12 @@ def process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_res
         conn = ctx.conn()
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT size, mtime_ns, text_status, deleted_at, sha256 FROM "idx"."files" WHERE root_id = %s AND path = %s',
+                'SELECT size, mtime_ns, text_status, deleted_at, sha256, error FROM "idx"."files" WHERE root_id = %s AND path = %s',
                 (ctx.root_id, rel_path),
             )
             row = cur.fetchone()
         manifest_row = (row[0], row[1], row[2], row[3]) if row else None
-        manifest_status = str(manifest_row[2]) if manifest_row is not None else ""
+        manifest_status = str(row[5] if row and row[5] == "excluded:image_dir" else (manifest_row[2] if manifest_row is not None else ""))
         unchanged = unchanged_in_db(manifest_row, st)
         if unchanged and not should_retry_unchanged(
             manifest_status, ext_of(os.path.basename(rel_path)), ctx.feature_configuration().values

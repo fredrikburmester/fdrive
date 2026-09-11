@@ -86,7 +86,7 @@ export type IndexerClearJob = z.infer<typeof IndexerClearJob>;
 
 /**
  * Progress of the most recent
- * `POST /api/v1/system/search/image-embeddings/rebuild` pass, mirrored from
+ * `POST /api/v1/system/image-search/rebuild` pass, mirrored from
  * the indexer's `GET /stats`'s `image_embedding_rebuild` field. Same shape
  * as `IndexerThumbnailRebuildJob`.
  */
@@ -94,7 +94,7 @@ export const ImageEmbeddingRebuildJob = IndexerThumbnailRebuildJob;
 
 export type ImageEmbeddingRebuildJob = z.infer<typeof ImageEmbeddingRebuildJob>;
 
-/** Progress of the most recent `POST /api/v1/system/search/image-embeddings/clear` pass. */
+/** Progress of the most recent `POST /api/v1/system/image-search/clear` pass. */
 export const ImageEmbeddingClearJob = IndexerThumbnailRebuildJob;
 
 export type ImageEmbeddingClearJob = z.infer<typeof ImageEmbeddingClearJob>;

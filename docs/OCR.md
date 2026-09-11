@@ -4,8 +4,10 @@
 > **Looking to configure or use OCR in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the Python OCR service.
 
 `services/ocr` is a small Python service that runs a nightly OCR pass over one
-or more disk roots, giving scanned PDFs a text layer so the indexer (and
-therefore search) can find them. It is the direct port of filesai's
+or more disk roots, rewriting scanned PDFs to add a permanent searchable text layer
+via `ocrmypdf` for PDF readers. (Search indexing itself also extracts text in-memory
+from scans and images during indexer scans when the `searchOcr` feature is enabled,
+without altering original files). It is the direct port of filesai's
 `ocr/run.sh`, extended for multiple roots and a Postgres-backed done-log, with
 status endpoints so the web app's System page can show and trigger it. It
 never creates or migrates its own schema: `packages/db`'s Drizzle migrations

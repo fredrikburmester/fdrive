@@ -737,7 +737,9 @@ export async function composeApp(
         },
       });
       registerThumbRoutes(groups, {
-        enabled: () => featureService.enabled("thumbnails"),
+        enabled: async () =>
+          (await featureService.enabled("thumbnails")) ||
+          (await featureService.enabled("imageSearch")),
         indexQueries,
         resolver: scopeResolver,
         identities: repos.identities,

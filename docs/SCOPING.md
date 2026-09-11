@@ -26,7 +26,7 @@ indexed. Version 2 records preserve these alongside mappings. An unmapped mount 
 with its virtual path; supported scopes can remain usable rather than disabling the login.
 Resetting overrides persists an empty record, not a SQL-null settings value.
 
-Shared-folder mappings are stored under `mount_mappings`. Each maps a virtual path to a
+Shared-folder mappings are stored in the `app.settings` table under key `mount_mappings`. Each maps a virtual path to a
 root and filesystem prefix; the resolver decides which logins can adopt it from their live
 listing and directory verification. Administrator-confirmed suggestions use bounded index
 evidence, not SFTPGo administration or automatic trust. See
