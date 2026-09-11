@@ -4,11 +4,14 @@ import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import BinaryIO, cast
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 
 from fdrive_indexer import db, server
+from fdrive_indexer import extract as extract_module
 from fdrive_indexer import thumb_rebuild as thumb_rebuild_module
 from fdrive_indexer.chunking import normalize
 from fdrive_indexer.config import Config
@@ -216,6 +219,92 @@ def test_extract_path_escaping_root_is_400(postgres_dsn: str, monkeypatch: pytes
     client = _make_client(ctx)
     resp = client.post("/extract", json={"root": "sftpgo", "path": "../../etc/passwd"})
     assert resp.status_code == 400
+
+
+def test_extract_rejects_leaf_symlink(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside secret")
+    (root / "leak.txt").symlink_to(outside)
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(root))
+
+    resp = _make_client(ctx).post("/extract", json={"root": "sftpgo", "path": "leak.txt"})
+
+    assert resp.status_code == 400
+    assert resp.json() == {"error": "path unavailable"}
+
+
+def test_extract_rejects_ancestor_symlink(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside secret")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(root))
+
+    resp = _make_client(ctx).post("/extract", json={"root": "sftpgo", "path": "linked/secret.txt"})
+
+    assert resp.status_code == 400
+    assert resp.json() == {"error": "path unavailable"}
+
+
+def test_open_extraction_file_stays_bound_after_entry_replacement(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    requested = root / "readme.txt"
+    requested.write_text("inside data")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside secret")
+
+    with server._open_extraction_file(str(root), "readme.txt") as (opened_path, size):
+        requested.unlink()
+        requested.symlink_to(outside)
+        with open(opened_path, "rb") as opened:
+            assert opened.read() == b"inside data"
+        assert size == len(b"inside data")
+
+
+def test_descriptor_path_keeps_pdf_extraction_working(tmp_path: Path) -> None:
+    import pymupdf
+
+    root = tmp_path / "root"
+    root.mkdir()
+    pdf = root / "document.pdf"
+    with pymupdf.open() as document:
+        document.new_page().insert_text((50, 50), "PDF descriptor text long enough for successful extraction")
+        document.save(pdf)
+    with server._open_extraction_file(str(root), "document.pdf") as (opened_path, _size):
+        text, status = extract_module.extract_pdf(opened_path, 10, normalize)
+    assert status == "indexed"
+    assert text is not None and "PDF descriptor text" in text
+
+
+def test_descriptor_path_keeps_office_extraction_working(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    office = root / "document.docx"
+    office.write_bytes(b"office descriptor bytes")
+
+    def fake_put(url: str, **kwargs: object) -> httpx.Response:
+        content = cast(BinaryIO, kwargs["content"])
+        assert content.read() == b"office descriptor bytes"
+        return httpx.Response(
+            200,
+            text="Office descriptor text long enough for successful extraction",
+            request=httpx.Request("PUT", url),
+        )
+
+    monkeypatch.setattr(extract_module.httpx, "put", fake_put)
+    with server._open_extraction_file(str(root), "document.docx") as (opened_path, _size):
+        text, status = extract_module.extract_tika(opened_path, "http://tika.invalid", normalize)
+    assert status == "indexed"
+    assert text is not None and "Office descriptor text" in text
 
 
 def test_extract_missing_file_is_404(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
