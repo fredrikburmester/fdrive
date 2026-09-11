@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -191,13 +193,72 @@ def test_unchanged_in_db_true_and_false() -> None:
     assert indexer.unchanged_in_db((9, 123, "indexed", None), st) is False
 
 
-def test_path_locks_returns_same_lock_for_same_key() -> None:
+def test_path_locks_reclaims_unique_paths() -> None:
     locks = indexer.PathLocks()
-    a = locks.get("x")
-    b = locks.get("x")
-    c = locks.get("y")
-    assert a is b
-    assert a is not c
+    for key in map(str, range(1_000)):
+        with locks.get(key):
+            pass
+
+    assert locks._locks == {}
+
+
+def test_path_locks_keep_waiters_on_same_lock_until_all_finish() -> None:
+    locks = indexer.PathLocks()
+    holder_entered = threading.Event()
+    release_holder = threading.Event()
+    waiter_entered = threading.Event()
+    release_waiter = threading.Event()
+    newcomer_entered = threading.Event()
+
+    def hold_first() -> None:
+        with locks.get("same"):
+            holder_entered.set()
+            assert release_holder.wait(2)
+
+    def wait_second() -> None:
+        with locks.get("same"):
+            waiter_entered.set()
+            assert release_waiter.wait(2)
+
+    def enter_third() -> None:
+        with locks.get("same"):
+            newcomer_entered.set()
+
+    def wait_for_users(expected: int) -> None:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with locks._lock:
+                if locks._locks["same"].users == expected:
+                    return
+            time.sleep(0.001)
+        pytest.fail(f"expected {expected} registered lock users")
+
+    holder = threading.Thread(target=hold_first)
+    waiter = threading.Thread(target=wait_second)
+    holder.start()
+    assert holder_entered.wait(2)
+    waiter.start()
+    wait_for_users(2)
+
+    release_holder.set()
+    assert waiter_entered.wait(2)
+    holder.join(2)
+    assert not holder.is_alive()
+    with locks._lock:
+        assert locks._locks["same"].users == 1
+
+    newcomer = threading.Thread(target=enter_third)
+    newcomer.start()
+    wait_for_users(2)
+    assert not newcomer_entered.wait(0.05)
+    release_waiter.set()
+    waiter.join(2)
+    newcomer.join(2)
+
+    assert not waiter.is_alive()
+    assert not newcomer.is_alive()
+    assert newcomer_entered.is_set()
+    assert locks._locks == {}
 
 
 def test_process_file_indexes_new_text_file(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

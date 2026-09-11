@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -110,20 +111,35 @@ def unchanged_in_db(manifest_row: tuple[int, int, str, object] | None, st: os.st
     )
 
 
+@dataclass
+class _PathLockEntry:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    users: int = 0
+
+
 class PathLocks:
     """Serialises work on one path so the watcher and a running scan never interleave
-    chunk writes for the same file."""
+    chunk writes for the same file. Entries live only while a holder or waiter uses them."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._locks: dict[str, threading.Lock] = {}
+        self._locks: dict[str, _PathLockEntry] = {}
 
-    def get(self, key: str) -> threading.Lock:
+    @contextmanager
+    def get(self, key: str) -> Iterator[None]:
         with self._lock:
-            lk = self._locks.get(key)
-            if lk is None:
-                lk = self._locks[key] = threading.Lock()
-            return lk
+            entry = self._locks.get(key)
+            if entry is None:
+                entry = self._locks[key] = _PathLockEntry()
+            entry.users += 1
+        try:
+            with entry.lock:
+                yield
+        finally:
+            with self._lock:
+                entry.users -= 1
+                if entry.users == 0:
+                    del self._locks[key]
 
 
 @dataclass
