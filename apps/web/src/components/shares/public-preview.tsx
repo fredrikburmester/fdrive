@@ -1,6 +1,5 @@
 "use client";
 
-import { extensionOf } from "@fdrive/core";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -11,7 +10,6 @@ import { PdfViewer } from "@/components/preview/pdf-viewer";
 import { VideoViewer } from "@/components/preview/video-viewer";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
-import { isHeicExt } from "@/lib/preview/heic";
 import { fetchPublicPreview, type PublicPreviewKind } from "@/lib/shares/preview";
 
 type PreviewState =
@@ -87,11 +85,10 @@ export function PublicPreview({
           {kind === "image" ? (
             <ImageViewer
               src={url}
-              alt={name}
+              name={name}
               thumbUrl={thumbUrl}
               downloadUrl={url}
               size={size}
-              isHeic={isHeicExt(extensionOf(name))}
               onError={failed}
             />
           ) : kind === "audio" ? (

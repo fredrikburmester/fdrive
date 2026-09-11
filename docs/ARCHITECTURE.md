@@ -63,10 +63,11 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
   update pins. The schema reserves sort state, but per-folder sort is not exposed.
 - Use the existing UI tokens and components. Action labels omit ellipses; progress labels
   may use them. Keep transient failures from deleting persisted preferences.
-- HEIC/HEIF images preserve original uploaded bytes non-destructively in storage. The web
-  client uses native decoding where supported (`<picture><source type="image/heic">`),
-  an instant 1024px WebP thumbnail fallback in Chromium/Firefox, and on-demand client-side
-  WASM decoding (`heic-to/csp` under `'wasm-unsafe-eval'`) upon zoom, guarded by a 50 MiB cap.
+- HEIC/HEIF files are stored as uploaded. The web client decodes them natively where the
+  browser can (`<picture><source type="image/heic">`), shows the indexer's 1024px WebP
+  thumbnail elsewhere, and decodes the full file in the browser on zoom or when no thumbnail
+  exists (`heic-to/csp`, a wasm2js build that needs no CSP `eval` allowance), refusing files
+  over 50 MiB before they are downloaded. A failed decode keeps the thumbnail on screen.
 
 ## Verification
 

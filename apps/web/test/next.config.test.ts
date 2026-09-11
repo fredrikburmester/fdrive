@@ -54,8 +54,8 @@ describe("buildContentSecurityPolicy", () => {
     const dev = buildContentSecurityPolicy({ officePublicUrl: undefined, development: true });
     expect(dev).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
     const prod = buildContentSecurityPolicy({ officePublicUrl: undefined, development: false });
-    expect(prod).toContain("script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'");
-    expect(prod).not.toMatch(/(^|\s)'unsafe-eval'(\s|;|$)/);
+    expect(prod).toContain("script-src 'self' 'unsafe-inline';");
+    expect(prod).not.toContain("eval");
   });
 
   it("keeps style-src permissive with 'unsafe-inline'", () => {
@@ -74,7 +74,7 @@ describe("buildContentSecurityPolicy", () => {
       "connect-src 'self'",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
-      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+      "script-src 'self' 'unsafe-inline'",
       "frame-src 'self'",
       "worker-src 'self' blob:",
     ]);

@@ -1,4 +1,5 @@
 import { ApiError } from "@fdrive/contracts";
+import { boundedBody } from "@/lib/preview/bounded-body";
 import { previewKindFor } from "@/lib/preview/kind";
 
 export const PUBLIC_TEXT_LIMIT = 1024 * 1024;
@@ -23,41 +24,6 @@ export function publicPreviewKind(name: string, size = 0): PublicPreviewKind {
     return "none";
   if (kind === "pdf" && size > PUBLIC_BLOB_LIMIT) return "none";
   return kind;
-}
-
-async function boundedBody(response: Response, limit: number, signal: AbortSignal): Promise<Blob> {
-  const size = Number(response.headers.get("content-length"));
-  if (size > limit) {
-    await response.body?.cancel();
-    throw new Error("This file is too large to preview. Download it instead.");
-  }
-  if (!response.body) return new Blob();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array<ArrayBuffer>[] = [];
-  let total = 0;
-  const abort = () => {
-    void reader.cancel().catch(() => {});
-  };
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const chunk = await reader.read();
-      signal.throwIfAborted();
-      if (chunk.done) break;
-      total += chunk.value.byteLength;
-      if (total > limit) {
-        await reader.cancel();
-        throw new Error("This file is too large to preview. Download it instead.");
-      }
-      chunks.push(new Uint8Array(chunk.value));
-    }
-    return new Blob(chunks);
-  } finally {
-    signal.removeEventListener("abort", abort);
-    if (signal.aborted) await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
 }
 
 export async function fetchPublicPreview(

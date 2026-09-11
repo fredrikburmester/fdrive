@@ -41,9 +41,9 @@ export interface ContentSecurityPolicyOptions {
   /**
    * True under `next dev`. React's development build uses `eval` for its
    * debugging features (reconstructing call stacks), so `script-src` gets
-   * `'unsafe-eval'` only then; production builds never allow JavaScript `eval()`
-   * and only include `'wasm-unsafe-eval'` to permit client-side WebAssembly
-   * compilation (e.g. for HEIC image decoding).
+   * `'unsafe-eval'` only then; production builds never use `eval` and never
+   * get it. The HEIC decoder (`heic-to/csp`) is a wasm2js build that runs as
+   * plain JavaScript in a blob worker, so it needs no `'wasm-unsafe-eval'` either.
    */
   readonly development?: boolean;
 }
@@ -86,7 +86,7 @@ export function buildContentSecurityPolicy(options: ContentSecurityPolicyOptions
       "script-src",
       options.development === true
         ? "'self' 'unsafe-inline' 'unsafe-eval'"
-        : "'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+        : "'self' 'unsafe-inline'",
     ],
     ["frame-src", frameSrc],
     ["worker-src", "'self' blob:"],

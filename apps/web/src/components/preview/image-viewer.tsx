@@ -1,18 +1,23 @@
 "use client";
 
-import { Download, ImageOff, Loader2 } from "lucide-react";
+import { extensionOf } from "@fdrive/core";
+import { ImageOff, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardTitle } from "@/components/ui/card";
-import { decodeHeicBlob } from "@/lib/preview/heic";
+import { fetchHeicAsJpeg, isHeicExt } from "@/lib/preview/heic";
+import { Unsupported } from "./unsupported";
 
 export interface ImageViewerProps {
   readonly src: string;
-  readonly alt: string;
+  /** The file name: rendered as the image's alt text and used to detect HEIC/HEIF. */
+  readonly name: string;
+  /** A 1024px thumbnail, shown for HEIC in browsers that cannot decode it natively. */
   readonly thumbUrl?: string | undefined;
+  /** Attachment URL for the download button when a HEIC cannot be shown at all. */
   readonly downloadUrl?: string | undefined;
+  /** The file's size, when known: a HEIC over the decode cap is refused before download. */
   readonly size?: number | undefined;
-  readonly isHeic?: boolean | undefined;
+  /** Called when a non-HEIC image fails to load. */
   readonly onError?: (() => void) | undefined;
 }
 
@@ -36,44 +41,31 @@ const CHECKERBOARD_STYLE: React.CSSProperties = {
  * natural (100%) size inside a scrollable viewport.
  *
  * For HEIC/HEIF images:
- * - Uses `<picture><source type="image/heic">` for native Safari hardware decoding.
- * - In non-native browsers (Chromium/Firefox), initializes to `thumbUrl` (1024px WebP).
- * - On zoom or thumbnail 404, dynamically decodes the full file to JPEG via `heic-to/csp`.
+ * - `<picture><source type="image/heic">` lets Safari decode the file natively.
+ * - Elsewhere the 1024px `thumbUrl` shows first; zooming, or a missing
+ *   thumbnail, decodes the full file to JPEG in the browser.
+ * - A failed decode keeps whatever is already on screen and reports the
+ *   reason in a pill; only when nothing can be shown does the unsupported
+ *   card with a download button take over.
+ *
+ * Callers key the viewer by file: state is per file, not reset on `src` changes.
  */
-export function ImageViewer({
-  src,
-  alt,
-  thumbUrl,
-  downloadUrl,
-  size: _size,
-  isHeic = false,
-  onError,
-}: ImageViewerProps) {
+export function ImageViewer({ src, name, thumbUrl, downloadUrl, size, onError }: ImageViewerProps) {
+  const isHeic = isHeicExt(extensionOf(name));
   const [zoomed, setZoomed] = useState(false);
-  const [displaySrc, setDisplaySrc] = useState<string>(() => (isHeic ? (thumbUrl ?? src) : src));
-  const [nativeSupported, setNativeSupported] = useState(false);
+  const [decoded, setDecoded] = useState<string | null>(null);
   const [decoding, setDecoding] = useState(false);
-  const [errorState, setErrorState] = useState<string | null>(null);
+  const [decodeError, setDecodeError] = useState<string | null>(null);
+  const [nativeSupported, setNativeSupported] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
 
   const objectUrlRef = useRef<string | null>(null);
   const decodePromiseRef = useRef<Promise<string | undefined> | null>(null);
-  const generationRef = useRef(0);
-
-  useEffect(() => {
-    setDisplaySrc(isHeic ? (thumbUrl ?? src) : src);
-    setZoomed(false);
-    setNativeSupported(false);
-    setDecoding(false);
-    setErrorState(null);
-    decodePromiseRef.current = null;
-    if (objectUrlRef.current !== null) {
-      URL.revokeObjectURL(objectUrlRef.current);
-      objectUrlRef.current = null;
-    }
-  }, [src, isHeic, thumbUrl]);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     return () => {
+      abortRef.current?.abort();
       decodePromiseRef.current = null;
       if (objectUrlRef.current !== null) {
         URL.revokeObjectURL(objectUrlRef.current);
@@ -83,36 +75,25 @@ export function ImageViewer({
   }, []);
 
   const startDecode = (): Promise<string | undefined> => {
-    if (decodePromiseRef.current !== null) {
-      return decodePromiseRef.current;
-    }
-    const currentGeneration = ++generationRef.current;
+    if (decodePromiseRef.current !== null) return decodePromiseRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setDecoding(true);
+    setDecodeError(null);
     const promise = (async () => {
       try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error(`Failed to load file: HTTP ${res.status}`);
-        const blob = await res.blob();
-        if (generationRef.current !== currentGeneration) return undefined;
-
-        const jpegBlob = await decodeHeicBlob(blob);
-        if (generationRef.current !== currentGeneration) return undefined;
-
-        if (objectUrlRef.current !== null) {
-          URL.revokeObjectURL(objectUrlRef.current);
-        }
-        const url = URL.createObjectURL(jpegBlob);
+        const jpeg = await fetchHeicAsJpeg(src, { size, signal: controller.signal });
+        if (controller.signal.aborted) return undefined;
+        const url = URL.createObjectURL(jpeg);
         objectUrlRef.current = url;
-        setDisplaySrc(url);
+        setDecoded(url);
         return url;
       } catch (err) {
-        if (generationRef.current !== currentGeneration) return undefined;
-        const message = err instanceof Error ? err.message : "Decoding failed";
-        setErrorState(message);
-        onError?.();
+        if (controller.signal.aborted) return undefined;
+        setDecodeError(err instanceof Error ? err.message : "Decoding failed");
         return undefined;
       } finally {
-        if (generationRef.current === currentGeneration) {
+        if (!controller.signal.aborted) {
           setDecoding(false);
           decodePromiseRef.current = null;
         }
@@ -127,14 +108,11 @@ export function ImageViewer({
       setZoomed(false);
       return;
     }
-    if (isHeic && !nativeSupported && displaySrc !== objectUrlRef.current) {
-      const decodedUrl = await startDecode();
-      if (decodedUrl) {
-        setZoomed(true);
-      }
-    } else {
-      setZoomed(true);
+    if (isHeic && !nativeSupported && decoded === null) {
+      if (await startDecode()) setZoomed(true);
+      return;
     }
+    setZoomed(true);
   };
 
   const handleImgError = () => {
@@ -142,37 +120,21 @@ export function ImageViewer({
       onError?.();
       return;
     }
-    if (displaySrc !== objectUrlRef.current) {
-      void startDecode();
-      return;
-    }
-    setErrorState("Could not display image");
-    onError?.();
+    setImgFailed(true);
+    if (decoded === null) void startDecode();
   };
 
-  if (isHeic && errorState !== null) {
-    const fileDownload = downloadUrl ?? src;
+  const displaySrc = isHeic ? (decoded ?? thumbUrl ?? src) : src;
+
+  if (isHeic && imgFailed && decoded === null && decodeError !== null) {
     return (
-      <div className="flex h-full w-full items-center justify-center p-8">
-        <Card className="max-w-sm">
-          <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
-            <ImageOff className="size-8 text-destructive" />
-            <CardTitle className="text-base font-medium">Could not load image</CardTitle>
-            <p className="text-xs text-muted-foreground">{errorState}</p>
-            {fileDownload && (
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={<a href={fileDownload} download />}
-              >
-                <Download className="mr-2 size-4" />
-                Download file
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <Unsupported
+        name={name}
+        size={size}
+        kind="image"
+        reason={decodeError}
+        downloadUrl={downloadUrl ?? src}
+      />
     );
   }
 
@@ -193,23 +155,31 @@ export function ImageViewer({
           <img
             src={displaySrc}
             onLoad={(e) => {
-              if (isHeic) {
-                const img = e.currentTarget;
-                if (img.currentSrc?.includes(src)) {
-                  setNativeSupported(true);
-                }
-              }
+              setImgFailed(false);
+              if (isHeic && e.currentTarget.currentSrc.includes(src)) setNativeSupported(true);
             }}
             onError={handleImgError}
-            alt={alt}
+            alt={name}
             className={zoomed ? "max-w-none" : "max-h-full max-w-full object-contain"}
           />
         </picture>
       </Button>
-      {decoding && (
-        <div className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
-          <Loader2 className="size-3 animate-spin text-primary" />
-          Decoding full resolution…
+      {(decoding || decodeError !== null) && (
+        <div
+          role="status"
+          className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+        >
+          {decoding ? (
+            <>
+              <Loader2 className="size-3 animate-spin text-primary" />
+              Decoding full resolution…
+            </>
+          ) : (
+            <>
+              <ImageOff className="size-3 text-destructive" />
+              {decodeError}
+            </>
+          )}
         </div>
       )}
     </div>
