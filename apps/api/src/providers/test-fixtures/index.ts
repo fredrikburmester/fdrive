@@ -51,6 +51,22 @@ export async function seedSftpgoProvider(
   return updated;
 }
 
+/** Ensures an enabled WebDAV provider row at `baseUrl`; the type has no configuration. */
+export async function seedWebdavProvider(
+  repos: Pick<Repos, "providers">,
+  baseUrl: string,
+  options: { label?: string; enabled?: boolean } = {},
+): Promise<Provider> {
+  const row = await repos.providers.ensure({ type: "webdav", baseUrl });
+  const updated = await repos.providers.update(row.id, {
+    enabled: options.enabled ?? true,
+    managedByEnv: false,
+    ...(options.label === undefined ? {} : { label: options.label }),
+  });
+  if (updated === null) throw new Error("provider vanished");
+  return updated;
+}
+
 /** A fetch double that answers SFTPGo's health and token probes. */
 export function probeFetch(reachable = true): typeof globalThis.fetch {
   return vi.fn(async (url: unknown) => {

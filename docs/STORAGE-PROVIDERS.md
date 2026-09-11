@@ -1,9 +1,11 @@
 # Adding a storage provider
 
-This guide describes the implemented provider extension points. SFTPGo is currently the only
-registered backend. WebDAV, S3 and fdrive-owned shares are not implemented. Start with a provider
-that supports ordinary file operations; enable additional features only after their complete
-API and UI paths work.
+This guide describes the implemented provider extension points. SFTPGo and WebDAV are the
+registered backends; S3 and fdrive-owned shares are not implemented. Start with a provider that
+supports ordinary file operations; enable additional features only after their complete API and
+UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations only:
+see [`packages/webdav`](../packages/webdav/src/module.ts) and its
+[plan](plans/WEBDAV-PROVIDER.md) for its decisions and remaining slices.
 
 For environment setup, see [Development](DEVELOPMENT.md). Follow [WORKING.md](../WORKING.md)
 for repository workflow and [verification commands](workflow/COMMANDS.md) for the required gates.
@@ -28,8 +30,8 @@ The request path is:
 | --- | --- |
 | Module, field metadata, instance and session types | [core provider port](../packages/core/src/ports/provider.ts) |
 | File operations, streams and optional methods | [core storage port](../packages/core/src/ports/storage.ts) |
-| Working module and injectable client factory | [SFTPGo module](../packages/sftpgo/src/module.ts) |
-| Adapter and error translation | [SFTPGo storage adapter](../packages/sftpgo/src/storage-provider.ts) |
+| Working module and injectable client factory | [SFTPGo module](../packages/sftpgo/src/module.ts), [WebDAV module](../packages/webdav/src/module.ts) |
+| Adapter and error translation | [SFTPGo storage adapter](../packages/sftpgo/src/storage-provider.ts), [WebDAV storage adapter](../packages/webdav/src/storage-provider.ts) |
 | Instance resolution, config validation and capabilities | [provider service](../apps/api/src/providers/service.ts) |
 | Per-request storage and Trash composition | [storage factory](../apps/api/src/auth/storage-factory.ts) |
 | Credential validation and post-login binding checks | [credential verification](../apps/api/src/accounts/credentials.ts) |
