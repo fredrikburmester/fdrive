@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import math
+import threading
 
+import httpx
 from conftest import UNDECODABLE, FakeEmbedder
 from starlette.testclient import TestClient
 
@@ -21,6 +24,38 @@ def _client(loaded: bool = True, device: str = "cpu") -> TestClient:
 
 def _image_file(name: str, content: bytes = b"fake-image-bytes") -> tuple[str, tuple[str, bytes, str]]:
     return ("images", (name, content, "image/png"))
+
+
+class BlockingEmbedder(FakeEmbedder):
+    """Blocks inference so tests can observe event-loop and concurrency behavior."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def embed_images(self, images: list[bytes]) -> list[list[float]]:
+        self._block()
+        return super().embed_images(images)
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self._block()
+        return super().embed_texts(texts)
+
+    def _block(self) -> None:
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.started.set()
+        try:
+            if not self.release.wait(timeout=2):
+                raise RuntimeError("test timed out waiting to release inference")
+        finally:
+            with self._lock:
+                self.active -= 1
 
 
 # -- /health ------------------------------------------------------------------------
@@ -45,6 +80,56 @@ def test_health_reports_ok_with_the_loaded_models_dim() -> None:
     assert body["model"] == "fake/model"
     assert body["dim"] == 4
     assert body["device"] == "cuda"
+
+
+def test_health_stays_responsive_and_model_inference_is_serialized() -> None:
+    embedder = BlockingEmbedder()
+    holder = server.ModelHolder()
+    holder.set(embedder)
+    state = server.ServerState(model_id=embedder.model_id, device="cpu", holder=holder)
+    app = server.create_app(state)
+
+    async def exercise() -> None:
+        fallback_release = threading.Timer(1, embedder.release.set)
+        fallback_release.start()
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                image_task = asyncio.create_task(
+                    client.post("/embed/image", files=[_image_file("a.png", b"aaa")])
+                )
+                text_task: asyncio.Task[httpx.Response] | None = None
+                try:
+                    assert await asyncio.to_thread(embedder.started.wait, 1)
+
+                    text_task = asyncio.create_task(client.post("/embed/text", json={"inputs": ["blue chair"]}))
+                    async with asyncio.timeout(0.5):
+                        while state.inference_limiter.statistics().tasks_waiting != 1:
+                            await asyncio.sleep(0)
+                    health_response = await client.get("/health")
+
+                    assert health_response.status_code == 200
+                    assert health_response.json()["status"] == "ok"
+                    assert not embedder.release.is_set()
+                    assert embedder.max_active == 1
+                finally:
+                    embedder.release.set()
+                    tasks = [image_task] if text_task is None else [image_task, text_task]
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+                assert text_task is not None
+                image_response = image_task.result()
+                text_response = text_task.result()
+                assert image_response.status_code == 200
+                assert text_response.status_code == 200
+                for response in (image_response, text_response):
+                    vector = response.json()["embeddings"][0]
+                    assert math.isclose(math.sqrt(sum(x * x for x in vector)), 1.0, rel_tol=1e-6)
+        finally:
+            embedder.release.set()
+            fallback_release.cancel()
+
+    asyncio.run(exercise())
 
 
 # -- /embed/image -------------------------------------------------------------------
