@@ -47,6 +47,40 @@ describe("createResolveTokenPrincipal", () => {
     expect(await resolve("not-a-token")).toBeNull();
   });
 
+  it("never looks a misshapen value up: a lookup is a database round trip an anonymous caller must not be able to buy", async () => {
+    const repos = createMemoryRepos();
+    const lookups: string[] = [];
+    const resolve = createResolveTokenPrincipal({
+      apiTokens: {
+        ...repos.apiTokens,
+        findByHash: async (hash) => {
+          lookups.push(hash);
+          return repos.apiTokens.findByHash(hash);
+        },
+      },
+      identities: repos.identities,
+      clock: () => new Date(),
+      storageFactory: async () => FAKE_STORAGE,
+    });
+
+    for (const value of [
+      "",
+      "not-a-token",
+      "fdr_x",
+      `fdr_${"a".repeat(42)}`,
+      `fdr_${"a".repeat(44)}`,
+      `fdr_${"+".repeat(43)}`,
+      `${generateApiToken()} `,
+      `fdr_${"a".repeat(100_000)}`,
+    ]) {
+      expect(await resolve(value)).toBeNull();
+    }
+    expect(lookups).toEqual([]);
+
+    expect(await resolve(generateApiToken())).toBeNull();
+    expect(lookups).toHaveLength(1);
+  });
+
   it("returns null for a well-formed but unknown token", async () => {
     const repos = createMemoryRepos();
     const resolve = createResolveTokenPrincipal({

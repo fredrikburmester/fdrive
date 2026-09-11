@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import type { AppHono } from "../app.js";
-import { type McpAuthDeps, resolveMcpPrincipal } from "./auth.js";
+import { authenticateMcpRequest, type McpAuthDeps } from "./auth.js";
 import type { McpToolDeps } from "./handlers.js";
 import { registerMcpTools } from "./tools.js";
 
@@ -21,13 +21,24 @@ export interface McpRoutesDeps extends McpAuthDeps {
 }
 
 async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Response> {
-  const principal = await resolveMcpPrincipal(c, deps);
-  if (principal === null) {
+  const auth = await authenticateMcpRequest(c, deps);
+  if (auth.kind === "rate_limited") {
+    // Never advertise an immediate retry: the limiter reports no delay when
+    // it is at capacity rather than blocking a known address.
+    const retryAfterSeconds = Math.max(1, Math.ceil(auth.retryAfterMs / 1000));
+    return withMcpResponseHeaders(
+      Response.json(
+        { error: "rate_limited" },
+        { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+      ),
+    );
+  }
+  if (auth.kind === "unauthorized") {
     return withMcpResponseHeaders(Response.json({ error: "unauthorized" }, { status: 401 }));
   }
 
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
-  registerMcpTools(server, principal, deps.toolDeps);
+  registerMcpTools(server, auth.principal, deps.toolDeps);
 
   // A fresh server and transport per request: the SDK's documented pattern
   // for a stateless streamable-HTTP MCP server with JSON responses.
@@ -68,6 +79,11 @@ export function withMcpResponseHeaders(response: Response): Response {
  * path-token-) authenticated instead. The `/mcp/t/:token` URL is itself a
  * secret: anyone who has it can act as the token's identity, so it should
  * be handled with the same care as the bearer token itself.
+ *
+ * Nothing else guards these routes, so `authenticateMcpRequest` also carries
+ * their abuse budget: a malformed credential is refused without a lookup,
+ * and repeated failed lookups from one address are answered `429` with
+ * `Retry-After` instead of another one.
  */
 export function registerMcpRoutes(app: AppHono, deps: McpRoutesDeps): void {
   const handler = (c: Context) => handleMcpRequest(c, deps);

@@ -13,7 +13,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
+import { createLoginLimiter, DEFAULT_MAX_FAILURES } from "../auth/login-limiter.js";
 import { loadConfig } from "../config.js";
+import { extractClientIp } from "../net.js";
 import type { SearchService } from "../search/service.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { generateApiToken, hashApiToken } from "../tokens/token-format.js";
@@ -194,7 +196,12 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
       providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
     }),
   });
-  registerMcpRoutes(app, { resolveToken, toolDeps });
+  registerMcpRoutes(app, {
+    resolveToken,
+    limiter: createLoginLimiter({ clock: () => new Date() }),
+    clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
+    toolDeps,
+  });
 
   const port = await new Promise<number>((resolve) => {
     currentServer = serve({ fetch: app.fetch, port: 0 }, (info) => resolve(info.port));
@@ -432,6 +439,75 @@ describe("MCP server end to end", () => {
     expect(res.status).toBe(401);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("answers 429 with Retry-After once an address has burned its failed-lookup budget", async () => {
+    const attempt = async (forwardedFor: string) => {
+      const res = await fetch(`http://127.0.0.1:${harness.port}/mcp/t/${generateApiToken()}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "x-forwarded-for": forwardedFor,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      return { status: res.status, headers: res.headers, body: await res.text() };
+    };
+
+    for (let i = 0; i < DEFAULT_MAX_FAILURES; i++) {
+      expect((await attempt("198.51.100.7")).status).toBe(401);
+    }
+
+    const blocked = await attempt("198.51.100.7");
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(blocked.headers.get("cache-control")).toBe("no-store");
+    expect(blocked.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(JSON.parse(blocked.body)).toEqual({ error: "rate_limited" });
+
+    // A different caller is unaffected, and a live token still works there.
+    expect((await attempt("203.0.113.9")).status).toBe(401);
+    const valid = await fetch(`http://127.0.0.1:${harness.port}/mcp/t/${harness.token}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "x-forwarded-for": "203.0.113.9",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "raw-fetch-client", version: "1.0.0" },
+        },
+      }),
+    });
+    expect(valid.status).toBe(200);
+    await valid.text();
+  });
+
+  it("does not spend the budget on a path token that is not token-shaped", async () => {
+    for (let i = 0; i < DEFAULT_MAX_FAILURES * 4; i++) {
+      const res = await fetch(`http://127.0.0.1:${harness.port}/mcp/t/fdr_x`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      expect(res.status).toBe(401);
+      await res.text();
+    }
+
+    const client = await connectPathTokenClient(harness.port, harness.token);
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+    await client.close();
   });
 
   it("sets Cache-Control: no-store and Referrer-Policy: no-referrer on a successful MCP response", async () => {
