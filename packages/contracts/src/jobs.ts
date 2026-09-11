@@ -45,6 +45,7 @@ export type JobStatus = z.infer<typeof JobStatus>;
 
 /** Returned with 202 by `POST /fs/compress` and `POST /fs/extract`. */
 export const JobAccepted = z.object({
+  id: z.string().optional(),
   jobId: z.string(),
 });
 

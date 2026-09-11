@@ -1,7 +1,8 @@
 # Office documents and editing
 
-ONLYOFFICE is bundled with the standard fdrive stack. Enable it during onboarding,
-or later in **System > Features** (the ONLYOFFICE card) or **System > Office > Settings**. No additional Compose file,
+ONLYOFFICE is bundled with the standard fdrive stack (Collabora is also supported
+as an alternate document engine). Enable Office during onboarding, or later in
+**System > Features** (the Office card) or **System > Office > Settings**. No additional Compose file,
 activation environment variable, or processing storage mount is needed.
 
 ## Enable the editor

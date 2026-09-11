@@ -67,9 +67,11 @@ export const ROUTES = {
   tags: "/api/v1/tags",
   favorites: {
     /**
-     * GET: the caller's favorites -> `FavoritesResponse`.
+     * Active-identity scoped favorites CRUD:
+     * GET: the caller's active identity favorites -> `FavoritesResponse`.
      * POST: favorite a path -> `OkResponse`.
      * DELETE: unfavorite a path (body `{ path }`) -> `OkResponse`.
+     * For account-wide aggregated favorites, see `account.favorites`.
      */
     base: "/api/v1/favorites",
   },
@@ -171,6 +173,7 @@ export const ROUTES = {
   account: {
     identities: "/api/v1/account/identities",
     activeIdentity: "/api/v1/account/active-identity",
+    /** GET: aggregated favorites across all identities linked to the account -> `AccountFavoritesResponse`. */
     favorites: "/api/v1/account/favorites",
     search: "/api/v1/account/search",
     /**

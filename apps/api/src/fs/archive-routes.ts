@@ -253,7 +253,7 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
     return { path: targetPath };
   });
 
-  const responseBody: JobAccepted = { jobId: job.id };
+  const responseBody: JobAccepted = { id: job.id, jobId: job.id };
   return c.json(responseBody, 202);
 }
 
@@ -292,7 +292,7 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
     return result;
   });
 
-  const responseBody: JobAccepted = { jobId: job.id };
+  const responseBody: JobAccepted = { id: job.id, jobId: job.id };
   return c.json(responseBody, 202);
 }
 

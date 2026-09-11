@@ -35,7 +35,7 @@ describe("isSystemRoute", () => {
   });
 
   it("is true for a path within System", () => {
-    expect(isSystemRoute("/system/connection")).toBe(true);
+    expect(isSystemRoute("/system/shared-folders")).toBe(true);
   });
 
   it("is false for another route", () => {

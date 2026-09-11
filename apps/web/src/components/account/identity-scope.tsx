@@ -359,7 +359,7 @@ function AdminEditor({
                 {scope.rootName}:{scope.fsPrefix}
               </span>
               <span className="text-muted-foreground">
-                Shared folder mapping, managed under System › Connection.
+                Shared folder mapping, managed under System › Shared folders.
               </span>
             </li>
           ))}

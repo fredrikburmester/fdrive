@@ -1,7 +1,7 @@
 "use client";
 
 import type { FsEntry, ManagedShare } from "@fdrive/contracts";
-import { Copy, Link2, Pencil, Trash2 } from "lucide-react";
+import { Copy, Link2, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import {
@@ -14,9 +14,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { EmptyState } from "@/components/files/empty-state";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { FieldError } from "@/components/ui/field";
+import { describeApiError } from "@/lib/api/errors";
 import {
   Table,
   TableBody,
@@ -81,17 +83,23 @@ export function SharesPage() {
           </p>
         </div>
         {(error || management.query.isError) && (
-          <FieldError>{error ?? "Could not load share links."}</FieldError>
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertTitle>Could not load share links</AlertTitle>
+            <AlertDescription>
+              {error ?? describeApiError(management.query.error)}
+            </AlertDescription>
+          </Alert>
         )}
         {management.query.isPending ? (
           <p role="status" className="text-sm text-muted-foreground">
             Loading links…
           </p>
         ) : management.query.data?.items.length === 0 ? (
-          <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">
-            <Link2 className="mx-auto mb-3 size-5" />
-            <p>No share links yet.</p>
-          </div>
+          <EmptyState
+            title="No share links yet"
+            description="Select files or a folder in Files and choose Share to create one."
+          />
         ) : (
           <Table>
             <TableHeader>

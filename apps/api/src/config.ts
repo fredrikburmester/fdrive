@@ -41,8 +41,8 @@ export interface AppConfig {
   /**
    * The SFTPGo base URL, when configured by environment. Undefined means
    * the connection must come from `settings` (configured through `/setup`
-   * or the admin connection page) or setup is still required. See
-   * `src/connection/store.ts`.
+   * or the admin storage page) or setup is still required. See
+   * `src/providers/`.
    */
   readonly sftpgoUrl: string | undefined;
   readonly fdriveMasterKey: string;

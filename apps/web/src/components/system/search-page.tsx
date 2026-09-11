@@ -63,7 +63,9 @@ export function SearchPage() {
       }
     >
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading…
+        </p>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
