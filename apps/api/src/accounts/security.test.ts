@@ -3,6 +3,7 @@ import { ROUTES } from "@fdrive/contracts";
 import { SftpgoError } from "@fdrive/sftpgo";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
+import { createLoginLimiter } from "../auth/login-limiter.js";
 import { hashSessionId } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
 import { verifyCredentials } from "./credentials.ts";
@@ -235,4 +236,80 @@ it("drops the new session when priming the upstream token fails after login", as
   });
   expect(res.status).toBe(500);
   expect(remove).toHaveBeenCalledTimes(1);
+});
+
+it("holds the per-address spray bound across a whole IPv6 /64, not per address", async () => {
+  const h = accountsHarness();
+  await h.seeded;
+  // One machine routinely owns its entire /64, so keying the bound on the
+  // address alone hands it a fresh allowance per attempt.
+  const from = (host: number) => `2001:db8:1:2::${host.toString(16)}`;
+  for (let host = 1; host <= 5; host += 1) {
+    await expect(
+      verifyCredentials(h.deps, {
+        credential: { username: `user${host}`, password: "wrong" },
+        ip: from(host),
+      }),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+  }
+
+  // A sixth address in that /64 is the same caller, even with a valid password...
+  await expect(
+    verifyCredentials(h.deps, {
+      credential: { username: "alice", password: "alice-pass" },
+      ip: from(6),
+    }),
+  ).rejects.toMatchObject({ kind: "rate_limited" });
+  // ...while a neighbouring /64 is a different one.
+  await expect(
+    verifyCredentials(h.deps, {
+      credential: { username: "alice", password: "alice-pass" },
+      ip: "2001:db8:1:3::1",
+    }),
+  ).resolves.toMatchObject({ externalUsername: "alice" });
+});
+
+it("bounds one address block's share of limiter capacity so another address still signs in", async () => {
+  const h = accountsHarness();
+  await h.seeded;
+  // A capacity this small stands in for the 10 000 default: what matters is
+  // that one caller's footprint is its block's budget rather than a slot per
+  // address it can source from.
+  const limiter = createLoginLimiter({ clock: h.clock, capacity: 8, maxKeysPerGroup: 2 });
+  const deps = { ...h.deps, limiter };
+  for (let host = 1; host <= 40; host += 1) {
+    await verifyCredentials(deps, {
+      credential: { username: `ghost-${host}`, password: "wrong" },
+      ip: `2001:db8:1:2::${host.toString(16)}`,
+    }).catch(() => undefined);
+  }
+
+  await expect(
+    verifyCredentials(deps, {
+      credential: { username: "bob", password: "bob-pass" },
+      ip: "203.0.113.50",
+    }),
+  ).resolves.toMatchObject({ externalUsername: "bob" });
+  // The attacker's own block is still throttled, and so is a username it
+  // hammers from a single address.
+  await expect(
+    verifyCredentials(deps, {
+      credential: { username: "alice", password: "alice-pass" },
+      ip: "2001:db8:1:2::1",
+    }),
+  ).rejects.toMatchObject({ kind: "rate_limited" });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await expect(
+      verifyCredentials(deps, {
+        credential: { username: "carol", password: "wrong" },
+        ip: "203.0.113.51",
+      }),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+  }
+  await expect(
+    verifyCredentials(deps, {
+      credential: { username: "carol", password: "carol-pass" },
+      ip: "203.0.113.51",
+    }),
+  ).rejects.toMatchObject({ kind: "rate_limited" });
 });
