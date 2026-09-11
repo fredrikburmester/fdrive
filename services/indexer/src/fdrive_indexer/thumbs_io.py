@@ -28,6 +28,9 @@ def _save_webp(image: object, dest: str, size: int) -> tuple[int, int]:
 def _open_image(abs_path: str) -> object:
     from PIL import Image, ImageOps
 
+    from .heif import register_heif_opener
+
+    register_heif_opener()
     opened = Image.open(abs_path)
     picture: Image.Image = ImageOps.exif_transpose(opened) or opened
     if picture.mode not in ("RGB", "RGBA"):

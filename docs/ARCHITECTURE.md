@@ -63,6 +63,10 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
   update pins. The schema reserves sort state, but per-folder sort is not exposed.
 - Use the existing UI tokens and components. Action labels omit ellipses; progress labels
   may use them. Keep transient failures from deleting persisted preferences.
+- HEIC/HEIF images preserve original uploaded bytes non-destructively in storage. The web
+  client uses native decoding where supported (`<picture><source type="image/heic">`),
+  an instant 1024px WebP thumbnail fallback in Chromium/Firefox, and on-demand client-side
+  WASM decoding (`heic-to/csp` under `'wasm-unsafe-eval'`) upon zoom, guarded by a 50 MiB cap.
 
 ## Verification
 

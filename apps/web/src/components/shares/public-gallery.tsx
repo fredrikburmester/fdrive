@@ -1,13 +1,15 @@
 "use client";
 
 import type { ThumbSize } from "@fdrive/contracts";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { extensionOf } from "@fdrive/core";
+import { ChevronLeft, ChevronRight, Image as ImageIcon, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { ImageViewer } from "@/components/preview/image-viewer";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isHeicExt } from "@/lib/preview/heic";
 import {
   galleryVisibleCount,
   hasMoreGalleryItems,
@@ -70,21 +72,30 @@ function GalleryTile({
   onOpen: () => void;
 }) {
   const [thumbFailed, setThumbFailed] = useState(false);
+  const isHeic = isHeicExt(extensionOf(image.name));
+
   return (
     <button
       type="button"
+      aria-label={image.name}
       className="group relative aspect-square overflow-hidden rounded-lg border bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       onClick={onOpen}
     >
-      {/* biome-ignore lint/performance/noImgElement: the public share page has no Next.js image loader for arbitrary API-served URLs */}
-      <img
-        src={thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path, 256)}
-        alt={image.name}
-        loading="lazy"
-        decoding="async"
-        onError={() => setThumbFailed(true)}
-        className="h-full w-full object-cover transition-transform group-hover:scale-105"
-      />
+      {thumbFailed && isHeic ? (
+        <span className="flex h-full w-full items-center justify-center">
+          <ImageIcon className="size-8 text-muted-foreground" />
+        </span>
+      ) : (
+        /* biome-ignore lint/performance/noImgElement: the public share page has no Next.js image loader for arbitrary API-served URLs */
+        <img
+          src={thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path, 256)}
+          alt={image.name}
+          loading="lazy"
+          decoding="async"
+          onError={() => setThumbFailed(true)}
+          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+        />
+      )}
     </button>
   );
 }
@@ -122,7 +133,9 @@ function Lightbox({
   // `onError` there falls straight through to the full image.
   const [fullLoaded, setFullLoaded] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
+  const isHeic = isHeicExt(extensionOf(image.name));
   useEffect(() => {
+    if (isHeic) return;
     setFullLoaded(false);
     setThumbFailed(false);
     const full = new Image();
@@ -132,7 +145,7 @@ function Lightbox({
     return () => {
       full.onload = null;
     };
-  }, [image.path, downloadUrl]);
+  }, [image.path, downloadUrl, isHeic]);
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -153,6 +166,11 @@ function Lightbox({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, onStep]);
+  const activeSrc = isHeic
+    ? downloadUrl(image.path)
+    : fullLoaded || thumbFailed
+      ? downloadUrl(image.path)
+      : thumbUrl(image.path, 1024);
   return (
     <div
       ref={overlayRef}
@@ -190,7 +208,11 @@ function Lightbox({
       </header>
       <div className="min-h-0 flex-1">
         <ImageViewer
-          src={fullLoaded || thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path, 1024)}
+          key={image.path}
+          src={activeSrc}
+          thumbUrl={thumbUrl(image.path, 1024)}
+          downloadUrl={downloadUrl(image.path)}
+          isHeic={isHeic}
           alt={image.name}
           onError={() => setThumbFailed(true)}
         />

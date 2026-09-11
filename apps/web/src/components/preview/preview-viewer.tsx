@@ -1,4 +1,5 @@
 import type { FsEntry } from "@fdrive/contracts";
+import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
 import { ArchivePreview } from "./archive-preview";
 import { AudioViewer } from "./audio-viewer";
@@ -16,15 +17,26 @@ export interface PreviewViewerProps {
   readonly inlineUrl: string;
   /** Attachment URL, used only by the unsupported fallback's download button. */
   readonly downloadUrl: string;
+  /** Optional high-res thumbnail URL for image preview fallback. */
+  readonly thumbUrl?: string | undefined;
 }
 
 /** Picks the right viewer for `entry`'s preview kind. */
-export function PreviewViewer({ entry, inlineUrl, downloadUrl }: PreviewViewerProps) {
+export function PreviewViewer({ entry, inlineUrl, downloadUrl, thumbUrl }: PreviewViewerProps) {
   const kind = previewKindFor(entry);
 
   switch (kind) {
     case "image":
-      return <ImageViewer src={inlineUrl} alt={entry.name} />;
+      return (
+        <ImageViewer
+          src={inlineUrl}
+          thumbUrl={thumbUrl}
+          downloadUrl={downloadUrl}
+          size={entry.size}
+          isHeic={isHeicExt(entry.ext)}
+          alt={entry.name}
+        />
+      );
     case "video":
       return <VideoViewer src={inlineUrl} />;
     case "audio":

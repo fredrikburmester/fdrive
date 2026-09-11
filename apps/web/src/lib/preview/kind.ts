@@ -39,6 +39,8 @@ const IMAGE_EXTENSIONS = new Set([
   ".bmp",
   ".ico",
   ".svg",
+  ".heic",
+  ".heif",
 ]);
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"]);

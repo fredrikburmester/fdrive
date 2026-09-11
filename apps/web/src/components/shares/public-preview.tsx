@@ -1,5 +1,6 @@
 "use client";
 
+import { extensionOf } from "@fdrive/core";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,6 +11,7 @@ import { PdfViewer } from "@/components/preview/pdf-viewer";
 import { VideoViewer } from "@/components/preview/video-viewer";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
+import { isHeicExt } from "@/lib/preview/heic";
 import { fetchPublicPreview, type PublicPreviewKind } from "@/lib/shares/preview";
 
 type PreviewState =
@@ -22,11 +24,15 @@ export function PublicPreview({
   url,
   name,
   kind,
+  thumbUrl,
+  size,
   onClose,
 }: {
   url: string;
   name: string;
   kind: Exclude<PublicPreviewKind, "none">;
+  thumbUrl?: string | undefined;
+  size?: number | undefined;
   onClose: () => void;
 }) {
   const [state, setState] = useState<PreviewState>({ type: "loading" });
@@ -79,7 +85,15 @@ export function PublicPreview({
       ) : (
         <div className="h-[min(65vh,44rem)]">
           {kind === "image" ? (
-            <ImageViewer src={url} alt={name} onError={failed} />
+            <ImageViewer
+              src={url}
+              alt={name}
+              thumbUrl={thumbUrl}
+              downloadUrl={url}
+              size={size}
+              isHeic={isHeicExt(extensionOf(name))}
+              onError={failed}
+            />
           ) : kind === "audio" ? (
             <AudioViewer src={url} onError={failed} />
           ) : kind === "video" ? (

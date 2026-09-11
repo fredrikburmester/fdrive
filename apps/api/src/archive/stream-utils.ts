@@ -98,6 +98,7 @@ const PRECOMPRESSED_EXTENSIONS = new Set([
   ".webm",
   ".ogg",
   ".heic",
+  ".heif",
 ]);
 
 /** True when `entryName`'s extension is already compressed and should be stored, not deflated. */

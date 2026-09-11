@@ -5,6 +5,20 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## HEIC/HEIF viewing and indexing support: complete
+
+- **Non-destructive storage**: Original `.heic` and `.heif` files remain bit-for-bit untouched in SFTPGo storage; no on-upload conversion.
+- **Backend & indexing**:
+  - `packages/contracts`: `.heic`/`.heif` added to `IMAGE_EXTENSIONS` (`isImageFileName`).
+  - `apps/api`: `.heif` added to `PRECOMPRESSED_EXTENSIONS` in archive stream utils.
+  - `services/indexer`: `pillow-heif>=0.18` added; registered opener idempotently before PIL reads; `.heic`/`.heif` added to `IMAGE_EXTS` in chunking (enabling 256/1024px WebP thumbnails, OCR, and SigLIP visual embeddings).
+- **Frontend & CSP compliance**:
+  - `apps/web`: Production CSP configured with `'wasm-unsafe-eval'` in `script-src` and `'self' blob:` in `worker-src` (forbidding `'unsafe-eval'`).
+  - `apps/web/src/lib/preview/heic.ts`: Client-side on-demand decoding via `heic-to/csp` (no `new Function(...)`), bounded by a 50 MiB memory safety guard.
+  - `ImageViewer`: Renders `<picture><source type="image/heic">` for native Safari hardware decoding, initializes to 1024px WebP thumbnail fallback in Chromium/Firefox, and decodes on-demand via WASM on zoom or unindexed thumbnail error.
+  - Public shares & galleries: Single-file HEIC shares automatically present in gallery mode with lightbox viewing; directory listings expose the preview button.
+- **Verification**: `python indexer`, `package @fdrive/contracts`, `package @fdrive/web`, `application`, `workflow`, and `browser` (`preview.spec.ts`, `grid-thumbs.spec.ts`, `shares.spec.ts`) all pass.
+
 ## Beta field report (clean install, 2026-09-11): fixed
 
 - **No worker had a CPU bound** (addendum widened this from `embed` alone). `deploy/compose.yaml`

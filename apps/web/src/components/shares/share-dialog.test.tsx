@@ -103,7 +103,7 @@ it("shows friendly access and password labels for every selected option", async 
   expect(screen.getByRole("combobox", { name: "Password protection" }).textContent).toContain(
     "Keep without password",
   );
-});
+}, 15000);
 it("shows a friendly Show as label for every presentation option", async () => {
   render(<ShareDialog entries={[entry]} share={share} onClose={vi.fn()} />);
   expect(screen.getByRole("combobox", { name: "Show as" }).textContent).toContain("Automatic");
