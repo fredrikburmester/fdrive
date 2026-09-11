@@ -1,4 +1,6 @@
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { createSftpgoClient } from "./client.js";
 import { SftpgoError } from "./errors.js";
 import {
   basicAuthHeader,
@@ -12,6 +14,7 @@ import {
   stripTrailingSlash,
   toRedirectError,
 } from "./http.js";
+import { probeConnection } from "./probe.js";
 
 describe("stripTrailingSlash", () => {
   it("removes a single trailing slash", () => {
@@ -38,6 +41,26 @@ describe("buildUrl", () => {
     const url = buildUrl("http://host", "/x", { limit: 500, flag: true });
     expect(url).toContain("limit=500");
     expect(url).toContain("flag=true");
+  });
+
+  it("keeps a reverse-proxy path prefix from the base URL", () => {
+    const url = buildUrl("https://files.example/sftpgo", "/api/v2/user/dirs", {
+      path: "/docs",
+    });
+    expect(url).toBe("https://files.example/sftpgo/api/v2/user/dirs?path=%2Fdocs");
+  });
+
+  it("keeps a multi-segment prefix, with or without a trailing slash", () => {
+    expect(buildUrl("https://files.example/apps/sftpgo", "/healthz")).toBe(
+      "https://files.example/apps/sftpgo/healthz",
+    );
+    expect(buildUrl("https://files.example/apps/sftpgo/", "/healthz")).toBe(
+      "https://files.example/apps/sftpgo/healthz",
+    );
+  });
+
+  it("never lets a path escape the configured origin", () => {
+    expect(buildUrl("http://host", "//other.example/x")).toBe("http://host/other.example/x");
   });
 });
 
@@ -210,5 +233,146 @@ describe("emptyByteStream", () => {
     const reader = emptyByteStream().getReader();
     const result = await reader.read();
     expect(result.done).toBe(true);
+  });
+});
+
+/**
+ * A real loopback HTTP server standing in for SFTPGo behind a reverse proxy
+ * that confines it to a subpath. It answers only under `prefix`; every other
+ * path is a 404, so a client that drops the prefix fails here instead of
+ * silently passing a URL-string assertion. Pass "" for the unproxied
+ * deployment, which must keep behaving exactly as before.
+ */
+async function startSftpgoBehind(prefix: string): Promise<{
+  readonly baseUrl: string;
+  readonly requests: readonly string[];
+  close: () => Promise<void>;
+}> {
+  const requests: string[] = [];
+  const server = createServer((req, res) => {
+    req.resume();
+    const target = req.url ?? "";
+    requests.push(target);
+    const route = new URL(target, "http://127.0.0.1").pathname.slice(prefix.length);
+    const send = (status: number, contentType: string, body: string): void => {
+      res.writeHead(status, { "content-type": contentType });
+      res.end(body);
+    };
+    if (!target.startsWith(`${prefix}/`)) {
+      send(404, "text/plain", "outside the proxy prefix");
+      return;
+    }
+    if (route === "/healthz") {
+      send(200, "text/plain", "ok");
+      return;
+    }
+    if (route === "/api/v2/user/token") {
+      if (req.headers.authorization === undefined) {
+        send(401, "text/plain", "unauthorized");
+        return;
+      }
+      send(
+        200,
+        "application/json",
+        JSON.stringify({ access_token: "proxied", expires_at: "2999-01-01T00:00:00Z" }),
+      );
+      return;
+    }
+    if (route === "/api/v2/user/dirs" && req.headers.authorization === "Bearer proxied") {
+      send(
+        200,
+        "application/json",
+        JSON.stringify([
+          { name: "notes.txt", size: 3, mode: 420, last_modified: "2026-01-02T03:04:05Z" },
+        ]),
+      );
+      return;
+    }
+    send(404, "text/plain", "not found");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("no fixture port");
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}${prefix}`,
+    requests,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+describe("endpoint joining against a real reverse-proxied SFTPGo", () => {
+  it("reaches the proxied API through a prefixed endpoint", async () => {
+    const fixture = await startSftpgoBehind("/sftpgo");
+    try {
+      const client = createSftpgoClient({ baseUrl: fixture.baseUrl });
+
+      const token = await client.login({ username: "alice", password: "secret" });
+      const entries = await client.user(token.accessToken).list("/");
+
+      expect(entries.map((entry) => entry.name)).toEqual(["notes.txt"]);
+      expect(fixture.requests).toEqual([
+        "/sftpgo/api/v2/user/token",
+        "/sftpgo/api/v2/user/dirs?path=%2F",
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  // probeConnection joins its two paths by string concatenation rather than
+  // through buildUrl, so it always kept the prefix. Locked in here so the two
+  // ways this package reaches an endpoint cannot drift apart again.
+  it("probes the proxied health and token endpoints through a prefixed endpoint", async () => {
+    const fixture = await startSftpgoBehind("/sftpgo");
+    try {
+      await expect(probeConnection(fixture.baseUrl, { fetch })).resolves.toEqual({
+        ok: true,
+        detail: "SFTPGo is reachable",
+      });
+      expect(fixture.requests).toEqual(["/sftpgo/healthz", "/sftpgo/api/v2/user/token"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("fails loudly when the prefix is dropped, the way the old join did", async () => {
+    const fixture = await startSftpgoBehind("/sftpgo");
+    try {
+      const unprefixed = new URL(fixture.baseUrl).origin;
+      const client = createSftpgoClient({ baseUrl: unprefixed });
+
+      await expect(client.login({ username: "alice", password: "secret" })).rejects.toMatchObject({
+        kind: "not_found",
+        status: 404,
+      });
+      expect(fixture.requests).toEqual(["/api/v2/user/token"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  it("still reaches an unproxied SFTPGo served at the origin root", async () => {
+    const fixture = await startSftpgoBehind("");
+    try {
+      const client = createSftpgoClient({ baseUrl: fixture.baseUrl });
+
+      const token = await client.login({ username: "alice", password: "secret" });
+      await client.user(token.accessToken).list("/");
+      await expect(probeConnection(fixture.baseUrl, { fetch })).resolves.toMatchObject({
+        ok: true,
+      });
+
+      expect(fixture.requests).toEqual([
+        "/api/v2/user/token",
+        "/api/v2/user/dirs?path=%2F",
+        "/healthz",
+        "/api/v2/user/token",
+      ]);
+    } finally {
+      await fixture.close();
+    }
   });
 });

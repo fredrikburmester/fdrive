@@ -9,13 +9,25 @@ export function stripTrailingSlash(baseUrl: string): string {
  * Builds a request URL from a base URL, a fixed path, and a set of query
  * parameters. Undefined values are omitted; every other value is coerced to
  * a string and URL-encoded by URLSearchParams.
+ *
+ * `path` is always joined *under* `baseUrl`, so an endpoint confined to a
+ * subpath by a reverse proxy (`https://files.example/sftpgo`) keeps that
+ * prefix: `new URL("/api/v2/...", base)` would instead reset the path to the
+ * origin root and send every call to an unproxied path. The path is made
+ * relative and the base is given a trailing slash first, which also means a
+ * `path` can never escape the configured origin the way a protocol-relative
+ * `//other.example/x` would.
  */
 export function buildUrl(
   baseUrl: string,
   path: string,
   params: Record<string, string | number | boolean | undefined> = {},
 ): string {
-  const url = new URL(path, `${baseUrl}/`);
+  const base = new URL(baseUrl);
+  if (!base.pathname.endsWith("/")) {
+    base.pathname += "/";
+  }
+  const url = new URL(path.replace(/^\/+/, ""), base);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) {
       url.searchParams.set(key, String(value));

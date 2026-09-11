@@ -77,6 +77,28 @@ describe("createSftpgoClient - baseUrl handling", () => {
     const token = await client.login({ username: "alice", password: "secret" });
     expect(token.accessToken).toBeTruthy();
   });
+
+  // A reverse proxy that confines SFTPGo to a subpath strips the prefix back
+  // off before forwarding, which is what this fetch stands in for.
+  it("keeps a reverse-proxy path prefix for authenticated requests", async () => {
+    const server = createFakeSftpgoServer(ALICE_SEED);
+    const paths: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      paths.push(url.pathname);
+      url.pathname = url.pathname.replace(/^\/sftpgo/, "");
+      return server.fetch(url, init);
+    };
+    const client = createSftpgoClient({
+      baseUrl: "http://sftpgo.test/sftpgo",
+      fetch: fetchImpl,
+    });
+
+    const token = await client.login({ username: "alice", password: "secret" });
+    await client.user(token.accessToken).list("/");
+
+    expect(paths).toEqual(["/sftpgo/api/v2/user/token", "/sftpgo/api/v2/user/dirs"]);
+  });
 });
 
 describe("createSftpgoClient - path validation", () => {
