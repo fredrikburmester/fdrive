@@ -377,6 +377,27 @@ function scopeCondition(prefixes: readonly ScopePrefix[]) {
   return sql`(${sql.join(parts, sql` OR `)})`;
 }
 
+/** Restricts one `idx.moves` path to the caller's root-relative scope. */
+function movePathScopeCondition(
+  prefixes: readonly ScopePrefix[],
+  pathColumn: typeof moves.src | typeof moves.dst,
+) {
+  const clauses = toScopeClauses(prefixes);
+  if (clauses.length === 0) {
+    return sql`false`;
+  }
+
+  const parts = clauses.map((clause) => {
+    if (clause.relativePrefix === "") {
+      return sql`(${moves.rootId} = ${clause.rootId})`;
+    }
+    const likePattern = `${escapeLikePattern(clause.relativePrefix)}/%`;
+    return sql`(${moves.rootId} = ${clause.rootId} AND (${pathColumn} = ${clause.relativePrefix} OR ${pathColumn} LIKE ${likePattern} ESCAPE '\\'))`;
+  });
+
+  return sql`(${sql.join(parts, sql` OR `)})`;
+}
+
 const SNIPPET_LENGTH = 300;
 
 /** Builds every `IndexQueries` method as Drizzle queries against `db`. */
@@ -793,14 +814,21 @@ export function createIndexQueries(db: Db): IndexQueries {
     },
 
     async recentMoves(scopePrefixes, actor, limit) {
-      const rootIds = Array.from(new Set(scopePrefixes.map((prefix) => prefix.rootId)));
-      if (rootIds.length === 0) {
+      if (scopePrefixes.length === 0) {
         return [];
       }
       const rows = await db
         .select()
         .from(moves)
-        .where(and(inArray(moves.rootId, rootIds), eq(moves.actor, actor)))
+        .where(
+          and(
+            movePathScopeCondition(scopePrefixes, moves.src),
+            isNotNull(moves.src),
+            movePathScopeCondition(scopePrefixes, moves.dst),
+            isNotNull(moves.dst),
+            eq(moves.actor, actor),
+          ),
+        )
         .orderBy(desc(moves.id))
         .limit(limit);
       return rows.map((row) => ({
