@@ -6,7 +6,7 @@ import { createScopeResolver } from "../scoping/resolver.ts";
 import { fakeStorageProvider, fileEntry } from "../scoping/test-fixtures/index.ts";
 import { createSetupService } from "../setup/service.ts";
 
-it("does not grant an env administrator username on a second provider", async () => {
+it.each(["", "/"])("scopes env administrators with URL suffix %s", async (suffix) => {
   const h = accountsHarness();
   await h.seeded;
   const second = await h.providers.create({
@@ -19,7 +19,7 @@ it("does not grant an env administrator username on a second provider", async ()
     providers: h.providers,
     tokenSource: h.tokenSource,
     identityLinks: h.links,
-    config: h.config,
+    config: { ...h.config, sftpgoUrl: `${h.config.sftpgoUrl}${suffix}` },
     storageFactory: h.storageFactory,
     adminUsernames: ["alice"],
   });
@@ -152,3 +152,71 @@ it("refuses an endpoint update when the first identity appeared after the initia
     password: "alice-pass",
   });
 });
+
+it.each(["loginVerified", "linkVerified"] as const)(
+  "serializes fixture provider updates with %s after verification",
+  async (operation) => {
+    const h = accountsHarness();
+    await h.seeded;
+    const provider = await h.providers.create({
+      type: "sftpgo",
+      label: "Race",
+      baseUrl: "http://original.test",
+    });
+    const account = await h.repos.accounts.create({ displayName: "Alice" });
+    let reached!: () => void;
+    const atLookup = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let resume!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const find = h.repos.identities.findByProviderUsername;
+    h.repos.identities.findByProviderUsername = async (...args) => {
+      reached();
+      await barrier;
+      return find(...args);
+    };
+    let updating!: () => void;
+    const atUpdate = new Promise<void>((resolve) => {
+      updating = resolve;
+    });
+    const update = h.repos.providers.update;
+    h.repos.providers.update = (...args) => {
+      const result = update(...args);
+      updating();
+      return result;
+    };
+    const persist = h.links[operation]({
+      accountId: account.id,
+      providerId: provider.id,
+      verifiedProvider: { type: provider.type, baseUrl: provider.baseUrl },
+      username: "alice",
+      at: h.clock(),
+      sealCredential: () => ({ ciphertext: new Uint8Array([1]), keyId: "test" }),
+      session: {
+        idHash: "a".repeat(64),
+        expiresAt: new Date("2030-01-01"),
+        userAgent: null,
+        ip: null,
+      },
+    });
+    try {
+      await atLookup;
+      const readdress = h.providers.update(provider.id, { baseUrl: "http://replacement.test" });
+      const rejected = expect(readdress).rejects.toMatchObject({ kind: "conflict" });
+      await atUpdate;
+      resume();
+      await persist;
+      await rejected;
+      expect((await h.repos.providers.get(provider.id))?.baseUrl).toBe(provider.baseUrl);
+      expect(await h.repos.identities.findByProviderUsername(provider.id, "alice")).not.toBeNull();
+    } finally {
+      resume();
+      h.repos.identities.findByProviderUsername = find;
+      h.repos.providers.update = update;
+      await persist;
+    }
+  },
+);
