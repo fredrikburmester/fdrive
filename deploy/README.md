@@ -32,11 +32,17 @@ resources and the [ARM64 instructions](REFERENCE.md#native-arm64-embeddings) whe
 
 For a new installation:
 
+The repository is private, so an anonymous clone fails. Arrange access first —
+an SSH key on an account with access, or a deploy key on this machine — then:
+
 ```sh
-git clone https://github.com/fredrikburmester/fdrive-web.git /path/to/fdrive
+git clone git@github.com:fredrikburmester/fdrive-web.git /path/to/fdrive
 cd /path/to/fdrive/deploy
 ./init-env.sh
 ```
+
+The HTTPS form (`https://github.com/fredrikburmester/fdrive-web.git`) works only
+with a personal access token that carries that access.
 
 Replace `/path/to/fdrive` with the chosen checkout path. All subsequent commands in
 this guide run from its `deploy` directory.
