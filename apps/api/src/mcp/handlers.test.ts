@@ -618,6 +618,20 @@ describe("runListDirectory", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it.each(["/docs/../docs", "//docs", "/./docs", "/docs/"])(
+    "lists the checked path for the unnormalized %s",
+    async (path) => {
+      const list = vi.fn(async () => []);
+      const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
+
+      const result = await runListDirectory(deps, fakePrincipal(fakeStorage({ list })), { path });
+
+      expect(list).toHaveBeenCalledWith("/docs");
+      expect(result.path).toBe("/docs");
+      expect(result.url).toBe("/files/docs");
+    },
+  );
+
   it("defaults to the root and truncates past the limit", async () => {
     const modifiedAt = new Date();
     const storage = fakeStorage({
@@ -1442,6 +1456,92 @@ describe("runCreateFolder", () => {
     expect(mkdir).toHaveBeenCalledWith("/new", { parents: true });
     expect(result).toEqual({ created: "/new", url: "https://fdrive.example.com/files/new" });
   });
+
+  it.each(["/docs/../new", "//new", "/./new", "/new/", "/new/sub/.."])(
+    "creates the folder at the admitted path for the unnormalized %s",
+    async (path) => {
+      const mkdir = vi.fn(async () => undefined);
+      const deps = baseDeps({ writesEnabled: true });
+
+      const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path });
+
+      // The provider forwards this string verbatim, so it must be the exact
+      // path the scope admission was decided on, not the caller's argument.
+      expect(mkdir).toHaveBeenCalledWith("/new", { parents: true });
+      expect(result).toEqual({ created: "/new", url: "https://fdrive.example.com/files/new" });
+    },
+  );
+
+  it("leaves characters normalization must not touch byte-identical", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    const deps = baseDeps({ writesEnabled: true });
+
+    const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
+      path: "/a b/50%-off & #1..2",
+    });
+
+    expect(mkdir).toHaveBeenCalledWith("/a b/50%-off & #1..2", { parents: true });
+    expect(result.created).toBe("/a b/50%-off & #1..2");
+  });
+
+  it("creates through the override that exposes a shadowed location", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      writesEnabled: true,
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({
+          available: true,
+          scopes: [
+            { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+            { rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/other" },
+          ],
+        }),
+      },
+    });
+
+    const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
+      path: "/docs/new",
+    });
+
+    // "/alice/docs" is reachable only as "/other" for this identity, the same
+    // virtual path every read tool reports for that location.
+    expect(mkdir).toHaveBeenCalledWith("/other/new", { parents: true });
+    expect(result.created).toBe("/other/new");
+  });
+
+  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
+    "refuses the configured Trash path %s before touching storage",
+    async (path) => {
+      const mkdir = vi.fn(async () => undefined);
+      const deps = baseDeps({ writesEnabled: true, trashPathForStorage: () => "/.trash" });
+
+      await expect(
+        runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path }),
+      ).rejects.toThrow("path is outside this identity's scope");
+      expect(mkdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a folder that climbs out of the verified scope without touching storage", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      writesEnabled: true,
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({
+          available: true,
+          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+        }),
+      },
+    });
+
+    await expect(
+      runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
+        path: "/docs/../private/new",
+      }),
+    ).rejects.toThrow("path is outside this identity's scope");
+    expect(mkdir).not.toHaveBeenCalled();
+  });
+
   it("refuses a folder outside the verified scope without touching storage", async () => {
     const mkdir = vi.fn(async () => undefined);
     const deps = baseDeps({
@@ -1509,6 +1609,80 @@ describe("runMovePath", () => {
       to: "/b.txt",
       url: "https://fdrive.example.com/view/b.txt",
     });
+  });
+
+  it.each([
+    ["/docs/../a.txt", "//b.txt"],
+    ["/./a.txt", "/b.txt/"],
+    ["/a.txt/", "/sub/../b.txt"],
+  ])("moves the admitted paths for the unnormalized %s -> %s", async (src, dst) => {
+    const move = vi.fn(async () => undefined);
+    const recordMove = vi.fn(async () => undefined);
+    const deps = baseDeps({ writesEnabled: true, indexQueries: stubIndexQueries({ recordMove }) });
+
+    const result = await runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src, dst });
+
+    // The provider forwards both strings verbatim, so both must be the exact
+    // paths the scope admission was decided on.
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
+    expect(recordMove).toHaveBeenCalledWith({
+      rootId: 1,
+      src: "alice/a.txt",
+      dst: "alice/b.txt",
+      actor: "mcp",
+    });
+    expect(result).toEqual({
+      moved: "/a.txt",
+      to: "/b.txt",
+      url: "https://fdrive.example.com/view/b.txt",
+    });
+  });
+
+  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
+    "refuses a src in the configured Trash path %s before touching storage",
+    async (src) => {
+      const move = vi.fn(async () => undefined);
+      const deps = baseDeps({ writesEnabled: true, trashPathForStorage: () => "/.trash" });
+
+      await expect(
+        runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src, dst: "/b.txt" }),
+      ).rejects.toThrow("src is outside this identity's scope");
+      expect(move).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
+    "refuses a dst in the configured Trash path %s before touching storage",
+    async (dst) => {
+      const move = vi.fn(async () => undefined);
+      const deps = baseDeps({ writesEnabled: true, trashPathForStorage: () => "/.trash" });
+
+      await expect(
+        runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src: "/a.txt", dst }),
+      ).rejects.toThrow("dst is outside this identity's scope");
+      expect(move).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["src", { src: "/docs/../private/a.txt", dst: "/docs/b.txt" }],
+    ["dst", { src: "/docs/a.txt", dst: "/docs/../private/b.txt" }],
+  ])("refuses a move whose %s climbs out of the verified scope", async (label, args) => {
+    const move = vi.fn(async () => undefined);
+    const deps = baseDeps({
+      writesEnabled: true,
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({
+          available: true,
+          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+        }),
+      },
+    });
+
+    await expect(runMovePath(deps, fakePrincipal(fakeStorage({ move })), args)).rejects.toThrow(
+      `${label} is outside this identity's scope`,
+    );
+    expect(move).not.toHaveBeenCalled();
   });
 
   it("treats an extensionless destination as a folder in the returned url", async () => {
