@@ -146,17 +146,33 @@ def scheduler_loop(
 def main() -> None:
     cfg = Config()
     bootstrap_conn = db.connect(cfg.database_url)
-    log(f"waiting for idx.schema_version = {EXPECTED_SCHEMA_VERSION} (timeout {cfg.schema_wait_seconds}s)")
-    version = db.wait_for_schema_version(bootstrap_conn, EXPECTED_SCHEMA_VERSION, cfg.schema_wait_seconds, log)
-    if version is None:
-        sys.exit(1)
-    log(f"schema ready at version {version}")
+    try:
+        log(f"waiting for idx.schema_version = {EXPECTED_SCHEMA_VERSION} (timeout {cfg.schema_wait_seconds}s)")
+        version = db.wait_for_schema_version(bootstrap_conn, EXPECTED_SCHEMA_VERSION, cfg.schema_wait_seconds, log)
+        if version is None:
+            sys.exit(1)
+        log(f"schema ready at version {version}")
 
-    targets = build_targets(bootstrap_conn, cfg.roots)
+        targets = build_targets(bootstrap_conn, cfg.roots)
+    finally:
+        bootstrap_conn.close()
     run_lock = RunLock()
 
-    def conn_factory() -> psycopg.Connection:
+    def scheduler_conn_factory() -> psycopg.Connection:
         return db.connect(cfg.database_url)
+
+    def conn_factory() -> psycopg.Connection:
+        # HTTP handlers must fail quickly while Postgres is unavailable. A
+        # later probe opens a new connection, so recovery needs no process
+        # restart. The scheduler keeps the normal startup retry budget.
+        return db.connect(cfg.database_url, retries=1, sleep=lambda _seconds: None)
+
+    def schema_ready() -> bool:
+        conn = conn_factory()
+        try:
+            return db.read_schema_version(conn) is not None
+        finally:
+            conn.close()
 
     tz = resolve_timezone(cfg.tz_name)
 
@@ -164,7 +180,7 @@ def main() -> None:
         target=scheduler_loop,
         args=(
             run_lock,
-            conn_factory,
+            scheduler_conn_factory,
             targets,
             cfg.default_settings(),
             cfg.state_dir,
@@ -192,7 +208,7 @@ def main() -> None:
         jobs=cfg.jobs,
         run_lock=run_lock,
         now=lambda: datetime.now(tz),
-        schema_ready=lambda: db.read_schema_version(bootstrap_conn) is not None,
+        schema_ready=schema_ready,
         log=log,
         include_globs=cfg.include_globs,
     )
