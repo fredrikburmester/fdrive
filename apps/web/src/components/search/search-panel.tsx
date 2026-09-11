@@ -545,13 +545,22 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     ? unavailableMessage
     : "Visual search is unavailable.";
   const visualFolderNotice = queryVisualMatches && chips.folderOnly && !isImageFetching;
-  const isPartial = queryVisualMatches && Boolean(imageResponse?.partial);
+  const textPartial = Boolean(response?.partial);
+  const visualPartial = queryVisualMatches && Boolean(imageResponse?.partial);
+  const partialMessage =
+    textPartial && visualPartial
+      ? "Some text and visual results omitted."
+      : textPartial
+        ? "Some text results omitted."
+        : visualPartial
+          ? "Some visual results omitted."
+          : null;
   const showNoResults =
     !showRecent && !isFetching && !waitingForImages && !hasResults && !unavailable && !searchError;
-  const noResultsMessage = visualUnavailable
-    ? `No text results for "${trimmedQuery}".`
-    : isPartial
-      ? `No results found in checked candidates for "${trimmedQuery}".`
+  const noResultsMessage = partialMessage
+    ? `No results found in checked candidates for "${trimmedQuery}".`
+    : visualUnavailable
+      ? `No text results for "${trimmedQuery}".`
       : `No results for "${trimmedQuery}".`;
   // Search is a command palette, so tree intentionally keeps its keyboard-friendly
   // flat rows; results can span identities and have no safe shared hierarchy.
@@ -693,12 +702,12 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             Visual search checks top matches; more images may exist in this folder.
           </p>
         ) : null}
-        {isPartial ? (
+        {partialMessage ? (
           <p
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            Some results omitted.
+            {partialMessage}
           </p>
         ) : null}
         {degraded ? (

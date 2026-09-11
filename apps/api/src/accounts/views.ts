@@ -130,11 +130,13 @@ export function createAccountViews(deps: AccountsDeps) {
               sections: { folders: [], files: [], content: [] },
               unavailable: true,
               degraded: result.degraded,
+              partial: result.partial === true,
             };
           async function checkedSection<T extends FsEntry>(items: readonly T[]) {
             const checked: Array<T & { identityId: string }> = [];
             const seen = new Set<string>();
-            for (const item of items) {
+            let partial = false;
+            for (const [index, item] of items.entries()) {
               if (seen.has(item.path)) continue;
               seen.add(item.path);
               await permission(storage, item.path, item.kind);
@@ -143,14 +145,22 @@ export function createAccountViews(deps: AccountsDeps) {
                 await readable.body.cancel();
               }
               checked.push({ ...item, identityId: identity.id });
-              if (checked.length >= 50) break;
+              if (checked.length >= 50) {
+                partial = items.slice(index + 1).some((candidate) => !seen.has(candidate.path));
+                break;
+              }
             }
-            return checked;
+            return { items: checked, partial };
           }
-          const sections: AccountSearchResponse["sections"] = {
+          const checked = {
             folders: await checkedSection(result.sections.folders),
             files: await checkedSection(result.sections.files),
             content: await checkedSection(result.sections.content),
+          };
+          const sections: AccountSearchResponse["sections"] = {
+            folders: checked.folders.items,
+            files: checked.files.items,
+            content: checked.content.items,
           };
           await owned(identity, input.principal.accountId);
           return {
@@ -158,6 +168,11 @@ export function createAccountViews(deps: AccountsDeps) {
             sections,
             unavailable: result.unavailable,
             degraded: result.degraded,
+            partial:
+              result.partial === true ||
+              checked.folders.partial ||
+              checked.files.partial ||
+              checked.content.partial,
           };
         } catch (error) {
           if (!partialFailure(error)) throw error;
@@ -166,6 +181,7 @@ export function createAccountViews(deps: AccountsDeps) {
             sections: { folders: [], files: [], content: [] },
             unavailable: true,
             degraded: true,
+            partial: false,
           };
         }
       });
@@ -173,24 +189,26 @@ export function createAccountViews(deps: AccountsDeps) {
         a: { score: number; identityId: string; path: string },
         b: { score: number; identityId: string; path: string },
       ) => b.score - a.score || order(a.identityId, b.identityId) || order(a.path, b.path);
+      const allFolders = rows
+        .flatMap((row) => row.sections.folders)
+        .sort((a, b) => order(a.path, b.path) || order(a.identityId, b.identityId));
+      const allFiles = rows.flatMap((row) => row.sections.files).sort(ranked);
+      const allContent = rows.flatMap((row) => row.sections.content).sort(ranked);
+      const partial =
+        rows.some((row) => row.partial) ||
+        allFolders.length > 50 ||
+        allFiles.length > 50 ||
+        allContent.length > 50;
       return {
         query: query.q,
         sections: {
-          folders: rows
-            .flatMap((row) => row.sections.folders)
-            .sort((a, b) => order(a.path, b.path) || order(a.identityId, b.identityId))
-            .slice(0, 50),
-          files: rows
-            .flatMap((row) => row.sections.files)
-            .sort(ranked)
-            .slice(0, 50),
-          content: rows
-            .flatMap((row) => row.sections.content)
-            .sort(ranked)
-            .slice(0, 50),
+          folders: allFolders.slice(0, 50),
+          files: allFiles.slice(0, 50),
+          content: allContent.slice(0, 50),
         },
         degraded: rows.some((row) => row.degraded),
         unavailable: rows.every((row) => row.unavailable),
+        ...(partial ? { partial: true } : {}),
         tookMs: Math.max(0, deps.clock().getTime() - start),
         unavailableIdentityIds: rows.filter((row) => row.unavailable).map((row) => row.identityId),
       };
