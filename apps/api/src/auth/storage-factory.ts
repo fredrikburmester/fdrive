@@ -2,6 +2,7 @@ import type { TrashSettings } from "@fdrive/contracts";
 import {
   createRecycleFolderTrash,
   isStorageError,
+  type RecycleFolderLayout,
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
@@ -58,17 +59,18 @@ export function withIdempotentMkdir(storage: StorageProvider): StorageProvider {
 
 /**
  * Extends `storage` with a `trash` provider built on top of its own
- * list/move/mkdir/deleteFile/deleteDir, using the recycle-folder layout at
+ * list/stat/move/mkdir/deleteFile/deleteDir, using the recycle-folder layout at
  * `trashPath`. Spreads `storage` into a new object so the original
  * provider is left untouched.
  */
 export function withRecycleFolderTrash(
   storage: StorageProvider,
   trashPath: string,
+  layout: RecycleFolderLayout = "native",
 ): StorageProvider {
   return {
     ...storage,
-    trash: createRecycleFolderTrash({ storage: withIdempotentMkdir(storage), trashPath }),
+    trash: createRecycleFolderTrash({ storage: withIdempotentMkdir(storage), trashPath, layout }),
   };
 }
 
@@ -130,7 +132,7 @@ export function createIdentityStorageFactory(
         module.trash === "move"
           ? withMoveToTrash({ storage, trashPath: settings.path, clock: deps.clock })
           : storage;
-      result = withRecycleFolderTrash(base, settings.path);
+      result = withRecycleFolderTrash(base, settings.path, module.trash);
     }
     if (settings !== undefined) trashSettingsByStorage.set(result, settings);
     return result;

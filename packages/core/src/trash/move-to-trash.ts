@@ -1,6 +1,7 @@
-import { baseName, normalizePath, parentPath } from "../paths.ts";
+import { isStorageError, StorageError } from "../errors.ts";
+import { normalizePath, parentPath } from "../paths.ts";
 import type { StorageProvider } from "../ports/storage.ts";
-import { isUnderPath } from "./recycle-folder.ts";
+import { isUnderPath, type MoveTrashLeafKind, moveTrashLeafPath } from "./recycle-folder.ts";
 
 export interface MoveToTrashOptions {
   readonly storage: StorageProvider;
@@ -8,29 +9,41 @@ export interface MoveToTrashOptions {
   readonly clock: () => Date;
 }
 
-/** Nanosecond epoch leaf name from `at`, the layout `parseTrashLeaf` reads back. */
+/** Nanosecond epoch leaf name from `at`, read back by the move-layout parser. */
 function leafNameFor(at: Date): string {
   return (BigInt(at.getTime()) * BigInt(1_000_000)).toString();
 }
 
 /**
  * Wraps `storage` so `deleteFile` and `deleteDir` move the entry into the
- * recycle folder at `trashPath` using the layout
- * `<trashPath>/<original dir>/<original name>/<nanosecond timestamp>`,
- * exactly what `createRecycleFolderTrash` lists and restores. For providers
- * that have no server-side trash rule of their own (WebDAV, S3). Deleting
- * something already inside the recycle folder deletes it for real, so
- * purge and empty keep working through the same wrapper.
+ * recycle folder at `trashPath` using the versioned generic move layout from
+ * `moveTrashLeafPath`, exactly what `createRecycleFolderTrash` reads in
+ * `layout: "move"` mode. For providers that have no server-side trash rule of
+ * their own (WebDAV, S3). Deleting something already inside the recycle folder
+ * deletes it for real, so purge and empty keep working through the same wrapper.
  */
 export function withMoveToTrash(options: MoveToTrashOptions): StorageProvider {
   const { storage, clock } = options;
   const trashRoot = normalizePath(options.trashPath);
 
-  async function moveIntoTrash(path: string): Promise<void> {
+  async function requireLeafFree(leafPath: string): Promise<void> {
+    try {
+      await storage.stat(leafPath);
+    } catch (error) {
+      if (isStorageError(error) && error.kind === "not_found") {
+        return;
+      }
+      throw error;
+    }
+    throw new StorageError("conflict", `trash leaf already exists: ${leafPath}`);
+  }
+
+  async function moveIntoTrash(path: string, kind: MoveTrashLeafKind): Promise<void> {
     const normalized = normalizePath(path);
-    const leafDir = `${trashRoot}${parentPath(normalized) === "/" ? "" : parentPath(normalized)}/${baseName(normalized)}`;
-    await storage.mkdir(leafDir, { parents: true });
-    await storage.move(normalized, `${leafDir}/${leafNameFor(clock())}`);
+    const leafPath = moveTrashLeafPath(trashRoot, normalized, kind, leafNameFor(clock()));
+    await requireLeafFree(leafPath);
+    await storage.mkdir(parentPath(leafPath), { parents: true });
+    await storage.move(normalized, leafPath, { overwrite: false });
   }
 
   return {
@@ -40,14 +53,18 @@ export function withMoveToTrash(options: MoveToTrashOptions): StorageProvider {
         await storage.deleteFile(path);
         return;
       }
-      await moveIntoTrash(path);
+      await moveIntoTrash(path, "file");
     },
     async deleteDir(path) {
-      if (isUnderPath(trashRoot, path) || normalizePath(path) === trashRoot) {
+      const normalized = normalizePath(path);
+      if (isUnderPath(trashRoot, normalized) || normalized === trashRoot) {
         await storage.deleteDir(path);
         return;
       }
-      await moveIntoTrash(path);
+      if (isUnderPath(normalized, trashRoot)) {
+        throw new StorageError("bad_request", "cannot recycle a parent of the trash folder");
+      }
+      await moveIntoTrash(normalized, "dir");
     },
   };
 }

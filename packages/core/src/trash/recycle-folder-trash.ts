@@ -2,8 +2,22 @@ import type { FileEntry } from "../entries.ts";
 import { makeEntry } from "../entries.ts";
 import { isStorageError, StorageError } from "../errors.ts";
 import { baseName, normalizePath, parentPath, relativeTo } from "../paths.ts";
-import type { StorageProvider, TrashEntry, TrashListing, TrashProvider } from "../ports/storage.ts";
-import { isUnderPath, parseTrashLeaf, trashLeafPath } from "./recycle-folder.ts";
+import type {
+  EntryStat,
+  StorageProvider,
+  TrashEntry,
+  TrashListing,
+  TrashProvider,
+} from "../ports/storage.ts";
+import {
+  isUnderPath,
+  moveTrashRootPath,
+  type ParsedTrashLeaf,
+  parseMoveTrashLeaf,
+  parseTrashLeaf,
+  type RecycleFolderLayout,
+  trashLeafPath,
+} from "./recycle-folder.ts";
 
 /** Directory visits are bounded on top of the entry limit, matching the spec's default. */
 const MAX_DIR_VISITS = 10000;
@@ -13,6 +27,8 @@ export interface CreateRecycleFolderTrashOptions {
   readonly storage: StorageProvider;
   readonly trashPath: string;
   readonly limit?: number;
+  /** Native providers use file leaves; the move wrapper uses its versioned namespace. */
+  readonly layout?: RecycleFolderLayout;
 }
 
 function checkAborted(signal: AbortSignal | undefined): void {
@@ -26,16 +42,33 @@ function compareEntries(a: TrashEntry, b: TrashEntry): number {
   return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
 }
 
+type ParsedLeaf = ParsedTrashLeaf & { readonly kind: "file" | "dir" };
+
+function parseLeaf(
+  trashRoot: string,
+  leafPath: string,
+  layout: RecycleFolderLayout,
+): ParsedLeaf | null {
+  if (layout === "move") {
+    return parseMoveTrashLeaf(trashRoot, leafPath);
+  }
+  const parsed = parseTrashLeaf(trashRoot, leafPath);
+  return parsed === null ? null : { ...parsed, kind: "file" };
+}
+
 async function walk(
   storage: StorageProvider,
   trashRoot: string,
+  layout: RecycleFolderLayout,
   limit: number,
   signal: AbortSignal | undefined,
 ): Promise<TrashListing> {
   const entries: TrashEntry[] = [];
   let truncated = false;
   let dirVisits = 0;
-  const queue: string[] = [trashRoot];
+  const moveRoot = moveTrashRootPath(trashRoot);
+  const walkRoot = layout === "move" ? moveRoot : trashRoot;
+  const queue: string[] = [walkRoot];
 
   for (const dir of queue) {
     checkAborted(signal);
@@ -47,17 +80,32 @@ async function walk(
       truncated = true;
       break;
     }
-    const children = await storage.list(dir);
+    let children: FileEntry[];
+    try {
+      children = await storage.list(dir);
+    } catch (error) {
+      if (
+        layout === "move" &&
+        dir === walkRoot &&
+        isStorageError(error) &&
+        error.kind === "not_found"
+      ) {
+        return { entries: [], truncated: false };
+      }
+      throw error;
+    }
     for (const child of children) {
-      if (child.kind === "dir") {
-        queue.push(child.path);
-        continue;
-      }
-      if (child.kind !== "file") {
-        continue;
-      }
-      const parsed = parseTrashLeaf(trashRoot, child.path);
+      const parsed = parseLeaf(trashRoot, child.path, layout);
       if (parsed === null) {
+        if (child.kind === "dir") {
+          queue.push(child.path);
+        }
+        continue;
+      }
+      if (child.kind !== parsed.kind) {
+        if (layout === "native" && child.kind === "dir") {
+          queue.push(child.path);
+        }
         continue;
       }
       if (entries.length >= limit) {
@@ -82,17 +130,21 @@ async function walk(
   return { entries, truncated };
 }
 
-/** Best-effort: removes `dirPath` only when it exists and is empty. Ignores every failure. */
-async function removeIfEmpty(storage: StorageProvider, dirPath: string): Promise<void> {
-  try {
-    const children = await storage.list(dirPath);
-    if (children.length === 0) {
-      await storage.deleteDir(dirPath);
-    }
-  } catch {
-    // Best effort: races, a directory that is already gone, or a provider
-    // that rejects listing an empty directory are all fine to ignore here.
+/**
+ * Stats a leaf only after its layout has identified the expected kind. This
+ * runs before restore mutates either the leaf or its destination.
+ */
+async function statLeaf(
+  storage: StorageProvider,
+  id: string,
+  leafPath: string,
+  expectedKind: "file" | "dir",
+): Promise<EntryStat> {
+  const stat = await storage.stat(leafPath);
+  if (stat.kind === expectedKind) {
+    return stat;
   }
+  throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
 }
 
 /**
@@ -136,14 +188,16 @@ async function requireTargetFree(
 async function restoreLeaf(
   storage: StorageProvider,
   trashRoot: string,
+  layout: RecycleFolderLayout,
   id: string,
   target: string | undefined,
 ): Promise<FileEntry> {
   const leafPath = trashLeafPath(trashRoot, id);
-  const parsed = parseTrashLeaf(trashRoot, leafPath);
+  const parsed = parseLeaf(trashRoot, leafPath, layout);
   if (parsed === null) {
     throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
   }
+  const leafStat = await statLeaf(storage, id, leafPath, parsed.kind);
   const resolvedTarget = normalizePath(target ?? parsed.originalPath);
   if (resolvedTarget === trashRoot || isUnderPath(trashRoot, resolvedTarget)) {
     throw new StorageError("bad_request", "cannot restore into the trash folder", {
@@ -155,33 +209,40 @@ async function restoreLeaf(
 
   await storage.mkdir(parentPath(resolvedTarget), { parents: true });
   await storage.move(leafPath, resolvedTarget);
-  await removeIfEmpty(storage, parentPath(leafPath));
 
-  const stat = await storage.statFile(resolvedTarget);
   return makeEntry(parentPath(resolvedTarget), {
     name: baseName(resolvedTarget),
-    kind: "file",
-    size: stat.size,
-    modifiedAt: stat.modifiedAt ?? new Date(0),
+    kind: leafStat.kind,
+    size: leafStat.size,
+    modifiedAt: leafStat.modifiedAt ?? new Date(0),
   });
 }
 
 async function purgeLeaves(
   storage: StorageProvider,
   trashRoot: string,
+  layout: RecycleFolderLayout,
   ids: readonly string[],
 ): Promise<void> {
   for (const id of ids) {
     const leafPath = trashLeafPath(trashRoot, id);
     try {
-      await storage.deleteFile(leafPath);
+      const parsed = parseLeaf(trashRoot, leafPath, layout);
+      if (parsed === null) {
+        throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
+      }
+      const stat = await statLeaf(storage, id, leafPath, parsed.kind);
+      if (stat.kind === "dir") {
+        await storage.deleteDir(leafPath);
+      } else {
+        await storage.deleteFile(leafPath);
+      }
     } catch (error) {
       if (isStorageError(error) && error.kind === "not_found") {
         continue;
       }
       throw error;
     }
-    await removeIfEmpty(storage, parentPath(leafPath));
   }
 }
 
@@ -198,22 +259,22 @@ async function emptyTrash(storage: StorageProvider, trashRoot: string): Promise<
 
 /**
  * Builds a `TrashProvider` purely on top of a `StorageProvider`'s own
- * `list`, `move`, `mkdir`, `deleteFile`, and `deleteDir`, using the recycle
+ * `list`, `stat`, `move`, `mkdir`, `deleteFile`, and `deleteDir`, using the recycle
  * folder layout described in `./recycle-folder.ts`.
  */
 export function createRecycleFolderTrash(options: CreateRecycleFolderTrashOptions): TrashProvider {
-  const { storage, limit = DEFAULT_LIMIT } = options;
+  const { storage, limit = DEFAULT_LIMIT, layout = "native" } = options;
   const trashRoot = normalizePath(options.trashPath);
 
   return {
     list(listOptions) {
-      return walk(storage, trashRoot, listOptions?.limit ?? limit, listOptions?.signal);
+      return walk(storage, trashRoot, layout, listOptions?.limit ?? limit, listOptions?.signal);
     },
     restore(id, restoreOptions) {
-      return restoreLeaf(storage, trashRoot, id, restoreOptions?.target);
+      return restoreLeaf(storage, trashRoot, layout, id, restoreOptions?.target);
     },
     purge(ids) {
-      return purgeLeaves(storage, trashRoot, ids);
+      return purgeLeaves(storage, trashRoot, layout, ids);
     },
     empty() {
       return emptyTrash(storage, trashRoot);
