@@ -195,6 +195,14 @@ services:
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
+      # pytesseract spawns the tesseract binary, which parallelises over every
+      # core through OpenMP. INDEX_WORKERS already runs several extractions at
+      # once, so without this each of them multiplies again: two OCR files were
+      # observed at 240% and 215% CPU, and the indexer as a whole at 581% on a
+      # 12-core host. One thread per process makes INDEX_WORKERS the honest
+      # concurrency bound; OCR throughput is unchanged because the parallelism
+      # simply moves up a level.
+      OMP_THREAD_LIMIT: "1"
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo:ro
       - fdrive-thumbs:/thumbs
@@ -203,6 +211,8 @@ services:
         condition: service_healthy
       thumbs-init:
         condition: service_completed_successfully
+    mem_limit: ${FDRIVE_INDEXER_MEMORY:-0}
+    cpus: ${FDRIVE_INDEXER_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -247,6 +257,8 @@ services:
         condition: service_healthy
       ocr-state-init:
         condition: service_completed_successfully
+    mem_limit: ${FDRIVE_OCR_MEMORY:-0}
+    cpus: ${FDRIVE_OCR_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -263,6 +275,11 @@ services:
       FDRIVE_RUNTIME_FEATURES: textSearch,searchOcr,semanticSearch
       FDRIVE_RUNTIME_PORT: "9997"
       FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:9998/version
+      # The JVM sizes its heap and its GC threads from what it can see. Under a
+      # container memory limit it sees the limit; with none it sees the host.
+      JAVA_TOOL_OPTIONS: ${FDRIVE_TIKA_JAVA_OPTS:-}
+    mem_limit: ${FDRIVE_TIKA_MEMORY:-0}
+    cpus: ${FDRIVE_TIKA_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -283,9 +300,21 @@ services:
       FDRIVE_RUNTIME_FEATURES: semanticSearch
       FDRIVE_RUNTIME_PORT: "8099"
       FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:80/health
+      # TEI sizes both pools from the host's visible core count: one tokenization
+      # worker per core, plus the RAYON_NUM_THREADS=8 baked into the upstream
+      # image. On a 12-core host that is 19 threads and enough load to make the
+      # host itself unreachable while every container still reports healthy,
+      # because mem_limit bounds memory and nothing bounds CPU. Keep the default
+      # below the core count of a small host so indexing never costs the operator
+      # their shell; raise FDRIVE_EMBED_THREADS on a dedicated machine.
+      RAYON_NUM_THREADS: ${FDRIVE_EMBED_THREADS:-4}
+      TOKENIZATION_WORKERS: ${FDRIVE_EMBED_THREADS:-4}
     volumes:
       - ${FDRIVE_DATA_DIR:-./data}/models:/data
-    mem_limit: 4g
+    mem_limit: ${FDRIVE_EMBED_MEMORY:-4g}
+    # A hard cap on top of the thread counts. 0 means no limit, and the value
+    # must not exceed the host's core count, so this stays opt-in via .env.
+    cpus: ${FDRIVE_EMBED_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     # Binds :80 as root; verified this image does not need
@@ -314,9 +343,13 @@ services:
       FDRIVE_RUNTIME_FEATURES: imageSearch
       FDRIVE_RUNTIME_PORT: "8013"
       FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:8012/health
+      # Same reasoning as `embed` above: unset, torch takes every core.
+      IMAGE_EMBED_THREADS: ${FDRIVE_IMAGE_EMBED_THREADS:-4}
+      OMP_NUM_THREADS: ${FDRIVE_IMAGE_EMBED_THREADS:-4}
     volumes:
       - fdrive-image-embed-models:/models
-    mem_limit: 6g
+    mem_limit: ${FDRIVE_IMAGE_EMBED_MEMORY:-6g}
+    cpus: ${FDRIVE_IMAGE_EMBED_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -351,6 +384,8 @@ services:
       retries: 12
       start_period: 10s
     stop_grace_period: 65s
+    mem_limit: ${FDRIVE_ONLYOFFICE_MEMORY:-0}
+    cpus: ${FDRIVE_ONLYOFFICE_CPUS:-0}
     restart: unless-stopped
     pids_limit: 512
     logging: *default-logging

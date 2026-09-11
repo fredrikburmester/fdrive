@@ -119,10 +119,51 @@ fdrive actively monitors its internal subsystems on startup and exposes diagnost
 - **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`, `trash`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
 - **ONLYOFFICE:** the bundled controller is healthy while disabled. Enable in **System > Features**; the document engine starts on demand. Readiness is shown in those settings. See [Office setup](../docs/OFFICE.md).
 - **Trash:** startup health means its integration is available, not enabled. The saved choice is in **System > Features > Trash**; user capability is reported by `/api/v1/trash/status`.
-- **Optional-worker controllers:** the Tika, embedding, image-embedding and Office containers run a small controller that starts the model or engine only while the matching feature is enabled. Each controller reports at `GET /runtime` on its own port with `status` (`preparing`, `ready`, `off`, `stopping`, `failed`), `attempts` and `error`; **System > Features** shows that state per feature. Startup is bounded: after three failed child starts the controller reports `failed` and waits `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` (default 300) before trying again, so a machine that is briefly out of memory or slow to pull a model recovers without an operator restarting anything. Saving features in the UI clears the wait immediately. A `failed` status persisting across several windows means the child itself cannot start; read that container's logs.
+- **Optional-worker controllers:** the Tika, embedding, image-embedding and Office containers run a small controller that starts the model or engine only while the matching feature is enabled. Each controller reports at `GET /runtime` on its own port with `status` (`preparing`, `ready`, `off`, `stopping`, `failed`), `attempts` and `error`; **System > Features** shows that state per feature. Startup is bounded: after three failed child starts the controller reports `failed` and waits `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` (default 300) before trying again, so a machine that is briefly out of memory or slow to pull a model recovers without an operator restarting anything. Saving features in the UI clears the wait immediately. The controller also distinguishes an API that answers with a document it must reject (stopped after `FDRIVE_RUNTIME_STALE_SECONDS`, default 9) from an API it could not reach at all (`FDRIVE_RUNTIME_UNREACHABLE_SECONDS`, default 60): a loaded host makes the API slow, and stopping a healthy worker for that reloads a model, which loads the host further. Both still fail closed. A `failed` status persisting across several windows means the child itself cannot start; read that container's logs.
 - **Postgres restarts:** the indexer, OCR worker and API reopen their database connections when postgres goes away, for example after `docker compose up -d --force-recreate db`. While the database is down the indexer's `/health` returns 500 and its container reports unhealthy; both recover on the next probe after postgres accepts connections. No container needs to be restarted by hand.
 - **Health Check Endpoint**: `GET /api/v1/health` is an unauthenticated JSON endpoint returning status (`configured`, `not_configured`, `unreachable`, `failed`) for all services. `failed` means the worker is down and its controller reports why, with the controller's reason in `detail` (for example `worker exceeded bounded startup retries`), so a worker the controller gave up on is distinguishable from a network problem. The same reason appears in the feature's detail line on **System > Features**.
 - **Web UI Diagnostics**: Administrators can view real-time health, queue depths, and error logs for all components in the **System** section of the sidebar.
+
+---
+
+## Processing Worker Resource Limits
+
+Every heavy container sizes its own concurrency from what it can see, and Docker shows it the
+*host*, not its share of it. Memory limits alone do not help: nothing OOMs, so nothing
+restarts, and the container simply consumes the machine while staying healthy. On a shared box
+this has taken the host to a load average above 120 on 12 cores — SSH and the NAS web UI
+unreachable — with every fdrive container healthy and `GET /api/v1/health` answering `ok`.
+More than one worker can do this on its own, so treat it as a property of the stack rather
+than of any single service.
+
+The defaults bound *thread counts*, which needs no knowledge of the host:
+
+| Variable | Default | Effect |
+| :--- | :--- | :--- |
+| `FDRIVE_EMBED_THREADS` | `4` | TEI's `RAYON_NUM_THREADS` and `TOKENIZATION_WORKERS`. |
+| `FDRIVE_IMAGE_EMBED_THREADS` | `4` | `IMAGE_EMBED_THREADS` and `OMP_NUM_THREADS` for the SigLIP sidecar. |
+| `INDEX_WORKERS` | `4` | Indexer extractions in flight. Each is now one tesseract thread (`OMP_THREAD_LIMIT=1` is set in compose), so this is the real bound rather than a multiplier. |
+| `OCR_JOBS` | `2` | `ocrmypdf --jobs` for the PDF-rewriting worker. |
+
+Raise them on a dedicated machine; indexing throughput scales with them.
+
+Hard caps are opt-in, and default to `0` — no limit, identical to the previous behaviour.
+Docker rejects a `cpus:` value above the host's core count, so a shipped default would break
+small hosts:
+
+| Service | CPU | Memory | Memory default |
+| :--- | :--- | :--- | :--- |
+| `indexer` | `FDRIVE_INDEXER_CPUS` | `FDRIVE_INDEXER_MEMORY` | unlimited |
+| `ocr` | `FDRIVE_OCR_CPUS` | `FDRIVE_OCR_MEMORY` | unlimited |
+| `tika` | `FDRIVE_TIKA_CPUS` | `FDRIVE_TIKA_MEMORY` | unlimited |
+| `onlyoffice` | `FDRIVE_ONLYOFFICE_CPUS` | `FDRIVE_ONLYOFFICE_MEMORY` | unlimited |
+| `embed` | `FDRIVE_EMBED_CPUS` | `FDRIVE_EMBED_MEMORY` | `4g` |
+| `image-embed` | `FDRIVE_IMAGE_EMBED_CPUS` | `FDRIVE_IMAGE_EMBED_MEMORY` | `6g` |
+
+Set the CPU caps when you want a guaranteed free core, and keep at least one: leaving one core
+free is the difference between a slow box and one you cannot log in to. `tika` additionally
+takes `FDRIVE_TIKA_JAVA_OPTS` (passed as `JAVA_TOOL_OPTIONS`) — a JVM with no container memory
+limit sizes its heap from host RAM, so set `FDRIVE_TIKA_MEMORY` or an explicit `-Xmx`.
 
 ---
 
