@@ -10,8 +10,9 @@ immediately while a background thread in `main.py` loads the model, and so
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from anyio import CapacityLimiter, to_thread
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
@@ -48,6 +49,7 @@ class ServerState:
     model_id: str
     device: str
     holder: ModelHolder
+    inference_limiter: CapacityLimiter = field(default_factory=lambda: CapacityLimiter(1))
 
 
 async def health(request: Request) -> JSONResponse:
@@ -74,7 +76,8 @@ async def embed_image(request: Request) -> Response:
 
     try:
         validate_images(images)
-        vectors = l2_normalize(embedder.embed_images(images))
+        raw_vectors = await to_thread.run_sync(embedder.embed_images, images, limiter=state.inference_limiter)
+        vectors = l2_normalize(raw_vectors)
     except RequestError as e:
         return JSONResponse({"error": e.message}, status_code=e.status_code)
     except ImageDecodeError as e:
@@ -97,7 +100,8 @@ async def embed_text(request: Request) -> Response:
     try:
         texts = parse_text_inputs(body)
         validate_texts(texts)
-        vectors = l2_normalize(embedder.embed_texts(texts))
+        raw_vectors = await to_thread.run_sync(embedder.embed_texts, texts, limiter=state.inference_limiter)
+        vectors = l2_normalize(raw_vectors)
     except RequestError as e:
         return JSONResponse({"error": e.message}, status_code=e.status_code)
 
