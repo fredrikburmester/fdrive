@@ -25,6 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { editHref } from "@/lib/editor/route";
+import { isEditableTarget } from "@/lib/keyboard";
 import { apiClient, pathToHref, queryKeys, useTouchRecent, viewHref } from "@/lib/preview/deps";
 import { previewKindFor } from "@/lib/preview/kind";
 import { siblingNavigation } from "@/lib/preview/siblings";
@@ -186,6 +187,15 @@ function PreviewShellContent({ path }: PreviewShellProps) {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      // These shortcuts listen on the window, so a keystroke meant for a
+      // field on this page — the archive viewer's "Filter entries" box, for
+      // one — would otherwise move the caret and navigate away at once.
+      // Escape is guarded along with the rest: here it leaves the page and
+      // throws away what was typed, unlike a dialog's Escape, which Base UI
+      // handles on the dialog itself and this listener never decides.
+      if (isEditableTarget(event.target)) {
+        return;
+      }
       if (event.key === "Escape") {
         router.push(toRoute(backHref));
         return;
