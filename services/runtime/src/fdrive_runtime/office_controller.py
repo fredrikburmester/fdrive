@@ -21,7 +21,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from fdrive_runtime.controller import DEFAULT_RETRY_AFTER_SECONDS, NoRedirect, parse_retry_after, serve_status
+from fdrive_runtime.controller import (
+    DEFAULT_RETRY_AFTER_SECONDS,
+    EndpointUnavailable,
+    NoRedirect,
+    parse_retry_after,
+    serve_status,
+)
 
 DEFAULT_OFFICE_URL = "http://api:3001/api/v1/internal/office"
 
@@ -53,7 +59,7 @@ def parse_office_snapshot(body: object) -> OfficeSnapshot:
 
 
 class OfficeClient:
-    def __init__(self, url: str, token: str, timeout_seconds: float = 2.0) -> None:
+    def __init__(self, url: str, token: str, timeout_seconds: float = 5.0) -> None:
         self.url = url
         self.token = token
         self.timeout_seconds = timeout_seconds
@@ -71,8 +77,10 @@ class OfficeClient:
                 if len(raw) > 64 * 1024:
                     raise ValueError("office endpoint response is too large")
                 return parse_office_snapshot(json.loads(raw))
-        except (http.client.HTTPException, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise ValueError(f"office endpoint unavailable: {type(error).__name__}") from error
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError) as error:
+            raise EndpointUnavailable(f"office endpoint unreachable: {type(error).__name__}") from error
+        except json.JSONDecodeError as error:
+            raise ValueError(f"office document is not JSON: {type(error).__name__}") from error
 
 
 class OfficeLifecycle:
@@ -115,9 +123,9 @@ class OfficeLifecycle:
         self._error: str | None = None
         self._services_stopped = False
 
-    def reconcile(self, snapshot: OfficeSnapshot | None) -> None:
+    def reconcile(self, snapshot: OfficeSnapshot | None, reason: str = "office document unavailable") -> None:
         if snapshot is None:
-            self.stop("office document unavailable")
+            self.stop(reason)
             return
         if snapshot.revision != self._revision:
             self._revision = snapshot.revision
@@ -127,6 +135,11 @@ class OfficeLifecycle:
             return
         if self._process is not None and self._process.poll() is None:
             self._status = "ready" if self._ready() else "starting"
+            if self._status == "ready":
+                # See `controller.py`: an `error` that outlives the condition it
+                # describes is worse than no error at all, because the health
+                # endpoint and the Features page both surface it as the reason.
+                self._error = None
             return
         if self._process is not None:
             self._process = None
@@ -148,6 +161,7 @@ class OfficeLifecycle:
             self._process = self._popen(self.command, start_new_session=True)
             self._services_stopped = False
             self._status = "starting"
+            self._error = None
         except OSError as error:
             self._status = "failed"
             self._error = f"Office start failed: {type(error).__name__}"
@@ -235,13 +249,21 @@ def run(
     interval: float,
     stale_seconds: float,
     sleep: Callable[[float], None],
+    unreachable_seconds: float | None = None,
 ) -> None:
+    """Same two windows as `controller.run`: a rejected document fails closed
+    after `stale_seconds`, an unreachable endpoint after the longer
+    `unreachable_seconds`, so a busy host does not tear down a healthy engine."""
+    unreachable_after = stale_seconds if unreachable_seconds is None else unreachable_seconds
     last_good_at: float | None = None
     while True:
         try:
             snapshot = client.fetch()
             last_good_at = time.monotonic()
             lifecycle.reconcile(snapshot)
+        except EndpointUnavailable:
+            if last_good_at is None or time.monotonic() - last_good_at >= unreachable_after:
+                lifecycle.reconcile(None, "office endpoint unreachable")
         except ValueError:
             if last_good_at is None or time.monotonic() - last_good_at >= stale_seconds:
                 lifecycle.reconcile(None)
@@ -263,8 +285,11 @@ def main() -> None:
     serve_status(lifecycle, int(os.environ.get("FDRIVE_RUNTIME_PORT", "8099")))
     interval = float(os.environ.get("FDRIVE_RUNTIME_POLL_SECONDS", "3"))
     stale_seconds = float(os.environ.get("FDRIVE_RUNTIME_STALE_SECONDS", "9"))
+    unreachable_seconds = float(os.environ.get("FDRIVE_RUNTIME_UNREACHABLE_SECONDS", "60"))
     if interval <= 0 or stale_seconds < interval:
         raise ValueError("runtime polling intervals must be positive and stale window >= poll interval")
+    if unreachable_seconds < stale_seconds:
+        raise ValueError("runtime unreachable window must be >= stale window")
 
     def stop_handler(_signum: int, _frame: object) -> None:
         lifecycle.stop(None)
@@ -273,7 +298,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     try:
-        run(lifecycle, client, interval, stale_seconds, time.sleep)
+        run(lifecycle, client, interval, stale_seconds, time.sleep, unreachable_seconds)
     except KeyboardInterrupt:
         lifecycle.stop(None)
 

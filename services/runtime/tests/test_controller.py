@@ -292,8 +292,15 @@ def test_main_always_starts_the_feature_polling_controller(monkeypatch: pytest.M
         interval: float,
         stale_seconds: float,
         _sleep: object,
+        unreachable_seconds: float | None = None,
     ) -> None:
-        seen.update(lifecycle=lifecycle, client=client, interval=interval, stale_seconds=stale_seconds)
+        seen.update(
+            lifecycle=lifecycle,
+            client=client,
+            interval=interval,
+            stale_seconds=stale_seconds,
+            unreachable_seconds=unreachable_seconds,
+        )
         raise KeyboardInterrupt
 
     monkeypatch.setattr(controller.sys, "argv", ["controller", "python3", "-m", "worker"])
@@ -311,3 +318,124 @@ def test_main_always_starts_the_feature_polling_controller(monkeypatch: pytest.M
     assert lifecycle.features == frozenset({"imageSearch"})
     assert seen["interval"] == 3
     assert seen["stale_seconds"] == 9
+    assert seen["unreachable_seconds"] == 60
+
+
+class _ReadyResponse:
+    status = 200
+
+    def __enter__(self) -> _ReadyResponse:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def test_lifecycle_clears_a_stale_error_once_the_worker_is_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An api recreate stops the worker transiently; the reason it stopped must
+    not stay attached to the healthy worker that replaces it."""
+    monkeypatch.setenv("FDRIVE_RUNTIME_READY_URL", "http://worker/ready")
+    monkeypatch.setattr(controller.urllib.request, "urlopen", lambda *_args, **_kwargs: _ReadyResponse())
+    lifecycle = WorkerLifecycle(
+        ("worker",),
+        frozenset({"semanticSearch"}),
+        popen=lambda *_args, **_kwargs: FakeProcess(),
+        killpg=lambda *_args: None,
+    )
+    enabled = snapshot(1, semanticSearch=True)
+
+    lifecycle.reconcile(enabled)
+    lifecycle.reconcile(enabled)
+    assert lifecycle.status()["status"] == "ready"
+    assert lifecycle.status()["error"] is None
+
+    lifecycle.stop("feature document unavailable")
+    assert lifecycle.status()["error"] == "feature document unavailable"
+
+    lifecycle.reconcile(enabled)
+    assert lifecycle.status() == {
+        "status": "preparing",
+        "revision": 1,
+        "features": ["semanticSearch"],
+        "attempts": 2,
+        "child": True,
+        "error": None,
+    }
+    lifecycle.reconcile(enabled)
+    assert lifecycle.status()["status"] == "ready"
+    assert lifecycle.status()["error"] is None
+
+
+class _Recorder:
+    """Stands in for a lifecycle so `run`'s two windows can be observed directly."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, str | None]] = []
+
+    def reconcile(self, snapshot: object, reason: str = "feature document unavailable") -> None:
+        self.calls.append((snapshot, None if snapshot is not None else reason))
+
+
+class _Stop(Exception):
+    pass
+
+
+def _drive(
+    monkeypatch: pytest.MonkeyPatch,
+    responses: list[object],
+    clock_steps: list[float],
+    *,
+    unreachable_seconds: float,
+) -> _Recorder:
+    now = 0.0
+    monkeypatch.setattr(controller.time, "monotonic", lambda: now)
+    lifecycle = _Recorder()
+    steps = iter(clock_steps)
+
+    class Client:
+        def fetch(self) -> object:
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    def sleep(_seconds: float) -> None:
+        nonlocal now
+        try:
+            now = next(steps)
+        except StopIteration:
+            raise _Stop from None
+
+    with pytest.raises(_Stop):
+        controller.run(lifecycle, Client(), 3, 9, sleep, unreachable_seconds)  # type: ignore[arg-type]
+    return lifecycle
+
+
+def test_run_does_not_stop_a_healthy_child_while_a_busy_api_is_merely_slow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Heavy indexing slows the api; tearing the model down for that reloads it,
+    which makes the host slower still. Only a rejected document fails closed fast."""
+    enabled = snapshot(1, semanticSearch=True)
+    lifecycle = _drive(
+        monkeypatch,
+        [enabled, controller.EndpointUnavailable("slow"), controller.EndpointUnavailable("slow"), ValueError("garbage")],
+        [0.0, 20.0, 40.0],
+        unreachable_seconds=60,
+    )
+
+    assert lifecycle.calls == [(enabled, None), (None, "feature document unavailable")]
+
+
+def test_run_still_fails_closed_once_the_endpoint_stays_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enabled = snapshot(1, semanticSearch=True)
+    lifecycle = _drive(
+        monkeypatch,
+        [enabled, controller.EndpointUnavailable("down"), controller.EndpointUnavailable("down")],
+        [0.0, 70.0],
+        unreachable_seconds=60,
+    )
+
+    assert lifecycle.calls == [(enabled, None), (None, "feature endpoint unreachable")]

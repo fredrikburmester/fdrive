@@ -70,7 +70,7 @@ def test_office_client_authenticates_and_rejects_bad_responses(monkeypatch: pyte
 
     monkeypatch.setattr(office_controller.urllib.request, "build_opener", lambda *_args: Opener())
     assert OfficeClient("http://api/office", "secret").fetch() == OfficeSnapshot(2, False)
-    assert seen == {"token": "secret", "timeout": 2.0}
+    assert seen == {"token": "secret", "timeout": 5.0}
 
     with pytest.raises(ValueError, match="WORKER_TOKEN"):
         OfficeClient("http://api/office", "").fetch()
@@ -80,7 +80,7 @@ def test_office_client_authenticates_and_rejects_bad_responses(monkeypatch: pyte
             raise urllib.error.URLError("down")
 
     monkeypatch.setattr(office_controller.urllib.request, "build_opener", lambda *_args: BrokenOpener())
-    with pytest.raises(ValueError, match="unavailable"):
+    with pytest.raises(office_controller.EndpointUnavailable, match="unreachable"):
         OfficeClient("http://api/office", "secret").fetch()
 
     class MalformedOpener:
@@ -278,3 +278,30 @@ def test_lifecycle_reaps_all_orphaned_daemons_after_shutdown() -> None:
     )
     lifecycle.reconcile(OfficeSnapshot(1, False))
     assert lifecycle.status()["status"] == "off"
+
+
+def test_office_lifecycle_clears_a_stale_error_once_the_engine_is_back() -> None:
+    lifecycle = OfficeLifecycle(
+        ("start",),
+        ("stop",),
+        "http://office/discovery",
+        popen=lambda *_args, **_kwargs: FakeProcess(),
+        run_command=lambda *_args, **_kwargs: completed(),
+        killpg=lambda *_args: None,
+        urlopen=lambda *_args, **_kwargs: FakeResponse({}),
+    )
+    enabled = OfficeSnapshot(1, True)
+
+    lifecycle.reconcile(enabled)
+    lifecycle.reconcile(enabled)
+    assert lifecycle.status()["status"] == "ready"
+    assert lifecycle.status()["error"] is None
+
+    lifecycle.stop("office document unavailable")
+    assert lifecycle.status()["error"] == "office document unavailable"
+
+    lifecycle.reconcile(enabled)
+    assert lifecycle.status()["error"] is None
+    lifecycle.reconcile(enabled)
+    assert lifecycle.status()["status"] == "ready"
+    assert lifecycle.status()["error"] is None
