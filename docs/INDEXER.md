@@ -29,7 +29,7 @@ follows filesai's rules exactly:
 | Extension group | How | Notes |
 | --- | --- | --- |
 | `.pdf` | pymupdf, page by page | Encrypted PDFs and pages beyond `MAX_PDF_PAGES` are skipped. Under 40 characters of text counts as `no_text` (the nightly OCR job in `services/ocr` fills these in later). |
-| Images (`.jpg`, `.png`, `.tif`, …) | Tesseract OCR | Only under paths matching `indexer.ocr_image_globs` (see Settings below); everything else is `excluded:image_dir`. |
+| Images (`.jpg`, `.png`, `.tif`, `.heic`, `.heif`, …) | Tesseract OCR | Only under paths matching `indexer.ocr_image_globs` (see Settings below); everything else is `excluded:image_dir`. |
 | Plain text / code (`.txt`, `.md`, `.py`, …) | Read directly, multiple encodings tried | Capped at `PLAIN_TEXT_CAP` characters. |
 | Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, …) | Apache Tika | Requires the `tika` service. |
 | Anything else | Not extracted | `text_status = 'none'`. |

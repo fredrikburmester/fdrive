@@ -102,13 +102,16 @@ export const ShareUploadPath = SharePath.refine(
 /**
  * Extensions the public gallery renders as image tiles for `auto` presentation. Shared by the
  * API (deciding what counts as "every shared file is an image") and the web app (the same check
- * client-side, without another round trip). SVG is excluded: the gallery grid feeds these names
- * straight into `img src` on a page that otherwise treats SVG as download-only.
+ * client-side, without another round trip). SVG is excluded: the gallery treats SVG as
+ * download-only. HEIC/HEIF files are included: the frontend handles thumbnails and client-side
+ * WASM/picture viewing.
  */
 export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".avif",
   ".bmp",
   ".gif",
+  ".heic",
+  ".heif",
   ".jpeg",
   ".jpg",
   ".png",

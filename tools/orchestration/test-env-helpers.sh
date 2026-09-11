@@ -194,7 +194,7 @@ env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FDRIVE_PYTHON="$FAKE_PYTHON" 
   bash "$DEV_APP" "$ROOT" --web-port 32123 --index >"$OUT" 2>"$ERR" &
 BACKGROUND_PID=$!
 set -e
-for attempt in 1 2 3 4 5; do
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   grep -F 'ready http://127.0.0.1:32123' "$ERR" >/dev/null && break
   sleep 1
 done

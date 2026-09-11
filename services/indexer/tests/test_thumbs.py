@@ -18,6 +18,8 @@ def test_sizes_constant() -> None:
 
 def test_kind_for_ext_image() -> None:
     assert kind_for_ext(".png") == "image"
+    assert kind_for_ext(".heic") == "image"
+    assert kind_for_ext(".heif") == "image"
 
 
 def test_kind_for_ext_pdf() -> None:

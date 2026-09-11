@@ -24,6 +24,25 @@ def test_generate_image_writes_both_sizes(tmp_path: Path) -> None:
         assert h == size // 2
 
 
+def test_generate_heic_image_writes_both_sizes(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from fdrive_indexer.heif import register_heif_opener
+
+    register_heif_opener()
+    src = tmp_path / "photo.heic"
+    img = Image.new("RGB", (1200, 800), color="green")
+    img.save(src, format="HEIF")
+
+    thumbs_dir = tmp_path / "thumbs"
+    results = thumbs_io.generate(str(src), ".heic", "heicsha123", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000)
+    sizes = {r[0] for r in results}
+    assert sizes == {256, 1024}
+    for size, rel, w, h in results:
+        assert (thumbs_dir / rel).exists()
+        assert max(w, h) == size
+
+
 def test_generate_skips_when_thumbnail_already_exists(tmp_path: Path) -> None:
     from PIL import Image
 
