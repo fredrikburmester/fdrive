@@ -5,7 +5,7 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
-## WebDAV storage provider: slice 1 in progress
+## WebDAV storage provider: slices 1–2 done, slice 3 next
 
 Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-provider`, PR #5.
 
@@ -15,15 +15,23 @@ Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-pro
   and an in-memory class 1 fake server in `src/fake` (prefix, href and namespace styles,
   ranges, `If-Range`, `If-None-Match: *`, `Overwrite`, `X-OC-Mtime`, read-only users,
   redirect and no-`DAV` toggles). Lockfile updated through `run-in-checkout.sh --lock`.
+- **Done (slice 2)**: `createWebdavStorageProvider` (own-property methods over the client, core
+  path normalization, `WebdavError` → `StorageError` with 409 on `MKCOL`/`MOVE`/`COPY` read as a
+  missing parent, `mkdir -p` that recurses only on a missing parent, `deleteFile`/`deleteDir`
+  refusing the wrong kind) and `webdavModule` (username/password credential, no config, only
+  `atomicMove` true, `trash: "none"`, `authenticate` as `PROPFIND` Depth 0 on the root,
+  storage bound to the identity's username rather than the stored credential's). The shared
+  `describeStorageProvider` suite passes over the fake three ways: plain, under a path prefix
+  with absolute hrefs, and with a default namespace.
 - **Confinement**: request URLs are built only from provider paths under the endpoint prefix;
   `assertValidPath` rejects `.`/`..` segments because the URL parser resolves dot segments
   (a `/../etc` path reached the origin root before this check) and `buildUrl` re-verifies
   the prefix. Hrefs on another origin or outside the prefix are dropped, never followed.
 - **Evidence**: `verify.sh package @fdrive/webdav` passes (lint, typecheck, coverage
-  99.5/99.6/100/99.6 against the 99/95/99/99 gates; 140 tests).
-- **Not done**: no `ProviderModule`, no `StorageProvider` adapter, nothing registered; the
-  contracts enum, API registry and web labels are untouched (slices 2–3). No real-server
-  run yet (slice 4). No application, integration or browser gate was run; none was affected.
+  99.6/99.5/100/99.7 against the 99/95/99/99 gates; 220 tests).
+- **Not done**: nothing registered yet; the contracts enum, API registry and web labels are
+  untouched (slice 3). No real-server run yet (slice 4). No application, integration or
+  browser gate was run; none was affected.
 
 ## HEIC/HEIF viewing and indexing support: complete
 

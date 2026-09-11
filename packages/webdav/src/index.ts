@@ -10,8 +10,12 @@ export type {
 export { createFakeWebdavServer } from "./fake/server.js";
 export type { FakeDir, FakeFile, FakeNode } from "./fake/volume.js";
 export { FakeVolume } from "./fake/volume.js";
+export type { CreateWebdavModuleOptions } from "./module.js";
+export { createWebdavModule, WEBDAV_CREDENTIAL_FIELDS, webdavModule } from "./module.js";
 export type { ProbeConnectionDeps, ProbeResult } from "./probe.js";
 export { candidateProblem, probeConnection } from "./probe.js";
+export type { WebdavDownloadOpts, WebdavStorageProviderDeps } from "./storage-provider.js";
+export { createWebdavStorageProvider, toStorageError } from "./storage-provider.js";
 export type {
   ByteRange,
   CopyMoveOptions,
