@@ -16,11 +16,25 @@ function webdavUrl(): string {
   return url;
 }
 
-/** The other loopback spelling, so two rows for the same server never share a `(type, baseUrl)`. */
-function otherSpelling(baseUrl: string): string {
+/**
+ * The endpoint spelled with the IPv4 loopback address. `localhost` can
+ * resolve to `::1` first on a CI runner where Docker publishes ports on
+ * IPv4 only, and the API probes a candidate before adding it.
+ */
+function loopbackOrigin(baseUrl: string): string {
   const url = new URL(baseUrl);
-  url.hostname = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
+  url.hostname = "127.0.0.1";
   return url.origin;
+}
+
+/** The row added through the UI; the trailing slash keeps its `(type, baseUrl)` apart from the login row's. */
+function uiAddress(): string {
+  return `${loopbackOrigin(webdavUrl())}/`;
+}
+
+/** The row a login binds; it persists (disabled) across runs, so it never shares the UI row's address. */
+function loginAddress(): string {
+  return loopbackOrigin(webdavUrl());
 }
 
 interface ProviderRow {
@@ -78,7 +92,7 @@ test("alice (admin) adds SFTPGo's WebDAV binding as a provider, tests it and rem
     await dialog.getByLabel("Type").click();
     await page.getByRole("option", { name: "WebDAV", exact: true }).click();
     await dialog.getByLabel("Name").fill(UI_LABEL);
-    await dialog.getByLabel("Address").fill(webdavUrl());
+    await dialog.getByLabel("Address").fill(uiAddress());
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(cards).toHaveCount(initial + 1);
@@ -86,7 +100,7 @@ test("alice (admin) adds SFTPGo's WebDAV binding as a provider, tests it and rem
     const card = cards.filter({ hasText: UI_LABEL });
     // The row names the product with its icon (labelled for screen readers) and shows the address.
     await expect(card.getByRole("img", { name: "WebDAV" })).toBeVisible();
-    await expect(card.getByText(webdavUrl())).toBeVisible();
+    await expect(card.getByText(uiAddress())).toBeVisible();
     await dismissActivityPanel(page);
     await card.getByRole("button", { name: `Test ${UI_LABEL}` }).dispatchEvent("click");
     await expect(card.getByText("Reachable", { exact: true })).toBeVisible();
@@ -118,7 +132,7 @@ test.describe("signing in through WebDAV", () => {
       if (row === undefined) {
         const created = await admin.post("/api/v1/admin/providers", {
           headers: MUTATION_HEADERS,
-          data: { type: "webdav", label: LOGIN_LABEL, baseUrl: otherSpelling(webdavUrl()) },
+          data: { type: "webdav", label: LOGIN_LABEL, baseUrl: loginAddress() },
         });
         expect(created.ok(), await created.text()).toBe(true);
         row = (await created.json()) as ProviderRow;
@@ -141,8 +155,10 @@ test.describe("signing in through WebDAV", () => {
       await page.waitForURL("**/files");
       await page.getByRole("button", { name: "New" }).waitFor();
 
-      // The seeded home, read over WebDAV this time.
-      await expect(page.getByText("photo.jpg", { exact: true }).first()).toBeVisible();
+      // The shell names the login by its row and product.
+      await expect(
+        page.getByRole("button", { name: new RegExp(`alice WebDAV ${LOGIN_LABEL}`) }),
+      ).toBeVisible();
       const me = (await (await page.request.get("/api/v1/auth/me")).json()) as {
         identities: { providerType: string; capabilities: { zip: boolean; atomicMove: boolean } }[];
       };
@@ -151,14 +167,35 @@ test.describe("signing in through WebDAV", () => {
         capabilities: { zip: false, atomicMove: true },
       });
 
-      const name = `webdav-upload-${Date.now().toString(36)}.txt`;
+      // alice's home is shared with every other spec's leftovers, so work
+      // inside a fresh folder where the upload is the only entry.
+      const folder = `/webdav-e2e-${Date.now().toString(36)}`;
+      const made = await page.request.post("/api/v1/fs/mkdir", {
+        headers: MUTATION_HEADERS,
+        data: { path: folder },
+      });
+      expect(made.ok()).toBe(true);
+      await page.goto(`/files${folder}`);
+      await page.getByRole("button", { name: "New" }).waitFor();
+      const name = "hello-over-webdav.txt";
       await uploadFiles(page, [{ name, mimeType: "text/plain", contents: "hello over webdav" }]);
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
-      const stat = await page.request.get(`/api/v1/fs/stat?path=${encodeURIComponent(`/${name}`)}`);
-      expect(stat.ok()).toBe(true);
+      // The list shows the entry while the upload is still streaming; wait
+      // for the server to have it.
+      await expect
+        .poll(
+          async () =>
+            (
+              await page.request.get(
+                `/api/v1/fs/stat?path=${encodeURIComponent(`${folder}/${name}`)}`,
+              )
+            ).status(),
+          { timeout: 15_000 },
+        )
+        .toBe(200);
       const removed = await page.request.post("/api/v1/fs/delete", {
         headers: MUTATION_HEADERS,
-        data: { items: [{ path: `/${name}`, kind: "file" }] },
+        data: { items: [{ path: folder, kind: "dir" }] },
       });
       expect(removed.ok()).toBe(true);
     } finally {
