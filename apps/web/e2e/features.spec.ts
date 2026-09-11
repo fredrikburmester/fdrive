@@ -56,9 +56,9 @@ test("an owner resumes and finishes setup without entering the application shell
     await expect(page.getByRole("switch", { name: "Enable Trash" })).toBeVisible();
     await page.getByRole("button", { name: "Skip Trash" }).click();
     await expect(page.getByText("Step 11 of 13 · Server address")).toBeVisible();
-    await expect(page.getByLabel("fdrive public address")).not.toHaveValue("");
+    await expect(page.getByLabel("Server address")).not.toHaveValue("");
     await page.getByRole("button", { name: "Save and continue" }).click();
-    await expect(page.getByText("Step 12 of 13 · ONLYOFFICE")).toBeVisible();
+    await expect(page.getByText("Step 12 of 13 · Office")).toBeVisible();
     await page.getByRole("button", { name: "Skip ONLYOFFICE" }).click();
     await expect(page.getByText("Ready to use fdrive", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Finish setup" }).click();

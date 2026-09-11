@@ -22,7 +22,7 @@ test("Office onboarding saves and resumes its choice before entering files", asy
   ).toBe(true);
   try {
     await page.goto("/setup");
-    await expect(page.getByText("Step 12 of 13 · ONLYOFFICE")).toBeVisible();
+    await expect(page.getByText("Step 12 of 13 · Office")).toBeVisible();
     await expect(page.getByRole("button", { name: "Toggle Sidebar" })).toHaveCount(0);
     const toggle = page.getByRole("switch", { name: "Enable ONLYOFFICE" });
     if ((await toggle.getAttribute("aria-checked")) === "false") await toggle.click();

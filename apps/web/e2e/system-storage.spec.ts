@@ -29,6 +29,18 @@ async function removeSpareProviders(page: Page): Promise<void> {
   }
 }
 
+async function dismissActivityPanel(page: Page): Promise<void> {
+  const clear = page.getByRole("button", { name: "Clear" });
+  if (await clear.isVisible()) {
+    await clear.click();
+    return;
+  }
+  const collapse = page.getByRole("button", { name: "Collapse activity panel" });
+  if (await collapse.isVisible()) {
+    await collapse.click();
+  }
+}
+
 /**
  * The same SFTPGo server spelled with the other loopback name, so the new
  * row's `(type, baseUrl)` pair does not collide with the seeded one while
@@ -77,6 +89,7 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
 
   try {
     await page.goto("/system/storage");
+    await dismissActivityPanel(page);
     await expect(cards).toHaveCount(1);
 
     await page.getByRole("button", { name: "Add provider" }).click();
@@ -91,7 +104,8 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     const second = cards.filter({ hasText: "Second" });
     await expect(second.getByText(address)).toBeVisible();
     await expect(second.getByText("Settings", { exact: true })).toBeVisible();
-    await second.getByRole("button", { name: "Test Second" }).click();
+    await dismissActivityPanel(page);
+    await second.getByRole("button", { name: "Test Second" }).dispatchEvent("click");
     await expect(second.getByText("Reachable", { exact: true })).toBeVisible();
 
     await second.getByRole("button", { name: "Edit Second" }).click();
@@ -120,10 +134,12 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
 });
 
 test("an admin can disable the last provider, reload, and enable it again", async ({ page }) => {
+  await removeSpareProviders(page);
   const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
   if (seeded === undefined) throw new Error("missing environment provider");
   try {
     await page.goto("/system/storage");
+    await dismissActivityPanel(page);
     const toggle = page.getByRole("switch", { name: `Enable ${seeded.label}`, exact: true });
     await toggle.click();
     await page

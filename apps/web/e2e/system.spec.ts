@@ -26,11 +26,15 @@ test("alice (admin) sees the env-managed provider on System > Storage and can ch
 
   // The seeded provider is pinned by SFTPGO_URL, so it reports the
   // environment as its source and refuses both address edits and removal.
-  await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
-  await expect(page.getByText("Environment (locked)", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Remove / })).toBeDisabled();
+  const card = page
+    .getByRole("main")
+    .locator('[data-slot="card"]')
+    .filter({ hasText: "Environment (locked)" });
+  await expect(card.getByText("Reachable", { exact: true })).toBeVisible();
+  await expect(card.getByText("Environment (locked)", { exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: /^Remove / })).toBeDisabled();
 
-  await page.getByRole("button", { name: /^Edit / }).click();
+  await card.getByRole("button", { name: /^Edit / }).click();
   let dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("Address")).toBeDisabled();
 
@@ -71,7 +75,7 @@ test("alice (admin) sees the Search embedding server and OCR as not configured i
 }) => {
   await page.goto("/files");
 
-  for (const label of ["Indexer", "Search", "OCR", "Thumbnails"]) {
+  for (const label of ["Full-text search", "Semantic search", "Searchable PDFs", "Thumbnails"]) {
     await expect(page.getByRole("link", { name: label, exact: true })).toBeVisible();
   }
 
@@ -79,12 +83,12 @@ test("alice (admin) sees the Search embedding server and OCR as not configured i
   // indexer, which `global-setup.ts` fakes; see the "configured and
   // reachable" tests below), so their own "not configured" state should
   // render rather than an error, naming exactly which variable to set.
-  await page.getByRole("link", { name: "Search", exact: true }).click();
+  await page.getByRole("link", { name: "Semantic search", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
   await expect(page.getByText("Not configured: set FDRIVE_EMBED_URL.")).toBeVisible();
 
-  await page.getByRole("link", { name: "OCR" }).click();
+  await page.getByRole("link", { name: "Searchable PDFs" }).click();
   await expect(page).toHaveURL(/\/system\/ocr$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
 });
