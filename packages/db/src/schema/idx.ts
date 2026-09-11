@@ -76,29 +76,42 @@ export const chunks = idxSchema.table(
   (table) => [index("chunks_file_id_idx").on(table.fileId)],
 );
 
-export const scans = idxSchema.table("scans", {
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  rootId: smallint("root_id")
-    .notNull()
-    .references(() => roots.id),
-  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
-  finishedAt: timestamp("finished_at", { withTimezone: true }),
-  filesSeen: integer("files_seen").notNull().default(0),
-  filesChanged: integer("files_changed").notNull().default(0),
-  filesDeleted: integer("files_deleted").notNull().default(0),
-  errors: integer("errors").notNull().default(0),
-});
+export const scans = idxSchema.table(
+  "scans",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    filesSeen: integer("files_seen").notNull().default(0),
+    filesChanged: integer("files_changed").notNull().default(0),
+    filesDeleted: integer("files_deleted").notNull().default(0),
+    errors: integer("errors").notNull().default(0),
+  },
+  // The indexer reads the latest scan per root on every status poll
+  // (`root_id = ? order by started_at desc limit 1`), which without this
+  // index scans the whole history table.
+  (table) => [index("scans_root_id_started_at_idx").on(table.rootId, table.startedAt.desc())],
+);
 
-export const moves = idxSchema.table("moves", {
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  at: timestamp("at", { withTimezone: true }).defaultNow(),
-  rootId: smallint("root_id")
-    .notNull()
-    .references(() => roots.id),
-  src: text("src"),
-  dst: text("dst"),
-  actor: text("actor"),
-});
+export const moves = idxSchema.table(
+  "moves",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    at: timestamp("at", { withTimezone: true }).defaultNow(),
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id),
+    src: text("src"),
+    dst: text("dst"),
+    actor: text("actor"),
+  },
+  // `recentMoves` restricts every scope clause with `root_id = ?`, so the
+  // scope filter has no access path without this index.
+  (table) => [index("moves_root_id_idx").on(table.rootId)],
+);
 
 export const events = idxSchema.table(
   "events",
@@ -133,6 +146,10 @@ export const ocrLog = idxSchema.table(
     detail: text("detail"),
     at: timestamp("at", { withTimezone: true }).defaultNow(),
   },
+  // The system event feed reads only failures, newest first
+  // (`status in ('failed','timeout') [and at < ?] order by at desc nulls last`).
+  // `status` leads because it is the equality side; `at` follows in the
+  // order the feed asks for so the index serves the range and the sort.
   (table) => [
     unique("ocr_log_root_id_path_size_mtime_ns_unique").on(
       table.rootId,
@@ -140,6 +157,7 @@ export const ocrLog = idxSchema.table(
       table.size,
       table.mtimeNs,
     ),
+    index("ocr_log_status_at_idx").on(table.status, table.at.desc().nullsLast()),
   ],
 );
 

@@ -73,6 +73,27 @@ describe("migrate", () => {
     expect(missing.rows).toEqual([]);
   });
 
+  it("indexes the idx read paths on their filter and sort columns", async () => {
+    const expected: ReadonlyArray<{ readonly name: string; readonly definition: string }> = [
+      { name: "moves_root_id_idx", definition: "USING btree (root_id)" },
+      { name: "ocr_log_status_at_idx", definition: "USING btree (status, at DESC NULLS LAST)" },
+      {
+        name: "scans_root_id_started_at_idx",
+        definition: "USING btree (root_id, started_at DESC NULLS LAST)",
+      },
+    ];
+
+    for (const { name, definition } of expected) {
+      const result = await db.execute(sql`
+        select indexdef
+        from pg_indexes
+        where schemaname = 'idx' and indexname = ${name}
+      `);
+      expect(result.rows, `idx.${name} should exist`).toHaveLength(1);
+      expect(String(result.rows[0]?.indexdef).replaceAll('"', "")).toContain(definition);
+    }
+  });
+
   it("creates every table from the domain model", async () => {
     for (const { schema: schemaName, table } of EXPECTED_TABLES) {
       const result = await db.execute(sql`
