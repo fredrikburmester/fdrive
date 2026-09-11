@@ -1,5 +1,6 @@
 import type { ProviderCredential, ProviderToken } from "@fdrive/core";
 import { isStorageError, stripTransientFields, validateFields } from "@fdrive/core";
+import { addressBlock } from "../auth/address-block.js";
 import { ApiHttpError } from "../errors.js";
 import type { ResolvedProvider } from "../providers/service.js";
 import type { VerifiedCredentialDeps } from "./types.ts";
@@ -25,9 +26,15 @@ export interface VerifiedCredential extends ResolvedProvider {
   readonly token: ProviderToken | undefined;
 }
 
-/** The limiter key shared by every login attempt from one address, distinct from `ip|username` and setup's `setup|ip`. */
+/**
+ * The limiter key shared by every login attempt from one address block,
+ * distinct from `ip|username` and setup's `setup|ip`. Keying it on the
+ * block (`addressBlock`) rather than the raw address is what keeps it a
+ * bound at all against an IPv6 caller, which can source from any address
+ * in its /64.
+ */
 export function loginIpKey(ip: string): string {
-  return `login-ip|${ip}`;
+  return `login-ip|${addressBlock(ip)}`;
 }
 
 /**
@@ -83,12 +90,15 @@ export async function verifyCredentials(
   }
 
   const usernameHint = validated.value.username ?? input.expectedUsername ?? "";
-  const key = `${input.ip}|${target.provider.id}|${usernameHint}`;
+  const block = addressBlock(input.ip);
+  const key = `${block}|${target.provider.id}|${usernameHint}`;
   // An independent per-address bucket bounds password spraying: without it
   // one address gets a fresh allowance for every username it tries. It is
   // never cleared by a success, so knowing one valid login cannot reset it.
+  // It is passed ungrouped, since there is one of it per block and it must
+  // stay trackable however many usernames that block has already tried.
   const ipKey = loginIpKey(input.ip);
-  const status = deps.limiter.check(key);
+  const status = deps.limiter.check(key, block);
   const ipStatus = deps.limiter.check(ipKey);
   if (!status.allowed || !ipStatus.allowed)
     throw new ApiHttpError("rate_limited", "too many failed login attempts", {
@@ -106,7 +116,7 @@ export async function verifyCredentials(
   } catch (error) {
     if (isStorageError(error)) {
       if (error.kind === "unauthorized") {
-        deps.limiter.recordFailure(key);
+        deps.limiter.recordFailure(key, block);
         deps.limiter.recordFailure(ipKey);
         throw new ApiHttpError("unauthorized", "invalid username or password");
       }

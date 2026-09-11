@@ -75,6 +75,24 @@ function buildApp(
   return { app, service, tokenGuard, limiter };
 }
 
+/**
+ * A tokenless `POST /setup/test` from `ip`, which the token guard rejects
+ * (401) and the limiter records as a failure. `x-forwarded-for` carries the
+ * address because the default one trusted proxy hop reads the client from
+ * it, and the unit test harness has no socket for `getConnInfo` to report.
+ */
+function attemptFrom(app: ReturnType<typeof buildApp>["app"], ip: string) {
+  return app.request("/api/v1/setup/test", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-requested-with": "fdrive",
+      "x-forwarded-for": ip,
+    },
+    body: JSON.stringify({ baseUrl: "http://sftpgo:8080" }),
+  });
+}
+
 describe("setup routes: GET /setup/status", () => {
   it("returns the service's status", async () => {
     const { app } = buildApp();
@@ -187,6 +205,54 @@ describe("setup routes: POST /setup/test", () => {
     await attempt();
     await attempt();
     const third = await attempt();
+
+    expect(third.status).toBe(429);
+  });
+
+  it("spends one allowance across every address in an IPv6 /64", async () => {
+    const limiter = createLoginLimiter({
+      clock: () => new Date(),
+      maxFailures: 2,
+      windowMs: 60_000,
+      blockMs: 60_000,
+    });
+    const { app } = buildApp({ limiter });
+
+    await attemptFrom(app, "2001:db8:1:2::1");
+    await attemptFrom(app, "2001:db8:1:2::2");
+    const third = await attemptFrom(app, "2001:db8:1:2::3");
+
+    expect(third.status).toBe(429);
+  });
+
+  it("keeps a separate allowance for a different IPv6 /64", async () => {
+    const limiter = createLoginLimiter({
+      clock: () => new Date(),
+      maxFailures: 2,
+      windowMs: 60_000,
+      blockMs: 60_000,
+    });
+    const { app } = buildApp({ limiter });
+
+    await attemptFrom(app, "2001:db8:1:2::1");
+    await attemptFrom(app, "2001:db8:1:2::2");
+    const neighbour = await attemptFrom(app, "2001:db8:1:3::1");
+
+    expect(neighbour.status).toBe(401);
+  });
+
+  it("spends one allowance across an IPv4 address and its mapped form", async () => {
+    const limiter = createLoginLimiter({
+      clock: () => new Date(),
+      maxFailures: 2,
+      windowMs: 60_000,
+      blockMs: 60_000,
+    });
+    const { app } = buildApp({ limiter });
+
+    await attemptFrom(app, "203.0.113.9");
+    await attemptFrom(app, "::ffff:203.0.113.9");
+    const third = await attemptFrom(app, "203.0.113.9");
 
     expect(third.status).toBe(429);
   });

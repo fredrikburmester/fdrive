@@ -159,17 +159,37 @@ response beyond the error kind and message, since the remedy is the same.
 `apps/api/src/auth/login-limiter.ts` implements a simple, in-memory,
 per-process limiter. Every credential check (login, setup, and the owner
 re-authentication that identity linking requires) consults two keys: a
-`${ip}|${username}` key, and an independent `login-ip|${ip}` key shared by
-every username tried from that address, so one address cannot spray a
-password across many usernames. Each key follows the same policy: after 5
-failed attempts within a 60-second window it is blocked for 60 seconds
-(`rate_limited`, with `retryAfterMs` in the error details). A successful
-login clears the `ip|username` key's failure history immediately but never
-the address key, so knowing one valid login cannot reset the spraying
-bound; the address key only drains as its window and block expire. Because
-the limiter is in-memory, it resets on process restart and is not shared
-across multiple api instances; this is an accepted simplification for
-fdrive's current single-instance deployment shape.
+`${block}|${provider}|${username}` key, and an independent
+`login-ip|${block}` key shared by every username tried from that address,
+so one address cannot spray a password across many usernames. `block` is
+the caller's address block (`apps/api/src/auth/address-block.ts`): an IPv4
+address as it stands, and an IPv6 address folded into its /64, because a
+single IPv6 host is routinely handed a whole /64 to source from and would
+otherwise draw a fresh allowance for every attempt. Each key follows the
+same policy: after 5 failed attempts within a 60-second window it is
+blocked for 60 seconds (`rate_limited`, with `retryAfterMs` in the error
+details). A successful login clears that username key's failure history
+immediately but never the address key, so knowing one valid login cannot
+reset the spraying bound; the address key only drains as its window and
+block expire.
+
+The limiter tracks at most 10 000 keys at once and denies any key it has
+no room for, so filling that map is a denial of service in itself. Each
+username key is therefore passed with the block it belongs to, and one
+block may hold at most 8 of them; further usernames from that block are
+left untracked and bounded by its `login-ip|${block}` key instead. Nothing
+is evicted to make room: dropping live failure counts or blocks under
+pressure would let an attacker flush the very state that throttles them.
+The number of distinct blocks stays unbounded, so a wide enough botnet can
+still fill the map and lock logins out until it stops. Setup's own
+`setup|${block}` key (`apps/api/src/setup/routes.ts`) uses the same block,
+so onboarding cannot be used to mint a key per address either; it is
+passed ungrouped like `login-ip|${block}`, since one block yields exactly
+one of it and a group budget would have nothing to bound.
+
+Because the limiter is in-memory, it resets on process restart and is not
+shared across multiple api instances; this is an accepted simplification
+for fdrive's current single-instance deployment shape.
 
 ## Re-authentication and session revocation
 

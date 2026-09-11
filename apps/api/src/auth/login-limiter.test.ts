@@ -262,3 +262,125 @@ describe("createLoginLimiter capacity", () => {
     expect(limiter.check("ip2|bob")).toEqual({ allowed: true });
   });
 });
+
+describe("createLoginLimiter per-group fan-out", () => {
+  const GROUP = "203.0.113.9";
+  const OTHER_GROUP = "198.51.100.7";
+  const invented = (index: number) => `${GROUP}|sftpgo|ghost-${index}`;
+
+  it("keeps one group's invented keys from filling the map, so another group is still tracked", () => {
+    const { clock } = createClock(0);
+    const limiter = createLoginLimiter({
+      clock,
+      capacity: 10,
+      maxKeysPerGroup: 3,
+      maxFailures: 5,
+      windowMs: 60_000,
+      blockMs: 60_000,
+    });
+
+    // One caller cycling usernames: every attempt would otherwise mint a
+    // slot of its own and, past `capacity`, fail every other key closed.
+    for (let i = 0; i < 100; i += 1) {
+      limiter.recordFailure(invented(i), GROUP);
+    }
+
+    const victim = `${OTHER_GROUP}|sftpgo|alice`;
+    expect(limiter.check(victim, OTHER_GROUP)).toEqual({ allowed: true });
+    // ...and it is a real slot, not an unthrottled pass: it still blocks.
+    for (let i = 0; i < 5; i += 1) {
+      limiter.recordFailure(victim, OTHER_GROUP);
+    }
+    expect(limiter.check(victim, OTHER_GROUP)).toEqual({ allowed: false, retryAfterMs: 60_000 });
+  });
+
+  it("blocks a key within its group's budget exactly as an ungrouped one", () => {
+    const { clock } = createClock(0);
+    const limiter = createLoginLimiter({
+      clock,
+      maxKeysPerGroup: 3,
+      maxFailures: 5,
+      windowMs: 60_000,
+      blockMs: 60_000,
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      limiter.recordFailure(invented(0), GROUP);
+    }
+
+    expect(limiter.check(invented(0), GROUP)).toEqual({ allowed: false, retryAfterMs: 60_000 });
+  });
+
+  it("leaves a key over the budget untracked instead of denying it or counting its failures", () => {
+    const { clock } = createClock(0);
+    const limiter = createLoginLimiter({ clock, maxKeysPerGroup: 1, maxFailures: 5 });
+
+    limiter.recordFailure(invented(0), GROUP);
+    for (let i = 0; i < 20; i += 1) {
+      limiter.recordFailure(invented(1), GROUP);
+    }
+
+    // The caller's own per-group bucket (passed ungrouped) is what bounds
+    // these attempts; the key itself has no history of its own.
+    expect(limiter.check(invented(1), GROUP)).toEqual({ allowed: true });
+    // The key that did get a slot is unaffected by the fan-out around it.
+    for (let i = 0; i < 4; i += 1) {
+      limiter.recordFailure(invented(0), GROUP);
+    }
+    expect(limiter.check(invented(0), GROUP).allowed).toBe(false);
+  });
+
+  it("frees a group's budget as its keys expire", () => {
+    const { clock, advance } = createClock(0);
+    const limiter = createLoginLimiter({
+      clock,
+      maxKeysPerGroup: 1,
+      maxFailures: 5,
+      windowMs: 1_000,
+      blockMs: 1_000,
+    });
+
+    limiter.recordFailure(invented(0), GROUP);
+    limiter.recordFailure(invented(1), GROUP);
+    advance(1_001);
+    // The first key's failure has aged out, so the group has room again.
+    limiter.recordFailure(invented(1), GROUP);
+
+    expect(limiter.check(invented(1), GROUP)).toEqual({ allowed: true });
+    for (let i = 0; i < 4; i += 1) {
+      limiter.recordFailure(invented(1), GROUP);
+    }
+    expect(limiter.check(invented(1), GROUP)).toEqual({ allowed: false, retryAfterMs: 1_000 });
+  });
+
+  it("frees a group's budget when a key succeeds", () => {
+    const { clock } = createClock(0);
+    const limiter = createLoginLimiter({ clock, maxKeysPerGroup: 1, maxFailures: 5 });
+
+    limiter.recordFailure(invented(0), GROUP);
+    limiter.recordSuccess(invented(0));
+    limiter.recordFailure(invented(1), GROUP);
+
+    for (let i = 0; i < 4; i += 1) {
+      limiter.recordFailure(invented(1), GROUP);
+    }
+    expect(limiter.check(invented(1), GROUP).allowed).toBe(false);
+  });
+
+  it("exempts ungrouped keys from the budget, so per-address and setup buckets stay trackable", () => {
+    const { clock } = createClock(0);
+    const limiter = createLoginLimiter({ clock, maxKeysPerGroup: 1, maxFailures: 5 });
+
+    limiter.recordFailure(invented(0), GROUP);
+    limiter.recordFailure(invented(1), GROUP);
+    for (let i = 0; i < 5; i += 1) {
+      limiter.recordFailure(`login-ip|${GROUP}`);
+    }
+    for (let i = 0; i < 5; i += 1) {
+      limiter.recordFailure(`setup|${GROUP}`);
+    }
+
+    expect(limiter.check(`login-ip|${GROUP}`).allowed).toBe(false);
+    expect(limiter.check(`setup|${GROUP}`).allowed).toBe(false);
+  });
+});
