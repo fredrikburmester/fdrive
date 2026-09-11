@@ -49,6 +49,7 @@ export class SftpgoError extends Error {
 export function mapStatusToKind(status: number): SftpgoErrorKind {
   switch (status) {
     case 400:
+    case 416:
       return "bad_request";
     case 401:
       return "unauthorized";

@@ -15,6 +15,7 @@ describe("mapStatusToKind", () => {
     [404, "not_found"],
     [409, "conflict"],
     [413, "payload_too_large"],
+    [416, "bad_request"],
     [429, "rate_limited"],
     [500, "server"],
     [503, "server"],
@@ -26,6 +27,7 @@ describe("mapStatusToKind", () => {
   it("maps an unrecognized status to unexpected", () => {
     expect(mapStatusToKind(302)).toBe("unexpected");
     expect(mapStatusToKind(418)).toBe("unexpected");
+    expect(mapStatusToKind(412)).toBe("unexpected");
   });
 });
 

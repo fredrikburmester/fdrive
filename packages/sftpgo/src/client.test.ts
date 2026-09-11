@@ -268,13 +268,15 @@ describe("createSftpgoClient - statFile and download", () => {
     expect(await response.text()).toBe("world");
   });
 
-  it("maps an unsatisfiable range to kind unexpected (HTTP 416)", async () => {
-    const { client, server } = setup(seed);
+  it("maps an unsatisfiable range to bad_request (HTTP 416)", async () => {
+    const { client } = setup(seed);
     const token = await loginAsAlice(client);
-    const response = await server.fetch("http://sftpgo.test/api/v2/user/files?path=%2Fa.txt", {
-      headers: { authorization: `Bearer ${token}`, range: "bytes=1000-2000" },
+    await expect(
+      client.user(token).download("/a.txt", { range: { start: 1000, end: 2000 } }),
+    ).rejects.toMatchObject({
+      kind: "bad_request",
+      status: 416,
     });
-    expect(response.status).toBe(416);
   });
 
   it("returns bad_request when downloading a directory", async () => {

@@ -611,6 +611,32 @@ describe("POST /fs/zip", () => {
 });
 
 describe("PUT /fs/upload", () => {
+  it.each([undefined, "data"])("forwards cancellation for body %s", async (body) => {
+    const storage = createMemoryStorage();
+    const controller = new AbortController();
+    const upload = vi.spyOn(storage, "upload").mockImplementation(async (_path, _body, opts) => {
+      expect(opts?.signal).toBeDefined();
+      controller.abort();
+      expect(opts?.signal?.aborted).toBe(true);
+      throw new StorageError("upstream_unavailable", "upload aborted");
+    });
+    const stat = vi.spyOn(storage, "statFile");
+    const { app, events } = await buildHarnessWithStorage(storage);
+    const res = await app.request(
+      "/api/v1/fs/upload?path=/cancelled.txt",
+      requestedWith({
+        method: "PUT",
+        ...(body === undefined ? {} : { body }),
+        signal: controller.signal,
+      }),
+    );
+    expect(res.ok).toBe(false);
+    expect(upload).toHaveBeenCalledOnce();
+    expect(stat).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(storage.dump()).toEqual({});
+  });
+
   it("uploads a file, returns 201 with the new entry, and publishes a create event", async () => {
     const { app, events } = await buildHarness();
 

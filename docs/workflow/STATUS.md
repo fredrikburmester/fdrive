@@ -5,6 +5,22 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Issue #2: quick fixes
+
+- Items 2, 5, 12 and 13 implemented locally: uploads forward request cancellation;
+  upstream 416 maps to `bad_request` (public shares return 400 instead of 502);
+  spare-provider E2E cleanup sends the CSRF header and checks success; auth docs use
+  `currentCredential`. The obsolete probe document was already removed.
+- Regressions cover cancellation with and without a body, client error classification
+  (412 stays unchanged), and removal of a provider left by an interrupted browser run.
+- Lint and typecheck pass. Default parallel coverage hit the two existing 5000ms archive
+  test timeouts (`.fdrive-workflow/logs/step.IIsiDj/`); all package coverage passes with
+  `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
+  (`.fdrive-workflow/logs/step.OvSddD/`). No gates or timeouts changed.
+- Integration passes against disposable SFTPGo/PostgreSQL. Storage browser tests pass
+  with `E2E_DEV=1`, including the new leftover-provider cleanup regression. Tooling
+  coverage and workflow verification pass. Changes uncommitted on `main`.
+
 ## Issue #2: descendant move/copy guard
 
 - Item 1 implemented locally: normalized descendant targets return 400 before storage,
@@ -19,7 +35,7 @@ not current instructions.
   (`.fdrive-workflow/logs/step.pkuX6l/`). All package coverage passes with
   `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`
   (`.fdrive-workflow/logs/step.pmRLLk/`); no timeouts or thresholds changed.
-- Changes remain uncommitted on `main`; no other issue items changed.
+- Committed on `main` as `4d80db3` at the user's request.
 
 ## Agent configuration and guard
 
