@@ -31,11 +31,13 @@ export type AuthedHono = Hono<{ Variables: AppVariables & PrincipalVariables }>;
 
 /**
  * Whether fdrive setup is still required, and the enabled providers to
- * show on the public `/about` route when it is not. `providers` is empty
- * exactly when `required` is true.
+ * show on the public `/about` route. Disabled providers contribute attribution
+ * without appearing as available connections.
  */
 export interface ConnectionStatus {
   readonly required: boolean;
+  /** All configured types, including disabled providers; defaults to the enabled list in tests. */
+  readonly configuredProviderTypes?: readonly string[];
   readonly providers: readonly { readonly type: string; readonly host: string }[];
 }
 
@@ -199,8 +201,8 @@ export function createApp(deps: AppDeps): AppHono {
     // to `/setup`.
     const principal = status.providers.length === 0 ? null : await principalResolver(c);
     const attributions = new Map<string, { name: string; sourceUrl: string }>();
-    for (const provider of status.providers) {
-      const attribution = moduleFor(provider.type)?.attribution;
+    for (const type of status.configuredProviderTypes ?? status.providers.map((p) => p.type)) {
+      const attribution = moduleFor(type)?.attribution;
       if (attribution !== undefined) attributions.set(attribution.name, attribution);
     }
     const body: AboutResponse = AboutResponse.parse({

@@ -224,6 +224,23 @@ describe("sftpgoHostLabel", () => {
 });
 
 describe("createApp about route", () => {
+  it("keeps configured attribution when no provider is enabled, without exposing endpoints", async () => {
+    const { app } = buildApp({
+      connectionStatus: async () => ({
+        required: false,
+        providers: [],
+        configuredProviderTypes: ["sftpgo", "sftpgo", "unknown"],
+      }),
+    });
+    const res = await app.request("/api/v1/about");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      setupRequired: false,
+      providers: [],
+      builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
+    });
+  });
+
   it("returns the version and SFTPGo attribution, redacting the host for an anonymous caller", async () => {
     const { app } = buildApp();
 
