@@ -49,29 +49,31 @@ def run_once(
     if not run_lock.try_acquire():
         log_fn("scheduled OCR pass skipped: a run is already in progress")
         return False
-    conn = conn_factory()
     try:
-        raw = db.read_settings(conn)
-        feature_config = resolve_features(raw)
-        if not feature_config.values.pdf_ocr:
-            log_fn("OCR pass skipped: PDF OCR disabled")
-            return False
-        settings = resolve_settings(raw, default_settings)
-        run_pass(
-            conn,
-            targets,
-            settings,
-            state_dir,
-            timeout_seconds,
-            jobs,
-            log_fn,
-            include_globs,
-            is_enabled=lambda: resolve_features(db.read_settings(conn)).values.pdf_ocr,
-        )
+        conn = conn_factory()
+        try:
+            raw = db.read_settings(conn)
+            feature_config = resolve_features(raw)
+            if not feature_config.values.pdf_ocr:
+                log_fn("OCR pass skipped: PDF OCR disabled")
+                return False
+            settings = resolve_settings(raw, default_settings)
+            run_pass(
+                conn,
+                targets,
+                settings,
+                state_dir,
+                timeout_seconds,
+                jobs,
+                log_fn,
+                include_globs,
+                is_enabled=lambda: resolve_features(db.read_settings(conn)).values.pdf_ocr,
+            )
+        finally:
+            conn.close()
     except Exception as e:  # noqa: BLE001
         log_fn(f"OCR pass crashed: {type(e).__name__}: {e}")
     finally:
-        conn.close()
         run_lock.release()
     return True
 
@@ -107,21 +109,27 @@ def scheduler_loop(
             include_globs,
         )
 
+    refresh_wait_s = max(1, settings_refresh_seconds)
     while True:
-        conn = conn_factory()
         try:
-            raw = db.read_settings(conn)
-            features = resolve_features(raw)
-            hour = resolve_settings(raw, default_settings).hour
-        finally:
-            conn.close()
+            conn = conn_factory()
+            try:
+                raw = db.read_settings(conn)
+                features = resolve_features(raw)
+                hour = resolve_settings(raw, default_settings).hour
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            log_fn(f"OCR scheduler settings refresh failed: {type(e).__name__}: {e}")
+            sleep(refresh_wait_s)
+            continue
         current = now()
         if not features.values.pdf_ocr:
             target = current
-            wait_s: float = settings_refresh_seconds
+            wait_s: float = refresh_wait_s
         else:
             target = next_run_at(current, hour)
-            wait_s = min(seconds_until(current, target), settings_refresh_seconds)
+            wait_s = min(seconds_until(current, target), refresh_wait_s)
         log_fn(f"next OCR pass at {target.isoformat()}")
         sleep(wait_s)
         if not features.values.pdf_ocr:

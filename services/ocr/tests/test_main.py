@@ -146,6 +146,7 @@ def test_run_once_does_not_rewrite_without_persisted_feature_selection(postgres_
 
 def test_run_once_logs_and_releases_lock_on_crash(postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_pdf_ocr(postgres_dsn)
+
     def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("kaboom")
 
@@ -156,6 +157,39 @@ def test_run_once_logs_and_releases_lock_on_crash(postgres_dsn: str, tmp_path: P
     assert ran is True
     assert lock.running is False
     assert any("crashed" in line for line in logs)
+
+
+def test_run_once_recovers_after_connection_failure_and_releases_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeConnection:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    recovered = FakeConnection()
+    connections: list[FakeConnection | Exception] = [RuntimeError("database unavailable"), recovered]
+
+    def conn_factory() -> FakeConnection:
+        result = connections.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(db, "read_settings", lambda _conn: {})
+    lock = RunLock()
+    logs: list[str] = []
+
+    first_ran = main.run_once(lock, conn_factory, [], DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)  # type: ignore[arg-type]
+    second_ran = main.run_once(lock, conn_factory, [], DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)  # type: ignore[arg-type]
+
+    assert first_ran is True
+    assert second_ran is False
+    assert lock.running is False
+    assert recovered.closed is True
+    assert connections == []
+    assert any("OCR pass crashed: RuntimeError: database unavailable" in line for line in logs)
 
 
 # -- scheduler_loop -----------------------------------------------------------------
@@ -264,6 +298,61 @@ def test_scheduler_loop_re_reads_settings_for_the_hour(
             sleep=fake_sleep,
         )
     assert seen_targets[0].hour == 7
+
+
+def test_scheduler_loop_recovers_after_settings_refresh_failure_and_closes_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeConnection:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    failed = FakeConnection("failed")
+    recovered = FakeConnection("recovered")
+    connections = [failed, recovered]
+
+    def conn_factory() -> FakeConnection:
+        return connections.pop(0)
+
+    def read_settings(conn: FakeConnection) -> dict[str, object]:
+        if conn is failed:
+            raise RuntimeError("database unavailable")
+        return {}
+
+    monkeypatch.setattr(db, "read_settings", read_settings)
+    sleep_calls: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        if len(sleep_calls) == 2:
+            raise StopLoop()
+
+    logs: list[str] = []
+    with pytest.raises(StopLoop):
+        main.scheduler_loop(
+            RunLock(),
+            conn_factory,  # type: ignore[arg-type]
+            [],
+            DEFAULT_SETTINGS,
+            str(tmp_path),
+            30,
+            2,
+            run_on_start=False,
+            log_fn=logs.append,
+            now=lambda: FIXED_NOW,
+            sleep=fake_sleep,
+            settings_refresh_seconds=0,
+        )
+
+    assert failed.closed is True
+    assert recovered.closed is True
+    assert connections == []
+    assert sleep_calls == [1, 1]
+    assert any("OCR scheduler settings refresh failed: RuntimeError: database unavailable" in line for line in logs)
 
 
 # -- main -----------------------------------------------------------------------
