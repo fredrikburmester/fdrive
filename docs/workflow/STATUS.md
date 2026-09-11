@@ -5,7 +5,7 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
-## WebDAV storage provider: slices 1–2 done, slice 3 next
+## WebDAV storage provider: slices 1–3 done, slice 4 next
 
 Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-provider`, PR #5.
 
@@ -23,15 +23,39 @@ Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-pro
   storage bound to the identity's username rather than the stored credential's). The shared
   `describeStorageProvider` suite passes over the fake three ways: plain, under a path prefix
   with absolute hrefs, and with a default namespace.
+- **Done (slice 3)**: `ProviderType` gains `webdav`; the API registry, `@fdrive/api`
+  dependency and lockfile, web label ("WebDAV") and icon (`Globe`) are wired. New API tests:
+  admin create/probe/list of a WebDAV row with its form and capabilities, refusal of undeclared
+  config, public listing without the endpoint, a login through a WebDAV row that never touches
+  the SFTPGo fake, and a same-path isolation test with one SFTPGo and one WebDAV identity on
+  one account (each server sees only its own credential). `deploy/compose.dev.yaml` now
+  enables SFTPGo's WebDAV binding on `FDRIVE_DEV_SFTPGO_WEBDAV_PORT` (default 58082) as the
+  dev target.
 - **Confinement**: request URLs are built only from provider paths under the endpoint prefix;
   `assertValidPath` rejects `.`/`..` segments because the URL parser resolves dot segments
   (a `/../etc` path reached the origin root before this check) and `buildUrl` re-verifies
   the prefix. Hrefs on another origin or outside the prefix are dropped, never followed.
-- **Evidence**: `verify.sh package @fdrive/webdav` passes (lint, typecheck, coverage
-  99.6/99.5/100/99.7 against the 99/95/99/99 gates; 220 tests).
-- **Not done**: nothing registered yet; the contracts enum, API registry and web labels are
-  untouched (slice 3). No real-server run yet (slice 4). No application, integration or
-  browser gate was run; none was affected.
+- **Evidence (slice 3)**: `application` passes (lint, typecheck, workspace coverage).
+  `integration` ran 14 API suites: 13 pass, `sftp-rename.test.ts` failed on its own
+  `docker build` of the indexer image hanging on the `python:3.12-slim` metadata fetch, the
+  pre-existing flake recorded in history (Docker Hub was unreachable from this machine during
+  the run). `browser e2e/login-providers.spec.ts e2e/system-storage.spec.ts --workers=1`
+  passes. `workflow` passes. Real dev app over SFTPGo's WebDAV binding, through the API on
+  the running stack: candidate probe ("reachable and requires a login"), row created, alice
+  logged in with `providerType: webdav` and only `atomicMove` true, list, upload with parents,
+  download, byte range (206), rename to a Unicode and literal-percent name, directory copy,
+  recursive delete, and `unsupported` from zip and share creation; SFTPGo's REST API saw the
+  same files. Earlier slice evidence: `package @fdrive/webdav` (220 tests, coverage
+  99.6/99.5/100/99.7).
+- **Limitation**: the dev-app UI pass could not be completed: `next dev` on this machine does
+  not hydrate any page (checked on three dev servers, including other sessions', with headless
+  Chromium; no console or page errors, the HMR websocket handshake fails in browsers only).
+  The browser gate runs a production build and passed, so the shipped path is covered; the
+  WebDAV-specific browser spec is slice 4. The shared dev database also had to be reset
+  (`pnpm dev:env:reset`): its ten recorded migrations predated this branch's four-entry
+  journal, which is `main`'s state, not a WebDAV change.
+- **Not done**: no real-server conformance run yet (slice 4: testkit WebDAV binding, container
+  suite, browser spec). Trash stays off (slice 5).
 
 ## HEIC/HEIF viewing and indexing support: complete
 

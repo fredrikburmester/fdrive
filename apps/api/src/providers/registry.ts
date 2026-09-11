@@ -1,6 +1,7 @@
 import { ProviderType } from "@fdrive/contracts";
 import type { ProviderModule } from "@fdrive/core";
 import { sftpgoModule } from "@fdrive/sftpgo";
+import { webdavModule } from "@fdrive/webdav";
 
 /**
  * Every storage backend this API can talk to, by type. Adding a provider is
@@ -10,6 +11,7 @@ import { sftpgoModule } from "@fdrive/sftpgo";
  */
 export const PROVIDER_MODULES: Readonly<Record<ProviderType, ProviderModule>> = {
   sftpgo: sftpgoModule,
+  webdav: webdavModule,
 };
 
 /** True when `type` names a registered provider module. */

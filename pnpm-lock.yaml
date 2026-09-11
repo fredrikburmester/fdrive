@@ -71,6 +71,9 @@ importers:
       '@fdrive/sftpgo':
         specifier: workspace:*
         version: link:../../packages/sftpgo
+      '@fdrive/webdav':
+        specifier: workspace:*
+        version: link:../../packages/webdav
       '@hono/node-server':
         specifier: ^1.19.5
         version: 1.19.17(hono@4.13.7)
