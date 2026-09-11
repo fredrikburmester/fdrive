@@ -17,6 +17,24 @@ describe("createMemoryRepos ids option", () => {
   });
 });
 
+describe("memory session timestamps", () => {
+  it("retains explicit timestamps when identity fixtures recreate a session", async () => {
+    const repos = createMemoryRepos();
+    const input = {
+      idHash: "copied",
+      accountId: "account",
+      activeIdentityId: "identity",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      lastSeenAt: new Date("2026-01-02T00:00:00Z"),
+      expiresAt: new Date("2026-01-03T00:00:00Z"),
+      userAgent: null,
+      ip: null,
+    };
+    expect(await repos.sessions.create(input)).toEqual(input);
+    expect(await repos.sessions.getByIdHash(input.idHash, input.lastSeenAt)).toEqual(input);
+  });
+});
+
 describe("memory metadata path transaction", () => {
   async function seedMetadata() {
     const repos = createMemoryRepos();
