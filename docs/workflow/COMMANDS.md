@@ -24,6 +24,8 @@ Setup never runs migrations. Python services: `indexer`, `ocr`, `image-embed`.
 ## Verification
 
 Run `bash "$T/verify.sh" "$PWD" <profile> [args]` in the checkout being verified.
+You can also type `/fdrive-verify <profile>` to run this in the current checkout. The name
+is deliberate: a bundled Claude Code skill already owns `/verify` and would shadow it.
 
 | Profile | Checks / prerequisites |
 | --- | --- |

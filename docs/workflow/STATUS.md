@@ -19,6 +19,10 @@ not current instructions.
 - Step logs prune on a bounded window, `FDRIVE_LOG_RETENTION_DAYS` (default 7, `0` disables).
   At the current rate that window settles near 28 MB; lower it or switch to a count cap if
   that matters.
+- Added a `/fdrive-verify <profile>` skill that runs a profile in the current checkout. The
+  name avoids a collision: a bundled Claude Code skill owns `/verify` and shadows a project
+  skill of that name, which is not obvious from the failure. Agents may still call
+  `verify.sh` directly, as WORKING.md directs.
 - `verify workflow` passes, including the new `test-guard-tool-use.sh` regression group.
   This change is configuration, documentation and workflow tooling only; no application,
   browser or security verification is claimed.
