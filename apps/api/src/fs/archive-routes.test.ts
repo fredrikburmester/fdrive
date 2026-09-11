@@ -137,7 +137,12 @@ interface Harness {
 
 const tempDirs: string[] = [];
 
-async function buildHarness(seed: FakeSeed = SEED, username = "alice", password = "secret") {
+async function buildHarness(
+  seed: FakeSeed = SEED,
+  username = "alice",
+  password = "secret",
+  jobMaxBytes = 10 * 1024 * 1024,
+) {
   const server = createFakeSftpgoServer(seed);
   const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
   const withToken = await withTokenFor(client, username, password);
@@ -181,7 +186,7 @@ async function buildHarness(seed: FakeSeed = SEED, username = "alice", password 
         clock,
         jobRunner,
         tmpDir,
-        jobMaxBytes: 10 * 1024 * 1024,
+        jobMaxBytes,
         folderSize: fakeFolderSizeDeps(),
       });
       registerEventRoutes(groups, { bus, clock });
@@ -318,6 +323,24 @@ function jsonPost(body: unknown): RequestInit {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+async function uploadBinary(
+  app: ReturnType<typeof createApp>,
+  path: string,
+  content: Buffer,
+): Promise<void> {
+  const res = await app.request(
+    `/api/v1/fs/upload?path=${encodeURIComponent(path)}`,
+    requestedWith({
+      method: "PUT",
+      headers: { "content-length": String(content.length) },
+      body: content,
+    }),
+  );
+  if (res.status !== 201) {
+    throw new Error(`upload failed: ${res.status}`);
+  }
 }
 
 interface ErrorJson {
@@ -695,6 +718,26 @@ describe("POST /fs/extract and the resulting job", () => {
     expect(listing.entries.map((e) => e.name).sort()).toEqual(["a.txt", "nested"]);
   });
 
+  it("fails the job when a compressed archive expands beyond jobMaxBytes", async () => {
+    const { app, fsEvents } = await buildHarness(SEED, "alice", "secret", 1000);
+    const zipBytes = await buildZipBuffer((zipfile) => {
+      zipfile.addBuffer(Buffer.from("x".repeat(20_000)), "large.txt");
+    });
+    expect(zipBytes.length).toBeLessThan(1000);
+    await uploadBinary(app, "/bomb.zip", zipBytes);
+
+    const res = await app.request("/api/v1/fs/extract", jsonPost({ path: "/bomb.zip" }));
+    expect(res.status).toBe(202);
+    const { jobId } = (await res.json()) as { jobId: string };
+    const final = await waitForJobDone(app, jobId);
+
+    expect(final.state).toBe("failed");
+    expect(final.error).toBe("exceeded the maximum of 1000 bytes allowed for this job");
+    expect(fsEvents.some((event) => event.op === "create" && event.paths.includes("/bomb"))).toBe(
+      false,
+    );
+  });
+
   it("rejects an archive path with no recognized extension", async () => {
     const { app } = await buildHarness();
 
@@ -725,24 +768,6 @@ describe("POST /fs/extract and the resulting job", () => {
 });
 
 describe("GET /fs/archive-entries", () => {
-  async function uploadBinary(
-    app: ReturnType<typeof createApp>,
-    path: string,
-    content: Buffer,
-  ): Promise<void> {
-    const res = await app.request(
-      `/api/v1/fs/upload?path=${encodeURIComponent(path)}`,
-      requestedWith({
-        method: "PUT",
-        headers: { "content-length": String(content.length) },
-        body: content,
-      }),
-    );
-    if (res.status !== 201) {
-      throw new Error(`upload failed: ${res.status}`);
-    }
-  }
-
   it("lists a zip's entries, sorted by path, via two Range reads", async () => {
     const { app } = await buildHarness();
     const zipBytes = await buildZipBuffer((zipfile) => {

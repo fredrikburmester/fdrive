@@ -2,12 +2,14 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync, zstdCompressSync } from "node:zlib";
+import type { StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/testkit";
 import * as tar from "tar-stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ZipFile } from "yazl";
 import { buildRawZip } from "../../test/fixtures/build-zip.js";
 import type { JobProgressPatch } from "../jobs/types.js";
-import { extractArchive } from "./extract.js";
+import { ArchiveEntryCapExceededError, extractArchive } from "./extract.js";
 import { ByteCapExceededError, JobAbortedError } from "./stream-utils.js";
 
 const tempPaths: string[] = [];
@@ -55,6 +57,22 @@ function buildTar(entries: readonly TarEntrySpec[]): Promise<Buffer> {
       pack.entry({ name: entry.name, size: Buffer.byteLength(content) }, content);
     }
     pack.finalize();
+  });
+}
+
+function buildCompressedZip(
+  entries: readonly { name: string; content: Buffer }[],
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const zipfile = new ZipFile();
+    const chunks: Buffer[] = [];
+    zipfile.outputStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    zipfile.outputStream.on("end", () => resolve(Buffer.concat(chunks)));
+    zipfile.outputStream.on("error", reject);
+    for (const entry of entries) {
+      zipfile.addBuffer(entry.content, entry.name);
+    }
+    zipfile.end();
   });
 }
 
@@ -244,6 +262,56 @@ describe("extractArchive: zip", () => {
 
     expect(await readdir(tmpDir)).toEqual([]);
   });
+
+  it("rejects a compressed zip whose cumulative expanded bytes exceed the cap", async () => {
+    const zipBytes = await buildCompressedZip([
+      { name: "one.txt", content: Buffer.from("x".repeat(600)) },
+      { name: "two.txt", content: Buffer.from("y".repeat(600)) },
+    ]);
+    const storage = createMemoryStorage();
+    await storage.upload("/bomb.zip", zipBytes);
+    const tmpDir = await tmpDirFor("zip-expanded-cap");
+    expect(zipBytes.length).toBeLessThan(1000);
+
+    await expect(
+      extractArchive({
+        storage,
+        archivePath: "/bomb.zip",
+        destination: "/out",
+        tmpDir,
+        signal: new AbortController().signal,
+        report: () => {},
+        maxBytes: 1000,
+      }),
+    ).rejects.toThrow(ByteCapExceededError);
+
+    expect(storage.dump()["/out/one.txt"]).toBe("x".repeat(600));
+    expect(storage.dump()["/out/two.txt"]).toBeUndefined();
+    expect(await readdir(tmpDir)).toEqual([]);
+  });
+
+  it("caps the number of entries inspected", async () => {
+    const zipBytes = buildRawZip([
+      { name: "one.txt", content: new Uint8Array() },
+      { name: "two.txt", content: new Uint8Array() },
+    ]);
+    const storage = createMemoryStorage();
+    await storage.upload("/many.zip", zipBytes);
+    const tmpDir = await tmpDirFor("zip-entry-cap");
+
+    await expect(
+      extractArchive({
+        storage,
+        archivePath: "/many.zip",
+        destination: "/out",
+        tmpDir,
+        signal: new AbortController().signal,
+        report: () => {},
+        maxBytes: DEFAULT_MAX_BYTES,
+        maxEntries: 1,
+      }),
+    ).rejects.toThrow(ArchiveEntryCapExceededError);
+  });
 });
 
 describe("extractArchive: tar", () => {
@@ -333,6 +401,78 @@ describe("extractArchive: tar", () => {
 
     expect(result).toEqual({ path: "/out" });
     expect(storage.dump()).toMatchObject({ "/out/a.txt": "alpha" });
+  });
+
+  it("rejects a tar.gz whose expanded entries exceed the cap", async () => {
+    const tarBuffer = await buildTar([{ name: "large.txt", content: "x".repeat(20_000) }]);
+    const archive = gzipSync(tarBuffer);
+    const storage = createMemoryStorage();
+    await storage.upload("/bomb.tar.gz", archive);
+    const tmpDir = await tmpDirFor("targz-expanded-cap");
+    expect(archive.length).toBeLessThan(1000);
+
+    await expect(
+      extractArchive({
+        storage,
+        archivePath: "/bomb.tar.gz",
+        destination: "/out",
+        tmpDir,
+        signal: new AbortController().signal,
+        report: () => {},
+        maxBytes: 1000,
+      }),
+    ).rejects.toThrow(ByteCapExceededError);
+
+    expect(storage.dump()["/out/large.txt"]).toBeUndefined();
+  });
+
+  it("caps decompressed tar bytes consumed internally as PAX metadata", async () => {
+    const longName = `${"nested/".repeat(180)}file.txt`;
+    const tarBuffer = await buildTar([{ name: longName, content: "x" }]);
+    const archive = gzipSync(tarBuffer);
+    const memory = createMemoryStorage();
+    const cancel = vi.fn();
+    let sent = false;
+    const holdOpen = new Promise<void>(() => {});
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          return holdOpen;
+        }
+        sent = true;
+        controller.enqueue(archive);
+      },
+      cancel,
+    });
+    const storage: StorageProvider = {
+      ...memory,
+      download: async () => ({
+        status: 200,
+        body,
+        contentLength: archive.length,
+        contentRange: null,
+        contentType: null,
+        lastModified: null,
+      }),
+    };
+    const tmpDir = await tmpDirFor("targz-pax-cap");
+    expect(archive.length).toBeLessThan(1000);
+    expect(tarBuffer.length).toBeGreaterThan(1000);
+
+    await expect(
+      extractArchive({
+        storage,
+        archivePath: "/pax-bomb.tar.gz",
+        destination: "/out",
+        tmpDir,
+        signal: new AbortController().signal,
+        report: () => {},
+        maxBytes: 1000,
+      }),
+    ).rejects.toThrow(ByteCapExceededError);
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(Object.keys(memory.dump()).some((path) => path.startsWith("/out/"))).toBe(false);
   });
 
   it("extracts a .tar.zst archive (Node 22.15+)", async () => {
@@ -442,10 +582,12 @@ describe("extractArchive: bare .gz", () => {
     expect(storage.dump()).toMatchObject({ "/out/notes.txt": "hello world" });
   });
 
-  it("enforces the byte cap", async () => {
+  it("enforces the byte cap on expanded content", async () => {
     const storage = createMemoryStorage();
-    await storage.upload("/big.txt.gz", gzipSync(Buffer.from("x".repeat(5000))));
+    const archive = gzipSync(Buffer.from("x".repeat(5000)));
+    await storage.upload("/big.txt.gz", archive);
     const tmpDir = await tmpDirFor("bare-gz-cap");
+    expect(archive.length).toBeLessThan(100);
 
     await expect(
       extractArchive({
@@ -455,9 +597,10 @@ describe("extractArchive: bare .gz", () => {
         tmpDir,
         signal: new AbortController().signal,
         report: () => {},
-        maxBytes: 10,
+        maxBytes: 100,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(ByteCapExceededError);
+    expect(storage.dump()["/out/big.txt"]).toBeUndefined();
   });
 });
 
