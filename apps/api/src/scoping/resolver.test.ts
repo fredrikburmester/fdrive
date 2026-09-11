@@ -833,9 +833,72 @@ describe("folder-level mappings", () => {
       available: true,
       scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
     });
-    const status = await resolver.status(identity, false);
-    expect(status.unverifiedPrefixes).toEqual(["/shared"]);
-    expect(status.unmappedMounts).toEqual([]);
+    expect(await resolver.configuredMappings(identity)).toMatchObject({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    const status = await resolver.status(identity, true);
+    expect(status).toMatchObject({
+      unverifiedPrefixes: ["/shared"],
+      unmappedMounts: [],
+      mappings: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+      adoptedMappings: [],
+    });
+  });
+
+  it("does not adopt a folder mapping whose indexed directory mismatches live storage", async () => {
+    const { resolver, identity, mountMappingStore } = await setup({
+      storageForIdentity: async () => mountedHome(),
+      indexer: fakeIndexerDirectory(
+        new Map([
+          ["sftpgo:/alice", homeIndex],
+          [
+            "sftpgo:/_folders/shared",
+            { items: [{ name: "different.txt", kind: "file" }], overflow: false },
+          ],
+        ]),
+      ),
+    });
+    await mountMappingStore.set([folderMapping]);
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    expect(await resolver.configuredMappings(identity)).toMatchObject({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    expect(await resolver.status(identity, true)).toMatchObject({
+      unverifiedPrefixes: ["/shared"],
+      mappings: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+      adoptedMappings: [],
+    });
+  });
+
+  it("does not adopt a shared mapping whose root is configured but not indexed", async () => {
+    const primary = buildProvider({ id: "primary", homeTemplate: "sftpgo:/{username}" });
+    const foreign = buildProvider({ id: "foreign", homeTemplate: "remote:/{username}" });
+    const { resolver } = await setup({
+      providers: fakeProviderRepo([primary, foreign]),
+      storageForIdentity: async () => mountedHome(),
+      indexer: fakeIndexerDirectory(new Map([["sftpgo:/alice", homeIndex]])),
+    });
+    const identity = buildIdentity({ providerId: primary.id });
+    await resolver.setMountMappings([{ ...folderMapping, rootName: "remote" }]);
+
+    expect(await resolver.verifiedIndexScopes(identity)).toEqual({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    expect(await resolver.configuredMappings(identity)).toMatchObject({
+      available: true,
+      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+    });
+    expect(await resolver.status(identity, true)).toMatchObject({
+      mappings: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+      adoptedMappings: [],
+    });
   });
 
   it("recomputes every login immediately after setMountMappings", async () => {
