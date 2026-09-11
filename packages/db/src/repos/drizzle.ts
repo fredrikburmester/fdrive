@@ -546,6 +546,11 @@ function createFileTagRepo(db: Db): FileTagRepo {
     },
     async setTags(identityId, path, tagIds) {
       await db.transaction(async (tx) => {
+        // Match movePrefix's lock order before touching file_tags rows. Without
+        // this, replacing an existing destination can deadlock with its move.
+        await tx.execute(sql`
+          select id from "app"."identities" where id = ${identityId} for update
+        `);
         await tx
           .delete(fileTags)
           .where(and(eq(fileTags.identityId, identityId), eq(fileTags.path, path)));
@@ -565,9 +570,15 @@ function createFileTagRepo(db: Db): FileTagRepo {
       return rows.map((row) => row.path);
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return;
       const oldPrefix = `${oldPath}/`;
       const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
+        // Inserts referencing this identity hold a conflicting key-share lock.
+        // Waiting here makes the following DELETE observe their committed rows.
+        await tx.execute(sql`
+          select id from "app"."identities" where id = ${identityId} for update
+        `);
         await tx.execute(sql`
           delete from "app"."file_tags" f
           using "app"."file_tags" s
@@ -638,9 +649,13 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
       return new Set(rows.map((row) => row.path));
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return;
       const oldPrefix = `${oldPath}/`;
       const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          select id from "app"."identities" where id = ${identityId} for update
+        `);
         await tx.execute(sql`
           delete from "app"."favorites" f
           using "app"."favorites" s
@@ -716,9 +731,13 @@ function createFolderViewRepo(db: Db): FolderViewRepo {
       return row !== undefined;
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return;
       const oldPrefix = `${oldPath}/`;
       const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          select id from "app"."identities" where id = ${identityId} for update
+        `);
         await tx.execute(sql`
           delete from "app"."folder_views" f
           using "app"."folder_views" s
@@ -776,9 +795,13 @@ function createRecentRepo(db: Db): RecentRepo {
         });
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return;
       const oldPrefix = `${oldPath}/`;
       const newPrefix = `${newPath}/`;
       await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          select id from "app"."identities" where id = ${identityId} for update
+        `);
         await tx.execute(sql`
           delete from "app"."recents" f
           using "app"."recents" s
