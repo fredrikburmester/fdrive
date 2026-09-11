@@ -5,6 +5,26 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## WebDAV storage provider: slice 1 in progress
+
+Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/heic-support`, uncommitted.
+
+- **Done (slice 1)**: `packages/webdav` (`@fdrive/webdav`) with the protocol client
+  (`PROPFIND`/`GET`/`PUT`/`MKCOL`/`MOVE`/`COPY`/`DELETE`, Basic auth per request, manual
+  redirects refused, bounded multistatus parsing over `fast-xml-parser`), the `OPTIONS` probe,
+  and an in-memory class 1 fake server in `src/fake` (prefix, href and namespace styles,
+  ranges, `If-Range`, `If-None-Match: *`, `Overwrite`, `X-OC-Mtime`, read-only users,
+  redirect and no-`DAV` toggles). Lockfile updated through `run-in-checkout.sh --lock`.
+- **Confinement**: request URLs are built only from provider paths under the endpoint prefix;
+  `assertValidPath` rejects `.`/`..` segments because the URL parser resolves dot segments
+  (a `/../etc` path reached the origin root before this check) and `buildUrl` re-verifies
+  the prefix. Hrefs on another origin or outside the prefix are dropped, never followed.
+- **Evidence**: `verify.sh package @fdrive/webdav` passes (lint, typecheck, coverage
+  99.5/99.6/100/99.6 against the 99/95/99/99 gates; 140 tests).
+- **Not done**: no `ProviderModule`, no `StorageProvider` adapter, nothing registered; the
+  contracts enum, API registry and web labels are untouched (slices 2–3). No real-server
+  run yet (slice 4). No application, integration or browser gate was run; none was affected.
+
 ## HEIC/HEIF viewing and indexing support: complete
 
 - **Non-destructive storage**: Original `.heic` and `.heif` files remain bit-for-bit untouched in SFTPGo storage; no on-upload conversion.
