@@ -943,6 +943,42 @@ describe("index-queries", () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.src).toBe("2.txt");
     });
+
+    it("filters both move paths by scope before applying the limit", async () => {
+      const rootId = await insertRoot("primary");
+      await queries.recordMove({
+        rootId,
+        src: "alice/old.txt",
+        dst: "alice/current.txt",
+        actor: "mcp",
+      });
+      await queries.recordMove({
+        rootId,
+        src: "bob/old.txt",
+        dst: "bob/current.txt",
+        actor: "mcp",
+      });
+      await queries.recordMove({
+        rootId,
+        src: "alice/old-cross.txt",
+        dst: "bob/current-cross.txt",
+        actor: "mcp",
+      });
+      await queries.recordMove({
+        rootId,
+        src: "bob/old-cross.txt",
+        dst: "alice/current-cross.txt",
+        actor: "mcp",
+      });
+
+      const results = await queries.recentMoves([{ rootId, fsPrefix: "/alice" }], "mcp", 1);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        src: "alice/old.txt",
+        dst: "alice/current.txt",
+      });
+    });
   });
 
   describe("thumbnail", () => {
