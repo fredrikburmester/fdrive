@@ -66,3 +66,10 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["fdrive_indexer.extract", "fdrive_indexer.thumbs_io"]
 disallow_untyped_calls = false
+
+# pillow-heif re-exports its public API (register_heif_opener and friends) from
+# submodules without listing it in __all__, which strict's implicit_reexport
+# rejects. Treat those imports as the exports the library documents them as.
+[[tool.mypy.overrides]]
+module = ["pillow_heif"]
+implicit_reexport = true
