@@ -52,22 +52,33 @@ function probeRequest(): RequestInit {
   return { redirect: "error", signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) };
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (response.body === null || response.bodyUsed) return;
+  await response.body.cancel().catch(() => undefined);
+}
+
 async function readTextWithin(response: Response, maxBytes: number): Promise<string | null> {
   const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && Number(contentLength) > maxBytes) return null;
+  if (contentLength !== null && Number(contentLength) > maxBytes) {
+    await cancelResponseBody(response);
+    return null;
+  }
   if (response.body === null) return "";
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let complete = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        complete = true;
+        break;
+      }
       if (value === undefined) continue;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
         return null;
       }
       chunks.push(value);
@@ -75,6 +86,9 @@ async function readTextWithin(response: Response, maxBytes: number): Promise<str
   } catch {
     return null;
   } finally {
+    if (!complete) {
+      await reader.cancel().catch(() => undefined);
+    }
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -108,6 +122,7 @@ export async function probeConnection(
     return { ok: false, detail: `could not reach ${base}/healthz: ${messageFor(err)}` };
   }
   if (healthRes.status !== 200) {
+    await cancelResponseBody(healthRes);
     return {
       ok: false,
       detail: `GET /healthz returned ${healthRes.status}, expected 200`,
@@ -130,6 +145,7 @@ export async function probeConnection(
       detail: `could not reach ${base}/api/v2/user/token: ${messageFor(err)}`,
     };
   }
+  await cancelResponseBody(tokenRes);
   if (tokenRes.status !== 401) {
     return {
       ok: false,

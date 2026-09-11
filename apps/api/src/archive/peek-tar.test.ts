@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { createGzip, createZstdCompress } from "node:zlib";
 import * as tar from "tar-stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { collectTarPeekEntries, tarCompressionFor } from "./peek-tar.js";
 import { webStreamFromNodeReadable } from "./stream-utils.js";
 
@@ -199,5 +199,26 @@ describe("collectTarPeekEntries: source stream failure", () => {
     });
 
     await expect(collectTarPeekEntries(failing, "none", 10 * 1024 * 1024, 5000)).rejects.toThrow();
+  });
+
+  it("cancels a held download when the tar parser rejects", async () => {
+    const cancel = vi.fn();
+    let sent = false;
+    const held = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new Uint8Array(512).fill(0x78));
+          return;
+        }
+        return new Promise<void>(() => undefined);
+      },
+      cancel,
+    });
+
+    await expect(collectTarPeekEntries(held, "none", 10 * 1024 * 1024, 5000)).rejects.toThrow(
+      /Invalid tar header/,
+    );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
