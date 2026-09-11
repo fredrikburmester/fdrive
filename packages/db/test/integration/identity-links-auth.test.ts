@@ -501,3 +501,20 @@ it("compares credentials under the login lock so equal replacements retain both 
   const remaining = await first.db.select().from(sessions);
   expect(remaining.map((row) => row.idHash).sort()).toEqual(["b".repeat(64), "c".repeat(64)]);
 });
+
+it("serializes provider deletion with first login without raw database failures", async () => {
+  const repos = createRepos(second.db);
+  const row = await repos.providers.create({ type: "sftpgo", baseUrl: "http://delete-race" });
+  const [login, removal] = await Promise.allSettled([
+    a.loginVerified({ ...loginInput("d"), providerId: row.id }),
+    repos.providers.delete(row.id),
+  ]);
+  expect([login, removal].filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  if (login.status === "fulfilled") {
+    expect(removal).toMatchObject({ reason: { name: "ConflictError" } });
+    expect(await repos.providers.get(row.id)).not.toBeNull();
+  } else {
+    expect(login.reason).toMatchObject({ code: "missing_provider" });
+    expect(await repos.identities.countByProvider(row.id)).toBe(0);
+  }
+});

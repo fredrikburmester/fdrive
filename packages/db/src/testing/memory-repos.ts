@@ -53,6 +53,24 @@ function createMemoryProviderRepo(
     async list() {
       return [...byId.values()];
     },
+    async create(input) {
+      for (const provider of byId.values()) {
+        if (keyOf(provider.type, provider.baseUrl) === keyOf(input.type, input.baseUrl))
+          throw new ConflictError("provider endpoint already exists");
+      }
+      const provider: Provider = {
+        id: ids(),
+        type: input.type,
+        baseUrl: input.baseUrl,
+        label: input.label ?? "",
+        config: { ...input.config },
+        enabled: input.enabled ?? true,
+        managedByEnv: input.managedByEnv ?? false,
+        createdAt: new Date(),
+      };
+      byId.set(provider.id, provider);
+      return provider;
+    },
     async ensure(input) {
       for (const provider of byId.values()) {
         if (keyOf(provider.type, provider.baseUrl) === keyOf(input.type, input.baseUrl)) {
@@ -85,6 +103,15 @@ function createMemoryProviderRepo(
       ) {
         throw new ConflictError("provider is still used by identities");
       }
+      if (
+        [...byId.values()].some(
+          (row) =>
+            row.id !== id &&
+            keyOf(row.type, row.baseUrl) ===
+              keyOf(existing.type, patch.baseUrl ?? existing.baseUrl),
+        )
+      )
+        throw new ConflictError("provider endpoint already exists");
       const next: Provider = {
         ...existing,
         ...(patch.label !== undefined ? { label: patch.label } : {}),

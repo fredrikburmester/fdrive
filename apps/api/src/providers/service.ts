@@ -227,22 +227,20 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     async create(input, opts) {
       const module = requireModule(input.type);
       const config = assertValidConfig(module, input.config);
-      const existing = (await repo.list()).find(
-        (provider) => provider.type === input.type && provider.baseUrl === input.baseUrl,
-      );
-      if (existing !== undefined) {
-        throw new ApiHttpError("conflict", "a provider with this endpoint already exists");
-      }
-      const created = await repo.ensure({ type: input.type, baseUrl: input.baseUrl });
-      const provider = await repo.update(created.id, {
-        label: input.label,
-        config,
-        enabled: opts?.enabled ?? true,
-        managedByEnv: opts?.managedByEnv ?? false,
-      });
-      if (provider === null) {
-        throw new ApiHttpError("internal", "provider vanished while being created");
-      }
+      const provider = await repo
+        .create({
+          type: input.type,
+          baseUrl: input.baseUrl,
+          label: input.label,
+          config,
+          enabled: opts?.enabled ?? true,
+          managedByEnv: opts?.managedByEnv ?? false,
+        })
+        .catch((error: unknown) => {
+          if (error instanceof ConflictError)
+            throw new ApiHttpError("conflict", "a provider with this endpoint already exists");
+          throw error;
+        });
       eventLog.record("general", "info", `Storage provider added: ${labelFor(provider)}`, {
         providerId: provider.id,
         type: provider.type,
@@ -291,7 +289,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           if (error instanceof ConflictError)
             throw new ApiHttpError(
               "conflict",
-              "logins already use this provider; add a new provider for another address",
+              "provider update conflicts with an existing endpoint or login",
             );
           throw error;
         });

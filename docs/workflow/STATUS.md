@@ -12,7 +12,12 @@ not current instructions.
   replacements retain both sessions. Memory fixture follows the same decision callback.
 - Deferred API regressions and real PostgreSQL concurrent replacement regression pass.
   All application gates pass using reduced-concurrency coverage; integration passes.
-- Next commits, in order: provider races (#8–10), token/cache races (#3), setup cleanup (#7).
+- #11 committed as `f8b8b55`.
+- #8–10 implemented: insert-only provider creation, uniqueness conflict translation,
+  and a provider row lock around deletion/checks. Matching memory repository behavior.
+  Concurrent create, readdress, and delete/login regressions pass on PostgreSQL;
+  application gates and full integration pass.
+- Next commits, in order: token/cache races (#3), setup cleanup (#7).
   Acceptance criteria: [concurrency plan](../plans/CONCURRENCY.md).
 
 ## Issue #2: quick fixes
