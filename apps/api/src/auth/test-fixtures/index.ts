@@ -24,6 +24,11 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
     sessions.set(row.idHash, row);
     return row;
   };
+  repos.sessions.touch = async (id, input) => {
+    await baseSessions.touch(id, input);
+    const session = sessions.get(id);
+    if (session !== undefined) sessions.set(id, { ...session, ...input });
+  };
   repos.sessions.delete = async (id) => {
     sessions.delete(id);
     await baseSessions.delete(id);
@@ -61,6 +66,38 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
     for (const token of await repos.apiTokens.listByAccount(identity.accountId))
       if (token.identityId === identity.id)
         await repos.apiTokens.delete(token.id, identity.accountId);
+  }
+  async function storeCredential(
+    identityId: string,
+    seal: (id: string) => { ciphertext: Uint8Array; keyId: string },
+  ) {
+    await repos.credentials.put({ identityId, ...seal(identityId) });
+    await repos.credentials.setCachedToken(identityId, null);
+  }
+  async function transferMetadata(identity: Identity, accountId: string) {
+    const targets = new Map((await repos.tags.list(accountId)).map((tag) => [tag.name, tag]));
+    const remapped = new Map<string, string>();
+    const paths = new Set<string>();
+    for (const source of await repos.tags.list(identity.accountId)) {
+      const tagged = await repos.fileTags.pathsForTag(identity.id, source.id);
+      if (tagged.length === 0) continue;
+      const target =
+        targets.get(source.name) ??
+        (await repos.tags.create(accountId, {
+          name: source.name,
+          color: source.color,
+        }));
+      targets.set(source.name, target);
+      remapped.set(source.id, target.id);
+      for (const path of tagged) paths.add(path);
+    }
+    for (const [path, tags] of await repos.fileTags.tagsForPaths(identity.id, [...paths])) {
+      await repos.fileTags.setTags(
+        identity.id,
+        path,
+        tags.map((id) => remapped.get(id) ?? id),
+      );
+    }
   }
   async function verifyProvider(input: {
     providerId: string;
@@ -124,19 +161,19 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
         }
         identity = { ...identity, lastLoginAt: input.at };
         changed.set(identity.id, identity);
-        await repos.credentials.put({
-          identityId: identity.id,
-          ...input.sealCredential(identity.id),
-        });
+        await storeCredential(identity.id, input.sealCredential);
         if (revoke === true)
           for (const session of [...sessions.values()])
             if (session.accountId === identity.accountId)
               await repos.sessions.delete(session.idHash);
-        const session = await repos.sessions.create({
+        const sessionInput = {
           ...input.session,
           accountId: identity.accountId,
           activeIdentityId: identity.id,
-        });
+          createdAt: input.at,
+          lastSeenAt: input.at,
+        };
+        const session = await repos.sessions.create(sessionInput);
         await repos.sessions.touch(session.idHash, {
           lastSeenAt: input.at,
           expiresAt: session.expiresAt,
@@ -159,6 +196,7 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
             externalUsername: input.username,
           });
         if (identity.accountId !== input.accountId) {
+          await transferMetadata(identity, input.accountId);
           for (const session of sessions.values())
             if (
               session.accountId === identity.accountId &&
@@ -169,10 +207,7 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
         }
         identity = { ...identity, accountId: input.accountId, lastLoginAt: input.at };
         changed.set(identity.id, identity);
-        await repos.credentials.put({
-          identityId: identity.id,
-          ...input.sealCredential(identity.id),
-        });
+        await storeCredential(identity.id, input.sealCredential);
         return identity;
       }),
     unlink: (input) =>
@@ -185,6 +220,7 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
           .sort((a, b) => a.id.localeCompare(b.id))[0];
         if (!remaining) throw new IdentityLinksError("last_identity");
         const account = await repos.accounts.create({ displayName: identity.externalUsername });
+        await transferMetadata(identity, account.id);
         const moved = { ...identity, accountId: account.id };
         changed.set(moved.id, moved);
         await revoke(identity);
@@ -207,11 +243,13 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
       atomic(async () => {
         const previous = await live(input.accountId, input.oldSessionIdHash, input.at);
         await owned(input.accountId, input.activeIdentityId);
-        const next = await repos.sessions.create({
+        const rotated = {
           ...previous,
           idHash: input.newSessionIdHash,
           activeIdentityId: input.activeIdentityId,
-        });
+          lastSeenAt: input.at,
+        };
+        const next = await repos.sessions.create(rotated);
         await repos.sessions.delete(previous.idHash);
         return next;
       }),

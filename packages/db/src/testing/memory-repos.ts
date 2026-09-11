@@ -261,14 +261,18 @@ function createMemorySessionRepo(): SessionRepo {
   const byIdHash = new Map<string, Session>();
 
   return {
-    async create(input) {
+    // Identity-operation fixtures may copy an existing login without resetting its age.
+    async create(
+      input: Parameters<SessionRepo["create"]>[0] &
+        Partial<Pick<Session, "createdAt" | "lastSeenAt">>,
+    ) {
       const session: Session = {
         idHash: input.idHash,
         accountId: input.accountId,
         activeIdentityId: input.activeIdentityId,
-        createdAt: new Date(),
+        createdAt: input.createdAt ?? new Date(),
         expiresAt: input.expiresAt,
-        lastSeenAt: new Date(),
+        lastSeenAt: input.lastSeenAt ?? new Date(),
         userAgent: input.userAgent,
         ip: input.ip,
       };
