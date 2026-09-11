@@ -1237,3 +1237,58 @@ it("rotating or removing a share password drops memoized thumbnail verifications
   expect((await h.request(`${base}/${id}`, { method: "DELETE", cookie })).status).toBe(200);
   expect((await h.request(thumb, { cookie: rotated })).status).toBe(404);
 });
+
+// SFTPGo stores a share's download limit in `max_tokens`, declared `integer` by
+// its PostgreSQL and MySQL data providers, so anything past signed 32-bit must be
+// refused at the edge instead of being forwarded to a provider that cannot hold it.
+it("refuses download limits past the SFTPGo counter column on create and update", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const overLimit = 2_147_483_648;
+  const created = await h.create(cookie, { maxDownloads: 2_147_483_647 });
+  const path = `${base}/${created.id}`;
+
+  expect(
+    (
+      await h.request(base, {
+        cookie,
+        method: "POST",
+        body: { name: "Too many", paths: ["/a.docx"], scope: "read", maxDownloads: overLimit },
+      })
+    ).status,
+  ).toBe(400);
+  expect(
+    (await h.request(path, { cookie, method: "PATCH", body: { maxDownloads: overLimit } })).status,
+  ).toBe(400);
+  // The boundary itself stays usable, and the rejected update left the share alone.
+  expect(ManagedShare.parse(await (await h.request(path, { cookie })).json()).maxDownloads).toBe(
+    2_147_483_647,
+  );
+});
+
+// A share created before the limit was bounded still lives in SFTPGo, and the
+// update path re-validates the whole merged share, so its stored limit must not
+// turn every later edit into an upstream failure.
+it("still edits a share whose stored download limit predates the bound", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const created = await h.create(cookie, { maxDownloads: 5 });
+  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
+  const user = h.client.user(auth.accessToken);
+  const [stored] = await user.shares.list();
+  if (!stored) throw new Error("Missing seeded share");
+  await user.shares.update(stored.id, {
+    name: stored.name,
+    scope: stored.scope,
+    paths: stored.paths,
+    maxTokens: Number.MAX_SAFE_INTEGER,
+  });
+
+  const path = `${base}/${created.id}`;
+  expect(
+    (await h.request(path, { cookie, method: "PATCH", body: { name: "Renamed" } })).status,
+  ).toBe(200);
+  const after = ManagedShare.parse(await (await h.request(path, { cookie })).json());
+  expect(after.name).toBe("Renamed");
+  expect(after.maxDownloads).toBe(2_147_483_647);
+});

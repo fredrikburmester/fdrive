@@ -1,5 +1,6 @@
 import {
   CreateShareRequest,
+  MAX_SHARE_DOWNLOADS,
   type ManagedShare,
   type PublicShare,
   type UpdateShareRequest,
@@ -293,7 +294,11 @@ export function createSharesService(deps: SharesDeps) {
         paths: current.paths,
         scope: current.scope,
         expiresAt: current.expiresAt?.toISOString() ?? null,
-        maxDownloads: current.maxTokens,
+        // A patch is merged onto the stored share and re-validated as a whole
+        // request, so a limit SFTPGo already holds from before MAX_SHARE_DOWNLOADS
+        // existed would otherwise fail every later edit, even a rename. Bring it
+        // into range instead: an untouched limit that high never runs out anyway.
+        maxDownloads: Math.min(current.maxTokens, MAX_SHARE_DOWNLOADS),
         presentation: row.presentation,
       };
       const merged = CreateShareRequest.parse({ ...base, ...patch });
