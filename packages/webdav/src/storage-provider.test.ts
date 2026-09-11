@@ -256,6 +256,28 @@ describe("createWebdavStorageProvider", () => {
     expect(await text((await storage.download("/moved/sub/b.txt")).body)).toBe("hello");
   });
 
+  it("reports a refused move of a missing source as not_found, and of an existing one as forbidden", async () => {
+    const fetchImpl = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (init?.method === "MOVE" || init?.method === "COPY") {
+        return new Response("Forbidden", { status: 403 });
+      }
+      return String(url).includes("/present")
+        ? new Response(
+            `<D:multistatus xmlns:D="DAV:"><D:response><D:href>/present</D:href><D:propstat><D:prop><D:resourcetype/></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>`,
+            { status: 207 },
+          )
+        : new Response(null, { status: 404 });
+    }) as unknown as typeof fetch;
+    const storage = createWebdavStorageProvider({
+      client: createWebdavClient({ baseUrl: "http://h/", fetch: fetchImpl }),
+      credential: async () => ALICE,
+    });
+    expect(await kindOf(storage.move("/missing", "/x"))).toBe("not_found");
+    expect(await kindOf(storage.copy("/missing", "/x"))).toBe("not_found");
+    expect(await kindOf(storage.move("/present", "/x"))).toBe("forbidden");
+    expect(await kindOf(storage.copy("/present", "/x"))).toBe("forbidden");
+  });
+
   it("maps denied writes to forbidden and a wrong password to unauthorized", async () => {
     const { storage: bob } = setup(BOB);
     expect(await kindOf(bob.upload("/x.txt", bytes("x")))).toBe("forbidden");
