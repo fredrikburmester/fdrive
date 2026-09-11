@@ -1,5 +1,5 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
 import { createRepos } from "../../src/repos/drizzle.js";
@@ -145,6 +145,62 @@ describe("metadata prefix operations", () => {
       });
     },
   );
+
+  it("moves Unicode descendants and replaces destination conflicts across every metadata repository", async () => {
+    const { account, identity, repos } = await createIdentity("move-unicode");
+    const source = "/archive-📁";
+    const target = "/moved";
+    const sourceChild = `${source}/child.txt`;
+    const targetChild = `${target}/child.txt`;
+    const sourceOpenedAt = new Date("2026-01-01T00:00:00.000Z");
+    const destinationOpenedAt = new Date("2026-02-01T00:00:00.000Z");
+    const sourceTag = await repos.tags.create(account.id, { name: "source", color: null });
+    const destinationTag = await repos.tags.create(account.id, {
+      name: "destination",
+      color: null,
+    });
+
+    await repos.fileTags.setTags(identity.id, sourceChild, [sourceTag.id]);
+    await repos.fileTags.setTags(identity.id, targetChild, [destinationTag.id]);
+    await repos.favorites.add(identity.id, sourceChild, "file");
+    await repos.favorites.add(identity.id, targetChild, "dir");
+    await repos.folderViews.set(identity.id, sourceChild, "grid");
+    await repos.folderViews.set(identity.id, targetChild, "list");
+    await repos.recents.touch(identity.id, sourceChild);
+    await repos.recents.touch(identity.id, targetChild);
+    await db
+      .update(recents)
+      .set({ openedAt: sourceOpenedAt })
+      .where(and(eq(recents.identityId, identity.id), eq(recents.path, sourceChild)));
+    await db
+      .update(recents)
+      .set({ openedAt: destinationOpenedAt })
+      .where(and(eq(recents.identityId, identity.id), eq(recents.path, targetChild)));
+
+    await Promise.all([
+      repos.fileTags.movePrefix(identity.id, source, target, true),
+      repos.favorites.movePrefix(identity.id, source, target, true),
+      repos.folderViews.movePrefix(identity.id, source, target, true),
+      repos.recents.movePrefix(identity.id, source, target, true),
+    ]);
+
+    expect(await metadataPaths(identity.id)).toEqual({
+      fileTags: [targetChild],
+      favorites: [targetChild],
+      folderViews: [targetChild],
+      recents: [targetChild],
+    });
+    expect(
+      (await repos.fileTags.tagsForPaths(identity.id, [targetChild])).get(targetChild),
+    ).toEqual([sourceTag.id]);
+    expect(await repos.favorites.list(identity.id)).toEqual([
+      expect.objectContaining({ path: targetChild, kind: "file" }),
+    ]);
+    expect(await repos.folderViews.get(identity.id, targetChild)).toMatchObject({ mode: "grid" });
+    expect(await repos.recents.list(identity.id, 10)).toEqual([
+      expect.objectContaining({ path: targetChild, openedAt: sourceOpenedAt }),
+    ]);
+  });
 
   it.each(wildcardPrefixes)(
     "deletes a $label path prefix literally across every metadata repository",
