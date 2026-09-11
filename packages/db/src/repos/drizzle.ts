@@ -575,7 +575,7 @@ function createFileTagRepo(db: Db): FileTagRepo {
             and f.path <> s.path
             and (
               (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and s.path like ${`${oldPrefix}%`} and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
             )
         `);
         await tx.execute(sql`
@@ -583,16 +583,16 @@ function createFileTagRepo(db: Db): FileTagRepo {
           set path = case when path = ${oldPath} then ${newPath}
                           else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
           where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and path like ${`${oldPrefix}%`}))
+            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
         `);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const likePattern = `${path}/%`;
+      const prefix = `${path}/`;
       await db.execute(sql`
         delete from "app"."file_tags"
         where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and path like ${likePattern}))
+          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
       `);
     },
   };
@@ -648,7 +648,7 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
             and f.path <> s.path
             and (
               (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and s.path like ${`${oldPrefix}%`} and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
             )
         `);
         await tx.execute(sql`
@@ -656,16 +656,16 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
           set path = case when path = ${oldPath} then ${newPath}
                           else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
           where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and path like ${`${oldPrefix}%`}))
+            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
         `);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const likePattern = `${path}/%`;
+      const prefix = `${path}/`;
       await db.execute(sql`
         delete from "app"."favorites"
         where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and path like ${likePattern}))
+          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
       `);
     },
   };
@@ -786,7 +786,7 @@ function createRecentRepo(db: Db): RecentRepo {
             and f.path <> s.path
             and (
               (s.path = ${oldPath} and f.path = ${newPath})
-              or (${isDir} and s.path like ${`${oldPrefix}%`} and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
+              or (${isDir} and starts_with(s.path, ${oldPrefix}) and f.path = ${newPrefix} || substr(s.path, ${oldPrefix.length + 1}))
             )
         `);
         await tx.execute(sql`
@@ -794,16 +794,16 @@ function createRecentRepo(db: Db): RecentRepo {
           set path = case when path = ${oldPath} then ${newPath}
                           else ${newPrefix} || substr(path, ${oldPrefix.length + 1}) end
           where identity_id = ${identityId}
-            and (path = ${oldPath} or (${isDir} and path like ${`${oldPrefix}%`}))
+            and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
         `);
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      const likePattern = `${path}/%`;
+      const prefix = `${path}/`;
       await db.execute(sql`
         delete from "app"."recents"
         where identity_id = ${identityId}
-          and (path = ${path} or (${isDir} and path like ${likePattern}))
+          and (path = ${path} or (${isDir} and starts_with(path, ${prefix})))
       `);
     },
     async prune(identityId, keep) {
