@@ -8,7 +8,9 @@ import { createInMemoryScopeOverrideStore, type ScopeOverrideStore } from "./ove
 import { type CreateScopeResolverDeps, createScopeResolver } from "./resolver.ts";
 import {
   buildIdentity,
+  buildProvider,
   fakeIndexerDirectory,
+  fakeProviderRepo,
   fakeStorageProvider,
   fileEntry,
 } from "./test-fixtures/index.ts";
@@ -1107,6 +1109,26 @@ describe("setOverrides", () => {
     });
     const scope: Scope = { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/team" };
     await expect(other.resolver.setOverrides(other.identity, [scope])).resolves.toBeUndefined();
+  });
+
+  it("keeps foreign template roots out of identity overrides but accepts them for shared mappings", async () => {
+    const primary = buildProvider({ id: "primary", homeTemplate: "home:/{username}" });
+    const foreign = buildProvider({ id: "foreign", homeTemplate: "remote:/{username}" });
+    const local = await setup({ providers: fakeProviderRepo([primary, foreign]), indexRoots: [] });
+    const identity = buildIdentity({ providerId: primary.id });
+    const scope: Scope = { rootName: "remote", fsPrefix: "/team", virtualPrefix: "/team" };
+    await expect(local.resolver.setOverrides(identity, [scope])).rejects.toMatchObject({
+      reason: "unknown_root",
+    });
+    expect(await local.overrideStore.get(identity.id)).toBeNull();
+    await expect(
+      local.resolver.setOverrides(identity, [{ ...scope, rootName: "home" }]),
+    ).resolves.toBeUndefined();
+    await expect(
+      local.resolver.setMountMappings([
+        { virtualPath: "/team", rootName: "remote", fsPrefix: "/team" },
+      ]),
+    ).resolves.toBeUndefined();
   });
 
   it("resets the override when given an empty list", async () => {

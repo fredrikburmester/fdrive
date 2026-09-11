@@ -463,11 +463,12 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
       : { ...common, ...state, isAdmin: false };
   }
 
-  /** Index roots plus the template root: the only roots a mapping may name. */
-  async function knownRootNames(): Promise<Set<string>> {
+  /** Index roots plus the identity's template root, or every template for shared mappings. */
+  async function knownRootNames(providerId?: string): Promise<Set<string>> {
     const knownRoots = new Set((deps.indexRoots ?? []).map((root) => root.name));
     for (const provider of await deps.providers.list()) {
       if (provider.type !== "sftpgo" || !provider.enabled) continue;
+      if (providerId !== undefined && provider.id !== providerId) continue;
       try {
         const template = sftpgoHomeTemplate(provider);
         if (template !== null) knownRoots.add(parseHomeTemplate(template).rootName);
@@ -495,7 +496,7 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
     scopes: readonly Scope[],
     unindexedPrefixes: readonly string[] = [],
   ): Promise<void> {
-    const knownRoots = await knownRootNames();
+    const knownRoots = await knownRootNames(identity.providerId);
     validateScopeOverrides(scopes, unindexedPrefixes, { knownRoots });
     if (scopes.length === 0 && unindexedPrefixes.length === 0) {
       await deps.overrides.reset(identity.id);
