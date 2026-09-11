@@ -348,20 +348,18 @@ export interface ListDirectoryArgs {
  * availability: this tool never consults `ScopeResolver` or `IndexQueries`.
  * A configured recycle folder is the one provider-backed location withheld
  * from ordinary browsing; direct requests into it fail before storage is
- * touched, and its entry is removed before pagination.
+ * touched, and its entry is removed before pagination. The listing is taken
+ * at the normalized path the Trash check ran against, never the raw
+ * argument, so the folder read is always the one that was checked.
  */
 export async function runListDirectory(
   deps: TrashPathDeps,
   principal: Principal,
   args: ListDirectoryArgs,
 ) {
-  const path = args.path ?? "/";
-  const normalizedPath = normalizePath(path);
+  const path = normalizePath(args.path ?? "/");
   const trashPath = currentTrashPath(deps, principal);
-  if (
-    trashPath !== null &&
-    (normalizedPath === trashPath || isUnderPath(trashPath, normalizedPath))
-  ) {
+  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path))) {
     throw new McpToolError("path is in the configured Trash folder");
   }
 
@@ -953,18 +951,27 @@ async function requireVerifiedScopes(
 }
 
 /**
- * Throws unless `path` lies inside the caller's verified scope, survives the
- * virtual round trip (so a location shadowed by a more specific override is
- * never written through the wrong identity), and is not in the trash. The
- * same admission every read tool applies before it returns content, so an
- * MCP token can never write where fdrive itself would refuse to look.
+ * Returns the admitted path in the coordinates `principal.storage` speaks
+ * (the identity's virtual filesystem, the same space `ScopeResolver` lists
+ * through and every `ReadAuthorizer` target uses). Throws unless `path`
+ * lies inside the caller's verified scope, survives the virtual round trip
+ * (so a location shadowed by a more specific override is never written
+ * through the wrong identity), and is not in the trash. The same admission
+ * every read tool applies before it returns content, so an MCP token can
+ * never write where fdrive itself would refuse to look.
+ *
+ * Callers must hand the returned path to storage, never the argument they
+ * passed in: admission is decided on the normalized, round-tripped path,
+ * while `@fdrive/sftpgo` forwards whatever string it is given verbatim
+ * (`assertValidPath` resolves no ".", ".." or repeated separator). Writing
+ * through the raw argument would send a path that was never the one checked.
  */
 function assertWritablePath(
   scopes: readonly Scope[],
   trashPath: string | null,
   path: string,
   label: string,
-): void {
+): string {
   const resolved = toFsPath(scopes, path);
   const virtualPath =
     resolved === null ? null : roundTripVirtualPath(scopes, resolved.rootName, resolved.fsPath);
@@ -974,12 +981,15 @@ function assertWritablePath(
   ) {
     throw new McpToolError(`${label} is outside this identity's scope`);
   }
+  return virtualPath;
 }
 
 /**
  * Creates a folder through `principal.storage` once `args.path` passes the
- * verified-scope admission (`assertWritablePath`). Works without any index
- * rows, but never without verified scopes.
+ * verified-scope admission (`assertWritablePath`). The folder is created at
+ * the admitted path, not at the raw argument, so the location written is
+ * always the one that was checked. Works without any index rows, but never
+ * without verified scopes.
  */
 export async function runCreateFolder(
   deps: McpToolDeps,
@@ -988,9 +998,9 @@ export async function runCreateFolder(
 ) {
   requireWrites(deps);
   const scopes = await requireVerifiedScopes(deps, principal);
-  assertWritablePath(scopes, currentTrashPath(deps, principal), args.path, "path");
-  await principal.storage.mkdir(args.path, { parents: true });
-  return { created: args.path, url: folderUrl(await deps.publicUrl(), args.path) };
+  const path = assertWritablePath(scopes, currentTrashPath(deps, principal), args.path, "path");
+  await principal.storage.mkdir(path, { parents: true });
+  return { created: path, url: folderUrl(await deps.publicUrl(), path) };
 }
 
 // -------------------------------------------------------------- move_path
@@ -1034,32 +1044,34 @@ export async function recordMoveIfInScope(
 
 /**
  * Moves or renames a path through `principal.storage` once both `src` and
- * `dst` pass the verified-scope admission (`assertWritablePath`). Works
- * without any index rows, but never without verified scopes. Best-effort
- * records the move in `idx.moves` afterward when the index knows the root.
+ * `dst` pass the verified-scope admission (`assertWritablePath`). Both ends
+ * of the move use the admitted paths, not the raw arguments, so the
+ * locations touched are always the ones that were checked. Works without
+ * any index rows, but never without verified scopes. Best-effort records
+ * the move in `idx.moves` afterward when the index knows the root.
  */
 export async function runMovePath(deps: McpToolDeps, principal: Principal, args: MovePathArgs) {
   requireWrites(deps);
   const scopes = await requireVerifiedScopes(deps, principal);
   const trashPath = currentTrashPath(deps, principal);
-  assertWritablePath(scopes, trashPath, args.src, "src");
-  assertWritablePath(scopes, trashPath, args.dst, "dst");
-  await principal.storage.move(args.src, args.dst);
+  const src = assertWritablePath(scopes, trashPath, args.src, "src");
+  const dst = assertWritablePath(scopes, trashPath, args.dst, "dst");
+  await principal.storage.move(src, dst);
 
   const ctx = await resolveScopeContext(deps.indexQueries, scopes, trashPath);
   if (ctx !== null) {
-    await recordMoveIfInScope(deps, ctx, args);
+    await recordMoveIfInScope(deps, ctx, { src, dst });
   }
 
   // Best-effort hint only (SFTPGo's move response carries no entry kind):
   // a destination with no extension is treated as a folder, matching how
   // fdrive's own folder names are chosen in practice.
-  const isDir = extensionOf(baseName(args.dst)) === "";
+  const isDir = extensionOf(baseName(dst)) === "";
   const publicUrl = await deps.publicUrl();
   return {
-    moved: args.src,
-    to: args.dst,
-    url: isDir ? folderUrl(publicUrl, args.dst) : fileUrl(publicUrl, args.dst),
+    moved: src,
+    to: dst,
+    url: isDir ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
   };
 }
 
