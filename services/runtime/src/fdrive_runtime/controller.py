@@ -35,6 +35,19 @@ def parse_retry_after(raw: str) -> float:
     return value
 
 
+class EndpointUnavailable(ValueError):
+    """The feature endpoint could not be reached, as distinct from answering
+    with something the contract rejects.
+
+    The two deserve different patience. A document that arrives and violates
+    the contract is a real signal and should fail closed quickly. A poll that
+    never completed usually means the host is busy — and stopping a healthy
+    child for that reloads a model, which makes the host busier, which fails
+    the next poll. Under load that loop stopped workers that had never failed
+    to start.
+    """
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args: object, **_kwargs: object) -> urllib.request.Request | None:
         return None
@@ -78,7 +91,7 @@ def parse_feature_snapshot(body: object) -> FeatureSnapshot:
 
 
 class FeatureClient:
-    def __init__(self, url: str, token: str, timeout_seconds: float = 2.0) -> None:
+    def __init__(self, url: str, token: str, timeout_seconds: float = 5.0) -> None:
         self.url = url
         self.token = token
         self.timeout_seconds = timeout_seconds
@@ -96,8 +109,10 @@ class FeatureClient:
                 if len(raw) > 64 * 1024:
                     raise ValueError("feature endpoint response is too large")
                 return parse_feature_snapshot(json.loads(raw))
-        except (http.client.HTTPException, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise ValueError(f"feature endpoint unavailable: {type(error).__name__}") from error
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError) as error:
+            raise EndpointUnavailable(f"feature endpoint unreachable: {type(error).__name__}") from error
+        except json.JSONDecodeError as error:
+            raise ValueError(f"feature document is not JSON: {type(error).__name__}") from error
 
 
 class WorkerLifecycle:
@@ -136,9 +151,9 @@ class WorkerLifecycle:
     def desired(self, snapshot: FeatureSnapshot) -> bool:
         return any(snapshot.values[key] for key in self.features)
 
-    def reconcile(self, snapshot: FeatureSnapshot | None) -> None:
+    def reconcile(self, snapshot: FeatureSnapshot | None, reason: str = "feature document unavailable") -> None:
         if snapshot is None:
-            self.stop("feature document unavailable")
+            self.stop(reason)
             return
         if snapshot.revision != self._revision:
             self._revision = snapshot.revision
@@ -148,6 +163,14 @@ class WorkerLifecycle:
             return
         if self._process is not None and self._process.poll() is None:
             self._status = "ready" if self._child_ready() else "preparing"
+            if self._status == "ready":
+                # `error` describes the current state or it is worthless as a
+                # diagnostic. A transient stop (an api recreate during an update,
+                # say) leaves a reason behind that neither the restart path nor
+                # this one used to clear, so a healthy worker kept serving
+                # `ready` next to a resolved failure until the retry window
+                # elapsed or someone saved settings.
+                self._error = None
             self._publish_status()
             return
         self._process = None
@@ -162,6 +185,7 @@ class WorkerLifecycle:
         try:
             self._process = self._popen(self.command, start_new_session=True)
             self._status = "preparing"
+            self._error = None
         except OSError as error:
             self._status = "failed"
             self._error = f"worker start failed: {type(error).__name__}"
@@ -282,13 +306,25 @@ def run(
     interval: float,
     stale_seconds: float,
     sleep: Callable[[float], None],
+    unreachable_seconds: float | None = None,
 ) -> None:
+    """Poll the feature document and reconcile the child against it.
+
+    Two windows rather than one, for the reason `EndpointUnavailable` gives:
+    a malformed or rejected document fails closed after `stale_seconds`, an
+    unreachable endpoint after the longer `unreachable_seconds`. Both still
+    fail closed, so a real API outage cannot leave optional processing running.
+    """
+    unreachable_after = stale_seconds if unreachable_seconds is None else unreachable_seconds
     last_good_at: float | None = None
     while True:
         try:
             snapshot = client.fetch()
             last_good_at = time.monotonic()
             lifecycle.reconcile(snapshot)
+        except EndpointUnavailable:
+            if last_good_at is None or time.monotonic() - last_good_at >= unreachable_after:
+                lifecycle.reconcile(None, "feature endpoint unreachable")
         except ValueError:
             if last_good_at is None or time.monotonic() - last_good_at >= stale_seconds:
                 lifecycle.reconcile(None)
@@ -311,8 +347,11 @@ def main() -> None:
     serve_status(lifecycle, int(os.environ.get("FDRIVE_RUNTIME_PORT", "8099")))
     interval = float(os.environ.get("FDRIVE_RUNTIME_POLL_SECONDS", "3"))
     stale_seconds = float(os.environ.get("FDRIVE_RUNTIME_STALE_SECONDS", "9"))
+    unreachable_seconds = float(os.environ.get("FDRIVE_RUNTIME_UNREACHABLE_SECONDS", "60"))
     if interval <= 0 or stale_seconds < interval:
         raise ValueError("runtime polling intervals must be positive and stale window >= poll interval")
+    if unreachable_seconds < stale_seconds:
+        raise ValueError("runtime unreachable window must be >= stale window")
 
     def stop_handler(_signum: int, _frame: object) -> None:
         lifecycle.stop(None)
@@ -321,7 +360,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
     try:
-        run(lifecycle, client, interval, stale_seconds, time.sleep)
+        run(lifecycle, client, interval, stale_seconds, time.sleep, unreachable_seconds)
     except KeyboardInterrupt:
         lifecycle.stop(None)
 
