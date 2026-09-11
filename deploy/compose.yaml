@@ -254,6 +254,7 @@ services:
     logging: *default-logging
 
   tika:
+    init: true
     build:
       context: ..
       dockerfile: deploy/runtime/Dockerfile.tika
@@ -269,6 +270,7 @@ services:
     logging: *default-logging
 
   embed:
+    init: true
     # Pinned to an explicit version (not :cpu-latest) plus digest, see
     # deploy/REFERENCE.md's pins table.
     build:
@@ -302,6 +304,7 @@ services:
   # restarts, matching the indexer's HF_HOME convention. No database
   # dependency: this service is stateless.
   image-embed:
+    init: true
     build:
       context: ..
       dockerfile: deploy/runtime/Dockerfile.image-embed
