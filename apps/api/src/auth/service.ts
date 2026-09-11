@@ -75,7 +75,8 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       return false;
     const resolved = await deps.providers.get(identity.providerId);
     return (
-      resolved?.provider.type === "sftpgo" && resolved.provider.baseUrl === deps.config.sftpgoUrl
+      resolved?.provider.type === "sftpgo" &&
+      resolved.provider.baseUrl.replace(/\/+$/, "") === deps.config.sftpgoUrl.replace(/\/+$/, "")
     );
   }
 

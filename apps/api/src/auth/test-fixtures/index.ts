@@ -42,6 +42,9 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
       release();
     }
   }
+  // Match the provider-row lock held by production login/link transactions.
+  const updateProvider = repos.providers.update.bind(repos.providers);
+  repos.providers.update = (id, patch) => atomic(() => updateProvider(id, patch));
   async function live(accountId: string, hash: string, at: Date) {
     const session = await repos.sessions.getByIdHash(hash, at);
     if (session === null || session.accountId !== accountId)

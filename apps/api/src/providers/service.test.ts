@@ -342,6 +342,49 @@ describe("createProviderService: seedFromEnvironment", () => {
     expect(h.events).toEqual([]);
   });
 
+  it.each([
+    ["http://env:8080", "http://env:8080/", true],
+    ["http://env:8080/", "http://env:8080", true],
+    ["http://env:8080/base/", "http://env:8080/base", false],
+  ] as const)("keeps provider %s when the environment becomes %s", async (stored, env, enabled) => {
+    const h = harness({ sftpgoUrl: env });
+    const row = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: stored });
+    await h.repos.providers.update(row.id, {
+      managedByEnv: true,
+      enabled,
+      config: { homeTemplate: "kept:/{username}" },
+    });
+    const account = await h.repos.accounts.create({ displayName: "Alice" });
+    const identity = await h.repos.identities.create({
+      accountId: account.id,
+      providerId: row.id,
+      externalUsername: "alice",
+    });
+    await h.service.seedFromEnvironment();
+    expect(await h.service.list()).toEqual([
+      expect.objectContaining({
+        id: row.id,
+        baseUrl: stored,
+        managedByEnv: true,
+        enabled,
+        config: { homeTemplate: "kept:/{username}" },
+      }),
+    ]);
+    expect((await h.repos.identities.get(identity.id))?.providerId).toBe(row.id);
+    expect(h.events).toEqual([]);
+  });
+
+  it("prefers the already pinned row over an older equivalent spelling", async () => {
+    const h = harness({ sftpgoUrl: "http://env:8080/" });
+    const other = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://env:8080/" });
+    const pinned = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://env:8080" });
+    await h.repos.providers.update(pinned.id, { managedByEnv: true });
+    await h.service.seedFromEnvironment();
+    expect((await h.repos.providers.get(other.id))?.managedByEnv).toBe(false);
+    expect((await h.service.defaultProvider())?.id).toBe(pinned.id);
+    expect(await h.service.list()).toHaveLength(2);
+  });
+
   it("leaves a row an admin disabled alone across restarts", async () => {
     const h = harness({ sftpgoUrl: "http://env:8080" });
     await h.service.seedFromEnvironment();

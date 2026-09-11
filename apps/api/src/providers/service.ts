@@ -389,7 +389,10 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
           : deps.environment.sftpgoUrl;
       const rows = await repo.list();
       for (const row of rows) {
-        if (!row.managedByEnv || row.baseUrl === envUrl) {
+        if (
+          !row.managedByEnv ||
+          (envUrl !== undefined && row.baseUrl.replace(/\/+$/, "") === envUrl.replace(/\/+$/, ""))
+        ) {
           continue;
         }
         // Without the variable the row is simply handed to the admin. With
@@ -409,7 +412,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       if (envUrl === undefined) {
         return;
       }
-      const existing = rows.find((row) => row.type === "sftpgo" && row.baseUrl === envUrl);
+      const matching = rows.filter(
+        (row) =>
+          row.type === "sftpgo" && row.baseUrl.replace(/\/+$/, "") === envUrl.replace(/\/+$/, ""),
+      );
+      // Existing installations can contain both spellings. Keep the pinned
+      // identity binding rather than adopting an older, unpinned duplicate.
+      const existing = matching.find((row) => row.managedByEnv) ?? matching[0];
       const row = existing ?? (await repo.ensure({ type: "sftpgo", baseUrl: envUrl }));
       // Only a row this seed creates starts enabled; one an admin disabled
       // stays that way across restarts.
