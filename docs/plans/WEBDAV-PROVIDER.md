@@ -1,6 +1,6 @@
 # WebDAV storage provider
 
-Status: slice 1 implemented (PR #5, see [STATUS](../workflow/STATUS.md)); slices 2–5 open. Reviewed against source on 2026-09-11. Supersedes the WebDAV
+Status: slices 1–2 implemented (PR #5, see [STATUS](../workflow/STATUS.md)); slices 2–5 open. Reviewed against source on 2026-09-11. Supersedes the WebDAV
 section that lived in [ROADMAP](ROADMAP.md). Contracts and integration points are those in
 [the provider guide](../STORAGE-PROVIDERS.md); nothing here changes the `ProviderModule` or
 `StorageProvider` ports.
