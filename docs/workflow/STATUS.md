@@ -17,7 +17,12 @@ not current instructions.
   and a provider row lock around deletion/checks. Matching memory repository behavior.
   Concurrent create, readdress, and delete/login regressions pass on PostgreSQL;
   application gates and full integration pass.
-- Next commits, in order: token/cache races (#3), setup cleanup (#7).
+- Provider fixes committed as `e413915`.
+- #3 implemented: per-identity coalescing, generation checks and ordered database writes
+  prevent stale mint results from surviving invalidate/prime. Scope cache completions
+  can only update/remove the in-flight entry they own. Deferred race regressions, all
+  application gates and full integration pass.
+- Remaining: setup cleanup (#7).
   Acceptance criteria: [concurrency plan](../plans/CONCURRENCY.md).
 
 ## Issue #2: quick fixes

@@ -115,6 +115,7 @@ describe("createScopeCache", () => {
 
     d.resolve(1);
     expect(await stalePending).toBe(1);
+    expect(await cache.get("identity-1:a", async () => 99)).toBe(5);
   });
 
   it("invalidatePrefix leaves an in-flight entry for a different identity untouched", async () => {
@@ -163,4 +164,21 @@ describe("createScopeCache", () => {
     const cache = createScopeCache<number>();
     expect(await cache.get("k", async () => 1)).toBe(1);
   });
+});
+
+it("old completion cannot delete a replacement in-flight entry", async () => {
+  const cache = createScopeCache<number>();
+  const old = deferred<number>();
+  const fresh = deferred<number>();
+  const first = cache.get("key", () => old.promise);
+  cache.invalidatePrefix("key");
+  const second = cache.get("key", () => fresh.promise);
+  old.resolve(1);
+  await first;
+  const compute = vi.fn(async () => 99);
+  const third = cache.get("key", compute);
+  fresh.resolve(2);
+  expect(await second).toBe(2);
+  expect(await third).toBe(2);
+  expect(compute).not.toHaveBeenCalled();
 });
