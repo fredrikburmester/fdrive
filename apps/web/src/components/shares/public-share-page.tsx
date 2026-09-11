@@ -232,11 +232,13 @@ function SharedContents({
             <span className="truncate font-medium">{share.fileName ?? "Shared file"}</span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {share.fileName && publicPreviewKind(share.fileName) !== "none" && (
-              <Button variant="outline" onClick={() => previewFile(share.fileName ?? "", "/")}>
-                Preview
-              </Button>
-            )}
+            {share.maxDownloads === 0 &&
+              share.fileName &&
+              publicPreviewKind(share.fileName) !== "none" && (
+                <Button variant="outline" onClick={() => previewFile(share.fileName ?? "", "/")}>
+                  Preview
+                </Button>
+              )}
             {share.fileName &&
               canPeekArchive(share.fileName, { downloadLimited: share.maxDownloads > 0 }) && (
                 <Button variant="outline" onClick={() => peekArchive(share.fileName ?? "", "/")}>
@@ -335,7 +337,7 @@ function SharedEntries({
               </TableCell>
               <TableCell>
                 <div className="flex justify-end gap-2">
-                  {kind !== "none" && (
+                  {!downloadLimited && kind !== "none" && (
                     <Button
                       variant="outline"
                       size="sm"

@@ -261,7 +261,7 @@ test("directory paths, bounded safe previews, Range and multipath ZIP use only p
 test("upload-only retries password failures, forbids reads, and reports expired and exhausted links", async ({
   page,
   browser,
-}) => {
+}, testInfo) => {
   await loginAs(page, "share_owner", "share-owner-test-password");
   const url = await createLink(page, ["incoming"], "Upload inbox", "upload-password", true);
   const id = new URL(url).pathname.split("/").at(-1);
@@ -314,6 +314,19 @@ test("upload-only retries password failures, forbids reads, and reports expired 
     await expect(visitor.getByText("This link has expired.", { exact: true })).toBeVisible();
     const limited = await create("One download", null, 1);
     await visitor.goto(new URL(limited.publicPath, url).href);
+    await expect(visitor.getByRole("button", { name: "Preview", exact: true })).toHaveCount(0);
+    await expect(visitor.getByRole("link", { name: "Download", exact: true })).toBeVisible();
+    const beforeDownload = await visitor.request.get(
+      new URL(`/api/v1/public/shares/${limited.id}`, url).href,
+    );
+    expect(beforeDownload.ok(), await beforeDownload.text()).toBe(true);
+    expect((await beforeDownload.json()) as { usedDownloads: number }).toMatchObject({
+      usedDownloads: 0,
+    });
+    await visitor.screenshot({
+      path: testInfo.outputPath("limited-share-before-download.png"),
+      fullPage: true,
+    });
     await downloaded(visitor, () =>
       visitor.getByRole("link", { name: "Download", exact: true }).click(),
     );
