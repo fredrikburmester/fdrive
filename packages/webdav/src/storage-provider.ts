@@ -66,6 +66,30 @@ export function toStorageError(error: unknown, statusKinds: StatusKinds = {}): n
 /** A `MOVE`, `COPY` or bare `MKCOL` answering 409 is missing an intermediate collection. */
 const MISSING_PARENT: StatusKinds = { 409: "not_found" };
 
+/**
+ * Runs a `MOVE` or `COPY`. Some servers (SFTPGo among them) answer 403
+ * for a source that does not exist; the port promises `not_found` there,
+ * so a refusal is checked against the source before it is reported as
+ * `forbidden`. The extra request happens only on that error path.
+ */
+async function copyOrMove(
+  api: WebdavUserApi,
+  fn: () => Promise<void>,
+  source: string,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    if (error instanceof WebdavError && error.kind === "forbidden") {
+      const existing = await statOrNull(api, source);
+      if (existing === null) {
+        throw new StorageError("not_found", `not found: ${source}`, { cause: error });
+      }
+    }
+    throw error;
+  }
+}
+
 async function run<T>(fn: () => Promise<T>, statusKinds?: StatusKinds): Promise<T> {
   try {
     return await fn();
@@ -184,17 +208,23 @@ export function createWebdavStorageProvider(deps: WebdavStorageProviderDeps): St
       return run(() => user.mkcol(normalized), MISSING_PARENT);
     },
 
-    move: (path, target, opts) =>
-      run(
-        async () => (await api()).move(normalizePath(path), normalizePath(target), opts ?? {}),
+    async move(path, target, opts) {
+      const source = normalizePath(path);
+      const user = await api();
+      await run(
+        () => copyOrMove(user, () => user.move(source, normalizePath(target), opts ?? {}), source),
         MISSING_PARENT,
-      ),
+      );
+    },
 
-    copy: (path, target, opts) =>
-      run(
-        async () => (await api()).copy(normalizePath(path), normalizePath(target), opts ?? {}),
+    async copy(path, target, opts) {
+      const source = normalizePath(path);
+      const user = await api();
+      await run(
+        () => copyOrMove(user, () => user.copy(source, normalizePath(target), opts ?? {}), source),
         MISSING_PARENT,
-      ),
+      );
+    },
 
     async deleteFile(path: string) {
       const normalized = normalizePath(path);

@@ -227,6 +227,9 @@ export async function startEnvironment(
     );
     stopFns.push(() => sftpgo.stop());
     await options.prepareSftpgo?.(sftpgo.baseUrl);
+    // The same container's WebDAV binding, for specs that add it as a
+    // second provider type; workers inherit the setup process's env.
+    process.env.E2E_SFTPGO_WEBDAV_URL = sftpgo.webdavUrl;
 
     const masterKey = randomBytes(32).toString("base64");
 

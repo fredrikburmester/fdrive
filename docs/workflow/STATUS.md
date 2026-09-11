@@ -5,7 +5,7 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
-## WebDAV storage provider: slices 1–3 done, slice 4 next
+## WebDAV storage provider: slices 1–4 done, slice 5 (Trash) open
 
 Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-provider`, PR #5.
 
@@ -31,6 +31,17 @@ Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-pro
   one account (each server sees only its own credential). `deploy/compose.dev.yaml` now
   enables SFTPGo's WebDAV binding on `FDRIVE_DEV_SFTPGO_WEBDAV_PORT` (default 58082) as the
   dev target.
+- **Done (slice 4)**: `startSftpgo` in the testkit now enables SFTPGo's WebDAV binding and
+  returns `webdavUrl`; `packages/webdav/test/integration/container.contract.test.ts` runs the
+  shared conformance suite plus probe/authenticate, denied-write (`forbidden`), same-path
+  isolation between two logins, and range/stale-`If-Range` checks against it. The real server
+  answers 403 for a `MOVE`/`COPY` of a missing source, so the adapter now stats the source on a
+  refusal and reports `not_found` when it is gone (unit-tested on the fake). The e2e stack
+  exports `E2E_SFTPGO_WEBDAV_URL`; the new `e2e/webdav-provider.spec.ts` adds the WebDAV
+  binding through System > Storage (type picker, probe, remove) and signs in through it,
+  browses the seeded home, uploads a file and checks the login's capabilities. The login row is
+  disabled rather than removed afterwards (a login binds it), and `system-storage.spec.ts`
+  now counts cards relative to what is present.
 - **Confinement**: request URLs are built only from provider paths under the endpoint prefix;
   `assertValidPath` rejects `.`/`..` segments because the URL parser resolves dot segments
   (a `/../etc` path reached the origin root before this check) and `buildUrl` re-verifies
@@ -54,8 +65,14 @@ Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-pro
   WebDAV-specific browser spec is slice 4. The shared dev database also had to be reset
   (`pnpm dev:env:reset`): its ten recorded migrations predated this branch's four-entry
   journal, which is `main`'s state, not a WebDAV change.
-- **Not done**: no real-server conformance run yet (slice 4: testkit WebDAV binding, container
-  suite, browser spec). Trash stays off (slice 5).
+- **Evidence (slice 4)**: `package @fdrive/webdav` passes; `@fdrive/webdav test:integration`
+  19/19 against the SFTPGo WebDAV container; `@fdrive/testkit test:integration` 10/10;
+  `browser e2e/webdav-provider.spec.ts e2e/login-providers.spec.ts e2e/system-storage.spec.ts
+  --workers=1` passes 7/7.
+- **Not done**: Trash through generic move (slice 5) needs the provider-aware settings copy and
+  a contract change; see the plan. GitGuardian on PR #5 flags two fake test passwords in an
+  earlier commit's history; the current tree no longer contains those patterns, and history
+  is not rewritten here, so the incidents need dismissing in the GitGuardian dashboard.
 
 ## HEIC/HEIF viewing and indexing support: complete
 
