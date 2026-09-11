@@ -103,21 +103,32 @@ export const sessions = appSchema.table(
     userAgent: text("user_agent"),
     ip: text("ip"),
   },
-  (table) => [index("sessions_expires_at_idx").on(table.expiresAt)],
+  (table) => [
+    index("sessions_expires_at_idx").on(table.expiresAt),
+    index("sessions_account_id_idx").on(table.accountId),
+    index("sessions_active_identity_id_idx").on(table.activeIdentityId),
+  ],
 );
 
-export const apiTokens = appSchema.table("api_tokens", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  accountId: uuid("account_id")
-    .notNull()
-    .references(() => accounts.id, { onDelete: "cascade" }),
-  identityId: uuid("identity_id").references(() => identities.id, { onDelete: "set null" }),
-  name: text("name").notNull(),
-  tokenHash: text("token_hash").notNull().unique(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-  expiresAt: timestamp("expires_at", { withTimezone: true }),
-});
+export const apiTokens = appSchema.table(
+  "api_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    identityId: uuid("identity_id").references(() => identities.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("api_tokens_account_id_idx").on(table.accountId),
+    index("api_tokens_identity_id_idx").on(table.identityId),
+  ],
+);
 
 export const tags = appSchema.table(
   "tags",
@@ -275,6 +286,7 @@ export const officeFiles = appSchema.table(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    index("office_files_provider_id_idx").on(table.providerId),
     uniqueIndex("office_files_active_location_unique")
       .on(table.providerId, table.rootName, table.path)
       .where(sql`${table.deletedAt} is null`),

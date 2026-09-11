@@ -56,6 +56,23 @@ describe("migrate", () => {
     await expect(migrate(db)).resolves.toBeUndefined();
   });
 
+  it("covers every app foreign key with an unconditional leading-column index", async () => {
+    const missing = await db.execute(sql`
+      select c.conrelid::regclass::text as table_name, c.conname
+      from pg_constraint c
+      where c.contype = 'f' and c.connamespace = 'app'::regnamespace
+        and not exists (
+          select 1 from pg_index i
+          join pg_class ix on ix.oid = i.indexrelid
+          join pg_am am on am.oid = ix.relam
+          where i.indrelid = c.conrelid and i.indisvalid
+            and i.indpred is null and i.indexprs is null and am.amname = 'btree'
+            and (i.indkey::smallint[])[0:cardinality(c.conkey) - 1] @> c.conkey
+        )
+    `);
+    expect(missing.rows).toEqual([]);
+  });
+
   it("creates every table from the domain model", async () => {
     for (const { schema: schemaName, table } of EXPECTED_TABLES) {
       const result = await db.execute(sql`
