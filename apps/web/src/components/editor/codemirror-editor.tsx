@@ -125,11 +125,15 @@ export function CodeMirrorEditor({
     appliedTokenRef.current = resetSignal.token;
     onCursorChangeRef.current(view.state.selection.main.head);
 
+    let cancelled = false;
     void loadLanguageExtension(languageKey).then((extension) => {
-      view.dispatch({ effects: languageCompartment.reconfigure(extension) });
+      if (!cancelled) {
+        view.dispatch({ effects: languageCompartment.reconfigure(extension) });
+      }
     });
 
     return () => {
+      cancelled = true;
       view.destroy();
       viewRef.current = null;
     };
