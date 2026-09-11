@@ -106,6 +106,9 @@ currently-valid SFTPGo JWT for an identity:
    re-minting once fewer than 2 minutes remain before it expires, not only
    once it has actually expired, so a request in flight does not race an
    expiry.
+   Concurrent misses for one identity share one mint within the API process.
+   Invalidation and priming supersede pending work; per-identity database writes
+   are ordered so an older mint cannot restore a token after a clear or prime.
 2. `sessionFor(identityId, username)` hands the provider module a
    `StorageSession` with `getToken`, `invalidateToken` and `getCredential`.
    The SFTPGo module's storage runs each call with the current token and,

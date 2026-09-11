@@ -71,12 +71,14 @@ export function createScopeCache<T>(deps: CreateScopeCacheDeps = {}): ScopeCache
         const value = await promise;
         // Re-insert so Map's iteration order (used for FIFO eviction below)
         // reflects recency rather than the original insertion time.
-        entries.delete(key);
-        entries.set(key, { value, expiresAtMs: clock().getTime() + ttlMs });
-        evictOldestUntilWithinCap();
+        if (inflight.get(key) === promise) {
+          entries.delete(key);
+          entries.set(key, { value, expiresAtMs: clock().getTime() + ttlMs });
+          evictOldestUntilWithinCap();
+        }
         return value;
       } finally {
-        inflight.delete(key);
+        if (inflight.get(key) === promise) inflight.delete(key);
       }
     },
 

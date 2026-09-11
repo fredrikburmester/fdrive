@@ -65,6 +65,88 @@ describe("createTokenSource", () => {
     identityId = await seedIdentity(repos);
   });
 
+  it("coalesces concurrent token misses", async () => {
+    const source = build();
+    const tokens = await Promise.all(Array.from({ length: 20 }, () => source.get(identityId)));
+    expect(new Set(tokens).size).toBe(1);
+    expect(server.state.tokens.size).toBe(1);
+  });
+
+  it.each(["invalidate", "prime"] as const)(
+    "%s supersedes a pending mint without stale writes",
+    async (operation) => {
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let calls = 0;
+      const source = build(async (input, init) => {
+        const response = await server.fetch(input, init);
+        if (++calls === 1) {
+          entered();
+          await gate;
+        }
+        return response;
+      });
+      const old = source.get(identityId);
+      await started;
+      if (operation === "prime")
+        await source.prime(identityId, {
+          token: "fresh",
+          expiresAt: new Date(clockCtl.clock().getTime() + 3600000),
+        });
+      else await source.invalidate(identityId);
+      const fresh = await source.get(identityId);
+      release();
+      expect(await old).toBe(fresh);
+      expect(await source.get(identityId)).toBe(fresh);
+      expect(await build().get(identityId)).toBe(fresh);
+      expect(calls).toBe(operation === "prime" ? 1 : 2);
+    },
+  );
+
+  it("serializes invalidation after an already-started database write", async () => {
+    const original = repos.credentials.setCachedToken.bind(repos.credentials);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.spyOn(repos.credentials, "setCachedToken").mockImplementationOnce(async (...args) => {
+      entered();
+      await gate;
+      await original(...args);
+    });
+    const source = build();
+    const old = source.get(identityId);
+    await started;
+    const invalidation = source.invalidate(identityId);
+    const freshPending = source.get(identityId);
+    release();
+    await invalidation;
+    const fresh = await freshPending;
+    expect(await old).toBe(fresh);
+    expect(await build().get(identityId)).toBe(fresh);
+    expect(server.state.tokens.size).toBe(2);
+  });
+
+  it("does not retain a failed shared mint", async () => {
+    const fetcher = vi.fn(server.fetch).mockRejectedValueOnce(new Error("offline"));
+    const source = build(fetcher);
+    const failed = await Promise.allSettled([source.get(identityId), source.get(identityId)]);
+    expect(failed.every((result) => result.status === "rejected")).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await source.get(identityId)).toEqual(expect.any(String));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("mints a token on first use and stores it sealed in the database", async () => {
     const tokenSource = build();
 

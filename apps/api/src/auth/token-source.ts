@@ -96,17 +96,49 @@ export function parseStoredCredential(bytes: Uint8Array): ProviderCredential {
   return result;
 }
 
+interface TokenState {
+  version: number;
+  inflight?: Promise<string | null>;
+  writes: Promise<void>;
+}
+
 /** Creates a `TokenSource` backed by `deps.repos` for storage and provider modules for minting. */
 export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
   const cache = new Map<string, CachedToken>();
 
-  async function storeAndCache(identityId: string, token: ProviderToken): Promise<void> {
-    const sealedToken = seal(deps.master, new TextEncoder().encode(token.token), identityId);
-    await deps.repos.credentials.setCachedToken(identityId, {
-      sealed: Buffer.from(sealedToken).toString("base64"),
-      expiresAt: token.expiresAt,
+  const states = new Map<string, TokenState>();
+  function stateFor(identityId: string): TokenState {
+    let state = states.get(identityId);
+    if (state === undefined) {
+      state = { version: 0, writes: Promise.resolve() };
+      states.set(identityId, state);
+    }
+    return state;
+  }
+
+  // Serialize persistence so a delayed old write cannot land after a clear or prime.
+  function write(state: TokenState, operation: () => Promise<void>): Promise<void> {
+    const pending = state.writes.catch(() => undefined).then(operation);
+    state.writes = pending;
+    return pending;
+  }
+
+  async function storeAndCache(
+    identityId: string,
+    token: ProviderToken,
+    state: TokenState,
+    version: number,
+  ): Promise<void> {
+    await write(state, async () => {
+      if (state.version !== version) return;
+      const sealedToken = seal(deps.master, new TextEncoder().encode(token.token), identityId);
+      await deps.repos.credentials.setCachedToken(identityId, {
+        sealed: Buffer.from(sealedToken).toString("base64"),
+        expiresAt: token.expiresAt,
+      });
+      if (state.version === version)
+        cache.set(identityId, { token: token.token, expiresAt: token.expiresAt });
     });
-    cache.set(identityId, { token: token.token, expiresAt: token.expiresAt });
   }
 
   async function credential(identityId: string): Promise<ProviderCredential> {
@@ -120,7 +152,7 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
     return parseStoredCredential(openOrReauth(deps.master, stored.ciphertext, identityId));
   }
 
-  async function mintAndStore(
+  async function mintToken(
     identityId: string,
     bound: IdentityProvider & { module: ProviderModule & Required<Pick<ProviderModule, "mint">> },
   ): Promise<CachedToken> {
@@ -150,52 +182,79 @@ export function createTokenSource(deps: CreateTokenSourceDeps): TokenSource {
       throw new ApiHttpError("upstream_unavailable", "storage provider is unavailable");
     }
 
-    await storeAndCache(identityId, minted);
     return { token: minted.token, expiresAt: minted.expiresAt };
   }
 
   async function get(identityId: string): Promise<string | null> {
-    // Resolve before cache access, credential decryption, and every retry;
-    // the mint below uses this same resolution, never a later one.
+    // Every caller still checks its provider binding before joining shared work.
     const bound = await deps.providers.forIdentity(identityId);
     const mint = bound.module.mint;
-    if (mint === undefined) {
-      return null;
+    if (mint === undefined) return null;
+    const mintingProvider = { ...bound, module: { ...bound.module, mint } };
+    const state = stateFor(identityId);
+    for (;;) {
+      const writes = state.writes;
+      await writes.catch(() => undefined);
+      if (writes === state.writes) break;
     }
-    const nowMs = deps.clock().getTime();
-
     const cached = cache.get(identityId);
-    if (cached && hasMargin(cached.expiresAt, nowMs)) {
-      return cached.token;
+    if (cached && hasMargin(cached.expiresAt, deps.clock().getTime())) return cached.token;
+    if (state.inflight !== undefined) return state.inflight;
+    const version = state.version;
+
+    async function load(): Promise<string> {
+      const stored = await deps.repos.credentials.get(identityId);
+      if (
+        stored?.cachedToken != null &&
+        stored.cachedTokenExpiresAt !== null &&
+        hasMargin(stored.cachedTokenExpiresAt, deps.clock().getTime())
+      ) {
+        const sealedBytes = new Uint8Array(Buffer.from(stored.cachedToken, "base64"));
+        const token = new TextDecoder().decode(openOrReauth(deps.master, sealedBytes, identityId));
+        if (state.version === version)
+          cache.set(identityId, { token, expiresAt: stored.cachedTokenExpiresAt });
+        return token;
+      }
+      const minted = await mintToken(identityId, mintingProvider);
+      await storeAndCache(identityId, minted, state, version);
+      return minted.token;
     }
 
-    const stored = await deps.repos.credentials.get(identityId);
-    if (
-      stored !== null &&
-      stored.cachedToken !== null &&
-      stored.cachedTokenExpiresAt !== null &&
-      hasMargin(stored.cachedTokenExpiresAt, nowMs)
-    ) {
-      const sealedBytes = new Uint8Array(Buffer.from(stored.cachedToken, "base64"));
-      const plaintext = openOrReauth(deps.master, sealedBytes, identityId);
-      const token = new TextDecoder().decode(plaintext);
-      cache.set(identityId, { token, expiresAt: stored.cachedTokenExpiresAt });
-      return token;
-    }
-
-    const minted = await mintAndStore(identityId, { ...bound, module: { ...bound.module, mint } });
-    return minted.token;
+    const pending = load()
+      .then(
+        (token) => (state.version === version ? token : get(identityId)),
+        (error: unknown) => {
+          if (state.version !== version) return get(identityId);
+          throw error;
+        },
+      )
+      .finally(() => {
+        if (state.inflight === pending) delete state.inflight;
+      });
+    state.inflight = pending;
+    return pending;
   }
 
   async function invalidate(identityId: string): Promise<void> {
+    const state = stateFor(identityId);
+    state.version++;
+    delete state.inflight;
     cache.delete(identityId);
-    await deps.repos.credentials.setCachedToken(identityId, null);
+    await write(state, () => deps.repos.credentials.setCachedToken(identityId, null));
+  }
+
+  async function prime(identityId: string, token: ProviderToken): Promise<void> {
+    const state = stateFor(identityId);
+    const version = ++state.version;
+    delete state.inflight;
+    cache.delete(identityId);
+    await storeAndCache(identityId, token, state, version);
   }
 
   return {
     get,
     invalidate,
-    prime: storeAndCache,
+    prime,
     credential,
     sessionFor(identityId, externalUsername) {
       return {
