@@ -453,7 +453,7 @@ def mark_pending(conn: psycopg.Connection, root_id: int, exact_path: str | None,
         else:
             cur.execute(
                 'UPDATE "idx"."files" SET text_status = \'pending\' WHERE root_id = %s AND deleted_at IS NULL '
-                "AND (path = %s OR path LIKE %s)",
-                (root_id, exact_path, prefix + "%" if prefix else exact_path),
+                "AND (path = %s OR (%s AND starts_with(path, %s)))",
+                (root_id, exact_path, prefix is not None, prefix or ""),
             )
         return cur.rowcount

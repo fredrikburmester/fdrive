@@ -387,3 +387,38 @@ def test_mark_pending_subtree(db_conn: psycopg.Connection) -> None:
     assert count == 1
     assert manifest["dir/a.txt"][2] == "pending"
     assert manifest["other.txt"][2] == "indexed"
+
+
+@pytest.mark.parametrize(
+    ("exact", "selected_path", "sibling_path"),
+    [
+        ("percent%", "percent%/child.txt", "percent-any/child.txt"),
+        ("under_", "under_/child.txt", "underx/child.txt"),
+        ("slash\\", "slash\\/child.txt", "slash/child.txt"),
+    ],
+)
+def test_mark_pending_subtree_treats_prefix_as_literal(
+    db_conn: psycopg.Connection,
+    exact: str,
+    selected_path: str,
+    sibling_path: str,
+) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    other_root_id = db.upsert_root(db_conn, "photos")
+    for file_root_id, path, sha256 in [
+        (root_id, selected_path, "selected"),
+        (root_id, sibling_path, "sibling"),
+        (other_root_id, selected_path, "other-root"),
+    ]:
+        file_id = db.upsert_file(
+            db_conn, file_root_id, path, path.rsplit("/", 1)[-1], ".txt", 1, 1, sha256, None
+        )
+        db.update_file_status(db_conn, file_id, "indexed", 1, None)
+
+    count = db.mark_pending(db_conn, root_id, exact, exact + "/")
+
+    manifest = db.get_manifest(db_conn, root_id)
+    assert count == 1
+    assert manifest[selected_path][2] == "pending"
+    assert manifest[sibling_path][2] == "indexed"
+    assert db.get_manifest(db_conn, other_root_id)[selected_path][2] == "indexed"
