@@ -13,10 +13,12 @@ import threading
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 
 from fdrive_indexer import db, indexer
 from fdrive_indexer.config import Config
+from fdrive_indexer.embed_backoff import EmbedBackoff
 from fdrive_indexer.features import FeatureConfiguration, FeatureValues
 from fdrive_indexer.image_embed import ImageEmbedHealth
 from fdrive_indexer.settings import Settings
@@ -337,6 +339,117 @@ def test_process_file_embed_failure_marks_partial(postgres_dsn: str, monkeypatch
     indexer.process_file(ctx, str(p), "a.txt", os.stat(p))
     manifest = db.get_manifest(ctx.conn(), ctx.root_id)
     assert manifest["a.txt"][2] == "partial"
+
+
+def test_process_file_stops_probing_an_unreachable_embed_backend(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A missing backend is a service condition: the first file reports it, the
+    rest keep their FTS chunks without opening another socket."""
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    calls: list[str] = []
+    logs: list[str] = []
+    monkeypatch.setattr(indexer, "log", logs.append)
+
+    def refused(pieces: list[str], url: str, batch: int) -> list[list[float]]:
+        calls.append(url)
+        raise httpx.ConnectError("[Errno 111] Connection refused")
+
+    monkeypatch.setattr(indexer, "embed_passages", refused)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        path = tmp_path / name
+        path.write_text("hello")
+        indexer.process_file(ctx, str(path), name, os.stat(path))
+
+    assert len(calls) == 1
+    assert len([m for m in logs if "embed backend unreachable" in m]) == 1
+    manifest = db.get_manifest(ctx.conn(), ctx.root_id)
+    assert [manifest[name][2] for name in ("a.txt", "b.txt", "c.txt")] == ["partial", "partial", "partial"]
+
+
+def test_process_file_resumes_embedding_once_the_pause_expires(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    now = 0.0
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx.embed_backoff = EmbedBackoff(pause_seconds=60, clock=lambda: now)
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    logs: list[str] = []
+    monkeypatch.setattr(indexer, "log", logs.append)
+    healthy = False
+
+    def flaky(pieces: list[str], url: str, batch: int) -> list[list[float]]:
+        if not healthy:
+            raise httpx.ConnectError("[Errno 111] Connection refused")
+        return [[0.1] * 384 for _ in pieces]
+
+    monkeypatch.setattr(indexer, "embed_passages", flaky)
+    first = tmp_path / "a.txt"
+    first.write_text("hello")
+    indexer.process_file(ctx, str(first), "a.txt", os.stat(first))
+
+    now = 60.0
+    healthy = True
+    second = tmp_path / "b.txt"
+    second.write_text("hello")
+    indexer.process_file(ctx, str(second), "b.txt", os.stat(second))
+
+    manifest = db.get_manifest(ctx.conn(), ctx.root_id)
+    assert manifest["b.txt"][2] == "indexed"
+    assert len([m for m in logs if "reachable again" in m]) == 1
+
+
+def test_process_file_keeps_reporting_per_file_when_the_backend_answers(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A backend that rejects one payload is not an outage; every file is tried."""
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    calls: list[str] = []
+    monkeypatch.setattr(indexer, "log", lambda _m: None)
+
+    def rejected(pieces: list[str], url: str, batch: int) -> list[list[float]]:
+        calls.append(url)
+        raise httpx.HTTPStatusError(
+            "413", request=httpx.Request("POST", "http://embed.invalid/embed"), response=httpx.Response(413)
+        )
+
+    monkeypatch.setattr(indexer, "embed_passages", rejected)
+    for name in ("a.txt", "b.txt"):
+        path = tmp_path / name
+        path.write_text("hello")
+        indexer.process_file(ctx, str(path), name, os.stat(path))
+
+    assert len(calls) == 2
+
+
+def test_embed_missing_leaves_the_row_alone_while_the_backend_is_down(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    path = tmp_path / "a.txt"
+    path.write_text("hello")
+    st = os.stat(path)
+    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", st.st_size, st.st_mtime_ns, "sha1", None)
+    db.insert_chunks(ctx.conn(), file_id, ["hello"], [None])
+    db.update_file_status(ctx.conn(), file_id, "partial", 5, "embed:ConnectError")
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    monkeypatch.setattr(indexer, "log", lambda _m: None)
+
+    def refused(texts: list[str], url: str, batch: int) -> list[list[float]]:
+        raise httpx.ConnectError("[Errno -2] Name or service not known")
+
+    monkeypatch.setattr(indexer, "embed_passages", refused)
+    assert indexer.embed_missing(ctx, "a.txt") is False
+    assert ctx.embed_backoff.paused() is True
+    # Neither counted as an error nor marked indexed: the next scan retries it.
+    assert indexer.scan_once(ctx)["errors"] == 0
+    assert db.get_manifest(ctx.conn(), ctx.root_id)["a.txt"][2] == "partial"
 
 
 def test_process_file_error_status(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -23,6 +23,7 @@ import psycopg
 from . import db
 from .chunking import chunk, max_chunks_for
 from .config import Config
+from .embed_backoff import EmbedBackoff, is_backend_outage
 from .events import build_event
 from .extract import Extractor, embed_passages
 from .features import FeatureConfiguration, FeatureValues, disabled
@@ -159,6 +160,7 @@ class RootContext:
     _last_feature_refresh: float = 0.0
     _backfill_media: bool = False
     path_locks: PathLocks = field(default_factory=PathLocks)
+    embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
     local: threading.local = field(default_factory=threading.local)
 
     def conn(self) -> psycopg.Connection:
@@ -253,6 +255,19 @@ def should_retry_unchanged(status: str, ext: str, features: FeatureValues) -> bo
     return status == "partial" and features.semantic_search
 
 
+def _note_embed_outage(ctx: RootContext, error: BaseException) -> None:
+    if ctx.embed_backoff.note_failure():
+        log(
+            f"[{ctx.name}] embed backend unreachable ({type(error).__name__}: {error}); pausing embeddings. "
+            "Affected files stay text-searchable and their vectors are backfilled on a later scan."
+        )
+
+
+def _note_embed_recovery(ctx: RootContext) -> None:
+    if ctx.embed_backoff.note_success():
+        log(f"[{ctx.name}] embed backend reachable again; resuming embeddings")
+
+
 def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result, known_sha256: str | None = None) -> None:
     conn = ctx.conn()
     name = os.path.basename(rel_path)
@@ -281,11 +296,21 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
         chars = len(text)
         limit = max_chunks_for(ext, ctx.cfg.max_chunks_per_file)
         pieces = chunk(text, ctx.cfg.chunk_chars, ctx.cfg.chunk_overlap, limit)
-        if features.semantic_search:
+        vecs: list[list[float] | None]
+        if features.semantic_search and ctx.embed_backoff.paused():
+            # The backend is known to be down; do not re-probe it per file.
+            vecs = [None] * len(pieces)
+            error = "embed:unavailable"
+            status = "partial"
+        elif features.semantic_search:
             try:
-                vecs: list[list[float] | None] = list(embed_passages(pieces, ctx.cfg.embed_url, ctx.cfg.embed_batch))
+                vecs = list(embed_passages(pieces, ctx.cfg.embed_url, ctx.cfg.embed_batch))
+                _note_embed_recovery(ctx)
             except Exception as e:  # noqa: BLE001 - keep text searchable via FTS, retry embeddings next scan
-                log(f"embed failed for {rel_path}: {e}")
+                if is_backend_outage(e):
+                    _note_embed_outage(ctx, e)
+                else:
+                    log(f"embed failed for {rel_path}: {e}")
                 vecs = [None] * len(pieces)
                 error = f"embed:{type(e).__name__}"
                 status = "partial"
@@ -422,18 +447,33 @@ def media_derivatives_missing(ctx: RootContext, rel_path: str, size_bytes: int, 
     )
 
 
-def embed_missing(ctx: RootContext, rel_path: str) -> None:
-    """Fill in embeddings for a file whose text is already chunked (status 'partial')."""
+def embed_missing(ctx: RootContext, rel_path: str) -> bool:
+    """Fill in embeddings for a file whose text is already chunked (status 'partial').
+
+    Returns False when the embed backend is down, so the caller neither logs nor
+    counts the file as an error: the row keeps its chunks and a later scan
+    retries it. A backend that answers but rejects this payload still raises.
+    """
     with ctx.path_locks.get(rel_path):
         ctx.maybe_refresh_features()
         if not ctx.feature_configuration().values.semantic_search:
-            return
+            return True
+        if ctx.embed_backoff.paused():
+            return False
         conn = ctx.conn()
         rows = db.chunks_missing_embeddings(conn, ctx.root_id, rel_path)
         if rows:
-            vecs = embed_passages([t for _, t in rows], ctx.cfg.embed_url, ctx.cfg.embed_batch)
+            try:
+                vecs = embed_passages([t for _, t in rows], ctx.cfg.embed_url, ctx.cfg.embed_batch)
+            except Exception as e:  # noqa: BLE001 - an absent backend is a service condition, not this file's error
+                if not is_backend_outage(e):
+                    raise
+                _note_embed_outage(ctx, e)
+                return False
+            _note_embed_recovery(ctx)
             db.set_chunk_embeddings(conn, [(cid, v) for (cid, _), v in zip(rows, vecs, strict=True)])
         db.mark_file_indexed(conn, ctx.root_id, rel_path)
+        return True
 
 
 def safe_process(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result) -> str:
@@ -550,7 +590,8 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
             if not ctx.feature_configuration().values.semantic_search:
                 return
             try:
-                embed_missing(ctx, rel_path)
+                if not embed_missing(ctx, rel_path):
+                    return
                 ok = True
             except Exception as e:  # noqa: BLE001
                 log(f"[{ctx.name}] embed retry failed for {rel_path}: {type(e).__name__}: {e}")
