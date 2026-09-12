@@ -175,27 +175,29 @@ export function registerTrashRoutes(
     const restored: FsEntry[] = [];
     const trashPaths: string[] = [];
     const targetPaths: string[] = [];
-    for (const id of validated) {
-      const entry = await restoreOne(trash, id, target);
-      const trashVirtualPath = trashLeafPath(trashPath, id);
-      if (
-        deps.metadata !== undefined &&
-        entry.originalPath !== entry.path &&
-        (await runStorageCall(() => originalPathIsMissing(principal.storage, entry.originalPath)))
-      ) {
-        await deps.metadata.onMoved(
-          principal.identityId,
-          entry.originalPath,
-          entry.path,
-          entry.kind === "dir",
-        );
+    try {
+      for (const id of validated) {
+        const entry = await restoreOne(trash, id, target);
+        const trashVirtualPath = trashLeafPath(trashPath, id);
+        trashPaths.push(trashVirtualPath);
+        targetPaths.push(entry.path);
+        if (
+          deps.metadata !== undefined &&
+          entry.originalPath !== entry.path &&
+          (await runStorageCall(() => originalPathIsMissing(principal.storage, entry.originalPath)))
+        ) {
+          await deps.metadata.onMoved(
+            principal.identityId,
+            entry.originalPath,
+            entry.path,
+            entry.kind === "dir",
+          );
+        }
+        restored.push(serializeEntry(entry));
       }
-      restored.push(serializeEntry(entry));
-      trashPaths.push(trashVirtualPath);
-      targetPaths.push(entry.path);
+    } finally {
+      if (trashPaths.length > 0) publishFsEvent(deps, principal, "move", trashPaths, targetPaths);
     }
-
-    publishFsEvent(deps, principal, "move", trashPaths, targetPaths);
     const responseBody: TrashRestoreResponse = TrashRestoreResponse.parse({ restored });
     return c.json(responseBody);
   });

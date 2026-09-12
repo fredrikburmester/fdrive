@@ -414,12 +414,23 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
   const channel = deps.channel ?? DEFAULT_INDEXER_CHANNEL;
   const scopeCacheTtlMs = deps.scopeCacheTtlMs ?? DEFAULT_SCOPE_CACHE_TTL_MS;
   const reconnectDelayMs = deps.reconnectDelayMs ?? defaultReconnectDelayMs;
-  const scheduleTimeout = deps.scheduleTimeout ?? ((fn, ms) => void setTimeout(fn, ms));
+  let cancelReconnect: (() => void) | null = null;
+  const scheduleTimeout =
+    deps.scheduleTimeout ??
+    ((fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      timer.unref();
+      cancelReconnect = () => clearTimeout(timer);
+    });
 
   let stopped = true;
   let attempt = 0;
   let client: NotificationClient | null = null;
   let cache: ScopeCache | null = null;
+  let generation = 0;
+  let reconnectPending = false;
+  let connecting: Promise<void> | null = null;
+  let payloadQueue = Promise.resolve();
 
   async function getCache(): Promise<ScopeCache> {
     const now = deps.clock().getTime();
@@ -457,53 +468,90 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
   }
 
   function scheduleReconnect(): void {
-    if (stopped) {
-      return;
-    }
-    const delay = reconnectDelayMs(attempt);
-    attempt += 1;
+    if (stopped || reconnectPending) return;
+    reconnectPending = true;
+    const scheduledGeneration = generation;
+    const delay = reconnectDelayMs(attempt++);
     scheduleTimeout(() => {
-      void connect();
+      if (stopped || generation !== scheduledGeneration) return;
+      cancelReconnect = null;
+      void (async () => {
+        // A slow connect may outlast the delay; do not consume its only retry.
+        await connecting;
+        if (stopped || generation !== scheduledGeneration) return;
+        reconnectPending = false;
+        await connect();
+      })();
     }, delay);
   }
 
-  async function connect(): Promise<void> {
-    if (stopped) {
-      return;
-    }
+  async function establish(): Promise<void> {
+    const connectionGeneration = generation;
+    const previous = client;
+    client = null;
+    // Detach before closing: pg emits `end`, which must not schedule another retry.
+    if (previous !== null) await previous.end().catch(() => undefined);
+    if (stopped || generation !== connectionGeneration) return;
     const nextClient = deps.createClient();
     client = nextClient;
     nextClient.onNotification((payload) => {
-      void handlePayload(payload).catch((error) =>
-        deps.logger.warn({ error }, "indexer-listener: event processing failed"),
-      );
+      if (stopped || client !== nextClient || generation !== connectionGeneration) return;
+      payloadQueue = payloadQueue
+        .then(async () => {
+          if (!stopped && generation === connectionGeneration) await handlePayload(payload);
+        })
+        .catch((error) => deps.logger.warn({ error }, "indexer-listener: event processing failed"));
     });
     nextClient.onError((error) => {
+      if (stopped || client !== nextClient || generation !== connectionGeneration) return;
       deps.logger.warn({ error }, "indexer-listener: connection error, reconnecting");
       scheduleReconnect();
     });
     try {
       await nextClient.connect();
+      if (stopped || generation !== connectionGeneration) {
+        await nextClient.end().catch(() => undefined);
+        return;
+      }
       await nextClient.query(`LISTEN ${channel}`);
       attempt = 0;
     } catch (error) {
+      if (client === nextClient) client = null;
+      await nextClient.end().catch(() => undefined);
       deps.logger.warn({ error }, "indexer-listener: failed to connect, retrying");
-      scheduleReconnect();
+      if (generation === connectionGeneration) scheduleReconnect();
+    }
+  }
+
+  async function connect(): Promise<void> {
+    if (stopped) return;
+    if (connecting !== null) return connecting;
+    connecting = establish();
+    try {
+      await connecting;
+    } finally {
+      connecting = null;
     }
   }
 
   return {
     async start() {
+      if (!stopped) return;
       stopped = false;
+      generation += 1;
       await connect();
     },
     async stop() {
       stopped = true;
+      generation += 1;
+      reconnectPending = false;
+      cancelReconnect?.();
+      cancelReconnect = null;
       const current = client;
       client = null;
-      if (current !== null) {
-        await current.end().catch(() => undefined);
-      }
+      if (current !== null) await current.end().catch(() => undefined);
+      await connecting;
+      await payloadQueue;
     },
   };
 }

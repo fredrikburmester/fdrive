@@ -104,3 +104,20 @@ describe("version 1 records", () => {
     });
   });
 });
+
+it("persists through transaction settings under the expected owner", async () => {
+  const outside = createMemoryRepos().settings;
+  const inside = createMemoryRepos().settings;
+  const store = createSettingsScopeOverrideStore(outside, async (accountId, identityId, write) => {
+    expect([accountId, identityId]).toEqual(["owner", "identity-1"]);
+    await write(inside);
+  });
+  await expect(store.set("identity-1", sample, [])).rejects.toThrow("requires an owner");
+  await store.set("identity-1", sample, [], "owner");
+  expect(await outside.get(scopeOverrideSettingsKey("identity-1"))).toBeNull();
+  expect(await inside.get(scopeOverrideSettingsKey("identity-1"))).toMatchObject({
+    scopes: sample,
+  });
+  await store.reset("identity-1", "owner");
+  expect(await inside.get(scopeOverrideSettingsKey("identity-1"))).toMatchObject({ scopes: [] });
+});

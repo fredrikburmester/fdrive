@@ -301,3 +301,9 @@ describe("changeBaseName", () => {
     }
   });
 });
+
+it("rejects overlong UTF-8 entry names before joining", () => {
+  expect(isSafeSegment(`${"é".repeat(127)}a`)).toBe(true);
+  expect(isSafeSegment("é".repeat(128))).toBe(false);
+  expect(() => changeBaseName("/old", "é".repeat(128))).toThrow("safe path segment");
+});

@@ -5,6 +5,7 @@ import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
   createIdentityLinksRepo,
+  createIdentityOwnershipGuard,
   createIndexQueries,
   createOfficeFileRepo,
   createOfficeWriteScope,
@@ -52,7 +53,7 @@ import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { allowsOfficeEdit } from "./office/edit-policy.ts";
 import { WopiError } from "./office/errors.ts";
 import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
-import { applyOfficeStorageEvent, withOfficeMetadata } from "./office/registry-events.ts";
+import { applyOfficeRootEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
 import { createOfficeService } from "./office/service.ts";
 import {
@@ -259,7 +260,7 @@ export async function composeApp(
   // `docs/SCOPING.md`.
   const scopeResolver = createScopeResolver({
     providers: repos.providers,
-    overrides: createSettingsScopeOverrideStore(repos.settings),
+    overrides: createSettingsScopeOverrideStore(repos.settings, createIdentityOwnershipGuard(db)),
     mountMappings: createSettingsMountMappingStore(repos.settings),
     indexRoots: config.fdriveIndexRoots,
     indexer: scopeIndexerDirectory,
@@ -419,7 +420,7 @@ export async function composeApp(
       ? { providerId: configured.providerId, scopes: configured.scopes }
       : null;
   };
-  /** The default (oldest enabled) provider's id, independent of any identity; used to route indexer registry events and Office settings. */
+  /** The default (oldest enabled) provider's id, independent of any identity; used for Office settings. */
   const currentOfficeProviderId = async (): Promise<string | null> =>
     (await providerService.defaultProvider())?.id ?? null;
   const officeService = createOfficeService({
@@ -466,10 +467,7 @@ export async function composeApp(
           fileTags: repos.fileTags,
           favorites: repos.favorites,
           metadata: metadataService,
-          onStorageEvent: async (event) => {
-            const providerId = await currentOfficeProviderId();
-            if (providerId !== null) await applyOfficeStorageEvent(officeFiles, providerId, event);
-          },
+          onStorageEvent: (event) => applyOfficeRootEvent(officeFiles, providerService, event),
           bus,
           configuredMappingsFor: scopeResolver.configuredMappings,
           storageForIdentity: (identityId) => storageFactory(identityId),

@@ -70,18 +70,48 @@ export interface PeekArchiveOptions {
   readonly zstdSupported?: boolean;
 }
 
-/** Reads a whole (already Range-bounded) `ReadableStream` into one `Buffer`. */
-async function readAllBytes(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  const reader = stream.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    chunks.push(Buffer.from(value));
+/** Validates both the returned range and the streamed byte count before buffering. */
+async function readRangeBytes(
+  download: Awaited<ReturnType<PeekStoragePort["download"]>>,
+  start: number,
+  end: number,
+  total: number,
+): Promise<Buffer> {
+  const expected = end - start + 1;
+  const range = /^bytes (\d+)-(\d+)\/(\d+)$/i.exec(download.contentRange ?? "");
+  const validRange =
+    download.status === 206 &&
+    range !== null &&
+    Number(range[1]) === start &&
+    Number(range[2]) === end &&
+    Number(range[3]) === total;
+  // A small complete archive may legitimately arrive as 200. Never accept a full
+  // response for a suffix or central-directory slice of a larger archive.
+  const complete = download.status === 200 && start === 0 && end === total - 1;
+  if (
+    (!validRange && !complete) ||
+    (download.contentLength !== null && download.contentLength !== expected)
+  ) {
+    await download.body.cancel().catch(() => undefined);
+    throw new UnreadableArchiveError();
   }
-  return Buffer.concat(chunks);
+  const reader = download.body.getReader();
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > expected) throw new UnreadableArchiveError();
+      chunks.push(Buffer.from(value));
+    }
+    if (bytes !== expected) throw new UnreadableArchiveError();
+    return Buffer.concat(chunks, bytes);
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 function withSignal(
@@ -113,7 +143,7 @@ async function peekZipArchive(
     range: { start: tailStart, end: fileSize - 1 },
     ...withSignal(signal),
   });
-  const tail = await readAllBytes(tailDownload.body);
+  const tail = await readRangeBytes(tailDownload, tailStart, fileSize - 1, fileSize);
 
   const location = locateZipCentralDirectory(tail, fileSize);
   if (location === null) {
@@ -133,7 +163,12 @@ async function peekZipArchive(
     range: { start: location.offset, end: location.offset + location.size - 1 },
     ...withSignal(signal),
   });
-  const cdBuffer = await readAllBytes(cdDownload.body);
+  const cdBuffer = await readRangeBytes(
+    cdDownload,
+    location.offset,
+    location.offset + location.size - 1,
+    fileSize,
+  );
 
   let parsed: PeekEntry[];
   try {

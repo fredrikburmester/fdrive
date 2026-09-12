@@ -1,3 +1,4 @@
+import { getFileNameLowLevel, parseExtraFields } from "yauzl";
 import { buildPeekEntry, type PeekEntry } from "./peek-entry.js";
 
 /**
@@ -28,7 +29,6 @@ const ZIP64_EOCD_SIGNATURE = 0x06064b50;
 const ZIP64_EOCD_FIXED_SIZE = 56;
 const CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
 const CENTRAL_DIRECTORY_FIXED_SIZE = 46;
-const UTF8_NAME_FLAG = 0x0800;
 const ZIP64_EXTRA_FIELD_ID = 0x0001;
 const SENTINEL_16 = 0xffff;
 const SENTINEL_32 = 0xffffffff;
@@ -183,9 +183,13 @@ export function parseZipCentralDirectoryEntries(buffer: Buffer): PeekEntry[] {
       throw new CorruptZipCentralDirectoryError();
     }
 
-    const isUtf8 = (flags & UTF8_NAME_FLAG) !== 0;
-    const name = buffer.subarray(nameStart, nameEnd).toString(isUtf8 ? "utf8" : "latin1");
     const extra = buffer.subarray(nameEnd, extraEnd);
+    const name = getFileNameLowLevel(
+      flags,
+      buffer.subarray(nameStart, nameEnd),
+      parseExtraFields(extra),
+      true,
+    );
     const uncompressedSize =
       uncompressedSize32 === SENTINEL_32
         ? readZip64UncompressedSize(extra, uncompressedSize32)

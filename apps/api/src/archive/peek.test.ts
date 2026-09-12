@@ -45,7 +45,7 @@ function createRangeAwareStorage(files: Record<string, Buffer>): StorageProvider
         status: (range !== undefined ? 206 : 200) as 200 | 206,
         body,
         contentLength: slice.length,
-        contentRange: null,
+        contentRange: range === undefined ? null : `bytes ${start}-${end}/${content.length}`,
         contentType: null,
         lastModified: null,
       };
@@ -258,3 +258,89 @@ describe("peekArchive: tar family", () => {
     ).rejects.toThrow(UnsupportedPeekFormatError);
   });
 });
+
+it.each(["ignored", "missing-range", "wrong-range", "wrong-length", "overrun", "short"])(
+  "bounds ZIP readers when the upstream response is %s",
+  async (mode) => {
+    let cancelled = false;
+    let reads = 0;
+    const total = 1024 * 1024;
+    const size = 65536;
+    const storage = createRangeAwareStorage({ "/large.zip": Buffer.alloc(total) });
+    storage.download = async () => ({
+      status: mode === "ignored" ? 200 : 206,
+      contentRange:
+        mode === "missing-range"
+          ? null
+          : `bytes ${mode === "wrong-range" ? 0 : total - size}-${total - 1}/${total}`,
+      contentLength: mode === "wrong-length" ? total : null,
+      contentType: null,
+      lastModified: null,
+      body: new ReadableStream(
+        {
+          pull(controller) {
+            reads++;
+            controller.enqueue(new Uint8Array(mode === "short" ? size - 1 : size + 1));
+            controller.close();
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    });
+    await expect(
+      peekArchive({ storage, path: "/large.zip", maxBytes: total }),
+    ).rejects.toBeInstanceOf(UnreadableArchiveError);
+    if (["ignored", "missing-range", "wrong-range", "wrong-length"].includes(mode)) {
+      expect(cancelled).toBe(true);
+      expect(reads).toBe(0);
+    } else {
+      expect(reads).toBe(1);
+    }
+  },
+);
+
+it("permits a bounded complete 200 response for a small archive", async () => {
+  const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("ok"), "ok.txt"));
+  const storage = createRangeAwareStorage({ "/small.zip": bytes });
+  const download = storage.download;
+  let calls = 0;
+  storage.download = async (path, options) => {
+    const result = await download(path, options);
+    return ++calls === 1 ? { ...result, status: 200, contentRange: null } : result;
+  };
+  expect(
+    (await peekArchive({ storage, path: "/small.zip", maxBytes: DEFAULT_MAX_BYTES })).entries[0]
+      ?.path,
+  ).toBe("ok.txt");
+});
+
+it.each([true, false])(
+  "rejects unsafe range replies even if cancel fails (invalid headers=%s)",
+  async (invalidHeaders) => {
+    const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("kept"), "a.txt"));
+    const storage = createRangeAwareStorage({ "/file.zip": bytes });
+    storage.download = async () => ({
+      status: invalidHeaders ? 200 : 206,
+      contentLength: null,
+      contentRange: invalidHeaders ? null : `bytes 0-${bytes.length - 1}/${bytes.length}`,
+      contentType: null,
+      lastModified: null,
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(bytes.length + 1));
+        },
+        cancel() {
+          throw new Error("cancel failed");
+        },
+      }),
+    });
+    if (invalidHeaders)
+      storage.statFile = async () => ({ size: 100_000, modifiedAt: null, contentType: null });
+    await expect(
+      peekArchive({ storage, path: "/file.zip", maxBytes: 1_000_000 }),
+    ).rejects.toBeInstanceOf(UnreadableArchiveError);
+  },
+);

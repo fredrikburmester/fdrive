@@ -61,6 +61,7 @@ export function createEmbedClient(options: CreateEmbedClientOptions): EmbedClien
           signal: controller.signal,
         });
         if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
           return null;
         }
         const data: unknown = await response.json();
