@@ -7,7 +7,7 @@ import {
 } from "@fdrive/core";
 import type { FavoriteRepo, FileTagRepo, Identity, IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   MetadataFavoriteItem,
   MetadataRecentItem,
@@ -1471,4 +1471,159 @@ describe("createIndexerListener: storageForIdentity failure", () => {
     expect(received).toEqual([]);
     await listener.stop();
   });
+});
+
+it("processes notifications in order and continues after a failed payload", async () => {
+  const repos = createMemoryRepos();
+  const fake = createFakeNotificationClient();
+  const { metadata } = fakeMetadataService();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const received: string[] = [];
+  const listener = createIndexerListener({
+    createClient: () => fake.client,
+    identities: repos.identities,
+    indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+    fileTags: repos.fileTags,
+    favorites: repos.favorites,
+    metadata,
+    bus: createEventBus(),
+    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    indexRootNames: ROOT_NAMES,
+    clock: () => new Date(AT),
+    logger: makeLogger().logger,
+    ...allowAllLiveCheck(),
+    onStorageEvent: async (event) => {
+      received.push(event.path);
+      if (event.path === "first") {
+        await blocked;
+        throw new Error("first failed");
+      }
+    },
+  });
+  await listener.start();
+  fake.notify(JSON.stringify({ ...makeEvent(), path: "first" }));
+  fake.notify(JSON.stringify({ ...makeEvent(), path: "second" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(received).toEqual(["first"]);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(received).toEqual(["first", "second"]);
+  await listener.stop();
+});
+
+it("coalesces repeated errors, closes the old client and ignores stale callbacks after restart", async () => {
+  const repos = createMemoryRepos();
+  const first = createFakeNotificationClient();
+  const second = createFakeNotificationClient();
+  const { metadata } = fakeMetadataService();
+  const scheduled: (() => void)[] = [];
+  let creations = 0;
+  const listener = createIndexerListener({
+    createClient: () => (++creations === 1 ? first.client : second.client),
+    identities: repos.identities,
+    indexQueries: fakeIndexQueries(),
+    fileTags: repos.fileTags,
+    favorites: repos.favorites,
+    metadata,
+    bus: createEventBus(),
+    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    indexRootNames: ROOT_NAMES,
+    clock: () => new Date(AT),
+    logger: makeLogger().logger,
+    ...allowAllLiveCheck(),
+    scheduleTimeout: (fn) => scheduled.push(fn),
+  });
+  await listener.start();
+  await listener.start();
+  expect(creations).toBe(1);
+  first.fail(new Error("error"));
+  first.fail(new Error("end"));
+  expect(scheduled).toHaveLength(1);
+  scheduled[0]?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(first.state.ended).toBe(true);
+  expect(creations).toBe(2);
+  first.fail(new Error("stale"));
+  expect(scheduled).toHaveLength(1);
+  second.fail(new Error("retry"));
+  await listener.stop();
+  await listener.start();
+  scheduled[1]?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(creations).toBe(3);
+  await listener.stop();
+});
+
+it("cancels real reconnect timers and recovers when closing the old client fails", async () => {
+  vi.useFakeTimers();
+  const repos = createMemoryRepos();
+  const first = createFakeNotificationClient();
+  const second = createFakeNotificationClient();
+  const { metadata } = fakeMetadataService();
+  let creations = 0;
+  const listener = createIndexerListener({
+    createClient: () => (++creations === 1 ? first.client : second.client),
+    identities: repos.identities,
+    indexQueries: fakeIndexQueries(),
+    fileTags: repos.fileTags,
+    favorites: repos.favorites,
+    metadata,
+    bus: createEventBus(),
+    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    indexRootNames: ROOT_NAMES,
+    clock: () => new Date(AT),
+    logger: makeLogger().logger,
+    ...allowAllLiveCheck(),
+  });
+  try {
+    await listener.start();
+    vi.spyOn(first.client, "end").mockRejectedValue(new Error("already disconnected"));
+    first.fail(new Error("connection reset"));
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(creations).toBe(2);
+    second.fail(new Error("retry"));
+    expect(vi.getTimerCount()).toBe(1);
+    await listener.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(creations).toBe(2);
+  } finally {
+    await listener.stop();
+    vi.useRealTimers();
+  }
+});
+
+it("stops a slow connection without LISTEN even if closing it fails", async () => {
+  const repos = createMemoryRepos();
+  const fake = createFakeNotificationClient();
+  let finishConnect!: () => void;
+  const connected = new Promise<void>((resolve) => {
+    finishConnect = resolve;
+  });
+  fake.state.connectImpl = () => connected;
+  vi.spyOn(fake.client, "end").mockRejectedValue(new Error("disconnected"));
+  const { metadata } = fakeMetadataService();
+  const listener = createIndexerListener({
+    createClient: () => fake.client,
+    identities: repos.identities,
+    indexQueries: fakeIndexQueries(),
+    fileTags: repos.fileTags,
+    favorites: repos.favorites,
+    metadata,
+    bus: createEventBus(),
+    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    indexRootNames: ROOT_NAMES,
+    clock: () => new Date(AT),
+    logger: makeLogger().logger,
+    ...allowAllLiveCheck(),
+  });
+  const starting = listener.start();
+  const stopping = listener.stop();
+  finishConnect();
+  await Promise.all([starting, stopping]);
+  expect(fake.state.queries).toEqual([]);
 });

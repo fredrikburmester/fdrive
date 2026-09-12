@@ -623,3 +623,151 @@ describe("extractArchive: format detection", () => {
     ).rejects.toThrow(/unsupported/);
   });
 });
+
+it("preserves an existing destination instead of silently overwriting edited content", async () => {
+  const bytes = buildRawZip([{ name: "kept.txt", content: Buffer.from("archive") }]);
+  const storage = createMemoryStorage({ "/a.zip": bytes, "/out/kept.txt": "edited" });
+  await expect(
+    extractArchive({
+      storage,
+      archivePath: "/a.zip",
+      destination: "/out",
+      tmpDir: await tmpDirFor("conflict"),
+      signal: new AbortController().signal,
+      report: () => {},
+      maxBytes: DEFAULT_MAX_BYTES,
+    }),
+  ).rejects.toMatchObject({ kind: "conflict" });
+  expect(storage.dump()["/out/kept.txt"]).toBe("edited");
+});
+
+it("decodes legacy ZIP names without colliding on replacement characters", async () => {
+  const bytes = buildRawZip([
+    {
+      name: "ignored",
+      nameBytes: Uint8Array.from([99, 97, 102, 130, 46, 116, 120, 116]),
+      content: Buffer.from("café"),
+    },
+    {
+      name: "ignored",
+      nameBytes: Uint8Array.from([99, 97, 102, 138, 46, 116, 120, 116]),
+      content: Buffer.from("cafè"),
+    },
+  ]);
+  const storage = createMemoryStorage({ "/a.zip": bytes });
+  await extractArchive({
+    storage,
+    archivePath: "/a.zip",
+    destination: "/out",
+    tmpDir: await tmpDirFor("cp437"),
+    signal: new AbortController().signal,
+    report: () => {},
+    maxBytes: DEFAULT_MAX_BYTES,
+  });
+  expect(storage.dump()["/out/café.txt"]).toBe("café");
+  expect(storage.dump()["/out/cafè.txt"]).toBe("cafè");
+});
+
+it.each(["..gz", "...gz"])(
+  "refuses unsafe stripped gzip name %s before downloading",
+  async (name) => {
+    const storage = createMemoryStorage({ [`/${name}`]: gzipSync("bad") });
+    const download = vi.spyOn(storage, "download");
+    await expect(
+      extractArchive({
+        storage,
+        archivePath: `/${name}`,
+        destination: "/out",
+        tmpDir: await tmpDirFor("gzip-name"),
+        signal: new AbortController().signal,
+        report: () => {},
+        maxBytes: DEFAULT_MAX_BYTES,
+      }),
+    ).rejects.toThrow("no entries were extracted");
+    expect(download).not.toHaveBeenCalled();
+  },
+);
+
+it("cancels the ZIP source and removes its spool when aborted mid-download", async () => {
+  const storage = createMemoryStorage();
+  const controller = new AbortController();
+  let cancelled = false;
+  storage.download = async () => ({
+    status: 200,
+    contentLength: null,
+    contentRange: null,
+    contentType: null,
+    lastModified: null,
+    body: new ReadableStream({
+      start(stream) {
+        stream.enqueue(new Uint8Array(32));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  });
+  const dir = await tmpDirFor("spool-abort");
+  const result = extractArchive({
+    storage,
+    archivePath: "/a.zip",
+    destination: "/out",
+    tmpDir: dir,
+    signal: controller.signal,
+    report: (progress) => {
+      if ((progress.bytes ?? 0) > 0) controller.abort();
+    },
+    maxBytes: DEFAULT_MAX_BYTES,
+  });
+  await expect(result).rejects.toThrow();
+  expect(cancelled).toBe(true);
+  expect(await readdir(dir)).toEqual([]);
+});
+
+it("refuses existing tar outputs and closes the failed extraction", async () => {
+  const storage = createMemoryStorage({ "/out/a.txt": "user edit" });
+  await storage.upload(
+    "/docs.tar",
+    await buildTar([{ name: "a.txt", content: "archive version" }]),
+  );
+  await expect(
+    extractArchive({
+      storage,
+      archivePath: "/docs.tar",
+      destination: "/out",
+      tmpDir: await tmpDirFor("tar-conflict"),
+      signal: new AbortController().signal,
+      report: () => {},
+      maxBytes: DEFAULT_MAX_BYTES,
+    }),
+  ).rejects.toMatchObject({ kind: "conflict" });
+  expect(storage.dump()["/out/a.txt"]).toBe("user edit");
+});
+
+it("propagates a gzip download stream failure and cancels decompression", async () => {
+  const storage = createMemoryStorage();
+  await storage.upload("/file.gz", new Uint8Array());
+  storage.download = async () => ({
+    status: 200,
+    contentLength: null,
+    contentRange: null,
+    contentType: null,
+    lastModified: null,
+    body: new ReadableStream({
+      pull(controller) {
+        controller.error(new Error("upstream disconnected"));
+      },
+    }),
+  });
+  await expect(
+    extractArchive({
+      storage,
+      archivePath: "/file.gz",
+      destination: "/out",
+      tmpDir: await tmpDirFor("gzip-failure"),
+      signal: new AbortController().signal,
+      report: () => {},
+      maxBytes: DEFAULT_MAX_BYTES,
+    }),
+  ).rejects.toThrow("upstream disconnected");
+});

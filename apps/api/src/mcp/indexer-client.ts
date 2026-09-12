@@ -45,6 +45,7 @@ export function createIndexerExtractClient(
       }
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return null;
       }
 

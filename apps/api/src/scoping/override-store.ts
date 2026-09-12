@@ -54,9 +54,10 @@ export interface ScopeOverrideStore {
     identityId: string,
     scopes: readonly Scope[],
     unindexedPrefixes: readonly string[],
+    accountId?: string,
   ): Promise<void>;
   /** Removes the override for `identityId`, so it falls back to the plain template-derived home scope. */
-  reset(identityId: string): Promise<void>;
+  reset(identityId: string, accountId?: string): Promise<void>;
 }
 
 /** The `SettingsRepo` key one identity's scope override is stored under. */
@@ -73,7 +74,20 @@ export function scopeOverrideSettingsKey(identityId: string): string {
  */
 export function createSettingsScopeOverrideStore(
   settings: Pick<SettingsRepo, "get" | "set">,
+  withOwnedIdentity?: (
+    accountId: string,
+    identityId: string,
+    write: (settings: Pick<SettingsRepo, "set">) => Promise<void>,
+  ) => Promise<void>,
 ): ScopeOverrideStore {
+  const persist = async (identityId: string, record: ScopeOverrideRecord, accountId?: string) => {
+    const write = (repo: Pick<SettingsRepo, "set">) =>
+      repo.set(scopeOverrideSettingsKey(identityId), record);
+    if (withOwnedIdentity !== undefined) {
+      if (accountId === undefined) throw new Error("scope write requires an owner");
+      await withOwnedIdentity(accountId, identityId, write);
+    } else await write(settings);
+  };
   return {
     async get(identityId) {
       const stored = await settings.get<StoredScopeOverrideRecord>(
@@ -81,12 +95,12 @@ export function createSettingsScopeOverrideStore(
       );
       return normalizeScopeOverrideRecord(stored);
     },
-    async set(identityId, scopes, unindexedPrefixes) {
+    async set(identityId, scopes, unindexedPrefixes, accountId) {
       const record: ScopeOverrideRecord = { version: 2, scopes, unindexedPrefixes };
-      await settings.set(scopeOverrideSettingsKey(identityId), record);
+      await persist(identityId, record, accountId);
     },
-    async reset(identityId) {
-      await settings.set(scopeOverrideSettingsKey(identityId), EMPTY_SCOPE_OVERRIDE_RECORD);
+    async reset(identityId, accountId) {
+      await persist(identityId, EMPTY_SCOPE_OVERRIDE_RECORD, accountId);
     },
   };
 }

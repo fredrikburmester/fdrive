@@ -9,7 +9,7 @@ import * as idxSchema from "./schema/idx.js";
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
 export { createRepos } from "./repos/drizzle.js";
-export { createIdentityLinksRepo } from "./repos/identity-links.js";
+export { createIdentityLinksRepo, createIdentityOwnershipGuard } from "./repos/identity-links.js";
 export type {
   IdentityLinksErrorCode,
   IdentityLinksRepo,

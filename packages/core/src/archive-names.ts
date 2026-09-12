@@ -1,4 +1,4 @@
-import { extensionOf, joinPath } from "./paths.ts";
+import { extensionOf, isSafeSegment, joinPath } from "./paths.ts";
 
 /**
  * The archive formats fdrive can produce. Mirrors `@fdrive/contracts`'
@@ -141,6 +141,7 @@ export function safeEntryPath(destination: string, entryName: string): string | 
       resolved.pop();
       continue;
     }
+    if (!isSafeSegment(segment)) return null;
     resolved.push(segment);
   }
 

@@ -2,6 +2,7 @@ import { toFsPath } from "@fdrive/core";
 import type { Identity, IdentityRepo } from "@fdrive/db";
 import type { IndexerEventPayload } from "../events/indexer-listener.js";
 import type { MetadataService } from "../metadata/service.js";
+import type { ProviderService } from "../providers/service.ts";
 import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import type { OfficeFileRepo } from "./types.ts";
 
@@ -22,6 +23,21 @@ export async function applyOfficeStorageEvent(
   else if (event.kind === "deleted")
     await files.deletePrefix({ providerId, rootName: event.root, path: event.path, at });
 }
+/** Route physical index events only to providers mapped to that root. */
+export async function applyOfficeRootEvent(
+  files: OfficeFileRepo,
+  providers: Pick<ProviderService, "list" | "get">,
+  event: IndexerEventPayload,
+): Promise<void> {
+  if (event.kind !== "moved" && event.kind !== "deleted") return;
+  for (const row of await providers.list()) {
+    const resolved = await providers.get(row.id);
+    if (resolved?.module.indexRootName?.(resolved.instance) === event.root) {
+      await applyOfficeStorageEvent(files, row.id, event);
+    }
+  }
+}
+
 /**
  * Wraps `metadata` so a user-initiated move/delete (from the fs or trash
  * routes) also updates the office file registry, using the same trusted

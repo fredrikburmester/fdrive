@@ -60,10 +60,14 @@ export function parseSearchFilters(query: RawSearchFilterQuery): SearchFilters {
           .map(normalizeExt)
           .filter((ext) => ext.length > 0);
 
-  const folder =
-    query.folder === undefined || query.folder.trim().length === 0
-      ? null
-      : normalizePath(query.folder);
+  let folder: string | null = null;
+  if (query.folder !== undefined && query.folder.trim().length > 0) {
+    try {
+      folder = normalizePath(query.folder);
+    } catch {
+      // Invalid path filters follow the same nullable contract as invalid dates.
+    }
+  }
 
   return {
     exts: exts !== null && exts.length > 0 ? exts : null,
