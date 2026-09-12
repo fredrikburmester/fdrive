@@ -6,10 +6,10 @@ Idle services are quiet. Hover or keyboard focus exposes the phase and counts; r
 motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
 warning. Background job state survives navigation and reload.
 
-Features sits below Shared folders, with a separate expand/collapse button nesting Thumbnails,
-Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label still opens
-the overview, whose activity remains visible when collapsed. General, Storage and Shared
-folders stay at the top level. Expansion is remembered in this browser; opening a feature
+Features sits below Storage, with a separate expand/collapse button nesting Shared folders,
+Thumbnails, Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label
+still opens the overview, whose activity remains visible when collapsed. General and Storage
+stay at the top level. Expansion is remembered in this browser; opening a feature
 page reveals its navigation item.
 
 ## Data flow

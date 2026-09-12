@@ -26,6 +26,7 @@ test("sidebar activity survives navigation and reload, supports keyboard details
   });
   await page.goto("/files");
   const thumbnails = page.getByRole("link", { name: "Thumbnails", exact: true });
+  const sharedFolders = page.getByRole("link", { name: "Shared folders", exact: true });
   const ocr = page.getByRole("link", { name: "Searchable PDFs", exact: true });
   await expect(thumbnails).toContainText("63%");
   await expect(ocr.locator('[data-system-activity="working"]')).toBeVisible();
@@ -33,8 +34,9 @@ test("sidebar activity survives navigation and reload, supports keyboard details
   const collapse = page.getByRole("button", { name: "Collapse Features", exact: true });
   await collapse.click();
   await expect(thumbnails).toHaveCount(0);
+  await expect(sharedFolders).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Office", exact: true })).toHaveCount(0);
-  for (const name of ["General", "Storage", "Shared folders"]) {
+  for (const name of ["General", "Storage"]) {
     await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
   }
   await expect(
@@ -50,6 +52,8 @@ test("sidebar activity survives navigation and reload, supports keyboard details
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
   await expect(thumbnails).toContainText("63%");
   await page.getByRole("button", { name: "Collapse Features", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(sharedFolders).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(thumbnails).toBeFocused();
   await expect(page.getByRole("tooltip")).toContainText("63 of 100 files processed");
@@ -95,13 +99,14 @@ test("sidebar activity survives navigation and reload, supports keyboard details
     timeout: 10000,
   });
   await expect(thumbnails).not.toContainText("84%");
+  await expect(sharedFolders.locator("[data-system-activity]")).toHaveCount(0);
   offline = false;
   running = false;
   await expect(thumbnails.locator("[data-system-activity]")).toHaveCount(0, { timeout: 10000 });
   await collapse.click();
-  await page.goto("/system/thumbnails");
-  await expect(thumbnails).toBeVisible();
-  await expect(thumbnails).toHaveAttribute("data-active", "");
+  await page.goto("/system/shared-folders");
+  await expect(sharedFolders).toBeVisible();
+  await expect(sharedFolders).toHaveAttribute("data-active", "");
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
   await page.getByRole("link", { name: "Features", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/features$/);
