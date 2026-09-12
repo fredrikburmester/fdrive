@@ -1,4 +1,3 @@
-import type { MeResponse } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { accountItemHref, accountItemKey, identityLabel, navigateAccountItem } from "./identities";

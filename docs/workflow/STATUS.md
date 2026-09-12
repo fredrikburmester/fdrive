@@ -43,9 +43,24 @@ conformance, manual browser pass) is archived in [history](STATUS-history.md).
   endpoint and card, or account-wide environment admins).
 - **Known**: GitGuardian on PR #5 flags two fake test passwords in an earlier commit's
   history; the current tree no longer contains those patterns, and history is not rewritten
-  here, so the incidents need dismissing in the GitGuardian dashboard. Two pre-existing UI
-  issues found during the manual pass (Base UI `Select` trigger shows the raw value; a
-  non-admin can open `/system/*` by URL and gets an empty state) are tracked separately.
+  here, so the incidents need dismissing in the GitGuardian dashboard. The two pre-existing UI
+  issues found during the manual pass (Base UI `Select` trigger showing the raw value; a
+  non-admin opening `/system/*` by URL) were fixed on `main` (PRs #6 and #7) and are merged
+  into this branch.
+
+## Move to Trash busy indicator: complete (uncommitted, `claude/trash-loading-indicator-c30eb5`)
+
+- Moving a large folder or selection to Trash gave no feedback while the single delete request
+  ran. `DeleteDialog` now shows a spinner with progressive copy on the confirm button
+  ("Moving to Trash…" / "Deleting…", from `deleteDialogCopy().pendingLabel`), disables Cancel,
+  and ignores Escape while `pending`, so the indicator stays visible until the request settles.
+  Both call sites (`file-browser.tsx`, `virtual-listing.tsx`) already pass `remove.isPending`.
+- Verification: `package @fdrive/web` (lint, typecheck, coverage) and `browser e2e/trash.spec.ts`
+  pass; the spec now holds the delete request back to assert the busy state. `application`
+  coverage hit unrelated timeout flakes under a load average around 20 (untouched search-panel,
+  office-actions and trash queries tests); each passes in isolation.
+- Limitation: the request is one round trip, so there is no per-item progress, and the dialog is
+  modal for its whole duration. A non-blocking loading toast is the alternative if that matters.
 
 ## HEIC/HEIF viewing and indexing support: complete
 

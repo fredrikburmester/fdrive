@@ -60,6 +60,14 @@ async function flush(): Promise<void> {
   });
 }
 
+it("shows the default expiry as its label in the closed Expires trigger", () => {
+  renderDialog();
+  expect(
+    screen.getByRole("combobox", { name: "Expires" }).querySelector('[data-slot="select-value"]')
+      ?.textContent,
+  ).toBe("90 days");
+});
+
 it("creates the token when Enter is pressed in the name field", async () => {
   const create = vi.spyOn(apiClient, "createApiToken").mockResolvedValue(RESULT);
   const { input, onCreated } = renderDialog();

@@ -40,7 +40,6 @@ import {
   type AnchorDownloader,
   adaptDocument,
   createAnchorDownloader,
-  type DownloadDeps,
   downloadMany,
   downloadSingle,
   planDownload,

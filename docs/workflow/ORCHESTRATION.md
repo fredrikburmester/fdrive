@@ -22,8 +22,8 @@ document. Shared rules live in [WORKING.md](../../WORKING.md).
 ## Claude Code
 
 - Use the native Agent tool with the roles in `.claude/agents/`; no custom spawning framework.
-  `implementer` (code plus tests) and `test-writer` (tests only) both default to Opus;
-  `explorer` is read-only on Sonnet.
+  `implementer` (code plus tests, or a tests-only assignment stated in the prompt) defaults to
+  Opus; `explorer` is read-only on Sonnet.
 - Fable subagents require explicit user approval for the specific scope; explain the cost and
   why Opus is insufficient. Never escalate automatically or through inheritance. The primary
   agent may itself run on Fable; that does not extend to workers.
@@ -41,6 +41,7 @@ document. Shared rules live in [WORKING.md](../../WORKING.md).
 - Do not pass a per-spawn `model` override to `spawn_agent`. Changing worker model or effort is
   a config change the user approves, the same way Fable escalation works for Claude Code.
 - There are no role definitions: the role belongs in the spawn prompt. State the equivalent of
-  `implementer` or `test-writer` explicitly, including the tools the worker may not use.
+  `implementer` or `explorer` explicitly, say when the assignment is tests only, and name the
+  tools the worker may not use.
 - Codex subagents share this checkout unless you give them another. For parallel writes,
   prepare a worktree with `prepare-worktree.sh` and pass the absolute path in the prompt.

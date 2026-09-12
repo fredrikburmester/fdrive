@@ -54,6 +54,36 @@ async function moveToTrash(page: Page, name: string): Promise<void> {
   await expect(confirmDialog).toBeHidden();
 }
 
+/**
+ * Moves `name` to Trash while holding back the delete request, so the confirm
+ * dialog's busy state is observable: the confirm button shows progressive
+ * copy and is disabled, Cancel is disabled, and Escape does not dismiss the
+ * dialog until the request completes.
+ */
+async function moveToTrashSlowly(page: Page, name: string): Promise<void> {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/fs/delete", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  const confirmDialog = page.getByRole("alertdialog");
+  await confirmDialog.getByRole("button", { name: "Move to Trash" }).click();
+  const busy = confirmDialog.getByRole("button", { name: "Moving to Trash…" });
+  await expect(busy).toBeVisible();
+  await expect(busy).toBeDisabled();
+  await expect(confirmDialog.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(busy).toBeVisible();
+  release();
+  await expect(confirmDialog).toBeHidden();
+  await page.unroute("**/api/v1/fs/delete");
+}
+
 test.describe("trash available", () => {
   test.describe.configure({ timeout: 300_000 });
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -116,9 +146,10 @@ test.describe("trash available", () => {
       timeout: 15_000,
     });
 
-    // Move it to Trash again, then recreate a file at its original path so
+    // Move it to Trash again, this time watching the dialog's busy state while
+    // the request is held back, then recreate a file at its original path so
     // restoring the trashed copy conflicts.
-    await moveToTrash(page, fileName);
+    await moveToTrashSlowly(page, fileName);
     await uploadFiles(page, [{ name: fileName, mimeType: "text/plain", contents: "conflict" }]);
     await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
       timeout: 15_000,

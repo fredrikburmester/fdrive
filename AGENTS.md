@@ -1,6 +1,7 @@
 # fdrive working agreements
 
-- Be extremely concise in reports.
+- Keep reports short by omission, not compression: lead with the outcome and drop detail that
+  does not change what the reader does next.
 - Before implementation or delegation, read `WORKING.md`, relevant architecture docs,
   `docs/plans/README.md` and `docs/workflow/STATUS.md`. Load command recipes and troubleshooting only as needed.
 - Use `tools/orchestration/` for setup and verification; keep their gates intact.
