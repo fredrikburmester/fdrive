@@ -8,6 +8,13 @@ export {
   SwitchIdentityRequest,
   UnlinkIdentityRequest,
 } from "./accounts.ts";
+export {
+  ActivityOperation,
+  SystemActivityId,
+  SystemActivityItem,
+  SystemActivityResponse,
+  WorkerActivity,
+} from "./activity.ts";
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export { CanonicalUuid } from "./canonical-uuid.ts";
 export type {

@@ -75,6 +75,7 @@ export const IndexerThumbnailRebuildJob = z.object({
   startedAt: z.iso.datetime({ offset: true }).nullable(),
   finishedAt: z.iso.datetime({ offset: true }).nullable(),
   errors: z.number().int(),
+  outcome: z.enum(["completed", "failed", "stopped"]).nullable().optional(),
 });
 
 export type IndexerThumbnailRebuildJob = z.infer<typeof IndexerThumbnailRebuildJob>;

@@ -6,6 +6,7 @@ import {
   type LinkIdentityRequest,
   type UnlinkIdentityRequest,
 } from "./accounts.ts";
+import { SystemActivityResponse } from "./activity.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
@@ -277,6 +278,7 @@ export interface ApiClient {
   adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
+  systemActivity(): Promise<SystemActivityResponse>;
   systemIndexer(): Promise<SystemIndexerResponse>;
   systemUpdateIndexerSettings(
     settings: IndexerSettingsUpdateRequest,
@@ -796,6 +798,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
       return put(ROUTES.system.trash, TrashSettings, { jsonBody: input });
+    },
+    systemActivity(): Promise<SystemActivityResponse> {
+      return get(ROUTES.system.activity, SystemActivityResponse);
     },
     systemIndexer(): Promise<SystemIndexerResponse> {
       return get(ROUTES.system.indexer, SystemIndexerResponse);

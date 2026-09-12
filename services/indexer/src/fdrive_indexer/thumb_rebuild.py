@@ -15,6 +15,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from . import db
 from .indexer import RootContext, log
@@ -36,6 +37,11 @@ class ThumbnailRebuildJob:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     errors: int = 0
+    skipped: int = 0
+    total_known: bool = False
+    outcome: str | None = None
+    revision: int = 0
+    run_id: str = ""
 
     def try_start(self, total: int) -> bool:
         """Claim the job for a new run. Returns False (and changes nothing) if a
@@ -47,13 +53,18 @@ class ThumbnailRebuildJob:
             self.processed = 0
             self.total = total
             self.errors = 0
+            self.skipped = 0
+            self.total_known = False
+            self.outcome = None
+            self.run_id = str(uuid4())
             self.started_at = datetime.now().astimezone()
             self.finished_at = None
             return True
 
-    def advance(self, ok: bool) -> None:
+    def advance(self, ok: bool, skipped: bool = False) -> None:
         with self._lock:
             self.processed += 1
+            self.skipped += int(skipped)
             if not ok:
                 self.errors += 1
 
@@ -61,14 +72,22 @@ class ThumbnailRebuildJob:
         with self._lock:
             self.total += count
 
+    def discovered(self) -> None:
+        with self._lock:
+            self.total_known = True
+
     def fail(self) -> None:
         with self._lock:
             self.errors += 1
+            self.outcome = "failed"
 
     def finish(self) -> None:
         with self._lock:
             if self.running:
                 self.running = False
+                self.outcome = self.outcome or (
+                    "failed" if self.errors else "stopped" if self.total_known and self.processed < self.total else "completed"
+                )
                 self.finished_at = datetime.now().astimezone()
                 self.admission.release()
 
@@ -81,6 +100,23 @@ class ThumbnailRebuildJob:
                 "started_at": self.started_at.isoformat() if self.started_at else None,
                 "finished_at": self.finished_at.isoformat() if self.finished_at else None,
                 "errors": self.errors,
+                "outcome": self.outcome,
+            }
+
+
+    def activity_snapshot(self, kind: str, features: list[str]) -> dict[str, Any] | None:
+        with self._lock:
+            if self.started_at is None:
+                return None
+            return {
+                "id": self.run_id, "kind": kind, "features": features, "revision": self.revision,
+                "state": "running" if self.running else self.outcome or "completed",
+                "phase": "processing" if self.total_known or self.processed else "discovering",
+                "processed": self.processed, "total": self.total if self.total_known else None,
+                "errors": self.errors, "skipped": self.skipped,
+                "unit": "entries" if kind.endswith("Clear") else "files",
+                "startedAt": self.started_at.isoformat(),
+                "finishedAt": self.finished_at.isoformat() if self.finished_at else None,
             }
 
 
@@ -89,6 +125,7 @@ def rebuild_thumbnails(
     path: str | None = None,
     force: bool = False,
     on_file: Callable[[bool], None] | None = None,
+    candidates: list[tuple[str, str, str, int]] | None = None,
 ) -> int:
     """Regenerate thumbnails for every live media file in `root`, optionally
     scoped to `path` (a single file or a directory subtree; the whole root when
@@ -100,8 +137,8 @@ def rebuild_thumbnails(
     embeddings are never touched, unlike `POST /reindex`.
     """
     conn = root.conn()
-    rows = db.media_files(conn, root.root_id)
-    candidates = select_candidates(rows, normalize_scope(path))
+    if candidates is None:
+        candidates = select_candidates(db.media_files(conn, root.root_id), normalize_scope(path))
     processed = 0
     for rel_path, ext, sha256, size in candidates:
         root.maybe_refresh_features()
@@ -145,8 +182,13 @@ def start_rebuild(
     if not job.try_start(0):
         return None
     try:
-        total = count_candidates(contexts, path)
+        candidates = [
+            (ctx, select_candidates(db.media_files(ctx.conn(), ctx.root_id), normalize_scope(path))) for ctx in contexts
+        ]
+        total = sum(len(rows) for _, rows in candidates)
+        job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
         job.discover(total)
+        job.discovered()
     except Exception:
         job.fail()
         job.finish()
@@ -154,10 +196,10 @@ def start_rebuild(
 
     def run() -> None:
         try:
-            for ctx in contexts:
+            for ctx, rows in candidates:
                 if not ctx.feature_configuration().values.internal_thumbnails:
                     continue
-                rebuild_thumbnails(ctx, path, force, on_file=job.advance)
+                rebuild_thumbnails(ctx, path, force, on_file=job.advance, candidates=rows)
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
             log(f"thumbnail rebuild job crashed: {type(e).__name__}: {e}")

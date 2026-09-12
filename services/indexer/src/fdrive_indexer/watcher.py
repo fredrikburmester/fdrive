@@ -61,7 +61,9 @@ class Watcher:
         debounce: float = 2.0,
         skip_names: frozenset[str] = DEFAULT_SKIP_NAMES,
         skip_dirs: frozenset[str] = DEFAULT_SKIP_DIRS,
+        on_queue: Callable[[str], Callable[[str], None]] | None = None,
     ) -> None:
+        self.on_queue = on_queue
         self.root, self.log = root, log
         self.index_file, self.mark_deleted, self.rename = index_file, mark_deleted, rename
         self.workers, self.debounce = workers, debounce
@@ -312,15 +314,33 @@ class Watcher:
                 continue
             if stat.S_ISDIR(st.st_mode):
                 for found_path in self.add_tree(abs_path, collect_files=True):
-                    futures.append(pool.submit(self._index, found_path))
+                    futures.append(self._submit(pool, found_path))
             elif stat.S_ISREG(st.st_mode):
-                futures.append(pool.submit(self._index, abs_path))
+                futures.append(self._submit(pool, abs_path))
         for future in futures:
             tally[future.result()] += 1
         self.log(
             f"watch: {tally['renamed']} renamed, {tally['deleted']} deleted, {tally['indexed']} indexed, "
             f"{tally['unchanged']} unchanged, {tally['error']} errors ({time.time() - t0:.1f}s)"
         )
+
+    def _submit(self, pool: ThreadPoolExecutor, abs_path: str) -> Future[str]:
+        finish = self.on_queue(abs_path) if self.on_queue is not None else None
+
+        def run() -> str:
+            result = "error"
+            try:
+                result = self._index(abs_path)
+                return result
+            finally:
+                if finish is not None:
+                    finish(result)
+        try:
+            return pool.submit(run)
+        except Exception:
+            if finish is not None:
+                finish("error")
+            raise
 
     def _index(self, abs_path: str) -> str:
         rel = os.path.relpath(abs_path, self.root)

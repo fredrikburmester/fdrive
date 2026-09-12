@@ -18,8 +18,14 @@ export function MaintenanceProgress({
       </CardHeader>
       <CardContent>
         <p role="status" className="text-sm text-muted-foreground">
-          {job.running ? "Running" : job.errors > 0 ? "Completed with errors" : "Completed"} ·{" "}
-          {job.processed.toLocaleString()} of {job.total.toLocaleString()} processed ·{" "}
+          {job.running
+            ? "Running"
+            : job.outcome === "stopped"
+              ? "Stopped"
+              : job.errors > 0 || job.outcome === "failed"
+                ? "Completed with errors"
+                : "Completed"}{" "}
+          · {job.processed.toLocaleString()} of {job.total.toLocaleString()} processed ·{" "}
           {job.errors.toLocaleString()} errors
         </p>
       </CardContent>

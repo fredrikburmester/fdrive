@@ -13,7 +13,7 @@ import stat
 import threading
 import time
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -21,6 +21,7 @@ from datetime import datetime
 import psycopg
 
 from . import db
+from .activity import Operation, RootActivity
 from .chunking import chunk, max_chunks_for
 from .config import Config
 from .embed_backoff import EmbedBackoff, is_backend_outage
@@ -184,6 +185,7 @@ class RootContext:
     embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
     image_embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
     local: threading.local = field(default_factory=threading.local)
+    activity: RootActivity = field(default_factory=RootActivity)
 
     def conn(self) -> psycopg.Connection:
         conn = getattr(self.local, "conn", None)
@@ -200,6 +202,8 @@ class RootContext:
         with self.feature_lock:
             old = self.features.values
             self.features = value
+            if not value.values.indexer_enabled:
+                self.activity.stop_queued()
             enabled_media = value.values.internal_thumbnails and not old.internal_thumbnails
             enabled_image = value.values.image_search and not old.image_search
             self._backfill_media = self._backfill_media or enabled_media or enabled_image
@@ -547,6 +551,23 @@ def emit_event(ctx: RootContext, kind: str, rel_path: str, target_path: str | No
 # -- watcher callbacks --------------------------------------------------------------------
 
 
+def work_features(
+    features: FeatureValues, ext: str | None = None, embed_only: bool = False, media_only: bool = False
+) -> list[str]:
+    from .chunking import is_textual
+
+    result = []
+    if features.text_search and not embed_only and not media_only:
+        result.append("textSearch")
+    if features.semantic_search and not media_only and (ext is None or is_textual(ext)):
+        result.append("semanticSearch")
+    if features.thumbnails and (not embed_only or media_only) and (ext is None or kind_for_ext(ext) is not None):
+        result.append("thumbnails")
+    if features.image_search and (not embed_only or media_only) and (ext is None or is_image_candidate(ext)):
+        result.append("imageSearch")
+    return result
+
+
 def watch_index(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result) -> str:
     ctx.maybe_refresh_features()
     if not ctx.feature_configuration().values.indexer_enabled:
@@ -584,6 +605,11 @@ def start_watcher(ctx: RootContext, workers: int, debounce: float) -> object | N
     try:
         from .watcher import Watcher
 
+        def queued(abs_path: str) -> Callable[[str], None]:
+            configuration = ctx.feature_configuration()
+            operations = ctx.activity.start_watch(work_features(configuration.values, ext_of(abs_path)), configuration.revision)
+            return lambda result: ctx.activity.finish_watch(operations, result != "error")
+
         w = Watcher(
             ctx.abs_path,
             log,
@@ -592,6 +618,7 @@ def start_watcher(ctx: RootContext, workers: int, debounce: float) -> object | N
             lambda o, n, d: watch_rename(ctx, o, n, d),
             workers=workers,
             debounce=debounce,
+            on_queue=queued,
         )
         w.start()
         log(f"[{ctx.name}] watching {w.dirs} directories for changes (debounce {debounce:g}s)")
@@ -602,6 +629,21 @@ def start_watcher(ctx: RootContext, workers: int, debounce: float) -> object | N
 
 
 def scan_once(ctx: RootContext) -> dict[str, int]:
+    ctx.maybe_refresh_features()
+    configuration = ctx.feature_configuration()
+    operations = ctx.activity.start_scan(work_features(configuration.values), configuration.revision)
+    outcome = "failed"
+    try:
+        result = _scan_once(ctx, operations)
+        outcome = "failed" if result["errors"] else "completed"
+        return result
+    finally:
+        enabled = ctx.feature_configuration().values.as_json()
+        for feature, operation in operations.items():
+            operation.finish(outcome if enabled[feature] else "stopped")
+
+
+def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, int]:
     ctx.maybe_refresh_features()
     if not ctx.feature_configuration().values.indexer_enabled:
         return {"seen": 0, "changed": 0, "deleted": 0, "errors": 0}
@@ -623,23 +665,25 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
     workers = ctx.settings.workers
     lock = threading.Lock()
 
-    def job(abs_path: str, rel_path: str, st: os.stat_result, embed_only: bool = False, media_only: bool = False) -> None:
+    def job(abs_path: str, rel_path: str, st: os.stat_result, embed_only: bool = False, media_only: bool = False) -> bool:
         nonlocal media_backfill_errors
         ctx.maybe_refresh_features()
         if not ctx.feature_configuration().values.indexer_enabled:
-            return
+            return True
+        media_ok = True
         if media_only:
-            if not backfill_media(ctx, abs_path, rel_path, st):
+            media_ok = backfill_media(ctx, abs_path, rel_path, st)
+            if not media_ok:
                 with lock:
                     media_backfill_errors += 1
             if not embed_only:
-                return
+                return media_ok
         if embed_only:
             if not ctx.feature_configuration().values.semantic_search:
-                return
+                return media_ok
             try:
                 if not embed_missing(ctx, rel_path):
-                    return
+                    return media_ok
                 ok = True
             except Exception as e:  # noqa: BLE001
                 log(f"[{ctx.name}] embed retry failed for {rel_path}: {type(e).__name__}: {e}")
@@ -647,10 +691,31 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
         else:
             result = safe_process(ctx, abs_path, rel_path, st)
             if result == "unchanged":
-                return
+                return media_ok
             ok = result == "indexed"
         with lock:
             counters["changed" if ok else "errors"] += 1
+        return ok and media_ok
+
+    def tracked_job(
+        abs_path: str, rel_path: str, st: os.stat_result, tracked: list[Operation], embed_only: bool, media_only: bool
+    ) -> None:
+        ok = False
+        try:
+            ok = job(abs_path, rel_path, st, embed_only, media_only)
+        finally:
+            for operation in tracked:
+                operation.advance(ok)
+
+    def submit(pool: ThreadPoolExecutor, abs_path: str, rel_path: str, st: os.stat_result,
+               embed_only: bool = False, media_only: bool = False) -> Future[None]:
+        features = work_features(ctx.feature_configuration().values, ext_of(rel_path), embed_only, media_only)
+        if embed_only and media_only and ctx.feature_configuration().values.semantic_search:
+            features.append("semanticSearch")
+        tracked = [operations[feature] for feature in features if feature in operations]
+        for operation in tracked:
+            operation.enqueue()
+        return pool.submit(tracked_job, abs_path, rel_path, st, tracked, embed_only, media_only)
 
     traversal_complete = True
 
@@ -677,18 +742,21 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
             if prev is not None and prev[2].startswith("excluded") and exclusion_still_applies(ctx, rel_path, st.st_size):
                 retry_unchanged = False
             if unchanged and prev is not None and prev[2] == "partial" and features.semantic_search:
-                pending.append(pool.submit(job, abs_path, rel_path, st, True, media_needed))
+                pending.append(submit(pool, abs_path, rel_path, st, True, media_needed))
             elif unchanged and retry_unchanged:
-                pending.append(pool.submit(job, abs_path, rel_path, st))
+                pending.append(submit(pool, abs_path, rel_path, st))
             elif media_needed:
-                pending.append(pool.submit(job, abs_path, rel_path, st, False, True))
+                pending.append(submit(pool, abs_path, rel_path, st, False, True))
             elif unchanged and prev is not None and prev[2] not in ("pending", "disabled:text", "disabled:search_ocr"):
                 continue
             else:
-                pending.append(pool.submit(job, abs_path, rel_path, st))
+                pending.append(submit(pool, abs_path, rel_path, st))
             if len(pending) >= workers * 8:
                 pending[0].result()
                 pending = [f for f in pending if not f.done()]
+        if traversal_complete:
+            for operation in operations.values():
+                operation.discovered()
         for f in pending:
             f.result()
 

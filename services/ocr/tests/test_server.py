@@ -278,3 +278,30 @@ def test_run_lock_released_when_thread_start_fails(postgres_dsn: str, tmp_path: 
         response = client.post("/run")
         assert response.status_code == 500
         assert not state.run_lock.running
+        assert state.run_lock.snapshot()["operations"][0]["state"] == "failed"
+
+
+def test_activity_counts_done_skips_and_errors_without_storage_reads(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    def forbidden():
+        raise AssertionError("Activity must not query the database or scan originals")
+    state.conn_factory = forbidden
+    client = TestClient(server.create_app(state))
+    lock = state.run_lock
+    assert client.get("/activity").json()["operations"] == []
+    assert lock.try_acquire()
+    lock.begin(7)
+    lock.advance("skipped_done", False)
+    lock.advance("ocred", True)
+    lock.advance("timeout", False)
+    operation = client.get("/activity").json()["operations"][0]
+    assert operation["revision"] == 7
+    assert operation["processed"] == 3 and operation["errors"] == 1 and operation["skipped"] == 1
+    assert operation["total"] is None and operation["state"] == "running"
+    lock.release()
+    assert client.get("/activity").json()["operations"][0]["state"] == "failed"
+    assert lock.try_acquire()
+    lock.stop()
+    lock.release()
+    newer = client.get("/activity").json()["operations"][0]
+    assert newer["id"] != operation["id"] and newer["state"] == "stopped"
