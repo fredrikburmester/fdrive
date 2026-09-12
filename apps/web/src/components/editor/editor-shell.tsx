@@ -1,5 +1,6 @@
 "use client";
 
+import type { MeResponse } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -30,6 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { getTabIdentity } from "@/lib/api/client";
 import { decideSave, type SaveBaseline } from "@/lib/editor/conflict";
 import {
   apiClient,
@@ -41,6 +43,7 @@ import {
 } from "@/lib/editor/deps";
 import { guardBeforeUnload, isDirty } from "@/lib/editor/dirty";
 import { computeDocumentStats } from "@/lib/editor/document-stats";
+import { discardDraft, draftKey, readDraft, writeDraft } from "@/lib/editor/drafts";
 import { capitalize } from "@/lib/editor/format";
 import { keyToEditorAction } from "@/lib/editor/keymap";
 import { languageKeyFor } from "@/lib/editor/language";
@@ -103,6 +106,11 @@ function ErrorState({ backHref }: { backHref: string }) {
 export function EditorShell({ path }: EditorShellProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const [identityId] = useState(getTabIdentity);
+  const [accountId] = useState(
+    () => queryClient.getQueryData<MeResponse>(queryKeys.auth.me())?.account.id,
+  );
+  const currentDraftKey = draftKey(accountId, identityId, path);
   const parent = parentPath(path);
   const backHref = viewHref(path);
 
@@ -138,14 +146,24 @@ export function EditorShell({ path }: EditorShellProps) {
       return;
     }
     resetTokenRef.current += 1;
-    setBaseline({
-      modifiedAt: loadState.entry.modifiedAt,
-      size: loadState.entry.size,
-      text: loadState.text,
-    });
-    setDocumentText(loadState.text);
-    setResetSignal({ text: loadState.text, token: resetTokenRef.current });
-  }, [loadState]);
+    const draft = readDraft(currentDraftKey);
+    setBaseline(
+      draft?.baseline ?? {
+        modifiedAt: loadState.entry.modifiedAt,
+        size: loadState.entry.size,
+        text: loadState.text,
+      },
+    );
+    const text = draft?.text ?? loadState.text;
+    setDocumentText(text);
+    setResetSignal({ text, token: resetTokenRef.current });
+    if (draft) toast.info("Restored your unsaved draft.");
+  }, [loadState, currentDraftKey]);
+
+  function handleDocumentChange(text: string) {
+    setDocumentText(text);
+    if (baseline) writeDraft(currentDraftKey, { baseline, text });
+  }
 
   const dirty = baseline !== null && isDirty(baseline.text, documentText);
 
@@ -174,7 +192,11 @@ export function EditorShell({ path }: EditorShellProps) {
         modifiedAt: new Date(),
         contentLength: blob.size,
       });
-      setBaseline({ modifiedAt: saved.modifiedAt, size: saved.size, text: documentText });
+      const savedBaseline = { modifiedAt: saved.modifiedAt, size: saved.size, text: documentText };
+      setBaseline(savedBaseline);
+      const latest = readDraft(currentDraftKey);
+      // Typing can continue while save is in flight; preserve those later edits.
+      writeDraft(currentDraftKey, { baseline: savedBaseline, text: latest?.text ?? documentText });
       void queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(parent) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.fs.stat(path) });
       toast.success("Saved");
@@ -205,6 +227,7 @@ export function EditorShell({ path }: EditorShellProps) {
 
   function handleReloadFromConflict() {
     setConflictOpen(false);
+    discardDraft(currentDraftKey);
     setGeneration((value) => value + 1);
   }
 
@@ -212,6 +235,7 @@ export function EditorShell({ path }: EditorShellProps) {
     if (baseline === null) {
       return;
     }
+    discardDraft(currentDraftKey);
     resetTokenRef.current += 1;
     setDocumentText(baseline.text);
     setResetSignal({ text: baseline.text, token: resetTokenRef.current });
@@ -226,6 +250,7 @@ export function EditorShell({ path }: EditorShellProps) {
   }
 
   function handleConfirmLeave() {
+    discardDraft(currentDraftKey);
     setLeaveConfirmOpen(false);
     router.push(toRoute(backHref));
   }
@@ -398,7 +423,7 @@ export function EditorShell({ path }: EditorShellProps) {
                       resetSignal={resetSignal}
                       languageKey={languageKey}
                       wordWrap={wordWrap}
-                      onChange={setDocumentText}
+                      onChange={handleDocumentChange}
                       onCursorChange={setCursorOffset}
                     />
                   </div>
@@ -419,7 +444,7 @@ export function EditorShell({ path }: EditorShellProps) {
                 resetSignal={resetSignal}
                 languageKey={languageKey}
                 wordWrap={wordWrap}
-                onChange={setDocumentText}
+                onChange={handleDocumentChange}
                 onCursorChange={setCursorOffset}
               />
             ))}

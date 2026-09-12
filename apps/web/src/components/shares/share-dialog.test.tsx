@@ -34,7 +34,7 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
-it("clears transient password immediately, returns a copyable public link and closes", async () => {
+it("retains password until success, returns a copyable public link and closes", async () => {
   let resolve: (value: ManagedShare) => void = () => {};
   calls.create.mockImplementation(
     () =>
@@ -51,7 +51,7 @@ it("clears transient password immediately, returns a copyable public link and cl
   render(<ShareDialog entries={[entry]} onClose={close} />);
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "transient-password" } });
   fireEvent.click(screen.getByRole("button", { name: "Create link" }));
-  expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("transient-password");
   expect((screen.getByLabelText("Password") as HTMLInputElement).type).toBe("password");
   expect(calls.create).toHaveBeenCalledWith(
     expect.objectContaining({ password: "transient-password", paths: ["/a.txt"] }),
@@ -122,4 +122,18 @@ it("generates a random visible password and reveals it via the eye toggle", asyn
   expect(password.type).toBe("password");
   fireEvent.click(screen.getByRole("button", { name: "Show password" }));
   expect(password.type).toBe("text");
+});
+
+it("keeps password protection when retrying a failed create", async () => {
+  calls.create.mockRejectedValueOnce(new Error("Try again")).mockResolvedValueOnce(share);
+  render(<ShareDialog entries={[entry]} onClose={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "keep-secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+  await screen.findByText("Try again");
+  expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("keep-secret");
+  fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+  await screen.findByRole("dialog", { name: "Share link ready" });
+  expect(calls.create).toHaveBeenLastCalledWith(
+    expect.objectContaining({ password: "keep-secret" }),
+  );
 });

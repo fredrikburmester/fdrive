@@ -177,6 +177,7 @@ export function FileGrid({
   // Cold starts, with nothing persisted yet, start out false: rendering the
   // grid's `ListingSkeleton` placeholder below instead of guessing at a
   // one-column layout, until the first real measurement lands.
+  const [measuredWidth, setMeasuredWidth] = useState<number | null>(null);
   const [hasMeasured, setHasMeasured] = useState(seededWidth > 0);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
@@ -193,6 +194,7 @@ export function FileGrid({
         return;
       }
       setContainerWidth(width);
+      setMeasuredWidth(width);
       setHasMeasured(true);
       writeGridWidth(window.localStorage, width);
     }
@@ -217,7 +219,12 @@ export function FileGrid({
   });
 
   useEffect(() => {
-    if (!scrollRequest || lastConsumedTokenRef.current === scrollRequest.token) {
+    if (
+      measuredWidth === null ||
+      measuredWidth !== containerWidth ||
+      !scrollRequest ||
+      lastConsumedTokenRef.current === scrollRequest.token
+    ) {
       return;
     }
     const index = findRevealIndex(entries, scrollRequest.path);
@@ -227,7 +234,15 @@ export function FileGrid({
       virtualizer.scrollToIndex(rowIndex, { align: "auto" });
       onScrollConsumed?.(scrollRequest.token);
     }
-  }, [scrollRequest, entries, columns, virtualizer, onScrollConsumed]);
+  }, [
+    scrollRequest,
+    entries,
+    columns,
+    virtualizer,
+    onScrollConsumed,
+    measuredWidth,
+    containerWidth,
+  ]);
 
   const onClearSelectionRef = useRef(onClearSelection);
   onClearSelectionRef.current = onClearSelection;

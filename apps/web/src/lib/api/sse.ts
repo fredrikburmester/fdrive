@@ -45,7 +45,12 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
       return [];
     }
     const resultPath = event.job.result.path;
-    return [queryKeys.fs.list(parentPath(resultPath)), queryKeys.fs.list(resultPath)];
+    return [
+      queryKeys.fs.list(parentPath(resultPath)),
+      queryKeys.fs.list(resultPath),
+      ["fs", "stat"],
+      ["fs", "folder-size"],
+    ];
   }
 
   const parents = new Set<string>();
@@ -58,6 +63,9 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
 
   return [
     ...[...parents].map((parent) => queryKeys.fs.list(parent)),
+    // Directory moves/deletes and extraction affect descendants; sizes affect every ancestor.
+    ["fs", "stat"],
+    ["fs", "folder-size"],
     ...metadataKeysToInvalidate(event),
     ...(event.op === "move" || event.op === "delete" ? [queryKeys.folderViews.all()] : []),
     ...trashKeysToInvalidate(event),

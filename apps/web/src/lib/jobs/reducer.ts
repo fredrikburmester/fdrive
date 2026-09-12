@@ -24,9 +24,8 @@ export type JobsAction =
   | { readonly type: "remove"; readonly id: string };
 
 /**
- * Applies `action` to `state`. `hydrate` replaces the whole set (used once,
- * on shell mount, from `apiClient.jobs()`), keeping only the remembered
- * requests whose job id survived. `upsert` adds a job to the end of `order`
+ * Applies `action` to `state`. `hydrate` merges the initial snapshot with jobs already received over SSE,
+ * keeping the newest timestamp and preserving remembered requests. `upsert` adds a job to the end of `order`
  * the first time it is seen and updates it in place afterwards; passing
  * `request` remembers (or overwrites) the request to retry with. `seed`
  * is like `upsert` but never overwrites a job already in `byId`: it exists
@@ -44,15 +43,14 @@ export type JobsAction =
 export function jobsReducer(state: JobsState, action: JobsAction): JobsState {
   switch (action.type) {
     case "hydrate": {
-      const byId: Record<string, JobStatus> = {};
-      const order: string[] = [];
-      const requests: Record<string, JobRequest> = {};
+      const byId: Record<string, JobStatus> = { ...state.byId };
+      const order = [...state.order];
+      const requests = state.requests;
       for (const job of action.jobs) {
-        byId[job.id] = job;
-        order.push(job.id);
-        const existing = state.requests[job.id];
-        if (existing !== undefined) {
-          requests[job.id] = existing;
+        const existing = byId[job.id];
+        if (existing === undefined) order.push(job.id);
+        if (existing === undefined || Date.parse(job.updatedAt) > Date.parse(existing.updatedAt)) {
+          byId[job.id] = job;
         }
       }
       return { byId, order, requests };

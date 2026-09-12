@@ -792,3 +792,36 @@ describe("preview stat metadata", () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["fs", "stat"] }));
   });
 });
+
+it("virtual rows observe invalidated stats even when paths do not change", async () => {
+  const { useResolvedEntries } = await import("./queries");
+  statMock.mockResolvedValue(entry("/a", { size: 1 }));
+  const { wrapper, queryClient } = createWrapper();
+  const { result } = renderHook(() => useResolvedEntries(["/a"]), { wrapper });
+  await waitFor(() => expect(result.current.entries[0]?.entry?.size).toBe(1));
+  statMock.mockResolvedValue(entry("/a", { size: 2 }));
+  await act(() => queryClient.invalidateQueries({ queryKey: ["fs", "stat"] }));
+  await waitFor(() => expect(result.current.entries[0]?.entry?.size).toBe(2));
+  statMock.mockRejectedValue(new Error("deleted"));
+  await act(() => queryClient.invalidateQueries({ queryKey: ["fs", "stat"] }));
+  await waitFor(() => expect(result.current.entries[0]?.entry).toBeNull());
+});
+
+it("virtual rows recover when an identity switch cancels their initial fetch and then fails", async () => {
+  const { useResolvedEntries } = await import("./queries");
+  const pending = Promise.withResolvers<FsEntry>();
+  statMock.mockReturnValueOnce(pending.promise).mockResolvedValue(entry("/a", { size: 2 }));
+  const { wrapper, queryClient } = createWrapper();
+  const { result } = renderHook(() => useResolvedEntries(["/a"]), { wrapper });
+  await waitFor(() => expect(statMock).toHaveBeenCalled());
+  await act(async () => {
+    accountTransition.begin();
+    await queryClient.cancelQueries();
+  });
+  await act(async () => {
+    accountTransition.finish(false);
+    pending.resolve(entry("/a", { size: 1 }));
+  });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.entries[0]?.entry?.size).toBe(2));
+});

@@ -70,12 +70,12 @@ export function ShareDialog({
     setError(null);
     try {
       const request = shareRequest(fields, entries, share !== undefined);
-      setFields((previous) => ({ ...previous, password: "" }));
       setPending(true);
       const result = share
         ? await management.update(share.id, request)
         : await management.create(CreateShareRequest.parse(request));
       if (result) {
+        setFields((previous) => ({ ...previous, password: "" }));
         if (share) onClose();
         else setCreated(result);
       }
