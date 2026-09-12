@@ -108,13 +108,30 @@ describe("indexerSettingsEntries", () => {
 });
 
 describe("resolveOcrSettings", () => {
+  it("preserves safety excludes when saving an unrelated setting", () => {
+    const shown = resolveOcrSettings({}).values;
+    const stored = Object.fromEntries(ocrSettingsEntries({ ...shown, hour: 4 }));
+    expect(stored[OCR_SETTINGS_KEYS.excludeGlobs]).toEqual([
+      "Programs/**",
+      "Photos/**",
+      "Videos/**",
+    ]);
+    expect(resolveOcrSettings(stored).values.excludeGlobs).toEqual(shown.excludeGlobs);
+  });
+
+  it("respects an explicitly saved empty exclude list", () => {
+    const resolved = resolveOcrSettings({ [OCR_SETTINGS_KEYS.excludeGlobs]: [] });
+    expect(resolved.values.excludeGlobs).toEqual([]);
+    expect(resolved.sources.excludeGlobs).toBe("settings");
+  });
+
   it("falls back to every default when app.settings is empty", () => {
     const result = resolveOcrSettings({});
 
     expect(result.values).toEqual({
       hour: OCR_SETTINGS_DEFAULTS.hour,
       langs: OCR_SETTINGS_DEFAULTS.langs,
-      excludeGlobs: [],
+      excludeGlobs: ["Programs/**", "Photos/**", "Videos/**"],
       maxMb: OCR_SETTINGS_DEFAULTS.maxMb,
       keepOriginals: OCR_SETTINGS_DEFAULTS.keepOriginals,
     });

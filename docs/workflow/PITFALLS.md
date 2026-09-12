@@ -5,7 +5,7 @@ Reference for affected code; shared workflow and commands live in [WORKING.md](.
 ## pnpm launcher
 
 The system pnpm launcher may try to download/verify another manager version and fail in a
-restricted environment. Use the [command helpers](COMMANDS.md#setup-and-runtime): they select
+restricted environment. Use the [command helpers](COMMANDS.md#setup-and-development): they select
 an already-installed pinned pnpm. Set `FDRIVE_NODE` / `FDRIVE_PNPM` to explicit matching
 binaries if discovery fails; never disable signature checks or use the wrong manager version.
 

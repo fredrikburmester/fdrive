@@ -61,3 +61,9 @@ def test_config_image_embed_reads_env(monkeypatch) -> None:
     cfg = Config()
     assert cfg.image_embed_url == "http://image-embed:8012"
     assert cfg.image_embed_batch_size == 4
+
+
+def test_image_request_batch_size_overrides_legacy_alias(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_EMBED_BATCH_SIZE", "2")
+    monkeypatch.setenv("IMAGE_EMBED_REQUEST_BATCH_SIZE", "4")
+    assert Config().image_embed_batch_size == 4

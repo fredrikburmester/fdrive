@@ -604,6 +604,7 @@ describe("GET /system/image-search", () => {
     expect(body.healthy).toBe(false);
     expect(body.model).toBe("m");
     expect(body.dim).toBeUndefined();
+    expect(body.status).toBe("loading");
   });
 
   it("reports configured but not healthy when the sidecar is unreachable", async () => {
@@ -1411,7 +1412,7 @@ describe("system routes: recorded events", () => {
         subsystem: "ocr",
         level: "info",
         message: "Settings updated",
-        data: { changed: ["hour", "keepOriginals"] },
+        data: { changed: ["hour", "excludeGlobs", "keepOriginals"] },
       },
     ]);
   });
@@ -1520,3 +1521,33 @@ describe("changedSettingKeys", () => {
     ]);
   });
 });
+
+it.each(["indexer/reindex", "search/reembed", "ocr/run"])(
+  "preserves worker conflict for %s",
+  async (route) => {
+    const failure = {
+      ok: false,
+      reason: "unreachable",
+      detail: "status 409",
+      status: 409,
+    } as const;
+    const { app } = buildApp({
+      deps: {
+        indexRootNames: ["sftpgo"],
+        indexerClient: fakeIndexerClient({ reindex: async () => failure }),
+        ocrClient: {
+          health: async () => failure,
+          stats: async () => failure,
+          run: async () => failure,
+        },
+      },
+    });
+    const response = await app.request(`/api/v1/system/${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ root: "sftpgo" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { kind: "conflict" } });
+  },
+);

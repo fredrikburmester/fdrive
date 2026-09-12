@@ -56,6 +56,7 @@ const IndexerThumbnailRebuildRaw = z.object({
   running: z.boolean(),
   processed: z.number().int(),
   total: z.number().int(),
+  total_known: z.boolean().optional(),
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   errors: z.number().int(),
@@ -65,6 +66,7 @@ const IndexerThumbnailRebuildRaw = z.object({
 const IndexerStatsRaw = z.object({
   roots: z.array(IndexerRootStatsRaw),
   thumbnails: z.number().int(),
+  image_embeddings: z.number().int().optional(),
   queue_depth: z.number().int(),
   errors_sample: z.array(IndexerErrorSampleRaw),
   thumbnail_rebuild: IndexerThumbnailRebuildRaw.optional(),
@@ -78,7 +80,7 @@ const IndexerCountRaw = z.object({ count: z.number().int() });
 
 const IndexerThumbnailsRebuildRaw = z.object({
   started: z.boolean(),
-  total: z.number().int(),
+  total: z.number().int().nullable(),
 });
 
 function toIndexerHealth(raw: z.infer<typeof IndexerHealthRaw>): IndexerHealth {
@@ -122,6 +124,7 @@ function toIndexerThumbnailRebuildJob(
     running: raw.running,
     processed: raw.processed,
     total: raw.total,
+    ...(raw.total_known === undefined ? {} : { totalKnown: raw.total_known }),
     startedAt: raw.started_at,
     finishedAt: raw.finished_at,
     errors: raw.errors,
@@ -133,6 +136,7 @@ function toIndexerStats(raw: z.infer<typeof IndexerStatsRaw>): IndexerStats {
   return {
     roots: raw.roots.map(toIndexerRootStats),
     thumbnails: raw.thumbnails,
+    ...(raw.image_embeddings === undefined ? {} : { imageEmbeddings: raw.image_embeddings }),
     queueDepth: raw.queue_depth,
     errorsSample: raw.errors_sample.map(toIndexerErrorSample),
     ...(raw.index_clear !== undefined

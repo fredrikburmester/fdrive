@@ -362,6 +362,15 @@ describe("index-queries", () => {
   });
 
   describe("filesByIds", () => {
+    it("omits rows deleted after search selected their ids", async () => {
+      const rootId = await insertRoot("primary");
+      const live = await insertFile(rootId, "live.txt");
+      const deleted = await insertFile(rootId, "deleted.txt", { deletedAt: new Date() });
+      expect((await queries.filesByIds([live.id, deleted.id])).map((row) => row.id)).toEqual([
+        live.id,
+      ]);
+    });
+
     it("loads files by id and skips missing ids", async () => {
       const rootId = await insertRoot("primary");
       const file = await insertFile(rootId, "alice/a.txt");

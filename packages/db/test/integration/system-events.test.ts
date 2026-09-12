@@ -52,6 +52,22 @@ async function insertRoot(name: string): Promise<number> {
 }
 
 describe("system event log: indexer merge", () => {
+  it("omits extraction failures for deleted files", async () => {
+    const rootId = await insertRoot("sftpgo");
+    await db.insert(schema.files).values({
+      rootId,
+      path: "gone.pdf",
+      name: "gone.pdf",
+      size: 12,
+      mtimeNs: 1n,
+      textStatus: "error",
+      error: "failed",
+      indexedAt: at(1),
+      deletedAt: at(2),
+    });
+    expect(await repo.list("indexer", { limit: 10 })).toEqual([]);
+  });
+
   it("merges API rows, scans and file extraction errors newest first", async () => {
     const rootId = await insertRoot("sftpgo");
     await db.insert(schema.scans).values({

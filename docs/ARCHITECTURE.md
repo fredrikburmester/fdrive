@@ -15,8 +15,8 @@ delivery evidence belongs in [workflow history](workflow/STATUS-history.md).
 - The Python indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
   OCR may write to mounted originals. Browser file operations use provider credentials.
   See [indexer](INDEXER.md), [OCR](OCR.md) and [search](SEARCH-AND-AI.md).
-- SFTPGo is the only shipped storage adapter. It stays independently administered; fdrive
-  does not need WebAdmin access or read SFTPGo's database. The bundled SFTPGo overlay is opt-in.
+- SFTPGo and WebDAV storage adapters ship. SFTPGo stays independently administered;
+  fdrive does not need WebAdmin access or read its database. The bundled SFTPGo overlay is opt-in.
 
 ## Accounts and storage
 
@@ -77,3 +77,22 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
 [WORKING.md](../WORKING.md) defines required verification profiles. Executable coverage
 thresholds and CI configuration are authoritative; do not copy historic phase targets.
 [Performance](PERF.md) describes the blocking harness and budgets.
+
+## Interface names and persistence
+
+Public share `usedDownloads` is the provider's consumed transfer-token count;
+`app.shares.views` is its legacy cached column name. Write shares count uploads;
+read shares count downloads and full-size previews. Thumbnail views do not consume
+that budget. Names remain compatible with existing clients and stored data.
+
+A `TrashEntry.id` is an opaque provider entry identifier; the recycle-folder adapter
+uses its path relative to the trash root. Public System logs merge internal
+`SystemEvent` rows with worker history. Share permission `scope` and index path
+scopes are separate typed concepts.
+
+WOPI locks accept opaque text file IDs and have a 30-minute TTL. The Office routes
+resolve and authorize a durable Office file before accessing its lock; the generic
+lock repository therefore has no UUID foreign key. Lock reads/writes prune up to
+100 expired rows using the expiry index and skip rows another transaction holds.
+The five migration-created search indexes are also declared in Drizzle so schema
+comparison preserves them; migration 0005 registers existing indexes idempotently.

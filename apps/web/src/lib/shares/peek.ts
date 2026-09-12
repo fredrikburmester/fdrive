@@ -1,15 +1,6 @@
-/**
- * Archive extensions `GET /public/shares/:id/archive-entries` can peek, matching the API's
- * own `ArchiveEntriesFormat`: `zip`, `tar`, `tar.gz`, and `tar.zst`. A bare `.gz` and other
- * formats such as `.7z` or `.rar` are excluded, same as the logged-in `archive-entries` route.
- */
-const PEEKABLE_ARCHIVE_EXTENSIONS: readonly string[] = [".zip", ".tar.gz", ".tar.zst", ".tar"];
+import { isPeekableArchiveName } from "@fdrive/core";
 
-/** True when `name`'s extension (case-insensitive) is one `archive-entries` can peek. */
-export function isPeekableArchiveName(name: string): boolean {
-  const lower = name.toLowerCase();
-  return PEEKABLE_ARCHIVE_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
+export { isPeekableArchiveName } from "@fdrive/core";
 
 export interface PeekVisibilityOptions {
   /**

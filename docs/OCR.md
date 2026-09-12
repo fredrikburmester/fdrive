@@ -105,21 +105,20 @@ The admin **Logs** sheet on System > OCR reads `idx.ocr_runs` and failed or time
 
 ## Compose
 
-Add `--profile index` to bring up `ocr` alongside `indexer`, `tika`, and
-`embed`:
+Production starts `ocr` alongside the other bundled services. Enable Searchable
+PDFs through onboarding or System > Features to allow processing:
 
 ```sh
-docker compose -f compose.yaml --profile index up -d
+docker compose -f compose.yaml up -d
 ```
 
 `ocr` mounts the same `FDRIVE_INDEX_SFTPGO_DIR` host directory as the indexer,
 but **read-write** (the indexer only needs read-only), plus its own state
 directory at `${FDRIVE_DATA_DIR}/ocr` for kept originals. The api's
-`FDRIVE_OCR_URL` (`http://ocr:8011`) is only reachable when this profile is
-up; the api treats a connection failure as "OCR status unknown", not an
-error.
+`FDRIVE_OCR_URL` (`http://ocr:8011`) is internal to the production network; the worker remains
+reachable while disabled. A connection failure reports unknown OCR status.
 
-In `deploy/compose.dev.yaml`, `ocr` mounts the dev stack's seeded SFTPGo data
+Only the dev compose file uses `--profile index`. In `deploy/compose.dev.yaml`, `ocr` mounts the dev stack's seeded SFTPGo data
 volume read-write and starts with `OCR_RUN_ON_START=false` so bringing the
 profile up does not immediately rewrite dev fixtures; trigger a pass
 explicitly with `POST /run` when you want to exercise it.

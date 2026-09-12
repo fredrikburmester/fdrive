@@ -338,10 +338,10 @@ async def thumbnails_rebuild(request: Request) -> JSONResponse:
     contexts = [state.contexts[name] for name in names if name in state.contexts]
     if contexts and not any(ctx.feature_configuration().values.internal_thumbnails for ctx in contexts):
         return JSONResponse({"error": "thumbnail processing disabled"}, status_code=409)
-    total = start_rebuild(state.thumbnail_job, contexts, path, force)
-    if total is None:
+    started = start_rebuild(state.thumbnail_job, contexts, path, force)
+    if not started:
         return JSONResponse({"error": "a thumbnail rebuild is already running"}, status_code=409)
-    return JSONResponse({"started": True, "total": total}, status_code=202)
+    return JSONResponse({"started": True, "total": None}, status_code=202)
 
 
 _CLEAR_ROUTES = {
@@ -420,10 +420,10 @@ async def image_embeddings_rebuild(request: Request) -> JSONResponse:
     contexts = [state.contexts[name] for name in names if name in state.contexts]
     if contexts and not any(ctx.feature_configuration().values.image_search for ctx in contexts):
         return JSONResponse({"error": "image search disabled"}, status_code=409)
-    total = start_image_embed_rebuild(state.image_embed_rebuild_job, contexts, path, force)
-    if total is None:
+    started = start_image_embed_rebuild(state.image_embed_rebuild_job, contexts, path, force)
+    if not started:
         return JSONResponse({"error": "an image-embedding rebuild is already running"}, status_code=409)
-    return JSONResponse({"started": True, "total": total}, status_code=202)
+    return JSONResponse({"started": True, "total": None}, status_code=202)
 
 
 def create_app(state: ServerState) -> Starlette:

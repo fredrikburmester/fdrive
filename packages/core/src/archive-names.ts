@@ -1,4 +1,4 @@
-import { extensionOf, isSafeSegment, joinPath } from "./paths.ts";
+import { baseName, extensionOf, isSafeSegment, joinPath, parentPath } from "./paths.ts";
 
 /**
  * The archive formats fdrive can produce. Mirrors `@fdrive/contracts`'
@@ -150,4 +150,18 @@ export function safeEntryPath(destination: string, entryName: string): string | 
   }
 
   return joinPath(destination, ...resolved);
+}
+
+/** Default archive stem shared by the UI and API; preserves dotfiles. */
+export function defaultArchiveName(paths: readonly string[]): string {
+  const first = paths[0];
+  if (first === undefined) return "archive";
+  const name = baseName(paths.length === 1 ? first : parentPath(first));
+  return (paths.length === 1 ? splitNameAndExtension(name).base : name) || "archive";
+}
+
+/** Listing archive entries supports the extractable containers, excluding bare gzip. */
+export function isPeekableArchiveName(name: string): boolean {
+  const kind = detectArchiveKind(name);
+  return kind !== null && kind !== "gz";
 }

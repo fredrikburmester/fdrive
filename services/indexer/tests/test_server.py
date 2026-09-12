@@ -10,7 +10,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from fdrive_indexer import db, server
+from fdrive_indexer import db, image_embed_rebuild, server
 from fdrive_indexer import extract as extract_module
 from fdrive_indexer import thumb_rebuild as thumb_rebuild_module
 from fdrive_indexer.chunking import normalize
@@ -135,6 +135,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "running": False,
         "processed": 0,
         "total": 0,
+        "total_known": False,
         "started_at": None,
         "finished_at": None,
         "errors": 0,
@@ -144,6 +145,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "running": False,
         "processed": 0,
         "total": 0,
+        "total_known": False,
         "started_at": None,
         "finished_at": None,
         "errors": 0,
@@ -153,6 +155,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "running": False,
         "processed": 0,
         "total": 0,
+        "total_known": False,
         "started_at": None,
         "finished_at": None,
         "errors": 0,
@@ -442,7 +445,7 @@ def test_thumbnails_rebuild_specific_root(postgres_dsn: str, monkeypatch: pytest
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 1}
+    assert resp.json() == {"started": True, "total": None}
     assert db.thumbnails_count(ctx.conn()) == 2
 
 
@@ -456,7 +459,7 @@ def test_thumbnails_rebuild_all_roots_no_body(postgres_dsn: str, monkeypatch: py
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild")
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 1}
+    assert resp.json() == {"started": True, "total": None}
 
 
 def test_thumbnails_rebuild_unknown_root_is_ignored(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -465,7 +468,7 @@ def test_thumbnails_rebuild_unknown_root_is_ignored(postgres_dsn: str, monkeypat
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "unknown"})
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 0}
+    assert resp.json() == {"started": True, "total": None}
 
 
 def test_thumbnails_rebuild_force_and_path_are_forwarded(
@@ -484,7 +487,7 @@ def test_thumbnails_rebuild_force_and_path_are_forwarded(
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": "keep", "force": True})
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 1}
+    assert resp.json() == {"started": True, "total": None}
     assert db.thumbnails_count(ctx.conn()) == 2
 
 
@@ -523,7 +526,7 @@ def test_image_embeddings_rebuild_not_configured_reports_zero(
     client = _make_client(ctx)
     resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 0}
+    assert resp.json() == {"started": True, "total": None}
 
 
 def test_image_embeddings_rebuild_invalid_root_type_is_400(
@@ -551,7 +554,7 @@ def test_image_embeddings_rebuild_unknown_root_is_ignored(
     client = _make_client(ctx)
     resp = client.post("/image-embeddings/rebuild", json={"root": "unknown"})
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 0}
+    assert resp.json() == {"started": True, "total": None}
 
 
 def test_image_embeddings_rebuild_returns_409_when_already_running(
@@ -585,7 +588,7 @@ def test_image_embeddings_rebuild_runs_end_to_end(postgres_dsn: str, monkeypatch
     client = _make_client(ctx)
     resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
     assert resp.status_code == 202
-    assert resp.json() == {"started": True, "total": 1}
+    assert resp.json() == {"started": True, "total": None}
     assert db.image_embedding_model(ctx.conn(), "sha1") == "model-a"
 
 
@@ -660,3 +663,43 @@ def test_activity_reports_rebuild_without_reading_storage() -> None:
     assert client.get("/activity").json()["operations"][0]["state"] == "stopped"
     newer = server.ServerState(contexts={}, watchers={}, wake_events={}, conn_factory=forbidden, schema_version=forbidden)
     assert newer.instance_id != state.instance_id
+
+
+@pytest.mark.parametrize("endpoint,job_name", [
+    ("/thumbnails/rebuild", "thumbnail_job"),
+    ("/image-embeddings/rebuild", "image_embed_rebuild_job"),
+])
+def test_rebuild_acknowledges_before_discovery(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, endpoint: str, job_name: str,
+) -> None:
+    import threading
+
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx.cfg.image_embed_url = "http://image-embed.invalid"
+    client = _make_client(ctx)
+    job = getattr(client.app.state.server_state, job_name)
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original_finish = job.finish
+
+    def inventory(*args):
+        entered.set()
+        assert release.wait(5)
+        return []
+
+    def finish():
+        original_finish()
+        finished.set()
+
+    monkeypatch.setattr(db, "media_files", inventory)
+    monkeypatch.setattr(job, "finish", finish)
+    monkeypatch.setattr(image_embed_rebuild, "rebuild_image_embeddings", lambda *args, **kwargs: 0)
+    try:
+        response = client.post(endpoint, json={"root": "sftpgo"})
+        assert response.status_code == 202
+        assert response.json() == {"started": True, "total": None}
+        assert entered.wait(2)
+        assert job.activity_snapshot("thumbnailRebuild", ["thumbnails"])["total"] is None
+        assert client.post(endpoint, json={"root": "sftpgo"}).status_code == 409
+    finally:
+        release.set()
+        assert finished.wait(5)

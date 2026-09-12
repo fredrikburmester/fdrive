@@ -12,7 +12,7 @@ FDRIVE_LOCK_TOKEN=
 FDRIVE_CHILD_PID=
 FDRIVE_CHILD_GROUP=0
 FDRIVE_SIGNAL_STATUS=0
-API_PORT=3001
+API_PORT=${FDRIVE_DEV_API_PORT:-3001}
 WEB_PORT=3002
 WITH_INDEX=0
 READY_TIMEOUT_SECONDS=${FDRIVE_DEV_READY_TIMEOUT_SECONDS:-45}
@@ -103,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     *) usage >&2; exit 1 ;;
   esac
 done
+valid_port "$API_PORT" || fdrive_die 'FDRIVE_DEV_API_PORT must be between 1024 and 65535'
 [[ $WEB_PORT -ne $API_PORT ]] || fdrive_die "web port must differ from API port: $API_PORT"
 valid_timeout "$READY_TIMEOUT_SECONDS" || fdrive_die 'FDRIVE_DEV_READY_TIMEOUT_SECONDS must be between 1 and 300'
 

@@ -1,7 +1,4 @@
-# Python service checks, path-filtered so they bill nothing on pull requests
-# that leave services/indexer and services/ocr alone (see the budget note in
-# ci.yml). `CI (full)` runs the same two jobs unconditionally; keep the job
-# bodies in sync with that file.
+# Python service checks, path-filtered. Keep service jobs in sync with ci-full.yml.
 name: Python services
 
 on:
@@ -10,6 +7,8 @@ on:
     paths:
       - 'services/indexer/**'
       - 'services/ocr/**'
+      - 'services/image-embed/**'
+      - 'services/runtime/**'
       - 'tools/orchestration/setup-python.sh'
       - 'tools/orchestration/verify.sh'
       - '.github/workflows/services.yml'
@@ -64,6 +63,32 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ocr-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  supporting-services:
+    name: Python (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [image-embed, runtime]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: bash tools/orchestration/setup-python.sh . "${{ matrix.service }}"
+        env:
+          FDRIVE_PYTHON: python
+      - run: bash tools/orchestration/verify.sh . python "${{ matrix.service }}"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.service }}-helper-logs
           path: .fdrive-workflow/logs/**
           include-hidden-files: true
           if-no-files-found: warn

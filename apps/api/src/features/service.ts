@@ -63,6 +63,7 @@ export interface FeatureService {
 
 interface Probe {
   ok: boolean;
+  revisionRequired?: boolean;
   status?: string;
   /** A controller's own fixed reason when `status` is `failed`; see `runtime-status.ts`. */
   error?: string;
@@ -80,25 +81,30 @@ function record(value: unknown): Record<string, unknown> {
 async function probe(
   url: string | undefined,
   fetchImpl: typeof fetch,
-  runtimePort?: string,
+  endpointPath = "worker",
 ): Promise<Probe> {
   if (url === undefined)
     return { ok: false, detail: "Worker is not installed in this deployment." };
   try {
     const endpoint = new URL(url);
-    if (runtimePort !== undefined) endpoint.port = runtimePort;
-    endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/${runtimePort === undefined ? "health" : "runtime"}`;
+    endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/${endpointPath === "live" || endpointPath === "worker" ? "health" : endpointPath}`;
     const response = await fetchImpl(endpoint.toString(), {
       signal: AbortSignal.timeout(3000),
       redirect: "error",
     });
     if (!response.ok)
       return { ok: false, detail: "Worker is unavailable. Retry after checking its status." };
-    const body = record(await response.json());
+    let body: Record<string, unknown> = {};
+    if (endpointPath === "version" || endpointPath === "live") {
+      await response.body?.cancel();
+    } else {
+      body = record(await response.json());
+    }
     const features = record(body.features);
     const error = runtimeError(body);
     return {
       ok: body.ok !== false,
+      revisionRequired: endpointPath === "worker" || endpointPath === "runtime",
       ...(error === null ? {} : { error }),
       ...(typeof features.status === "string"
         ? { status: features.status }
@@ -133,11 +139,11 @@ export function createFeatureService(deps: {
   // still down rather than staying silent about it forever.
   const lastKnown = new Map<ProbeName, boolean>();
   const probes = new Map<string, () => Promise<Probe>>();
-  function observe(url: string | undefined, runtimePort?: string) {
-    const key = `${url}:${runtimePort}`;
+  function observe(url: string | undefined, endpointPath = "worker") {
+    const key = `${url}:${endpointPath}`;
     let cached = probes.get(key);
     if (!cached) {
-      cached = createCachedProbe(() => probe(url, deps.fetch, runtimePort), {
+      cached = createCachedProbe(() => probe(url, deps.fetch, endpointPath), {
         ttlMs: deps.probeCacheMs ?? 0,
       });
       probes.set(key, cached);
@@ -223,12 +229,30 @@ export function createFeatureService(deps: {
       const checkStorage = roots.length > 0;
       const needsIndex = values.thumbnails || values.textSearch || values.imageSearch;
       const observeDisabled = raw !== null;
-      const [indexer, ocr, embed, image, tika] = await Promise.all([
+      const [indexer, ocr, embed, image, tika, imageHealth] = await Promise.all([
         needsIndex || observeDisabled || checkStorage ? observe(config.fdriveIndexerUrl) : null,
         values.pdfOcr || observeDisabled || checkStorage ? observe(config.fdriveOcrUrl) : null,
-        values.semanticSearch || observeDisabled ? observe(config.fdriveEmbedUrl, "8099") : null,
-        values.imageSearch || observeDisabled ? observe(config.fdriveImageEmbedUrl, "8013") : null,
-        values.textSearch ? observe("http://tika", "9997") : null,
+        values.semanticSearch || observeDisabled
+          ? observe(
+              config.fdriveEmbedRuntimeUrl ?? config.fdriveEmbedUrl,
+              config.fdriveEmbedRuntimeUrl ? "runtime" : "live",
+            )
+          : null,
+        values.imageSearch || observeDisabled
+          ? observe(
+              config.fdriveImageEmbedRuntimeUrl ?? config.fdriveImageEmbedUrl,
+              config.fdriveImageEmbedRuntimeUrl ? "runtime" : "health",
+            )
+          : null,
+        values.textSearch
+          ? observe(
+              config.fdriveTikaRuntimeUrl ?? config.fdriveTikaUrl,
+              config.fdriveTikaRuntimeUrl ? "runtime" : "version",
+            )
+          : null,
+        values.imageSearch && config.fdriveImageEmbedRuntimeUrl
+          ? observe(config.fdriveImageEmbedUrl, "health")
+          : null,
       ]);
       recordProbe("indexer", indexer);
       recordProbe("ocr", ocr);
@@ -286,7 +310,11 @@ export function createFeatureService(deps: {
             : id === "semanticSearch"
               ? [indexer, embed, tika]
               : id === "imageSearch"
-                ? [indexer, image]
+                ? [
+                    indexer,
+                    image,
+                    image?.status === "ready" || image?.status === "ok" ? imageHealth : null,
+                  ]
                 : id === "textSearch" || id === "searchOcr"
                   ? [indexer, tika]
                   : [indexer];
@@ -317,7 +345,7 @@ export function createFeatureService(deps: {
               (["loading", "preparing", "starting", "off", "stopping"].includes(
                 worker.status ?? "",
               ) ||
-                worker.revision !== configuration.revision),
+                (worker.revisionRequired && worker.revision !== configuration.revision)),
           )
         ) {
           return {

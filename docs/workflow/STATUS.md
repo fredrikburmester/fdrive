@@ -1,9 +1,20 @@
 # Current handoff
 
-Updated: 2026-09-12. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-13. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
+
+## Inconsistency audit: complete on main
+
+- Worktree `/private/tmp/fdrive-inconsistency-audit`, branch `codex/inconsistency-audit-20260912`,
+  originally based on `6e9f2ce`, integrated with main `7462d7f`. Confirmed defects repaired;
+  intentional differences documented.
+- Application, integration, all four Python services, workflow and 39 affected browser cases
+  pass. Live dev readiness/discovery and screenshot layout reviewed.
+- [Complete dispositions and evidence](INCONSISTENCY-AUDIT-2026-09-12.md). Original checkout
+  WIP preserved. Integrated application, database/storage, indexer and browser gates pass
+  again; live dev UI verified. Committed to main on user request; no push or deployment.
 
 ## Tester report: thumbnail accounting and deployment readiness
 
@@ -63,10 +74,9 @@ not current instructions.
   external clients can still race the provider write. No permanent deletion or public sharing.
 - Unrelated System activity planning and `.playwright-mcp/` artifacts are preserved.
 
-## System sidebar activity: ready for PR review
+## System sidebar activity: shipped
 
-Worktree `/private/tmp/fdrive-system-activity`, branch `codex/system-activity`, rebased onto
-`08cc98c` for PR publication; original checkout work preserved.
+Merged via PR #14 (`b38690e`); implementation `ab18549`. Original checkout work preserved.
 [Behavior and contracts](../SYSTEM-ACTIVITY.md); [verification evidence](STATUS-history.md#2026-09-12-system-sidebar-activity).
 
 - Per-section spinners, fixed-workload percentages, accessible details, runtime transitions
@@ -74,7 +84,7 @@ Worktree `/private/tmp/fdrive-system-activity`, branch `codex/system-activity`, 
 - Passed: application, integration, indexer/OCR Python, final web package, workflow and all
   20 affected browser cases. Real worker/dev-app smoke: 120 images rebuilt, zero errors;
   progress visible through navigation and idle after completion. Light/dark/mobile reviewed.
-- OCR/clear jobs retain unknown totals and show live counts. Merge awaits review.
+- OCR/clear jobs retain unknown totals and show live counts. Merged.
   Test runner pins its own Docker image to avoid worktree races.
 
 ## Findings repair: ready for PR review

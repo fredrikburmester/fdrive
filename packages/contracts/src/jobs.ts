@@ -38,6 +38,7 @@ export const JobStatus = z.object({
   updatedAt: z.iso.datetime(),
   progress: JobProgress,
   result: z.object({ path: z.string() }).optional(),
+  /** Failure detail for failed jobs; nonfatal skipped-entry warning for completed extraction. */
   error: z.string().optional(),
 });
 
@@ -45,6 +46,7 @@ export type JobStatus = z.infer<typeof JobStatus>;
 
 /** Returned with 202 by `POST /fs/compress` and `POST /fs/extract`. */
 export const JobAccepted = z.object({
+  /** Compatibility alias for jobId; new callers should use jobId. */
   id: z.string().optional(),
   jobId: z.string(),
 });

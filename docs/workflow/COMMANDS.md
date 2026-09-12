@@ -19,7 +19,7 @@ select installed Node 24 and pinned pnpm automatically. Recovery and overrides: 
 
 Dev needs Docker already running; use a persistent terminal. Ctrl-C stops owned servers,
 keeping container data. Login `dev` / `dev`; restart after env/dependency changes.
-Setup never runs migrations. Python services: `indexer`, `ocr`, `image-embed`.
+Setup never runs migrations. Python services: `indexer`, `ocr`, `image-embed`, `runtime`.
 
 ## Verification
 
@@ -38,7 +38,7 @@ is deliberate: a bundled Claude Code skill already owns `/verify` and would shad
 
 Profiles fail on the first failed gate and share the checkout lock. CI uses the same helpers.
 Hosted CI is budgeted (private repository, 2000 free minutes a month): pull requests run only
-`application` (`CI`) plus `python indexer`/`ocr` when `services/**` changes (`Python services`).
+`application` (`CI`) plus all four Python service gates when their service paths change (`Python services`).
 The `ci:full` PR label or `gh workflow run "CI (full)" --ref <ref>` runs everything; nothing runs
 on push to `main`, so dispatch `CI` or `CI (full)` for `main` after a direct commit.
 PASS/FAIL summaries are compact; full logs are retained. `FDRIVE_VERBOSE=1` shows full output.

@@ -6,6 +6,8 @@
  * method or verb.
  */
 export const ROUTES = {
+  /** GET, public: API liveness and subsystem status -> `HealthResponse`. */
+  health: "/api/v1/health",
   shares: "/api/v1/shares",
   publicShares: "/api/v1/public/shares",
   office: {
@@ -147,7 +149,7 @@ export const ROUTES = {
     /** POST, admin only: mark files pending on the indexer -> `IndexerActionResponse`. */
     indexerReindex: "/api/v1/system/indexer/reindex",
     indexerClear: "/api/v1/system/indexer/clear",
-    /** POST, admin only: mark thumbnails pending on the indexer -> `IndexerActionResponse`. */
+    /** POST, admin only: start a thumbnail rebuild -> `IndexerThumbnailsRebuildResponse` (202). */
     indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
     /** GET, admin only: semantic search and index totals -> `SystemSearchResponse`. */
     search: "/api/v1/system/search",
@@ -167,7 +169,7 @@ export const ROUTES = {
     ocrRun: "/api/v1/system/ocr/run",
     /** GET, admin only: thumbnail cache size -> `SystemThumbnailsResponse`. */
     thumbnails: "/api/v1/system/thumbnails",
-    /** POST, admin only: rebuild every missing thumbnail -> `IndexerActionResponse`. */
+    /** POST, admin only: rebuild every missing thumbnail -> `IndexerThumbnailsRebuildResponse` (202). */
     thumbnailsRebuild: "/api/v1/system/thumbnails/rebuild",
     thumbnailsClear: "/api/v1/system/thumbnails/clear",
   },
@@ -189,7 +191,6 @@ export const ROUTES = {
 
 export type Routes = typeof ROUTES;
 
-/** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
 /** `PATCH`/`DELETE`, admin only: one configured provider. */
 export function adminProviderRoute(id: string): string {
   return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
@@ -200,6 +201,7 @@ export function adminProviderTestRoute(id: string): string {
   return `${adminProviderRoute(id)}/test`;
 }
 
+/** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
 export function jobRoute(id: string): string {
   return `${ROUTES.fs.jobs}/${encodeURIComponent(id)}`;
 }
@@ -241,8 +243,23 @@ export const MODIFIED_AT_HEADER = "x-modified-at";
 export function shareRoute(id: string): string {
   return `${ROUTES.shares}/${encodeURIComponent(id)}`;
 }
-export function publicShareRoute(id: string): string {
-  return `${ROUTES.publicShares}/${encodeURIComponent(id)}`;
+/** Named public-share subroutes used by both clients. IDs are encoded once. */
+export const PUBLIC_SHARE_SUFFIXES = {
+  metadata: "",
+  credentials: "/credentials",
+  entries: "/entries",
+  archiveEntries: "/archive-entries",
+  download: "/download",
+  archive: "/archive",
+  thumb: "/thumb",
+  upload: "/upload",
+} as const;
+
+export function publicShareRoute(
+  id: string,
+  action: keyof typeof PUBLIC_SHARE_SUFFIXES = "metadata",
+): string {
+  return `${ROUTES.publicShares}/${encodeURIComponent(id)}${PUBLIC_SHARE_SUFFIXES[action]}`;
 }
 
 /**
@@ -259,3 +276,8 @@ export function identityScopeRoute(id: string): string {
 export function identityScopeSuggestionsRoute(id: string): string {
   return `${identityScopeRoute(id)}/suggestions`;
 }
+
+/** GET/HEAD identity selection for URLs that cannot send headers (images/downloads).
+ * This selects an owned identity within the authenticated session; it is not a credential.
+ * Repeated values and disagreement with IDENTITY_HEADER are rejected. */
+export const IDENTITY_QUERY_PARAM = "identity";

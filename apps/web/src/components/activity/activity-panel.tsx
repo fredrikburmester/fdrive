@@ -177,8 +177,14 @@ function JobRow({ job, request, onCancel, onRetry }: JobRowProps) {
       {isActive && (
         <p className="text-xs text-muted-foreground">{formatJobProgress(job.progress)}</p>
       )}
-      {job.state === "failed" && job.error !== undefined && (
-        <p className="truncate text-xs text-destructive">{job.error}</p>
+      {(job.state === "failed" || job.state === "done") && job.error !== undefined && (
+        <p
+          className={
+            job.state === "failed" ? "text-xs text-destructive" : "text-xs text-muted-foreground"
+          }
+        >
+          {job.state === "done" ? `Warning: ${job.error}` : job.error}
+        </p>
       )}
       {openFolderPath !== null && (
         <Link
@@ -283,13 +289,15 @@ export function ActivityPanel() {
   }
 
   const jobsFailed = finishedJobList.filter((j) => j.state === "failed").length;
-  const jobsDone = finishedJobList.length - jobsFailed;
+  const jobsDone = finishedJobList.filter((j) => j.state === "done").length;
+  const jobsCancelled = finishedJobList.filter((j) => j.state === "cancelled").length;
   const title = activityTitle({
     activeCount,
     uploadsDone: uploadSummary.done,
     uploadsFailed: uploadSummary.failed,
     jobsDone,
     jobsFailed,
+    jobsCancelled,
   });
 
   const speed = estimateSpeed(samplesRef.current);

@@ -89,7 +89,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # Keep these two in sync with services.yml, which runs them path-filtered.
+  # Keep the Python jobs in sync with services.yml, which runs them path-filtered.
   indexer:
     name: Indexer (Python)
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
@@ -198,3 +198,30 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  supporting-services:
+    name: Python (${{ matrix.service }})
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [image-embed, runtime]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: bash tools/orchestration/setup-python.sh . "${{ matrix.service }}"
+        env:
+          FDRIVE_PYTHON: python
+      - run: bash tools/orchestration/verify.sh . python "${{ matrix.service }}"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.service }}-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

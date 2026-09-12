@@ -161,7 +161,7 @@ async function statLeaf(
  * `statFile` succeeding means a file is already there: conflict. A
  * directory is reported as `StorageError("bad_request")`, by convention
  * across every `StorageProvider` implementation (see
- * `test/fixtures/memory-storage.ts`): also a conflict. `"not_found"` means
+ * `packages/testkit/src/storage/memory-storage.ts`): also a conflict. `"not_found"` means
  * the target is free. Any other error (a permissions failure, an upstream
  * outage) is not this function's to interpret, so it propagates unchanged.
  */

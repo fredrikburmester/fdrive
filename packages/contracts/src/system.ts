@@ -72,6 +72,8 @@ export const IndexerThumbnailRebuildJob = z.object({
   running: z.boolean(),
   processed: z.number().int(),
   total: z.number().int(),
+  /** False while discovery is incomplete; older workers omit this field. */
+  totalKnown: z.boolean().optional(),
   startedAt: z.iso.datetime({ offset: true }).nullable(),
   finishedAt: z.iso.datetime({ offset: true }).nullable(),
   errors: z.number().int(),
@@ -240,13 +242,13 @@ export type IndexerThumbnailsRebuildRequest = z.infer<typeof IndexerThumbnailsRe
 /**
  * Response for `POST /api/v1/system/indexer/thumbnails/rebuild` and the
  * legacy `POST /api/v1/system/thumbnails/rebuild`. The pass runs in the
- * background, so this reports whether it started and the candidate count
- * computed up front (not a final count); progress while it runs is visible
+ * background. The candidate count is null until background discovery completes;
+ * progress while it runs is visible
  * at `GET /api/v1/system/indexer` under `stats.thumbnailRebuild`.
  */
 export const IndexerThumbnailsRebuildResponse = z.object({
   started: z.boolean(),
-  total: z.number().int(),
+  total: z.number().int().nullable(),
 });
 
 export type IndexerThumbnailsRebuildResponse = z.infer<typeof IndexerThumbnailsRebuildResponse>;
@@ -309,6 +311,7 @@ export type SystemReembedResponse = z.infer<typeof SystemReembedResponse>;
 export const SystemImageSearchResponse = z.object({
   configured: z.boolean(),
   healthy: z.boolean(),
+  status: z.enum(["ok", "loading"]).optional(),
   model: z.string().optional(),
   dim: z.number().int().optional(),
   embedded: z.number().int(),

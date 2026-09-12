@@ -270,3 +270,22 @@ describe("ImageSearchPage", () => {
     expect(screen.getByText("Image embedding clear")).toBeTruthy();
   });
 });
+
+it("shows model warm-up as loading and blocks maintenance", () => {
+  mockHealthy({ healthy: false, status: "loading" });
+  render(<ImageSearchPage />);
+  expect(screen.getByText("Loading")).toBeTruthy();
+  expect(screen.queryByText("Unreachable")).toBeNull();
+  expect(screen.getByRole("button", { name: "Rebuild" }).hasAttribute("disabled")).toBe(true);
+});
+
+it.each(["rebuild", "clear"] as const)("blocks both actions while %s runs", (kind) => {
+  mockHealthy({
+    [kind]: { running: true, processed: 0, total: 1, errors: 0, startedAt: null, finishedAt: null },
+  });
+  render(<ImageSearchPage />);
+  expect(screen.getByRole("button", { name: "Rebuild" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Clear embeddings" }).hasAttribute("disabled")).toBe(
+    true,
+  );
+});

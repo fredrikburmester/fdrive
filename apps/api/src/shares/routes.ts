@@ -1,6 +1,7 @@
 import {
   ArchiveEntriesResponse,
   CreateShareRequest,
+  PUBLIC_SHARE_SUFFIXES,
   ROUTES,
   ShareCredentialsRequest,
   ShareId,
@@ -322,7 +323,7 @@ export function registerSharesRoutes(
   groups.public.get(pub, (c) =>
     shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), password(c)))),
   );
-  groups.public.post(`${pub}/credentials`, (c) =>
+  groups.public.post(`${pub}${PUBLIC_SHARE_SUFFIXES.credentials}`, (c) =>
     shareCall(async () => {
       const id = shareId(c);
       const body = await publicBody(ShareCredentialsRequest, c);
@@ -331,11 +332,11 @@ export function registerSharesRoutes(
       return c.json({ ok: true });
     }),
   );
-  groups.public.delete(`${pub}/credentials`, (c) => {
+  groups.public.delete(`${pub}${PUBLIC_SHARE_SUFFIXES.credentials}`, (c) => {
     credentialCookie(c, "", 0);
     return c.json({ ok: true });
   });
-  groups.public.get(`${pub}/entries`, (c) =>
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.entries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
       const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
@@ -352,7 +353,7 @@ export function registerSharesRoutes(
       });
     }),
   );
-  groups.public.get(`${pub}/archive-entries`, (c) =>
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archiveEntries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
       const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
@@ -428,7 +429,7 @@ export function registerSharesRoutes(
   // limit-reached, whether the password is wrong or missing, whether the
   // path fails to resolve, or whether the file is not indexed, this route
   // must never become an oracle for which of those it was.
-  groups.public.get(`${pub}/thumb`, async (c) => {
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.thumb}`, async (c) => {
     if (
       deps.thumbsDir === undefined ||
       (deps.thumbnailsEnabled !== undefined && !(await deps.thumbnailsEnabled()))
@@ -502,7 +503,7 @@ export function registerSharesRoutes(
     response.headers.set("Cache-Control", "private, max-age=60");
     return response;
   });
-  groups.public.get(`${pub}/download`, (c) =>
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.download}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
       const options = publicDownloadOptions(c);
@@ -521,7 +522,7 @@ export function registerSharesRoutes(
       );
     }),
   );
-  groups.public.get(`${pub}/archive`, (c) =>
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, (c) =>
     shareCall(async () => {
       const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
       const body = await publicCall(() => api.zip({ signal: c.req.raw.signal }), share.hasPassword);
@@ -533,7 +534,7 @@ export function registerSharesRoutes(
       });
     }),
   );
-  groups.public.put(`${pub}/upload`, (c) =>
+  groups.public.put(`${pub}${PUBLIC_SHARE_SUFFIXES.upload}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c, true);
       const maxBytes = deps.config.fdriveShareUploadMaxBytes;

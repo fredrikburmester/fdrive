@@ -58,6 +58,8 @@ export const files = idxSchema.table(
     index("files_sha256_idx").on(table.sha256),
     index("files_mtime_ns_idx").on(table.mtimeNs),
     index("files_text_status_idx").on(table.textStatus),
+    index("files_name_trgm_idx").using("gin", table.name.op("gin_trgm_ops")),
+    index("files_path_trgm_idx").using("gin", table.path.op("gin_trgm_ops")),
   ],
 );
 
@@ -73,7 +75,11 @@ export const chunks = idxSchema.table(
     tsv: tsvector("tsv").generatedAlwaysAs(sql`to_tsvector('simple', "text")`),
     embedding: vector("embedding", { dimensions: 384 }),
   },
-  (table) => [index("chunks_file_id_idx").on(table.fileId)],
+  (table) => [
+    index("chunks_file_id_idx").on(table.fileId),
+    index("chunks_tsv_idx").using("gin", table.tsv),
+    index("chunks_embedding_hnsw_idx").using("hnsw", table.embedding.op("vector_cosine_ops")),
+  ],
 );
 
 export const scans = idxSchema.table(

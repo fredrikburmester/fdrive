@@ -1,9 +1,9 @@
-import { isOfficePath } from "@fdrive/contracts";
+import { CanonicalUuid, isOfficePath } from "@fdrive/contracts";
 import type { Identity } from "@fdrive/db";
 import { z } from "zod";
 
 const ruleSchema = z.strictObject({
-  providerId: z.uuid().refine((value) => value === value.toLowerCase()),
+  providerId: CanonicalUuid,
   username: z
     .string()
     .min(1)

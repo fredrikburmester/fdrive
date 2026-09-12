@@ -77,7 +77,11 @@ export interface SystemRoutesDeps {
   readonly walkThumbnailBytes?: typeof defaultWalkThumbnailBytes;
 }
 
-function sidecarErrorMessage(service: string, result: { reason: string; detail: string }): string {
+function sidecarErrorMessage(
+  service: string,
+  result: { reason: string; detail: string; status?: number },
+): string {
+  if (result.status === 409) return `${service} is busy or processing is disabled.`;
   return `${service} is ${result.reason === "unreachable" ? "unreachable" : "returning an unexpected response"}: ${result.detail}`;
 }
 
@@ -219,7 +223,10 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     );
     if (!result.ok) {
       deps.eventLog.record("indexer", "error", `Reindex failed: ${result.detail}`, target);
-      throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("the indexer", result));
+      throw new ApiHttpError(
+        result.status === 409 ? "conflict" : "upstream_unavailable",
+        sidecarErrorMessage("the indexer", result),
+      );
     }
     deps.eventLog.record("indexer", "info", "Reindex requested", target);
 
@@ -342,7 +349,7 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       if (!result.ok) {
         deps.eventLog.record("search", "error", `Reembed failed: ${result.detail}`, { root });
         throw new ApiHttpError(
-          "upstream_unavailable",
+          result.status === 409 ? "conflict" : "upstream_unavailable",
           sidecarErrorMessage(`the indexer (root "${root}")`, result),
         );
       }
@@ -371,6 +378,7 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
       ...(healthResult?.ok === true
         ? {
             model: healthResult.data.model,
+            status: healthResult.data.status,
             ...(healthResult.data.dim !== null ? { dim: healthResult.data.dim } : {}),
           }
         : {}),
@@ -488,7 +496,10 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     const result = await deps.ocrClient.run();
     if (!result.ok) {
       deps.eventLog.record("ocr", "error", `OCR run failed: ${result.detail}`);
-      throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("OCR", result));
+      throw new ApiHttpError(
+        result.status === 409 ? "conflict" : "upstream_unavailable",
+        sidecarErrorMessage("OCR", result),
+      );
     }
     deps.eventLog.record("ocr", "info", "OCR run requested");
 

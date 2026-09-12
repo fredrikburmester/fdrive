@@ -193,6 +193,13 @@ describe("deploy/preflight.sh", () => {
     },
   );
 
+  it("accepts the scripted-install setup token", () => {
+    const result = runPreflight(
+      "POSTGRES_PASSWORD=real\nFDRIVE_MASTER_KEY=abc\nFDRIVE_SETUP_TOKEN=setup-test-token",
+    );
+    expect(result.code).toBe(0);
+  });
+
   it("accepts the Collabora overlay's address key", () => {
     const result = runPreflight(
       [

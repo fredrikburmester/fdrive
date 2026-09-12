@@ -10,6 +10,15 @@ Archived snapshots through 2026-09-12. Read [current STATUS](STATUS.md) and
 below describe their original handoff, not current instructions. Removed brief names are
 historical identifiers; their originals remain in Git history.
 
+## 2026-09-13 Inconsistency audit
+
+Confirmed audit defects repaired in `codex/inconsistency-audit-20260912` from `6e9f2ce`.
+Application, integration, four Python service gates, workflow and 39 browser cases pass;
+live Next dev readiness/discovery and warning layouts reviewed. Integrated with main
+`7462d7f`, retaining newer navigation and thumbnail accounting; integrated gates and live
+dev verification pass. Committed to local main on user request; unrelated WIP preserved.
+[Dispositions, compatibility decisions and evidence](INCONSISTENCY-AUDIT-2026-09-12.md).
+
 ## 2026-09-12 MCP access and file management
 
 Implemented on `feat/webdav-provider` from `1f045c1`, uncommitted at delivery. The

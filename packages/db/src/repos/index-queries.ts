@@ -493,7 +493,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       const rows = await db
         .select()
         .from(files)
-        .where(inArray(files.id, ids as number[]));
+        .where(and(inArray(files.id, ids as number[]), isNull(files.deletedAt)));
       return rows.map(toIndexedFile);
     },
 

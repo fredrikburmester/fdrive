@@ -549,7 +549,7 @@ export async function composeApp(
   const controllerVerdict = async (
     reachable: boolean,
     controllerUrl: string | null,
-    port: string,
+    port: string | null,
   ): Promise<SubsystemProbe> => {
     if (reachable || controllerUrl === null) return reachable;
     const failure = runtimeFailure(await fetchRuntimeStatus(controllerUrl, port, fetchImpl));
@@ -578,7 +578,11 @@ export async function composeApp(
     const [search, imageSearch, office] = await Promise.all([
       searchStatus === null
         ? null
-        : controllerVerdict(searchStatus.healthy, forConfig.fdriveEmbedUrl ?? null, "8099"),
+        : controllerVerdict(
+            searchStatus.healthy,
+            forConfig.fdriveEmbedRuntimeUrl ?? forConfig.fdriveEmbedUrl ?? null,
+            forConfig.fdriveEmbedRuntimeUrl ? null : "8099",
+          ),
       // A sidecar that answered but is still loading its model is treated as
       // unreachable here: it cannot yet serve an embedding, so it is not
       // usefully "up" from the health endpoint's point of view.
@@ -586,8 +590,8 @@ export async function composeApp(
         ? null
         : controllerVerdict(
             imageSearchResult.ok && imageSearchResult.data.status === "ok",
-            forConfig.fdriveImageEmbedUrl ?? null,
-            "8013",
+            forConfig.fdriveImageEmbedRuntimeUrl ?? forConfig.fdriveImageEmbedUrl ?? null,
+            forConfig.fdriveImageEmbedRuntimeUrl ? null : "8013",
           ),
       officeReachable === null
         ? null

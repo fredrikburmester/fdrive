@@ -471,7 +471,7 @@ describe("POST /fs/compress and the resulting job", () => {
     const { jobId } = (await res.json()) as { jobId: string };
     const final = await waitForJobDone(app, jobId);
 
-    expect(final.result?.path).toBe("/hello.txt.zip");
+    expect(final.result?.path).toBe("/hello.zip");
   });
 
   it("uses the given name and destination", async () => {
