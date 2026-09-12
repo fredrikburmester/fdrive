@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from . import db
 from .indexer import RootContext, log
-from .thumbs import normalize_scope, select_candidates
+from .thumbs import SIZES, normalize_scope, select_candidates, skip_reason
 from .thumbs_io import generate as generate_thumbnails
 
 
@@ -126,12 +126,15 @@ def rebuild_thumbnails(
     force: bool = False,
     on_file: Callable[[bool], None] | None = None,
     candidates: list[tuple[str, str, str, int]] | None = None,
+    on_skip: Callable[[], None] | None = None,
 ) -> int:
     """Regenerate thumbnails for every live media file in `root`, optionally
     scoped to `path` (a single file or a directory subtree; the whole root when
     omitted). With `force`, both sizes are deleted and rewritten even when a
     thumbnail already exists for that sha256; otherwise only missing sizes are
-    written. Returns the number of candidate files processed.
+    written. Returns the number of candidate files processed, including policy
+    skips. `on_file` reports whether both sizes were saved; policy skips call
+    `on_skip` instead, so they are not counted as successes or failures.
 
     Only `app.thumbnails` is written here: `text_status`, `idx.chunks`, and
     embeddings are never touched, unlike `POST /reindex`.
@@ -146,6 +149,13 @@ def rebuild_thumbnails(
             log("thumbnail rebuild stopped: feature disabled")
             break
         abs_path = os.path.join(root.abs_path, rel_path)
+        reason = skip_reason(size, root.cfg.thumb_max_bytes)
+        if reason is not None:
+            log(f"thumb rebuild: skip {rel_path}: {reason}")
+            if on_skip is not None:
+                on_skip()
+            processed += 1
+            continue
         ok = True
         try:
             results = generate_thumbnails(
@@ -153,6 +163,9 @@ def rebuild_thumbnails(
             )
             for out_size, rel_thumb_path, width, height in results:
                 db.upsert_thumbnail(conn, sha256, out_size, rel_thumb_path, width, height)
+            # Generation deliberately catches per-file errors. Empty or partial
+            # output is a failure even though no exception reached this caller.
+            ok = {result[0] for result in results} == set(SIZES)
         except Exception as e:  # noqa: BLE001 - one bad file must never stop the pass
             log(f"thumb rebuild: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
             ok = False
@@ -199,7 +212,10 @@ def start_rebuild(
             for ctx, rows in candidates:
                 if not ctx.feature_configuration().values.internal_thumbnails:
                     continue
-                rebuild_thumbnails(ctx, path, force, on_file=job.advance, candidates=rows)
+                rebuild_thumbnails(
+                    ctx, path, force, on_file=job.advance, candidates=rows,
+                    on_skip=lambda: job.advance(True, skipped=True),
+                )
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
             log(f"thumbnail rebuild job crashed: {type(e).__name__}: {e}")

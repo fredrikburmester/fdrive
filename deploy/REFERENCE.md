@@ -116,6 +116,14 @@ server {
 
 fdrive actively monitors its internal subsystems on startup and exposes diagnostic endpoints:
 
+`update.sh` waits for the saved enabled features and Office before reporting
+success. `FDRIVE_READY_TIMEOUT_SECONDS` defaults to 1200 (a positive integer,
+read from `.env` or the process environment). The check runs with the API
+container's Node runtime and worker credential; no extra host runtime is needed.
+It checks the API health body and, for text extraction, Tika's controller revision
+and readiness. Disabled features are ignored. This verifies startup, not completed
+indexing or account-specific search results; still verify those after deployment.
+
 - **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`, `trash`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
 - **ONLYOFFICE:** the bundled controller is healthy while disabled. Enable in **System > Features**; the document engine starts on demand. Readiness is shown in those settings. See [Office setup](../docs/OFFICE.md).
 - **Trash:** startup health means its integration is available, not enabled. The saved choice is in **System > Features > Trash**; user capability is reported by `/api/v1/trash/status`.

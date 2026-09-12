@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 
-from .thumbs import SIZES, kind_for_ext, resize_dimensions, should_regenerate, storage_path, within_size_budget
+from .thumbs import SIZES, kind_for_ext, resize_dimensions, should_regenerate, skip_reason, storage_path
 
 
 def _save_webp(image: object, dest: str, size: int) -> tuple[int, int]:
@@ -102,8 +102,9 @@ def generate(
     kind = kind_for_ext(ext)
     if kind is None:
         return []
-    if not within_size_budget(size_bytes, max_bytes):
-        log(f"thumb: skip {abs_path}: {size_bytes} bytes over budget {max_bytes}")
+    reason = skip_reason(size_bytes, max_bytes)
+    if reason is not None:
+        log(f"thumb: skip {abs_path}: {reason}")
         return []
 
     results: list[tuple[int, str, int, int]] = []
@@ -131,6 +132,6 @@ def generate(
             w, h = _save_webp(image, dest, size)
             results.append((size, rel, w, h))
     except Exception as e:  # noqa: BLE001 - thumbnails never fail the file
-        log(f"thumb: failed for {abs_path}: {type(e).__name__}: {e}")
+        log(f"thumb: failed for {abs_path} ({len(results)}/{len(SIZES)} sizes available): {type(e).__name__}: {e}")
         return results
     return results

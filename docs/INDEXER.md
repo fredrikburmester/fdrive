@@ -71,6 +71,13 @@ missing sizes are filled in. It runs in a background thread (at most one at a
 time process-wide) and its progress is visible at `GET /stats` under
 `thumbnail_rebuild`.
 
+A file succeeds only when both thumbnail sizes are available and their database
+rows are saved. Missing or undecodable sources and partially generated thumbnails
+increment `errors`; the pass continues with other files. Empty files and files
+over the `THUMB_MAX_MB` limit are skipped with a reason. Activity `processed` includes
+those skips, and `skipped` counts them separately; generation errors include the
+number of sizes available in the worker log.
+
 ### Image embeddings (optional)
 
 When `IMAGE_EMBED_URL` is set (the `services/image-embed` sidecar, a SigLIP 2

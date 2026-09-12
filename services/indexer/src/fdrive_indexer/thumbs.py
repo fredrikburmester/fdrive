@@ -31,6 +31,14 @@ def within_size_budget(size_bytes: int, max_bytes: int) -> bool:
     return size_bytes <= max_bytes
 
 
+def skip_reason(size_bytes: int, max_bytes: int) -> str | None:
+    if size_bytes <= 0:
+        return "empty file"
+    if not within_size_budget(size_bytes, max_bytes):
+        return f"{size_bytes} bytes over budget {max_bytes}"
+    return None
+
+
 def storage_path(sha256: str, size: int) -> str:
     """Path relative to `THUMBS_DIR`: `<sha[:2]>/<sha>.<size>.webp`."""
     return f"{sha256[:2]}/{sha256}.{size}.webp"
