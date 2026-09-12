@@ -5,6 +5,30 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Tester report: thumbnail accounting and deployment readiness
+
+- Thumbnail rebuilds require both sizes and saved database rows before reporting success.
+  Missing/corrupt sources and partial generation count as errors; empty and over-limit
+  files count as skips and still advance activity progress. Logs include skip reasons and
+  available thumbnail sizes. [Indexer behavior](../INDEXER.md).
+- `update.sh` waits for saved enabled subsystems and Office, including Tika readiness and
+  its configuration revision. Disabled features permit fresh setup. The configurable
+  `FDRIVE_READY_TIMEOUT_SECONDS` defaults to 1200; timeout exits nonzero with pending checks.
+  [Deployment reference](../../deploy/REFERENCE.md).
+- Pinned the image model runtime after real cached SigLIP CPU image/text probes returned
+  1024 finite nonzero values each. Reproduced the upstream BOS/EOS warning: the actual
+  vocabulary is 256000, so IDs 49406/49407 are valid. Tokenizer IDs and warnings remain
+  unchanged. [Compatibility note](../../services/image-embed/README.md#runtime-compatibility).
+- Passed: deployment coverage (81 tests), deployment typecheck, indexer Python gate
+  (564 tests, 95.45% coverage, including Linux inotify), image-embed Python gate
+  (74 tests, 100% coverage), real model probes, and the final workflow gate.
+  Logs: `.fdrive-workflow/logs/step.18xbYv/`, `step.MpQZvI/`, `step.XcaRHb/`.
+- Initial regression run exposed an incorrect size-limit fixture and log noise, both fixed.
+  Subsequent indexer runs failed in fixture setup with `container ... is not running`:
+  local Docker disk had zero available space. Removed this task's superseded test images
+  and reclaimed unused build cache (3.47 GB in the final cleanup); no deployment performed.
+- Committed on `main`; concurrent sidebar work preserved.
+
 ## Features navigation and spinner explanation
 
 - In this checkout, Features now expands to Thumbnails, Full-text search, Semantic search,

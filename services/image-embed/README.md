@@ -44,6 +44,20 @@ weights are resident; embed requests before that return 503.
 | `IMAGE_EMBED_THREADS` | unset | `torch.set_num_threads`; unset leaves torch's own default. |
 | `HF_HOME` | `/models` | Hugging Face cache directory (mount a volume here). |
 
+## Runtime compatibility
+
+The runtime extra pins the tested Torch, Transformers, Pillow, Tokenizers and
+Safetensors versions. On 2026-09-12 the cached default model passed real CPU image
+and text inference on this set, producing 1024 finite nonzero values per vector.
+Dependency updates must repeat both inference probes; unit tests use a fake model.
+
+Transformers 5.16.1 can warn that BOS/EOS IDs 49406/49407 exceed a 32,000-token
+vocabulary while constructing its default configuration. The loaded default
+model actually has 256,000 tokens, so both IDs are in range. This reproduces the
+[upstream configuration warning](https://github.com/huggingface/transformers/issues/47612).
+Do not rewrite tokenizer IDs or suppress warnings globally to hide it. A warning
+from a different model or dependency version needs its own configuration check.
+
 ## HTTP API
 
 Bound to `0.0.0.0:${IMAGE_EMBED_PORT}`. Not authenticated: reachable only
