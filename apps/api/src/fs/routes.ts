@@ -28,7 +28,6 @@ import {
   isUnderPath,
   mimeFromExtension,
   normalizePath,
-  parentPath,
   parseRangeHeader,
   type StorageError,
   type StorageProvider,

@@ -1,7 +1,7 @@
 import type { IndexerDirectoryResponse } from "@fdrive/contracts";
 import { MeResponse } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
+import { createFakeSftpgoServer } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -70,7 +70,6 @@ function harness(
     files: {},
     now: clock,
   });
-  const client = createSftpgoClient({ baseUrl: "http://storage.test", fetch: server.fetch });
   const providers = memoryProviderService(repos, {
     fetch: server.fetch,
     clock,
