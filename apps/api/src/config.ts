@@ -101,12 +101,12 @@ export interface AppConfig {
   readonly fdriveSetupToken: string | undefined;
   /**
    * Base URL of the indexer's internal HTTP API. `undefined` disables the
-   * System > Indexer page and the MCP `read_file_text` tool.
+   * System > Indexer page and MCP document extraction. Explicit tokens still read UTF-8 directly.
    */
   readonly fdriveIndexerUrl: string | undefined;
   /** Base URL of the OCR service's internal HTTP API. `undefined` disables the System > OCR page. */
   readonly fdriveOcrUrl: string | undefined;
-  /** Enables the MCP write tools (`create_folder`, `move_path`). Off by default. */
+  /** Enables legacy tokens' `create_folder` and `move_path`; explicit tokens use their own grants. */
   readonly fdriveMcpWrites: boolean;
 }
 

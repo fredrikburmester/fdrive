@@ -10,6 +10,49 @@ Archived snapshots through 2026-09-12. Read [current STATUS](STATUS.md) and
 below describe their original handoff, not current instructions. Removed brief names are
 historical identifiers; their originals remain in Git history.
 
+## 2026-09-12 MCP access and file management
+
+Implemented on `feat/webdav-provider` from `1f045c1`, uncommitted at delivery. The
+[review](MCP-REVIEW-2026-09-12.md) records the original defects; current behavior lives in
+[MCP.md](../MCP.md), [AUTH.md](../AUTH.md) and [SCOPING.md](../SCOPING.md). All four authorized
+stages are implemented; the completed acceptance plan was removed.
+
+- New tokens select one linked login, Read/Organize/Full mode and normalized folder grants.
+  Migration `0004_mcp_token_access` adds nullable access JSON; old tokens retain verified-index
+  rules and the legacy global write flag. New grants independently govern direct provider
+  access; index results additionally intersect verified mappings and live read proofs.
+- Direct original/text/image reads, live metadata, copy, text creation, bounded base64 upload,
+  SHA-256 text replacement, recoverable Trash/restore, tags, favorites and visual search.
+  Optional byte-based document extraction works without mounted index roots. Shared REST/MCP
+  move/copy admission prevents occupied-target replacement and descendant moves; completed
+  storage operations report metadata/history failures as warnings. Trash exclusions, path
+  links, pagination and search status are repaired. Next dev routes `/mcp` at the web origin.
+- `application` passes: lint, typecheck and all workspace, Office, performance and deployment
+  coverage gates with unchanged thresholds. Coverage log: `.fdrive-workflow/logs/step.dc0Vla`.
+  The new token tests were split by behavior after a combined dialog test exceeded 5 seconds
+  under suite load; both scenarios pass, including selected login and Full folder grants.
+- `integration` passes: five package suites, including 40 API tests and real SFTPGo/WebDAV MCP
+  HTTP workflows. Occupied destinations survive; post-write audit failure returns success
+  with a warning; unindexed WebDAV supports create/read/edit/copy/move/Trash/restore;
+  out-of-folder access and revoked tokens are denied. Log: `.fdrive-workflow/logs/step.ab6FpI`.
+  An old write fixture was corrected to request Organize after the new Read default denied it.
+- `browser e2e/account.spec.ts --workers=1` passes (2 tests). The UI-created Full token is used
+  through the web-origin `/mcp` for create/read/tag, denied outside-folder creation and
+  revocation. Real disposable SFTPGo/PostgreSQL/API/Next dev stack; token form screenshot
+  inspected at `apps/web/test-results/account-alice-creates-an-A-20b5a--shows-it-and-can-revoke-it-chromium/token-permissions.png`.
+  Log: `.fdrive-workflow/logs/step.J82DOv`.
+- `python indexer` passes Ruff, mypy and Docker coverage/inotify: 539 tests, 95.24% coverage,
+  including actual PDF extraction. Log: `.fdrive-workflow/logs/step.5zDKpZ`. Earlier runs were
+  blocked by a full Docker virtual disk (PostgreSQL initdb and image build reported no space);
+  unused build cache was reclaimed, retaining images, containers and data volumes.
+- `workflow` passes all six orchestration regression scripts, syntax checks, lint and diff
+  check after delivery documentation cleanup. Logs remain under `.fdrive-workflow/logs/`.
+- Limits: 4 MiB original files/uploads/replacements, optional extraction dependencies, bounded
+  index/Trash scans with partial status, and no atomic edit compare-and-swap against other API
+  processes or external clients. No permanent deletion/public sharing. External hosted-client
+  connectivity and production deployment were not tested; the local HTTP/SDK/browser paths were.
+- Unrelated System activity planning and `.playwright-mcp/` remained untouched.
+
 ## 2026-09-11 WebDAV storage provider, slices 1–4 (PR #5)
 
 Branch `feat/webdav-provider`, PR #5. The plan was removed when slice 5 landed; see [WEBDAV.md](../WEBDAV.md).

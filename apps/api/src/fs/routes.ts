@@ -25,7 +25,6 @@ import {
   type FileEntry,
   isInlinePreviewable,
   isStorageError,
-  isUnderPath,
   mimeFromExtension,
   normalizePath,
   parseRangeHeader,
@@ -43,6 +42,7 @@ import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
+import { relocatePath, requireUnoccupiedTarget } from "./mutations.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -199,21 +199,7 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
  * `StorageError` propagates unchanged.
  */
 export async function requireTargetFree(storage: StorageProvider, target: string): Promise<void> {
-  try {
-    await storage.statFile(target);
-  } catch (error) {
-    if (isStorageError(error) && error.kind === "not_found") {
-      return;
-    }
-    if (isStorageError(error) && error.kind === "bad_request") {
-      throw new ApiHttpError("conflict", `something already exists at ${target}`);
-    }
-    if (isStorageError(error)) {
-      throw toApiHttpError(error);
-    }
-    throw error;
-  }
-  throw new ApiHttpError("conflict", `something already exists at ${target}`);
+  await runStorageCall(() => requireUnoccupiedTarget(storage, target));
 }
 
 export function serializeEntry(entry: FileEntry): FsEntry {
@@ -518,17 +504,7 @@ export function registerFsRoutes(
     const body = await parseBody(MoveRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    if (isUnderPath(path, target)) {
-      throw new ApiHttpError("bad_request", "cannot move a path into its own descendant");
-    }
-    // A target equal to the source is a no-op: skip both the conflict check (the source is not
-    // a conflict with itself) and the storage call. The real drakkan/sftpgo:v2.7.5 container
-    // rejects a move of a file onto itself with 400, verified against the container directly,
-    // so this cannot simply fall through to the same move() call as a different target.
-    if (target !== path) {
-      await requireTargetFree(principal.storage, target);
-      await runStorageCall(() => principal.storage.move(path, target));
-    }
+    await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
     const entry = await statEntry(principal.storage, target);
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
@@ -543,15 +519,7 @@ export function registerFsRoutes(
     const body = await parseBody(CopyRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    if (isUnderPath(path, target)) {
-      throw new ApiHttpError("bad_request", "cannot copy a path into its own descendant");
-    }
-    // See the move handler above: a target equal to the source skips the conflict check and the
-    // storage call itself, rather than asking the provider to copy something onto itself.
-    if (target !== path) {
-      await requireTargetFree(principal.storage, target);
-      await runStorageCall(() => principal.storage.copy(path, target));
-    }
+    await runStorageCall(() => relocatePath(principal.storage, "copy", path, target));
     const entry = await statEntry(principal.storage, target);
     deps.metadata?.onCopied(principal.identityId, path, target);
     publishFsEvent(deps, principal, "copy", [path], [target]);
@@ -564,12 +532,7 @@ export function registerFsRoutes(
     const body = await parseBody(RenameRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = changeBaseName(path, body.newName);
-    // See the move handler above: renaming to the same name skips the conflict check and the
-    // storage call itself, rather than asking the provider to move something onto itself.
-    if (target !== path) {
-      await requireTargetFree(principal.storage, target);
-      await runStorageCall(() => principal.storage.move(path, target));
-    }
+    await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
     const entry = await statEntry(principal.storage, target);
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");

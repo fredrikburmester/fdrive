@@ -226,7 +226,8 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   },
   {
     key: "FDRIVE_MCP_WRITES",
-    description: "Enables the MCP write tools (create_folder, move_path). Off by default.",
+    description:
+      "Enables create_folder and move_path for legacy MCP tokens only. New tokens use their individual access permissions.",
     default: "false",
     example: "false",
     secret: false,
@@ -244,7 +245,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_INDEXER_URL",
     description:
-      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and the MCP read_file_text tool.",
+      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. Explicit tokens can still read UTF-8 files directly.",
     default: null,
     example: "http://indexer:8010",
     secret: false,

@@ -1,12 +1,4 @@
-import {
-  baseName,
-  extensionOf,
-  isUnderPath,
-  normalizePath,
-  parseSearchFilters,
-  type Scope,
-  toFsPath,
-} from "@fdrive/core";
+import { isUnderPath, normalizePath, parseSearchFilters, type Scope, toFsPath } from "@fdrive/core";
 import type {
   DuplicateGroup,
   FileFilter,
@@ -16,12 +8,24 @@ import type {
   IndexQueries,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
+import { relocatePath } from "../fs/mutations.js";
+import type { MetadataService } from "../metadata/service.ts";
 import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { VerifiedUnavailableReason } from "../scoping/types.ts";
+import type { ImageSearchService } from "../search/image-service.ts";
 import { toIndexRelativePath } from "../search/scopes.js";
 import type { SearchService } from "../search/service.js";
+import {
+  assertMutablePath,
+  canBrowsePath,
+  canOrganize,
+  canReadPath,
+  ordinaryPath,
+  tokenScopes,
+} from "./access.ts";
+import { liveFileInfo, readFileTextDirect } from "./content.ts";
 import {
   isoFromNs,
   moveDestinationKind,
@@ -54,6 +58,8 @@ export const MAX_CANDIDATE_FILES = 2000;
 export interface McpToolDeps {
   readonly indexQueries: IndexQueries;
   readonly searchService: SearchService;
+  readonly imageSearchService?: ImageSearchService;
+  readonly metadata?: MetadataService;
   /**
    * Resolves each caller's *verified* index scopes, the only source of
    * index-backed authorization every tool in this file uses; there is no
@@ -77,6 +83,17 @@ export interface McpToolDeps {
    */
   readonly trashPath?: string | null;
   readonly trashPathForStorage?: (storage: Principal["storage"]) => string | null;
+  readonly onMutation?: (
+    principal: Principal,
+    change: {
+      kind: "move" | "copy" | "create" | "mkdir" | "trash" | "restore";
+      path: string;
+      target?: string;
+      eventPath?: string;
+      moveMetadata?: boolean;
+      isDir: boolean;
+    },
+  ) => Promise<void>;
 }
 
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
@@ -113,7 +130,11 @@ async function requireScope(deps: McpToolDeps, principal: Principal): Promise<Sc
   }
 
   const trashPath = currentTrashPath(deps, principal);
-  const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, trashPath);
+  const ctx = await resolveScopeContext(
+    deps.indexQueries,
+    tokenScopes(principal, verified.scopes),
+    trashPath,
+  );
   if (ctx === null) {
     throw new McpToolError(indexUnavailableMessage("no_roots"));
   }
@@ -233,7 +254,7 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
       : await deps.scopeResolver.verifiedIndexScopes(identity);
   const response = await deps.searchService.search({
     trashPath: currentTrashPath(deps, principal),
-    scopes: verified.available ? verified.scopes : [],
+    scopes: verified.available ? tokenScopes(principal, verified.scopes) : [],
     authorizer: createReadAuthorizer({ storage: principal.storage }),
     query: args.query,
     filters,
@@ -241,7 +262,7 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
   });
 
   if (response.unavailable) {
-    return { query: args.query, results: [], available: false };
+    return { query: args.query, results: [], available: false, unavailable: true };
   }
 
   const publicUrl = await deps.publicUrl();
@@ -256,7 +277,12 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     snippets: hit.snippets.map((snippet) => snippet.text),
   }));
 
-  return { query: args.query, results };
+  return {
+    query: args.query,
+    results,
+    ...(response.degraded ? { degraded: true } : {}),
+    ...(response.partial ? { partial: true } : {}),
+  };
 }
 
 // ------------------------------------------------------------- find_files
@@ -269,6 +295,7 @@ export interface FindFilesArgs {
   readonly modified_before?: string | undefined;
   readonly min_size_mb?: number | undefined;
   readonly order_by?: FileOrder | undefined;
+  readonly offset?: number | undefined;
   readonly limit?: number | undefined;
 }
 
@@ -309,6 +336,7 @@ export async function findFilesInScope(
     filter,
     args.order_by ?? "modified_desc",
     Math.min(limit, MAX_CANDIDATE_FILES),
+    ...(args.offset === undefined ? [] : [args.offset]),
   );
 
   const {
@@ -325,9 +353,15 @@ export async function findFilesInScope(
     // fallback below only guards the type checker.
     return fileSummaryFor(publicUrl, file, virtualPath ?? "");
   });
-  const partial = authPartial || total > candidates.length;
+  const nextOffset = (args.offset ?? 0) + candidates.length;
+  const partial = authPartial || total > nextOffset;
 
-  return { total_matches: accessible.length, results, ...(partial ? { partial: true } : {}) };
+  return {
+    ...(total > nextOffset ? { next_offset: nextOffset } : {}),
+    total_matches: accessible.length,
+    results,
+    ...(partial ? { partial: true } : {}),
+  };
 }
 
 export async function runFindFiles(deps: McpToolDeps, principal: Principal, args: FindFilesArgs) {
@@ -340,6 +374,7 @@ export async function runFindFiles(deps: McpToolDeps, principal: Principal, args
 export interface ListDirectoryArgs {
   readonly path?: string | undefined;
   readonly limit?: number | undefined;
+  readonly offset?: number | undefined;
 }
 
 /**
@@ -353,11 +388,13 @@ export interface ListDirectoryArgs {
  * argument, so the folder read is always the one that was checked.
  */
 export async function runListDirectory(
-  deps: TrashPathDeps,
+  deps: TrashPathDeps & Partial<Pick<McpToolDeps, "publicUrl">>,
   principal: Principal,
   args: ListDirectoryArgs,
 ) {
   const path = normalizePath(args.path ?? "/");
+  if (!canBrowsePath(principal, path))
+    throw new McpToolError("path is outside this token's allowed folders");
   const trashPath = currentTrashPath(deps, principal);
   if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path))) {
     throw new McpToolError("path is in the configured Trash folder");
@@ -365,28 +402,37 @@ export async function runListDirectory(
 
   const limit = Math.max(1, Math.min(args.limit ?? 300, 2000));
   const entries = await principal.storage.list(path);
-  const visible =
+  const notTrashed =
     trashPath === null
       ? entries
       : entries.filter((entry) => {
           const entryPath = normalizePath(entry.path);
           return entryPath !== trashPath && !isUnderPath(trashPath, entryPath);
         });
-  const truncated = visible.length > limit;
-  const sliced = visible.slice(0, limit);
+  const visible = notTrashed.filter((entry) =>
+    entry.kind === "dir"
+      ? canBrowsePath(principal, entry.path)
+      : canReadPath(principal, entry.path),
+  );
+  visible.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const offset = args.offset ?? 0;
+  const truncated = visible.length > offset + limit;
+  const sliced = visible.slice(offset, offset + limit);
+  const publicUrl = (await deps.publicUrl?.()) ?? null;
 
   return {
     path,
-    url: folderUrl(null, path),
+    url: folderUrl(publicUrl, path),
     entries: sliced.map((entry) => ({
       name: entry.name,
       type: entry.kind === "dir" ? "dir" : "file",
       path: entry.path,
       size_bytes: entry.kind === "dir" ? null : entry.size,
-      modified: entry.modifiedAt.toISOString(),
-      url: entry.kind === "dir" ? folderUrl(null, entry.path) : fileUrl(null, entry.path),
+      modified: canReadPath(principal, entry.path) ? entry.modifiedAt.toISOString() : null,
+      url: entry.kind === "dir" ? folderUrl(publicUrl, entry.path) : fileUrl(publicUrl, entry.path),
     })),
     truncated,
+    ...(truncated ? { next_offset: offset + sliced.length } : {}),
   };
 }
 
@@ -466,6 +512,12 @@ export async function runReadFileText(
   principal: Principal,
   args: ReadFileTextArgs,
 ) {
+  if (principal.tokenAccess !== undefined) return readFileTextDirect(deps, principal, args);
+  const path = normalizePath(args.path);
+  const trashPath = currentTrashPath(deps, principal);
+  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path))) {
+    throw new McpToolError("path is in the configured Trash folder");
+  }
   const identity = await deps.identities.get(principal.identityId);
   const verified =
     identity === null
@@ -475,7 +527,10 @@ export async function runReadFileText(
     throw new McpToolError(indexUnavailableMessage(verified.reason));
   }
   const authorizer = createReadAuthorizer({ storage: principal.storage });
-  return readFileTextWithScopes(deps, verified.scopes, authorizer, args);
+  return readFileTextWithScopes(deps, tokenScopes(principal, verified.scopes), authorizer, {
+    ...args,
+    path,
+  });
 }
 
 // -------------------------------------------------------------- file_info
@@ -542,6 +597,7 @@ export async function fileInfoInScope(
 }
 
 export async function runFileInfo(deps: McpToolDeps, principal: Principal, args: FileInfoArgs) {
+  if (principal.tokenAccess !== undefined) return liveFileInfo(deps, principal, args.path);
   const { ctx, authorizer } = await requireScope(deps, principal);
   return fileInfoInScope(deps, ctx, authorizer, args);
 }
@@ -914,7 +970,11 @@ export async function indexStatsInScope(
 
 export async function runIndexStats(deps: McpToolDeps, principal: Principal) {
   const { ctx, authorizer } = await requireScope(deps, principal);
-  return indexStatsInScope(deps, ctx, authorizer);
+  return indexStatsInScope(
+    { ...deps, writesEnabled: canOrganize(principal, deps.writesEnabled) },
+    ctx,
+    authorizer,
+  );
 }
 
 // ----------------------------------------------------------- create_folder
@@ -923,9 +983,13 @@ export interface CreateFolderArgs {
   readonly path: string;
 }
 
-function requireWrites(deps: McpToolDeps): void {
-  if (!deps.writesEnabled) {
-    throw new McpToolError("write tools are disabled (FDRIVE_MCP_WRITES=false)");
+function requireWrites(deps: McpToolDeps, principal: Principal): void {
+  if (!canOrganize(principal, deps.writesEnabled)) {
+    throw new McpToolError(
+      principal.tokenAccess === undefined
+        ? "write tools are disabled (FDRIVE_MCP_WRITES=false)"
+        : "this token does not allow organize operations",
+    );
   }
 }
 
@@ -947,7 +1011,7 @@ async function requireVerifiedScopes(
   if (!verified.available) {
     throw new McpToolError(indexUnavailableMessage(verified.reason));
   }
-  return verified.scopes;
+  return tokenScopes(principal, verified.scopes);
 }
 
 /**
@@ -996,11 +1060,26 @@ export async function runCreateFolder(
   principal: Principal,
   args: CreateFolderArgs,
 ) {
-  requireWrites(deps);
-  const scopes = await requireVerifiedScopes(deps, principal);
-  const path = assertWritablePath(scopes, currentTrashPath(deps, principal), args.path, "path");
+  requireWrites(deps, principal);
+  const scopes =
+    principal.tokenAccess === undefined ? await requireVerifiedScopes(deps, principal) : [];
+  const path =
+    principal.tokenAccess === undefined
+      ? assertWritablePath(scopes, currentTrashPath(deps, principal), args.path, "path")
+      : ordinaryPath(deps, principal, args.path);
+  const publicUrl = await deps.publicUrl();
   await principal.storage.mkdir(path, { parents: true });
-  return { created: path, url: folderUrl(await deps.publicUrl(), path) };
+  let warnings: string[] = [];
+  try {
+    await deps.onMutation?.(principal, { kind: "mkdir", path, isDir: true });
+  } catch {
+    warnings = ["Folder created, but live updates could not be updated."];
+  }
+  return {
+    created: path,
+    url: folderUrl(publicUrl, path),
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 // -------------------------------------------------------------- move_path
@@ -1051,27 +1130,48 @@ export async function recordMoveIfInScope(
  * the move in `idx.moves` afterward when the index knows the root.
  */
 export async function runMovePath(deps: McpToolDeps, principal: Principal, args: MovePathArgs) {
-  requireWrites(deps);
-  const scopes = await requireVerifiedScopes(deps, principal);
+  requireWrites(deps, principal);
+  const scopes =
+    principal.tokenAccess === undefined ? await requireVerifiedScopes(deps, principal) : [];
   const trashPath = currentTrashPath(deps, principal);
-  const src = assertWritablePath(scopes, trashPath, args.src, "src");
-  const dst = assertWritablePath(scopes, trashPath, args.dst, "dst");
-  await principal.storage.move(src, dst);
-
-  const ctx = await resolveScopeContext(deps.indexQueries, scopes, trashPath);
-  if (ctx !== null) {
-    await recordMoveIfInScope(deps, ctx, { src, dst });
-  }
-
-  // Best-effort hint only (SFTPGo's move response carries no entry kind):
-  // a destination with no extension is treated as a folder, matching how
-  // fdrive's own folder names are chosen in practice.
-  const isDir = extensionOf(baseName(dst)) === "";
+  const src =
+    principal.tokenAccess === undefined
+      ? assertWritablePath(scopes, trashPath, args.src, "src")
+      : ordinaryPath(deps, principal, args.src);
+  const dst =
+    principal.tokenAccess === undefined
+      ? assertWritablePath(scopes, trashPath, args.dst, "dst")
+      : ordinaryPath(deps, principal, args.dst);
+  assertMutablePath(principal, src, trashPath);
+  const isDir = (await principal.storage.stat(src)).kind === "dir";
   const publicUrl = await deps.publicUrl();
+  await relocatePath(principal.storage, "move", src, dst);
+  const warnings: string[] = [];
+  if (src !== dst) {
+    try {
+      await deps.onMutation?.(principal, { kind: "move", path: src, target: dst, isDir });
+    } catch {
+      warnings.push("File moved, but metadata or live updates could not be updated.");
+    }
+    try {
+      let auditScopes = scopes;
+      if (principal.tokenAccess !== undefined) {
+        const identity = await deps.identities.get(principal.identityId);
+        const verified =
+          identity === null ? null : await deps.scopeResolver.verifiedIndexScopes(identity);
+        auditScopes = verified?.available ? tokenScopes(principal, verified.scopes) : [];
+      }
+      const ctx = await resolveScopeContext(deps.indexQueries, auditScopes, trashPath);
+      if (ctx !== null) await recordMoveIfInScope(deps, ctx, { src, dst });
+    } catch {
+      warnings.push("File moved, but move history could not be recorded.");
+    }
+  }
   return {
     moved: src,
     to: dst,
     url: isDir ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
@@ -1095,6 +1195,7 @@ export async function recentMovesInScope(
   ctx: ScopeContext,
   authorizer: ReadAuthorizer,
   args: RecentMovesArgs,
+  storage?: Principal["storage"],
 ) {
   const rows = await deps.indexQueries.recentMoves(
     ctx.scopePrefixes,
@@ -1114,7 +1215,17 @@ export async function recentMovesInScope(
       if (src === null || dst === null) {
         return null;
       }
-      const authResult = await authorizer.authorize({ path: dst, kind: moveDestinationKind(dst) });
+      let kind = moveDestinationKind(dst);
+      if (storage !== undefined) {
+        try {
+          const stat = await storage.stat(dst);
+          if (stat.kind !== "file" && stat.kind !== "dir") return null;
+          kind = stat.kind;
+        } catch {
+          return null;
+        }
+      }
+      const authResult = await authorizer.authorize({ path: dst, kind });
       if (!authResult.allowed) {
         return null;
       }
@@ -1149,12 +1260,12 @@ export async function runRecentMoves(
   }
   const ctx = await resolveScopeContext(
     deps.indexQueries,
-    verified.scopes,
+    tokenScopes(principal, verified.scopes),
     currentTrashPath(deps, principal),
   );
   if (ctx === null) {
     return { moves: [] };
   }
   const authorizer = createReadAuthorizer({ storage: principal.storage });
-  return recentMovesInScope(deps, ctx, authorizer, args);
+  return recentMovesInScope(deps, ctx, authorizer, args, principal.storage);
 }

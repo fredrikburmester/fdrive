@@ -131,8 +131,8 @@ const nextConfig: NextConfig = {
   // The destination below is fixed at `next build` time (Next.js does not
   // re-read API_INTERNAL_URL at `next start`), so it only matters for local
   // `next dev`. In the compose deployment (see deploy/README.md), Caddy
-  // routes /api/* straight to the api service and this rewrite never runs;
-  // the production proxy owns /api.
+  // routes /api/* and /mcp* straight to the api service; local development
+  // proxies both so the connection URLs shown on the account page work.
   // `System > Connection` became `System > General` (see
   // `docs/ARCHITECTURE.md`); bookmarks and links to the old
   // route keep working.
@@ -145,6 +145,7 @@ const nextConfig: NextConfig = {
         source: "/api/:path*",
         destination: `${apiInternalUrl}/api/:path*`,
       },
+      { source: "/mcp/:path*", destination: `${apiInternalUrl}/mcp/:path*` },
     ];
   },
   // Applies to every route, including ones proxied through `rewrites()`

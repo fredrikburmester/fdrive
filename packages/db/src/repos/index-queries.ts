@@ -253,6 +253,7 @@ export interface IndexQueries {
     filter: FileFilter,
     order: FileOrder,
     limit: number,
+    offset?: number,
   ): Promise<{ total: number; files: IndexedFile[] }>;
   /** Every other (non-deleted) file in scope with the same sha256, excluding `excludeId`. */
   filesBySha256(
@@ -504,7 +505,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       return row ? toIndexedFile(row) : null;
     },
 
-    async listFiles(scopePrefixes, filter, order, limit) {
+    async listFiles(scopePrefixes, filter, order, limit, offset = 0) {
       const conditions = [scopeCondition(scopePrefixes), isNull(files.deletedAt)];
       if (filter.nameContains !== undefined) {
         const pattern = `%${escapeLikePattern(filter.nameContains)}%`;
@@ -534,7 +535,13 @@ export function createIndexQueries(db: Db): IndexQueries {
               : files.path;
 
       const [totalRow] = await db.select({ value: count() }).from(files).where(where);
-      const rows = await db.select().from(files).where(where).orderBy(orderExpr).limit(limit);
+      const rows = await db
+        .select()
+        .from(files)
+        .where(where)
+        .orderBy(orderExpr, files.id)
+        .limit(limit)
+        .offset(offset);
 
       return { total: Number(totalRow?.value ?? 0), files: rows.map(toIndexedFile) };
     },

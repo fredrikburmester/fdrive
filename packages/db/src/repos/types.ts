@@ -163,6 +163,11 @@ export interface SettingsRepo {
  * A long-lived per-account (optionally per-identity) token for MCP and
  * Raycast, shown once at creation and stored only as a sha256 hash.
  */
+export interface ApiTokenAccess {
+  readonly mode: "read" | "organize" | "full";
+  readonly paths: string[];
+}
+
 export interface ApiToken {
   readonly id: string;
   readonly accountId: string;
@@ -170,6 +175,7 @@ export interface ApiToken {
   readonly identityId: string | null;
   readonly name: string;
   readonly tokenHash: string;
+  readonly access?: ApiTokenAccess;
   readonly createdAt: Date;
   readonly lastUsedAt: Date | null;
   readonly expiresAt: Date | null;
@@ -181,6 +187,7 @@ export interface ApiTokenRepo {
     identityId: string | null;
     name: string;
     tokenHash: string;
+    access?: ApiTokenAccess;
     expiresAt: Date | null;
   }): Promise<ApiToken>;
   /** Looks up a token by its sha256 hash. `null` when no token has that hash, expired or not. */

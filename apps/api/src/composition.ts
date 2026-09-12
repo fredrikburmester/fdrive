@@ -41,7 +41,7 @@ import { registerEventRoutes } from "./events/routes.js";
 import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
-import { registerFsRoutes } from "./fs/routes.js";
+import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
@@ -787,6 +787,34 @@ export async function composeApp(
       publicUrl: () => publicUrl.current(),
       indexerClient: indexerExtractClient,
       writesEnabled: config.fdriveMcpWrites,
+      metadata: metadataService,
+      imageSearchService,
+      onMutation: async (principal, change) => {
+        try {
+          if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata)) {
+            await fsMetadata.onMoved(
+              principal.identityId,
+              change.path,
+              change.target ?? change.path,
+              change.isDir,
+            );
+          } else if (change.kind === "trash") {
+            await fsMetadata.onTrashed(principal.identityId, change.path, change.isDir);
+          } else if (change.kind === "copy") {
+            fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
+          }
+        } finally {
+          const kind =
+            change.kind === "trash" ? "delete" : change.kind === "restore" ? "move" : change.kind;
+          publishFsEvent(
+            { bus, clock },
+            principal,
+            kind,
+            [change.eventPath ?? change.path],
+            change.target === undefined ? undefined : [change.target],
+          );
+        }
+      },
       clock,
       trashPathForStorage: (storage) => {
         const settings = trashSettingsForStorage(storage);
