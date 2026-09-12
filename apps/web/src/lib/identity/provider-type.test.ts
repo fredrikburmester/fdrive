@@ -10,5 +10,5 @@ it("names every provider type the contracts know", () => {
 });
 
 it("falls back to the raw type for one this build does not know", () => {
-  expect(providerTypeLabel("webdav")).toBe("webdav");
+  expect(providerTypeLabel("s3")).toBe("s3");
 });

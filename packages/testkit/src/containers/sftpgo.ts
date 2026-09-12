@@ -12,6 +12,8 @@ import { buildSftpgoDump } from "../sftpgo-dump.js";
 
 const DEFAULT_IMAGE = "drakkan/sftpgo:v2.7.5";
 const HTTP_PORT = 8080;
+/** SFTPGo's own WebDAV binding: the real class 1 server the WebDAV provider is verified against. */
+const WEBDAV_PORT = 8081;
 const DATA_DIR = "/srv/sftpgo/data";
 const SEED_DUMP_CONTAINER_PATH = "/tmp/seed.json";
 const ADMIN_USERNAME = "admin";
@@ -34,6 +36,8 @@ export interface StartSftpgoOptions {
 
 export interface SftpgoContainer {
   readonly baseUrl: string;
+  /** The WebDAV endpoint of the same server and users, e.g. `http://localhost:32771`. */
+  readonly webdavUrl: string;
   readonly users: readonly SeedUser[];
   stop(): Promise<void>;
 }
@@ -87,11 +91,13 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
   ];
 
   const started = await new GenericContainer(options.image ?? DEFAULT_IMAGE)
-    .withExposedPorts(HTTP_PORT)
+    .withExposedPorts(HTTP_PORT, WEBDAV_PORT)
     .withCopyContentToContainer(contentsToCopy)
     .withEnvironment({
       SFTPGO_HTTPD__BINDINGS__0__PORT: String(HTTP_PORT),
       SFTPGO_HTTPD__BINDINGS__0__ADDRESS: "",
+      SFTPGO_WEBDAVD__BINDINGS__0__PORT: String(WEBDAV_PORT),
+      SFTPGO_WEBDAVD__BINDINGS__0__ADDRESS: "",
       SFTPGO_LOADDATA_FROM: SEED_DUMP_CONTAINER_PATH,
       SFTPGO_LOADDATA_MODE: "0",
       SFTPGO_DEFAULT_ADMIN_USERNAME: ADMIN_USERNAME,
@@ -111,11 +117,13 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
   await started.exec(["chown", "-R", "1000:1000", DATA_DIR], { user: "root" });
 
   const baseUrl = `http://${started.getHost()}:${started.getMappedPort(HTTP_PORT)}`;
+  const webdavUrl = `http://${started.getHost()}:${started.getMappedPort(WEBDAV_PORT)}`;
 
   await verifySeedLoaded(baseUrl, alice, started.stop.bind(started));
 
   return {
     baseUrl,
+    webdavUrl,
     users,
     stop: async () => {
       await started.stop();
