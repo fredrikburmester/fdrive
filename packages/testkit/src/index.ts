@@ -2,6 +2,7 @@ export type { PostgresContainer, StartPostgresOptions } from "./containers/postg
 export { startPostgres } from "./containers/postgres.js";
 export type { SftpgoContainer, StartSftpgoOptions } from "./containers/sftpgo.js";
 export { startSftpgo } from "./containers/sftpgo.js";
+export { startApacheWebdav } from "./containers/webdav.js";
 export type { SeededFile, SeedFileLayoutOptions } from "./file-layout.js";
 export { seedFileLayout } from "./file-layout.js";
 export type { SeedFolder, SeedUser, SeedVirtualFolder } from "./seed-data.js";
