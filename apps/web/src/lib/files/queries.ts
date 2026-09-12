@@ -292,7 +292,9 @@ export function useTreeChildren(
   useEffect(() => {
     setChildrenByPath((prev) => {
       let changed = false;
-      const next = new Map(prev);
+      const reachable = new Set(expandedDirs);
+      const next = new Map([...prev].filter(([path]) => reachable.has(path)));
+      changed = next.size !== prev.size;
       expandedDirs.forEach((path, index) => {
         const entries = results[index]?.data?.entries;
         if (entries !== undefined && next.get(path) !== entries) {

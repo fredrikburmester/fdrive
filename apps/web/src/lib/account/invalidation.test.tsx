@@ -59,3 +59,18 @@ it.each([false, true])(
     expect(client.getQueryData(queryKey)).toEqual(["new identity.txt"]);
   },
 );
+
+it.each([false, true])(
+  "replays deferred invalidation only for an unchanged identity: changed=%s",
+  async (changed) => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const transition = createAccountTransitionStore();
+    transition.begin();
+    await refreshIdentityQuery(client, queryKey, transition);
+    await refreshIdentityQuery(client, queryKey, transition);
+    expect(invalidate).not.toHaveBeenCalled();
+    transition.finish(changed);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(changed ? 0 : 1));
+  },
+);

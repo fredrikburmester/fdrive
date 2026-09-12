@@ -269,6 +269,10 @@ export function FileBrowser({
   const toggleFavorite = useToggleFavorite();
   const { createTag } = useTagMutations();
   const [tagsEditorEntries, setTagsEditorEntries] = useState<FsEntry[] | null>(null);
+  const liveTagsEditorEntries = (tagsEditorEntries ?? []).flatMap((target) => {
+    const live = displayEntries.find((entry) => entry.path === target.path);
+    return live ? [live] : [];
+  });
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFileKind, setNewFileKind] = useState<NewFileKind | null>(null);
@@ -722,7 +726,12 @@ export function FileBrowser({
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
+    if (
+      event.defaultPrevented ||
+      target.closest(
+        'input, textarea, select, button, a, [contenteditable="true"], [role="checkbox"], [role="switch"], [role="button"], [role="menuitem"]',
+      )
+    ) {
       return;
     }
 
@@ -1098,17 +1107,17 @@ export function FileBrowser({
             setTagsEditorEntries(null);
           }
         }}
-        count={tagsEditorEntries?.length ?? 0}
+        count={liveTagsEditorEntries.length}
         tags={tags}
         checkState={(tagId) =>
           computeTagCheckState(
-            (tagsEditorEntries ?? []).map((target) => ({ tagIds: target.meta?.tagIds ?? [] })),
+            liveTagsEditorEntries.map((target) => ({ tagIds: target.meta?.tagIds ?? [] })),
             tagId,
           )
         }
         onToggle={(tagId, checked) =>
           handleToggleTag(
-            (tagsEditorEntries ?? []).map((target) => target.path),
+            liveTagsEditorEntries.map((target) => target.path),
             tagId,
             checked,
           )

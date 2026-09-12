@@ -117,3 +117,15 @@ test("keyboard navigation: arrow down moves focus, Enter opens a folder, and sel
   await page.getByRole("link", { name: "Home" }).click();
   await deleteEntry(page, sandbox);
 });
+
+test("select-all checkbox keeps its native Space key behavior", async ({ page }) => {
+  await page.goto("/files/docs");
+  const checkbox = listing(page).getByRole("checkbox", { name: "Select all", exact: true });
+  await checkbox.focus();
+  await page.keyboard.press("Space");
+  await expect(
+    listing(page).getByRole("checkbox", { name: "Deselect all", exact: true }),
+  ).toBeChecked();
+  await expect(page).toHaveURL(/\/files\/docs$/);
+  await expect(page.getByRole("dialog")).toBeHidden();
+});

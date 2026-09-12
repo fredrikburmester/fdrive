@@ -14,5 +14,5 @@ export default async function EditPage({ params }: EditPageProps) {
   const { path: segments } = await params;
   const path = segmentsToPath(segments);
 
-  return <EditorShell path={path} />;
+  return <EditorShell key={path} path={path} />;
 }
