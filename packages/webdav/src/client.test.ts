@@ -50,12 +50,13 @@ describe("createWebdavClient", () => {
     expect(client.baseUrl).toBe("http://h/dav");
   });
 
-  it("sends Basic credentials and a User-Agent on every request", async () => {
+  it("sends Basic credentials, a User-Agent and identity encoding on every request", async () => {
     const { server, alice } = setup();
     await alice.stat("/");
     expect(lastRequest(server).headers).toMatchObject({
       authorization: `Basic ${Buffer.from("alice:secret").toString("base64")}`,
       "user-agent": "fdrive",
+      "accept-encoding": "identity",
       depth: "0",
     });
     const custom = createWebdavClient({
@@ -306,6 +307,27 @@ describe("download", () => {
     expect(await kindOf(alice.download("/docs/a.txt", { signal: controller.signal }))).toBe(
       "network",
     );
+  });
+
+  it("drops the declared length of a body the server encoded anyway", async () => {
+    const encoded = vi.fn(
+      async () =>
+        new Response("", {
+          status: 200,
+          headers: { "Content-Encoding": "gzip", "Content-Length": "23" },
+        }),
+    ) as unknown as typeof fetch;
+    const gz = createWebdavClient({ baseUrl: "http://h/", fetch: encoded }).user(ALICE);
+    expect((await gz.download("/empty.txt")).contentLength).toBeNull();
+    const identity = vi.fn(
+      async () =>
+        new Response("hello", {
+          status: 200,
+          headers: { "Content-Encoding": "identity", "Content-Length": "5" },
+        }),
+    ) as unknown as typeof fetch;
+    const plain = createWebdavClient({ baseUrl: "http://h/", fetch: identity }).user(ALICE);
+    expect((await plain.download("/a.txt")).contentLength).toBe(5);
   });
 
   it("substitutes an empty stream for a bodiless 200", async () => {

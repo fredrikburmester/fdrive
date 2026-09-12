@@ -58,11 +58,24 @@ Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-pro
   recursive delete, and `unsupported` from zip and share creation; SFTPGo's REST API saw the
   same files. Earlier slice evidence: `package @fdrive/webdav` (220 tests, coverage
   99.6/99.5/100/99.7).
-- **Limitation**: the dev-app UI pass could not be completed: `next dev` on this machine does
-  not hydrate any page (checked on three dev servers, including other sessions', with headless
-  Chromium; no console or page errors, the HMR websocket handshake fails in browsers only).
-  The browser gate runs a production build and passed, so the shipped path is covered; the
-  WebDAV-specific browser spec is slice 4. The shared dev database also had to be reset
+- **Manual browser pass** (production build `next start` on the dev stack, over SFTPGo's
+  WebDAV binding): sign in through the WebDAV row, list, new folder, new text file, view,
+  edit and save, rename, duplicate, per-file download for a multi-selection (no zip), delete
+  with the permanent-deletion warning, and as admin the Storage card (WebDAV label, globe,
+  address, "Reachable", only "Atomic move"), add a second WebDAV row through the dialog
+  (candidate probe), and remove it. It found one real defect, fixed in the client: SFTPGo
+  gzips `text/*` bodies when the client accepts compression, Node's fetch accepts and decodes
+  transparently, so `GET` reported the encoded `Content-Length` (23 bytes for an empty file)
+  over a decoded body and the API's download closed early. The client now sends
+  `Accept-Encoding: identity` on every request and drops the declared length when a response
+  is still encoded. Two pre-existing issues seen on the way, not WebDAV's: the Base UI
+  `Select` trigger shows the raw value (row id, `webdav`) rather than the option label in the
+  login and Add-provider pickers, and a non-admin can open `/system/*` by URL (the sidebar
+  hides it; the API refuses with 403 and the page shows an empty state).
+- **Limitation**: `next dev` on this machine does not hydrate any page (checked on three dev
+  servers, including other sessions', with headless Chromium; no console or page errors, the
+  HMR websocket handshake fails in browsers only); the manual pass above used a production
+  build instead. The shared dev database also had to be reset
   (`pnpm dev:env:reset`): its ten recorded migrations predated this branch's four-entry
   journal, which is `main`'s state, not a WebDAV change.
 - **Evidence (slice 4)**: `package @fdrive/webdav` passes; `@fdrive/webdav test:integration`
