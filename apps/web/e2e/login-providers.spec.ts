@@ -79,6 +79,9 @@ test("the login page shows no server picker with one provider and a picker with 
     // picker present and sends that provider's id. It is listed by product
     // name alone: the admin view's host label is not public.
     await page.getByRole("option", { name: "SFTPGo", exact: true }).click();
+    // The closed picker names the chosen server, never its provider id.
+    await expect(picker).toHaveText(/SFTPGo/);
+    await expect(picker).not.toContainText(seeded.id);
     const loginRequest = page.waitForRequest(
       (request) => request.url().endsWith("/api/v1/auth/login") && request.method() === "POST",
     );
