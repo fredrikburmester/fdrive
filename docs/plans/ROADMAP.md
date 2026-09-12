@@ -45,18 +45,3 @@ experience around their interpretation and effects.
 - Explain when changes take effect and when reindex/purge is needed; changing a rule must not
   imply that existing cached rows disappeared or that original files were removed.
 - Complete with rule-engine parity tests, authorization checks and browser preview verification.
-
-## WebDAV storage adapter
-
-The module registry ships only SFTPGo. Follow the [provider guide](../STORAGE-PROVIDERS.md)
-for the existing contracts; adding the registry did not deliver a second backend.
-
-- Operators configure a fixed endpoint. Bind credentials to its provider row throughout login,
-  retries, sessions and jobs. Unprivileged users cannot choose credential destinations.
-- Bound XML bodies/entries; parse namespaces correctly; validate href origins and endpoint
-  prefixes, canonical paths, Unicode and literal-percent names. Follow redirects only under
-  an explicit safe same-origin policy; never forward credentials across origins.
-- Implement streaming list/stat/read/Range/write/mkdir/move/copy/delete with native error and
-  cancellation semantics. Keep unsupported shares/indexing/Office capabilities disabled.
-- Complete with shared conformance, a disposable real DAV server, denied-permission/redirect/
-  traversal tests, cross-identity same-path isolation and browser browse/transfer checks.

@@ -273,6 +273,18 @@ test.describe("bob (not admin)", () => {
       expect(res.status()).toBe(403);
     }
   });
+
+  test("is sent back to /files when typing a System page's address directly", async ({ page }) => {
+    await loginAs(page, "bob", "bob-password");
+
+    for (const path of ["/system/storage", "/system/general", "/system/features"]) {
+      await page.goto(path);
+      await expect(page).toHaveURL(/\/files$/);
+      await expect(page.getByRole("heading", { name: "Storage" })).toHaveCount(0);
+      await expect(page.getByText("No storage servers")).toHaveCount(0);
+      await expect(page.getByText("Administrators only")).toHaveCount(0);
+    }
+  });
 });
 
 for (const scope of ["index", "thumbnails"] as const) {

@@ -19,6 +19,7 @@ it("loads settings and refreshes affected views after a live change", async () =
     path: "/.trash",
     retentionHours: null,
     rulesConfirmed: false,
+    strategy: "native" as const,
   };
   const updated = { ...data, revision: 1, enabled: true, rulesConfirmed: true };
   mocks.get.mockResolvedValue(data);

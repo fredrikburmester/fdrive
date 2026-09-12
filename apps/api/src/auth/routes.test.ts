@@ -3,11 +3,16 @@ import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
+import { createFakeWebdavServer } from "@fdrive/webdav";
 import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
-import { memoryProviderService, seedSftpgoProvider } from "../providers/test-fixtures/index.ts";
+import {
+  memoryProviderService,
+  seedSftpgoProvider,
+  seedWebdavProvider,
+} from "../providers/test-fixtures/index.ts";
 import { parseMasterKey } from "./crypto";
 import { createAuthModule } from "./index";
 import { registerAuthRoutes } from "./routes";
@@ -925,5 +930,92 @@ describe("native safe-request identity selection", () => {
         })
       ).status,
     ).toBe(403);
+  });
+});
+
+describe("auth routes: POST /auth/login through a WebDAV provider", () => {
+  it("binds the login to the WebDAV row, reports its capabilities and never touches SFTPGo", async () => {
+    const clockCtl = createClock(Date.now());
+    const davUser = { username: "alice", password: "looking-glass" };
+    const dav = createFakeWebdavServer({
+      users: [davUser],
+      origin: "http://dav.test",
+      prefix: "/dav",
+    });
+    const sftpgo = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
+      now: clockCtl.clock,
+    });
+    const hosts: string[] = [];
+    const fetchImpl: typeof globalThis.fetch = async (url, init) => {
+      const host = new URL(String(url)).host;
+      hosts.push(host);
+      return host === "dav.test" ? dav.fetch(url, init) : sftpgo.fetch(url, init);
+    };
+    const repos = createMemoryRepos();
+    const config = loadConfig(REQUIRED_ENV);
+    await seedSftpgoProvider(repos, "http://sftpgo.internal:8080", { managedByEnv: true });
+    const row = await seedWebdavProvider(repos, "http://dav.test/dav", { label: "Team drive" });
+    const authModule = createAuthModule({
+      identityLinks: memoryIdentityOperations(repos),
+      repos,
+      providers: memoryProviderService(repos, {
+        fetch: fetchImpl,
+        clock: clockCtl.clock,
+        sftpgoUrl: config.sftpgoUrl,
+      }),
+      fetch: fetchImpl,
+      master: parseMasterKey(config.fdriveMasterKey),
+      clock: clockCtl.clock,
+      config,
+      storageFactory: async () => FAKE_STORAGE,
+    });
+    const app = createApp({
+      config,
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date(0),
+      clock: clockCtl.clock,
+      principalResolver: authModule.principalResolver,
+      registerRoutes: authModule.registerRoutes,
+    });
+
+    const res = await login(app, {
+      providerId: row.id,
+      credential: { ...davUser },
+    });
+    expect(res.status).toBe(200);
+    const me = MeResponse.parse(await readJson(res));
+    expect(me.identities).toHaveLength(1);
+    expect(me.identities[0]).toMatchObject({
+      username: "alice",
+      providerId: row.id,
+      providerType: "webdav",
+      providerLabel: "Team drive",
+      capabilities: {
+        zip: false,
+        setModifiedAt: false,
+        atomicMove: true,
+        trash: false,
+        shares: false,
+        office: false,
+        index: false,
+        scopeMapping: false,
+      },
+    });
+    expect(hosts.every((host) => host === "dav.test")).toBe(true);
+    expect(dav.requests.at(-1)).toMatchObject({
+      method: "PROPFIND",
+      url: "http://dav.test/dav/",
+      headers: {
+        authorization: `Basic ${Buffer.from(`${davUser.username}:${davUser.password}`).toString("base64")}`,
+      },
+    });
+
+    const denied = await login(app, {
+      providerId: row.id,
+      credential: { username: "alice", password: "nope" },
+    });
+    expect(denied.status).toBe(401);
   });
 });

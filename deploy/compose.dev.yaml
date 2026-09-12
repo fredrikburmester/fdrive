@@ -49,9 +49,13 @@ services:
     ports:
       - "${FDRIVE_DEV_SFTPGO_HTTP_PORT:-58080}:8080"
       - "${FDRIVE_DEV_SFTPGO_SFTP_PORT:-52022}:2022"
+      # SFTPGo's own WebDAV binding: the dev target for the WebDAV provider.
+      - "${FDRIVE_DEV_SFTPGO_WEBDAV_PORT:-58082}:8081"
     environment:
       SFTPGO_HTTPD__BINDINGS__0__PORT: "8080"
       SFTPGO_HTTPD__BINDINGS__0__ADDRESS: ""
+      SFTPGO_WEBDAVD__BINDINGS__0__PORT: "8081"
+      SFTPGO_WEBDAVD__BINDINGS__0__ADDRESS: ""
       SFTPGO_LOADDATA_FROM: /seed/sftpgo-seed.json
       SFTPGO_LOADDATA_MODE: "0"
       SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"

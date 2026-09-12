@@ -1,9 +1,66 @@
 # Current handoff
 
-Updated: 2026-09-11. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-12. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
+
+## WebDAV storage provider: complete on PR #5, awaiting merge
+
+Branch `feat/webdav-provider`, PR #5. Durable documentation: [WEBDAV.md](../WEBDAV.md),
+[STORAGE-PROVIDERS.md](../STORAGE-PROVIDERS.md), [TRASH.md](../TRASH.md); the plan is removed.
+Per-slice evidence for slices 1–4 (package, adapter and module, registration, real-server
+conformance, manual browser pass) is archived in [history](STATUS-history.md).
+
+- **Done (slice 5, Trash)**: `webdavModule` declares `trash: "move"` and the `trash`
+  capability, so the API storage factory moves deleted files into the configured folder and
+  serves list/restore/purge/empty from it. `TrashSettings` (contracts) now carries the active
+  provider module's `strategy` (`native` | `move` | `none`) next to the stored configuration
+  (`TrashConfiguration`, unchanged on disk); the refinement requires confirmed rules only for
+  `native` and refuses enabling for `none`. The settings service reads the strategy from the
+  provider module per request, refuses an update whose strategy no longer matches (conflict),
+  and reports a stored row as disabled when the current strategy would not allow it. The
+  Trash settings card keys its copy on the strategy: SFTPGo rules, link and confirmation
+  checkbox for `native`; "fdrive moves deleted files" copy with no checkbox for `move`; a
+  disabled switch and "no Trash" copy for `none`. TRASH.md gained a section for providers
+  where fdrive performs the move.
+- **Evidence (slice 5)**: `@fdrive/webdav test:integration` 20/20 against the SFTPGo WebDAV
+  container, including a new round trip (delete dir and file, list, restore, purge, empty)
+  through `withMoveToTrash` + `createRecycleFolderTrash` as the factory composes them.
+  `browser e2e/trash.spec.ts` gained a WebDAV scenario in the isolated Trash environment:
+  add the SFTPGo WebDAV binding as a row, link and switch to it, enable Trash from the
+  "move" card (no rule checkbox), move a file to Trash from the listing, restore it from
+  `/trash`, and read its contents back. Gates on 2026-09-12: `package @fdrive/contracts`,
+  `application`, `integration`, `workflow` and `browser e2e/trash.spec.ts --workers=1` all
+  pass (the web coverage step needed two reruns under a load average near 30 from other
+  checkouts' gates: 5 s test timeouts in untouched `search-panel`, `office-actions` and
+  `capability-gating` suites, each passing alone).
+- **Found on the way**: Trash settings belong to the active login's row, and
+  `FDRIVE_ADMIN_USERS` makes someone admin only while their SFTPGo login is active, so a
+  WebDAV row's Trash can only be configured by an owner account from the setup claim. The
+  browser scenario grants that flag directly in its disposable database; TRASH.md documents
+  the limitation and FOLLOWUPS carries the decision (explicit provider choice on the settings
+  endpoint and card, or account-wide environment admins).
+- **Known**: GitGuardian on PR #5 flags two fake test passwords in an earlier commit's
+  history; the current tree no longer contains those patterns, and history is not rewritten
+  here, so the incidents need dismissing in the GitGuardian dashboard. The two pre-existing UI
+  issues found during the manual pass (Base UI `Select` trigger showing the raw value; a
+  non-admin opening `/system/*` by URL) were fixed on `main` (PRs #6 and #7) and are merged
+  into this branch.
+
+## Move to Trash busy indicator: complete (uncommitted, `claude/trash-loading-indicator-c30eb5`)
+
+- Moving a large folder or selection to Trash gave no feedback while the single delete request
+  ran. `DeleteDialog` now shows a spinner with progressive copy on the confirm button
+  ("Moving to Trash…" / "Deleting…", from `deleteDialogCopy().pendingLabel`), disables Cancel,
+  and ignores Escape while `pending`, so the indicator stays visible until the request settles.
+  Both call sites (`file-browser.tsx`, `virtual-listing.tsx`) already pass `remove.isPending`.
+- Verification: `package @fdrive/web` (lint, typecheck, coverage) and `browser e2e/trash.spec.ts`
+  pass; the spec now holds the delete request back to assert the busy state. `application`
+  coverage hit unrelated timeout flakes under a load average around 20 (untouched search-panel,
+  office-actions and trash queries tests); each passes in isolation.
+- Limitation: the request is one round trip, so there is no per-item progress, and the dialog is
+  modal for its whole duration. A non-blocking loading toast is the alternative if that matters.
 
 ## HEIC/HEIF viewing and indexing support: complete
 

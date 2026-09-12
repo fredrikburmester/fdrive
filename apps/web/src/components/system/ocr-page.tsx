@@ -72,7 +72,10 @@ function valuesFromDraft(draft: SettingsDraft): OcrSettingsValue {
   };
 }
 
-const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+const HOUR_ITEMS = Array.from({ length: 24 }, (_, hour) => ({
+  value: String(hour),
+  label: `${hour.toString().padStart(2, "0")}:00`,
+}));
 
 /** Admin page: `System > OCR`. Schedule, last run, originals, settings, and run-now. */
 export function OcrPage() {
@@ -221,6 +224,7 @@ export function OcrPage() {
             <Field>
               <FieldLabel htmlFor="ocr-hour">Run hour</FieldLabel>
               <Select
+                items={HOUR_ITEMS}
                 value={draft.hour}
                 onValueChange={(value) => setDraft({ ...draft, hour: value ?? draft.hour })}
               >
@@ -228,9 +232,9 @@ export function OcrPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {HOURS.map((hour) => (
-                    <SelectItem key={hour} value={String(hour)}>
-                      {hour.toString().padStart(2, "0")}:00
+                  {HOUR_ITEMS.map((hour) => (
+                    <SelectItem key={hour.value} value={hour.value}>
+                      {hour.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

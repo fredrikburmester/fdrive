@@ -21,7 +21,8 @@ const saved = {
   path: "/.trash",
   retentionHours: null,
   rulesConfirmed: false,
-};
+  strategy: "native",
+} as const;
 beforeEach(() => {
   mocks.query.mockReturnValue({ data: saved, refetch: mocks.refetch });
   mocks.update.mockReturnValue({
@@ -135,6 +136,37 @@ describe("Trash settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue without changing Trash" }));
     expect(next).toHaveBeenCalledOnce();
     expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+  it("enables a provider that moves deletes itself without SFTPGo rules", () => {
+    const next = vi.fn();
+    mocks.query.mockReturnValue({ data: { ...saved, strategy: "move" }, refetch: mocks.refetch });
+    render(<TrashSettingsCard onContinue={next} />);
+    expect(
+      screen.getByText("Restore deleted files that fdrive moved into a recycle folder."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/SFTPGo/)).toBeNull();
+    enable();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Trash setup instructions" })).toBeNull();
+    expect(screen.getByText(/fdrive creates it on the first delete/)).toBeTruthy();
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      { ...saved, strategy: "move", enabled: true },
+      expect.anything(),
+    );
+  });
+  it("cannot enable Trash for a provider without one", () => {
+    mocks.query.mockReturnValue({ data: { ...saved, strategy: "none" }, refetch: mocks.refetch });
+    render(<TrashSettingsCard />);
+    expect(screen.getByText("This storage server has no Trash.")).toBeTruthy();
+    expect(screen.getByText(/removes it permanently/)).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Enable Trash" });
+    expect(toggle.hasAttribute("disabled") || toggle.getAttribute("aria-disabled") === "true").toBe(
+      true,
+    );
+    fireEvent.click(toggle);
+    expect(screen.queryByLabelText("Trash folder")).toBeNull();
   });
   it("offers a settings save outside onboarding and reviews persisted state", () => {
     render(

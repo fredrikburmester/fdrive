@@ -1,3 +1,4 @@
+import type { TrashSettings } from "@fdrive/contracts";
 import {
   moveTrashLeafPath,
   type ProviderModule,
@@ -5,8 +6,9 @@ import {
   type StorageProvider,
 } from "@fdrive/core";
 import type { Identity, Provider } from "@fdrive/db";
-import { sftpgoModule } from "@fdrive/sftpgo";
+import { createFakeSftpgoServer, createSftpgoClient, sftpgoModule } from "@fdrive/sftpgo";
 import { createMemoryStorage } from "@fdrive/testkit";
+import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import { expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors.js";
 import type { IdentityProvider } from "../providers/service.js";
@@ -88,13 +90,14 @@ function tokenSourceStub(
   };
 }
 
-const TRASH_SETTINGS = {
+const TRASH_SETTINGS: TrashSettings = {
   providerId: "123e4567-e89b-42d3-a456-426614174000",
   revision: 1,
   enabled: true,
   path: "/.trash",
   retentionHours: null,
   rulesConfirmed: true,
+  strategy: "native",
 };
 
 it("captures the identity's provider for delayed reads/writes without retargeting", async () => {
@@ -354,4 +357,81 @@ it("unavailableStorage rejects every call with the given error and has no trash"
   await expect(storage.deleteFile("/a")).rejects.toBe(error);
   await expect(storage.deleteDir("/a")).rejects.toBe(error);
   expect(trashSettingsForStorage(storage)).toBeNull();
+});
+
+it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", async () => {
+  const requests: { host: string; authorization: string | null }[] = [];
+  const sftpgo = createFakeSftpgoServer({
+    users: [{ username: "alice", password: "pw", permissions: { "/": ["*"] } }],
+    files: { alice: { "/shared/a.txt": "from sftpgo" } },
+  });
+  const davUser = { username: "alice", password: "teacup" };
+  const dav = createFakeWebdavServer({
+    users: [davUser],
+    origin: "http://dav.test",
+    files: { "/shared/a.txt": "from webdav" },
+  });
+  const fetchImpl: typeof globalThis.fetch = async (url, init) => {
+    const host = new URL(String(url)).host;
+    requests.push({ host, authorization: new Headers(init?.headers).get("authorization") });
+    return host === "dav.test" ? dav.fetch(url, init) : sftpgo.fetch(url, init);
+  };
+  const sftpgoRow = providerRow("provider-a", "http://a.test");
+  const davRow: Provider = { ...providerRow("provider-dav", "http://dav.test"), type: "webdav" };
+  const sftpgoToken = (
+    await createSftpgoClient({ baseUrl: "http://a.test", fetch: sftpgo.fetch }).login({
+      username: "alice",
+      password: "pw",
+    })
+  ).accessToken;
+  const forIdentity = vi.fn(
+    async (identityId: string): Promise<IdentityProvider> =>
+      identityId === "identity-dav"
+        ? {
+            ...resolvedFor(davRow, webdavModule),
+            identity: { ...IDENTITY, id: "identity-dav", providerId: davRow.id },
+          }
+        : resolvedFor(sftpgoRow),
+  );
+  const tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential"> = {
+    sessionFor: (identityId, externalUsername) => ({
+      externalUsername,
+      getCredential: async () => ({
+        username: externalUsername,
+        password: identityId === "identity-dav" ? davUser.password : "pw",
+      }),
+      getToken: async () => (identityId === "identity-dav" ? null : sftpgoToken),
+      invalidateToken: async () => {},
+    }),
+    get: async () => sftpgoToken,
+    credential: async () => ({ password: "pw" }),
+  };
+  const factory = createIdentityStorageFactory({
+    providers: { forIdentity },
+    tokenSource,
+    fetch: fetchImpl,
+    clock: () => new Date(0),
+  });
+  const davStorage = await factory("identity-dav");
+  const sftpgoStorage = await factory("identity-a");
+  const text = async (storage: StorageProvider) =>
+    new Response((await storage.download("/shared/a.txt")).body).text();
+
+  expect(await text(davStorage)).toBe("from webdav");
+  expect(await text(sftpgoStorage)).toBe("from sftpgo");
+  await davStorage.upload("/shared/only-dav.txt", new TextEncoder().encode("x"));
+  await expect(sftpgoStorage.stat("/shared/only-dav.txt")).rejects.toMatchObject({
+    kind: "not_found",
+  });
+
+  const basic = `Basic ${Buffer.from(`${davUser.username}:${davUser.password}`).toString("base64")}`;
+  const davRequests = requests.filter((request) => request.host === "dav.test");
+  const sftpgoRequests = requests.filter((request) => request.host === "a.test");
+  expect(davRequests.length).toBeGreaterThan(0);
+  expect(sftpgoRequests.length).toBeGreaterThan(0);
+  expect(davRequests.length + sftpgoRequests.length).toBe(requests.length);
+  expect(davRequests.every((request) => request.authorization === basic)).toBe(true);
+  expect(sftpgoRequests.every((request) => request.authorization === `Bearer ${sftpgoToken}`)).toBe(
+    true,
+  );
 });

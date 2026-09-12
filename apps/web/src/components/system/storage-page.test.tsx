@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { AdminProvider, AdminProviderType } from "@fdrive/contracts";
+import { type AdminProvider, type AdminProviderType, ApiClientError } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -48,6 +48,8 @@ const SFTPGO_TYPE: AdminProviderType = {
 const mocks = vi.hoisted(() => ({
   providers: [] as unknown[],
   types: [] as unknown[],
+  /** When set, `useAdminProviders` reports this error and no data. */
+  listError: null as Error | null,
   create: { mutate: vi.fn(), isPending: false, isError: false, error: null },
   update: { mutate: vi.fn(), isPending: false, isError: false, error: null },
   remove: { mutate: vi.fn(), isPending: false, isError: false, error: null },
@@ -77,11 +79,22 @@ vi.mock("./system-page", () => ({
   ),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
-  useAdminProviders: () => ({
-    data: { providers: mocks.providers, types: mocks.types },
-    isLoading: false,
-    dataUpdatedAt: 1,
-  }),
+  useAdminProviders: () =>
+    mocks.listError === null
+      ? {
+          data: { providers: mocks.providers, types: mocks.types },
+          isLoading: false,
+          isError: false,
+          error: null,
+          dataUpdatedAt: 1,
+        }
+      : {
+          data: undefined,
+          isLoading: false,
+          isError: true,
+          error: mocks.listError,
+          dataUpdatedAt: 0,
+        },
   useAdminCreateProvider: () => mocks.create,
   useAdminUpdateProvider: () => mocks.update,
   useAdminDeleteProvider: () => mocks.remove,
@@ -100,6 +113,35 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.test.data = undefined;
+  mocks.listError = null;
+});
+
+it("shows the empty state when the list is loaded and holds no servers", () => {
+  renderPage([]);
+
+  expect(screen.getByText("No storage servers")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("treats a 403 as a refusal, not an installation without servers", () => {
+  mocks.listError = new ApiClientError("forbidden", "admin only", 403);
+  renderPage([]);
+
+  expect(screen.getByText("Administrators only")).toBeTruthy();
+  expect(screen.queryByText("No storage servers")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect((screen.getByRole("button", { name: "Add provider" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+});
+
+it("reports any other list failure instead of pretending the list is empty", () => {
+  mocks.listError = new ApiClientError("upstream_unavailable", "down", 502);
+  renderPage([]);
+
+  expect(screen.getByRole("alert").textContent).toContain("fdrive can't reach the server");
+  expect(screen.queryByText("No storage servers")).toBeNull();
+  expect(screen.queryByText("Administrators only")).toBeNull();
 });
 
 it("lists each provider with its type, address, source, logins, and capabilities", () => {
@@ -167,6 +209,11 @@ it("adds a provider with its type, name, address, and configuration", () => {
   renderPage([PRIMARY]);
 
   fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+  // The closed Type trigger shows the type's label, not its raw value.
+  expect(
+    screen.getByRole("combobox", { name: "Type" }).querySelector('[data-slot="select-value"]')
+      ?.textContent,
+  ).toBe("SFTPGo");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: " Second " } });
   fireEvent.change(screen.getByLabelText("Address"), {
     target: { value: " http://second:8080 " },
