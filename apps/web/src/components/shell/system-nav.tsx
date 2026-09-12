@@ -43,14 +43,14 @@ const FEATURES_ITEM = {
 const SYSTEM_ITEMS = [
   { id: "general", href: "/system/general", label: "General", Icon: Settings2 },
   { id: "storage", href: "/system/storage", label: "Storage", Icon: HardDrive },
+] as const;
+const FEATURE_ITEMS = [
   {
     id: "sharedFolders",
     href: "/system/shared-folders",
     label: "Shared folders",
     Icon: FolderSymlink,
   },
-] as const;
-const FEATURE_ITEMS = [
   { id: "thumbnails", ...FEATURE_PAGES.thumbnails, Icon: Image },
   { id: "textSearch", ...FEATURE_PAGES.textSearch, Icon: Database },
   { id: "semanticSearch", ...FEATURE_PAGES.semanticSearch, Icon: Search },
@@ -160,7 +160,7 @@ export function SystemNav() {
           query.pending.has(item.id) ||
           (item.id === "features" && FEATURE_ITEMS.some(({ id }) => query.pending.has(id)))
         }
-        stale={query.isError && !SYSTEM_ITEMS.some(({ id }) => id === item.id)}
+        stale={query.isError && !["general", "storage", "sharedFolders"].includes(item.id)}
       />
     );
   }
