@@ -155,6 +155,10 @@ export async function composeApp(
   const trashSettings = createTrashSettingsService({
     settings: repos.settings,
     identities: repos.identities,
+    // The provider service below reads these settings back (`trashEnabled`);
+    // the strategy lookup runs per request, after both exist.
+    strategyFor: async (providerId) =>
+      (await providerService.get(providerId))?.module.trash ?? "none",
   });
   // Storage providers are rows: the SFTPGo named by `SFTPGO_URL` is seeded
   // and pinned at startup. Every credential-bearing call resolves an

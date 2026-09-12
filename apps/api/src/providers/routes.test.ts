@@ -268,7 +268,7 @@ describe("/admin/providers with a WebDAV type", () => {
         zip: false,
         setModifiedAt: false,
         atomicMove: true,
-        trash: false,
+        trash: true,
         shares: false,
         office: false,
         index: false,

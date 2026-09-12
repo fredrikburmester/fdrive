@@ -3,9 +3,9 @@
 This guide describes the implemented provider extension points. SFTPGo and WebDAV are the
 registered backends; S3 and fdrive-owned shares are not implemented. Start with a provider that
 supports ordinary file operations; enable additional features only after their complete API and
-UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations only:
-see [`packages/webdav`](../packages/webdav/src/module.ts) and its
-[plan](plans/WEBDAV-PROVIDER.md) for its decisions and remaining slices.
+UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations and
+fdrive-performed Trash: see [`packages/webdav`](../packages/webdav/src/module.ts) and
+[WEBDAV.md](WEBDAV.md) for its decisions and protocol mapping.
 
 For environment setup, see [Development](DEVELOPMENT.md). Follow [WORKING.md](../WORKING.md)
 for repository workflow and [verification commands](workflow/COMMANDS.md) for the required gates.
@@ -251,10 +251,16 @@ Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
 the trash permanently deletes so purge/empty work. The native option is not an arbitrary
 upstream recycle-bin API hook.
 
-The [Trash settings UI](../apps/web/src/components/system/trash-settings-card.tsx) still asks
-operators to configure and confirm SFTPGo rules. A new backend using `"move"` needs suitable
-configuration/onboarding copy and real round-trip tests before advertising Trash. The old
-proposal for automatic trash-folder ownership validation is not an implemented guarantee.
+The Trash settings response (`TrashSettings` in contracts) carries the active provider
+module's strategy next to the stored configuration, and the
+[Trash settings card](../apps/web/src/components/system/trash-settings-card.tsx) keys its copy
+on it: `native` asks operators to configure and confirm the SFTPGo rule, `move` explains that
+fdrive performs the move and needs no confirmation, `none` cannot be enabled. The strategy is
+never stored; the service reads it from the module on every request, refuses an update whose
+strategy no longer matches, and reads a stored row as disabled when the module's current
+strategy would not allow it. A new `"move"` backend needs a real round-trip test on its server
+(see the WebDAV container suite). The old proposal for automatic trash-folder ownership
+validation is not an implemented guarantee.
 
 ## Isolation and lifecycle requirements
 

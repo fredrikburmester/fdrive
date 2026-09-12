@@ -1,3 +1,4 @@
+import type { TrashSettings } from "@fdrive/contracts";
 import {
   moveTrashLeafPath,
   type ProviderModule,
@@ -89,13 +90,14 @@ function tokenSourceStub(
   };
 }
 
-const TRASH_SETTINGS = {
+const TRASH_SETTINGS: TrashSettings = {
   providerId: "123e4567-e89b-42d3-a456-426614174000",
   revision: 1,
   enabled: true,
   path: "/.trash",
   retentionHours: null,
   rulesConfirmed: true,
+  strategy: "native",
 };
 
 it("captures the identity's provider for delayed reads/writes without retargeting", async () => {

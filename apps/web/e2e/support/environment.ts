@@ -34,6 +34,8 @@ export interface RunningEnvironment {
   /** The seeded Postgres container's connection string, for tests that seed extra rows directly. */
   readonly databaseUrl: string;
   readonly sftpgoUrl: string;
+  /** The same SFTPGo's WebDAV binding, for specs that add it as a second provider type. */
+  readonly sftpgoWebdavUrl: string;
   /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
    * `getWebBaseUrl()` for the default, shared environment, but reflect
    * `options.apiPort`/`options.webPort` for a second, independent
@@ -387,6 +389,7 @@ export async function startEnvironment(
     return {
       databaseUrl: postgres.connectionString,
       sftpgoUrl: sftpgo.baseUrl,
+      sftpgoWebdavUrl: sftpgo.webdavUrl,
       apiBaseUrl,
       webBaseUrl,
       stop: stopAll,

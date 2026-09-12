@@ -234,6 +234,7 @@ export {
 } from "./tokens.ts";
 export {
   isValidPath,
+  TrashConfiguration,
   TrashEntry,
   TrashListResponse,
   TrashPurgeRequest,
@@ -242,4 +243,5 @@ export {
   TrashSettings,
   TrashSettingsUpdateRequest,
   TrashStatusResponse,
+  TrashStrategy,
 } from "./trash.ts";

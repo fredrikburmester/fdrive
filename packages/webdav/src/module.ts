@@ -76,13 +76,15 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
       zip: false,
       setModifiedAt: false,
       atomicMove: true,
-      trash: false,
+      trash: true,
       shares: false,
       office: false,
       index: false,
       scopeMapping: false,
     },
-    trash: "none",
+    // No recycle bin in the protocol: the API storage factory moves deleted
+    // files into the configured folder itself (`withMoveToTrash`).
+    trash: "move",
 
     probe(instance, ctx) {
       return probeConnection(instance.baseUrl, { fetch: ctx.fetch });

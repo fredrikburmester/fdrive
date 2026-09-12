@@ -45,8 +45,3 @@ experience around their interpretation and effects.
 - Explain when changes take effect and when reindex/purge is needed; changing a rule must not
   imply that existing cached rows disappeared or that original files were removed.
 - Complete with rule-engine parity tests, authorization checks and browser preview verification.
-
-## WebDAV storage adapter
-
-Planned in [WEBDAV-PROVIDER.md](WEBDAV-PROVIDER.md): decisions, protocol mapping, work slices
-and verification gates. The registry still ships only SFTPGo until that plan lands.
