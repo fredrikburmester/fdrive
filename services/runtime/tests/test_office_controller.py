@@ -305,3 +305,23 @@ def test_office_lifecycle_clears_a_stale_error_once_the_engine_is_back() -> None
     lifecycle.reconcile(enabled)
     assert lifecycle.status()["status"] == "ready"
     assert lifecycle.status()["error"] is None
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 503])
+def test_http_error_is_stale_and_closes_response(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    import io
+    import urllib.error
+
+    from fdrive_runtime import office_controller
+
+    body = io.BytesIO(b"unavailable")
+    error = urllib.error.HTTPError("http://api", status, "failure", {}, body)
+
+    class Opener:
+        def open(self, *_args: object, **_kwargs: object) -> object:
+            raise error
+
+    monkeypatch.setattr(office_controller.urllib.request, "build_opener", lambda *_a: Opener())
+    with pytest.raises(ValueError, match=str(status)):
+        office_controller.OfficeClient("http://api", "token").fetch()
+    assert body.closed

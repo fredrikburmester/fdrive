@@ -140,8 +140,9 @@ async def trigger_run(request: Request) -> JSONResponse:
         return JSONResponse({"error": "already running"}, status_code=409)
 
     def worker() -> None:
-        conn = state.conn_factory()
+        conn = None
         try:
+            conn = state.conn_factory()
             raw = db.read_settings(conn)
             if not state.features(raw).values.pdf_ocr:
                 state.log("OCR run stopped: PDF OCR disabled")
@@ -161,10 +162,18 @@ async def trigger_run(request: Request) -> JSONResponse:
         except Exception as e:  # noqa: BLE001
             state.log(f"OCR pass crashed: {type(e).__name__}: {e}")
         finally:
-            conn.close()
-            state.run_lock.release()
+            try:
+                if conn is not None:
+                    conn.close()
+            finally:
+                state.run_lock.release()
 
-    threading.Thread(target=worker, daemon=True, name="ocr-run").start()
+    try:
+        threading.Thread(target=worker, daemon=True, name="ocr-run").start()
+    except Exception as error:  # noqa: BLE001 - failed thread creation must release admission
+        state.run_lock.release()
+        state.log(f"OCR run could not start: {type(error).__name__}: {error}")
+        return JSONResponse({"error": "could not start OCR run"}, status_code=500)
     return JSONResponse({"started": True}, status_code=202)
 
 

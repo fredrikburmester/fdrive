@@ -22,7 +22,7 @@ from starlette.routing import Route
 from .embedder import Embedder, ImageDecodeError
 from .normalize import l2_normalize
 from .shapes import shape_embed_response, shape_health
-from .validation import RequestError, parse_text_inputs, validate_images, validate_texts
+from .validation import MAX_IMAGE_BYTES, MAX_IMAGES, RequestError, parse_text_inputs, validate_images, validate_texts
 
 MODEL_NOT_LOADED_MESSAGE = "model is not loaded yet"
 
@@ -67,12 +67,20 @@ async def embed_image(request: Request) -> Response:
     if embedder is None:
         return PlainTextResponse(MODEL_NOT_LOADED_MESSAGE, status_code=503)
 
-    form = await request.form()
     images: list[bytes] = []
-    for value in form.getlist("images"):
-        if not isinstance(value, UploadFile):
-            return JSONResponse({"error": "'images' parts must be file uploads"}, status_code=400)
-        images.append(await value.read())
+    async with request.form() as form:
+        parts = form.getlist("images")
+        if len(parts) > MAX_IMAGES:
+            return JSONResponse({"error": f"at most {MAX_IMAGES} images per request"}, status_code=413)
+        for value in parts:
+            if not isinstance(value, UploadFile):
+                return JSONResponse({"error": "'images' parts must be file uploads"}, status_code=400)
+            if value.size is not None and value.size > MAX_IMAGE_BYTES:
+                return JSONResponse({"error": f"an image part exceeds {MAX_IMAGE_BYTES} bytes"}, status_code=413)
+            data = await value.read(MAX_IMAGE_BYTES + 1)
+            if len(data) > MAX_IMAGE_BYTES:
+                return JSONResponse({"error": f"an image part exceeds {MAX_IMAGE_BYTES} bytes"}, status_code=413)
+            images.append(data)
 
     try:
         validate_images(images)
