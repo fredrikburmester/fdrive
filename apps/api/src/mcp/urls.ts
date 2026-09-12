@@ -5,9 +5,13 @@
  * useful to an LLM, just not clickable without a base).
  */
 export function fileUrl(publicUrl: string | null, virtualPath: string): string {
-  return `${publicUrl ?? ""}/view${virtualPath}`;
+  return `${publicUrl ?? ""}/view${encodePath(virtualPath)}`;
 }
 
 export function folderUrl(publicUrl: string | null, virtualPath: string): string {
-  return `${publicUrl ?? ""}/files${virtualPath}`;
+  return `${publicUrl ?? ""}/files${encodePath(virtualPath)}`;
+}
+
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
 }

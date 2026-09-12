@@ -3,18 +3,22 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Context } from "hono";
 import type { AppHono } from "../app.js";
 import { authenticateMcpRequest, type McpAuthDeps } from "./auth.js";
+import { boundedBytes } from "./content.ts";
 import type { McpToolDeps } from "./handlers.js";
 import { registerMcpTools } from "./tools.js";
 
 const SERVER_INFO = { name: "fdrive", version: "0.1.0" };
+// Allows a 4 MiB text payload even when JSON escapes every character.
+export const MAX_MCP_REQUEST_BYTES = 32 * 1024 * 1024;
 
 const SERVER_INSTRUCTIONS =
   "Search and browse the user's fdrive share. Paths are virtual paths from the share root, e.g. " +
   '"/Documents/Work/Contracts/agreement.pdf". Use `search` for content or topic questions, ' +
   "`find_files` for names/dates/types/sizes, `read_file_text` to read a document, " +
   "`find_duplicates` and `folder_overview` when helping organize. Always give the `url` back to " +
-  "the user so they can open the file in fdrive. Write tools (`create_folder`, `move_path`) may " +
-  "be disabled; if so, tell the user rather than retrying.";
+  "the user so they can open the file in fdrive. Use `capabilities` for token permissions and " +
+  "optional processing status. Stay within allowed folders. For edits, read first and pass the " +
+  "returned SHA-256. Completed writes may include metadata warnings; do not repeat the write.";
 
 export interface McpRoutesDeps extends McpAuthDeps {
   readonly toolDeps: McpToolDeps;
@@ -37,6 +41,27 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
     return withMcpResponseHeaders(Response.json({ error: "unauthorized" }, { status: 401 }));
   }
 
+  let parsedBody: unknown;
+  if (c.req.method === "POST" && c.req.raw.body !== null) {
+    if (Number(c.req.header("content-length")) > MAX_MCP_REQUEST_BYTES) {
+      await c.req.raw.body.cancel();
+      return withMcpResponseHeaders(Response.json({ error: "request too large" }, { status: 413 }));
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await boundedBytes(c.req.raw.body, MAX_MCP_REQUEST_BYTES);
+    } catch {
+      return withMcpResponseHeaders(
+        Response.json({ error: "request too large or interrupted" }, { status: 413 }),
+      );
+    }
+    try {
+      parsedBody = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      return withMcpResponseHeaders(Response.json({ error: "invalid JSON" }, { status: 400 }));
+    }
+  }
+
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
   registerMcpTools(server, auth.principal, deps.toolDeps);
 
@@ -49,7 +74,7 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
   });
   await server.connect(transport);
 
-  const response = await transport.handleRequest(c.req.raw);
+  const response = await transport.handleRequest(c.req.raw, { parsedBody });
   return withMcpResponseHeaders(response);
 }
 

@@ -1,3 +1,4 @@
+import { ApiTokenAccess } from "@fdrive/contracts";
 import type { ApiTokenRepo, IdentityRepo } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
@@ -32,6 +33,8 @@ export function createResolveTokenPrincipal(
     if (token === null) {
       return null;
     }
+    const access = token.access === undefined ? undefined : ApiTokenAccess.safeParse(token.access);
+    if (access !== undefined && !access.success) return null;
 
     const now = deps.clock();
     if (token.expiresAt !== null && token.expiresAt.getTime() <= now.getTime()) {
@@ -58,6 +61,7 @@ export function createResolveTokenPrincipal(
       username: identity.externalUsername,
       storage: await deps.storageFactory(identity.id),
       isAdmin: false,
+      ...(access?.success === true ? { tokenAccess: access.data } : {}),
     };
   };
 }

@@ -105,6 +105,7 @@ function stubSearchService(): SearchService {
 }
 
 interface Harness {
+  readonly app: ReturnType<typeof createApp>;
   readonly port: number;
   readonly token: string;
   readonly toolDeps: McpToolDeps;
@@ -208,6 +209,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
   });
 
   return {
+    app,
     port,
     token: rawToken,
     toolDeps,
@@ -273,6 +275,34 @@ describe("MCP server end to end", () => {
     await harness.close();
   });
 
+  it("bounds authenticated request bodies before MCP parsing", async () => {
+    const headers = {
+      authorization: `Bearer ${harness.token}`,
+      "content-type": "application/json",
+    };
+    expect(
+      (await harness.app.request("/mcp", { method: "POST", headers, body: "invalid" })).status,
+    ).toBe(400);
+    expect(
+      (
+        await harness.app.request("/mcp", {
+          method: "POST",
+          headers: { ...headers, "content-length": "999999999" },
+          body: "x",
+        })
+      ).status,
+    ).toBe(413);
+    expect(
+      (
+        await harness.app.request("/mcp", {
+          method: "POST",
+          headers,
+          body: "x".repeat(32 * 1024 * 1024 + 1),
+        })
+      ).status,
+    ).toBe(413);
+  });
+
   it("initializes and lists every tool", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
@@ -289,8 +319,7 @@ describe("MCP server end to end", () => {
         "similar_files",
         "folder_overview",
         "index_stats",
-        "create_folder",
-        "move_path",
+        "capabilities",
         "recent_moves",
       ].sort(),
     );
@@ -343,7 +372,7 @@ describe("MCP server end to end", () => {
     const result = await client.callTool({ name: "create_folder", arguments: { path: "/new" } });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result as CallToolResult)).toMatch(/FDRIVE_MCP_WRITES/);
+    expect(textOf(result as CallToolResult)).toMatch(/not found/);
 
     await client.close();
   });
@@ -357,7 +386,7 @@ describe("MCP server end to end", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(textOf(result as CallToolResult)).toMatch(/FDRIVE_MCP_WRITES/);
+    expect(textOf(result as CallToolResult)).toMatch(/not found/);
 
     await client.close();
   });

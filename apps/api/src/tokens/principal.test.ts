@@ -270,3 +270,37 @@ describe("createResolveTokenPrincipal", () => {
     expect(after?.lastUsedAt).toEqual(now);
   });
 });
+
+it("resolves explicit grants on each request and fails closed for malformed persisted access", async () => {
+  const repos = createMemoryRepos();
+  const { account, identity } = await seedAccountWithIdentity(repos);
+  const token = generateApiToken();
+  const created = await repos.apiTokens.create({
+    accountId: account.id,
+    identityId: identity.id,
+    name: "Scoped",
+    tokenHash: hashApiToken(token),
+    expiresAt: null,
+    access: { mode: "read", paths: ["/docs"] },
+  });
+  const resolve = createResolveTokenPrincipal({
+    apiTokens: repos.apiTokens,
+    identities: repos.identities,
+    clock: () => new Date(),
+    storageFactory: async () => FAKE_STORAGE,
+  });
+  expect((await resolve(token))?.tokenAccess).toEqual({ mode: "read", paths: ["/docs"] });
+  const invalid = createResolveTokenPrincipal({
+    apiTokens: {
+      ...repos.apiTokens,
+      findByHash: async () =>
+        ({ ...created, access: { mode: "root", paths: [] } }) as unknown as typeof created,
+    },
+    identities: repos.identities,
+    clock: () => new Date(),
+    storageFactory: async () => FAKE_STORAGE,
+  });
+  expect(await invalid(token)).toBeNull();
+  await repos.apiTokens.delete(created.id, account.id);
+  expect(await resolve(token)).toBeNull();
+});

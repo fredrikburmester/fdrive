@@ -1,6 +1,6 @@
 "use client";
 
-import type { ApiTokenSummary } from "@fdrive/contracts";
+import { ApiTokenAccess, type ApiTokenSummary, type IdentitySummary } from "@fdrive/contracts";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   DEFAULT_EXPIRY_OPTION_VALUE,
   EXPIRY_OPTIONS,
@@ -33,13 +34,40 @@ export interface CreateTokenDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Called with the freshly created token once, so the caller can show it. */
   onCreated: (result: { token: string; item: ApiTokenSummary }) => void;
+  identities: Pick<IdentitySummary, "id" | "username" | "providerLabel" | "providerType">[];
+  activeIdentityId: string;
 }
 
+export const TOKEN_ACCESS_LABELS = {
+  read: "Read",
+  organize: "Organize",
+  full: "Full management",
+} as const;
+const ACCESS_HELP = {
+  read: "Browse, read and search files.",
+  organize: "Read, create folders, move, copy and tag files.",
+  full: "Organize, create and edit files, and move items to and from Trash.",
+};
+
 /** Account page dialog: name a new API token and pick when it expires. */
-export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateTokenDialogProps) {
+export function CreateTokenDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  identities,
+  activeIdentityId,
+}: CreateTokenDialogProps) {
   const [name, setName] = useState("");
   const [expiryValue, setExpiryValue] = useState(DEFAULT_EXPIRY_OPTION_VALUE);
   const createToken = useCreateApiToken();
+  const [identityId, setIdentityId] = useState(activeIdentityId);
+  const [mode, setMode] = useState<ApiTokenAccess["mode"]>("read");
+  const [folders, setFolders] = useState("/");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const loginItems = identities.map((identity) => ({
+    value: identity.id,
+    label: `${identity.providerLabel || identity.providerType} · ${identity.username}`,
+  }));
 
   function handleOpenChange(nextOpen: boolean) {
     if (nextOpen) {
@@ -56,8 +84,25 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
       return;
     }
     const expiresInDays = expiresInDaysFromOptionValue(expiryValue);
+    const access = ApiTokenAccess.safeParse({
+      mode,
+      paths: folders
+        .split("\n")
+        .map((path) => path.trim())
+        .filter(Boolean),
+    });
+    if (!access.success || !identities.some((identity) => identity.id === identityId)) {
+      setValidationError("Choose a login and enter 1–32 folder paths beginning with /.");
+      return;
+    }
+    setValidationError(null);
     createToken.mutate(
-      { name: name.trim(), ...(expiresInDays !== undefined ? { expiresInDays } : {}) },
+      {
+        name: name.trim(),
+        identityId,
+        access: access.data,
+        ...(expiresInDays !== undefined ? { expiresInDays } : {}),
+      },
       { onSuccess: (result) => onCreated(result) },
     );
   }
@@ -82,6 +127,62 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
                 onChange={(event) => setName(event.target.value)}
                 autoFocus
               />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="token-login">Login</FieldLabel>
+              <Select
+                items={loginItems}
+                value={identityId}
+                onValueChange={(value) => {
+                  if (value !== null) setIdentityId(value);
+                }}
+              >
+                <SelectTrigger id="token-login">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {loginItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>The token can access only this storage login.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="token-access">Access</FieldLabel>
+              <Select
+                items={TOKEN_ACCESS_LABELS}
+                value={mode}
+                onValueChange={(value) => {
+                  if (value !== null) setMode(value);
+                }}
+              >
+                <SelectTrigger id="token-access">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(TOKEN_ACCESS_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>{ACCESS_HELP[mode]}</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="token-folders">Allowed folders</FieldLabel>
+              <Textarea
+                id="token-folders"
+                value={folders}
+                onChange={(event) => setFolders(event.target.value)}
+                rows={2}
+              />
+              <FieldDescription>
+                One folder per line. / allows all folders in this login.
+              </FieldDescription>
             </Field>
             <Field>
               <FieldLabel htmlFor="token-expiry">Expires</FieldLabel>
@@ -112,6 +213,7 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
             {createToken.isError ? (
               <FieldError>{describeApiError(createToken.error)}</FieldError>
             ) : null}
+            {validationError ? <FieldError>{validationError}</FieldError> : null}
           </FieldGroup>
           <DialogFooter>
             <Button type="submit" disabled={name.trim().length === 0 || createToken.isPending}>

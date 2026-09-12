@@ -78,7 +78,7 @@ async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.
     },
   });
 
-  return { app, account, identity, service };
+  return { app, account, identity, service, repos, principal };
 }
 
 describe("token routes: GET /account/tokens", () => {
@@ -218,4 +218,42 @@ describe("token routes: DELETE /account/tokens/:id", () => {
 
     expect(res.status).toBe(200);
   });
+});
+
+it("defaults new tokens to the active login and persists normalized per-token permissions", async () => {
+  const { app, account, repos, principal } = await buildApp();
+  const provider = await repos.providers.ensure({
+    type: "webdav",
+    baseUrl: "https://other.invalid",
+  });
+  const second = await repos.identities.create({
+    accountId: account.id,
+    providerId: provider.id,
+    externalUsername: "alice",
+  });
+  Object.assign(principal, { identityId: second.id });
+  const response = await app.request("/api/v1/account/tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+    body: JSON.stringify({
+      name: "Scoped",
+      access: { mode: "organize", paths: ["/docs/./", "/docs"] },
+    }),
+  });
+  expect(response.status).toBe(201);
+  expect(await response.json()).toMatchObject({
+    item: { identityId: second.id, access: { mode: "organize", paths: ["/docs"] } },
+  });
+});
+
+it("rejects paths that cannot be represented by storage before creating a token", async () => {
+  const { app } = await buildApp();
+  for (const path of ["relative", "/bad\0path", `/${"a".repeat(256)}`]) {
+    const response = await app.request("/api/v1/account/tokens", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ name: "Bad", access: { mode: "full", paths: [path] } }),
+    });
+    expect(response.status).toBe(400);
+  }
 });

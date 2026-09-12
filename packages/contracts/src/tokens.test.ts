@@ -102,3 +102,24 @@ describe("CreateApiTokenResponse", () => {
     expect(CreateApiTokenResponse.parse(value)).toEqual(value);
   });
 });
+
+it("validates explicit token modes and bounded absolute folder grants", () => {
+  for (const mode of ["read", "organize", "full"]) {
+    expect(
+      CreateApiTokenRequest.parse({
+        name: "Scoped",
+        access: { mode, paths: ["/docs", "/Team #1"] },
+      }).access?.mode,
+    ).toBe(mode);
+  }
+  for (const access of [
+    { mode: "admin", paths: ["/"] },
+    { mode: "read", paths: [] },
+    { mode: "read", paths: ["relative"] },
+    { mode: "read", paths: ["/bad\0name"] },
+    { mode: "read", paths: ["/bad\nname"] },
+    { mode: "read", paths: ["/bad\u007fname"] },
+    { mode: "read", paths: Array(33).fill("/") },
+  ])
+    expect(CreateApiTokenRequest.safeParse({ name: "Scoped", access }).success).toBe(false);
+});

@@ -1,0 +1,1 @@
+ALTER TABLE "app"."api_tokens" ADD COLUMN "access" jsonb;

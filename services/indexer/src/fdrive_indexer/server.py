@@ -5,6 +5,7 @@ without pulling in a full web framework.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import os
@@ -24,6 +25,7 @@ from starlette.routing import Route
 from . import db
 from .chunking import is_textual
 from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
+from .content_extract import MAX_CONTENT_BYTES, ContentExtractor
 from .directory_listing import directory_parts, directory_query, list_directory
 from .extract import embed_health
 from .features import FeatureConfiguration
@@ -42,6 +44,7 @@ class ServerState:
     conn_factory: Callable[[], psycopg.Connection]
     schema_version: Callable[[], int | None]
     feature_configuration: Callable[[], FeatureConfiguration] | None = None
+    content_extractor: ContentExtractor | None = None
     thumbnail_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     index_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     thumbnail_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
@@ -186,6 +189,33 @@ async def stats(request: Request) -> JSONResponse:
     body["thumbnail_clear"] = state.thumbnail_clear_job.snapshot()
     body["image_embedding_clear"] = state.image_embed_clear_job.snapshot()
     return JSONResponse(body)
+
+
+async def extract_content(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    extractor = state.content_extractor
+    if extractor is None:
+        return JSONResponse({"error": "extraction unavailable"}, status_code=503)
+    name = request.query_params.get("name", "")
+    if not name or len(name) > 255 or any(c in name for c in ("/", "\\", "\x00")):
+        return JSONResponse({"error": "invalid name"}, status_code=400)
+    if not extractor.admission.acquire(blocking=False):
+        return JSONResponse({"error": "extraction busy"}, status_code=429)
+    try:
+        content = bytearray()
+        async with asyncio.timeout(10):
+            async for chunk in request.stream():
+                if len(content) + len(chunk) > MAX_CONTENT_BYTES:
+                    return JSONResponse({"error": "content too large"}, status_code=413)
+                content.extend(chunk)
+        configuration = state.feature_configuration
+        search_ocr = configuration is not None and configuration().values.search_ocr
+        result = await run_in_threadpool(extractor.extract, bytes(content), name, search_ocr=search_ocr)
+        return JSONResponse(result)
+    except TimeoutError:
+        return JSONResponse({"error": "request timed out"}, status_code=408)
+    finally:
+        extractor.admission.release()
 
 
 async def extract_text(request: Request) -> JSONResponse:
@@ -373,6 +403,7 @@ def create_app(state: ServerState) -> Starlette:
             Route("/directory", directory, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/extract", extract_text, methods=["POST"]),
+            Route("/extract-content", extract_content, methods=["POST"]),
             Route("/reindex", reindex, methods=["POST"]),
             Route("/index/clear", clear, methods=["POST"]),
             Route("/thumbnails/clear", clear, methods=["POST"]),

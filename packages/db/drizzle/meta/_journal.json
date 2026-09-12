@@ -29,6 +29,13 @@
       "when": 1789133411800,
       "tag": "0003_index_query_hot_paths",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789224953826,
+      "tag": "0004_mcp_token_access",
+      "breakpoints": true
     }
   ]
 }

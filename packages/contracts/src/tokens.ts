@@ -10,6 +10,27 @@ export const ApiTokenExpiresInDays = z.union([z.literal(30), z.literal(90), z.li
 
 export type ApiTokenExpiresInDays = z.infer<typeof ApiTokenExpiresInDays>;
 
+export const ApiTokenAccess = z.object({
+  mode: z.enum(["read", "organize", "full"]),
+  paths: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(4096)
+        .startsWith("/")
+        .refine(
+          (path) =>
+            [...path].every((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127),
+          "Path contains a control character",
+        ),
+    )
+    .min(1)
+    .max(32),
+});
+
+export type ApiTokenAccess = z.infer<typeof ApiTokenAccess>;
+
 /**
  * One API token as listed on the account page. Never carries the secret
  * itself, only `POST /api/v1/account/tokens` does that, and only once.
@@ -22,6 +43,8 @@ export const ApiTokenSummary = z.object({
   createdAt: z.iso.datetime(),
   lastUsedAt: z.iso.datetime().nullable(),
   expiresAt: z.iso.datetime().nullable(),
+  /** Absent for legacy tokens, which retain the old index/global-write policy. */
+  access: ApiTokenAccess.optional(),
 });
 
 export type ApiTokenSummary = z.infer<typeof ApiTokenSummary>;
@@ -34,14 +57,15 @@ export const ApiTokensResponse = z.object({
 export type ApiTokensResponse = z.infer<typeof ApiTokensResponse>;
 
 /**
- * Body for `POST /api/v1/account/tokens`. `identityId` defaults to the
- * account's first linked identity when omitted; `expiresInDays` omitted
- * means the token never expires.
+ * Body for `POST /api/v1/account/tokens`. The route defaults `identityId`
+ * to the active login when omitted; omitted `expiresInDays` means the
+ * token never expires. Omitted `access` creates a Read token for `/`.
  */
 export const CreateApiTokenRequest = z.object({
   name: z.string().min(1).max(200),
   identityId: CanonicalUuid.optional(),
   expiresInDays: ApiTokenExpiresInDays.optional(),
+  access: ApiTokenAccess.optional(),
 });
 
 export type CreateApiTokenRequest = z.infer<typeof CreateApiTokenRequest>;

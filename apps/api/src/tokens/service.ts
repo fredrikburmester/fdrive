@@ -1,8 +1,10 @@
-import type {
-  ApiTokenSummary,
-  CreateApiTokenRequest,
-  CreateApiTokenResponse,
+import {
+  ApiTokenAccess,
+  type ApiTokenSummary,
+  type CreateApiTokenRequest,
+  type CreateApiTokenResponse,
 } from "@fdrive/contracts";
+import { normalizePath } from "@fdrive/core";
 import type { ApiTokenRepo, IdentityRepo } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
 import { generateApiToken, hashApiToken } from "./token-format.js";
@@ -39,6 +41,7 @@ function toSummary(token: {
   createdAt: Date;
   lastUsedAt: Date | null;
   expiresAt: Date | null;
+  access?: ApiTokenAccess;
 }): ApiTokenSummary {
   return {
     id: token.id,
@@ -47,6 +50,7 @@ function toSummary(token: {
     createdAt: token.createdAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
     expiresAt: token.expiresAt?.toISOString() ?? null,
+    ...(token.access === undefined ? {} : { access: token.access }),
   };
 }
 
@@ -89,12 +93,20 @@ export function createTokenService(deps: TokenServiceDeps): TokenService {
           : null;
 
       const token = generateToken();
+      let access: ApiTokenAccess;
+      try {
+        access = ApiTokenAccess.parse(req.access ?? { mode: "read", paths: ["/"] });
+        access.paths = [...new Set(access.paths.map(normalizePath))];
+      } catch {
+        throw new ApiHttpError("bad_request", "invalid token folder access");
+      }
       const created = await deps.apiTokens.create({
         accountId,
         identityId,
         name: req.name,
         tokenHash: hashApiToken(token),
         expiresAt,
+        access,
       });
 
       return { token, item: toSummary(created) };
