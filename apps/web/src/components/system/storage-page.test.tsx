@@ -209,6 +209,11 @@ it("adds a provider with its type, name, address, and configuration", () => {
   renderPage([PRIMARY]);
 
   fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+  // The closed Type trigger shows the type's label, not its raw value.
+  expect(
+    screen.getByRole("combobox", { name: "Type" }).querySelector('[data-slot="select-value"]')
+      ?.textContent,
+  ).toBe("SFTPGo");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: " Second " } });
   fireEvent.change(screen.getByLabelText("Address"), {
     target: { value: " http://second:8080 " },

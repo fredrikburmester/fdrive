@@ -132,6 +132,7 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
           <Field>
             <FieldLabel htmlFor="provider-type">Type</FieldLabel>
             <Select
+              items={types.map((candidate) => ({ value: candidate.type, label: candidate.label }))}
               value={type}
               onValueChange={(value) => changeType(value ?? type)}
               disabled={editing}
