@@ -15,9 +15,11 @@ dependencies = [
 # venv never installs or imports them; the Dockerfile installs this extra
 # from the PyTorch CPU wheel index. See `src/fdrive_image_embed/siglip.py`.
 runtime = [
-  "torch>=2.3",
-  "transformers>=4.44",
-  "pillow>=10.4",
+  "torch==2.14.0",
+  "transformers==5.16.1",
+  "pillow==12.3.0",
+  "tokenizers==0.23.2",
+  "safetensors==0.8.0",
 ]
 dev = [
   "pytest>=8",

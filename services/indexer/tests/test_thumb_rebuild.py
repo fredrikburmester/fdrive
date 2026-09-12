@@ -226,6 +226,60 @@ def test_rebuild_thumbnails_reports_progress_via_callback(
     assert calls == [True]
 
 
+@pytest.mark.parametrize("failure", ["missing", "corrupt", "partial"])
+def test_rebuild_counts_generation_failures_and_continues(
+    failure: str, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fdrive_indexer import thumbs_io
+
+    cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    bad = tmp_path / "bad.png"
+    good = tmp_path / "good.png"
+    for path in (bad, good):
+        _write_png(path)
+        _upsert_media_file(ctx, path.name, ".png", path, path.stem)
+    if failure == "missing":
+        bad.unlink()
+    elif failure == "corrupt":
+        bad.write_bytes(b"not an image")
+    else:
+        save = thumbs_io._save_webp
+
+        def fail_large(image: object, dest: str, size: int) -> tuple[int, int]:
+            if "bad.1024.webp" in dest:
+                raise OSError("cannot write large thumbnail")
+            return save(image, dest, size)
+
+        monkeypatch.setattr(thumbs_io, "_save_webp", fail_large)
+    monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) == 2
+    assert job.snapshot()["processed"] == 2
+    assert job.snapshot()["errors"] == 1
+    assert job.snapshot()["outcome"] == "failed"
+    assert db.thumbnails_count(ctx.conn()) == (3 if failure == "partial" else 2)
+
+
+@pytest.mark.parametrize("empty", [True, False])
+def test_rebuild_counts_policy_skips_separately(
+    empty: bool, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    size = 0 if empty else cfg.thumb_max_bytes + 1
+    db.upsert_file(ctx.conn(), ctx.root_id, "skip.png", "skip.png", ".png", size, 0, "skip", None)
+    monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) == 1
+    activity = job.activity_snapshot("thumbnailRebuild", ["thumbnails"])
+    assert activity is not None
+    assert activity["processed"] == activity["total"] == activity["skipped"] == 1
+    assert activity["errors"] == 0
+    assert activity["state"] == "completed"
+    assert db.thumbnails_count(ctx.conn()) == 0
+
+
 def test_rebuild_stops_admitting_files_when_thumbnails_are_disabled(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
