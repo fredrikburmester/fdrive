@@ -109,6 +109,20 @@ describe("testkit containers", () => {
     expect(response.status).toBe(200);
   });
 
+  it("sftpgo serves the same users over its WebDAV binding", async () => {
+    const anonymous = await fetch(`${sftpgo.webdavUrl}/`, { method: "OPTIONS" });
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.headers.get("www-authenticate")).toMatch(/^Basic/);
+    const alice = seedUser("alice");
+    const credentials = Buffer.from(`${alice.username}:${alice.password}`).toString("base64");
+    const listing = await fetch(`${sftpgo.webdavUrl}/`, {
+      method: "PROPFIND",
+      headers: { Authorization: `Basic ${credentials}`, Depth: "1" },
+    });
+    expect(listing.status).toBe(207);
+    expect(await listing.text()).toContain("photo.jpg");
+  });
+
   it("postgres container accepts TCP connections", async () => {
     const url = new URL(postgres.connectionString);
     await assertTcpReachable(url.hostname, Number(url.port));

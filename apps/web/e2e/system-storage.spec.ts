@@ -79,7 +79,10 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
   try {
     await page.goto("/system/storage");
     await dismissActivityPanel(page);
-    await expect(cards).toHaveCount(1);
+    // Other specs may leave a disabled WebDAV row behind (a login binds it,
+    // so it cannot be removed); count relative to what is already there.
+    await expect(cards.first()).toBeVisible();
+    const initial = await cards.count();
 
     await page.getByRole("button", { name: "Add provider" }).click();
     const dialog = page.getByRole("dialog");
@@ -90,7 +93,7 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     await dialog.getByLabel("Address").fill(address);
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
     await expect(dialog).toBeHidden();
-    await expect(cards).toHaveCount(2);
+    await expect(cards).toHaveCount(initial + 1);
 
     // The row's own probe, against the freshly stored address.
     const second = cards.filter({ hasText: "Second" });
@@ -118,7 +121,7 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     // No login uses this provider, so it can be removed after confirming.
     await renamed.getByRole("button", { name: "Remove Second renamed" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
-    await expect(cards).toHaveCount(1);
+    await expect(cards).toHaveCount(initial);
     await expect(page.getByText("Second")).toHaveCount(0);
   } finally {
     await removeSpareProviders(page);
