@@ -315,7 +315,7 @@ def test_start_rebuild_not_configured_reports_zero_total_without_thread_work(
     def boom(*a: object, **k: object) -> object:
         raise AssertionError("must not count or embed when unconfigured")
 
-    monkeypatch.setattr(image_embed_rebuild, "count_image_embed_candidates", boom)
+    monkeypatch.setattr(image_embed_rebuild.db, "media_files", boom)
     from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
 
     job = ThumbnailRebuildJob()
@@ -369,7 +369,7 @@ def test_start_rebuild_discovery_failure_releases_job(
     def boom(*a: object, **k: object) -> int:
         raise RuntimeError("cannot count")
 
-    monkeypatch.setattr(image_embed_rebuild, "count_image_embed_candidates", boom)
+    monkeypatch.setattr(image_embed_rebuild.db, "media_files", boom)
     from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
 
     job = ThumbnailRebuildJob()
@@ -388,7 +388,7 @@ def test_start_rebuild_thread_start_failure_releases_job(
     def boom(*a: object, **k: object) -> None:
         raise RuntimeError("cannot start thread")
 
-    monkeypatch.setattr(image_embed_rebuild, "count_image_embed_candidates", lambda *a: 0)
+    monkeypatch.setattr(image_embed_rebuild.db, "media_files", lambda *a: [])
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", boom)
     from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
 
@@ -397,3 +397,24 @@ def test_start_rebuild_thread_start_failure_releases_job(
         image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False)
     assert not job.snapshot()["running"]
     assert job.snapshot()["errors"] == 1
+
+
+def test_rebuild_counts_already_embedded_candidates_as_resolved(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
+    monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
+    cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    _upsert_image_file(ctx, "a.png", "same-content")
+    _upsert_image_file(ctx, "copy.png", "same-content")
+    db.upsert_image_embedding(ctx.conn(), "same-content", "model-a", [0.1] * 1024)
+    monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
+    def forbidden(*args):
+        raise AssertionError("Already embedded content must not be sent again")
+    monkeypatch.setattr(image_embed_rebuild, "embed_images", forbidden)
+    job = ThumbnailRebuildJob()
+    assert image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False) == 2
+    activity = job.activity_snapshot("imageRebuild", ["imageSearch"])
+    assert activity["processed"] == activity["total"] == activity["skipped"] == 2
+    assert activity["state"] == "completed"

@@ -130,6 +130,7 @@ export const ROUTES = {
     providersTest: "/api/v1/admin/providers/test",
   },
   system: {
+    activity: "/api/v1/system/activity",
     features: "/api/v1/system/features",
     /** GET/PUT, admin only: the address everyone opens fdrive at -> `PublicUrlSettings`. */
     publicUrl: "/api/v1/system/public-url",
