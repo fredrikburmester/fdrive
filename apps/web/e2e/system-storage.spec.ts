@@ -86,6 +86,9 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
 
     await page.getByRole("button", { name: "Add provider" }).click();
     const dialog = page.getByRole("dialog");
+    // The closed Type trigger shows the type's label, not its raw value.
+    await expect(dialog.getByLabel("Type")).toHaveText(/SFTPGo/);
+    await expect(dialog.getByLabel("Type")).not.toContainText("sftpgo");
     await dialog.getByLabel("Name").fill("Second");
     await dialog.getByLabel("Address").fill(address);
     await dialog.getByRole("button", { name: "Add", exact: true }).click();

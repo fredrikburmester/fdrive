@@ -1,6 +1,6 @@
 "use client";
 
-import type { AdminProvider, AdminProviderType } from "@fdrive/contracts";
+import { type AdminProvider, type AdminProviderType, ApiClientError } from "@fdrive/contracts";
 import { Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { ProviderIcon } from "@/components/identity/provider-icon";
@@ -166,7 +166,7 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
  * still has any, so those controls are locked here with the reason.
  */
 export function StoragePage() {
-  const { data, isLoading, dataUpdatedAt } = useAdminProviders();
+  const { data, isLoading, isError, error, dataUpdatedAt } = useAdminProviders();
   const remove = useAdminDeleteProvider();
   const update = useAdminUpdateProvider();
   const [dialog, setDialog] = useState<{ readonly provider: AdminProvider | null } | null>(null);
@@ -174,6 +174,10 @@ export function StoragePage() {
   const providers = data?.providers ?? [];
   const types = data?.types ?? [];
   const enabledCount = providers.filter((provider) => provider.enabled).length;
+  // The API answers 403 for a non-administrator's session. That is a
+  // refusal, not an installation without servers, so it must never fall
+  // through to the empty state below.
+  const forbidden = error instanceof ApiClientError && error.kind === "forbidden";
 
   function confirm() {
     if (confirmation === null) {
@@ -210,7 +214,17 @@ export function StoragePage() {
           {describeApiError(remove.error)}
         </p>
       ) : null}
-      {!isLoading && providers.length === 0 ? (
+      {forbidden ? (
+        <SystemSection
+          title="Administrators only"
+          description="Storage servers can only be viewed and managed by an administrator."
+        />
+      ) : isError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {describeApiError(error)}
+        </p>
+      ) : null}
+      {data !== undefined && providers.length === 0 ? (
         <SystemSection
           title="No storage servers"
           description="Add a server so people have somewhere to sign in to."

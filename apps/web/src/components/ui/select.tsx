@@ -5,6 +5,12 @@ import { cn } from "cn";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import type * as React from "react";
 
+/**
+ * Base UI's `Select.Value` renders the raw `value` unless the root is given
+ * `items` (`[{ value, label }]`) or the value receives explicit children.
+ * Pass `items` whenever an option's label differs from its value, or the
+ * closed trigger shows the id instead of the label.
+ */
 const Select = SelectPrimitive.Root;
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {

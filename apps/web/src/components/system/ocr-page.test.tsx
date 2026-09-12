@@ -150,6 +150,11 @@ describe("OcrPage", () => {
     const view = render(<OcrPage />);
     openSettings();
     const langs = await screen.findByLabelText("Languages");
+    // The closed Run hour trigger shows the formatted hour, not the raw value.
+    expect(
+      screen.getByRole("combobox", { name: "Run hour" }).querySelector('[data-slot="select-value"]')
+        ?.textContent,
+    ).toBe("03:00");
     fireEvent.change(langs, { target: { value: "deu" } });
 
     useSystemOcrMock.mockReturnValue({
