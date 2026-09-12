@@ -11,12 +11,61 @@ not current instructions.
   login, Read/Organize/Full mode and allowed folders. Create a replacement token for the new
   permissions; existing tokens retain legacy access. [MCP documentation](../MCP.md) covers
   tools, migration and limits; [delivery evidence](STATUS-history.md#2026-09-12-mcp-access-and-file-management).
-- Application, integration, affected browser, indexer and workflow gates pass.
+- Application, affected browser, indexer and workflow checks pass. Integration tests all pass
+  across the full run and a composition rerun after a disposable database failed during setup.
   Real SFTPGo/WebDAV operations and the web-origin MCP connection are verified;
   the token form was inspected visually. No deployment performed.
 - Reads/uploads/edits have a 4 MiB cap. SHA-256 guards MCP edits within one API process;
   external clients can still race the provider write. No permanent deletion or public sharing.
 - Unrelated System activity planning and `.playwright-mcp/` artifacts are preserved.
+
+## Findings repair: ready for PR review
+
+- Branch `codex/findings-20260912`, isolated from the original checkout's MCP WIP.
+- Addressed 46 supplied findings covering downloads, archives, providers, UI state and workers.
+  Three MCP WIP findings are deferred; unrestricted legacy-token compatibility is unchanged.
+- Application, integration, workflow, 32 affected browser tests and all four Python service gates pass.
+  Live Next dev inspection confirms keyboard selection and draft recovery/save.
+- Complete dispositions, evidence and remaining provider limits:
+  [FINDINGS-2026-09-12.md](FINDINGS-2026-09-12.md). Next: review and merge the PR.
+
+## Preflight allowlist for processing worker resource keys: complete on main
+
+- A beta tester reported on 2026-09-12 that `deploy/preflight.sh` rejects every resource key
+  `compose.yaml` interpolates since the resource-cap commit (1fb84a2): the six `FDRIVE_*_CPUS`
+  and `FDRIVE_*_MEMORY` pairs, `FDRIVE_EMBED_THREADS`, `FDRIVE_IMAGE_EMBED_THREADS` and
+  `FDRIVE_TIKA_JAVA_OPTS`, 15 keys in all, so `update.sh` refuses a `.env` that follows
+  REFERENCE.md. Cause: the allowlist is generated from `DEPLOY_EXTRA_KEYS`, and that commit
+  documented the keys in REFERENCE.md without adding them to the table.
+- Fix: the 15 keys are `DEPLOY_EXTRA_KEYS` entries and `pnpm env:example` regenerated the
+  allowlist; the other generated files are unchanged. Two new tests close the gap: preflight
+  accepts a `.env` setting all 15, and every `${FDRIVE_*}` reference in `compose.yaml` and the
+  production overlays must be a known key, which is the check that was missing.
+- Follow-up: `.env.example` is the quick-start template and lists only the secrets by design,
+  so the keys are not added there; its header pointer now also names REFERENCE.md's processing
+  worker resource limits, which is the only cue an operator reading the template alone gets.
+- Evidence: `pnpm test:deploy:coverage` 60/60 at 100% coverage, `tsc -p tools/deploy`,
+  `biome check tools/deploy/`. Dropping one key from the allowlist or the table makes the new
+  tests fail.
+
+## GitHub Actions budget: scaled down (2026-09-12)
+
+- **Evidence**: private repository on the free plan (2000 minutes/month). The 30 days to
+  2026-09-12 billed ~2530 minutes (CI 2282, Performance 217, Office 34) and runs now fail
+  at start with the spending-limit message. A CI run cost ~30 minutes over seven jobs
+  (e2e 664 min/month, check 582, indexer 338, integration 325); 60 % of CI minutes were
+  push-to-main runs duplicating the PR run, and rapid pushes stacked without cancelling.
+- **Change**: `CI` runs only `application` on pull requests (docs/agent-config paths
+  ignored, superseded runs cancelled, ~8 min). New `Python services` runs indexer/ocr only
+  when `services/**` or the Python helpers change. New `CI (full)` holds the previous seven
+  jobs, gated on the `ci:full` PR label or `workflow_dispatch`. `Performance budgets` and
+  `Real Office editors` are `workflow_dispatch` only (both were already disabled by hand;
+  re-enable them after merge so dispatch works). No workflow runs on push to `main`.
+  Timeouts trimmed to ~2x the observed maxima; failure artifacts kept 7 days; the
+  always-on coverage artifact upload was dropped (nothing consumed it).
+- **Expected spend**: ~10 PR-runs-a-week × 8 min ≈ 350 min/month plus opt-in full runs.
+- **Trade-off**: a direct commit to `main` gets no automatic check; run
+  `gh workflow run CI --ref main` (or `"CI (full)"`) when one is wanted.
 
 ## WebDAV storage provider: complete on PR #5, awaiting merge
 

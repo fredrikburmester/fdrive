@@ -52,6 +52,21 @@ stages are implemented; the completed acceptance plan was removed.
   processes or external clients. No permanent deletion/public sharing. External hosted-client
   connectivity and production deployment were not tested; the local HTTP/SDK/browser paths were.
 - Unrelated System activity planning and `.playwright-mcp/` remained untouched.
+- PR preparation on `codex/mcp-access-management` integrates `main` at `08cc98c`. Conflict
+  resolution retains both sets of token/indexer tests and handoff sections; the new extraction
+  client also adopts main's cancellation of HTTP error bodies.
+- After integration, lint/typecheck and every application coverage suite pass. Full coverage
+  ran with `turbo run test:coverage --concurrency=1 -- --maxWorkers=2`, followed by all Office,
+  performance and deployment suites, retaining thresholds (`.fdrive-workflow/logs/step.tleIzW`).
+  Standard runs hit search-panel/Office-action timing failures under a load average near 35;
+  both suites pass with reduced concurrency. No test or threshold was relaxed.
+- Integration: four package suites and 37 API tests pass in `.fdrive-workflow/logs/step.EVuROm`;
+  composition's three tests did not run because its disposable database stopped during setup.
+  All three pass on the isolated rerun (`.fdrive-workflow/logs/step.6R6nBO`). The full helper run
+  remains recorded as failed; the suites are verified across these two runs.
+- Post-integration browser: 2 account tests pass (`.fdrive-workflow/logs/step.4nA8f5`). Indexer:
+  551 tests, 95.22% coverage, Ruff and mypy pass (`.fdrive-workflow/logs/step.p1mcKn`). Workflow:
+  all six regression scripts, syntax, lint and diff checks pass. No deployment performed.
 
 ## 2026-09-11 WebDAV storage provider, slices 1–4 (PR #5)
 

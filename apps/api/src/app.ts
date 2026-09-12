@@ -1,4 +1,5 @@
 import { AboutResponse, type ApiError, HealthResponse, statusForKind } from "@fdrive/contracts";
+import { isCoreError } from "@fdrive/core";
 import { Hono } from "hono";
 import { requestId as requestIdMiddleware } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
@@ -236,6 +237,10 @@ export function createApp(deps: AppDeps): AppHono {
 
   app.onError((err, c) => {
     const requestId = c.get("requestId");
+
+    if (isCoreError(err) && (err.kind === "invalid_path" || err.kind === "invalid_argument")) {
+      return c.json(toApiError("bad_request", err.message, requestId), 400);
+    }
 
     if (err instanceof ApiHttpError) {
       const body = toApiError(err.kind, err.message, requestId, err.details);

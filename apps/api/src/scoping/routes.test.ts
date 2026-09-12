@@ -1,5 +1,6 @@
 import type { IndexerDirectoryResponse } from "@fdrive/contracts";
 import { MeResponse } from "@fdrive/contracts";
+import { IdentityLinksError } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
@@ -613,4 +614,42 @@ describe("PUT /api/v1/account/identities/:id/scope", () => {
     );
     expect(failedScope.status).toBe(500);
   });
+});
+
+it("returns 404 when scope persistence detects that ownership changed", async () => {
+  const h = harness({
+    adminUsernames: ["alice"],
+    resolverOverrides: {
+      setOverrides: async () => {
+        throw new IdentityLinksError("forbidden");
+      },
+    },
+  });
+  const alice = await h.login();
+  const response = await h.call(`/api/v1/account/identities/${alice.me.activeIdentityId}/scope`, {
+    cookie: alice.cookie,
+    method: "PUT",
+    body: { scopes: [] },
+  });
+  expect(response.status).toBe(404);
+});
+
+it("rejects malformed JSON in scope and mount mapping writes", async () => {
+  const h = harness({ adminUsernames: ["alice"] });
+  const alice = await h.login();
+  for (const path of [
+    `/api/v1/account/identities/${alice.me.activeIdentityId}/scope`,
+    "/api/v1/system/mount-mappings",
+  ]) {
+    const response = await h.app.request(path, {
+      method: "PUT",
+      body: "{",
+      headers: {
+        cookie: alice.cookie,
+        "x-requested-with": "fdrive",
+        "content-type": "application/json",
+      },
+    });
+    expect(response.status).toBe(400);
+  }
 });

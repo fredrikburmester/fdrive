@@ -83,7 +83,10 @@ def extract_image(abs_path: str, langs: str, normalize: Normalizer) -> tuple[str
 def extract_plain(abs_path: str, cap: int, normalize: Normalizer) -> tuple[str | None, str]:
     with open(abs_path, "rb") as fh:
         raw = fh.read(cap * 2)
-    for enc in ("utf-8", "utf-16", "cp1252", "latin-1"):
+    encodings: tuple[str, ...] = ("utf-8", "cp1252", "latin-1")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings = ("utf-16", *encodings)
+    for enc in encodings:
         try:
             text = raw.decode(enc)
             break

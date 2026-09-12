@@ -3,11 +3,13 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { createGunzip, createZstdDecompress } from "node:zlib";
 import {
   baseName,
   detectArchiveKind,
-  joinPath,
+  isStorageError,
+  StorageError,
   type StorageProvider,
   safeEntryPath,
   stripArchiveExtension,
@@ -109,6 +111,23 @@ function capStreamBytes(source: Readable, maxBytes: number): Readable {
   return capped;
 }
 
+/** Preserve existing files for every archive format, even outside the route wrapper. */
+async function uploadNewEntry(
+  storage: StorageProvider,
+  target: string,
+  body: ReadableStream<Uint8Array>,
+  opts: { mkdirParents: true; signal: AbortSignal; contentLength?: number },
+): Promise<void> {
+  try {
+    await storage.stat(target);
+  } catch (error) {
+    if (!isStorageError(error) || error.kind !== "not_found") throw error;
+    await storage.upload(target, body, { ...opts, overwrite: false });
+    return;
+  }
+  throw new StorageError("conflict", `already exists: ${target}`);
+}
+
 /**
  * Caps one upload while sharing the expanded-byte budget across all archive entries.
  * Closing either side closes the other, so a rejected upload or limit error cannot
@@ -136,7 +155,7 @@ async function uploadCappedEntry(
   entryStream.pipe(capped);
 
   try {
-    await storage.upload(target, webStreamFromNodeReadable(capped), opts);
+    await uploadNewEntry(storage, target, webStreamFromNodeReadable(capped), opts);
   } catch (error) {
     entryStream.destroy();
     capped.destroy();
@@ -175,7 +194,12 @@ function openZipFile(path: string): Promise<yauzl.ZipFile> {
 
 /** The entry's name, decoded from `fileNameRaw` rather than `fileName` (see `openZipFile`). */
 function rawEntryName(entry: yauzl.Entry): string {
-  return entry.fileNameRaw.toString("utf8");
+  return yauzl.getFileNameLowLevel(
+    entry.generalPurposeBitFlag,
+    entry.fileNameRaw,
+    entry.extraFields,
+    true,
+  );
 }
 
 function openZipEntryStream(zipfile: yauzl.ZipFile, entry: yauzl.Entry): Promise<Readable> {
@@ -276,16 +300,7 @@ async function extractZip(
     enforceByteCap(nodeStream, maxBytes, (bytes) => report({ bytes }));
 
     const outStream = createWriteStream(spoolPath);
-    await new Promise<void>((resolve, reject) => {
-      // `.pipe()` alone does not forward a source error to its
-      // destination, so without this explicit listener a byte-cap
-      // destroy() on `nodeStream` would leave `outStream` (and this
-      // promise) hanging forever instead of rejecting.
-      nodeStream.once("error", reject);
-      outStream.once("error", reject);
-      outStream.once("finish", resolve);
-      nodeStream.pipe(outStream);
-    });
+    await pipeline(nodeStream, outStream, { signal });
 
     const zipfile = await openZipFile(spoolPath);
     try {
@@ -333,7 +348,7 @@ async function handleTarEntry(
   };
   limits.noteDeclaredFileSize(header.size ?? 0);
   try {
-    await storage.upload(target, webStreamFromNodeReadable(entryStream), uploadOpts);
+    await uploadNewEntry(storage, target, webStreamFromNodeReadable(entryStream), uploadOpts);
   } catch (error) {
     entryStream.destroy();
     throw error;
@@ -418,7 +433,7 @@ async function extractTar(
             limits,
           ).then(
             () => next(),
-            (error: unknown) => next(error),
+            (error: unknown) => fail(error),
           );
         },
       );
@@ -439,6 +454,10 @@ async function extractPlainGzip(
   maxBytes: number,
   limits: ExtractionLimits,
 ): Promise<EntryOutcome> {
+  const targetName = stripArchiveExtension(baseName(archivePath));
+  const target = safeEntryPath(destination, targetName);
+  if (target === null) return { written: 0, skipped: [targetName] };
+
   const download = await storage.download(archivePath, { signal });
   const nodeStream = nodeReadableFromWeb(download.body);
   enforceByteCap(nodeStream, maxBytes, (bytes) => report({ bytes }));
@@ -449,8 +468,6 @@ async function extractPlainGzip(
   // the upload reading from it below) waiting forever instead of failing.
   nodeStream.once("error", (err) => gunzip.destroy(err));
   const outputStream = nodeStream.pipe(gunzip);
-  const targetName = stripArchiveExtension(baseName(archivePath));
-  const target = joinPath(destination, targetName);
 
   limits.noteEntry();
   try {

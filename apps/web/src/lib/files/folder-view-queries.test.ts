@@ -160,3 +160,21 @@ it("reports reset errors and refuses reset from an old login", async () => {
   });
   expect(mocks.reset).toHaveBeenCalledOnce();
 });
+
+it("allows saving another folder while the first folder is still saving", async () => {
+  const first = Promise.withResolvers<void>();
+  mocks.set.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ok: true });
+  const { result, rerender } = renderHook(({ path }) => useFolderView(path, "alice"), {
+    wrapper,
+    initialProps: { path: "/first" },
+  });
+  await waitFor(() => expect(result.current.disabled).toBe(false));
+  act(() => result.current.setMode("grid"));
+  await waitFor(() => expect(mocks.set).toHaveBeenCalledTimes(1));
+  rerender({ path: "/second" });
+  await waitFor(() => expect(result.current.disabled).toBe(false));
+  act(() => result.current.setMode("tree"));
+  await waitFor(() => expect(mocks.set).toHaveBeenCalledTimes(2));
+  expect(mocks.set).toHaveBeenLastCalledWith({ path: "/second", mode: "tree" });
+  await act(async () => first.resolve());
+});

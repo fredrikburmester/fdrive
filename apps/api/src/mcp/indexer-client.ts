@@ -45,7 +45,10 @@ export function createIndexerExtractClient(
             signal: AbortSignal.timeout(30_000),
           },
         );
-        if (!response.ok) return null;
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          return null;
+        }
         const body: unknown = await response.json();
         if (!isExtractResultShaped(body) || typeof body.status !== "string") return null;
         return { text: typeof body.text === "string" ? body.text : "", status: body.status };
@@ -66,6 +69,7 @@ export function createIndexerExtractClient(
       }
 
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return null;
       }
 

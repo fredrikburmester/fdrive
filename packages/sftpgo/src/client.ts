@@ -55,7 +55,11 @@ function authHeaders(ctx: ClientContext, authorization: string | null): Headers 
 }
 
 async function readJson<T>(response: Response): Promise<T> {
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new SftpgoError("SFTPGo returned invalid JSON", "server", response.status, null);
+  }
 }
 
 async function performDownload(

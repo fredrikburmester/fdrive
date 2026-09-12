@@ -1,4 +1,4 @@
-import { toWebdavError, WebdavError } from "./errors.js";
+import { mapStatusToKind, toWebdavError, WebdavError } from "./errors.js";
 import {
   basicAuthHeader,
   buildUrl,
@@ -95,7 +95,7 @@ async function propfind(
   const headers = authHeaders(ctx, credential);
   headers.set("Depth", depth);
   headers.set("Content-Type", "application/xml; charset=utf-8");
-  const response = await fetchChecked(
+  const response = await safeFetch(
     ctx.fetchImpl,
     buildUrl(ctx.baseUrl, path, { collection }),
     {
@@ -104,8 +104,9 @@ async function propfind(
       body: PROPFIND_BODY,
       signal: combineSignals(undefined, ctx.timeoutMs),
     },
-    [207],
+    collection ? undefined : buildUrl(ctx.baseUrl, path, { collection: true }),
   );
+  if (response.status !== 207) throw await toWebdavError(response);
   const text = await readTextBounded(response, ctx.maxMultistatusBytes);
   if (text === null) {
     throw new WebdavError(
@@ -138,8 +139,13 @@ function selfOf(responses: readonly ResolvedResponse[], path: string): ResolvedR
       "no response matched the request href",
     );
   }
-  if (self.status === 404) {
-    throw new WebdavError("WebDAV resource not found", "not_found", 404, null);
+  if (self.status !== null && (self.status < 200 || self.status >= 300)) {
+    throw new WebdavError(
+      "WebDAV resource request failed",
+      mapStatusToKind(self.status),
+      self.status,
+      null,
+    );
   }
   return self;
 }
@@ -211,11 +217,12 @@ async function performCopyMove(
 ): Promise<void> {
   assertValidPath(path);
   assertValidPath(target);
+  const collection = (await statPath(ctx, credential, path)).kind === "dir";
   const headers = authHeaders(ctx, credential);
-  headers.set("Destination", buildUrl(ctx.baseUrl, target));
+  headers.set("Destination", buildUrl(ctx.baseUrl, target, { collection }));
   headers.set("Overwrite", options?.overwrite === false ? "F" : "T");
   if (method === "COPY") headers.set("Depth", "infinity");
-  const response = await fetchChecked(ctx.fetchImpl, buildUrl(ctx.baseUrl, path), {
+  const response = await fetchChecked(ctx.fetchImpl, buildUrl(ctx.baseUrl, path, { collection }), {
     method,
     headers,
     signal: combineSignals(undefined, ctx.timeoutMs),
@@ -307,11 +314,16 @@ function createUserApi(ctx: ClientContext, credential: WebdavCredential): Webdav
 
     async delete(path: string): Promise<void> {
       assertValidPath(path);
-      const response = await fetchChecked(ctx.fetchImpl, buildUrl(ctx.baseUrl, path), {
-        method: "DELETE",
-        headers: authHeaders(ctx, credential),
-        signal: timeoutSignal(),
-      });
+      const collection = (await statPath(ctx, credential, path)).kind === "dir";
+      const response = await fetchChecked(
+        ctx.fetchImpl,
+        buildUrl(ctx.baseUrl, path, { collection }),
+        {
+          method: "DELETE",
+          headers: authHeaders(ctx, credential),
+          signal: timeoutSignal(),
+        },
+      );
       await cancelBody(response);
     },
   };

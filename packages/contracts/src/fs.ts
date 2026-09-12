@@ -103,14 +103,15 @@ export const CopyRequest = z.object({
 export type CopyRequest = z.infer<typeof CopyRequest>;
 
 const FORBIDDEN_NAME_CHARS = /[/\0]/;
+const nameEncoder = new TextEncoder();
 
 /**
  * True when `name` is safe to use as a single path segment: non-empty, at
- * most 255 characters, contains neither `/` nor a NUL byte, and is not `.`
+ * most 255 UTF-8 bytes, contains neither `/` nor a NUL byte, and is not `.`
  * or `..`.
  */
 export function isValidEntryName(name: string): boolean {
-  if (name.length < 1 || name.length > 255) {
+  if (name.length < 1 || nameEncoder.encode(name).length > 255) {
     return false;
   }
   if (FORBIDDEN_NAME_CHARS.test(name)) {

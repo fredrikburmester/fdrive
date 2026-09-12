@@ -121,3 +121,12 @@ describe("probeConnection", () => {
     );
   });
 });
+
+it.each(["http://dav.test/?query=x", "http://dav.test/#fragment"])(
+  "rejects URL components that requests would discard: %s",
+  async (url) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    expect((await probeConnection(url, { fetch })).ok).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);

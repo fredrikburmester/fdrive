@@ -10,6 +10,7 @@
 export interface RawZipEntry {
   readonly name: string;
   readonly content: Uint8Array;
+  readonly nameBytes?: Uint8Array;
 }
 
 const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
@@ -48,14 +49,14 @@ export function buildRawZip(entries: readonly RawZipEntry[]): Uint8Array {
   let offset = 0;
 
   for (const entry of entries) {
-    const nameBytes = encoder.encode(entry.name);
+    const nameBytes = entry.nameBytes ?? encoder.encode(entry.name);
     const crc = crc32(entry.content);
     const size = entry.content.length;
 
     const localHeader = new DataView(new ArrayBuffer(30));
     localHeader.setUint32(0, LOCAL_FILE_HEADER_SIGNATURE, true);
     localHeader.setUint16(4, VERSION, true);
-    localHeader.setUint16(6, 0, true);
+    localHeader.setUint16(6, entry.nameBytes === undefined ? 0x800 : 0, true);
     localHeader.setUint16(8, 0, true);
     localHeader.setUint16(10, 0, true);
     localHeader.setUint16(12, 0, true);
@@ -71,7 +72,7 @@ export function buildRawZip(entries: readonly RawZipEntry[]): Uint8Array {
     centralHeader.setUint32(0, CENTRAL_DIRECTORY_SIGNATURE, true);
     centralHeader.setUint16(4, VERSION, true);
     centralHeader.setUint16(6, VERSION, true);
-    centralHeader.setUint16(8, 0, true);
+    centralHeader.setUint16(8, entry.nameBytes === undefined ? 0x800 : 0, true);
     centralHeader.setUint16(10, 0, true);
     centralHeader.setUint16(12, 0, true);
     centralHeader.setUint16(14, 0, true);

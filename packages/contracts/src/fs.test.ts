@@ -422,3 +422,12 @@ describe("ArchiveEntriesResponse", () => {
     expect(ArchiveEntriesResponse.safeParse({ format: "zip", entries: [] }).success).toBe(false);
   });
 });
+
+it("validates names by UTF-8 bytes", () => {
+  const accepted = `${"é".repeat(127)}a`;
+  const rejected = "é".repeat(128);
+  expect(isValidEntryName(accepted)).toBe(true);
+  expect(RenameRequest.safeParse({ path: "/old", newName: accepted }).success).toBe(true);
+  expect(isValidEntryName(rejected)).toBe(false);
+  expect(RenameRequest.safeParse({ path: "/old", newName: rejected }).success).toBe(false);
+});

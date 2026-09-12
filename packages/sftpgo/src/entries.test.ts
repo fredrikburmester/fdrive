@@ -50,3 +50,7 @@ describe("toEntry", () => {
     expect(entry.kind).toBe("dir");
   });
 });
+
+it("does not expose Go ModeIrregular entries as regular files", () => {
+  expect(classifyKind((1 << 19) | 0o644)).toBe("other");
+});

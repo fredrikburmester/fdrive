@@ -361,6 +361,7 @@ async function handleDownload(c: FsContext): Promise<Response> {
     "Accept-Ranges": "bytes",
     "Cache-Control": "private, no-store",
     "Content-Disposition": disposition,
+    "Content-Security-Policy": "sandbox",
   };
   if (result.contentLength !== null) {
     headers["Content-Length"] = String(result.contentLength);
@@ -546,34 +547,37 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(DeleteRequest, c, jsonMaxBytes);
     const removed: string[] = [];
-    for (const item of body.items) {
-      const path = normalizeOrThrow(item.path);
-      try {
-        if (item.kind === "dir") {
-          await principal.storage.deleteDir(path);
-        } else {
-          await principal.storage.deleteFile(path);
+    try {
+      for (const item of body.items) {
+        const path = normalizeOrThrow(item.path);
+        try {
+          if (item.kind === "dir") {
+            await principal.storage.deleteDir(path);
+          } else {
+            await principal.storage.deleteFile(path);
+          }
+        } catch (error) {
+          if (isStorageError(error)) {
+            const mapped = toApiHttpError(error);
+            throw new ApiHttpError(mapped.kind, mapped.message, {
+              ...(mapped.details ?? {}),
+              failedPath: path,
+            });
+          }
+          throw error;
         }
-      } catch (error) {
-        if (isStorageError(error)) {
-          const mapped = toApiHttpError(error);
-          throw new ApiHttpError(mapped.kind, mapped.message, {
-            ...(mapped.details ?? {}),
-            failedPath: path,
-          });
+        removed.push(path);
+        if (deps.metadata !== undefined) {
+          if (principal.storage.trash !== undefined) {
+            await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir");
+          } else {
+            await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
+          }
         }
-        throw error;
       }
-      if (deps.metadata !== undefined) {
-        if (principal.storage.trash !== undefined) {
-          await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir");
-        } else {
-          await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
-        }
-      }
-      removed.push(path);
+    } finally {
+      if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);
     }
-    publishFsEvent(deps, principal, "delete", removed);
     const body2: OkResponse = OkResponse.parse({ ok: true });
     return c.json(body2);
   });

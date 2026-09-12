@@ -28,10 +28,10 @@ templates. The extension points are those in [the provider guide](STORAGE-PROVID
 | `probe` | `OPTIONS` on the endpoint; ok when 2xx with a `DAV` header containing class `1`, or 401/403 carrying `WWW-Authenticate` | Servers commonly refuse anonymous `OPTIONS`; a challenge still proves a reachable HTTP endpoint. Reuse SFTPGo's URL checks: http(s) only, no userinfo, no metadata hosts, 5 s timeout, 1 KiB body bound. |
 | Config fields | none | Endpoint and label are row fields. Nothing else is needed for class 1 servers. |
 | Credential fields | `username` (text, required, 255) and `password` (password, required) | Confirmation forms already render `password`; `ctx.expectedUsername` fills `username` on link/unlink. |
-| Redirects | `redirect: "manual"`; any 3xx is an error (`upstream_unavailable`) | Never forward Basic credentials to a `Location` the server chose. Operators enter the final URL. |
+| Redirects | `redirect: "manual"`; only a stat PROPFIND 301/308 to the exact same URL plus `/` is retried | Other redirects fail as `upstream_unavailable`. The one retry uses a locally constructed same-origin collection URL; operators enter the final endpoint URL. |
 | Capabilities | `zip` false, `setModifiedAt` false, `atomicMove` true, `trash` true, `shares` false, `office` false, `index` false, `scopeMapping` false | Only `MOVE` is a native single operation. No standard mtime setter; `X-OC-Mtime` is sent on upload as best effort but not advertised. |
 | Trash | `"move"` strategy | WebDAV has no recycle bin, so the API storage factory moves deleted files into the configured folder itself (`withMoveToTrash`) and the recycle-folder view lists, restores and purges them. See [Trash](TRASH.md). |
-| Real backend in CI | SFTPGo's WebDAV binding, exposed by `startSftpgo` as `webdavUrl` | No new image, already seeded users and files, one heavy container at a time. |
+| Real backend in CI | SFTPGo's WebDAV binding plus Apache `httpd:2.4` | Provider conformance and a real collection-redirect regression; credentials/data are test-only. |
 
 ## Protocol mapping
 

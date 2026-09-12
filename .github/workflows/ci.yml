@@ -1,39 +1,45 @@
+# Actions budget: this is a private repository on GitHub's free plan, which
+# includes 2000 hosted minutes a month. In the 30 days to 2026-09-12 the repo
+# billed ~2500 minutes and hit the spending limit: every run of the previous
+# single workflow cost ~30 minutes across seven jobs, 60 % of runs were
+# push-to-main duplicates of the pull request run for the same commit, and
+# rapid pushes stacked instead of cancelling. Keep that in mind before adding
+# triggers or jobs here.
+#
+# This workflow is the cheap default gate: lint, typecheck and unit coverage on
+# pull requests, roughly 8 billed minutes a run. Docs-only changes skip it and a
+# newer push cancels the previous run. Everything heavier is opt-in:
+#   - `Python services` runs only when services/indexer or services/ocr change;
+#   - `CI (full)` runs integration, browser, Python and image builds when a PR
+#     carries the `ci:full` label or when dispatched by hand;
+#   - `Performance budgets` and `Real Office editors` are manual only.
+# Nothing runs on push to main: run `gh workflow run CI --ref main` (or the
+# full suite) after a direct commit you want checked.
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - '.claude/**'
+      - '.codex/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  workflow:
-    name: Workflow helpers
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . workflow
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workflow-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
   check:
     name: Lint, typecheck, test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -43,13 +49,6 @@ jobs:
           cache: pnpm
       - run: bash tools/orchestration/setup-checkout.sh .
       - run: bash tools/orchestration/verify.sh . application
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage
-          path: |
-            **/coverage/lcov.info
-            **/coverage/coverage-summary.json
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -57,126 +56,4 @@ jobs:
           path: .fdrive-workflow/logs/**
           include-hidden-files: true
           if-no-files-found: warn
-
-  integration:
-    name: Integration tests
-    needs: check
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . integration
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-
-  indexer:
-    name: Indexer (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install indexer system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
-      - run: bash tools/orchestration/setup-python.sh . indexer
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python indexer
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: indexer-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-
-  ocr:
-    name: OCR (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: bash tools/orchestration/setup-python.sh . ocr
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python ocr
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ocr-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-
-  e2e:
-    name: End-to-end tests
-    needs: check
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: pnpm --filter @fdrive/web exec playwright install --with-deps chromium
-      - run: bash tools/orchestration/verify.sh . browser
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: apps/web/playwright-report
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-
-  # The images an operator actually builds. `check` type-checks the sources, but
-  # nothing else here runs `next build` or exercises the Dockerfiles' build
-  # context, so a break that only surfaces during the image build reached
-  # self-hosters as a failed `./update.sh` with no attribution to upstream.
-  images:
-    name: Deployment images
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the web image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/web/Dockerfile
-          build-args: API_INTERNAL_URL=http://api:3001
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build the api image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/api/Dockerfile
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          retention-days: 7

@@ -37,6 +37,12 @@ async function tagFileWithNewTag(page: Page, name: string, tagName: string): Pro
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
 
   await expect(dialog.getByText(tagName, { exact: true })).toBeVisible();
+  const tag = dialog.getByRole("option", { name: tagName, exact: true });
+  await expect(tag.getByRole("checkbox")).toBeChecked();
+  await tag.click();
+  await expect(tag.getByRole("checkbox")).not.toBeChecked();
+  await tag.click();
+  await expect(tag.getByRole("checkbox")).toBeChecked();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 }

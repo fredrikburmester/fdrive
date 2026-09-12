@@ -60,6 +60,8 @@ describe("keysToInvalidate", () => {
   it("invalidates the parent directory of every affected path, and the trash list", () => {
     expect(keysToInvalidate(fsEvent({ paths: ["/a/b.txt"] }))).toEqual([
       ["fs", "list", "/a"],
+      ["fs", "stat"],
+      ["fs", "folder-size"],
       ["trash", "list"],
       ["fs", "archiveEntries", "/a/b.txt"],
     ]);
@@ -70,6 +72,8 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(event)).toEqual([
       ["fs", "list", "/a"],
       ["fs", "list", "/c"],
+      ["fs", "stat"],
+      ["fs", "folder-size"],
       ["trash", "list"],
       ["fs", "archiveEntries", "/a/b.txt"],
       ["fs", "archiveEntries", "/c/d.txt"],
@@ -81,6 +85,8 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(moveEvent)).toEqual([
       ["fs", "list", "/a"],
       ["fs", "list", "/c"],
+      ["fs", "stat"],
+      ["fs", "folder-size"],
       ["favorites", "list"],
       ["recents", "list"],
       ["tags", "files"],
@@ -93,6 +99,8 @@ describe("keysToInvalidate", () => {
     const deleteEvent = fsEvent({ op: "delete", paths: ["/a/b.txt"] });
     expect(keysToInvalidate(deleteEvent)).toEqual([
       ["fs", "list", "/a"],
+      ["fs", "stat"],
+      ["fs", "folder-size"],
       ["favorites", "list"],
       ["recents", "list"],
       ["tags", "files"],
@@ -106,6 +114,8 @@ describe("keysToInvalidate", () => {
     const event = fsEvent({ paths: ["/a/b.txt", "/a/c.txt"] });
     expect(keysToInvalidate(event)).toEqual([
       ["fs", "list", "/a"],
+      ["fs", "stat"],
+      ["fs", "folder-size"],
       ["trash", "list"],
       ["fs", "archiveEntries", "/a/b.txt"],
       ["fs", "archiveEntries", "/a/c.txt"],
@@ -125,6 +135,8 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(event)).toEqual([
       ["fs", "list", "/a"],
       ["fs", "list", "/a/docs.zip"],
+      ["fs", "stat"],
+      ["fs", "folder-size"],
     ]);
   });
 });

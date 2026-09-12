@@ -921,6 +921,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const other = await seedAccount();
         const tag = await repos.tags.create(account.id, { name: "Work", color: null });
 
+        expect(await repos.tags.update(tag.id, account.id, {})).toEqual(tag);
+        expect(await repos.tags.update(tag.id, other.id, {})).toBeNull();
         expect(await repos.tags.update(tag.id, other.id, { name: "Stolen" })).toBeNull();
       });
 

@@ -205,6 +205,34 @@ describe("deploy/preflight.sh", () => {
     expect(result.code).toBe(0);
   });
 
+  it("accepts the processing worker thread and resource cap keys compose.yaml interpolates", () => {
+    // Regression: the resource-cap change taught compose.yaml these keys but
+    // left them out of DEPLOY_EXTRA_KEYS, so preflight called every one a typo.
+    const result = runPreflight(
+      [
+        "POSTGRES_PASSWORD=real",
+        "FDRIVE_MASTER_KEY=abc",
+        "FDRIVE_EMBED_THREADS=8",
+        "FDRIVE_IMAGE_EMBED_THREADS=8",
+        "FDRIVE_INDEXER_CPUS=2",
+        "FDRIVE_INDEXER_MEMORY=2g",
+        "FDRIVE_OCR_CPUS=1",
+        "FDRIVE_OCR_MEMORY=1g",
+        "FDRIVE_TIKA_CPUS=1",
+        "FDRIVE_TIKA_MEMORY=1g",
+        "FDRIVE_TIKA_JAVA_OPTS=-Xmx768m",
+        "FDRIVE_EMBED_CPUS=2",
+        "FDRIVE_EMBED_MEMORY=2g",
+        "FDRIVE_IMAGE_EMBED_CPUS=2",
+        "FDRIVE_IMAGE_EMBED_MEMORY=3g",
+        "FDRIVE_ONLYOFFICE_CPUS=2",
+        "FDRIVE_ONLYOFFICE_MEMORY=4g",
+      ].join("\n"),
+    );
+    expect(result.code).toBe(0);
+    expect(result.output).not.toContain("unknown key");
+  });
+
   it("reports every failure together (both change-me and an unknown key) before exiting", () => {
     const result = runPreflight(
       ["POSTGRES_PASSWORD=change-me", "FDRIVE_MASTER_KEY=abc", "FDRIVE_TRUSTD_PROXY_HOPS=1"].join(

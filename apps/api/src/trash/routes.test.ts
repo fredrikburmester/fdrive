@@ -763,3 +763,23 @@ describe("POST /trash/empty", () => {
     expect(res.status).toBe(404);
   });
 });
+
+it("publishes successful restores before a later item fails", async () => {
+  const { app, storage, events } = await buildHarness();
+  await storage.deleteFile("/hello.txt");
+  const list = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
+  const id = list.entries[0]?.id;
+  if (!id) throw new Error("expected trash entry");
+  const response = await app.request(
+    ROUTES.trash.restore,
+    requestedWith({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: [id, id] }),
+    }),
+  );
+  expect(response.status).toBe(404);
+  expect(events).toEqual([
+    expect.objectContaining({ type: "fs", op: "move", targetPaths: ["/hello.txt"] }),
+  ]);
+});

@@ -102,12 +102,13 @@ function withTokenFor(session: StorageSession): WithToken {
     }
     return value;
   };
-  return async (fn) => {
+  return async (fn, options) => {
     try {
       return await fn(await token());
     } catch (error) {
       if (error instanceof SftpgoError && error.kind === "unauthorized") {
         await session.invalidateToken();
+        if (options?.retry === false) throw error;
         return await fn(await token());
       }
       throw error;

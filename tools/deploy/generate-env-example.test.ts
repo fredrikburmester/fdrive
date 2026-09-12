@@ -94,6 +94,14 @@ describe("renderEnvExample", () => {
     expect(rendered).not.toContain("FDRIVE_PROFILES");
   });
 
+  it("points the quick-start reader at the resource limits it deliberately omits", () => {
+    // The CPU/memory caps and thread counts live only in REFERENCE.md; the
+    // template's header is the one cue an operator reading it alone gets.
+    const rendered = renderQuickstartEnvExample();
+    expect(rendered).not.toContain("FDRIVE_EMBED_CPUS");
+    expect(rendered).toContain("processing worker resource limits: REFERENCE.md");
+  });
+
   it("ends with a trailing newline", () => {
     expect(renderEnvExample().endsWith("\n")).toBe(true);
   });
@@ -265,6 +273,31 @@ describe("generated file diff", () => {
       renderKnownFdriveKeysBashArray(knownFdriveKeys()),
     );
     expect(committed).toBe(regenerated);
+  });
+});
+
+describe("compose interpolation", () => {
+  // deploy/.env feeds every compose file update.sh passes to docker compose,
+  // so a `${FDRIVE_*}` reference in one of them is a key an operator is meant
+  // to set there and preflight.sh must accept it. compose.dev.yaml is left
+  // out: tools/orchestration drives it, not deploy/.env.
+  const composeFiles = [
+    "compose.yaml",
+    "compose.arm64.yaml",
+    "compose.sftpgo.yaml",
+    "compose.office.collabora.yaml",
+  ];
+
+  it.each(composeFiles)("every FDRIVE_* key %s interpolates is a known preflight key", (file) => {
+    const source = readFileSync(join(deployDir, file), "utf-8");
+    const referenced = new Set(
+      [...source.matchAll(/\$\{(FDRIVE_[A-Z0-9_]+)/g)]
+        .map((match) => match[1])
+        .filter((key): key is string => key !== undefined),
+    );
+    const known = new Set(knownFdriveKeys());
+    const missing = [...referenced].filter((key) => !known.has(key)).sort();
+    expect(missing).toEqual([]);
   });
 });
 

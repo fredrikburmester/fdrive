@@ -257,3 +257,14 @@ it("rejects paths that cannot be represented by storage before creating a token"
     expect(response.status).toBe(400);
   }
 });
+
+it("rejects malformed token ids before persistence", async () => {
+  const { app, service } = await buildApp();
+  const revoke = vi.spyOn(service, "revoke");
+  const response = await app.request("/api/v1/account/tokens/not-a-uuid", {
+    method: "DELETE",
+    headers: { "x-requested-with": "fdrive" },
+  });
+  expect(response.status).toBe(400);
+  expect(revoke).not.toHaveBeenCalled();
+});

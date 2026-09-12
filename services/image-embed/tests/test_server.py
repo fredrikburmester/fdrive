@@ -230,3 +230,50 @@ def test_embed_text_413_over_the_length_limit() -> None:
     client = _client()
     resp = client.post("/embed/text", json={"inputs": ["x" * 513]})
     assert resp.status_code == 413
+
+
+def test_oversized_upload_is_rejected_before_read_and_closed(monkeypatch) -> None:
+    from starlette.datastructures import UploadFile
+
+    reads: list[int] = []
+    closed: list[bool] = []
+    original_read = UploadFile.read
+    original_close = UploadFile.close
+
+    async def read(self, size=-1):
+        reads.append(size)
+        return await original_read(self, size)
+
+    async def close(self):
+        closed.append(True)
+        await original_close(self)
+
+    monkeypatch.setattr(UploadFile, "read", read)
+    monkeypatch.setattr(UploadFile, "close", close)
+    response = _client().post("/embed/image", files=[_image_file("huge.png", b"x" * (server.MAX_IMAGE_BYTES + 1))])
+    assert response.status_code == 413
+    assert reads == []
+    assert closed
+
+
+def test_upload_reader_is_bounded_even_without_parser_size(monkeypatch) -> None:
+    from starlette.datastructures import UploadFile
+
+    original_init = UploadFile.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.size = None
+
+    monkeypatch.setattr(UploadFile, "__init__", init)
+    original_read = UploadFile.read
+    reads: list[int] = []
+
+    async def read(self, size=-1):
+        reads.append(size)
+        return await original_read(self, size)
+
+    monkeypatch.setattr(UploadFile, "read", read)
+    response = _client().post("/embed/image", files=[_image_file("unknown-size.png", b"x" * (server.MAX_IMAGE_BYTES + 1))])
+    assert response.status_code == 413
+    assert reads == [server.MAX_IMAGE_BYTES + 1]

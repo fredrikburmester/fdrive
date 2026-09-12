@@ -336,7 +336,7 @@ def file_content_key(conn: psycopg.Connection, root_id: int, path: str) -> str |
             (root_id, path),
         )
         row = cur.fetchone()
-        return str(row[0]) if row else None
+        return str(row[0]) if row and row[0] is not None else None
 
 
 def upsert_image_embedding(conn: psycopg.Connection, content_key: str, model: str, embedding: Any) -> None:
@@ -391,7 +391,7 @@ def media_files(conn: psycopg.Connection, root_id: int) -> list[tuple[str, str, 
             'SELECT path, ext, sha256, size FROM "idx"."files" WHERE root_id = %s AND deleted_at IS NULL',
             (root_id,),
         )
-        return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall()]
+        return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall() if r[2] is not None]
 
 
 def root_stats(conn: psycopg.Connection, root: str, root_id: int) -> RootStats:
