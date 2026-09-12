@@ -71,6 +71,9 @@ importers:
       '@fdrive/sftpgo':
         specifier: workspace:*
         version: link:../../packages/sftpgo
+      '@fdrive/webdav':
+        specifier: workspace:*
+        version: link:../../packages/webdav
       '@hono/node-server':
         specifier: ^1.19.5
         version: 1.19.17(hono@4.13.7)
@@ -422,6 +425,31 @@ importers:
       vite:
         specifier: ^8.2.2
         version: 8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)
+      vitest:
+        specifier: ^5.0.0
+        version: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
+
+  packages/webdav:
+    dependencies:
+      '@fdrive/core':
+        specifier: workspace:*
+        version: link:../core
+      fast-xml-parser:
+        specifier: 5.11.1
+        version: 5.11.1
+    devDependencies:
+      '@fdrive/config':
+        specifier: workspace:*
+        version: link:../config
+      '@fdrive/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+      '@vitest/coverage-v8':
+        specifier: ^5.0.0
+        version: 5.0.0(vitest@5.0.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       vitest:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))

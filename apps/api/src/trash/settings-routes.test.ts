@@ -31,7 +31,11 @@ function buildApp(isAdmin: boolean) {
     },
   };
   const identities = { get: async () => identity };
-  const service = createTrashSettingsService({ settings, identities });
+  const service = createTrashSettingsService({
+    settings,
+    identities,
+    strategyFor: async () => "native",
+  });
   const principal: Principal = {
     accountId: identity.accountId,
     identityId: identity.id,
@@ -57,7 +61,12 @@ describe("admin Trash settings routes", () => {
   it("returns defaults and updates the active provider with revision CAS", async () => {
     const app = buildApp(true);
     const initial = TrashSettings.parse(await (await app.request(ROUTES.system.trash)).json());
-    expect(initial).toMatchObject({ providerId: PROVIDER_ID, revision: 0, enabled: false });
+    expect(initial).toMatchObject({
+      providerId: PROVIDER_ID,
+      revision: 0,
+      enabled: false,
+      strategy: "native",
+    });
 
     const response = await app.request(ROUTES.system.trash, {
       method: "PUT",

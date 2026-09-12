@@ -3,7 +3,6 @@
 import type {
   ImageSearchHit,
   ImageSearchResponse,
-  MeResponse,
   SearchHit,
   SearchResponse,
 } from "@fdrive/contracts";

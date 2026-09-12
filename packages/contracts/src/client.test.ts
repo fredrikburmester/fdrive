@@ -79,7 +79,8 @@ describe("Trash settings client", () => {
       path: "/.trash",
       retentionHours: null,
       rulesConfirmed: false,
-    };
+      strategy: "native",
+    } as const;
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(settings));
     const client = createApiClient({ fetch: fetchMock });
 

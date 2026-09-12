@@ -4,9 +4,13 @@ Trash is the seventh optional choice in fdrive onboarding, after the six process
 features. It can also be changed in **System > General > Trash**. No environment
 variables, worker, local storage mount, or restart are required.
 
-fdrive uses SFTPGo's Event Manager recycle-bin rule. It does not create that rule or
-intercept filesystem operations outside SFTPGo. Deleting directly on the host disk
-bypasses this integration; overwriting a file does not retain its previous version.
+How deleted files reach the recycle folder depends on the storage provider. For SFTPGo,
+fdrive uses SFTPGo's Event Manager recycle-bin rule (sections 1–3 below). For WebDAV,
+fdrive moves deleted files into the folder itself; see
+[Providers where fdrive performs the move](#providers-where-fdrive-performs-the-move).
+Either way, fdrive does not intercept filesystem operations outside the provider. Deleting
+directly on the host disk bypasses this integration; overwriting a file does not retain its
+previous version.
 
 ## 1. Configure SFTPGo
 
@@ -67,6 +71,36 @@ for that provider; confirmation is not carried across connections.
 You may **Skip Trash** and enable it later in **System > General**. Disabling the
 integration hides fdrive's Trash controls; it does not remove existing items or
 change SFTPGo rules. A configured SFTPGo rule can still recycle subsequent deletions.
+
+## Providers where fdrive performs the move
+
+A WebDAV server has no recycle bin, so fdrive's API moves each deleted file or folder into
+the Trash folder on that server (`/.trash` by default, relative to each user's home) and
+lists, restores and purges it from there. Nothing is configured on the server:
+
+1. Sign in through the WebDAV login as an administrator and open **System > General >
+   Trash** (or the onboarding **Trash** step). The card says that fdrive moves deleted files
+   itself and shows no rule-confirmation checkbox.
+2. Turn on **Enable Trash**, keep or change the folder, optionally note a retention period,
+   and save. The folder is created on the first delete.
+3. Delete a disposable file with **Move to Trash**, open **Trash** and test **Restore**.
+
+Deleted items live under `<folder>/.fdrive-move-v1/…`, a layout that keeps long, Unicode and
+literal-percent names reversible; do not point a WebDAV row's Trash at a folder that an
+SFTPGo recycle rule also writes to. Deleting inside the Trash folder is permanent, which is
+how **Delete permanently** and **Empty Trash** work. Retention is informational here too:
+fdrive never removes old items on its own.
+
+Trash settings belong to the active login's storage row, so the administrator opens them
+with the WebDAV login active. That takes an account-wide administrator (the owner account
+from the setup claim); an environment administrator (`FDRIVE_ADMIN_USERS`) is one only
+while their SFTPGo login is active and cannot configure a WebDAV row's Trash. Where one home is
+served by both an SFTPGo login and a WebDAV login, give the WebDAV row its own folder (for
+example `/.trash-webdav`) so the two layouts never share a root, and add that folder to the
+SFTPGo rule's inverse path filter (`/.trash-webdav/**`); otherwise the rule recycles the
+WebDAV Trash's permanent deletes into `/.trash` instead of removing them. Each login hides
+only its own Trash folder from listings, so the SFTPGo rule's `/.trash` shows as an ordinary
+folder over WebDAV.
 
 ## Optional retention
 

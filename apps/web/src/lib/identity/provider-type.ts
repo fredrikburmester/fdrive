@@ -7,6 +7,7 @@ import type { ProviderType } from "@fdrive/contracts";
  */
 export const PROVIDER_TYPE_LABELS: Readonly<Record<ProviderType, string>> = {
   sftpgo: "SFTPGo",
+  webdav: "WebDAV",
 };
 
 /** `PROVIDER_TYPE_LABELS[type]`, falling back to the raw type for a value this build does not know. */
