@@ -97,6 +97,7 @@ def test_job_initial_snapshot() -> None:
         "started_at": None,
         "finished_at": None,
         "errors": 0,
+        "outcome": None,
     }
 
 
@@ -366,3 +367,24 @@ def test_start_rebuild_thread_uses_own_connection(postgres_dsn: str, monkeypatch
     waiter.join(timeout=10)
     assert done.is_set()
     assert job.snapshot()["processed"] == 1
+
+
+def test_rebuild_uses_one_candidate_inventory(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
+    cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    png = tmp_path / "a.png"
+    _write_png(png)
+    _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
+    original = db.media_files
+    reads = []
+    def inventory(conn, root_id):
+        reads.append(root_id)
+        assert len(reads) == 1, "Counting and execution must share the inventory"
+        return original(conn, root_id)
+    monkeypatch.setattr(db, "media_files", inventory)
+    job = thumb_rebuild.ThumbnailRebuildJob()
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) == 1
+    assert job.snapshot()["outcome"] == "completed"
+    assert job.snapshot()["processed"] == job.snapshot()["total"] == 1
+    assert db.thumbnails_count(ctx.conn()) == 2

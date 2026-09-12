@@ -59,6 +59,7 @@ const IndexerThumbnailRebuildRaw = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   errors: z.number().int(),
+  outcome: z.enum(["completed", "failed", "stopped"]).nullable().optional(),
 });
 
 const IndexerStatsRaw = z.object({
@@ -124,6 +125,7 @@ function toIndexerThumbnailRebuildJob(
     startedAt: raw.started_at,
     finishedAt: raw.finished_at,
     errors: raw.errors,
+    ...(raw.outcome === undefined ? {} : { outcome: raw.outcome }),
   };
 }
 

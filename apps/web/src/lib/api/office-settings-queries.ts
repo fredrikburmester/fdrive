@@ -16,6 +16,7 @@ export function useSystemOffice() {
 export function useUpdateOfficeSettings() {
   const client = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["office"], systemActivityBackground: true },
     mutationFn: (input: OfficeSettingsUpdateRequest) => apiClient.systemUpdateOffice(input),
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.system.office(), data);

@@ -12,6 +12,7 @@ import type {
   IndexerThumbnailsRebuildRequest,
   OcrSettingsUpdateRequest,
   SetupCompleteRequest,
+  SystemActivityId,
 } from "@fdrive/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
@@ -32,6 +33,7 @@ export function useSystemFeatures() {
 export function useUpdateFeatures() {
   const client = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["features"], systemActivityBackground: true },
     mutationFn: (input: FeaturesUpdateRequest) => apiClient.systemUpdateFeatures(input),
     onSuccess: (data) => {
       client.setQueryData(queryKeys.system.features(), data);
@@ -83,11 +85,17 @@ export function useAdminProviders() {
 }
 
 function useInvalidatingMutation<TInput, TOutput>(
+  section: SystemActivityId,
+  background: boolean,
   mutationFn: (input: TInput) => Promise<TOutput>,
   ...keys: readonly (readonly unknown[])[]
 ) {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: {
+      systemActivity: [section],
+      systemActivityBackground: background,
+    },
     mutationFn,
     onSuccess: () => {
       for (const key of keys) {
@@ -100,6 +108,8 @@ function useInvalidatingMutation<TInput, TOutput>(
 /** Adds a provider (the API stores it without probing) and refreshes the cached list. */
 export const useAdminCreateProvider = () =>
   useInvalidatingMutation(
+    "storage",
+    false,
     (input: AdminProviderCreateRequest) => apiClient.adminCreateProvider(input),
     queryKeys.admin.providers(),
   );
@@ -107,6 +117,8 @@ export const useAdminCreateProvider = () =>
 /** Updates one provider (label, address, configuration, enabled) and refreshes the cached list. */
 export const useAdminUpdateProvider = () =>
   useInvalidatingMutation(
+    "storage",
+    false,
     ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
       apiClient.adminUpdateProvider(id, patch),
     queryKeys.admin.providers(),
@@ -115,6 +127,8 @@ export const useAdminUpdateProvider = () =>
 /** Removes a provider and refreshes the cached list. Refused while logins still use it. */
 export const useAdminDeleteProvider = () =>
   useInvalidatingMutation(
+    "storage",
+    false,
     (id: string) => apiClient.adminDeleteProvider(id),
     queryKeys.admin.providers(),
   );
@@ -122,6 +136,7 @@ export const useAdminDeleteProvider = () =>
 /** Probes a saved provider (by id) or an unsaved candidate, without saving anything. */
 export function useAdminTestProvider() {
   return useMutation({
+    meta: { systemActivity: ["storage"], systemActivityBackground: false },
     mutationFn: (target: string | AdminProviderTestRequest) => apiClient.adminTestProvider(target),
   });
 }
@@ -138,6 +153,8 @@ export function useSystemIndexer() {
 /** Saves the indexer's settings and refreshes the `System > Indexer` cache. */
 export const useUpdateIndexerSettings = () =>
   useInvalidatingMutation(
+    "textSearch",
+    false,
     (settings: IndexerSettingsUpdateRequest) => apiClient.systemUpdateIndexerSettings(settings),
     queryKeys.system.indexer(),
   );
@@ -145,6 +162,8 @@ export const useUpdateIndexerSettings = () =>
 /** Marks a root (or one path within it) pending on the indexer. */
 export const useReindex = () =>
   useInvalidatingMutation(
+    "textSearch",
+    true,
     (req: IndexerReindexRequest) => apiClient.systemReindex(req),
     queryKeys.system.indexer(),
   );
@@ -154,6 +173,7 @@ export function useRebuildIndexerThumbnails() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { systemActivity: ["thumbnails"], systemActivityBackground: true },
     mutationKey: MAINTENANCE_KEY,
     mutationFn: (req?: IndexerThumbnailsRebuildRequest) =>
       apiClient.systemRebuildIndexerThumbnails(req),
@@ -177,6 +197,8 @@ export function useSystemSearch() {
 /** Triggers a full re-extraction and re-embed of every configured root. */
 export const useReembed = () =>
   useInvalidatingMutation(
+    "semanticSearch",
+    true,
     () => apiClient.systemReembed(),
     queryKeys.system.search(),
     queryKeys.system.indexer(),
@@ -194,6 +216,8 @@ export function useSystemOcr() {
 /** Saves the OCR service's settings and refreshes the `System > OCR` cache. */
 export const useUpdateOcrSettings = () =>
   useInvalidatingMutation(
+    "pdfOcr",
+    false,
     (settings: OcrSettingsUpdateRequest) => apiClient.systemUpdateOcrSettings(settings),
     queryKeys.system.ocr(),
   );
@@ -203,6 +227,7 @@ export function useRunOcr() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { systemActivity: ["pdfOcr"], systemActivityBackground: true },
     mutationFn: () => apiClient.systemRunOcr(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
@@ -224,6 +249,7 @@ export function useRebuildThumbnails() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { systemActivity: ["thumbnails"], systemActivityBackground: true },
     mutationFn: () => apiClient.systemRebuildThumbnails(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.system.thumbnails() });
@@ -247,6 +273,7 @@ export function useSystemMaintenanceBusy(stats: IndexerStats | undefined) {
 export function useClearIndex() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["textSearch", "semanticSearch"], systemActivityBackground: true },
     mutationKey: MAINTENANCE_KEY,
     mutationFn: (request: IndexerClearRequest) => apiClient.systemClearIndex(request),
     onSettled: () =>
@@ -261,6 +288,7 @@ export function useClearIndex() {
 export function useClearThumbnails() {
   const queryClient = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["thumbnails"], systemActivityBackground: true },
     mutationKey: MAINTENANCE_KEY,
     mutationFn: () => apiClient.systemClearThumbnails(),
     onSettled: () =>
@@ -285,6 +313,7 @@ export function useRebuildImageSearch() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { systemActivity: ["imageSearch"], systemActivityBackground: true },
     mutationKey: MAINTENANCE_KEY,
     mutationFn: (req?: IndexerThumbnailsRebuildRequest) => apiClient.systemImageSearchRebuild(req),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.system.imageSearch() }),
@@ -296,6 +325,7 @@ export function useClearImageSearch() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    meta: { systemActivity: ["imageSearch"], systemActivityBackground: true },
     mutationKey: MAINTENANCE_KEY,
     mutationFn: () => apiClient.systemImageSearchClear(),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.system.imageSearch() }),

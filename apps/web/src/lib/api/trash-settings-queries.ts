@@ -16,6 +16,7 @@ export function useSystemTrash(enabled = true) {
 export function useUpdateTrashSettings() {
   const client = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["general"], systemActivityBackground: false },
     mutationFn: (input: TrashSettingsUpdateRequest) => apiClient.systemUpdateTrash(input),
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.system.trash(), data);

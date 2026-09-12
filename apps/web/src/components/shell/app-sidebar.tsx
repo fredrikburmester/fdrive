@@ -2,22 +2,12 @@
 
 import {
   ChevronsUpDown,
-  Database,
-  FileText,
-  FolderSymlink,
-  HardDrive,
-  Image,
-  Images,
   Info,
   Link2,
   LogOut,
   Monitor,
   Moon,
-  ScanText,
-  Search,
-  Settings2,
   Sun,
-  ToggleRight,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -31,6 +21,7 @@ import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
 import { RecentsSection } from "@/components/shell/recents-section";
+import { SystemNav } from "@/components/shell/system-nav";
 import { TagsSection } from "@/components/shell/tags-section";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -62,7 +53,6 @@ import {
 import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
 import { anyLoginCan } from "@/lib/identity/capabilities";
-import { FEATURE_PAGES, OFFICE_PAGE } from "@/lib/system/pages";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light", Icon: Sun },
@@ -92,25 +82,6 @@ export function isTrashRoute(pathname: string | null): boolean {
 
 const TRASH_ROUTE = "/trash" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
-
-/**
- * The System group, ordered the way an owner works through it: what is on,
- * the settings that are neither feature nor sidecar, then one entry per
- * subsystem page. Feature hrefs come from `lib/system/pages` so the cards on
- * the Features page and this list cannot drift apart.
- */
-const SYSTEM_NAV_ITEMS = [
-  { href: "/system/features" as Route, label: "Features", Icon: ToggleRight },
-  { href: "/system/general" as Route, label: "General", Icon: Settings2 },
-  { href: "/system/storage" as Route, label: "Storage", Icon: HardDrive },
-  { href: "/system/shared-folders" as Route, label: "Shared folders", Icon: FolderSymlink },
-  { href: FEATURE_PAGES.thumbnails.href, label: "Thumbnails", Icon: Image },
-  { href: FEATURE_PAGES.textSearch.href, label: "Full-text search", Icon: Database },
-  { href: FEATURE_PAGES.semanticSearch.href, label: "Semantic search", Icon: Search },
-  { href: FEATURE_PAGES.pdfOcr.href, label: "Searchable PDFs", Icon: ScanText },
-  { href: FEATURE_PAGES.imageSearch.href, label: "Image search", Icon: Images },
-  { href: OFFICE_PAGE.href, label: "Office", Icon: FileText },
-] as const;
 
 export function AppSidebar() {
   const { data: me } = useShellMe();
@@ -173,16 +144,7 @@ export function AppSidebar() {
           <SidebarGroup>
             <SidebarGroupLabel>System</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                {SYSTEM_NAV_ITEMS.map(({ href, label, Icon }) => (
-                  <SidebarMenuItem key={label}>
-                    <SidebarMenuButton isActive={pathname === href} render={<Link href={href} />}>
-                      <Icon />
-                      <span>{label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
+              <SystemNav />
             </SidebarGroupContent>
           </SidebarGroup>
         ) : null}

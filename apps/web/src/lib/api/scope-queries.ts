@@ -62,6 +62,7 @@ export function useMountMappings(enabled = true) {
 export function useSetMountMappings() {
   const client = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["sharedFolders"], systemActivityBackground: false },
     mutationFn: (body: SetMountMappingsRequest) => apiClient.setMountMappings(body),
     onSuccess: async (mappings: MountMappingsResponse) => {
       client.setQueryData(queryKeys.system.mountMappings(), mappings);

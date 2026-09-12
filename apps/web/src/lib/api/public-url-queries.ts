@@ -15,6 +15,7 @@ export function useSystemPublicUrl() {
 export function useUpdatePublicUrl() {
   const client = useQueryClient();
   return useMutation({
+    meta: { systemActivity: ["general"], systemActivityBackground: false },
     mutationFn: (input: PublicUrlUpdateRequest) => apiClient.systemUpdatePublicUrl(input),
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.system.publicUrl(), data);
