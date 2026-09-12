@@ -136,17 +136,65 @@ export function mimeFromExtension(ext: string): string | null {
   return MIME_BY_EXTENSION[ext.toLowerCase()] ?? null;
 }
 
-const INLINE_PREFIXES = ["image/", "video/", "audio/", "text/"];
-const INLINE_EXACT = new Set(["application/pdf", "application/json"]);
+// Only known passive formats may become documents on the authenticated origin.
+const INLINE_EXACT = new Set([
+  "application/pdf",
+  "application/json",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+  "image/tiff",
+  "image/heic",
+  "image/heif",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/ogg",
+  "audio/flac",
+  "audio/aac",
+  "audio/mp4",
+  "audio/webm",
+  "audio/opus",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-msvideo",
+  "video/x-matroska",
+  "video/mpeg",
+  "video/3gpp",
+  "video/mp2t",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "text/tab-separated-values",
+  "text/calendar",
+  "text/css",
+  "text/javascript",
+  "text/typescript",
+  "text/tsx",
+  "text/jsx",
+  "text/x-python",
+  "text/x-ruby",
+  "text/x-go",
+  "text/x-rust",
+  "text/x-java-source",
+  "text/x-c",
+  "text/x-c++",
+  "text/x-csharp",
+  "text/x-sh",
+  "text/x-swift",
+  "text/x-kotlin",
+]);
 
 /**
- * True when a MIME type is safe to render inline in the browser rather
- * than forcing a download: any `image/*`, `video/*`, `audio/*`, `text/*`,
- * plus `application/pdf` and `application/json`.
+ * True for an explicitly supported passive MIME type. Active documents (including
+ * HTML, SVG and XML) and unknown types must download even when inline is requested.
  */
 export function isInlinePreviewable(mime: string): boolean {
-  if (INLINE_EXACT.has(mime)) {
-    return true;
-  }
-  return INLINE_PREFIXES.some((prefix) => mime.startsWith(prefix));
+  return INLINE_EXACT.has(mime.split(";", 1)[0]?.trim().toLowerCase() ?? "");
 }

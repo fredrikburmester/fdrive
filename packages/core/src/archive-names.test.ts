@@ -167,3 +167,8 @@ describe("safeEntryPath", () => {
     );
   });
 });
+
+it("skips overlong UTF-8 archive segments without aborting extraction", () => {
+  expect(safeEntryPath("/out", `${"é".repeat(128)}/file`)).toBeNull();
+  expect(safeEntryPath("/out", `${"é".repeat(127)}a`)).not.toBeNull();
+});

@@ -439,3 +439,23 @@ def test_run_still_fails_closed_once_the_endpoint_stays_unreachable(
     )
 
     assert lifecycle.calls == [(enabled, None), (None, "feature endpoint unreachable")]
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 503])
+def test_http_error_is_stale_and_closes_response(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    import io
+    import urllib.error
+
+    from fdrive_runtime import controller
+
+    body = io.BytesIO(b"unavailable")
+    error = urllib.error.HTTPError("http://api", status, "failure", {}, body)
+
+    class Opener:
+        def open(self, *_args: object, **_kwargs: object) -> object:
+            raise error
+
+    monkeypatch.setattr(controller.urllib.request, "build_opener", lambda *_a: Opener())
+    with pytest.raises(ValueError, match=str(status)):
+        controller.FeatureClient("http://api", "token").fetch()
+    assert body.closed

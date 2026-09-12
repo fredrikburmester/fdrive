@@ -83,6 +83,7 @@ export async function callSidecar<T>(
     }
 
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       return {
         ok: false,
         reason: "unreachable",

@@ -16,7 +16,10 @@ import type { SftpgoClient } from "./types.js";
  * token) and returns the eventual result. Provided by the auth chunk; this
  * module only depends on the shape.
  */
-export type WithToken = <T>(fn: (token: string) => Promise<T>) => Promise<T>;
+export type WithToken = <T>(
+  fn: (token: string) => Promise<T>,
+  options?: { retry?: boolean },
+) => Promise<T>;
 
 export interface SftpgoStorageProviderDeps {
   readonly client: SftpgoClient;
@@ -65,9 +68,13 @@ export function toStorageError(error: unknown): never {
   });
 }
 
-async function runStorage<T>(withToken: WithToken, fn: (token: string) => Promise<T>): Promise<T> {
+async function runStorage<T>(
+  withToken: WithToken,
+  fn: (token: string) => Promise<T>,
+  options?: { retry?: boolean },
+): Promise<T> {
   try {
-    return await withToken(fn);
+    return await withToken(fn, options);
   } catch (error) {
     toStorageError(error);
   }
@@ -81,8 +88,10 @@ async function runStorage<T>(withToken: WithToken, fn: (token: string) => Promis
  */
 export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): StorageProvider {
   const { client, withToken } = deps;
-  const runUser = <T>(fn: (user: ReturnType<SftpgoClient["user"]>) => Promise<T>) =>
-    runStorage(withToken, (token) => fn(client.user(token)));
+  const runUser = <T>(
+    fn: (user: ReturnType<SftpgoClient["user"]>) => Promise<T>,
+    options?: { retry?: boolean },
+  ) => runStorage(withToken, (token) => fn(client.user(token)), options);
 
   return {
     async list(path: string): Promise<FileEntry[]> {
@@ -117,7 +126,10 @@ export function createSftpgoStorageProvider(deps: SftpgoStorageProviderDeps): St
     },
 
     download: (path, opts) => runUser((u) => u.download(normalizePath(path), opts ?? {})),
-    upload: (path, body, opts) => runUser((u) => u.upload(normalizePath(path), body, opts ?? {})),
+    upload: (path, body, opts) =>
+      runUser((u) => u.upload(normalizePath(path), body, opts ?? {}), {
+        retry: body instanceof Uint8Array,
+      }),
     mkdir: (path, opts) => runUser((u) => u.mkdir(normalizePath(path), opts ?? {})),
     move: (path, target) => runUser((u) => u.move(normalizePath(path), normalizePath(target))),
     copy: (path, target) => runUser((u) => u.copy(normalizePath(path), normalizePath(target))),

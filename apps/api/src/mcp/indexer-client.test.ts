@@ -63,3 +63,15 @@ describe("createIndexerExtractClient", () => {
     });
   });
 });
+
+it("cancels HTTP error bodies even when cancellation itself fails", async () => {
+  const cancel = vi.fn(async () => {
+    throw new Error("already closed");
+  });
+  const client = createIndexerExtractClient({
+    baseUrl: "http://indexer",
+    fetch: async () => new Response(new ReadableStream({ cancel }), { status: 503 }),
+  });
+  expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toBeNull();
+  expect(cancel).toHaveBeenCalledOnce();
+});

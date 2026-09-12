@@ -99,14 +99,24 @@ function responseOf(raw: unknown): MultistatusResponse {
   const href = textOf(raw.href);
   if (href === null) throw malformed("response without href");
   let props = EMPTY_PROPS;
+  let successful = false;
+  let failedStatus: number | null = null;
   const propstats = Array.isArray(raw.propstat) ? raw.propstat : [];
   for (const propstat of propstats) {
     if (!isRecord(propstat)) continue;
     const status = parseStatusLine(propstat.status);
-    if (status === null || status < 200 || status >= 300) continue;
+    if (status === null || status < 200 || status >= 300) {
+      failedStatus ??= status;
+      continue;
+    }
+    successful = true;
     props = propsOf(propstat.prop, props);
   }
-  return { href: href.trim(), status: parseStatusLine(raw.status), props };
+  return {
+    href: href.trim(),
+    status: parseStatusLine(raw.status) ?? (successful ? null : (failedStatus ?? 502)),
+    props,
+  };
 }
 
 /**

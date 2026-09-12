@@ -42,7 +42,12 @@ export function createTrashSettingsService(deps: {
     const raw = await deps.settings.get<unknown>(trashSettingsKey(providerId));
     const strategy = await deps.strategyFor(providerId);
     if (raw === null) return { raw, value: { ...defaults(providerId), strategy } };
-    const parsed = TrashConfiguration.safeParse(raw);
+    let parsed = TrashConfiguration.safeParse(raw);
+    if (!parsed.success && typeof raw === "object") {
+      // Older versions accepted overlong UTF-8 path segments. Disable that configuration
+      // so authentication and the settings editor stay reachable; the next save repairs it.
+      parsed = TrashConfiguration.safeParse({ ...raw, path: "/.trash", enabled: false });
+    }
     if (!parsed.success || parsed.data.providerId !== providerId)
       throw new ApiHttpError("internal", "Stored Trash configuration is invalid.");
     // A stored row that predates a module change may be enabled for a

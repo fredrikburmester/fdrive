@@ -39,6 +39,7 @@ export function candidateProblem(baseUrl: string): string | null {
   if (parsed.username.length > 0 || parsed.password.length > 0) {
     return "WebDAV URL must not include credentials";
   }
+  if (parsed.search || parsed.hash) return "WebDAV URL must not include a query or fragment";
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return PROHIBITED_METADATA_HOSTS.has(host)
     ? "WebDAV URL targets a prohibited metadata host"

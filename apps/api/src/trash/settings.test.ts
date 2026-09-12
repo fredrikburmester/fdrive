@@ -152,3 +152,22 @@ describe("Trash settings service", () => {
     });
   });
 });
+
+it("disables a legacy overlong Trash path and permits repairing the stored row", async () => {
+  const { service, values } = harness();
+  const initial = await service.configuration(PROVIDER_A);
+  const { strategy: _strategy, ...stored } = initial;
+  values.set(`trash.configuration.${PROVIDER_A}`, {
+    ...stored,
+    enabled: true,
+    rulesConfirmed: true,
+    path: `/${"é".repeat(128)}`,
+    revision: 3,
+  });
+  expect(await service.pathForIdentity("identity-a")).toBeNull();
+  const recovered = await service.configuration(PROVIDER_A);
+  expect(recovered).toMatchObject({ enabled: false, path: "/.trash", revision: 3 });
+  await expect(
+    service.update(PROVIDER_A, { ...recovered, path: "/recovered" }),
+  ).resolves.toMatchObject({ revision: 4, path: "/recovered" });
+});

@@ -148,3 +148,8 @@ describe("matchesSearchFilters", () => {
     ).toBe(false);
   });
 });
+
+it("ignores invalid path filters like invalid dates", () => {
+  expect(parseSearchFilters({ folder: "/bad\0path" }).folder).toBeNull();
+  expect(parseSearchFilters({ folder: `/${"é".repeat(128)}` }).folder).toBeNull();
+});

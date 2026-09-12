@@ -184,7 +184,7 @@ function InspectorBody({
 
   const single = entries.length === 1 ? entries.at(0) : undefined;
   if (single !== undefined) {
-    return <SingleEntryBody entry={single} capabilities={capabilities} />;
+    return <SingleEntryBody key={single.path} entry={single} capabilities={capabilities} />;
   }
 
   return <MultiEntryBody entries={entries} />;

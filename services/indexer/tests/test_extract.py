@@ -407,3 +407,10 @@ def test_embed_health_false_on_exception(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(extract.httpx, "get", raise_connect_error)
     assert extract.embed_health("http://embed:80") is False
+
+
+@pytest.mark.parametrize("encoding", ["cp1252", "utf-16", "utf-8"])
+def test_plain_preserves_accented_text_with_and_without_bom(tmp_path: Path, encoding: str) -> None:
+    path = tmp_path / "accent.txt"
+    path.write_bytes("café".encode(encoding))
+    assert extract.extract_plain(str(path), 100, normalize) == ("café", "indexed")

@@ -145,3 +145,15 @@ describe("createEmbedClient", () => {
     expect(called).toBe(true);
   });
 });
+
+it("releases HTTP error bodies without masking the upstream failure", async () => {
+  const cancel = vi.fn(async () => {
+    throw new Error("already closed");
+  });
+  const client = createEmbedClient({
+    baseUrl: "http://embed",
+    fetchImpl: async () => new Response(new ReadableStream({ cancel }), { status: 503 }),
+  });
+  expect(await client.embed("query")).toBeNull();
+  expect(cancel).toHaveBeenCalledOnce();
+});

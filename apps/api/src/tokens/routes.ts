@@ -1,4 +1,4 @@
-import { CreateApiTokenRequest, ROUTES } from "@fdrive/contracts";
+import { CanonicalUuid, CreateApiTokenRequest, ROUTES } from "@fdrive/contracts";
 import type { AuthedHono } from "../app.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
 import { ApiHttpError } from "../errors.js";
@@ -42,8 +42,9 @@ export function registerTokenRoutes(
 
   authed.delete(`${withoutApiV1Prefix(ROUTES.account.tokens)}/:id`, async (c) => {
     const principal = c.get("principal");
-    const id = c.req.param("id");
-    await deps.service.revoke(id, principal.accountId);
+    const id = CanonicalUuid.safeParse(c.req.param("id"));
+    if (!id.success) throw new ApiHttpError("bad_request", "invalid token id");
+    await deps.service.revoke(id.data, principal.accountId);
     return c.json({ ok: true });
   });
 }
