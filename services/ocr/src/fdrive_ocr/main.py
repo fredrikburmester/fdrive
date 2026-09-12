@@ -55,8 +55,10 @@ def run_once(
             raw = db.read_settings(conn)
             feature_config = resolve_features(raw)
             if not feature_config.values.pdf_ocr:
+                run_lock.stop()
                 log_fn("OCR pass skipped: PDF OCR disabled")
                 return False
+            run_lock.begin(feature_config.revision)
             settings = resolve_settings(raw, default_settings)
             run_pass(
                 conn,
@@ -68,10 +70,12 @@ def run_once(
                 log_fn,
                 include_globs,
                 is_enabled=lambda: resolve_features(db.read_settings(conn)).values.pdf_ocr,
+                on_file=run_lock.advance, on_stopped=run_lock.stop,
             )
         finally:
             conn.close()
     except Exception as e:  # noqa: BLE001
+        run_lock.fail()
         log_fn(f"OCR pass crashed: {type(e).__name__}: {e}")
     finally:
         run_lock.release()

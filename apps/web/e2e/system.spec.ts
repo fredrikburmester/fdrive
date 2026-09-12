@@ -98,7 +98,7 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
 }) => {
   await page.goto("/system/indexer");
 
-  await expect(page.getByText("Reachable")).toBeVisible();
+  await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
 
   // Counts by status: one row per (root, status) pair from the fake's
   // `GET /stats`, including the "indexed" row this bug's symptom curl showed.
@@ -188,7 +188,7 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
   await page.goto("/system/thumbnails");
 
   await expect(page.getByText("Loading…")).toBeHidden({ timeout: 15_000 });
-  await expect(page.getByText("Reachable")).toBeVisible();
+  await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
 
   // The "Thumbnails" stat card: matched by its exact label so this hits neither
   // the page's own "Thumbnails" heading nor the Status card's prose.

@@ -49,6 +49,11 @@ class EmbedBackoff:
         self._lock = threading.Lock()
         self._resume_at: float | None = None
 
+    def waiting(self) -> bool:
+        """A failed backend remains pending until a retry actually succeeds."""
+        with self._lock:
+            return self._resume_at is not None
+
     def paused(self) -> bool:
         with self._lock:
             return self._resume_at is not None and self._clock() < self._resume_at

@@ -10,7 +10,9 @@ import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
 
 import psycopg
 from starlette.applications import Starlette
@@ -47,17 +49,60 @@ class RunLock:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running = False
+        self.instance_id = str(uuid4())
+        self._operation: dict[str, Any] | None = None
 
     def try_acquire(self) -> bool:
         with self._lock:
             if self._running:
                 return False
             self._running = True
+            self._operation = {
+                "id": str(uuid4()), "kind": "ocr", "features": ["pdfOcr"], "revision": 0,
+                "state": "running", "phase": "queued", "processed": 0, "total": None,
+                "errors": 0, "skipped": 0, "unit": "files",
+                "startedAt": datetime.now(UTC).isoformat(), "finishedAt": None,
+            }
             return True
 
     def release(self) -> None:
         with self._lock:
             self._running = False
+            if self._operation is not None:
+                if self._operation["state"] == "running":
+                    self._operation["state"] = "failed" if self._operation["errors"] else "completed"
+                self._operation["finishedAt"] = datetime.now(UTC).isoformat()
+
+    def begin(self, revision: int) -> None:
+        with self._lock:
+            if self._operation is not None:
+                self._operation.update(revision=revision, phase="processing")
+
+    def advance(self, status: str, rewrite: bool) -> None:
+        with self._lock:
+            if self._operation is not None:
+                failed = status in ("failed", "timeout")
+                self._operation["processed"] += 1
+                self._operation["errors"] += int(failed)
+                self._operation["skipped"] += int(not rewrite and not failed)
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._operation is not None:
+                self._operation["state"] = "stopped"
+
+    def fail(self) -> None:
+        with self._lock:
+            if self._operation is not None:
+                self._operation["errors"] += 1
+                self._operation["state"] = "failed"
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "instanceId": self.instance_id, "observedAt": datetime.now(UTC).isoformat(),
+                "operations": [dict(self._operation)] if self._operation is not None else [],
+            }
 
     @property
     def running(self) -> bool:
@@ -98,6 +143,11 @@ async def health(request: Request) -> JSONResponse:
     )
     body["storage"] = storage_diagnostics(state.targets)
     return JSONResponse(body)
+
+
+async def activity(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    return JSONResponse(state.run_lock.snapshot())
 
 
 async def stats(request: Request) -> JSONResponse:
@@ -145,8 +195,10 @@ async def trigger_run(request: Request) -> JSONResponse:
             conn = state.conn_factory()
             raw = db.read_settings(conn)
             if not state.features(raw).values.pdf_ocr:
+                state.run_lock.stop()
                 state.log("OCR run stopped: PDF OCR disabled")
                 return
+            state.run_lock.begin(state.features(raw).revision)
             settings = resolve_settings(raw, state.default_settings)
             run_pass(
                 conn,
@@ -158,8 +210,10 @@ async def trigger_run(request: Request) -> JSONResponse:
                 state.log,
                 state.include_globs,
                 is_enabled=lambda: state.features(db.read_settings(conn)).values.pdf_ocr,
+                on_file=state.run_lock.advance, on_stopped=state.run_lock.stop,
             )
         except Exception as e:  # noqa: BLE001
+            state.run_lock.fail()
             state.log(f"OCR pass crashed: {type(e).__name__}: {e}")
         finally:
             try:
@@ -171,6 +225,7 @@ async def trigger_run(request: Request) -> JSONResponse:
     try:
         threading.Thread(target=worker, daemon=True, name="ocr-run").start()
     except Exception as error:  # noqa: BLE001 - failed thread creation must release admission
+        state.run_lock.fail()
         state.run_lock.release()
         state.log(f"OCR run could not start: {type(error).__name__}: {error}")
         return JSONResponse({"error": "could not start OCR run"}, status_code=500)
@@ -182,6 +237,7 @@ def create_app(state: ServerState) -> Starlette:
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
+            Route("/activity", activity, methods=["GET"]),
             Route("/run", trigger_run, methods=["POST"]),
         ]
     )
