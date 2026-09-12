@@ -1,5 +1,4 @@
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
-import { createSftpgoClient } from "@fdrive/sftpgo";
 import { startPostgres, startSftpgo } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { KEY_ID, seal } from "../../src/auth/crypto.js";

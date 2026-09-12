@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { ApiClientError, type MeResponse, type OfficeOpenResponse } from "@fdrive/contracts";
+import { ApiClientError, type OfficeOpenResponse } from "@fdrive/contracts";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";

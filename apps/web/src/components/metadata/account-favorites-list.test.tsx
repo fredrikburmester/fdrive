@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import type { MeResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
