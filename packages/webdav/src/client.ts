@@ -56,7 +56,16 @@ function authHeaders(ctx: ClientContext, credential: WebdavCredential): Headers 
   const headers = new Headers();
   headers.set("User-Agent", ctx.userAgent);
   headers.set("Authorization", basicAuthHeader(credential.username, credential.password));
+  // Servers gzip text bodies when allowed and fetch decodes them silently,
+  // which leaves Content-Length (and byte ranges) describing the encoded
+  // body. Ask for the bytes as stored.
+  headers.set("Accept-Encoding", "identity");
   return headers;
+}
+
+function isEncoded(response: Response): boolean {
+  const encoding = response.headers.get("content-encoding");
+  return encoding !== null && encoding.trim().toLowerCase() !== "identity";
 }
 
 function statOf(response: MultistatusResponse): WebdavStat {
@@ -154,7 +163,10 @@ async function performDownload(
   return {
     status,
     body: response.body ?? emptyByteStream(),
-    contentLength: parseIntOrNull(response.headers.get("content-length")),
+    // A server that encoded the body anyway declared the encoded length.
+    contentLength: isEncoded(response)
+      ? null
+      : parseIntOrNull(response.headers.get("content-length")),
     contentRange: response.headers.get("content-range"),
     contentType: response.headers.get("content-type"),
     lastModified: parseDateOrNull(response.headers.get("last-modified")),
