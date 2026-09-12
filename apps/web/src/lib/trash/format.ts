@@ -57,14 +57,17 @@ export interface DeleteDialogCopy {
   readonly title: string;
   readonly description: string;
   readonly confirmLabel: string;
+  /** The confirm button's label while the request is in flight. */
+  readonly pendingLabel: string;
 }
 
 /**
- * The delete confirmation dialog's title, body, and confirm button label:
+ * The delete confirmation dialog's title, body, and confirm button labels:
  * "Move to Trash" copy when the active identity's storage exposes a trash,
  * otherwise the permanent-delete copy. `names` is the list of entries being
  * acted on, in display order; a single entry is quoted by name, more than
- * one is summarized by count.
+ * one is summarized by count. `pendingLabel` replaces `confirmLabel` while
+ * the request runs, which can be a while for a large folder or selection.
  */
 export function deleteDialogCopy(
   names: readonly string[],
@@ -80,13 +83,19 @@ export function deleteDialogCopy(
       note === null
         ? `${subject} will be moved to Trash.`
         : `${subject} will be moved to Trash. ${note}`;
-    return { title: "Move to Trash?", description, confirmLabel: "Move to Trash" };
+    return {
+      title: "Move to Trash?",
+      description,
+      confirmLabel: "Move to Trash",
+      pendingLabel: "Moving to Trash…",
+    };
   }
 
   return {
     title: `Delete ${count === 1 ? "item" : "items"}?`,
     description: `${subject} will be permanently deleted. This cannot be undone.`,
     confirmLabel: "Delete",
+    pendingLabel: "Deleting…",
   };
 }
 

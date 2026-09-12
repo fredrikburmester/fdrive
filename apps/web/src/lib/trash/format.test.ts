@@ -62,6 +62,7 @@ describe("deleteDialogCopy", () => {
       title: "Delete item?",
       description: '"a.txt" will be permanently deleted. This cannot be undone.',
       confirmLabel: "Delete",
+      pendingLabel: "Deleting…",
     });
   });
 
@@ -70,6 +71,7 @@ describe("deleteDialogCopy", () => {
       title: "Delete item?",
       description: '"a.txt" will be permanently deleted. This cannot be undone.',
       confirmLabel: "Delete",
+      pendingLabel: "Deleting…",
     });
   });
 
@@ -78,6 +80,7 @@ describe("deleteDialogCopy", () => {
       title: "Delete items?",
       description: "2 items will be permanently deleted. This cannot be undone.",
       confirmLabel: "Delete",
+      pendingLabel: "Deleting…",
     });
   });
 
@@ -86,6 +89,7 @@ describe("deleteDialogCopy", () => {
       title: "Move to Trash?",
       description: '"a.txt" will be moved to Trash.',
       confirmLabel: "Move to Trash",
+      pendingLabel: "Moving to Trash…",
     });
   });
 
@@ -95,6 +99,7 @@ describe("deleteDialogCopy", () => {
         title: "Move to Trash?",
         description: "2 items will be moved to Trash.",
         confirmLabel: "Move to Trash",
+        pendingLabel: "Moving to Trash…",
       },
     );
   });
@@ -105,6 +110,7 @@ describe("deleteDialogCopy", () => {
       description:
         '"a.txt" will be moved to Trash. Items in Trash are removed automatically after 1 day.',
       confirmLabel: "Move to Trash",
+      pendingLabel: "Moving to Trash…",
     });
   });
 

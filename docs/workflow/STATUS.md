@@ -5,6 +5,20 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Move to Trash busy indicator: complete (uncommitted, `claude/trash-loading-indicator-c30eb5`)
+
+- Moving a large folder or selection to Trash gave no feedback while the single delete request
+  ran. `DeleteDialog` now shows a spinner with progressive copy on the confirm button
+  ("Moving to Trash…" / "Deleting…", from `deleteDialogCopy().pendingLabel`), disables Cancel,
+  and ignores Escape while `pending`, so the indicator stays visible until the request settles.
+  Both call sites (`file-browser.tsx`, `virtual-listing.tsx`) already pass `remove.isPending`.
+- Verification: `package @fdrive/web` (lint, typecheck, coverage) and `browser e2e/trash.spec.ts`
+  pass; the spec now holds the delete request back to assert the busy state. `application`
+  coverage hit unrelated timeout flakes under a load average around 20 (untouched search-panel,
+  office-actions and trash queries tests); each passes in isolation.
+- Limitation: the request is one round trip, so there is no per-item progress, and the dialog is
+  modal for its whole duration. A non-blocking loading toast is the alternative if that matters.
+
 ## HEIC/HEIF viewing and indexing support: complete
 
 - **Non-destructive storage**: Original `.heic` and `.heif` files remain bit-for-bit untouched in SFTPGo storage; no on-upload conversion.
