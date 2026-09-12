@@ -26,10 +26,15 @@ export interface ProviderPickerProps {
  * form names it in its subtitle instead.
  */
 export function ProviderPicker({ providers, value, onChange, id, disabled }: ProviderPickerProps) {
+  const items = providers.map((provider) => ({
+    value: provider.id,
+    label: providerDisplayName(provider),
+  }));
   return (
     <Field>
       <FieldLabel htmlFor={id}>Server</FieldLabel>
       <Select
+        items={items}
         value={value}
         onValueChange={(next) => {
           if (typeof next === "string") onChange(next);
