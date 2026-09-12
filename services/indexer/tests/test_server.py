@@ -138,6 +138,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "started_at": None,
         "finished_at": None,
         "errors": 0,
+        "outcome": None,
     }
     assert body["image_embedding_rebuild"] == {
         "running": False,
@@ -146,6 +147,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "started_at": None,
         "finished_at": None,
         "errors": 0,
+        "outcome": None,
     }
     assert body["image_embedding_clear"] == {
         "running": False,
@@ -154,6 +156,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
         "started_at": None,
         "finished_at": None,
         "errors": 0,
+        "outcome": None,
     }
 
 
@@ -634,3 +637,26 @@ def test_directory_offloads_and_sanitizes_errors(postgres_dsn: str, monkeypatch:
         response = client.get("/directory?root=sftpgo&path=/")
         assert response.status_code == expected
         assert response.json() == {"error": "directory unavailable"}
+
+
+def test_activity_reports_rebuild_without_reading_storage() -> None:
+    def forbidden() -> None:
+        raise AssertionError("Activity must not query the database or walk files")
+
+    state = server.ServerState(contexts={}, watchers={}, wake_events={}, conn_factory=forbidden, schema_version=forbidden)
+    client = TestClient(server.create_app(state))
+    job = state.thumbnail_job
+    assert job.try_start(100)
+    job.discovered()
+    for _ in range(63):
+        job.advance(True)
+    response = client.get("/activity")
+    assert response.status_code == 200
+    operation = response.json()["operations"][0]
+    assert operation["processed"] == 63
+    assert operation["total"] == 100
+    assert operation["state"] == "running"
+    job.finish()
+    assert client.get("/activity").json()["operations"][0]["state"] == "stopped"
+    newer = server.ServerState(contexts={}, watchers={}, wake_events={}, conn_factory=forbidden, schema_version=forbidden)
+    assert newer.instance_id != state.instance_id

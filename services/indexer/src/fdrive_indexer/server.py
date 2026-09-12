@@ -14,6 +14,7 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 import psycopg
 from starlette.applications import Starlette
@@ -23,6 +24,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import db
+from .activity import timestamp
 from .chunking import is_textual
 from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
 from .content_extract import MAX_CONTENT_BYTES, ContentExtractor
@@ -30,7 +32,7 @@ from .directory_listing import directory_parts, directory_query, list_directory
 from .extract import embed_health
 from .features import FeatureConfiguration
 from .image_embed_rebuild import start_image_embed_rebuild
-from .indexer import RootContext
+from .indexer import RootContext, work_features
 from .paths import ext_of, reindex_scope
 from .stats import shape_health, shape_stats
 from .thumb_rebuild import ThumbnailRebuildJob, start_rebuild
@@ -50,6 +52,8 @@ class ServerState:
     thumbnail_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     image_embed_rebuild_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     image_embed_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+
+    instance_id: str = field(default_factory=lambda: str(uuid4()))
 
     def __post_init__(self) -> None:
         self.index_clear_job.admission = self.thumbnail_job.admission
@@ -162,6 +166,31 @@ async def health(request: Request) -> JSONResponse:
     body["storage"] = storage_diagnostics(state.contexts)
     return JSONResponse(body)
 
+
+
+async def activity(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    operations = []
+    for ctx in state.contexts.values():
+        for operation in ctx.activity.snapshot():
+            if (
+                "semanticSearch" in operation["features"]
+                and ctx.embed_backoff.waiting()
+                and ctx.feature_configuration().values.semantic_search
+            ):
+                operation = {**operation, "state": "waiting", "phase": "waiting", "total": None, "finishedAt": None}
+            operations.append(operation)
+    for job, kind, features in [
+        (state.thumbnail_job, "thumbnailRebuild", ["thumbnails"]),
+        (state.thumbnail_clear_job, "thumbnailClear", ["thumbnails"]),
+        (state.index_clear_job, "indexClear", ["textSearch", "semanticSearch"]),
+        (state.image_embed_rebuild_job, "imageRebuild", ["imageSearch"]),
+        (state.image_embed_clear_job, "imageClear", ["imageSearch"]),
+    ]:
+        snapshot = job.activity_snapshot(kind, features)
+        if snapshot is not None:
+            operations.append(snapshot)
+    return JSONResponse({"instanceId": state.instance_id, "observedAt": timestamp(), "operations": operations})
 
 async def stats(request: Request) -> JSONResponse:
     state: ServerState = request.app.state.server_state
@@ -280,6 +309,7 @@ async def reindex(request: Request) -> JSONResponse:
     scoped_path = path if isinstance(path, str) else None
     exact, prefix = reindex_scope(scoped_path)
     count = db.mark_pending(ctx.conn(), ctx.root_id, exact, prefix)
+    ctx.activity.queue_scan(work_features(features), ctx.feature_configuration().revision)
     event = state.wake_events.get(root_name)
     if event is not None:
         event.set()
@@ -402,6 +432,7 @@ def create_app(state: ServerState) -> Starlette:
             Route("/health", health, methods=["GET"]),
             Route("/directory", directory, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
+            Route("/activity", activity, methods=["GET"]),
             Route("/extract", extract_text, methods=["POST"]),
             Route("/extract-content", extract_content, methods=["POST"]),
             Route("/reindex", reindex, methods=["POST"]),

@@ -23,5 +23,6 @@ uncommitted changes belong in [STATUS](../workflow/STATUS.md).
   second archive of obsolete implementation instructions.
 
 Current behavior: [architecture](../ARCHITECTURE.md), [provider development](../STORAGE-PROVIDERS.md),
-[scoping](../SCOPING.md), [authentication](../AUTH.md) and [Office](../OFFICE-DEVELOPMENT.md).
+[scoping](../SCOPING.md), [authentication](../AUTH.md), [Office](../OFFICE-DEVELOPMENT.md)
+and [System activity](../SYSTEM-ACTIVITY.md).
 Delivery evidence: [history](../workflow/STATUS-history.md). Workflow: [WORKING](../../WORKING.md).

@@ -85,6 +85,7 @@ import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
+import { registerActivityRoutes } from "./system/activity.js";
 import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
 import { createSystemEventLog } from "./system/event-log.js";
@@ -180,6 +181,7 @@ export async function composeApp(
   await providerService.seedFromEnvironment();
 
   const featureService = createFeatureService({
+    probeCacheMs: 2000,
     settings: repos.settings,
     config,
     fetch: fetchImpl,
@@ -395,6 +397,7 @@ export async function composeApp(
     return { config: resolved, discovery };
   };
   const officeSettings = createOfficeSettingsService({
+    probeCacheMs: 2000,
     settings: repos.settings,
     eventLog,
     product: officeProduct,
@@ -746,6 +749,13 @@ export async function composeApp(
         resolver: scopeResolver,
         identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
+      });
+      registerActivityRoutes(groups, {
+        indexerUrl: config.fdriveIndexerUrl,
+        ocrUrl: config.fdriveOcrUrl,
+        fetch: fetchImpl,
+        features: () => featureService.status(),
+        office: () => officeSettings.status(null),
       });
       registerSystemRoutes(groups, {
         settings: repos.settings,

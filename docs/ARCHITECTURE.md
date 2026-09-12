@@ -57,6 +57,8 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
 
 - Feature activation is persisted through onboarding/System settings. Optional processing
   begins disabled; runtime controllers expose starting, ready and failed states.
+- The admin sidebar shows live processing activity and percentages only for fixed workloads.
+  Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.
   Image similarity by perceptual hash is not the shipped text-to-image search feature.
 - Folder view mode is pinned per identity/path in `app.folder_views`, with no inheritance.

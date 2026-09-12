@@ -27,6 +27,7 @@ export const queryKeys = {
     providers: () => ["admin", "providers"] as const,
   },
   system: {
+    activity: () => ["system", "activity"] as const,
     publicUrl: () => ["system", "public-url"] as const,
     office: () => ["system", "office"] as const,
     trash: () => ["system", "trash"] as const,

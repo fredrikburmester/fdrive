@@ -13,7 +13,9 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-IMAGE_TAG="fdrive-indexer-test:local"
+# Pin this run to its own build, even when another checkout builds concurrently.
+IMAGE_ID_FILE=$(mktemp)
+trap 'rm -f "$IMAGE_ID_FILE"' EXIT
 SOCKET=/var/run/docker.sock
 if [[ -z "${FDRIVE_TEST_DOCKER_GID:-}" ]]; then
   # Only a Linux host's socket is the one mounted into the container; Docker
@@ -25,7 +27,7 @@ if [[ -z "${FDRIVE_TEST_DOCKER_GID:-}" ]]; then
   fi
 fi
 
-docker build -t "$IMAGE_TAG" .
+docker build --iidfile "$IMAGE_ID_FILE" .
 
 docker run --rm \
   --group-add "$FDRIVE_TEST_DOCKER_GID" \
@@ -38,5 +40,5 @@ docker run --rm \
   -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal \
   --add-host=host.docker.internal:host-gateway \
   --entrypoint pytest \
-  "$IMAGE_TAG" \
+  "$(cat "$IMAGE_ID_FILE")" \
   -q --cov=fdrive_indexer --cov-report=term-missing --cov-fail-under=95 "$@"

@@ -34,6 +34,8 @@ def rebuild_image_embeddings(
     path: str | None = None,
     force: bool = False,
     on_file: Callable[[bool], None] | None = None,
+    candidates: list[tuple[str, str, str, int]] | None = None,
+    on_skip: Callable[[], None] | None = None,
 ) -> int:
     """Backfill (or, with `force`, replace stale-model) image embeddings for
     every live image in `root`, optionally scoped to `path` (a single file
@@ -54,8 +56,8 @@ def rebuild_image_embeddings(
     assert health is not None  # dimension_guard is None only when health is present
     configured_model = health.model or ""
 
-    rows = db.media_files(conn, root.root_id)
-    candidates = select_image_embed_candidates(rows, normalize_scope(path))
+    if candidates is None:
+        candidates = select_image_embed_candidates(db.media_files(conn, root.root_id), normalize_scope(path))
 
     processed = 0
     pending: list[tuple[str, str]] = []
@@ -98,6 +100,8 @@ def rebuild_image_embeddings(
             break
         existing_model = db.image_embedding_model(conn, sha256)
         if not rebuild_needs_embedding(existing_model, configured_model, force):
+            if on_skip is not None:
+                on_skip()
             continue
         pending.append((sha256, os.path.join(root.cfg.thumbs_dir, storage_path(sha256, 256))))
         if len(pending) >= batch_size:
@@ -133,8 +137,14 @@ def start_image_embed_rebuild(
         return None
     configured = any(ctx.cfg.image_embed_url for ctx in contexts)
     try:
-        total = count_image_embed_candidates(contexts, path) if configured else 0
+        candidates = [
+            (ctx, select_image_embed_candidates(db.media_files(ctx.conn(), ctx.root_id), normalize_scope(path)))
+            for ctx in contexts if ctx.cfg.image_embed_url
+        ]
+        total = sum(len(rows) for _, rows in candidates)
+        job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
         job.discover(total)
+        job.discovered()
     except Exception:
         job.fail()
         job.finish()
@@ -143,10 +153,12 @@ def start_image_embed_rebuild(
     def run() -> None:
         try:
             if configured:
-                for ctx in contexts:
+                for ctx, rows in candidates:
                     if not ctx.feature_configuration().values.image_search:
                         continue
-                    rebuild_image_embeddings(ctx, path, force, on_file=job.advance)
+                    rebuild_image_embeddings(
+                        ctx, path, force, on_file=job.advance, candidates=rows, on_skip=lambda: job.advance(True, skipped=True)
+                    )
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
             log(f"image embedding rebuild job crashed: {type(e).__name__}: {e}")
