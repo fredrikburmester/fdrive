@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isValidPath,
+  TrashConfiguration,
   TrashEntry,
   TrashListResponse,
   TrashPurgeRequest,
@@ -22,6 +23,7 @@ describe("Trash settings", () => {
     path: "/.trash",
     retentionHours: null,
     rulesConfirmed: false,
+    strategy: "native",
   };
 
   it("accepts disabled defaults and confirmed enabled settings", () => {
@@ -40,6 +42,32 @@ describe("Trash settings", () => {
     expect(TrashSettingsUpdateRequest.safeParse({ ...disabled, enabled: true }).success).toBe(
       false,
     );
+  });
+
+  it("enables a provider that moves deleted files itself without rule confirmation", () => {
+    expect(
+      TrashSettingsUpdateRequest.safeParse({ ...disabled, strategy: "move", enabled: true })
+        .success,
+    ).toBe(true);
+  });
+
+  it("never enables Trash for a provider without one", () => {
+    expect(TrashSettings.safeParse({ ...disabled, strategy: "none" }).success).toBe(true);
+    expect(
+      TrashSettings.safeParse({
+        ...disabled,
+        strategy: "none",
+        enabled: true,
+        rulesConfirmed: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("stores the configuration without the module's strategy", () => {
+    const { strategy, ...configuration } = disabled;
+    expect(TrashConfiguration.safeParse(configuration).success).toBe(true);
+    expect(TrashConfiguration.safeParse({ ...configuration, strategy }).success).toBe(false);
+    expect(TrashSettings.safeParse(configuration).success).toBe(false);
   });
 
   it.each(["/", "relative", "/.trash/", "/a//b", "/a/../b"])("rejects invalid path %s", (path) => {

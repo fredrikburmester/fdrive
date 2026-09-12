@@ -1,91 +1,51 @@
 # Current handoff
 
-Updated: 2026-09-11. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-12. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
-## WebDAV storage provider: slices 1–4 done, slice 5 (Trash) open
+## WebDAV storage provider: complete on PR #5, awaiting merge
 
-Plan: [WEBDAV-PROVIDER.md](../plans/WEBDAV-PROVIDER.md). Branch `feat/webdav-provider`, PR #5.
+Branch `feat/webdav-provider`, PR #5. Durable documentation: [WEBDAV.md](../WEBDAV.md),
+[STORAGE-PROVIDERS.md](../STORAGE-PROVIDERS.md), [TRASH.md](../TRASH.md); the plan is removed.
+Per-slice evidence for slices 1–4 (package, adapter and module, registration, real-server
+conformance, manual browser pass) is archived in [history](STATUS-history.md).
 
-- **Done (slice 1)**: `packages/webdav` (`@fdrive/webdav`) with the protocol client
-  (`PROPFIND`/`GET`/`PUT`/`MKCOL`/`MOVE`/`COPY`/`DELETE`, Basic auth per request, manual
-  redirects refused, bounded multistatus parsing over `fast-xml-parser`), the `OPTIONS` probe,
-  and an in-memory class 1 fake server in `src/fake` (prefix, href and namespace styles,
-  ranges, `If-Range`, `If-None-Match: *`, `Overwrite`, `X-OC-Mtime`, read-only users,
-  redirect and no-`DAV` toggles). Lockfile updated through `run-in-checkout.sh --lock`.
-- **Done (slice 2)**: `createWebdavStorageProvider` (own-property methods over the client, core
-  path normalization, `WebdavError` → `StorageError` with 409 on `MKCOL`/`MOVE`/`COPY` read as a
-  missing parent, `mkdir -p` that recurses only on a missing parent, `deleteFile`/`deleteDir`
-  refusing the wrong kind) and `webdavModule` (username/password credential, no config, only
-  `atomicMove` true, `trash: "none"`, `authenticate` as `PROPFIND` Depth 0 on the root,
-  storage bound to the identity's username rather than the stored credential's). The shared
-  `describeStorageProvider` suite passes over the fake three ways: plain, under a path prefix
-  with absolute hrefs, and with a default namespace.
-- **Done (slice 3)**: `ProviderType` gains `webdav`; the API registry, `@fdrive/api`
-  dependency and lockfile, web label ("WebDAV") and icon (`Globe`) are wired. New API tests:
-  admin create/probe/list of a WebDAV row with its form and capabilities, refusal of undeclared
-  config, public listing without the endpoint, a login through a WebDAV row that never touches
-  the SFTPGo fake, and a same-path isolation test with one SFTPGo and one WebDAV identity on
-  one account (each server sees only its own credential). `deploy/compose.dev.yaml` now
-  enables SFTPGo's WebDAV binding on `FDRIVE_DEV_SFTPGO_WEBDAV_PORT` (default 58082) as the
-  dev target.
-- **Done (slice 4)**: `startSftpgo` in the testkit now enables SFTPGo's WebDAV binding and
-  returns `webdavUrl`; `packages/webdav/test/integration/container.contract.test.ts` runs the
-  shared conformance suite plus probe/authenticate, denied-write (`forbidden`), same-path
-  isolation between two logins, and range/stale-`If-Range` checks against it. The real server
-  answers 403 for a `MOVE`/`COPY` of a missing source, so the adapter now stats the source on a
-  refusal and reports `not_found` when it is gone (unit-tested on the fake). The e2e stack
-  exports `E2E_SFTPGO_WEBDAV_URL`; the new `e2e/webdav-provider.spec.ts` adds the WebDAV
-  binding through System > Storage (type picker, probe, remove) and signs in through it,
-  browses the seeded home, uploads a file and checks the login's capabilities. The login row is
-  disabled rather than removed afterwards (a login binds it), and `system-storage.spec.ts`
-  now counts cards relative to what is present.
-- **Confinement**: request URLs are built only from provider paths under the endpoint prefix;
-  `assertValidPath` rejects `.`/`..` segments because the URL parser resolves dot segments
-  (a `/../etc` path reached the origin root before this check) and `buildUrl` re-verifies
-  the prefix. Hrefs on another origin or outside the prefix are dropped, never followed.
-- **Evidence (slice 3)**: `application` passes (lint, typecheck, workspace coverage).
-  `integration` ran 14 API suites: 13 pass, `sftp-rename.test.ts` failed on its own
-  `docker build` of the indexer image hanging on the `python:3.12-slim` metadata fetch, the
-  pre-existing flake recorded in history (Docker Hub was unreachable from this machine during
-  the run). `browser e2e/login-providers.spec.ts e2e/system-storage.spec.ts --workers=1`
-  passes. `workflow` passes. Real dev app over SFTPGo's WebDAV binding, through the API on
-  the running stack: candidate probe ("reachable and requires a login"), row created, alice
-  logged in with `providerType: webdav` and only `atomicMove` true, list, upload with parents,
-  download, byte range (206), rename to a Unicode and literal-percent name, directory copy,
-  recursive delete, and `unsupported` from zip and share creation; SFTPGo's REST API saw the
-  same files. Earlier slice evidence: `package @fdrive/webdav` (220 tests, coverage
-  99.6/99.5/100/99.7).
-- **Manual browser pass** (production build `next start` on the dev stack, over SFTPGo's
-  WebDAV binding): sign in through the WebDAV row, list, new folder, new text file, view,
-  edit and save, rename, duplicate, per-file download for a multi-selection (no zip), delete
-  with the permanent-deletion warning, and as admin the Storage card (WebDAV label, globe,
-  address, "Reachable", only "Atomic move"), add a second WebDAV row through the dialog
-  (candidate probe), and remove it. It found one real defect, fixed in the client: SFTPGo
-  gzips `text/*` bodies when the client accepts compression, Node's fetch accepts and decodes
-  transparently, so `GET` reported the encoded `Content-Length` (23 bytes for an empty file)
-  over a decoded body and the API's download closed early. The client now sends
-  `Accept-Encoding: identity` on every request and drops the declared length when a response
-  is still encoded. Two pre-existing issues seen on the way, not WebDAV's: the Base UI
-  `Select` trigger shows the raw value (row id, `webdav`) rather than the option label in the
-  login and Add-provider pickers, and a non-admin can open `/system/*` by URL (the sidebar
-  hides it; the API refuses with 403 and the page shows an empty state).
-- **Limitation**: `next dev` on this machine does not hydrate any page (checked on three dev
-  servers, including other sessions', with headless Chromium; no console or page errors, the
-  HMR websocket handshake fails in browsers only); the manual pass above used a production
-  build instead. The shared dev database also had to be reset
-  (`pnpm dev:env:reset`): its ten recorded migrations predated this branch's four-entry
-  journal, which is `main`'s state, not a WebDAV change.
-- **Evidence (slice 4)**: `package @fdrive/webdav` passes; `@fdrive/webdav test:integration`
-  19/19 against the SFTPGo WebDAV container; `@fdrive/testkit test:integration` 10/10;
-  `browser e2e/webdav-provider.spec.ts e2e/login-providers.spec.ts e2e/system-storage.spec.ts
-  --workers=1` passes 7/7.
-- **Not done**: Trash through generic move (slice 5) needs the provider-aware settings copy and
-  a contract change; see the plan. GitGuardian on PR #5 flags two fake test passwords in an
-  earlier commit's history; the current tree no longer contains those patterns, and history
-  is not rewritten here, so the incidents need dismissing in the GitGuardian dashboard.
+- **Done (slice 5, Trash)**: `webdavModule` declares `trash: "move"` and the `trash`
+  capability, so the API storage factory moves deleted files into the configured folder and
+  serves list/restore/purge/empty from it. `TrashSettings` (contracts) now carries the active
+  provider module's `strategy` (`native` | `move` | `none`) next to the stored configuration
+  (`TrashConfiguration`, unchanged on disk); the refinement requires confirmed rules only for
+  `native` and refuses enabling for `none`. The settings service reads the strategy from the
+  provider module per request, refuses an update whose strategy no longer matches (conflict),
+  and reports a stored row as disabled when the current strategy would not allow it. The
+  Trash settings card keys its copy on the strategy: SFTPGo rules, link and confirmation
+  checkbox for `native`; "fdrive moves deleted files" copy with no checkbox for `move`; a
+  disabled switch and "no Trash" copy for `none`. TRASH.md gained a section for providers
+  where fdrive performs the move.
+- **Evidence (slice 5)**: `@fdrive/webdav test:integration` 20/20 against the SFTPGo WebDAV
+  container, including a new round trip (delete dir and file, list, restore, purge, empty)
+  through `withMoveToTrash` + `createRecycleFolderTrash` as the factory composes them.
+  `browser e2e/trash.spec.ts` gained a WebDAV scenario in the isolated Trash environment:
+  add the SFTPGo WebDAV binding as a row, link and switch to it, enable Trash from the
+  "move" card (no rule checkbox), move a file to Trash from the listing, restore it from
+  `/trash`, and read its contents back. Gates on 2026-09-12: `package @fdrive/contracts`,
+  `application`, `integration`, `workflow` and `browser e2e/trash.spec.ts --workers=1` all
+  pass (the web coverage step needed two reruns under a load average near 30 from other
+  checkouts' gates: 5 s test timeouts in untouched `search-panel`, `office-actions` and
+  `capability-gating` suites, each passing alone).
+- **Found on the way**: Trash settings belong to the active login's row, and
+  `FDRIVE_ADMIN_USERS` makes someone admin only while their SFTPGo login is active, so a
+  WebDAV row's Trash can only be configured by an owner account from the setup claim. The
+  browser scenario grants that flag directly in its disposable database; TRASH.md documents
+  the limitation and FOLLOWUPS carries the decision (explicit provider choice on the settings
+  endpoint and card, or account-wide environment admins).
+- **Known**: GitGuardian on PR #5 flags two fake test passwords in an earlier commit's
+  history; the current tree no longer contains those patterns, and history is not rewritten
+  here, so the incidents need dismissing in the GitGuardian dashboard. Two pre-existing UI
+  issues found during the manual pass (Base UI `Select` trigger shows the raw value; a
+  non-admin can open `/system/*` by URL and gets an empty state) are tracked separately.
 
 ## HEIC/HEIF viewing and indexing support: complete
 

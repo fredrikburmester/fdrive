@@ -45,6 +45,7 @@ function trashSettings(path: string | null, retentionHours: number | null = null
     path: path ?? TRASH_PATH,
     retentionHours,
     rulesConfirmed: path !== null,
+    strategy: "native",
   } as const;
 }
 

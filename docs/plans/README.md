@@ -7,7 +7,6 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Roadmap](ROADMAP.md) | Remaining requested features and acceptance criteria |
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
-| [WebDAV provider](WEBDAV-PROVIDER.md) | Second storage backend: decisions, protocol mapping, work slices and gates |
 
 These are a backlog, not a claim that an agent is working on every item. Current work and
 uncommitted changes belong in [STATUS](../workflow/STATUS.md).

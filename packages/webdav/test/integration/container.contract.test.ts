@@ -1,4 +1,9 @@
-import { isStorageError, type StorageProvider } from "@fdrive/core";
+import {
+  createRecycleFolderTrash,
+  isStorageError,
+  type StorageProvider,
+  withMoveToTrash,
+} from "@fdrive/core";
 import { describeStorageProvider, type SeedUser, startSftpgo } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWebdavClient } from "../../src/client.js";
@@ -121,5 +126,42 @@ describe("WebDAV provider against SFTPGo's WebDAV binding", () => {
     expect(stale.status).toBe(200);
     expect(await text(stale.body)).toBe("0123456789");
     await alice.deleteFile(path);
+  });
+
+  it("moves deletes into a recycle folder, restores them and purges them (the API's Trash for WebDAV)", async () => {
+    // The module declares `trash: "move"`: the API storage factory wraps the
+    // adapter exactly like this, with the recycle-folder view on top.
+    const storage = storageFor(container, userNamed(container, "alice"));
+    const trashPath = `/.dav-trash-${Date.now().toString(36)}`;
+    const wrapped = withMoveToTrash({ storage, trashPath, clock: () => new Date() });
+    const trash = createRecycleFolderTrash({ storage: wrapped, trashPath, layout: "move" });
+    const original = `/dav-generic/2026/Å %20/${"x".repeat(200)}`;
+    await storage.mkdir(original, { parents: true });
+    await storage.upload(`${original}/keep.txt`, new TextEncoder().encode("kept"));
+    await wrapped.deleteDir(original);
+    expect(await kindOf(storage.stat(original))).toBe("not_found");
+    const item = (await trash.list()).entries.find((entry) => entry.originalPath === original);
+    expect(item).toBeDefined();
+    expect(await trash.restore(item?.id ?? "missing")).toMatchObject({
+      path: original,
+      kind: "dir",
+    });
+    expect(await text((await storage.download(`${original}/keep.txt`)).body)).toBe("kept");
+
+    await wrapped.deleteFile(`${original}/keep.txt`);
+    const file = (await trash.list()).entries.find(
+      (entry) => entry.originalPath === `${original}/keep.txt`,
+    );
+    expect(file).toMatchObject({ name: "keep.txt", size: 4 });
+    await trash.purge([file?.id ?? "missing"]);
+    expect((await trash.list()).entries).toEqual([]);
+
+    await wrapped.deleteDir(original);
+    expect((await trash.list()).entries).toHaveLength(1);
+    await trash.empty();
+    expect((await trash.list()).entries).toEqual([]);
+    expect(await kindOf(storage.stat(original))).toBe("not_found");
+    await storage.deleteDir("/dav-generic");
+    await storage.deleteDir(trashPath);
   });
 });

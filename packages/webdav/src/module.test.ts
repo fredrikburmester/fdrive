@@ -56,13 +56,13 @@ describe("webdavModule metadata", () => {
       zip: false,
       setModifiedAt: false,
       atomicMove: true,
-      trash: false,
+      trash: true,
       shares: false,
       office: false,
       index: false,
       scopeMapping: false,
     });
-    expect(webdavModule.trash).toBe("none");
+    expect(webdavModule.trash).toBe("move");
     expect(webdavModule.mint).toBeUndefined();
     expect(webdavModule.indexRootName).toBeUndefined();
   });

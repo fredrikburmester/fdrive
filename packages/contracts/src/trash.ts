@@ -23,18 +23,37 @@ const TrashPath = z.string().refine((value) => value !== "/" && isValidPath(valu
   message: "path must be a normalized absolute directory other than the root",
 });
 
-/** Provider-bound configuration for fdrive's existing SFTPGo recycle-folder integration. */
-export const TrashSettings = z
-  .object({
-    providerId: z.uuid(),
-    revision: z.number().int().nonnegative(),
-    enabled: z.boolean(),
-    path: TrashPath,
-    retentionHours: z.number().int().positive().nullable(),
-    rulesConfirmed: z.boolean(),
-  })
+/**
+ * How deleted files reach a provider's recycle folder: the backend's own
+ * rule (`native`, SFTPGo's Event Manager), fdrive moving them itself
+ * (`move`), or no Trash at all (`none`). Mirrors core's `TrashStrategy`;
+ * it is the active provider module's, never stored.
+ */
+export const TrashStrategy = z.enum(["native", "move", "none"]);
+export type TrashStrategy = z.infer<typeof TrashStrategy>;
+
+const TrashSettingsFields = z.object({
+  providerId: z.uuid(),
+  revision: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  path: TrashPath,
+  retentionHours: z.number().int().positive().nullable(),
+  /** Only meaningful for `native`: the operator tested the backend's recycle rule. */
+  rulesConfirmed: z.boolean(),
+});
+
+/** The provider-bound Trash configuration as stored, without the module's strategy. */
+export const TrashConfiguration = TrashSettingsFields.strict();
+export type TrashConfiguration = z.infer<typeof TrashConfiguration>;
+
+/** Provider-bound Trash configuration plus the active provider's strategy. */
+export const TrashSettings = TrashSettingsFields.extend({ strategy: TrashStrategy })
   .strict()
-  .refine((value) => !value.enabled || value.rulesConfirmed, {
+  .refine((value) => !value.enabled || value.strategy !== "none", {
+    message: "this storage provider has no Trash",
+    path: ["enabled"],
+  })
+  .refine((value) => !value.enabled || value.strategy !== "native" || value.rulesConfirmed, {
     message: "SFTPGo trash rules must be confirmed before Trash can be enabled",
     path: ["rulesConfirmed"],
   });
