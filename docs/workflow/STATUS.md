@@ -1,9 +1,22 @@
 # Current handoff
 
-Updated: 2026-09-12. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-13. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
+
+## Mobile search fixes
+
+- Worktree `/private/tmp/fdrive-mobile-search`, branch `codex/mobile-search-fixes`.
+- Search filters wrap within the viewport; command inputs use 16px text below `md`.
+- Live Next dev checks pass at 320, 393, 402, 700 and 1280px widths, including a short
+  320x360 viewport: all filters remain visible/selectable, no horizontal overflow,
+  mobile input text computes to 16px, desktop remains 14px, and document search works.
+  Light/dark layouts inspected. Screenshots: `.fdrive-workflow/mobile-search-*.png`.
+- Application passes with `VITEST_MAX_WORKERS=1` (`step.uRu2CU` coverage log).
+  Initial `verify: FAIL coverage (exit 1)` hit provider-picker's 5s timeout and a search-panel
+  async assertion under high load (`step.lpo8BU`); both pass in isolation and the full rerun.
+- Search browser gate passes 18/18 on Next dev (`step.KVu9UI`); no device Safari check claimed.
 
 ## Features navigation and spinner explanation
 
