@@ -2,12 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadText } from "./text-loader";
 
 function textResponse(text: string, ok = true, status = 200): Response {
-  const bytes = new TextEncoder().encode(text);
-  return {
-    ok,
-    status,
-    arrayBuffer: () => Promise.resolve(bytes.buffer),
-  } as unknown as Response;
+  return new Response(text, { status: ok ? 200 : status });
 }
 
 describe("loadText", () => {
@@ -50,4 +45,23 @@ describe("loadText", () => {
     expect(result.text).toBe("héllo — wörld");
     expect(result.truncated).toBe(false);
   });
+});
+
+it("cancels a streaming response as soon as the text limit is exceeded", async () => {
+  const cancel = vi.fn();
+  let reads = 0;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        reads += 1;
+        controller.enqueue(new TextEncoder().encode("abcdef"));
+      },
+      cancel,
+    },
+    { highWaterMark: 0 },
+  );
+  const result = await loadText("/large", async () => new Response(body), { limit: 3 });
+  expect(result).toEqual({ text: "abc", truncated: true });
+  expect(reads).toBe(1);
+  expect(cancel).toHaveBeenCalledTimes(1);
 });

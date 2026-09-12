@@ -1,5 +1,5 @@
 import { AboutResponse, HealthResponse } from "@fdrive/contracts";
-import type { StorageProvider } from "@fdrive/core";
+import { CoreError, type StorageProvider } from "@fdrive/core";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, isSetupExempt, redactMcpTokenPath, sftpgoHostLabel } from "./app";
@@ -558,3 +558,21 @@ describe("createApp authed group wiring", () => {
     expect(await res.json()).toEqual({ username: "alice" });
   });
 });
+
+it.each(["invalid_path", "invalid_argument"] as const)(
+  "maps input CoreError %s to bad_request",
+  async (kind) => {
+    const { app } = buildApp({
+      registerRoutes: ({ public: v1 }) => {
+        v1.get("/invalid-core", () => {
+          throw new CoreError(kind, "invalid input");
+        });
+      },
+    });
+    const response = await app.request("/api/v1/invalid-core");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { kind: "bad_request", message: "invalid input" },
+    });
+  },
+);

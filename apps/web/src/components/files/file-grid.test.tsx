@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GRID_WIDTH_STORAGE_KEY } from "@/lib/files/grid-layout";
 import { FileGrid } from "./file-grid";
@@ -30,6 +30,14 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
 /** A no-op `ResizeObserver`: jsdom does not implement the real thing, and
  * these tests only need the grid's construction of one not to throw. */
 class FakeResizeObserver {
+  static measure: ((width: number) => void) | undefined;
+  constructor(callback: ResizeObserverCallback) {
+    FakeResizeObserver.measure ??= (width) =>
+      callback(
+        [{ contentRect: { width } } as ResizeObserverEntry],
+        this as unknown as ResizeObserver,
+      );
+  }
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -88,6 +96,7 @@ describe("FileGrid", () => {
 
   beforeEach(() => {
     mockScrollToIndex.mockClear();
+    FakeResizeObserver.measure = undefined;
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     offsetHeight = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
     window.localStorage.clear();
@@ -241,6 +250,8 @@ describe("FileGrid", () => {
       onScrollConsumed,
     });
 
+    expect(mockScrollToIndex).not.toHaveBeenCalled();
+    act(() => FakeResizeObserver.measure?.(700));
     expect(mockScrollToIndex).toHaveBeenCalled();
     expect(onScrollConsumed).toHaveBeenCalledWith(1);
   });
@@ -253,6 +264,7 @@ describe("FileGrid", () => {
       scrollRequest: { path: "/file-5.txt", token: 1 },
       onScrollConsumed,
     });
+    act(() => FakeResizeObserver.measure?.(700));
     expect(mockScrollToIndex).toHaveBeenCalledTimes(1);
     expect(onScrollConsumed).toHaveBeenCalledWith(1);
 

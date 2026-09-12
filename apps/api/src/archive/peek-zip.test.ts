@@ -220,9 +220,9 @@ describe("parseZipCentralDirectoryEntries: names never used as real filesystem p
     ]);
   });
 
-  it("decodes a name as latin1 when the UTF-8 flag is not set", () => {
-    const record = buildRawCentralDirectoryRecord({ name: "plain.txt", isUtf8: false });
-    expect(parseZipCentralDirectoryEntries(record)[0]?.path).toBe("plain.txt");
+  it("decodes CP437 when the UTF-8 flag is not set", () => {
+    const record = buildRawCentralDirectoryRecord({ name: "caf\x82.txt", isUtf8: false });
+    expect(parseZipCentralDirectoryEntries(record)[0]?.path).toBe("café.txt");
   });
 
   it("clamps an all-zero DOS date to a valid Date instead of producing an invalid one", () => {

@@ -191,3 +191,20 @@ describe("callSidecar", () => {
     expect(result).toEqual({ ok: false, reason: "unreachable", detail: "aborted" });
   });
 });
+
+it("keeps the HTTP error status when cancelling its body also fails", async () => {
+  const cancel = vi.fn(async () => {
+    throw new Error("already closed");
+  });
+  const result = await callSidecar(
+    "http://sidecar",
+    "/health",
+    SCHEMA,
+    {},
+    {
+      fetch: async () => new Response(new ReadableStream({ cancel }), { status: 503 }),
+    },
+  );
+  expect(result).toMatchObject({ ok: false, status: 503 });
+  expect(cancel).toHaveBeenCalledOnce();
+});

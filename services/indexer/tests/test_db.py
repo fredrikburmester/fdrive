@@ -422,3 +422,10 @@ def test_mark_pending_subtree_treats_prefix_as_literal(
     assert manifest[selected_path][2] == "pending"
     assert manifest[sibling_path][2] == "indexed"
     assert db.get_manifest(db_conn, other_root_id)[selected_path][2] == "indexed"
+
+
+def test_unhashed_imports_have_no_derivative_key(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    db.upsert_file(db_conn, root_id, "import.png", "import.png", ".png", 100, 1, None, "image/png")
+    assert db.file_content_key(db_conn, root_id, "import.png") is None
+    assert db.media_files(db_conn, root_id) == []

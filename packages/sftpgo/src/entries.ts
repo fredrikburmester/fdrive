@@ -5,7 +5,7 @@ const DIR_BIT = 0x80000000;
 /** Go's os.ModeSymlink bit (1 << 27). */
 const SYMLINK_BIT = 0x08000000;
 /** Go's os.ModeType mask: the set of bits that mark a non-regular file. */
-const TYPE_MASK = 0x8f200000;
+const TYPE_MASK = 0x8f280000;
 
 export interface RawSftpgoEntry {
   readonly name: string;

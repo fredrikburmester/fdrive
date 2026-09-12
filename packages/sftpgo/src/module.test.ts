@@ -159,3 +159,40 @@ describe("sftpgoModule", () => {
     expect(await kindOf(storage.list("/"))).toBe("unauthorized");
   });
 });
+
+it.each([false, true])("only retries replayable uploads (bytes=%s)", async (replayable) => {
+  const session: StorageSession = {
+    externalUsername: "alice",
+    getCredential: async () => ({}),
+    getToken: vi.fn(async () => "token"),
+    invalidateToken: vi.fn(async () => {}),
+  };
+  const received: string[] = [];
+  const uploadFetch: typeof fetch = async (_url, init) => {
+    received.push(await new Response(init?.body).text());
+    return received.length === 1
+      ? new Response("expired", { status: 401 })
+      : new Response(null, { status: 201 });
+  };
+  const storage = sftpgoModule.createStorage(INSTANCE, session, { fetch: uploadFetch });
+  const body = replayable
+    ? new TextEncoder().encode("payload")
+    : (new Response("payload").body ?? new ReadableStream<Uint8Array>());
+  expect(await kindOf(storage.upload("/file.txt", body))).toBe(replayable ? null : "unauthorized");
+  expect(received).toEqual(replayable ? ["payload", "payload"] : ["payload"]);
+  expect(session.invalidateToken).toHaveBeenCalledTimes(1);
+  expect(session.getToken).toHaveBeenCalledTimes(replayable ? 2 : 1);
+});
+
+it("maps a proxy's invalid JSON success to upstream unavailable", async () => {
+  const session: StorageSession = {
+    externalUsername: "alice",
+    getCredential: async () => ({}),
+    getToken: async () => "token",
+    invalidateToken: async () => {},
+  };
+  const storage = sftpgoModule.createStorage(INSTANCE, session, {
+    fetch: async () => new Response("<html>proxy failure</html>"),
+  });
+  expect(await kindOf(storage.list("/"))).toBe("upstream_unavailable");
+});

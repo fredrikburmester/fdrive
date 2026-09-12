@@ -71,3 +71,24 @@ describe("isInlinePreviewable", () => {
     expect(isInlinePreviewable("application/zip")).toBe(false);
   });
 });
+
+describe("inline document isolation", () => {
+  it.each([
+    "text/html",
+    "TEXT/HTML; charset=UTF-8",
+    "image/svg+xml",
+    "image/svg+xml; charset=utf-8",
+    "text/xml",
+    "application/xml",
+    "application/xhtml+xml",
+    "image/unknown",
+    "text/unknown",
+    "",
+  ])("refuses %s", (mime) => {
+    expect(isInlinePreviewable(mime)).toBe(false);
+  });
+  it("normalizes passive MIME parameters and case", () => {
+    expect(isInlinePreviewable(" Image/PNG ; charset=binary")).toBe(true);
+    expect(isInlinePreviewable("application/pdf; version=1.7")).toBe(true);
+  });
+});

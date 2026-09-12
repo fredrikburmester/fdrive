@@ -29,7 +29,7 @@ from .extract import Extractor, embed_passages
 from .features import FeatureConfiguration, FeatureValues, disabled
 from .image_embed import dimension_guard, embed_images, image_embed_health, is_image_candidate, needs_embedding
 from .paths import ext_of
-from .rules import is_text_excluded, should_index_name, should_walk_dir
+from .rules import is_ocr_image_dir, is_text_excluded, should_index_name, should_walk_dir
 from .settings import Settings
 from .thumbs import SIZES, kind_for_ext, within_size_budget
 from .thumbs import storage_path as thumb_storage_path
@@ -114,7 +114,7 @@ def unchanged_in_db(manifest_row: tuple[int, int, str, object] | None, st: os.st
 
 @dataclass
 class _PathLockEntry:
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    active: bool = False
     users: int = 0
 
 
@@ -125,22 +125,43 @@ class PathLocks:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._locks: dict[str, _PathLockEntry] = {}
+        self._changed = threading.Condition(self._lock)
 
     @contextmanager
     def get(self, key: str) -> Iterator[None]:
-        with self._lock:
-            entry = self._locks.get(key)
-            if entry is None:
-                entry = self._locks[key] = _PathLockEntry()
-            entry.users += 1
+        with self.get_many((key,)):
+            yield
+
+    @contextmanager
+    def get_many(self, keys: tuple[str, ...]) -> Iterator[None]:
+        keys = tuple(sorted({key.strip("/") for key in keys}))
+        with self._changed:
+            for key in keys:
+                self._locks.setdefault(key, _PathLockEntry()).users += 1
+        acquired = False
         try:
-            with entry.lock:
-                yield
+            with self._changed:
+                while any(
+                    entry.active and (
+                        key == active or not key or not active or key.startswith(active + "/") or active.startswith(key + "/")
+                    )
+                    for key in keys for active, entry in self._locks.items()
+                ):
+                    self._changed.wait()
+                for key in keys:
+                    self._locks[key].active = True
+                acquired = True
+            yield
         finally:
-            with self._lock:
-                entry.users -= 1
-                if entry.users == 0:
-                    del self._locks[key]
+            with self._changed:
+                for key in keys:
+                    entry = self._locks[key]
+                    if acquired:
+                        entry.active = False
+                    entry.users -= 1
+                    if entry.users == 0:
+                        del self._locks[key]
+                self._changed.notify_all()
 
 
 @dataclass
@@ -161,6 +182,7 @@ class RootContext:
     _backfill_media: bool = False
     path_locks: PathLocks = field(default_factory=PathLocks)
     embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
+    image_embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
     local: threading.local = field(default_factory=threading.local)
 
     def conn(self) -> psycopg.Connection:
@@ -226,10 +248,13 @@ def process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_res
             else (manifest_row[2] if manifest_row is not None else "")
         )
         unchanged = unchanged_in_db(manifest_row, st)
-        if unchanged and not should_retry_unchanged(
-            manifest_status, ext_of(os.path.basename(rel_path)), ctx.feature_configuration().values
-        ):
-            return False
+        if unchanged:
+            if manifest_status.startswith("excluded") and exclusion_still_applies(ctx, rel_path, st.st_size):
+                return False
+            if not should_retry_unchanged(
+                manifest_status, ext_of(os.path.basename(rel_path)), ctx.feature_configuration().values
+            ):
+                return False
         was_new = manifest_row is None
         # Feature transitions may re-extract an otherwise unchanged file. The
         # existing digest is still valid under the same size+mtime contract that
@@ -238,6 +263,17 @@ def process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_res
         _process_file(ctx, abs_path, rel_path, st, known_sha256)
         emit_event(ctx, "created" if was_new else "changed", rel_path)
         return True
+
+
+def exclusion_still_applies(ctx: RootContext, rel_path: str, size: int) -> bool:
+    from .chunking import is_image, is_pdf, is_tika
+
+    if is_text_excluded(ctx.name, rel_path, list(ctx.settings.text_exclude_globs)):
+        return True
+    ext = ext_of(os.path.basename(rel_path))
+    if is_image(ext):
+        return not is_ocr_image_dir(ctx.name, rel_path, list(ctx.settings.ocr_image_globs)) or size > ctx.cfg.image_max_bytes
+    return (is_pdf(ext) or is_tika(ext)) and size > ctx.cfg.text_max_bytes
 
 
 def should_retry_unchanged(status: str, ext: str, features: FeatureValues) -> bool:
@@ -352,12 +388,13 @@ def embed_thumbnail(ctx: RootContext, sha256: str) -> bool:
     the 256px thumbnail was never written (e.g. it was over the thumbnail
     size budget)."""
     embed_url = ctx.cfg.image_embed_url
-    if not embed_url:
+    if not embed_url or ctx.image_embed_backoff.paused():
         return False
     health = image_embed_health(embed_url)
     guard = dimension_guard(health)
     if guard is not None:
-        log(f"image embed: {guard}; skipping")
+        if ctx.image_embed_backoff.note_failure():
+            log(f"image embed: {guard}; pausing image embeddings")
         return False
     assert health is not None  # dimension_guard is None only when health is present
     configured_model = health.model or ""
@@ -379,7 +416,16 @@ def embed_thumbnail(ctx: RootContext, sha256: str) -> bool:
         log(f"image embed: cannot read thumbnail {thumb_path}: {type(e).__name__}: {e}")
         return False
 
-    embeddings, model = embed_images([data], embed_url, ctx.cfg.image_embed_batch_size)
+    try:
+        embeddings, model = embed_images([data], embed_url, ctx.cfg.image_embed_batch_size)
+    except Exception as error:
+        if is_backend_outage(error):
+            if ctx.image_embed_backoff.note_failure():
+                log(f"image embed: backend unreachable ({type(error).__name__}); pausing image embeddings")
+            return False
+        raise
+    if ctx.image_embed_backoff.note_success():
+        log("image embed: backend reachable again; resuming image embeddings")
     if embeddings:
         db.upsert_image_embedding(conn, sha256, model, embeddings[0])
         return True
@@ -511,10 +557,11 @@ def watch_index(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_resu
 def watch_mark_deleted(ctx: RootContext, rel_path: str, is_dir: bool) -> int:
     if not ctx.feature_configuration().values.indexer_enabled:
         return 0
-    ids = db.mark_deleted(ctx.conn(), ctx.root_id, rel_path, is_dir)
-    if ids:
-        emit_event(ctx, "deleted", rel_path)
-    return len(ids)
+    with ctx.path_locks.get(rel_path):
+        ids = db.mark_deleted(ctx.conn(), ctx.root_id, rel_path, is_dir)
+        if ids:
+            emit_event(ctx, "deleted", rel_path)
+        return len(ids)
 
 
 def watch_rename(ctx: RootContext, old_rel: str, new_rel: str, is_dir: bool) -> int:
@@ -523,11 +570,12 @@ def watch_rename(ctx: RootContext, old_rel: str, new_rel: str, is_dir: bool) -> 
     if not is_dir and ext_of(os.path.basename(old_rel)) != ext_of(os.path.basename(new_rel)):
         watch_mark_deleted(ctx, old_rel, False)
         return 0
-    moved = db.rename_paths(ctx.conn(), ctx.root_id, old_rel, new_rel, is_dir)
-    if moved:
-        db.insert_moves(ctx.conn(), ctx.root_id, old_rel, new_rel, "watcher")
-        emit_event(ctx, "moved", old_rel, new_rel)
-    return moved
+    with ctx.path_locks.get_many((old_rel, new_rel)):
+        moved = db.rename_paths(ctx.conn(), ctx.root_id, old_rel, new_rel, is_dir)
+        if moved:
+            db.insert_moves(ctx.conn(), ctx.root_id, old_rel, new_rel, "watcher")
+            emit_event(ctx, "moved", old_rel, new_rel)
+        return moved
 
 
 def start_watcher(ctx: RootContext, workers: int, debounce: float) -> object | None:
@@ -626,6 +674,8 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
                 ctx, rel_path, st.st_size, include_existing=ctx.needs_media_backfill()
             )
             retry_unchanged = prev is not None and should_retry_unchanged(prev[2], ext_of(os.path.basename(rel_path)), features)
+            if prev is not None and prev[2].startswith("excluded") and exclusion_still_applies(ctx, rel_path, st.st_size):
+                retry_unchanged = False
             if unchanged and prev is not None and prev[2] == "partial" and features.semantic_search:
                 pending.append(pool.submit(job, abs_path, rel_path, st, True, media_needed))
             elif unchanged and retry_unchanged:

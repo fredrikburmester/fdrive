@@ -1680,3 +1680,11 @@ describe("system logs client", () => {
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "GET"]);
   });
 });
+
+it("passes stat cancellation through to fetch", async () => {
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(VALID_ENTRY));
+  const client = createApiClient({ fetch: fetchMock });
+  const controller = new AbortController();
+  await client.stat("/file.txt", controller.signal);
+  expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+});

@@ -2,13 +2,20 @@
 
 import type { CreateTagRequest, FsEntry, ListResponse, UpdateTagRequest } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
-import { type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import {
+  type QueryKey,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useState } from "react";
 import { toast } from "sonner";
 import { refreshIdentityQuery } from "@/lib/account/invalidation";
-import { accountTransition } from "@/lib/account/transition";
+import { accountTransition, useAccountTransition } from "@/lib/account/transition";
 import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
-import { DEFAULT_RESOLVE_CONCURRENCY, type ResolvedEntry, resolveEntries } from "./resolve";
+import { DEFAULT_RESOLVE_CONCURRENCY, type ResolvedEntry } from "./resolve";
+import { createStatQueue } from "./stat-queue";
 import { applyFavoriteToEntries, applyTagsToEntries } from "./tag-set";
 
 /** A prefix key matching every `fs.list` query, for the broad invalidation a
@@ -299,49 +306,27 @@ export interface UseResolvedEntriesResult {
   readonly isLoading: boolean;
 }
 
-/**
- * Resolves `paths` to live `FsEntry`s via `apiClient.stat`, for the
- * favorites/recents/tag "virtual listing" pages, which have a list of paths
- * rather than a real folder to list. Re-resolves whenever the path list
- * changes (compared by its joined contents, not array identity, so a
- * caller mapping a query result to a plain array of paths on every render
- * does not retrigger this on every render). Not a `useQuery` because there
- * is no single stable key naming "this exact set of paths" that would be
- * useful to cache or invalidate from elsewhere; each page owns its own
- * resolution instead.
- */
+/** Resolves paths through the shared stat cache, observing mutation/SSE invalidations. */
 export function useResolvedEntries(paths: readonly string[]): UseResolvedEntriesResult {
-  const [entries, setEntries] = useState<readonly ResolvedEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(paths.length > 0);
-  const key = paths.join("\0");
-
-  // Deliberately keyed on `key` (the joined path list) below, not `paths`
-  // itself: see the doc comment above.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` is `paths` joined; re-running per new array identity for the same paths would loop.
-  useEffect(() => {
-    let cancelled = false;
-    if (paths.length === 0) {
-      setEntries([]);
-      setIsLoading(false);
-      return;
-    }
-    setIsLoading(true);
-    const client = snapshotTabApiClient();
-    const generation = currentGeneration();
-    void resolveEntries(paths, (path) => client.stat(path), DEFAULT_RESOLVE_CONCURRENCY).then(
-      (resolved) => {
-        if (!cancelled && currentWork(generation)) {
-          setEntries(resolved);
-          setIsLoading(false);
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [key]);
-
-  return { entries, isLoading };
+  const transition = useAccountTransition();
+  const scope = useMetadataScope();
+  const [run] = useState(() => createStatQueue(DEFAULT_RESOLVE_CONCURRENCY));
+  const queries = useQueries({
+    queries: paths.map((path) => ({
+      queryKey: queryKeys.fs.stat(path),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        run(() => scope.client.stat(path, signal), signal),
+      enabled: !transition.pending && transition.generation === scope.generation,
+      retry: false,
+    })),
+  });
+  return {
+    entries: paths.map((path, index) => ({
+      path,
+      entry: queries[index]?.isError ? null : (queries[index]?.data ?? null),
+    })),
+    isLoading: queries.some((query) => query.isLoading),
+  };
 }
 
 export type { FsEntry, ResolvedEntry };

@@ -471,3 +471,58 @@ describe("timeouts", () => {
     expect(await kindOf(api.stat("/"))).toBe("network");
   });
 });
+
+it("uses collection URLs for stat, copy, move and delete on a strict server", async () => {
+  const { server } = setup();
+  const collectionPaths = new Set(["/docs", "/copy", "/moved"]);
+  const fetchStrict: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (collectionPaths.has(url.pathname)) {
+      return new Response(null, { status: 301, headers: { location: `${url.pathname}/` } });
+    }
+    if (init?.method === "COPY" || init?.method === "MOVE") {
+      expect(new Headers(init.headers).get("destination")).toMatch(/\/$/);
+    }
+    return server.fetch(input, init);
+  };
+  const user = createWebdavClient({ baseUrl: "http://webdav.test/", fetch: fetchStrict }).user(
+    ALICE,
+  );
+  expect((await user.stat("/docs")).kind).toBe("dir");
+  await user.copy("/docs", "/copy");
+  await user.move("/copy", "/moved");
+  await user.delete("/moved");
+  expect(await kindOf(user.stat("/moved"))).toBe("not_found");
+});
+
+it.each([403, 404, 500])(
+  "rejects response-level and all-property %s failures within 207",
+  async (status) => {
+    for (const detail of [
+      `<d:status>HTTP/1.1 ${status} Error</d:status>`,
+      `<d:propstat><d:prop/><d:status>HTTP/1.1 ${status} Error</d:status></d:propstat>`,
+    ]) {
+      const client = createWebdavClient({
+        baseUrl: "http://dav.test/",
+        fetch: async () =>
+          new Response(
+            `<d:multistatus xmlns:d="DAV:"><d:response><d:href>/file</d:href>${detail}</d:response></d:multistatus>`,
+            { status: 207 },
+          ),
+      });
+      await expect(client.user(ALICE).stat("/file")).rejects.toMatchObject({ status });
+    }
+  },
+);
+
+it.each(["http://evil.test/file/", "/other/", "/file/?token=x", "/file/#x"])(
+  "refuses a noncanonical redirect %s",
+  async (location) => {
+    const redirected = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 301, headers: { location } }),
+    );
+    const client = createWebdavClient({ baseUrl: "http://dav.test/", fetch: redirected });
+    expect(await kindOf(client.user(ALICE).stat("/file"))).toBe("server");
+    expect(redirected).toHaveBeenCalledTimes(1);
+  },
+);

@@ -7,7 +7,7 @@ import {
   SetIdentityScopeRequest,
   SetMountMappingsRequest,
 } from "@fdrive/contracts";
-import type { IdentityRepo } from "@fdrive/db";
+import { IdentityLinksError, type IdentityRepo } from "@fdrive/db";
 import { accountContext } from "../accounts/routes.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
@@ -100,6 +100,9 @@ export function registerScopeRoutes(
     try {
       await deps.resolver.setOverrides(identity, parsed.data.scopes, parsed.data.unindexedPrefixes);
     } catch (error) {
+      if (error instanceof IdentityLinksError) {
+        throw new ApiHttpError("not_found", "identity not found");
+      }
       if (error instanceof ScopeOverrideValidationError) {
         // `reason` lets the account page map the failure to the offending field.
         throw new ApiHttpError("bad_request", error.message, { reason: error.reason });

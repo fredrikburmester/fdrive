@@ -340,3 +340,8 @@ describe("IdentityScopeResponse", () => {
     ).toBe(true);
   });
 });
+
+it("refuses scope segments longer than 255 UTF-8 bytes", () => {
+  expect(ScopeCanonicalPath.safeParse(`/${"é".repeat(128)}`).success).toBe(false);
+  expect(ScopeCanonicalPath.safeParse(`/${"é".repeat(127)}a`).success).toBe(true);
+});

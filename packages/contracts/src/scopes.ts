@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidEntryName } from "./fs.ts";
 
 /**
  * A single root name segment as used in a home template or a scope
@@ -39,7 +40,7 @@ export function isCanonicalScopePath(value: string): boolean {
   if (value.endsWith("/")) return false;
   const segments = value.slice(1).split("/");
   for (const segment of segments) {
-    if (segment.length === 0 || segment === "." || segment === "..") return false;
+    if (!isValidEntryName(segment)) return false;
   }
   return true;
 }

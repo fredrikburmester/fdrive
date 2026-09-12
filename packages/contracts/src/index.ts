@@ -9,6 +9,7 @@ export {
   UnlinkIdentityRequest,
 } from "./accounts.ts";
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
+export { CanonicalUuid } from "./canonical-uuid.ts";
 export type {
   ApiClient,
   ApiClientOptions,

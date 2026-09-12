@@ -82,19 +82,35 @@ export async function toRedirectError(response: Response): Promise<WebdavError> 
 
 /**
  * Performs a fetch call, converting a rejected promise into a "network"
- * `WebdavError` and any 3xx answer into a "server" one (see
- * `toRedirectError`). Always requests `redirect: "manual"`.
+ * `WebdavError` and refused redirects into a "server" one. A stat may
+ * retry exactly one 301/308 to its locally constructed collection URL.
+ * Always requests `redirect: "manual"`.
  */
 export async function safeFetch(
   fetchImpl: typeof globalThis.fetch,
   url: string,
   init: RequestInit,
+  canonicalCollectionUrl?: string,
 ): Promise<Response> {
   let response: Response;
   try {
     response = await fetchImpl(url, { ...init, redirect: "manual" });
   } catch (cause) {
     throw toNetworkError(cause);
+  }
+  if (
+    (response.status === 301 || response.status === 308) &&
+    canonicalCollectionUrl !== undefined
+  ) {
+    const location = response.headers.get("location");
+    let target: string | undefined;
+    try {
+      if (location !== null) target = new URL(location, url).href;
+    } catch {}
+    if (target === canonicalCollectionUrl && target === `${url}/`) {
+      await cancelBody(response);
+      return safeFetch(fetchImpl, target, init);
+    }
   }
   if (response.status >= 300 && response.status < 400) {
     throw await toRedirectError(response);
