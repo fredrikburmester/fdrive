@@ -89,11 +89,14 @@ def originals_stats(state_dir: str) -> tuple[int, int]:
     return count, total
 
 
+MAX_OCR_PAGE_MEGAPIXELS = 50
+
+
 def run_ocrmypdf(
     src: str,
     dst: str,
     langs: str,
-    max_mb: int,
+    max_page_megapixels: int,
     timeout_seconds: int,
     jobs: int,
     popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
@@ -105,7 +108,7 @@ def run_ocrmypdf(
         [
             "ocrmypdf",
             "--skip-big",
-            str(max_mb),
+            str(max_page_megapixels),
             "-l",
             langs,
             "--output-type",
@@ -213,7 +216,9 @@ def process_file(
     fd, tmp_out = tempfile.mkstemp(prefix="._fdrive-ocr-", suffix=".pdf", dir=os.path.dirname(abs_path))
     os.close(fd)
     try:
-        exit_code, stderr, timed_out = run_ocrmypdf(abs_path, tmp_out, settings.langs, settings.max_mb, timeout_seconds, jobs)
+        exit_code, stderr, timed_out = run_ocrmypdf(
+            abs_path, tmp_out, settings.langs, MAX_OCR_PAGE_MEGAPIXELS, timeout_seconds, jobs
+        )
         decision = decide(exit_code, stderr, timed_out)
         if decision.rewrite:
             apply_rewrite(abs_path, tmp_out, state_dir, target.name, rel_path, size, mtime_ns, settings.keep_originals)

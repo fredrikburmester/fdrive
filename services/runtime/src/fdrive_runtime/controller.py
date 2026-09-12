@@ -109,6 +109,9 @@ class FeatureClient:
                 if len(raw) > 64 * 1024:
                     raise ValueError("feature endpoint response is too large")
                 return parse_feature_snapshot(json.loads(raw))
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise ValueError(f"feature endpoint returned {error.code}") from error
         except (http.client.HTTPException, urllib.error.URLError, TimeoutError) as error:
             raise EndpointUnavailable(f"feature endpoint unreachable: {type(error).__name__}") from error
         except json.JSONDecodeError as error:

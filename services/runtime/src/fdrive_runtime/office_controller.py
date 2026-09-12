@@ -77,6 +77,9 @@ class OfficeClient:
                 if len(raw) > 64 * 1024:
                     raise ValueError("office endpoint response is too large")
                 return parse_office_snapshot(json.loads(raw))
+        except urllib.error.HTTPError as error:
+            error.close()
+            raise ValueError(f"office endpoint returned {error.code}") from error
         except (http.client.HTTPException, urllib.error.URLError, TimeoutError) as error:
             raise EndpointUnavailable(f"office endpoint unreachable: {type(error).__name__}") from error
         except json.JSONDecodeError as error:
