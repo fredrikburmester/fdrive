@@ -17,7 +17,10 @@ not current instructions.
   allowlist; the other generated files are unchanged. Two new tests close the gap: preflight
   accepts a `.env` setting all 15, and every `${FDRIVE_*}` reference in `compose.yaml` and the
   production overlays must be a known key, which is the check that was missing.
-- Evidence: `pnpm test:deploy:coverage` 59/59 at 100% coverage, `tsc -p tools/deploy`,
+- Follow-up: `.env.example` is the quick-start template and lists only the secrets by design,
+  so the keys are not added there; its header pointer now also names REFERENCE.md's processing
+  worker resource limits, which is the only cue an operator reading the template alone gets.
+- Evidence: `pnpm test:deploy:coverage` 60/60 at 100% coverage, `tsc -p tools/deploy`,
   `biome check tools/deploy/`. Dropping one key from the allowlist or the table makes the new
   tests fail.
 

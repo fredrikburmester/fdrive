@@ -94,6 +94,14 @@ describe("renderEnvExample", () => {
     expect(rendered).not.toContain("FDRIVE_PROFILES");
   });
 
+  it("points the quick-start reader at the resource limits it deliberately omits", () => {
+    // The CPU/memory caps and thread counts live only in REFERENCE.md; the
+    // template's header is the one cue an operator reading it alone gets.
+    const rendered = renderQuickstartEnvExample();
+    expect(rendered).not.toContain("FDRIVE_EMBED_CPUS");
+    expect(rendered).toContain("processing worker resource limits: REFERENCE.md");
+  });
+
   it("ends with a trailing newline", () => {
     expect(renderEnvExample().endsWith("\n")).toBe(true);
   });
