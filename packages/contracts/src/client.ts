@@ -21,6 +21,7 @@ import {
   ListResponse,
   OkResponse,
 } from "./fs.ts";
+import { HealthResponse } from "./health.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import {
   type CreateTagRequest,
@@ -60,6 +61,7 @@ import {
   adminProviderRoute,
   adminProviderTestRoute,
   IDENTITY_HEADER,
+  IDENTITY_QUERY_PARAM,
   identityScopeRoute,
   identityScopeSuggestionsRoute,
   jobCancelRoute,
@@ -190,6 +192,7 @@ export interface ApiClientImageSearchOptions {
 }
 
 export interface ApiClient {
+  health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
   systemPublicUrl(): Promise<PublicUrlSettings>;
@@ -523,33 +526,33 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return get(publicShareRoute(id), PublicShare);
     },
     setSharePassword(id, password) {
-      return post(`${publicShareRoute(id)}/credentials`, OkResponse, { jsonBody: { password } });
+      return post(publicShareRoute(id, "credentials"), OkResponse, { jsonBody: { password } });
     },
     clearSharePassword(id) {
-      return del(`${publicShareRoute(id)}/credentials`, OkResponse);
+      return del(publicShareRoute(id, "credentials"), OkResponse);
     },
     shareEntries(id, path = "/") {
-      return get(`${publicShareRoute(id)}/entries`, ShareEntriesResponse, { query: { path } });
+      return get(publicShareRoute(id, "entries"), ShareEntriesResponse, { query: { path } });
     },
     shareArchiveEntries(id, path = "/") {
-      return get(`${publicShareRoute(id)}/archive-entries`, ArchiveEntriesResponse, {
+      return get(publicShareRoute(id, "archiveEntries"), ArchiveEntriesResponse, {
         query: { path },
       });
     },
     shareDownloadUrl(id, path = "/") {
-      return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/download`, { path });
+      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "download"), { path });
     },
     shareArchiveUrl(id) {
-      return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/archive`);
+      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "archive"));
     },
     shareThumbUrl(id, path, size) {
-      return buildRequestUrl(ctx.baseUrl, `${publicShareRoute(id)}/thumb`, {
+      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "thumb"), {
         path,
         size: String(size),
       });
     },
     shareUpload(id, path, body, signal) {
-      return put(`${publicShareRoute(id)}/upload`, OkResponse, {
+      return put(publicShareRoute(id, "upload"), OkResponse, {
         query: { path },
         rawBody: body,
         signal,
@@ -649,7 +652,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return buildRequestUrl(ctx.baseUrl, ROUTES.fs.download, {
         path,
         inline: opts?.inline === true ? "1" : undefined,
-        identity: ctx.identityId,
+        [IDENTITY_QUERY_PARAM]: ctx.identityId,
       });
     },
 
@@ -707,6 +710,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(jobCancelRoute(id), JobStatus);
     },
 
+    health() {
+      return get(ROUTES.health, HealthResponse);
+    },
     about(): Promise<AboutResponse> {
       return get(ROUTES.about, AboutResponse);
     },

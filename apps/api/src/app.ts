@@ -1,4 +1,10 @@
-import { AboutResponse, type ApiError, HealthResponse, statusForKind } from "@fdrive/contracts";
+import {
+  AboutResponse,
+  type ApiError,
+  HealthResponse,
+  ROUTES,
+  statusForKind,
+} from "@fdrive/contracts";
 import { isCoreError } from "@fdrive/core";
 import { Hono } from "hono";
 import { requestId as requestIdMiddleware } from "hono/request-id";
@@ -178,7 +184,7 @@ export function createApp(deps: AppDeps): AppHono {
 
   const subsystemReachability = deps.subsystemReachability ?? (async () => ({}));
 
-  v1.get("/health", async (c) => {
+  v1.get(ROUTES.health.slice("/api/v1".length), async (c) => {
     const uptimeSeconds = (clock().getTime() - deps.startedAt.getTime()) / 1000;
     const reachable = await subsystemReachability(deps.config);
     const subsystems = applyReachability(subsystemsStatus(deps.config), reachable);

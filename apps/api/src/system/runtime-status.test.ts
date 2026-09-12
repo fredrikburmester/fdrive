@@ -64,3 +64,12 @@ describe("runtimeFailure", () => {
     expect(runtimeFailure({ status: "failed", error: null })).toBe("Worker could not be started.");
   });
 });
+
+it("preserves an explicit controller URL's published port", async () => {
+  let seen = "";
+  await fetchRuntimeStatus("http://127.0.0.1:58099", null, async (url) => {
+    seen = String(url);
+    return Response.json({ status: "ready" });
+  });
+  expect(seen).toBe("http://127.0.0.1:58099/runtime");
+});

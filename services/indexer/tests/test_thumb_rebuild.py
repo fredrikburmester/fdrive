@@ -94,6 +94,7 @@ def test_job_initial_snapshot() -> None:
         "running": False,
         "processed": 0,
         "total": 0,
+        "total_known": False,
         "started_at": None,
         "finished_at": None,
         "errors": 0,
@@ -254,7 +255,7 @@ def test_rebuild_counts_generation_failures_and_continues(
         monkeypatch.setattr(thumbs_io, "_save_webp", fail_large)
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
     job = thumb_rebuild.ThumbnailRebuildJob()
-    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) == 2
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) is True
     assert job.snapshot()["processed"] == 2
     assert job.snapshot()["errors"] == 1
     assert job.snapshot()["outcome"] == "failed"
@@ -271,7 +272,7 @@ def test_rebuild_counts_policy_skips_separately(
     db.upsert_file(ctx.conn(), ctx.root_id, "skip.png", "skip.png", ".png", size, 0, "skip", None)
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
     job = thumb_rebuild.ThumbnailRebuildJob()
-    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) == 1
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) is True
     activity = job.activity_snapshot("thumbnailRebuild", ["thumbnails"])
     assert activity is not None
     assert activity["processed"] == activity["total"] == activity["skipped"] == 1
@@ -357,7 +358,7 @@ def test_start_rebuild_runs_and_updates_job(postgres_dsn: str, monkeypatch: pyte
 
     job = thumb_rebuild.ThumbnailRebuildJob()
     total = thumb_rebuild.start_rebuild(job, [ctx], None, False)
-    assert total == 1
+    assert total is True
     snap = job.snapshot()
     assert snap["running"] is False
     assert snap["processed"] == 1
@@ -368,7 +369,7 @@ def test_start_rebuild_runs_and_updates_job(postgres_dsn: str, monkeypatch: pyte
     assert db.thumbnails_count(ctx.conn()) == 2
 
 
-def test_start_rebuild_returns_none_when_already_running(
+def test_start_rebuild_returns_false_when_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
@@ -376,7 +377,7 @@ def test_start_rebuild_returns_none_when_already_running(
     job = thumb_rebuild.ThumbnailRebuildJob()
     assert job.try_start(5) is True
     result = thumb_rebuild.start_rebuild(job, [ctx], None, False)
-    assert result is None
+    assert result is False
 
 
 def test_start_rebuild_job_crash_still_releases_job(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -390,7 +391,7 @@ def test_start_rebuild_job_crash_still_releases_job(postgres_dsn: str, monkeypat
     monkeypatch.setattr(thumb_rebuild, "rebuild_thumbnails", boom)
     job = thumb_rebuild.ThumbnailRebuildJob()
     total = thumb_rebuild.start_rebuild(job, [ctx], None, False)
-    assert total == 0
+    assert total is True
     snap = job.snapshot()
     assert snap["running"] is False
     assert snap["finished_at"] is not None
@@ -407,7 +408,7 @@ def test_start_rebuild_thread_uses_own_connection(postgres_dsn: str, monkeypatch
 
     job = thumb_rebuild.ThumbnailRebuildJob()
     total = thumb_rebuild.start_rebuild(job, [ctx], None, False)
-    assert total == 1
+    assert total is True
 
     done = threading.Event()
 
@@ -438,7 +439,24 @@ def test_rebuild_uses_one_candidate_inventory(postgres_dsn: str, monkeypatch: py
         return original(conn, root_id)
     monkeypatch.setattr(db, "media_files", inventory)
     job = thumb_rebuild.ThumbnailRebuildJob()
-    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) == 1
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) is True
     assert job.snapshot()["outcome"] == "completed"
     assert job.snapshot()["processed"] == job.snapshot()["total"] == 1
+    assert db.thumbnails_count(ctx.conn()) == 2
+
+
+def test_avif_is_indexed_and_generates_thumbnails(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from PIL import Image
+
+    from fdrive_indexer.chunking import is_image
+
+    cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    avif = tmp_path / "photo.avif"
+    Image.new("RGB", (32, 24), (100, 120, 140)).save(avif, format="AVIF")
+    _upsert_media_file(ctx, "photo.avif", ".avif", avif, "avif-sha")
+    assert is_image(".avif")
+    assert thumb_rebuild.rebuild_thumbnails(ctx) == 1
     assert db.thumbnails_count(ctx.conn()) == 2

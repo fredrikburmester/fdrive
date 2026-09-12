@@ -11,7 +11,7 @@
 # package it depends on, in topological (dependency-first) order, without
 # needing turbo installed.
 #
-# `node:24-alpine` is pinned by digest (see deploy/README.md's pins table)
+# `node:24-alpine` is pinned by digest (digest recorded below)
 # so a rebuild never silently picks up a new base image without a
 # deliberate bump of the digest in both FROM lines below.
 
@@ -32,7 +32,7 @@ ENV API_INTERNAL_URL=$API_INTERNAL_URL
 # buildContentSecurityPolicy): verified empirically that setting this as a
 # plain runtime `-e`/compose `environment:` value has no effect once the
 # image is built. Empty by default (no office origin allowed); an office
-# overlay (compose.office.yaml, compose.office.collabora.yaml) must pass
+# stack or overlay (deploy/compose.yaml, compose.office.collabora.yaml) must pass
 # --build-arg FDRIVE_OFFICE_PUBLIC_URL=... matching its own
 # FDRIVE_OFFICE_PUBLIC_URL for the office editor iframe to load under the
 # CSP.

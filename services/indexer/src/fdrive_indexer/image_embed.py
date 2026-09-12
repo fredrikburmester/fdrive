@@ -28,7 +28,7 @@ IMAGE_EMBED_DIMENSIONS = 1024
 
 # The sidecar's own HTTP contract rejects more than this many image parts in
 # one `/embed/image` request (413); the client-side batcher below never
-# exceeds it even if `IMAGE_EMBED_BATCH_SIZE` is configured higher.
+# exceeds it even if `IMAGE_EMBED_REQUEST_BATCH_SIZE` is configured higher.
 MAX_IMAGES_PER_REQUEST = 32
 
 

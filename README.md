@@ -106,8 +106,11 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 If you already have Docker and SFTPGo running on your home server:
 
 ### 1. Download and initialize
+
+Repository access and a GitHub SSH key are required while the repository is private.
+
 ```bash
-git clone https://github.com/fredrikburmester/fdrive-web.git /path/to/fdrive
+git clone git@github.com:fredrikburmester/fdrive-web.git /path/to/fdrive
 cd /path/to/fdrive/deploy
 ./init-env.sh
 ```

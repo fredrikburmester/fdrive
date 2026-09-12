@@ -38,10 +38,12 @@ class Config:
         self.embed_dim = int(os.environ.get("EMBED_DIM", "384"))
         self.embed_batch = int(os.environ.get("EMBED_BATCH", "16"))
         # Empty means the image-embed sidecar is not deployed: optional, like OCR.
-        # `IMAGE_EMBED_BATCH_SIZE` is the indexer's own client-side batching knob for
+        # `IMAGE_EMBED_REQUEST_BATCH_SIZE` is the indexer's own client-side batching knob for
         # `/embed/image` requests, distinct from the sidecar's own internal batch size.
         self.image_embed_url = os.environ.get("IMAGE_EMBED_URL", "").rstrip("/")
-        self.image_embed_batch_size = int(os.environ.get("IMAGE_EMBED_BATCH_SIZE", "8"))
+        self.image_embed_batch_size = int(
+            os.environ.get("IMAGE_EMBED_REQUEST_BATCH_SIZE", os.environ.get("IMAGE_EMBED_BATCH_SIZE", "8"))
+        )
         self.scan_interval = int(os.environ.get("SCAN_INTERVAL_SECONDS", "900"))
         self.text_max_bytes = int(os.environ.get("TEXT_MAX_MB", "64")) * 1024 * 1024
         self.image_max_bytes = int(os.environ.get("IMAGE_MAX_MB", "25")) * 1024 * 1024

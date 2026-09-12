@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { CanonicalUuid } from "./canonical-uuid.ts";
 
-export const ShareId = z.uuid().regex(/^[0-9a-f-]+$/);
+export const ShareId = CanonicalUuid;
 /** Canonical virtual path. Transport decodes once; literal percent characters are preserved. */
 export const SharePath = z
   .string()
@@ -62,6 +63,7 @@ export const ManagedShare = z.object({
   hasPassword: z.boolean(),
   expiresAt: z.iso.datetime().nullable(),
   maxDownloads: z.number().int().min(0),
+  /** Consumed provider transfer tokens: downloads/previews for read shares, uploads for write shares. */
   usedDownloads: z.number().int().min(0),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -81,6 +83,7 @@ export const PublicShare = z.object({
   credentialPresent: z.boolean(),
   expiresAt: z.iso.datetime().nullable(),
   maxDownloads: z.number().int().min(0),
+  /** Consumed provider transfer tokens: downloads/previews for read shares, uploads for write shares. */
   usedDownloads: z.number().int().min(0),
   unavailableReason: z.enum(["expired", "limit"]).nullable(),
 });

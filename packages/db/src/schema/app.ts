@@ -224,22 +224,30 @@ export const thumbnails = appSchema.table(
  * `content_key` (sha256) `thumbnails` uses so two copies of one photo are
  * embedded once. `model` records which sidecar model produced the vector;
  * search filters to a single model and the rebuild pass replaces rows a
- * different model wrote. The HNSW index (`image_embeddings_hnsw_idx`) is
- * created by raw SQL in the migration, not declared here, matching
- * `idx.chunks.embedding`'s index.
+ * different model wrote. Index declarations mirror the migration-owned indexes.
  */
-export const imageEmbeddings = appSchema.table("image_embeddings", {
-  contentKey: text("content_key").primaryKey(),
-  model: text("model").notNull(),
-  embedding: vector("embedding", { dimensions: 1024 }).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const imageEmbeddings = appSchema.table(
+  "image_embeddings",
+  {
+    contentKey: text("content_key").primaryKey(),
+    model: text("model").notNull(),
+    embedding: vector("embedding", { dimensions: 1024 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("image_embeddings_hnsw_idx").using("hnsw", table.embedding.op("vector_cosine_ops")),
+  ],
+);
 
-export const wopiLocks = appSchema.table("wopi_locks", {
-  fileId: text("file_id").primaryKey(),
-  lockId: text("lock_id").notNull(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-});
+export const wopiLocks = appSchema.table(
+  "wopi_locks",
+  {
+    fileId: text("file_id").primaryKey(),
+    lockId: text("lock_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [index("wopi_locks_expires_at_idx").on(table.expiresAt)],
+);
 
 export const shares = appSchema.table(
   "shares",
@@ -257,6 +265,7 @@ export const shares = appSchema.table(
     presentation: text("presentation").notNull().default("auto"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Legacy name: cached SFTPGo used_tokens (transfers), exposed as usedDownloads. */
     views: integer("views").notNull().default(0),
   },
   (table) => [

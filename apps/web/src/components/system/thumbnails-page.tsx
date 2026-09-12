@@ -75,9 +75,11 @@ export function ThumbnailsPage() {
       {
         onSuccess: (result) => {
           toast.success(
-            result.total > 0
-              ? `Rebuilding ${result.total} thumbnail${result.total === 1 ? "" : "s"}…`
-              : "No thumbnails need rebuilding.",
+            result.total === null
+              ? "Rebuild started. Discovering files…"
+              : result.total > 0
+                ? `Rebuilding ${result.total} thumbnail${result.total === 1 ? "" : "s"}…`
+                : "No thumbnails need rebuilding.",
           );
           setRebuildOpen(false);
           setRoot(ALL_ROOTS);

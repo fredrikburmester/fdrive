@@ -45,6 +45,20 @@ async function stored() {
 }
 
 describe("Postgres WOPI locks", () => {
+  it("prunes expired locks in bounded batches while retaining live locks", async () => {
+    await first.db.insert(wopiLocks).values(
+      Array.from({ length: 101 }, (_, i) => ({
+        fileId: `expired-${i}`,
+        lockId: "old",
+        expiresAt: now,
+      })),
+    );
+    await a.apply(request);
+    expect(await first.db.select().from(wopiLocks)).toHaveLength(2);
+    expect(await a.get("file", now)).toBe("a");
+    expect(await first.db.select().from(wopiLocks)).toHaveLength(1);
+  });
+
   it("serializes two independent pools acquiring absent rows", async () => {
     for (let attempt = 0; attempt < 20; attempt++) {
       const fileId = `absent-${attempt}`;

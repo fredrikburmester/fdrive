@@ -4,7 +4,7 @@
 class tracks nothing thumbnail-specific, it is just "one background job's
 progress", already shared by the index-clear and thumbnail-clear jobs.
 
-Requests to the sidecar are batched at `IMAGE_EMBED_BATCH_SIZE`
+Requests to the sidecar are batched at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
 (`RootContext.cfg.image_embed_batch_size`): thumbnail bytes for up to that
 many candidates are read and POSTed together, bounding both memory and the
 number of HTTP round trips for a whole-root backfill.
@@ -113,9 +113,8 @@ def rebuild_image_embeddings(
 def count_image_embed_candidates(contexts: Sequence[RootContext], path: str | None) -> int:
     """How many files `rebuild_image_embeddings(ctx, path, ...)` would
     consider across `contexts`, before filtering by existing rows or
-    `force`. Used to answer `POST /image-embeddings/rebuild` with a total
-    before the background pass has processed anything, matching
-    `thumb_rebuild.count_candidates`."""
+    `force`. Like `thumb_rebuild.count_candidates`, this is a synchronous
+    inventory helper; HTTP rebuild admission discovers candidates asynchronously."""
     scope = normalize_scope(path)
     return sum(len(select_image_embed_candidates(db.media_files(ctx.conn(), ctx.root_id), scope)) for ctx in contexts)
 
@@ -125,43 +124,34 @@ def start_image_embed_rebuild(
     contexts: Sequence[RootContext],
     path: str | None,
     force: bool,
-) -> int | None:
-    """Start a background image-embedding rebuild across `contexts`.
-    Returns the total candidate count, or `None` when a rebuild (of any
-    kind sharing this job's admission lock) is already running, matching
-    `thumb_rebuild.start_rebuild`. When `IMAGE_EMBED_URL` is not configured
-    on any context, the total is reported as 0 up front rather than
-    discovering candidates the pass will then never touch (it is a no-op,
-    matching `rebuild_image_embeddings`)."""
+) -> bool:
+    """Claim admission and start discovery in the background. False means busy.
+
+    Candidate discovery can take longer than the API timeout. The HTTP caller
+    acknowledges with an unknown total; stats/activity expose it after discovery.
+    """
     if not job.try_start(0):
-        return None
-    configured = any(ctx.cfg.image_embed_url for ctx in contexts)
-    try:
-        candidates = [
-            (ctx, select_image_embed_candidates(db.media_files(ctx.conn(), ctx.root_id), normalize_scope(path)))
-            for ctx in contexts if ctx.cfg.image_embed_url
-        ]
-        total = sum(len(rows) for _, rows in candidates)
-        job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
-        job.discover(total)
-        job.discovered()
-    except Exception:
-        job.fail()
-        job.finish()
-        raise
+        return False
+    job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
 
     def run() -> None:
         try:
-            if configured:
-                for ctx, rows in candidates:
-                    if not ctx.feature_configuration().values.image_search:
-                        continue
-                    rebuild_image_embeddings(
-                        ctx, path, force, on_file=job.advance, candidates=rows, on_skip=lambda: job.advance(True, skipped=True)
-                    )
+            candidates = [
+                (ctx, select_image_embed_candidates(db.media_files(ctx.conn(), ctx.root_id), normalize_scope(path)))
+                for ctx in contexts if ctx.cfg.image_embed_url
+            ]
+            job.discover(sum(len(rows) for _, rows in candidates))
+            job.discovered()
+            for ctx, rows in candidates:
+                if not ctx.feature_configuration().values.image_search:
+                    continue
+                rebuild_image_embeddings(
+                    ctx, path, force, on_file=job.advance, candidates=rows,
+                    on_skip=lambda: job.advance(True, skipped=True),
+                )
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
-            log(f"image embedding rebuild job crashed: {type(e).__name__}: {e}")
+            log(f"image-embed-rebuild job crashed: {type(e).__name__}: {e}")
         finally:
             job.finish()
 
@@ -171,4 +161,4 @@ def start_image_embed_rebuild(
         job.fail()
         job.finish()
         raise
-    return total
+    return True

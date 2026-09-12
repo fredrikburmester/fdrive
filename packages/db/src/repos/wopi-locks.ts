@@ -10,6 +10,16 @@ import {
   type WopiLockRepo,
 } from "./wopi-lock-state.js";
 
+/** Bounded opportunistic cleanup; concurrent refreshes retain their row locks. */
+async function pruneExpired(tx: Parameters<Parameters<OfficeTransactionRunner>[0]>[0], now: Date) {
+  await tx.execute(sql`
+    delete from app.wopi_locks where file_id in (
+      select file_id from app.wopi_locks where expires_at <= ${now}
+      order by expires_at limit 100 for update skip locked
+    )
+  `);
+}
+
 export function createWopiLockRepo(db: Db): WopiLockRepo {
   return createWopiLockRepoWithRunner((callback) => db.transaction(callback));
 }
@@ -41,6 +51,7 @@ export function createWopiLockRepoWithRunner(
           async get(now) {
             assertActive();
             validateWopiLockRead(fileId, now);
+            await pruneExpired(tx, now);
             const [row] = await tx
               .select({ lockId: wopiLocks.lockId })
               .from(wopiLocks)
@@ -52,6 +63,7 @@ export function createWopiLockRepoWithRunner(
             assertActive();
             const request = { ...input, fileId };
             validateWopiLockRequest(request);
+            await pruneExpired(tx, request.now);
             const [row] = await tx
               .select()
               .from(wopiLocks)

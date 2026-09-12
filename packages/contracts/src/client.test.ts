@@ -1696,3 +1696,29 @@ it("passes stat cancellation through to fetch", async () => {
   await client.stat("/file.txt", controller.signal);
   expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
 });
+
+it("reads the typed public health route", async () => {
+  const response = {
+    status: "ok",
+    service: "fdrive-api",
+    version: "1",
+    uptimeSeconds: 2,
+    subsystems: Object.fromEntries(
+      [
+        "core",
+        "index",
+        "search",
+        "imageSearch",
+        "ocr",
+        "thumbnails",
+        "office",
+        "trash",
+        "shares",
+        "network",
+      ].map((name) => [name, { status: "configured", missing: [] }]),
+    ),
+  };
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json(response));
+  expect(await createApiClient({ fetch }).health()).toEqual(response);
+  expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/health");
+});

@@ -544,3 +544,18 @@ it("parses the internal worker credential", () => {
     fdriveWorkerToken: "worker-secret",
   });
 });
+
+describe("explicit processing probe URLs", () => {
+  it.each([
+    ["FDRIVE_EMBED_RUNTIME_URL", "fdriveEmbedRuntimeUrl"],
+    ["FDRIVE_IMAGE_EMBED_RUNTIME_URL", "fdriveImageEmbedRuntimeUrl"],
+    ["FDRIVE_TIKA_RUNTIME_URL", "fdriveTikaRuntimeUrl"],
+    ["FDRIVE_TIKA_URL", "fdriveTikaUrl"],
+  ] as const)("loads %s without changing its published port", (key, property) => {
+    expect(loadConfig({ ...REQUIRED_ENV, [key]: "http://127.0.0.1:59123" })[property]).toBe(
+      "http://127.0.0.1:59123",
+    );
+    expect(loadConfig({ ...REQUIRED_ENV, [key]: "" })[property]).toBeUndefined();
+    expect(() => loadConfig({ ...REQUIRED_ENV, [key]: "file:///tmp/worker" })).toThrow(key);
+  });
+});

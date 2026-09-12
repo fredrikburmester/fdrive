@@ -36,6 +36,12 @@ describe("MaintenanceProgress", () => {
       `${running ? "Running" : "Completed with errors"} · 3 of 4 processed · 1 errors`,
     );
   });
+  it("keeps the total unknown while discovering candidates", () => {
+    render(
+      <MaintenanceProgress title="Rebuild" job={{ ...idle, running: true, totalKnown: false }} />,
+    );
+    expect(screen.getByRole("status").textContent).toBe("Discovering · 0 processed · 0 errors");
+  });
   it("shows clean completion", () => {
     render(
       <MaintenanceProgress

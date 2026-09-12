@@ -133,6 +133,14 @@ globalThis.fetch = async (url) => new Response(JSON.stringify(
     ]);
   });
 
+  it("uses the configured text runtime endpoint, retaining its port and path", async () => {
+    const f = fixture();
+    f.features.values.textSearch = true;
+    const env = { ...f.env, FDRIVE_TIKA_RUNTIME_URL: "http://runtime.example:1234/tika/" };
+    expect(await checkReadiness(f.fetchImpl, env)).toEqual([]);
+    expect(f.fetchImpl.mock.calls.at(-1)?.[0]).toBe("http://runtime.example:1234/tika/runtime");
+  });
+
   it("fails with the outstanding subsystem when the deadline expires", async () => {
     const f = fixture();
     f.office.enabled = true;

@@ -366,8 +366,8 @@ def test_start_failure_http_and_rebuild_cleanup(postgres_dsn, monkeypatch, tmp_p
     assert client.post("/index/clear").status_code == 500
     job = thumb_rebuild.ThumbnailRebuildJob()
     monkeypatch.setattr(thumb_rebuild.db, "media_files", boom)
-    with pytest.raises(RuntimeError):
-        thumb_rebuild.start_rebuild(job, [ctx], None, False)
+    monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
+    assert thumb_rebuild.start_rebuild(job, [ctx], None, False) is True
     assert not job.snapshot()["running"] and job.snapshot()["errors"] == 1
     monkeypatch.setattr(thumb_rebuild.db, "media_files", lambda *a: [])
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", boom)

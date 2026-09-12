@@ -30,18 +30,30 @@ export interface EnvFileSpec {
   readonly contents: string;
 }
 
+type DevEnv = Readonly<Record<string, string | undefined>>;
+
+function devPort(env: DevEnv, key: string, fallback: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return fallback;
+  const port = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${key} must be a TCP port between 1 and 65535`);
+  }
+  return port;
+}
+
 /**
  * Builds the apps/api/.env.dev contents. Pure aside from taking the master
  * key as an argument so tests can supply a fixed one.
  */
-export function buildApiEnvDev(masterKey: string): string {
+export function buildApiEnvDev(masterKey: string, env: DevEnv = {}): string {
   return [
-    "PORT=3001",
+    `PORT=${devPort(env, "FDRIVE_DEV_API_PORT", 3001)}`,
     "HOST=127.0.0.1",
     "LOG_LEVEL=debug",
     "NODE_ENV=development",
-    "DATABASE_URL=postgres://fdrive:fdrive-dev@127.0.0.1:55432/fdrive",
-    "SFTPGO_URL=http://127.0.0.1:58080",
+    `DATABASE_URL=postgres://fdrive:fdrive-dev@127.0.0.1:${devPort(env, "FDRIVE_DEV_DB_PORT", 55432)}/fdrive`,
+    `SFTPGO_URL=http://127.0.0.1:${devPort(env, "FDRIVE_DEV_SFTPGO_HTTP_PORT", 58080)}`,
     `FDRIVE_MASTER_KEY=${masterKey}`,
     "FDRIVE_HOME_TEMPLATE=sftpgo:/{username}",
     "FDRIVE_COOKIE_SECURE=false",
@@ -50,8 +62,11 @@ export function buildApiEnvDev(masterKey: string): string {
 }
 
 /** Builds the apps/web/.env.local contents. */
-export function buildWebEnvLocal(): string {
-  return ["API_INTERNAL_URL=http://127.0.0.1:3001", ""].join("\n");
+export function buildWebEnvLocal(env: DevEnv = {}): string {
+  return [
+    `API_INTERNAL_URL=http://127.0.0.1:${devPort(env, "FDRIVE_DEV_API_PORT", 3001)}`,
+    "",
+  ].join("\n");
 }
 
 /**
@@ -64,17 +79,18 @@ export function buildWebEnvLocal(): string {
  * pages are reachable without extra setup. Trash is enabled through onboarding;
  * `tools/dev/generate-seed.ts` seeds its prerequisite SFTPGo recycle rule.
  */
-export function buildDevSearchEnv(repoRoot: string): Record<string, string> {
+export function buildDevSearchEnv(repoRoot: string, env: DevEnv = {}): Record<string, string> {
   return {
     FDRIVE_INDEX_ROOTS: JSON.stringify([
       { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
     ]),
-    FDRIVE_EMBED_URL: "http://127.0.0.1:58081",
+    FDRIVE_EMBED_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_EMBED_PORT", 58081)}`,
     FDRIVE_THUMBS_DIR: join(repoRoot, "deploy", "dev", ".data", "thumbs"),
-    FDRIVE_INDEXER_URL: "http://127.0.0.1:58010",
-    FDRIVE_OCR_URL: "http://127.0.0.1:58011",
-    FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:58012",
+    FDRIVE_INDEXER_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_INDEXER_HTTP_PORT", 58010)}`,
+    FDRIVE_OCR_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_OCR_HTTP_PORT", 58011)}`,
+    FDRIVE_IMAGE_EMBED_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_IMAGE_EMBED_PORT", 58012)}`,
     FDRIVE_ADMIN_USERS: "dev",
+    FDRIVE_TIKA_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_TIKA_PORT", 59998)}`,
   };
 }
 
@@ -157,8 +173,9 @@ export function planApiEnvDev(
   existing: string | undefined,
   additions: Record<string, string>,
   masterKey: string,
+  env: DevEnv = {},
 ): ApiEnvDevPlan {
-  const before = existing ?? buildApiEnvDev(masterKey);
+  const before = existing ?? buildApiEnvDev(masterKey, env);
   const beforeKeys = new Set(
     before
       .split("\n")
@@ -215,7 +232,12 @@ function main(): void {
 
   const apiEnvExisted = existsSync(apiEnvPath);
   const existingApiEnv = apiEnvExisted ? readFileSync(apiEnvPath, "utf-8") : undefined;
-  const plan = planApiEnvDev(existingApiEnv, buildDevSearchEnv(repoRoot), generateMasterKey());
+  const plan = planApiEnvDev(
+    existingApiEnv,
+    buildDevSearchEnv(repoRoot, process.env),
+    generateMasterKey(),
+    process.env,
+  );
 
   if (!apiEnvExisted) {
     mkdirSync(dirname(apiEnvPath), { recursive: true });
@@ -228,7 +250,7 @@ function main(): void {
     console.log(`Skipped ${apiEnvPath} (already exists)`);
   }
 
-  const wroteWeb = ensureEnvFile({ path: webEnvPath, contents: buildWebEnvLocal() });
+  const wroteWeb = ensureEnvFile({ path: webEnvPath, contents: buildWebEnvLocal(process.env) });
   console.log(wroteWeb ? `Created ${webEnvPath}` : `Skipped ${webEnvPath} (already exists)`);
 }
 

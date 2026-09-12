@@ -20,6 +20,7 @@ describe("createIndexerExtractClient", () => {
       "http://indexer:8090/extract",
       expect.objectContaining({
         method: "POST",
+        signal: expect.any(AbortSignal),
         body: JSON.stringify({ root: "sftpgo", path: "alice/a.txt" }),
       }),
     );

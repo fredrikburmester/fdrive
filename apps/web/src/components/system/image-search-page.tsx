@@ -35,9 +35,17 @@ export function ImageSearchPage() {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemImageSearch();
   const rebuild = useRebuildImageSearch();
   const clear = useClearImageSearch();
-  const busy = useSystemMaintenanceBusy(undefined) || rebuild.isPending || clear.isPending;
+  const busy =
+    useSystemMaintenanceBusy(undefined) ||
+    rebuild.isPending ||
+    clear.isPending ||
+    data?.rebuild?.running === true ||
+    data?.clear?.running === true;
   const unavailable = !data?.configured || !data?.healthy || !!error;
-  const status = sidecarStatus(data?.configured ?? false, data?.healthy ?? false);
+  const status =
+    data?.status === "loading"
+      ? "loading"
+      : sidecarStatus(data?.configured ?? false, data?.healthy ?? false);
   const [rebuildOpen, setRebuildOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [force, setForce] = useState(false);
@@ -54,9 +62,11 @@ export function ImageSearchPage() {
       {
         onSuccess: (result) => {
           toast.success(
-            result.total > 0
-              ? `Rebuilding ${result.total} image embedding${result.total === 1 ? "" : "s"}…`
-              : "No image embeddings need rebuilding.",
+            result.total === null
+              ? "Rebuild started. Discovering files…"
+              : result.total > 0
+                ? `Rebuilding ${result.total} image embedding${result.total === 1 ? "" : "s"}…`
+                : "No image embeddings need rebuilding.",
           );
           setRebuildOpen(false);
           setForce(false);
@@ -110,11 +120,13 @@ export function ImageSearchPage() {
           <SystemSection
             title="Status"
             description={
-              status === "ok"
-                ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
-                : status === "unreachable"
-                  ? "The image-embedding sidecar is unreachable."
-                  : "Not configured: set FDRIVE_IMAGE_EMBED_URL."
+              status === "loading"
+                ? "The image search model is loading."
+                : status === "ok"
+                  ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
+                  : status === "unreachable"
+                    ? "The image-embedding sidecar is unreachable."
+                    : "Not configured: set FDRIVE_IMAGE_EMBED_URL."
             }
           >
             <StatusBadge status={status} />

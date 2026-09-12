@@ -44,15 +44,13 @@ export const OCR_SETTINGS_KEYS = {
 } as const;
 
 /**
- * Assumed env-derived defaults for the OCR service, since it ships no
- * documented default table yet: a nightly run at 03:00, the same language
- * pack as the indexer's OCR fallback, no folders excluded, a 200 MB cap per
- * file, and originals retained after a successful pass.
+ * Defaults from the OCR service settings.py and docs/OCR.md. These must match
+ * the worker: saving an unrelated field must preserve its safety excludes.
  */
 export const OCR_SETTINGS_DEFAULTS = {
   hour: 3,
   langs: "swe+eng",
-  excludeGlobs: [] as readonly string[],
+  excludeGlobs: ["Programs/**", "Photos/**", "Videos/**"] as readonly string[],
   maxMb: 200,
   keepOriginals: true,
 };

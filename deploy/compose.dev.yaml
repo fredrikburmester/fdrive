@@ -115,6 +115,8 @@ services:
 
   tika:
     image: apache/tika:3.2.1.0
+    ports:
+      - "127.0.0.1:${FDRIVE_DEV_TIKA_PORT:-59998}:9998"
     profiles: [index]
 
   # Published on the host so the api dev server (running with `tsx watch` on

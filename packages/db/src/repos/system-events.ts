@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { systemEvents } from "../schema/app.js";
 import { files, ocrLog, ocrRuns, roots, scans } from "../schema/idx.js";
@@ -116,6 +116,7 @@ async function readFileErrorEvents(db: Db, opts: SystemEventListOptions): Promis
     .where(
       and(
         eq(files.textStatus, "error"),
+        isNull(files.deletedAt),
         ...(opts.before === undefined ? [] : [sql`${at} < ${opts.before}`]),
       ),
     )

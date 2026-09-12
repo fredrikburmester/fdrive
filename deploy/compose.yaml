@@ -52,6 +52,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         API_INTERNAL_URL: http://api:3001
+        FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}
     environment:
       API_INTERNAL_URL: http://api:3001
     restart: unless-stopped
@@ -77,6 +78,7 @@ services:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       SFTPGO_URL: ${SFTPGO_URL:-}
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
+      FDRIVE_SETUP_TOKEN: ${FDRIVE_SETUP_TOKEN:-}
       # Reuse the database secret only inside the private compose network as
       # the worker/API authentication token; no extra operator secret exists.
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
@@ -86,12 +88,17 @@ services:
       FDRIVE_INDEXER_URL: http://indexer:8010
       FDRIVE_EMBED_URL: http://embed:80
       FDRIVE_IMAGE_EMBED_URL: http://image-embed:8012
+      FDRIVE_EMBED_RUNTIME_URL: ${FDRIVE_EMBED_RUNTIME_URL:-http://embed:8099}
+      FDRIVE_IMAGE_EMBED_RUNTIME_URL: ${FDRIVE_IMAGE_EMBED_RUNTIME_URL:-http://image-embed:8013}
+      FDRIVE_TIKA_RUNTIME_URL: ${FDRIVE_TIKA_RUNTIME_URL:-http://tika:9997}
+      FDRIVE_TIKA_URL: ${FDRIVE_TIKA_URL:-http://tika:9998}
+
       # ONLYOFFICE is bundled in this stack. The owner enables it and chooses
-      # the browser-facing origin in onboarding; these internal addresses do
-      # not vary with that choice.
-      FDRIVE_OFFICE_PRODUCT: onlyoffice
-      FDRIVE_OFFICE_URL: http://onlyoffice
-      FDRIVE_WOPI_URL: http://api:3001/wopi
+      # the browser-facing origin in onboarding. Explicit overrides support
+      # an externally managed Office installation.
+      FDRIVE_OFFICE_PRODUCT: ${FDRIVE_OFFICE_PRODUCT:-onlyoffice}
+      FDRIVE_OFFICE_URL: ${FDRIVE_OFFICE_URL:-http://onlyoffice}
+      FDRIVE_WOPI_URL: ${FDRIVE_WOPI_URL:-http://api:3001/wopi}
       # The conventional shipped mount remains fixed. The walkthrough may
       # choose scopes below it, but cannot add arbitrary host mounts at runtime.
       FDRIVE_INDEX_ROOTS: '[{"name":"sftpgo","sftpgoPath":"${FDRIVE_INDEX_SFTPGO_PATH:-/srv/sftpgo/data}","indexerPath":"/roots/sftpgo"}]'
@@ -111,6 +118,7 @@ services:
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: ${FDRIVE_SHARE_UPLOAD_MAX_BYTES:-}
       FDRIVE_ADMIN_USERS: ${FDRIVE_ADMIN_USERS:-}
       FDRIVE_MCP_WRITES: ${FDRIVE_MCP_WRITES:-}
+      FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-}
       FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-}
       # END GENERATED CONFIG KEYS
@@ -194,7 +202,6 @@ services:
       IMAGE_EMBED_URL: http://image-embed:8012
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
-      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       # pytesseract spawns the tesseract binary, which parallelises over every
       # core through OpenMP. INDEX_WORKERS already runs several extractions at
       # once, so without this each of them multiplies again: two OCR files were
@@ -248,7 +255,6 @@ services:
       # single-user instance; see deploy/.env.example. OCR_EXCLUDE_GLOBS
       # still applies on top. Empty (the default) means no restriction.
       OCR_INCLUDE_GLOBS: ${OCR_INCLUDE_GLOBS:-}
-      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/state

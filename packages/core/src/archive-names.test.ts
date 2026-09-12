@@ -2,7 +2,9 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   archiveExtensionFor,
+  defaultArchiveName,
   detectArchiveKind,
+  isPeekableArchiveName,
   safeEntryPath,
   stripArchiveExtension,
   uniqueCopyName,
@@ -171,4 +173,24 @@ describe("safeEntryPath", () => {
 it("skips overlong UTF-8 archive segments without aborting extraction", () => {
   expect(safeEntryPath("/out", `${"é".repeat(128)}/file`)).toBeNull();
   expect(safeEntryPath("/out", `${"é".repeat(127)}a`)).not.toBeNull();
+});
+
+describe("shared archive defaults", () => {
+  it.each([
+    [[], "archive"],
+    [["/"], "archive"],
+    [["/docs/report.pdf"], "report"],
+    [["/docs/.env"], ".env"],
+    [["/docs"], "docs"],
+    [["/backup.tar.gz"], "backup"],
+    [["/a/x", "/a/y"], "a"],
+    [["/x", "/y"], "archive"],
+  ])("names %j as %s", (paths, expected) => expect(defaultArchiveName(paths)).toBe(expected));
+
+  it.each(["x.zip", "X.TGZ", "x.tar", "x.tar.gz", "x.tar.zst"])("can list %s", (name) => {
+    expect(isPeekableArchiveName(name)).toBe(true);
+  });
+  it.each(["x.gz", "x.7z", "x.rar", "x.tar.xz", "x.tar.bz2", "x.txt"])("cannot list %s", (name) => {
+    expect(isPeekableArchiveName(name)).toBe(false);
+  });
 });

@@ -429,3 +429,16 @@ it("lists bounded directory metadata with exact query encoding and strict respon
   fetchStub.mockRejectedValueOnce(new Error("offline"));
   expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "unreachable" });
 });
+
+it("retains image embedding counts and accepts asynchronous rebuild discovery", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(jsonResponse(200, { ...STATS_RAW, image_embeddings: 27 }))
+    .mockResolvedValueOnce(jsonResponse(202, { started: true, total: null }));
+  const client = createIndexerClient({ baseUrl: "http://indexer", fetch });
+  expect(await client.stats()).toMatchObject({ ok: true, data: { imageEmbeddings: 27 } });
+  expect(await client.thumbnailsRebuild()).toEqual({
+    ok: true,
+    data: { started: true, total: null },
+  });
+});

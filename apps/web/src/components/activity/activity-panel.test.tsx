@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { placeholderJob } from "@/lib/jobs/placeholder";
 import { useJobsStore } from "@/lib/jobs/store";
 import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem, UploadStatus } from "@/lib/upload/types";
@@ -52,6 +53,16 @@ describe("ActivityPanel", () => {
 
     const card = container.querySelector('[data-slot="activity-panel"]');
     expect(card?.className).toContain("max-h-[70vh]");
+  });
+
+  it("shows extraction safety warnings for a completed job", () => {
+    useJobsStore.getState().upsert({
+      ...placeholderJob("warning", "extract"),
+      state: "done",
+      error: "Skipped unsafe archive entry",
+    });
+    render(<ActivityPanel />);
+    expect(screen.getByText("Warning: Skipped unsafe archive entry")).toBeTruthy();
   });
 
   it("renders nothing when both queues are empty", () => {

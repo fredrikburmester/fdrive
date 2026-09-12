@@ -19,7 +19,7 @@ function buildFakeSeed(): FakeSeed {
       username: user.username,
       password: user.password,
       permissions: user.permissions,
-      virtualFolders: user.virtualFolders,
+      ...(user.virtualFolders === undefined ? {} : { virtualFolders: user.virtualFolders }),
     })),
     folders: SEED_FOLDERS.map((folder) => ({ name: folder.name })),
     files: SEED_FILES,

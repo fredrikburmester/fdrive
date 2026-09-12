@@ -13,6 +13,7 @@ import {
   applyComposePassthroughBlock,
   applyPreflightKnownKeysBlock,
   knownFdriveKeys,
+  renderApiEnvExample,
   renderComposePassthroughLines,
   renderKnownFdriveKeysBashArray,
   renderQuickstartEnvExample,
@@ -25,6 +26,11 @@ function main(): void {
   const composePath = join(deployDir, "compose.yaml");
   const preflightPath = join(deployDir, "preflight.sh");
 
+  writeFileSync(
+    join(deployDir, "..", "apps", "api", ".env.example"),
+    renderApiEnvExample(),
+    "utf-8",
+  );
   writeFileSync(envExamplePath, renderQuickstartEnvExample(), "utf-8");
   console.log(`Wrote ${envExamplePath}`);
 

@@ -1,4 +1,9 @@
-import { IDENTITY_HEADER, type IdentitySummary, type MeResponse } from "@fdrive/contracts";
+import {
+  IDENTITY_HEADER,
+  IDENTITY_QUERY_PARAM,
+  type IdentitySummary,
+  type MeResponse,
+} from "@fdrive/contracts";
 import { type StorageProvider, sameCredential } from "@fdrive/core";
 import type { Credential, Repos } from "@fdrive/db";
 import type { Context } from "hono";
@@ -267,7 +272,9 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
 
     const identityHeader = c.req.header(IDENTITY_HEADER);
     const queryIdentities =
-      c.req.method === "GET" || c.req.method === "HEAD" ? (c.req.queries("identity") ?? []) : [];
+      c.req.method === "GET" || c.req.method === "HEAD"
+        ? (c.req.queries(IDENTITY_QUERY_PARAM) ?? [])
+        : [];
     if (queryIdentities.length > 1)
       throw new ApiHttpError("forbidden", "ambiguous identity selection");
     const queryIdentity = queryIdentities[0];

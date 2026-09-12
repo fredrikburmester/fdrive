@@ -36,7 +36,7 @@ Every pull request must pass the automated quality gates:
 
 1. **TypeScript Strict**: Clean type checking (`pnpm typecheck`) with no `any` and `noUncheckedIndexedAccess`.
 2. **Biome Lint & Format**: Zero warnings on `pnpm lint`.
-3. **High Unit Test Coverage**: Every package enforces high test coverage thresholds via `pnpm test:coverage` (99% functions and lines in core).
+3. **High Unit Test Coverage**: Every package enforces high test coverage thresholds via `pnpm test:coverage` (core: 100% lines/functions/statements, 98% branches; each package config defines its own thresholds).
 4. **Integration Tests**: Critical storage, auth, and database flows are covered by container integration tests (`pnpm test:integration`).
 5. **UI Consistency**: Every UI component comes from shadcn/ui primitives (`src/components/ui/`) adhering to the clean, minimalist design language.
 

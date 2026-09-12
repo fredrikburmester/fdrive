@@ -48,6 +48,42 @@ export interface ConfigKeyDef {
  */
 export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
+    key: "FDRIVE_EMBED_RUNTIME_URL",
+    description:
+      "Optional controller base URL; unset probes the worker directly without controller revision checks.",
+    default: null,
+    example: "http://embed:8099",
+    secret: false,
+    subsystem: "search",
+  },
+  {
+    key: "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
+    description:
+      "Optional controller base URL; unset probes the worker directly without controller revision checks.",
+    default: null,
+    example: "http://image-embed:8013",
+    secret: false,
+    subsystem: "imageSearch",
+  },
+  {
+    key: "FDRIVE_TIKA_RUNTIME_URL",
+    description:
+      "Optional controller base URL; unset probes the worker directly without controller revision checks.",
+    default: null,
+    example: "http://tika:9997",
+    secret: false,
+    subsystem: "index",
+  },
+  {
+    key: "FDRIVE_TIKA_URL",
+    description:
+      "Tika base URL for direct readiness probes when no runtime controller is configured.",
+    default: null,
+    example: "http://tika:9998",
+    secret: false,
+    subsystem: "index",
+  },
+  {
     key: "FDRIVE_WORKER_TOKEN",
     description: "Shared internal credential for bundled worker configuration polling.",
     default: null,

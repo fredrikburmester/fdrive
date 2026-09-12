@@ -102,7 +102,7 @@ a model change self-heals as files are next touched.
 
 `POST /image-embeddings/rebuild` (`image_embed_rebuild.py`) is the bulk
 backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ root?,
-path?, force? }`, batched against the sidecar at `IMAGE_EMBED_BATCH_SIZE`
+path?, force? }`, batched against the sidecar at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
 requests per call. Without `force`, only images with no row at all are
 filled in; a row from a different model is left alone. With `force`, a
 stale-model row is also re-embedded and overwritten, the deliberate "replace
@@ -163,8 +163,9 @@ After every applied change (create, change, delete, move), the indexer:
    `{ "kind": "created|changed|deleted|moved", "root": "<name>", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
 
 `idx.events` rows older than 7 days (`EVENTS_RETENTION_DAYS`) are pruned once
-per scan. The API (`apps/api`) listens on `idx_events` for live updates and can
-replay `idx.events` after a restart to catch anything it missed.
+per scan. The API (`apps/api`) listens on `idx_events` for live updates and
+re-subscribes after a disconnect. It does not replay stored events; notifications
+missed while disconnected are lost. A refresh/re-query reads current data; no missed-event replay is implemented.
 
 ## Internal HTTP API
 
@@ -176,11 +177,11 @@ a published port in the non-dev compose file.
 | --- | --- | --- | --- |
 | `/health` | GET | None | `{ ok, roots, watcher, embed_ok, schema_version }`. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
 | `/activity` | GET | None | In-memory scan, watcher and maintenance operations; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
-| `/stats` | GET | None | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
+| `/stats` | GET | None | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, total_known, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract` | POST | `{ root, path, offset?, max_chars? }` | Live text extraction for one file (not persisted), sliced by `offset`/`max_chars`. Used for the web app's live text preview. |
 | `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
-| `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is the candidate count computed up front), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
-| `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Reports `image_embeddings: 0` and `total: 0` immediately when `IMAGE_EMBED_URL` is not configured, rather than discovering candidates the pass will never touch. Returns `202 { started: true, total }`, or `409` if a rebuild is already running. |
+| `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
+| `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Unconfigured roots are skipped. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
 | `/image-embeddings/clear` | POST | `{}` or empty | Deletes every row of `app.image_embeddings`; see "Clearing derived data" below. |
 
 ## Image embeddings
@@ -205,11 +206,11 @@ full; it is not repeated here.
 
 ## Compose
 
-Add `--profile index` to bring up `indexer`, `tika`, `embed`, and
-`image-embed` alongside the core stack:
+Production starts the processing services with the core stack. Enable processing
+through onboarding or System > Features:
 
 ```sh
-docker compose -f compose.yaml --profile index up -d
+docker compose -f compose.yaml up -d
 ```
 
 Environment (see `deploy/.env.example`):
@@ -224,7 +225,7 @@ Environment (see `deploy/.env.example`):
   under one of these roots and an administrator has mapped them per account;
   see [SFTPGo virtual folders](../deploy/REFERENCE.md#sftpgo-virtual-folders).
 
-In `deploy/compose.dev.yaml`, the same `--profile index` mounts the dev
+Only `deploy/compose.dev.yaml` uses `--profile index`; it mounts the dev
 environment's seeded SFTPGo data (the `fdrive-dev-sftpgo-data` named volume,
 read-only) so the indexer sees exactly what the `dev` user's SFTPGo account
 sees. Two things differ from the production-shaped compose file because the
@@ -236,7 +237,7 @@ can reach it directly, and `THUMBS_DIR` is bind-mounted to a host directory
 `FDRIVE_DEV_THUMBS_DIR`) rather than a named volume, so the host api process
 can read the generated WebP files at the path `FDRIVE_THUMBS_DIR` names.
 `image-embed` follows the same host-published pattern (58012 by default,
-override with `FDRIVE_DEV_IMAGE_EMBED_PORT`) for a future
+override with `FDRIVE_DEV_IMAGE_EMBED_PORT`) for the generated
 `FDRIVE_IMAGE_EMBED_URL` in `apps/api/.env.dev`; the dev `indexer` service
 already points `IMAGE_EMBED_URL` at it (`http://image-embed:8012`) so the
 image embedding pass works as soon as `services/indexer` reads that
@@ -249,12 +250,12 @@ slower to start (the model download and warmup take roughly a minute).
 
 ## Migrating from filesai
 
-`scripts/import-filesai.py` copies `files` and `chunks` from an old filesai
+`scripts/import_filesai.py` copies `files` and `chunks` from an old filesai
 Postgres database into the new schema under one root, so nothing needs to be
 re-extracted or re-embedded (the embedding model is unchanged):
 
 ```sh
-python scripts/import-filesai.py \
+python scripts/import_filesai.py \
   --source "host=old-db port=5432 dbname=filesai user=filesai password=..." \
   --target "$DATABASE_URL" \
   --root sftpgo
@@ -327,3 +328,8 @@ admission; conflicting requests return 409. `/stats` exposes `index_clear`,
 grow as batches are discovered. Top-level failures are counted, and admission is
 released even if thread startup fails. Each background thread gets its own
 thread-local database connection. These actions do not pause normal indexing.
+
+`IMAGE_EMBED_REQUEST_BATCH_SIZE` controls how many thumbnails the indexer sends per
+HTTP request (default 8); its former `IMAGE_EMBED_BATCH_SIZE` name remains a fallback
+alias. The image-embed service's own `IMAGE_EMBED_BATCH_SIZE` controls inference
+microbatches, independently of the request size.

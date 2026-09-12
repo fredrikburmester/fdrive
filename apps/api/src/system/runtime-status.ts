@@ -29,13 +29,13 @@ export function runtimeError(body: unknown): string | null {
 /** A controller's status document, or `null` when it cannot be reached or does not answer with one. */
 export async function fetchRuntimeStatus(
   baseUrl: string,
-  port: string,
+  port: string | null,
   fetchImpl: typeof fetch,
   timeoutMs = 2000,
 ): Promise<RuntimeStatus | null> {
   try {
     const url = new URL(baseUrl);
-    url.port = port;
+    if (port !== null) url.port = port;
     url.pathname = "/runtime";
     url.search = "";
     url.hash = "";

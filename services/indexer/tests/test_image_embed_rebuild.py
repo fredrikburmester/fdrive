@@ -296,7 +296,7 @@ def test_start_rebuild_runs_and_updates_job(postgres_dsn: str, monkeypatch: pyte
 
     job = ThumbnailRebuildJob()
     total = image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False)
-    assert total == 1
+    assert total is True
     snap = job.snapshot()
     assert snap["running"] is False
     assert snap["processed"] == 1
@@ -320,13 +320,13 @@ def test_start_rebuild_not_configured_reports_zero_total_without_thread_work(
 
     job = ThumbnailRebuildJob()
     total = image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False)
-    assert total == 0
+    assert total is True
     snap = job.snapshot()
     assert snap["processed"] == 0
     assert snap["running"] is False
 
 
-def test_start_rebuild_returns_none_when_already_running(
+def test_start_rebuild_returns_false_when_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
@@ -336,7 +336,7 @@ def test_start_rebuild_returns_none_when_already_running(
     job = ThumbnailRebuildJob()
     assert job.try_start(5) is True
     result = image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False)
-    assert result is None
+    assert result is False
 
 
 def test_start_rebuild_job_crash_still_releases_job(
@@ -354,7 +354,7 @@ def test_start_rebuild_job_crash_still_releases_job(
 
     job = ThumbnailRebuildJob()
     total = image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False)
-    assert total == 0
+    assert total is True
     snap = job.snapshot()
     assert snap["running"] is False
     assert snap["finished_at"] is not None
@@ -363,6 +363,7 @@ def test_start_rebuild_job_crash_still_releases_job(
 def test_start_rebuild_discovery_failure_releases_job(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
     ctx = _make_context(cfg, "sftpgo", str(tmp_path))
 
@@ -373,8 +374,7 @@ def test_start_rebuild_discovery_failure_releases_job(
     from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
 
     job = ThumbnailRebuildJob()
-    with pytest.raises(RuntimeError):
-        image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False)
+    assert image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False) is True
     assert not job.snapshot()["running"]
     assert job.snapshot()["errors"] == 1
 
@@ -414,7 +414,7 @@ def test_rebuild_counts_already_embedded_candidates_as_resolved(
         raise AssertionError("Already embedded content must not be sent again")
     monkeypatch.setattr(image_embed_rebuild, "embed_images", forbidden)
     job = ThumbnailRebuildJob()
-    assert image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False) == 2
+    assert image_embed_rebuild.start_image_embed_rebuild(job, [ctx], None, False) is True
     activity = job.activity_snapshot("imageRebuild", ["imageSearch"])
     assert activity["processed"] == activity["total"] == activity["skipped"] == 2
     assert activity["state"] == "completed"

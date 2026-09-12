@@ -55,7 +55,7 @@ describe("buildDevSearchEnv", () => {
     ]);
   });
 
-  it("returns exactly the seven documented keys", () => {
+  it("returns every documented processing key", () => {
     expect(Object.keys(buildDevSearchEnv("/repo")).sort()).toEqual(
       [
         "FDRIVE_ADMIN_USERS",
@@ -65,6 +65,7 @@ describe("buildDevSearchEnv", () => {
         "FDRIVE_OCR_URL",
         "FDRIVE_IMAGE_EMBED_URL",
         "FDRIVE_THUMBS_DIR",
+        "FDRIVE_TIKA_URL",
       ].sort(),
     );
   });
@@ -231,4 +232,30 @@ describe("writeEnvFile", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+it("derives URLs from the same port overrides as dev compose", () => {
+  const env = {
+    FDRIVE_DEV_API_PORT: "3301",
+    FDRIVE_DEV_DB_PORT: "55433",
+    FDRIVE_DEV_SFTPGO_HTTP_PORT: "58083",
+    FDRIVE_DEV_EMBED_PORT: "59081",
+    FDRIVE_DEV_INDEXER_HTTP_PORT: "59010",
+    FDRIVE_DEV_OCR_HTTP_PORT: "59011",
+    FDRIVE_DEV_IMAGE_EMBED_PORT: "59012",
+    FDRIVE_DEV_TIKA_PORT: "59999",
+  };
+  const api = buildApiEnvDev("key", env);
+  expect(api).toContain("PORT=3301");
+  expect(api).toContain("127.0.0.1:55433/fdrive");
+  expect(api).toContain("SFTPGO_URL=http://127.0.0.1:58083");
+  expect(buildWebEnvLocal(env)).toContain("127.0.0.1:3301");
+  expect(buildDevSearchEnv("/repo", env)).toMatchObject({
+    FDRIVE_EMBED_URL: "http://127.0.0.1:59081",
+    FDRIVE_INDEXER_URL: "http://127.0.0.1:59010",
+    FDRIVE_OCR_URL: "http://127.0.0.1:59011",
+    FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:59012",
+    FDRIVE_TIKA_URL: "http://127.0.0.1:59999",
+  });
+  expect(() => buildWebEnvLocal({ FDRIVE_DEV_API_PORT: "bad" })).toThrow("TCP port");
 });

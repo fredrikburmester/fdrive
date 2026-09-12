@@ -35,6 +35,9 @@ const full: AppConfig = {
   ...base,
   fdriveIndexRoots: [{ name: "sftpgo", sftpgoPath: "/data", indexerPath: "/roots/sftpgo" }],
   fdriveIndexerUrl: "http://indexer",
+  fdriveEmbedRuntimeUrl: "http://embed:8099",
+  fdriveImageEmbedRuntimeUrl: "http://image:8013",
+  fdriveTikaRuntimeUrl: "http://tika:9997",
   fdriveEmbedUrl: "http://embed",
   fdriveImageEmbedUrl: "http://image",
   fdriveOcrUrl: "http://ocr",
@@ -378,4 +381,58 @@ describe("feature event log", () => {
       message: "Worker unreachable: Worker is unreachable. Check the bundled service, then retry.",
     });
   });
+});
+
+it("uses published dev worker URLs without inventing controller ports or revisions", async () => {
+  const seen: string[] = [];
+  const { service } = fixture({
+    raw: config,
+    config: {
+      ...full,
+      fdriveEmbedRuntimeUrl: undefined,
+      fdriveImageEmbedRuntimeUrl: undefined,
+      fdriveTikaRuntimeUrl: undefined,
+      fdriveEmbedUrl: "http://127.0.0.1:59081",
+      fdriveImageEmbedUrl: "http://127.0.0.1:59012",
+      fdriveTikaUrl: "http://127.0.0.1:59999",
+    },
+    fetch: async (url) => {
+      const target = String(url);
+      seen.push(target);
+      if (target.includes(":59081")) return new Response("");
+      if (target.includes(":59999")) return new Response("Apache Tika");
+      if (target.includes(":59012")) return Response.json({ status: "ok" });
+      return Response.json({ ok: true, features: { revision: 1, values: enabled } });
+    },
+  });
+  expect((await service.status()).statuses.every((status) => status.state === "ready")).toBe(true);
+  expect(seen).toContain("http://127.0.0.1:59012/health");
+  expect(seen).toContain("http://127.0.0.1:59999/version");
+  expect(seen.some((url) => url.endsWith("/runtime"))).toBe(false);
+});
+
+it("keeps image search preparing while the model loads behind a ready controller", async () => {
+  const { service } = fixture({
+    raw: config,
+    fetch: async (url) => {
+      if (String(url) === "http://image/health") return Response.json({ status: "loading" });
+      return Response.json({ status: "ready", features: { revision: 1, values: enabled } });
+    },
+  });
+  expect(
+    (await service.status()).statuses.find((status) => status.id === "imageSearch")?.state,
+  ).toBe("preparing");
+});
+
+it("waits for a starting controller without misreporting its absent child as failed", async () => {
+  const { service } = fixture({
+    raw: config,
+    fetch: async (url) => {
+      if (String(url) === "http://image/health") throw new Error("not started yet");
+      return Response.json({ status: "starting", features: { revision: 1, values: enabled } });
+    },
+  });
+  expect(
+    (await service.status()).statuses.find((status) => status.id === "imageSearch")?.state,
+  ).toBe("preparing");
 });

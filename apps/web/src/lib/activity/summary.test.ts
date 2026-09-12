@@ -42,3 +42,16 @@ describe("activityTitle", () => {
     expect(activityTitle({ ...BASE, activeCount: 1, uploadsDone: 5 })).toBe("Working on 1 item");
   });
 });
+
+it("distinguishes cancelled jobs from successful work", () => {
+  expect(
+    activityTitle({
+      activeCount: 0,
+      uploadsDone: 0,
+      uploadsFailed: 0,
+      jobsDone: 0,
+      jobsFailed: 0,
+      jobsCancelled: 2,
+    }),
+  ).toBe("2 cancelled");
+});

@@ -1,3 +1,6 @@
+import { IMAGE_EXTENSIONS as GALLERY_IMAGE_EXTENSIONS } from "@fdrive/contracts";
+import { isPeekableArchiveName } from "@fdrive/core";
+
 /**
  * The category of preview the viewer route knows how to render. "none"
  * means fdrive has no built-in viewer (or the file is too large to load
@@ -32,18 +35,8 @@ export const TEXT_LIMIT_BYTES = 2 * 1024 * 1024;
 /** Image extensions the browser cannot decode itself; `lib/preview/heic.ts` handles them. */
 export const HEIC_EXTENSIONS: ReadonlySet<string> = new Set([".heic", ".heif"]);
 
-const IMAGE_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".avif",
-  ".bmp",
-  ".ico",
-  ".svg",
-  ...HEIC_EXTENSIONS,
-]);
+// Authenticated viewing also permits SVG and icons; public galleries exclude them.
+const IMAGE_EXTENSIONS = new Set([...GALLERY_IMAGE_EXTENSIONS, ".ico", ".svg"]);
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"]);
 
@@ -61,18 +54,6 @@ const OFFICE_EXTENSIONS = new Set([
   ".odt",
   ".ods",
   ".odp",
-]);
-
-const ARCHIVE_EXTENSIONS = new Set([
-  ".zip",
-  ".tar",
-  ".tar.gz",
-  ".tar.bz2",
-  ".tar.xz",
-  ".tar.zst",
-  ".gz",
-  ".7z",
-  ".rar",
 ]);
 
 /** Extension to language identifier, for `code-viewer`'s language badge. */
@@ -154,7 +135,7 @@ function baseKindFor(entry: PreviewableEntry): PreviewKind {
   if (OFFICE_EXTENSIONS.has(ext)) {
     return "office";
   }
-  if (ARCHIVE_EXTENSIONS.has(ext)) {
+  if (isPeekableArchiveName(ext)) {
     return "archive";
   }
   if (TEXT_EXTENSIONS.has(ext)) {

@@ -15,6 +15,7 @@ import {
 import {
   archiveExtensionFor,
   baseName,
+  defaultArchiveName,
   detectArchiveKind,
   isSafeSegment,
   isStorageError,
@@ -78,16 +79,6 @@ function sameParent(paths: readonly string[]): boolean {
   }
   const first = parentPath(paths[0] as string);
   return paths.every((path) => parentPath(path) === first);
-}
-
-/** Default archive base name (no extension) when the request does not give one. */
-function defaultCompressName(paths: readonly string[], parent: string): string {
-  if (paths.length === 1) {
-    const name = baseName(paths[0] as string);
-    return name.length > 0 ? name : "archive";
-  }
-  const parentName = baseName(parent);
-  return parentName.length > 0 ? parentName : "archive";
 }
 
 /**
@@ -227,7 +218,7 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
       "name must be a single file name without path separators",
     );
   }
-  const name = body.name ?? defaultCompressName(paths, parent);
+  const name = body.name ?? defaultArchiveName(paths);
   const targetPath = joinPath(destination, `${name}${archiveExtensionFor(body.format)}`);
   if (await pathExists(principal.storage, targetPath)) {
     throw new ApiHttpError("conflict", `already exists: ${targetPath}`);

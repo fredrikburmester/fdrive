@@ -102,3 +102,10 @@ permissions depend on `FDRIVE_MCP_WRITES` (default false).
 New tokens use their own Read/Organize/Full settings regardless of that legacy flag. Existing
 tokens never silently gain the new file-management tools. Create a replacement token to
 choose login/folders/permissions, update the client, then revoke the old token.
+
+## MCP and REST vocabulary
+
+MCP tools are task-oriented interfaces, not a mirror of REST payloads. `move_path`
+accepts `src`/`dst`; REST `/fs/move` accepts `path`/`target`. `set_file_tags` accepts
+names and creates missing tags; REST `/fs/tags` accepts existing tag IDs and refuses
+unknown IDs. Both routes enforce the caller's identity and permissions.

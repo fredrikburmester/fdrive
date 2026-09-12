@@ -36,6 +36,13 @@
       "when": 1789224953826,
       "tag": "0004_mcp_token_access",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789248974126,
+      "tag": "0005_synchronize_declared_indexes",
+      "breakpoints": true
     }
   ]
 }

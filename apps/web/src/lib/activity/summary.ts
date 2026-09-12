@@ -9,6 +9,7 @@ export interface ActivitySummaryInput {
   readonly uploadsFailed: number;
   readonly jobsDone: number;
   readonly jobsFailed: number;
+  readonly jobsCancelled?: number;
 }
 
 /**
@@ -35,6 +36,7 @@ export function activityTitle(input: ActivitySummaryInput): string {
   if (input.jobsDone > 0 || jobsFailed > 0) {
     parts.push(`${input.jobsDone} finished`);
   }
+  if (input.jobsCancelled) parts.push(`${input.jobsCancelled} cancelled`);
   if (totalFailed > 0) {
     parts.push(`${totalFailed} failed`);
   }

@@ -4,9 +4,8 @@
 # Swedish and English tesseract data, then install this package into its own
 # venv rather than trying to inject pip into the base image's venv.
 #
-# Pinned to ocrmypdf 17.11.0 by tag and digest (see deploy/README.md's pins
-# table) rather than :latest, so a rebuild never silently picks up a new
-# ocrmypdf release or base image without a deliberate bump here.
+# Pinned to ocrmypdf 17.11.0 by tag and digest below, so a rebuild never silently
+# picks up a new ocrmypdf release or base image without a deliberate bump here.
 FROM jbarlow83/ocrmypdf:v17.11.0@sha256:c6bcc39ae87cccdbf243d62dba39032a3aacd8a1463365170db3604139aba977
 
 USER root

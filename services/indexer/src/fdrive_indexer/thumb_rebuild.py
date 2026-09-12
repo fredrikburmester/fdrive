@@ -97,6 +97,7 @@ class ThumbnailRebuildJob:
                 "running": self.running,
                 "processed": self.processed,
                 "total": self.total,
+                "total_known": self.total_known,
                 "started_at": self.started_at.isoformat() if self.started_at else None,
                 "finished_at": self.finished_at.isoformat() if self.finished_at else None,
                 "errors": self.errors,
@@ -177,8 +178,8 @@ def rebuild_thumbnails(
 
 def count_candidates(contexts: Sequence[RootContext], path: str | None) -> int:
     """How many files `rebuild_thumbnails(ctx, path, ...)` would touch, summed
-    across `contexts`. Used to answer `POST /thumbnails/rebuild` with a total
-    before the background pass has processed anything."""
+    across `contexts`. This synchronous helper is for callers that need an
+    inventory count; HTTP rebuild admission discovers candidates asynchronously."""
     scope = normalize_scope(path)
     return sum(len(select_candidates(db.media_files(ctx.conn(), ctx.root_id), scope)) for ctx in contexts)
 
@@ -188,27 +189,24 @@ def start_rebuild(
     contexts: Sequence[RootContext],
     path: str | None,
     force: bool,
-) -> int | None:
-    """Start a background thumbnail rebuild across `contexts`. Returns the total
-    candidate count, or `None` when a rebuild is already running (the caller
-    should answer with 409 in that case)."""
+) -> bool:
+    """Claim admission and start discovery in the background. False means busy.
+
+    Candidate discovery can take longer than the API timeout. The HTTP caller
+    acknowledges with an unknown total; stats/activity expose it after discovery.
+    """
     if not job.try_start(0):
-        return None
-    try:
-        candidates = [
-            (ctx, select_candidates(db.media_files(ctx.conn(), ctx.root_id), normalize_scope(path))) for ctx in contexts
-        ]
-        total = sum(len(rows) for _, rows in candidates)
-        job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
-        job.discover(total)
-        job.discovered()
-    except Exception:
-        job.fail()
-        job.finish()
-        raise
+        return False
+    job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
 
     def run() -> None:
         try:
+            candidates = [
+                (ctx, select_candidates(db.media_files(ctx.conn(), ctx.root_id), normalize_scope(path)))
+                for ctx in contexts
+            ]
+            job.discover(sum(len(rows) for _, rows in candidates))
+            job.discovered()
             for ctx, rows in candidates:
                 if not ctx.feature_configuration().values.internal_thumbnails:
                     continue
@@ -218,7 +216,7 @@ def start_rebuild(
                 )
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
-            log(f"thumbnail rebuild job crashed: {type(e).__name__}: {e}")
+            log(f"thumbnail-rebuild job crashed: {type(e).__name__}: {e}")
         finally:
             job.finish()
 
@@ -228,4 +226,4 @@ def start_rebuild(
         job.fail()
         job.finish()
         raise
-    return total
+    return True

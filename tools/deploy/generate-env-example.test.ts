@@ -10,6 +10,7 @@ import {
   ENV_EXAMPLE_EXCLUDED_KEYS,
   groupBySubsystem,
   knownFdriveKeys,
+  renderApiEnvExample,
   renderComposePassthroughLines,
   renderEnvExample,
   renderEnvExampleEntry,
@@ -306,4 +307,15 @@ describe("Subsystem", () => {
     const subsystem: Subsystem = "core";
     expect(subsystem).toBe("core");
   });
+});
+
+it("keeps the complete API env reference generated from the config catalog", () => {
+  const rendered = renderApiEnvExample();
+  expect(readFileSync(join(deployDir, "../apps/api/.env.example"), "utf8")).toBe(rendered);
+  expect(rendered).not.toContain("FDRIVE_PUBLIC_URL=");
+  expect(rendered).toContain("#FDRIVE_SETUP_TOKEN=");
+  expect(knownFdriveKeys()).toContain("FDRIVE_SETUP_TOKEN");
+  const compose = readFileSync(join(deployDir, "compose.yaml"), "utf8");
+  expect(compose).toContain("FDRIVE_SETUP_TOKEN: ${FDRIVE_SETUP_TOKEN:-}");
+  expect(compose).toContain("FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}");
 });

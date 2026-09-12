@@ -27,6 +27,11 @@ export interface IndexRootConfig {
 }
 
 export interface AppConfig {
+  readonly fdriveEmbedRuntimeUrl?: string | undefined;
+  readonly fdriveImageEmbedRuntimeUrl?: string | undefined;
+  readonly fdriveTikaRuntimeUrl?: string | undefined;
+  readonly fdriveTikaUrl?: string | undefined;
+
   readonly fdriveWorkerToken?: string | undefined;
   readonly fdriveOfficeEditRules?: readonly OfficeEditRule[];
   readonly fdriveOfficeProduct?: "onlyoffice" | "collabora" | undefined;
@@ -357,6 +362,42 @@ const envSchema = z.object({
         }
       }),
   ),
+  FDRIVE_EMBED_RUNTIME_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
+  FDRIVE_IMAGE_EMBED_RUNTIME_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
+  FDRIVE_TIKA_RUNTIME_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
+  FDRIVE_TIKA_URL: z.preprocess(
+    undefinedWhenEmpty,
+    z
+      .string()
+      .optional()
+      .refine((value) => value === undefined || isHttpUrl(value), {
+        message: "must be an http(s) URL",
+      }),
+  ),
   FDRIVE_EMBED_URL: z.preprocess(
     undefinedWhenEmpty,
     z
@@ -466,6 +507,11 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveShareUploadMaxBytes: parsed.FDRIVE_SHARE_UPLOAD_MAX_BYTES,
     fdriveIndexRoots: parsed.FDRIVE_INDEX_ROOTS,
     fdriveEmbedUrl: parsed.FDRIVE_EMBED_URL,
+    fdriveEmbedRuntimeUrl: parsed.FDRIVE_EMBED_RUNTIME_URL,
+    fdriveImageEmbedRuntimeUrl: parsed.FDRIVE_IMAGE_EMBED_RUNTIME_URL,
+    fdriveTikaRuntimeUrl: parsed.FDRIVE_TIKA_RUNTIME_URL,
+    fdriveTikaUrl: parsed.FDRIVE_TIKA_URL,
+
     fdriveImageEmbedUrl: parsed.FDRIVE_IMAGE_EMBED_URL,
     fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,
     fdriveAdminUsers: parseAdminUsers(parsed.FDRIVE_ADMIN_USERS),

@@ -1,5 +1,5 @@
 /** The three states a sidecar-backed System page can be in. */
-export type SidecarStatus = "ok" | "unreachable" | "not_configured";
+export type SidecarStatus = "ok" | "unreachable" | "not_configured" | "loading";
 
 /**
  * Resolves a sidecar's status badge from the API's `configured`/`reachable`
@@ -16,6 +16,8 @@ export function sidecarStatus(configured: boolean, reachable: boolean): SidecarS
 /** Human label for a `SidecarStatus`, used by `StatusBadge`. */
 export function sidecarStatusLabel(status: SidecarStatus): string {
   switch (status) {
+    case "loading":
+      return "Loading";
     case "ok":
       return "Reachable";
     case "unreachable":

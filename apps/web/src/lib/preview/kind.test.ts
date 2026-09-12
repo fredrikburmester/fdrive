@@ -68,6 +68,13 @@ describe("previewKindFor", () => {
     expect(previewKindFor(entry(".tar.gz", null))).toBe("archive");
   });
 
+  it.each([".rar", ".7z", ".gz", ".tar.xz", ".tar.bz2"])(
+    "offers download for unsupported archive %s",
+    (ext) => {
+      expect(previewKindFor(entry(ext, null))).toBe("none");
+    },
+  );
+
   it("detects plain text by extension or mime", () => {
     expect(previewKindFor(entry(".txt", null))).toBe("text");
     expect(previewKindFor(entry(".weird", "text/plain"))).toBe("text");

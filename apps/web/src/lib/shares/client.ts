@@ -2,7 +2,7 @@ import {
   type ApiClient,
   buildRequestUrl,
   createApiClient,
-  ROUTES,
+  publicShareRoute,
   ShareId,
   ShareUploadPath,
 } from "@fdrive/contracts";
@@ -40,5 +40,5 @@ export function publicShareClient(
 export function publicUploadUrl(id: string, path: string): string {
   ShareId.parse(id);
   ShareUploadPath.parse(path);
-  return buildRequestUrl("", `${ROUTES.publicShares}/${encodeURIComponent(id)}/upload`, { path });
+  return buildRequestUrl("", publicShareRoute(id, "upload"), { path });
 }

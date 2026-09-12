@@ -63,6 +63,7 @@ export function createIndexerExtractClient(
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(input),
+          signal: AbortSignal.timeout(30_000),
         });
       } catch {
         return null;
