@@ -5,6 +5,20 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## System sidebar activity: ready for PR review
+
+Worktree `/private/tmp/fdrive-system-activity`, branch `codex/system-activity`, rebased onto
+`08cc98c` for PR publication; original checkout work preserved.
+[Behavior and contracts](../SYSTEM-ACTIVITY.md); [verification evidence](STATUS-history.md#2026-09-12-system-sidebar-activity).
+
+- Per-section spinners, fixed-workload percentages, accessible details, runtime transitions
+  and immediate mutation feedback. Indexer/OCR provide lightweight in-memory snapshots.
+- Passed: application, integration, indexer/OCR Python, final web package, workflow and all
+  20 affected browser cases. Real worker/dev-app smoke: 120 images rebuilt, zero errors;
+  progress visible through navigation and idle after completion. Light/dark/mobile reviewed.
+- OCR/clear jobs retain unknown totals and show live counts. Merge awaits review.
+  Test runner pins its own Docker image to avoid worktree races.
+
 ## Findings repair: ready for PR review
 
 - Branch `codex/findings-20260912`, isolated from the original checkout's MCP WIP.

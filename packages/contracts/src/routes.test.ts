@@ -114,6 +114,7 @@ describe("ROUTES", () => {
 
   it("defines every system route under /api/v1/system", () => {
     expect(ROUTES.system).toEqual({
+      activity: "/api/v1/system/activity",
       features: "/api/v1/system/features",
       publicUrl: "/api/v1/system/public-url",
       office: "/api/v1/system/office",

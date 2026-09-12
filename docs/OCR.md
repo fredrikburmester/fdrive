@@ -91,6 +91,7 @@ only from other containers on the compose network.
 | Endpoint | Method | Returns |
 | --- | --- | --- |
 | `/health` | GET | `{ ok, running }`. `ok` is `false` until the schema handshake with `idx.schema_version` has completed. |
+| `/activity` | GET | In-memory current/last OCR operation, including live processed/skipped/error counts; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
 | `/stats` | GET | `{ last_run, next_run_at, schedule_hour, langs, exclude_globs, max_mb, keep_originals, originals_count, originals_bytes, running }`. `last_run` is `{ started_at, finished_at, seen, ocred, skipped, failed }` or `null` if no pass has ever run. `originals_count` / `originals_bytes` describe `<state_dir>/originals` on disk right now. |
 | `/run` | POST | `202 { started: true }`, or `409 { error: "already running" }` if a pass (scheduled or manual) is already in progress. Runs in the background; poll `/stats` or `/health` for completion. |
 

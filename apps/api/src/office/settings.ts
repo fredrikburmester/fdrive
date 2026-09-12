@@ -6,6 +6,7 @@ import {
 } from "@fdrive/contracts";
 import type { SettingsRepo } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
+import { createCachedProbe } from "../system/cached-probe.js";
 import type { SystemEventLog } from "../system/event-log.js";
 import { noopSystemEventLog } from "../system/event-log.js";
 
@@ -50,8 +51,20 @@ export function createOfficeSettingsService(deps: {
   probeStatus: (configuration: OfficeSettings) => Promise<"starting" | "ready" | "unavailable">;
   /** Optional so existing call sites keep working; defaults to recording nothing. */
   eventLog?: SystemEventLog;
+  probeCacheMs?: number;
 }): OfficeSettingsService {
   const eventLog = deps.eventLog ?? noopSystemEventLog;
+  let probeRevision = -1;
+  let cachedProbe: (() => ReturnType<typeof deps.probeStatus>) | undefined;
+  function observe(configuration: OfficeSettings) {
+    if (!cachedProbe || probeRevision !== configuration.revision) {
+      probeRevision = configuration.revision;
+      cachedProbe = createCachedProbe(() => deps.probeStatus(configuration), {
+        ttlMs: deps.probeCacheMs ?? 0,
+      });
+    }
+    return cachedProbe();
+  }
   const defaults: OfficeSettings = {
     revision: 0,
     enabled: false,
@@ -115,7 +128,7 @@ export function createOfficeSettingsService(deps: {
       let status: SystemOfficeResponse["status"] = "off";
       if (configuration.enabled) {
         try {
-          status = await deps.probeStatus(configuration);
+          status = await observe(configuration);
         } catch {
           status = "unavailable";
         }

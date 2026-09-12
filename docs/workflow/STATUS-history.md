@@ -10,6 +10,37 @@ Archived snapshots through 2026-09-12. Read [current STATUS](STATUS.md) and
 below describe their original handoff, not current instructions. Removed brief names are
 historical identifiers; their originals remain in Git history.
 
+## 2026-09-12 System sidebar activity
+
+Implemented in `/private/tmp/fdrive-system-activity`, branch `codex/system-activity` from
+`1f045c1`; verification completed before PR publication. Durable design: [SYSTEM-ACTIVITY.md](../SYSTEM-ACTIVITY.md).
+
+- Added admin-only activity aggregation, one five-second sidebar query, mutation feedback,
+  per-feature worker counters, stable rebuild inventories and explicit terminal outcomes.
+  Fixed workloads show weighted percentages below 100 while running; unknown totals stay
+  indeterminate. Disabled/idle, waiting, unavailable and error states are distinct.
+- Passed helper profiles: `application`, `integration`, `python indexer` (543 tests, 95.44%
+  coverage including Linux inotify), `python ocr`, final `package @fdrive/web`, `workflow`,
+  and `browser system-activity.spec.ts system.spec.ts features.spec.ts office-settings.spec.ts
+  system-storage.spec.ts --workers=1` (20/20). Application and integration logs:
+  `.fdrive-workflow/logs/step.XrYvyd/`, `step.KQnrXp/`; final browser: `step.bG0L4h/`.
+- Real Next dev + PostgreSQL + SFTPGo + Python indexer smoke generated 240 previews and
+  rebuilt 120 actual images with zero errors. Observed percentage, navigation and completion;
+  evidence in `.fdrive-workflow/live-activity/`. Intercepted browser tests separately cover
+  reload, offline recovery, non-admin isolation, keyboard tooltip semantics and reduced motion.
+  Reviewed settled light/dark/mobile screenshots in `apps/web/test-results/`.
+- Initial test runs exposed a full Docker disk, a shared test-image tag race, outdated route
+  expectations, broad text selectors and a missing tooltip role. Resolved without weakening
+  gates. The Docker helper now runs its own immutable image ID. OCR/clear pre-inventorying
+  remains optional; no completion percentage is invented for those jobs.
+- Rebased for PR publication onto `08cc98c`, preserving newer OCR lock cleanup and thread-start
+  failure handling. Revalidated OCR and indexer (555 tests, 95.42% coverage), application lint,
+  types and full coverage, integration, and all 20 affected browser cases. Reduced concurrency
+  resolved six UI test failures;
+  reclaiming unused Docker build cache resolved PostgreSQL disk exhaustion. Gates unchanged.
+  Rebase coverage, integration and browser logs: `.fdrive-workflow/logs/step.df59I2/`,
+  `step.KkEREI/`, `step.PutGbj/`.
+
 ## 2026-09-11 WebDAV storage provider, slices 1–4 (PR #5)
 
 Branch `feat/webdav-provider`, PR #5. The plan was removed when slice 5 landed; see [WEBDAV.md](../WEBDAV.md).

@@ -12,6 +12,7 @@ import {
 import type { SettingsRepo } from "@fdrive/db";
 import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { createCachedProbe } from "../system/cached-probe.js";
 import type { SystemEventLog } from "../system/event-log.js";
 import { noopSystemEventLog } from "../system/event-log.js";
 import { runtimeError } from "../system/runtime-status.js";
@@ -124,12 +125,25 @@ export function createFeatureService(deps: {
   fetch: typeof fetch;
   /** Optional so existing call sites keep working; defaults to recording nothing. */
   eventLog?: SystemEventLog;
+  probeCacheMs?: number;
 }): FeatureService {
   const { settings, config } = deps;
   const eventLog = deps.eventLog ?? noopSystemEventLog;
   // Per-process, so a restart re-emits one entry for a worker that is
   // still down rather than staying silent about it forever.
   const lastKnown = new Map<ProbeName, boolean>();
+  const probes = new Map<string, () => Promise<Probe>>();
+  function observe(url: string | undefined, runtimePort?: string) {
+    const key = `${url}:${runtimePort}`;
+    let cached = probes.get(key);
+    if (!cached) {
+      cached = createCachedProbe(() => probe(url, deps.fetch, runtimePort), {
+        ttlMs: deps.probeCacheMs ?? 0,
+      });
+      probes.set(key, cached);
+    }
+    return cached();
+  }
 
   /** Records only the edges of a worker's reachability, never every poll. */
   function recordProbe(name: ProbeName, worker: Probe | null): void {
@@ -210,19 +224,11 @@ export function createFeatureService(deps: {
       const needsIndex = values.thumbnails || values.textSearch || values.imageSearch;
       const observeDisabled = raw !== null;
       const [indexer, ocr, embed, image, tika] = await Promise.all([
-        needsIndex || observeDisabled || checkStorage
-          ? probe(config.fdriveIndexerUrl, deps.fetch)
-          : null,
-        values.pdfOcr || observeDisabled || checkStorage
-          ? probe(config.fdriveOcrUrl, deps.fetch)
-          : null,
-        values.semanticSearch || observeDisabled
-          ? probe(config.fdriveEmbedUrl, deps.fetch, "8099")
-          : null,
-        values.imageSearch || observeDisabled
-          ? probe(config.fdriveImageEmbedUrl, deps.fetch, "8013")
-          : null,
-        values.textSearch ? probe("http://tika", deps.fetch, "9997") : null,
+        needsIndex || observeDisabled || checkStorage ? observe(config.fdriveIndexerUrl) : null,
+        values.pdfOcr || observeDisabled || checkStorage ? observe(config.fdriveOcrUrl) : null,
+        values.semanticSearch || observeDisabled ? observe(config.fdriveEmbedUrl, "8099") : null,
+        values.imageSearch || observeDisabled ? observe(config.fdriveImageEmbedUrl, "8013") : null,
+        values.textSearch ? observe("http://tika", "9997") : null,
       ]);
       recordProbe("indexer", indexer);
       recordProbe("ocr", ocr);
