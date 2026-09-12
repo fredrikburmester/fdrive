@@ -1489,3 +1489,71 @@ describe("unmapped errors pass through unchanged", () => {
     expect(body.error.details).toEqual({ failedPath: "/a.txt" });
   });
 });
+
+describe("untrusted download documents", () => {
+  it.each(["GET", "HEAD"])(
+    "forces active content to attachment for %s, including misleading names",
+    async (method) => {
+      for (const mime of [
+        null,
+        "text/html; charset=utf-8",
+        "image/svg+xml",
+        "Text/HTML",
+        "text/xml",
+        "application/xhtml+xml",
+      ]) {
+        const storage = makeStubStorage({
+          download: async () => makeDownloadResult({ contentType: mime }),
+        });
+        const { app } = await buildHarnessWithStorage(storage);
+        const path = mime === null ? "/attack.html" : "/innocent.txt";
+        const response = await app.request(`/api/v1/fs/download?path=${path}&inline=1`, { method });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-disposition")).toContain("attachment");
+        expect(response.headers.get("content-security-policy")).toBe("sandbox");
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        await response.body?.cancel();
+      }
+    },
+  );
+  it("isolates partial responses and preserves passive inline downloads", async () => {
+    const storage = makeStubStorage({
+      download: async () =>
+        makeDownloadResult({
+          contentType: "image/svg+xml",
+          status: 206,
+          contentRange: "bytes 0-3/8",
+        }),
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+    const response = await app.request("/api/v1/fs/download?path=/attack.svg&inline=1", {
+      headers: { range: "bytes=0-3" },
+    });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-disposition")).toContain("attachment");
+    expect(response.headers.get("content-security-policy")).toBe("sandbox");
+    expect(response.headers.get("content-range")).toBe("bytes 0-3/8");
+    await response.body?.cancel();
+  });
+});
+
+it("publishes successful deletes before a later item fails", async () => {
+  const { app, events } = await buildHarness();
+  const response = await app.request(
+    "/api/v1/fs/delete",
+    requestedWith({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [
+          { path: "/hello.txt", kind: "file" },
+          { path: "/missing.txt", kind: "file" },
+        ],
+      }),
+    }),
+  );
+  expect(response.status).toBe(404);
+  expect(events).toEqual([
+    expect.objectContaining({ type: "fs", op: "delete", paths: ["/hello.txt"] }),
+  ]);
+});

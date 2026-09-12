@@ -66,6 +66,17 @@ expect_failure() {
 
 assert_contains() { grep -F -- "$2" "$1" >/dev/null || { printf 'missing %s\n' "$2" >&2; exit 1; }; }
 assert_missing() { [[ ! -e $1 ]] || { printf 'unexpected path: %s\n' "$1" >&2; exit 1; }; }
+# Poll a file for a fixed string with a bounded wait; background scenarios use
+# this instead of fixed sleeps so they hold under machine load.
+wait_for_text() {
+  local file=$1 needle=$2 attempt
+  for (( attempt = 0; attempt < 30; attempt++ )); do
+    grep -F -- "$needle" "$file" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  printf 'timed out waiting for %s in %s\n' "$needle" "$file" >&2
+  exit 1
+}
 
 write_repo() {
   ROOT="$TEST_ROOT/repo-$1"
@@ -112,9 +123,10 @@ cat > "$FAKE_PNPM" <<'PNPM'
 #!/bin/bash
 set -euo pipefail
 if [[ ${1:-} == --version ]]; then printf '10.11.0\n'; exit 0; fi
-printf 'pnpm' >> "$LOG"
-for arg in "$@"; do printf ' <%s>' "$arg" >> "$LOG"; done
-printf ' PWD=<%s>\n' "$PWD" >> "$LOG"
+# The api and web servers append concurrently, so write each line in one call.
+line=pnpm
+for arg in "$@"; do line+=" <$arg>"; done
+printf '%s PWD=<%s>\n' "$line" "$PWD" >> "$LOG"
 if [[ $* == 'dev:env' || $* == *'compose -f deploy/compose.dev.yaml --profile index up -d'* ]]; then exit 0; fi
 if [[ $* == *'@fdrive/api dev'* || $* == *'@fdrive/web dev'* ]]; then
   if [[ $* == *'@fdrive/api dev'* ]]; then server=api; else server=web; fi
@@ -194,11 +206,11 @@ env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FDRIVE_PYTHON="$FAKE_PYTHON" 
   bash "$DEV_APP" "$ROOT" --web-port 32123 --index >"$OUT" 2>"$ERR" &
 BACKGROUND_PID=$!
 set -e
-for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  grep -F 'ready http://127.0.0.1:32123' "$ERR" >/dev/null && break
-  sleep 1
-done
-assert_contains "$ERR" 'ready http://127.0.0.1:32123'
+wait_for_text "$ERR" 'ready http://127.0.0.1:32123'
+# The fake curl makes readiness immediate, so the ready line can precede the
+# servers' trap installation; each fake logs server-start only after its trap.
+wait_for_text "$LOG" 'server-start <api>'
+wait_for_text "$LOG" 'server-start <web>'
 kill -TERM "$BACKGROUND_PID"
 set +e
 wait "$BACKGROUND_PID"
@@ -232,10 +244,13 @@ printf 'PASS dev treats an early zero exit as failure\n'
 
 write_repo interrupt
 : > "$LOG"
+# The readiness timeout exceeds wait_for_text's bound, so the interrupt below
+# always lands while the helper is still waiting for readiness.
 env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FAKE_CURL_STATUS=1 \
-  FDRIVE_DEV_READY_TIMEOUT_SECONDS=30 bash "$DEV_APP" "$ROOT" --web-port 32126 >"$OUT" 2>"$ERR" &
+  FDRIVE_DEV_READY_TIMEOUT_SECONDS=60 bash "$DEV_APP" "$ROOT" --web-port 32126 >"$OUT" 2>"$ERR" &
 BACKGROUND_PID=$!
-sleep 1
+wait_for_text "$LOG" 'server-start <api>'
+wait_for_text "$LOG" 'server-start <web>'
 kill -TERM "$BACKGROUND_PID"
 set +e
 wait "$BACKGROUND_PID"

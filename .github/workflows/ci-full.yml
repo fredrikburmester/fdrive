@@ -1,0 +1,200 @@
+# The complete suite: everything the old single CI workflow ran, ~30 billed
+# minutes a run (see the budget note in ci.yml). Opt in per pull request by
+# adding the `ci:full` label (the label event starts it and every later push
+# keeps it running), or dispatch it by hand for any ref:
+#   gh workflow run "CI (full)" --ref main
+# On pull requests without the label every job is skipped at no cost.
+name: CI (full)
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow:
+    name: Workflow helpers
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: bash tools/orchestration/setup-checkout.sh .
+      - run: bash tools/orchestration/verify.sh . workflow
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  check:
+    name: Lint, typecheck, test
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: bash tools/orchestration/setup-checkout.sh .
+      - run: bash tools/orchestration/verify.sh . application
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  integration:
+    name: Integration tests
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: bash tools/orchestration/setup-checkout.sh .
+      - run: bash tools/orchestration/verify.sh . integration
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Keep these two in sync with services.yml, which runs them path-filtered.
+  indexer:
+    name: Indexer (Python)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install indexer system dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
+      - run: bash tools/orchestration/setup-python.sh . indexer
+        env:
+          FDRIVE_PYTHON: python
+      - run: bash tools/orchestration/verify.sh . python indexer
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexer-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  ocr:
+    name: OCR (Python)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: bash tools/orchestration/setup-python.sh . ocr
+        env:
+          FDRIVE_PYTHON: python
+      - run: bash tools/orchestration/verify.sh . python ocr
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e:
+    name: End-to-end tests
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: bash tools/orchestration/setup-checkout.sh .
+      - run: pnpm --filter @fdrive/web exec playwright install --with-deps chromium
+      - run: bash tools/orchestration/verify.sh . browser
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  # The images an operator actually builds. `check` type-checks the sources, but
+  # nothing else here runs `next build` or exercises the Dockerfiles' build
+  # context, so a break that only surfaces during the image build reached
+  # self-hosters as a failed `./update.sh` with no attribution to upstream.
+  images:
+    name: Deployment images
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          build-args: API_INTERNAL_URL=http://api:3001
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build the api image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -7,7 +7,11 @@ import { createInMemoryMountMappingStore } from "../scoping/mount-mapping-store.
 import { createInMemoryScopeOverrideStore } from "../scoping/override-store.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
 import { fakeIndexerDirectory, fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
-import { applyOfficeStorageEvent, withOfficeMetadata } from "./registry-events.ts";
+import {
+  applyOfficeRootEvent,
+  applyOfficeStorageEvent,
+  withOfficeMetadata,
+} from "./registry-events.ts";
 
 const now = new Date("2026-09-06T00:00:00Z");
 
@@ -174,4 +178,41 @@ it("tombstones the source when the move target becomes unmapped", async () => {
     () => now,
   ).onMoved(identity.id, "/a.docx", "/elsewhere.docx", false);
   expect(await files.get(file.id)).toBeNull();
+});
+
+it("routes a root event to its provider, independently of the default provider", async () => {
+  const repos = createMemoryRepos();
+  const first = await seedSftpgoProvider(repos, "http://first");
+  const second = await seedSftpgoProvider(repos, "http://second");
+  const files = createMemoryOfficeFileRepo();
+  const firstFile = await files.ensure({
+    providerId: first.id,
+    rootName: "second",
+    path: "a.docx",
+  });
+  const secondFile = await files.ensure({
+    providerId: second.id,
+    rootName: "second",
+    path: "a.docx",
+  });
+  const providers = {
+    list: () => repos.providers.list(),
+    get: async (id: string) => ({
+      module: { indexRootName: () => (id === second.id ? "second" : "first") },
+      instance: {},
+    }),
+  } as unknown as Parameters<typeof applyOfficeRootEvent>[1];
+  const event = {
+    kind: "deleted" as const,
+    root: "second",
+    path: "a.docx",
+    target_path: null,
+    at: now.toISOString(),
+  };
+  await applyOfficeRootEvent(files, providers, { ...event, kind: "changed" });
+  expect(await files.get(secondFile.id)).not.toBeNull();
+  await applyOfficeRootEvent(files, providers, event);
+  expect(await files.get(secondFile.id)).toBeNull();
+  expect(await files.get(firstFile.id)).not.toBeNull();
+  await applyOfficeRootEvent(files, { ...providers, get: async () => null }, event);
 });

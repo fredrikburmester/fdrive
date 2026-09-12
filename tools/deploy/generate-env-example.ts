@@ -181,7 +181,7 @@ export function renderQuickstartEnvExample(): string {
     "# Copy to .env, then fill in every uncommented change-me value:",
     "#   cp .env.example .env && chmod 600 .env",
     "# Leave SFTPGO_URL unset to configure and test it in the first-run walkthrough.",
-    "# Advanced host mounts, networking, and Office: REFERENCE.md.",
+    "# Advanced host mounts, networking, Office, and processing worker resource limits: REFERENCE.md.",
   ].join("\n");
   const sections = groupBySubsystem([...configKeys, ...deployKeys]).map(
     ({ subsystem, entries }) => {

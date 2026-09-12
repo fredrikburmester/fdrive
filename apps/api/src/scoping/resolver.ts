@@ -499,9 +499,9 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
     const knownRoots = await knownRootNames(identity.providerId);
     validateScopeOverrides(scopes, unindexedPrefixes, { knownRoots });
     if (scopes.length === 0 && unindexedPrefixes.length === 0) {
-      await deps.overrides.reset(identity.id);
+      await deps.overrides.reset(identity.id, identity.accountId);
     } else {
-      await deps.overrides.set(identity.id, scopes, unindexedPrefixes);
+      await deps.overrides.set(identity.id, scopes, unindexedPrefixes, identity.accountId);
     }
     cache.invalidatePrefix(`${identity.id}:`);
   }

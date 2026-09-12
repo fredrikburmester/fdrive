@@ -15,11 +15,12 @@ pnpm --filter @fdrive/web exec vitest run --coverage --config office-e2e/vitest.
 ```
 
 The `Real Office editors` GitHub Actions workflow runs both products in separate
-Ubuntu 24.04 jobs daily at 03:17 UTC, on relevant pull requests, and through manual
-`workflow_dispatch`. Jobs use Node 24, pnpm 10.11.0, a frozen lockfile and the
-production shadow build, with a 45-minute limit. No repository secrets or browser
-artifacts are used. The same pinned images and fixture cleanup apply locally and
-in CI. Run `pnpm test:e2e:office` locally to reproduce its ONLYOFFICE job, or set
+Ubuntu 24.04 jobs, manual `workflow_dispatch` only (`gh workflow run "Real Office
+editors" --ref <branch>`); the nightly schedule and pull request trigger were removed
+on 2026-09-12 to protect the Actions budget. Jobs use Node 24, pnpm 10.11.0, a frozen
+lockfile and the production shadow build, with a 45-minute limit. No repository secrets
+or browser artifacts are used. The same pinned images and fixture cleanup apply locally
+and in CI. Run `pnpm test:e2e:office` locally to reproduce its ONLYOFFICE job, or set
 `OFFICE_E2E_PRODUCT=collabora` for its second matrix entry.
 
 `E2E_DEV=1` uses a development web server in this isolated checkout. The default

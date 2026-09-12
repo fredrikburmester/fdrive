@@ -583,3 +583,21 @@ def test_run_pass_finishes_run_row_even_on_crash(postgres_dsn: str, tmp_path: Pa
         assert last.finished_at is not None
     finally:
         conn.close()
+
+
+def test_page_megapixel_limit_is_independent_of_pdf_megabytes() -> None:
+    calls: list[list[str]] = []
+
+    class Process:
+        returncode = 0
+
+        def communicate(self, timeout: int) -> tuple[str, str]:
+            return "", ""
+
+    def popen(command: list[str], **_kwargs: object) -> Process:
+        calls.append(command)
+        return Process()
+
+    runner.run_ocrmypdf("in.pdf", "out.pdf", "eng", runner.MAX_OCR_PAGE_MEGAPIXELS, 30, 2, popen=popen)
+    assert calls[0][calls[0].index("--skip-big") + 1] == "50"
+    assert DEFAULT_SETTINGS.max_mb == 200

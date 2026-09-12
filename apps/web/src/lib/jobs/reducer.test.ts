@@ -197,3 +197,20 @@ describe("finishedJobs", () => {
     expect(finishedJobs(state).map((j) => j.id)).toEqual(["2", "3", "4"]);
   });
 });
+
+it("hydration preserves SSE-only jobs and newer terminal states", () => {
+  const terminal = job({ id: "1", state: "done", updatedAt: "2026-09-06T00:00:02.000Z" });
+  let state = jobsReducer(initialJobsState, { type: "upsert", job: terminal });
+  state = jobsReducer(state, {
+    type: "upsert",
+    job: job({ id: "2", state: "done" }),
+    request: COMPRESS_REQUEST,
+  });
+  state = jobsReducer(state, {
+    type: "hydrate",
+    jobs: [job({ id: "1", state: "running" }), job({ id: "3", state: "done" })],
+  });
+  expect(state.byId["1"]).toEqual(terminal);
+  expect(state.order).toEqual(["1", "2", "3"]);
+  expect(state.requests["2"]).toEqual(COMPRESS_REQUEST);
+});

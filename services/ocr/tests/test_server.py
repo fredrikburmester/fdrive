@@ -265,3 +265,16 @@ def test_run_releases_lock_and_logs_when_pass_crashes(postgres_dsn: str, tmp_pat
     assert resp.status_code == 202
     assert _wait_until(lambda: not state.run_lock.running)
     assert any("crashed" in line for line in logs)
+
+
+def test_run_lock_released_when_thread_start_fails(postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    _set_pdf_ocr(state)
+    with TestClient(server.create_app(state)) as client:
+        def fail_start(_self: object) -> None:
+            raise RuntimeError("thread limit")
+
+        monkeypatch.setattr(server.threading.Thread, "start", fail_start)
+        response = client.post("/run")
+        assert response.status_code == 500
+        assert not state.run_lock.running

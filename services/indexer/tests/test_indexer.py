@@ -1259,3 +1259,111 @@ def test_wait_for_embed_gives_up_after_retries(monkeypatch: pytest.MonkeyPatch) 
     assert result is False
     assert len(sleeps) == 300
     assert any("still not healthy" in line for line in logs)
+
+
+def test_image_backend_outage_is_probed_once_per_backoff_window(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    clock = [0.0]
+    ctx.image_embed_backoff = EmbedBackoff(pause_seconds=60, clock=lambda: clock[0])
+    calls: list[str] = []
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: calls.append(url))
+    for i in range(100):
+        assert indexer.embed_thumbnail(ctx, str(i)) is False
+    assert len(calls) == 1
+    clock[0] = 61
+    assert indexer.embed_thumbnail(ctx, "retry") is False
+    assert len(calls) == 2
+
+
+def test_unchanged_exclusion_stays_quiet_and_removed_rule_reindexes(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx.settings = replace(ctx.settings, text_exclude_globs=("sftpgo/*.txt",))
+    path = tmp_path / "a.txt"
+    path.write_text("excluded")
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *_a, **_k: [])
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is True
+    monkeypatch.setattr(indexer, "safe_process", lambda *_a: pytest.fail("unchanged exclusion must not reindex"))
+    monkeypatch.setattr(indexer, "emit_event", lambda *_a: pytest.fail("unchanged exclusion must not emit"))
+    indexer.scan_once(ctx)
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is False
+    ctx.settings = replace(ctx.settings, text_exclude_globs=())
+    admitted: list[str] = []
+    monkeypatch.setattr(indexer, "safe_process", lambda _ctx, _abs, rel, _st: admitted.append(rel) or "indexed")
+    indexer.scan_once(ctx)
+    assert admitted == ["a.txt"]
+
+
+@pytest.mark.parametrize("rename", [False, True])
+def test_watcher_parent_mutation_waits_for_inflight_child(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rename: bool
+) -> None:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    called = threading.Event()
+    monkeypatch.setattr(db, "mark_deleted", lambda *_a: called.set() or [])
+    monkeypatch.setattr(db, "rename_paths", lambda *_a: called.set() or 0)
+    def operation() -> None:
+        if rename:
+            indexer.watch_rename(ctx, "docs", "moved", True)
+        else:
+            indexer.watch_mark_deleted(ctx, "docs", True)
+
+    with ctx.path_locks.get("docs/a.txt"):
+        thread = threading.Thread(target=operation)
+        thread.start()
+        deadline = time.monotonic() + 2
+        while "docs" not in ctx.path_locks._locks and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert "docs" in ctx.path_locks._locks
+        assert not called.is_set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert called.is_set()
+    assert ctx.path_locks._locks == {}
+
+
+def test_image_embedding_transport_outage_recovers_after_backoff(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    clock = [0.0]
+    ctx.image_embed_backoff = EmbedBackoff(pause_seconds=60, clock=lambda: clock[0])
+    _write_thumbnail(cfg, "recover")
+    monkeypatch.setattr(indexer, "image_embed_health", lambda _url: _HEALTHY)
+    logged: list[str] = []
+    monkeypatch.setattr(indexer, "log", logged.append)
+
+    def unavailable(*_args: object) -> object:
+        raise httpx.ConnectError("backend restarted")
+
+    monkeypatch.setattr(indexer, "embed_images", unavailable)
+    assert indexer.embed_thumbnail(ctx, "recover") is False
+    assert ctx.image_embed_backoff.paused()
+    assert indexer.embed_thumbnail(ctx, "recover") is False
+    assert len(logged) == 1
+    clock[0] = 61
+    monkeypatch.setattr(indexer, "embed_images", lambda *_a: ([[0.1] * 1024], "model-a"))
+    assert indexer.embed_thumbnail(ctx, "recover") is True
+    assert not ctx.image_embed_backoff.paused()
+    assert "resuming image embeddings" in logged[-1]
+    assert db.image_embedding_model(ctx.conn(), "recover") == "model-a"
+
+
+@pytest.mark.parametrize("extension", [".png", ".pdf", ".docx"])
+def test_excluded_oversized_inputs_only_retry_after_their_limit_changes(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, extension: str
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    path = "large" + extension
+    assert indexer.exclusion_still_applies(ctx, path, max(cfg.image_max_bytes, cfg.text_max_bytes) + 1)
+    assert not indexer.exclusion_still_applies(ctx, path, 1)

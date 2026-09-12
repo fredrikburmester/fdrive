@@ -20,12 +20,14 @@ import {
   isStorageError,
   joinPath,
   parentPath,
+  safeEntryPath,
   stripArchiveExtension,
   uniqueCopyName,
 } from "@fdrive/core";
 import type { AppHono, AuthedHono } from "../app.js";
 import { compressToTemp } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
+import { protectArchiveWrites } from "../archive/new-file-storage.ts";
 import {
   peekArchive,
   UnreadableArchiveError,
@@ -241,10 +243,13 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
       report: ctx.report,
     });
     try {
-      await principal.storage.upload(
+      if (await pathExists(principal.storage, targetPath)) {
+        throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
+      }
+      await protectArchiveWrites(principal.storage, principal.identityId).upload(
         targetPath,
         webStreamFromNodeReadable(createReadStream(file)),
-        { contentLength: size, signal: ctx.signal },
+        { contentLength: size, signal: ctx.signal, overwrite: false },
       );
     } finally {
       await rm(file, { force: true });
@@ -276,11 +281,13 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
   const destination =
     body.destination !== undefined
       ? normalizeOrThrow(body.destination)
-      : joinPath(parentPath(archivePath), stripArchiveExtension(baseName(archivePath)));
+      : safeEntryPath(parentPath(archivePath), stripArchiveExtension(baseName(archivePath)));
+  if (destination === null)
+    throw new ApiHttpError("bad_request", "archive has no safe destination name");
 
   const job = submitJob(deps, principal, "extract", async (ctx) => {
     const result = await extractArchive({
-      storage: principal.storage,
+      storage: protectArchiveWrites(principal.storage, principal.identityId),
       archivePath,
       destination,
       tmpDir: deps.tmpDir,

@@ -515,6 +515,13 @@ function createTagRepo(db: Db): TagRepo {
       }
     },
     async update(id, accountId, patch) {
+      if (patch.name === undefined && patch.color === undefined) {
+        const [row] = await db
+          .select()
+          .from(tags)
+          .where(and(eq(tags.id, id), eq(tags.accountId, accountId)));
+        return row ? toTag(row) : null;
+      }
       try {
         const [row] = await db
           .update(tags)

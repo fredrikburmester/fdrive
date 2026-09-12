@@ -1,9 +1,9 @@
+# Manual only since 2026-09-12: ~7 billed minutes a run on every pull request
+# and push to main was part of exhausting the Actions budget (see ci.yml).
+#   gh workflow run "Performance budgets" --ref <branch>
 name: Performance budgets
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main]
 concurrency:
   group: performance-${{ github.ref }}
   cancel-in-progress: true
@@ -12,7 +12,7 @@ permissions:
 jobs:
   budgets:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -32,3 +32,4 @@ jobs:
           name: performance-observations
           path: tools/perf/results/*.json
           if-no-files-found: error
+          retention-days: 7

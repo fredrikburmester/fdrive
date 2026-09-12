@@ -135,6 +135,7 @@ export function extensionOf(name: string): string {
 export function isSafeSegment(segment: string): boolean {
   return (
     segment.length > 0 &&
+    textEncoder.encode(segment).length <= MAX_SEGMENT_BYTES &&
     !segment.includes("/") &&
     !segment.includes("\0") &&
     segment !== "." &&

@@ -240,7 +240,7 @@ export interface ApiClient {
   /** Admin + CSRF only: replaces the folder-level mappings. */
   setMountMappings(body: SetMountMappingsRequest): Promise<MountMappingsResponse>;
   list(path: string): Promise<ListResponse>;
-  stat(path: string): Promise<FsEntry>;
+  stat(path: string, signal?: AbortSignal): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
   move(path: string, target: string): Promise<FsEntry>;
   copy(path: string, target: string): Promise<FsEntry>;
@@ -611,8 +611,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return get(ROUTES.fs.list, ListResponse, { query: { path } });
     },
 
-    stat(path: string): Promise<FsEntry> {
-      return get(ROUTES.fs.stat, EntryResponse, { query: { path } });
+    stat(path: string, signal?: AbortSignal): Promise<FsEntry> {
+      return get(ROUTES.fs.stat, EntryResponse, { query: { path }, signal });
     },
 
     mkdir(path: string): Promise<FsEntry> {

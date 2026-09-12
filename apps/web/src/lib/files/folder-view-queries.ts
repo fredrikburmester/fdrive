@@ -27,7 +27,7 @@ export function useFolderView(path: string, identityId: string | undefined) {
   const scope = useScope();
   const queryClient = useQueryClient();
   const [globalDefault, setGlobalDefault] = useDefaultView();
-  const busy = useRef(false);
+  const busy = useRef(new Set<string>());
   const query = useQuery({
     queryKey: queryKeys.folderViews.path(identityId ?? "", path),
     queryFn: () => scope.client.getFolderView(path),
@@ -57,24 +57,24 @@ export function useFolderView(path: string, identityId: string | undefined) {
       if (context) queryClient.setQueryData(context.key, context.previous);
       toast.error("Could not save the folder view.");
     },
-    onSettled: async (_data, _error, _input, context) => {
+    onSettled: async (_data, _error, input, context) => {
       if (isCurrent(scope.generation) && context) {
         await queryClient.invalidateQueries({ queryKey: context.key });
       }
-      busy.current = false;
+      busy.current.delete(input.path);
     },
   });
   const mode = resolveFolderView(path, query.data?.view, globalDefault);
   function save(next: ViewMode | null) {
-    if (busy.current || !query.isSuccess || !isCurrent(scope.generation)) return;
-    busy.current = true;
+    if (busy.current.has(path) || !query.isSuccess || !isCurrent(scope.generation)) return;
+    busy.current.add(path);
     mutation.mutate({ path, mode: next });
   }
   return {
     mode,
     pinned: query.data?.view != null,
     loading: query.isPending,
-    disabled: !query.isSuccess || mutation.isPending,
+    disabled: !query.isSuccess || busy.current.has(path),
     error: query.isError,
     retry: () => void query.refetch(),
     setMode: (next: ViewMode) => save(next),

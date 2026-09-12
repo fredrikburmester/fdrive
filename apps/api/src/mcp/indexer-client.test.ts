@@ -83,3 +83,17 @@ it("sends authorized content bytes with an encoded name and handles optional ext
   expect(await client.extractContent?.(input)).toEqual({ text: "", status: "disabled" });
   for (let i = 0; i < 4; i++) expect(await client.extractContent?.(input)).toBeNull();
 });
+
+it("cancels HTTP error bodies even when cancellation itself fails", async () => {
+  const cancel = vi.fn(async () => {
+    throw new Error("already closed");
+  });
+  const client = createIndexerExtractClient({
+    baseUrl: "http://indexer",
+    fetch: async () => new Response(new ReadableStream({ cancel }), { status: 503 }),
+  });
+  expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toBeNull();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(await client.extractContent?.({ name: "a.txt", bytes: new Uint8Array() })).toBeNull();
+  expect(cancel).toHaveBeenCalledTimes(2);
+});

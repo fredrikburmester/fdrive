@@ -69,3 +69,33 @@ test("photo.heic opens the image viewer and decodes via WASM on zoom", async ({ 
   await img.click();
   await expect(page.getByRole("button", { name: "Zoom out" })).toBeVisible({ timeout: 15_000 });
 });
+
+for (const ext of ["html", "svg"]) {
+  test(`active ${ext} downloads cannot act through the browser session`, async ({ page }) => {
+    const path = `/active-preview.${ext}`;
+    const sentinel = `/xss-sentinel-${ext}`;
+    const script = `fetch('/api/v1/fs/mkdir',{method:'POST',headers:{'x-requested-with':'fdrive','content-type':'application/json'},body:JSON.stringify({path:'${sentinel}'})})`;
+    const payload =
+      ext === "svg"
+        ? `<svg xmlns="http://www.w3.org/2000/svg"><script>${script}</script></svg>`
+        : `<html><script>${script}</script></html>`;
+    const upload = await page.request.put(`/api/v1/fs/upload?path=${encodeURIComponent(path)}`, {
+      headers: { "x-requested-with": "fdrive" },
+      data: payload,
+    });
+    expect(upload.ok()).toBe(true);
+    const url = `/api/v1/fs/download?path=${encodeURIComponent(path)}&inline=1`;
+    const response = await page.request.get(url);
+    expect(response.headers()["content-disposition"]).toContain("attachment");
+    expect(response.headers()["content-security-policy"]).toBe("sandbox");
+    await page.goto(`/view${path}`);
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Open in new tab" }).click();
+    expect((await download).suggestedFilename()).toBe(`active-preview.${ext}`);
+    const direct = page.waitForEvent("download");
+    await page.goto(url).catch(() => undefined);
+    expect((await direct).suggestedFilename()).toBe(`active-preview.${ext}`);
+    const stat = await page.request.get(`/api/v1/fs/stat?path=${encodeURIComponent(sentinel)}`);
+    expect(stat.status()).toBe(404);
+  });
+}
