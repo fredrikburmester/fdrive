@@ -138,8 +138,8 @@ it("nests feature pages beneath Features and keeps other System pages separate",
   const expected = [
     ["General", "/system/general"],
     ["Storage", "/system/storage"],
-    ["Shared folders", "/system/shared-folders"],
     ["Features", "/system/features"],
+    ["Shared folders", "/system/shared-folders"],
     ["Thumbnails", "/system/thumbnails"],
     ["Full-text search", "/system/indexer"],
     ["Semantic search", "/system/search"],
@@ -151,11 +151,11 @@ it("nests feature pages beneath Features and keeps other System pages separate",
   const links = await Promise.all(
     expected.map(([label]) => screen.findByRole("link", { name: label })),
   );
-  const featuresItem = links[3]?.closest("li");
+  const featuresItem = links[2]?.closest("li");
   for (const [index, link] of links.entries()) {
     expect(link.getAttribute("href")).toBe(expected[index]?.[1]);
     expect(link.closest("li")).not.toBeNull();
-    expect(featuresItem?.contains(link)).toBe(index >= 3);
+    expect(featuresItem?.contains(link)).toBe(index >= 2);
     if (index > 0) {
       const previous = links[index - 1];
       expect(previous !== undefined && isBefore(previous, link)).toBe(true);
