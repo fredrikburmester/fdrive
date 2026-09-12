@@ -1,3 +1,4 @@
+import type { ApiTokenAccess } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Context, MiddlewareHandler } from "hono";
 import { ApiHttpError } from "../errors.js";
@@ -14,6 +15,8 @@ export interface Principal {
   readonly storage: StorageProvider;
   /** True when this account can reach the System admin routes and pages. */
   readonly isAdmin: boolean;
+  /** Present only for tokens with explicit operation and virtual-folder grants. */
+  readonly tokenAccess?: ApiTokenAccess;
   /**
    * Re-checks that whatever authenticated this principal (its session) is
    * still valid and still entitles it to act as `identityId`: the session

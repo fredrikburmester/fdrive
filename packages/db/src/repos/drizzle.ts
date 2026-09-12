@@ -397,6 +397,7 @@ function toApiToken(row: typeof apiTokens.$inferSelect): ApiToken {
     identityId: row.identityId,
     name: row.name,
     tokenHash: row.tokenHash,
+    ...(row.access === null ? {} : { access: row.access }),
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
     expiresAt: row.expiresAt,
@@ -413,6 +414,7 @@ function createApiTokenRepo(db: Db): ApiTokenRepo {
           identityId: input.identityId,
           name: input.name,
           tokenHash: input.tokenHash,
+          access: input.access ?? null,
           expiresAt: input.expiresAt,
         })
         .returning();

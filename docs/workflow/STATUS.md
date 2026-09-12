@@ -5,6 +5,20 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## MCP access and file management: ready for review
+
+- All four authorized stages implemented on `codex/mcp-access-management`. New tokens select a
+  login, Read/Organize/Full mode and allowed folders. Create a replacement token for the new
+  permissions; existing tokens retain legacy access. [MCP documentation](../MCP.md) covers
+  tools, migration and limits; [delivery evidence](STATUS-history.md#2026-09-12-mcp-access-and-file-management).
+- Application, affected browser, indexer and workflow checks pass. Integration tests all pass
+  across the full run and a composition rerun after a disposable database failed during setup.
+  Real SFTPGo/WebDAV operations and the web-origin MCP connection are verified;
+  the token form was inspected visually. No deployment performed.
+- Reads/uploads/edits have a 4 MiB cap. SHA-256 guards MCP edits within one API process;
+  external clients can still race the provider write. No permanent deletion or public sharing.
+- Unrelated System activity planning and `.playwright-mcp/` artifacts are preserved.
+
 ## System sidebar activity: ready for PR review
 
 Worktree `/private/tmp/fdrive-system-activity`, branch `codex/system-activity`, rebased onto

@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { ApiTokenAccess } from "../repos/types.js";
 import { vector } from "../vector.js";
 
 /**
@@ -120,6 +121,7 @@ export const apiTokens = appSchema.table(
     identityId: uuid("identity_id").references(() => identities.id, { onDelete: "set null" }),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
+    access: jsonb("access").$type<ApiTokenAccess>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),

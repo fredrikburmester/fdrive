@@ -752,6 +752,20 @@ describe("index-queries", () => {
   });
 
   describe("listFiles", () => {
+    it("continues stable pages when modification times and sizes tie", async () => {
+      const rootId = await insertRoot("primary");
+      const first = await insertFile(rootId, "alice/z.txt", { mtimeNs: 1n, size: 10 });
+      const second = await insertFile(rootId, "alice/a.txt", { mtimeNs: 1n, size: 10 });
+      await insertFile(rootId, "bob/hidden.txt", { mtimeNs: 1n, size: 10 });
+      for (const order of ["modified_desc", "modified_asc", "size_desc"] as const) {
+        const a = await queries.listFiles([{ rootId, fsPrefix: "/alice" }], {}, order, 1);
+        const b = await queries.listFiles([{ rootId, fsPrefix: "/alice" }], {}, order, 1, 1);
+        expect(a.total).toBe(2);
+        expect(a.files.map((file) => file.id)).toEqual([first.id]);
+        expect(b.files.map((file) => file.id)).toEqual([second.id]);
+      }
+    });
+
     it("filters by name substring", async () => {
       const rootId = await insertRoot("primary");
       const match = await insertFile(rootId, "alice/report.pdf");

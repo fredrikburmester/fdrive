@@ -608,6 +608,30 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("apiTokens", () => {
+      it("persists explicit grants while old tokens retain absent access", async () => {
+        const { account, identity } = await seedIdentity();
+        const access = { mode: "organize" as const, paths: ["/docs", "/team"] };
+        const token = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Scoped",
+          tokenHash: "scope-hash",
+          expiresAt: null,
+          access,
+        });
+        expect(token.access).toEqual(access);
+        expect((await repos.apiTokens.findByHash("scope-hash"))?.access).toEqual(access);
+        expect((await repos.apiTokens.listByAccount(account.id))[0]?.access).toEqual(access);
+        const legacy = await repos.apiTokens.create({
+          accountId: account.id,
+          identityId: identity.id,
+          name: "Old",
+          tokenHash: "legacy-hash",
+          expiresAt: null,
+        });
+        expect(legacy).not.toHaveProperty("access");
+      });
+
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
           type: "sftpgo",

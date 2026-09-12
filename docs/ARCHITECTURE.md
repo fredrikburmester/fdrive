@@ -43,7 +43,8 @@ rules in the authentication guide supersede the original account-linking briefs.
 Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events, Office paths
 or MCP. Trusted configuration, directory consistency checks and live read authorization
 are separate requirements. Never substitute a guessed username/home template for verified
-index scopes. Providers without a supported local mapping retain ordinary file browsing.
+index scopes. Providers without a supported local mapping retain ordinary provider operations,
+including explicitly scoped [MCP file tools](MCP.md).
 
 ## Office and recovery
 

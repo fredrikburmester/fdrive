@@ -66,3 +66,12 @@ Regression coverage includes
 [provider binding](../apps/api/test/integration/provider-binding.test.ts).
 Use two identities with overlapping virtual names and different permissions; include
 mapping changes, unindexed mounts, dependency failures and renamed/deleted paths.
+
+## MCP folder grants
+
+Explicit MCP token grants narrow virtual paths independently of indexing. Provider operations
+check these grants directly; index-backed operations intersect them with verified scopes,
+retain nested mapping shadow boundaries and then perform the usual live read authorization.
+Ancestor browsing exposes only the chains to granted roots. Configured Trash remains excluded
+from ordinary tools; restore admits both original and destination paths. Legacy tokens retain
+the verified-index restrictions described in [MCP](MCP.md).

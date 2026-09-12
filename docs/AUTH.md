@@ -240,3 +240,12 @@ valid. In practice this means such a user is asked to sign back in to fdrive
 periodically, more often than a user without TOTP enforced. There is no
 current workaround beyond disabling TOTP enforcement for HTTP on the SFTPGo
 side, or accepting the more frequent re-authentication.
+
+## MCP token grants
+
+New personal tokens persist nullable `app.api_tokens.access` JSON with `mode` and normalized
+virtual `paths`. Absent access identifies legacy tokens and preserves their old admission
+rules. Token creation defaults to the authenticated session's active identity and Read access;
+an explicitly selected identity must belong to that account. Token principal resolution
+validates stored grants and includes them on every request; malformed access fails closed.
+See [MCP](MCP.md) for the mode matrix and legacy `FDRIVE_MCP_WRITES` behavior.
