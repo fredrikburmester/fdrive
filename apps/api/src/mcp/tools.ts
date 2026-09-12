@@ -2,6 +2,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { Principal } from "../auth/principal.js";
+import { canOrganize, trashPathFor } from "./access.ts";
+import { MAX_FILE_BYTES, readFile, readStoredFile } from "./content.ts";
+import {
+  copyPath,
+  createFile,
+  editFile,
+  fileTags,
+  listTrash,
+  restorePath,
+  searchImages,
+  setFavorite,
+  trashPath,
+} from "./file-tools.ts";
 import {
   type McpToolDeps,
   runCreateFolder,
@@ -46,7 +59,73 @@ const ORDER_BY = z.enum(["modified_desc", "modified_asc", "size_desc", "path"]);
  * write tool never crashes the connection.
  */
 export function registerMcpTools(server: McpServer, principal: Principal, deps: McpToolDeps): void {
-  server.registerTool(
+  const organize = canOrganize(principal, deps.writesEnabled);
+  const writeNames = new Set([
+    "create_folder",
+    "move_path",
+    "copy_path",
+    "create_file",
+    "upload_file",
+    "edit_file",
+    "trash_path",
+    "restore_path",
+    "set_file_tags",
+    "set_favorite",
+  ]);
+  const register: McpServer["registerTool"] = (name, config, handler) => {
+    const write = writeNames.has(name);
+    return server.registerTool(
+      name,
+      {
+        ...config,
+        annotations: {
+          readOnlyHint: !write,
+          destructiveHint: ["move_path", "edit_file", "trash_path", "set_file_tags"].includes(name),
+          idempotentHint: !write || name === "set_favorite" || name === "set_file_tags",
+          openWorldHint: false,
+        },
+      },
+      handler,
+    );
+  };
+  register(
+    "capabilities",
+    {
+      title: "Token access and capabilities",
+      description:
+        "Show this token's login, allowed folders, permissions, limits and optional index availability. Start here when a tool is unavailable.",
+      inputSchema: {},
+    },
+    wrap(async () => {
+      let index: { available: boolean; reason?: string };
+      try {
+        const identity = await deps.identities.get(principal.identityId);
+        index =
+          identity === null
+            ? { available: false, reason: "login unavailable" }
+            : await deps.scopeResolver.verifiedIndexScopes(identity);
+      } catch {
+        index = { available: false, reason: "index mapping unavailable" };
+      }
+      return {
+        identity_id: principal.identityId,
+        access: principal.tokenAccess ?? {
+          mode: "legacy",
+          paths: "verified index scope for legacy operations",
+        },
+        organize,
+        full_management: principal.tokenAccess?.mode === "full",
+        index: { available: index.available, ...(index.reason ? { reason: index.reason } : {}) },
+        document_extraction_configured: deps.indexerClient !== null,
+        trash_configured:
+          trashPathFor(deps, principal) !== null && principal.storage.trash !== undefined,
+        max_file_bytes: MAX_FILE_BYTES,
+        edit_concurrency:
+          "SHA-256 is checked before writing. Provider contracts cannot guarantee atomic updates against other clients.",
+      };
+    }),
+  );
+  register(
     "search",
     {
       title: "Search files",
@@ -77,7 +156,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap((args) => runSearch(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "find_files",
     {
       title: "Find files by metadata",
@@ -93,13 +172,20 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
         modified_before: z.string().optional(),
         min_size_mb: z.number().min(0).optional(),
         order_by: ORDER_BY.optional(),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(10_000_000)
+          .optional()
+          .describe("Continue at next_offset from the previous result."),
         limit: z.number().int().min(1).max(500).optional().describe("Max results, default 50."),
       },
     },
     wrap((args) => runFindFiles(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "list_directory",
     {
       title: "List a directory",
@@ -111,20 +197,29 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
           .string()
           .optional()
           .describe('Virtual path, e.g. "/Documents". Defaults to the root.'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(10_000_000)
+          .optional()
+          .describe(
+            "Continue at next_offset from the previous result. Listing changes can shift pages.",
+          ),
         limit: z.number().int().min(1).max(2000).optional().describe("Max entries, default 300."),
       },
     },
     wrap((args) => runListDirectory(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "read_file_text",
     {
       title: "Read a file's text",
       description:
         "Return the text of a document (PDF, Office, txt/code, OCR'd image). Extracted live, so it " +
-        "works even before indexing finishes. Use offset to page through long documents. Requires " +
-        "FDRIVE_INDEXER_URL to be configured; otherwise this tool reports an error.",
+        "works even before indexing finishes. Use offset to page through long documents. Explicit " +
+        "tokens read UTF-8 directly (4 MiB limit); PDF/Office/OCR require the optional indexer extractor.",
       inputSchema: {
         path: z.string().min(1),
         offset: z.number().int().min(0).optional(),
@@ -139,7 +234,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap((args) => runReadFileText(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "file_info",
     {
       title: "File metadata",
@@ -151,7 +246,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap((args) => runFileInfo(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "find_duplicates",
     {
       title: "Find duplicate files",
@@ -167,7 +262,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap((args) => runFindDuplicates(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "similar_files",
     {
       title: "Find similar files",
@@ -182,7 +277,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap((args) => runSimilarFiles(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "folder_overview",
     {
       title: "Folder overview",
@@ -197,7 +292,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap((args) => runFolderOverview(deps, principal, args)),
   );
 
-  server.registerTool(
+  register(
     "index_stats",
     {
       title: "Index health",
@@ -209,33 +304,32 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap(() => runIndexStats(deps, principal)),
   );
 
-  server.registerTool(
-    "create_folder",
-    {
-      title: "Create a folder",
-      description:
-        "Create a folder (and parents) on the share. Requires FDRIVE_MCP_WRITES to be enabled; " +
-        "otherwise this tool reports an error explaining that writes are disabled.",
-      inputSchema: { path: z.string().min(1) },
-    },
-    wrap((args) => runCreateFolder(deps, principal, args)),
-  );
+  if (organize) {
+    register(
+      "create_folder",
+      {
+        title: "Create a folder",
+        description: "Create a folder (and parents) within this token’s allowed folders.",
+        inputSchema: { path: z.string().min(1) },
+      },
+      wrap((args) => runCreateFolder(deps, principal, args)),
+    );
 
-  server.registerTool(
-    "move_path",
-    {
-      title: "Move or rename a path",
-      description:
-        "Move or rename a file or folder within the share. dst is the full new path (not a parent " +
-        "folder). The index is updated in place when possible, so no re-OCR/re-embedding happens. " +
-        "Requires FDRIVE_MCP_WRITES to be enabled. Always confirm with the user before moving; " +
-        "never use this to delete.",
-      inputSchema: { src: z.string().min(1), dst: z.string().min(1) },
-    },
-    wrap((args) => runMovePath(deps, principal, args)),
-  );
+    register(
+      "move_path",
+      {
+        title: "Move or rename a path",
+        description:
+          "Move or rename a file or folder within the share. dst is the full new path (not a parent " +
+          "folder). The index is updated in place when possible, so no re-OCR/re-embedding happens. " +
+          "An occupied destination is refused. Use this only for user-requested organization.",
+        inputSchema: { src: z.string().min(1), dst: z.string().min(1) },
+      },
+      wrap((args) => runMovePath(deps, principal, args)),
+    );
+  }
 
-  server.registerTool(
+  register(
     "recent_moves",
     {
       title: "Recent moves",
@@ -245,5 +339,171 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
       inputSchema: { limit: z.number().int().min(1).max(500).optional().describe("Default 50.") },
     },
     wrap((args) => runRecentMoves(deps, principal, args)),
+  );
+  if (principal.tokenAccess === undefined) return;
+  const path = z.string().min(1).max(4096);
+  register(
+    "read_file",
+    {
+      title: "Read original bytes",
+      description:
+        "Read a file as base64, with its SHA-256. Maximum 4 MiB. Use read_file_text for text and read_image for images.",
+      inputSchema: { path },
+    },
+    wrap((args) => readFile(deps, principal, args.path)),
+  );
+  register(
+    "read_image",
+    {
+      title: "Read an image",
+      description:
+        "Return a PNG, JPEG, GIF or WebP as MCP image content (maximum 4 MiB). Other formats can be read with read_file.",
+      inputSchema: { path },
+    },
+    async (args) => {
+      try {
+        const file = await readStoredFile(deps, principal, args.path);
+        if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.mime))
+          throw new Error("Use read_file for this image format.");
+        return {
+          content: [
+            { type: "image", data: file.bytes.toString("base64"), mimeType: file.mime },
+            {
+              type: "text",
+              text: JSON.stringify({ path: file.path, url: file.url, sha256: file.sha256 }),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+          isError: true,
+        };
+      }
+    },
+  );
+  if (deps.imageSearchService !== undefined)
+    register(
+      "search_images",
+      {
+        title: "Search images",
+        description:
+          "Find indexed images by visual description within allowed folders. Results report partial or unavailable processing.",
+        inputSchema: {
+          query: z.string().min(1).max(2000),
+          limit: z.number().int().min(1).max(50).optional(),
+        },
+      },
+      wrap((args) => searchImages(deps, principal, args)),
+    );
+  if (deps.metadata !== undefined)
+    register(
+      "file_tags",
+      {
+        title: "File tags",
+        description: "Read tags attached to one accessible file or folder.",
+        inputSchema: { path },
+      },
+      wrap((args) => fileTags(deps, principal, args.path)),
+    );
+  if (!organize) return;
+  register(
+    "copy_path",
+    {
+      title: "Copy a file or folder",
+      description:
+        "Copy within allowed folders. Refuses an occupied destination and copying a folder inside itself.",
+      inputSchema: { src: path, dst: path },
+    },
+    wrap((args) => copyPath(deps, principal, args)),
+  );
+  if (deps.metadata !== undefined) {
+    register(
+      "set_file_tags",
+      {
+        title: "Set file tags",
+        description:
+          "Replace the tags on one accessible file or folder. Creates missing tag names. An empty list clears its tags.",
+        inputSchema: { path, names: z.array(z.string().trim().min(1).max(100)).max(50) },
+      },
+      wrap((args) => fileTags(deps, principal, args.path, args.names)),
+    );
+    register(
+      "set_favorite",
+      {
+        title: "Set favorite",
+        description: "Add or remove a file or folder from favorites.",
+        inputSchema: { path, favorite: z.boolean() },
+      },
+      wrap((args) => setFavorite(deps, principal, args)),
+    );
+  }
+  if (principal.tokenAccess.mode !== "full") return;
+  register(
+    "create_file",
+    {
+      title: "Create a text file",
+      description: "Create UTF-8 text (maximum 4 MiB). Refuses an existing file or folder.",
+      inputSchema: { path, text: z.string().max(MAX_FILE_BYTES) },
+    },
+    wrap((args) => createFile(deps, principal, args)),
+  );
+  register(
+    "upload_file",
+    {
+      title: "Upload a file",
+      description:
+        "Create a file from canonical base64 (decoded maximum 4 MiB). Refuses an existing file or folder.",
+      inputSchema: { path, data: z.string().max(Math.ceil(MAX_FILE_BYTES / 3) * 4) },
+    },
+    wrap((args) => createFile(deps, principal, args)),
+  );
+  register(
+    "edit_file",
+    {
+      title: "Replace text contents",
+      description:
+        "Replace a UTF-8 file (maximum 4 MiB). Requires the SHA-256 from a prior read and rejects stale content. Other clients may race the provider's final write.",
+      inputSchema: {
+        path,
+        text: z.string().max(MAX_FILE_BYTES),
+        expected_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      },
+    },
+    wrap((args) => editFile(deps, principal, args)),
+  );
+  if (trashPathFor(deps, principal) === null || principal.storage.trash === undefined) return;
+  register(
+    "trash_path",
+    {
+      title: "Move to Trash",
+      description:
+        "Move a file or folder to recoverable Trash. Requires user intent to remove it. Never permanently deletes.",
+      inputSchema: { path },
+    },
+    wrap((args) => trashPath(deps, principal, args.path)),
+  );
+  register(
+    "list_trash",
+    {
+      title: "List recoverable items",
+      description:
+        "List Trash entries whose original paths are in allowed folders. Partial means the provider scan reached its 10,000-item bound.",
+      inputSchema: {
+        offset: z.number().int().min(0).max(10_000).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    wrap((args) => listTrash(deps, principal, args)),
+  );
+  register(
+    "restore_path",
+    {
+      title: "Restore from Trash",
+      description:
+        "Restore an id from list_trash to its original path or an unoccupied target. Both paths must be in allowed folders.",
+      inputSchema: { id: z.string().min(1).max(4096), target: path.optional() },
+    },
+    wrap((args) => restorePath(deps, principal, args)),
   );
 }

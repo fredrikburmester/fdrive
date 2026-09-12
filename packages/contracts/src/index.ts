@@ -234,6 +234,7 @@ export {
 export type { ThumbSize } from "./thumbs.ts";
 export { THUMB_SIZES, ThumbQuery } from "./thumbs.ts";
 export {
+  ApiTokenAccess,
   ApiTokenExpiresInDays,
   ApiTokenSummary,
   ApiTokensResponse,

@@ -16,6 +16,7 @@ import uvicorn
 from . import db
 from .chunking import normalize as normalize_text
 from .config import Config
+from .content_extract import ContentExtractor
 from .extract import Extractor
 from .features import FeatureConfiguration, disabled, resolve_features
 from .indexer import RootContext, log, scan_once, start_watcher
@@ -178,6 +179,7 @@ def main() -> None:
         wake_events=wake_events,
         conn_factory=shared.get,
         schema_version=lambda: db.read_schema_version(shared.get()),
+        content_extractor=ContentExtractor(cfg),
         feature_configuration=lambda: (
             next(iter(contexts.values())).feature_configuration()
             if contexts

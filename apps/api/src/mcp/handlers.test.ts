@@ -115,8 +115,14 @@ function fakeDownloadResult(): Awaited<ReturnType<StorageProvider["download"]>> 
 function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider {
   return {
     list: overrides.list ?? (async () => []),
-    stat: overrides.stat ?? notImplemented,
-    statFile: overrides.statFile ?? notImplemented,
+    stat:
+      overrides.stat ??
+      (async () => ({ kind: "file", size: 0, modifiedAt: null, contentType: null })),
+    statFile:
+      overrides.statFile ??
+      (async () => {
+        throw new StorageError("not_found", "missing");
+      }),
     download: overrides.download ?? (async () => fakeDownloadResult()),
     upload: overrides.upload ?? notImplemented,
     mkdir: overrides.mkdir ?? notImplemented,
@@ -288,7 +294,7 @@ describe("runSearch", () => {
 
     const result = await runSearch(deps, fakePrincipal(), { query: "x" });
 
-    expect(result).toEqual({ query: "x", results: [], available: false });
+    expect(result).toEqual({ query: "x", results: [], available: false, unavailable: true });
   });
 
   it("passes the identity's verified scopes to the search service", async () => {
@@ -604,7 +610,7 @@ describe("runListDirectory", () => {
         path: "/docs/a.txt",
         size_bytes: 10,
         modified: modifiedAt.toISOString(),
-        url: "/view/docs/a.txt",
+        url: "https://fdrive.example.com/view/docs/a.txt",
       },
       {
         name: "sub",
@@ -612,7 +618,7 @@ describe("runListDirectory", () => {
         path: "/docs/sub",
         size_bytes: null,
         modified: modifiedAt.toISOString(),
-        url: "/files/docs/sub",
+        url: "https://fdrive.example.com/files/docs/sub",
       },
     ]);
     expect(result.truncated).toBe(false);
@@ -628,7 +634,7 @@ describe("runListDirectory", () => {
 
       expect(list).toHaveBeenCalledWith("/docs");
       expect(result.path).toBe("/docs");
-      expect(result.url).toBe("/files/docs");
+      expect(result.url).toBe("https://fdrive.example.com/files/docs");
     },
   );
 
@@ -1577,6 +1583,81 @@ describe("runCreateFolder", () => {
 });
 
 describe("runMovePath", () => {
+  it("refuses occupied destinations without moving", async () => {
+    const move = vi.fn();
+    const storage = fakeStorage({
+      move,
+      statFile: async () => ({ size: 12, modifiedAt: null, contentType: null }),
+    });
+    await expect(
+      runMovePath(baseDeps({ writesEnabled: true }), fakePrincipal(storage), {
+        src: "/a",
+        dst: "/b",
+      }),
+    ).rejects.toThrow("already exists");
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("reports completed moves with warnings when metadata and audit persistence fail", async () => {
+    const move = vi.fn();
+    const deps = baseDeps({
+      writesEnabled: true,
+      onMutation: async () => {
+        throw new Error("metadata unavailable");
+      },
+      indexQueries: stubIndexQueries({
+        recordMove: async () => {
+          throw new Error("database unavailable");
+        },
+      }),
+    });
+    const result = await runMovePath(deps, fakePrincipal(fakeStorage({ move })), {
+      src: "/a",
+      dst: "/b",
+    });
+    expect(result).toMatchObject({
+      moved: "/a",
+      to: "/b",
+      warnings: [expect.stringContaining("metadata"), expect.stringContaining("history")],
+    });
+    expect(move).toHaveBeenCalledOnce();
+  });
+
+  it("does not mutate or record history for a same-path move", async () => {
+    const move = vi.fn();
+    const recordMove = vi.fn();
+    await runMovePath(
+      baseDeps({ writesEnabled: true, indexQueries: stubIndexQueries({ recordMove }) }),
+      fakePrincipal(fakeStorage({ move })),
+      { src: "/a", dst: "/a" },
+    );
+    expect(move).not.toHaveBeenCalled();
+    expect(recordMove).not.toHaveBeenCalled();
+  });
+
+  it("uses storage kind for a dotted directory and runs the mutation hook", async () => {
+    const onMutation = vi.fn();
+    const storage = fakeStorage({
+      move: async () => {},
+      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
+    });
+    const result = await runMovePath(
+      baseDeps({
+        writesEnabled: true,
+        onMutation,
+        indexQueries: stubIndexQueries({ recordMove: async () => {} }),
+      }),
+      fakePrincipal(storage),
+      { src: "/a", dst: "/archive.2026" },
+    );
+    expect(result.url).toBe("https://fdrive.example.com/files/archive.2026");
+    expect(onMutation).toHaveBeenCalledWith(expect.anything(), {
+      kind: "move",
+      path: "/a",
+      target: "/archive.2026",
+      isDir: true,
+    });
+  });
   it("throws when writes are disabled", async () => {
     const deps = baseDeps({ writesEnabled: false });
     await expect(
@@ -1597,7 +1678,7 @@ describe("runMovePath", () => {
       dst: "/b.txt",
     });
 
-    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt", { overwrite: false });
     expect(recordMove).toHaveBeenCalledWith({
       rootId: 1,
       src: "alice/a.txt",
@@ -1624,7 +1705,7 @@ describe("runMovePath", () => {
 
     // The provider forwards both strings verbatim, so both must be the exact
     // paths the scope admission was decided on.
-    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt", { overwrite: false });
     expect(recordMove).toHaveBeenCalledWith({
       rootId: 1,
       src: "alice/a.txt",
@@ -1685,7 +1766,7 @@ describe("runMovePath", () => {
     expect(move).not.toHaveBeenCalled();
   });
 
-  it("treats an extensionless destination as a folder in the returned url", async () => {
+  it("uses storage kind for an extensionless file in the returned url", async () => {
     const deps = baseDeps({
       writesEnabled: true,
       indexQueries: stubIndexQueries({ recordMove: async () => undefined }),
@@ -1700,7 +1781,7 @@ describe("runMovePath", () => {
       },
     );
 
-    expect(result.url).toBe("https://fdrive.example.com/files/folder");
+    expect(result.url).toBe("https://fdrive.example.com/view/folder");
   });
 
   it("refuses the move without touching storage when verified scopes are unavailable", async () => {

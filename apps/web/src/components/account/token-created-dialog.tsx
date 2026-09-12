@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { claudeMcpAddCommand, connectorUrl } from "@/lib/account/connect-snippets";
 import { CopyField } from "./copy-field";
+import { TOKEN_ACCESS_LABELS } from "./create-token-dialog";
 
 export interface CreatedToken {
   readonly token: string;
@@ -51,9 +52,15 @@ export function TokenCreatedDialog({ created, onClose }: TokenCreatedDialogProps
                 This is the only time you will see this token. Store it somewhere safe.
               </AlertDescription>
             </Alert>
+            {created.item.access ? (
+              <p className="text-sm text-muted-foreground">
+                {TOKEN_ACCESS_LABELS[created.item.access.mode]} ·{" "}
+                {created.item.access.paths.join(", ")}
+              </p>
+            ) : null}
             <CopyField label="API token" value={created.token} />
             <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">Connect Claude</span>
+              <span className="text-sm font-medium">Connect Claude Code</span>
               <p className="text-xs text-muted-foreground">
                 Run this in a terminal to add fdrive as an MCP server:
               </p>

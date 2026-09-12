@@ -34,18 +34,26 @@ import {
 } from "@/components/ui/table";
 import { formatExpires, formatLastUsed, formatShortDate } from "@/lib/account/format";
 import { useApiTokens, useRevokeApiToken } from "@/lib/account/queries";
-import { CreateTokenDialog } from "./create-token-dialog";
+import { CreateTokenDialog, TOKEN_ACCESS_LABELS } from "./create-token-dialog";
 import { type CreatedToken, TokenCreatedDialog } from "./token-created-dialog";
 
 /** Looks up an identity's username by id, "-" when the identity was unlinked. */
 function identityLabel(
-  identities: { id: string; username: string }[],
+  identities: {
+    id: string;
+    username: string;
+    providerLabel: string | null;
+    providerType: string;
+  }[],
   identityId: string | null,
 ): string {
   if (identityId === null) {
     return "-";
   }
-  return identities.find((identity) => identity.id === identityId)?.username ?? "(unlinked)";
+  const identity = identities.find((identity) => identity.id === identityId);
+  return identity === undefined
+    ? "(unlinked)"
+    : `${identity.providerLabel || identity.providerType} · ${identity.username}`;
 }
 
 /** Account page card: the signed-in account's API tokens (MCP, Raycast). */
@@ -67,7 +75,12 @@ export function ApiTokensCard() {
           <CardTitle>API tokens</CardTitle>
           <CardDescription>Long-lived tokens for Claude (MCP) and Raycast.</CardDescription>
           <CardAction>
-            <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
+            <Button
+              type="button"
+              size="sm"
+              disabled={me === undefined}
+              onClick={() => setCreateOpen(true)}
+            >
               <PlusIcon />
               Create token
             </Button>
@@ -84,6 +97,7 @@ export function ApiTokensCard() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Identity</TableHead>
+                  <TableHead>Access</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Last used</TableHead>
                   <TableHead>Expires</TableHead>
@@ -95,6 +109,23 @@ export function ApiTokensCard() {
                   <TableRow key={token.id}>
                     <TableCell className="font-medium">{token.name}</TableCell>
                     <TableCell>{identityLabel(identities, token.identityId)}</TableCell>
+                    <TableCell>
+                      {token.access ? (
+                        <>
+                          <div>{TOKEN_ACCESS_LABELS[token.access.mode]}</div>
+                          <div
+                            className="max-w-48 truncate text-xs text-muted-foreground"
+                            title={token.access.paths.join(", ")}
+                          >
+                            {token.access.paths.join(", ")}
+                          </div>
+                        </>
+                      ) : (
+                        <span title="Uses the old index and server write settings. Create a replacement token to choose permissions.">
+                          Legacy
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell>{formatShortDate(token.createdAt)}</TableCell>
                     <TableCell>{formatLastUsed(token.lastUsedAt)}</TableCell>
                     <TableCell>{formatExpires(token.expiresAt)}</TableCell>
@@ -117,6 +148,9 @@ export function ApiTokensCard() {
       </Card>
 
       <CreateTokenDialog
+        key={`${createOpen}:${me?.activeIdentityId}`}
+        identities={identities}
+        activeIdentityId={me?.activeIdentityId ?? ""}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={(result) => {
