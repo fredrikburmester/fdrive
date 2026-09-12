@@ -6,6 +6,12 @@ Idle services are quiet. Hover or keyboard focus exposes the phase and counts; r
 motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
 warning. Background job state survives navigation and reload.
 
+Features sits below Shared folders, with a separate expand/collapse button nesting Thumbnails,
+Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label still opens
+the overview, whose activity remains visible when collapsed. General, Storage and Shared
+folders stay at the top level. Expansion is remembered in this browser; opening a feature
+page reveals its navigation item.
+
 ## Data flow
 
 `GET /api/v1/system/activity` requires admin authorization before probing dependencies.
@@ -35,6 +41,15 @@ reset on restart; they are observations, not a durable job queue.
 Operations include kind, feature IDs, revision, phase, state, processed count, nullable total,
 errors, skips, unit and timestamps. Finally blocks finish failed or stopped work. Semantic
 backend backoff appears as waiting. A ready runtime can still be processing files.
+
+Normal scans currently mark every participating feature active for the entire root scan,
+including discovery and the final wait for other workers. A feature's counter can therefore
+pause while its spinner continues. Discovery interleaves traversal and bounded processing;
+"Discovering files" does not mean no files are being processed yet. Counts track handled
+file attempts, not newly stored thumbnails or embeddings, and one file job's result is
+shared by its participating feature counters. These are coarse scan indicators, not proof
+that each feature is producing output at that moment. Failed or missing derivatives can
+be retried on later scans; the normal interval defaults to 15 minutes after completion.
 
 ## Percentages
 

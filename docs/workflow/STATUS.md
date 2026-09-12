@@ -5,6 +5,23 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Features navigation and spinner explanation
+
+- In this checkout, Features now expands to Thumbnails, Full-text search, Semantic search,
+  Searchable PDFs, Image search and Office. General, Storage and Shared folders remain
+  top-level, with Features placed below Shared folders. Expansion persists locally;
+  feature routes reveal their active item.
+- Live browser observations showed Image search advancing from the supplied 1,397 processed
+  to 1,646, then 1,696, while errors stayed at 297. The scan was progressing. Source confirms
+  per-feature activity lasts until the entire root scan ends; attempted work and shared
+  errors do not imply new stored outputs. [Details](../SYSTEM-ACTIVITY.md#worker-accounting).
+- Dev app navigation/collapse and light/dark/mobile layouts verified. Application passes
+  with `VITEST_MAX_WORKERS=2`; workflow and 15 System browser checks pass. Final activity
+  browser rerun after moving Features below Shared folders also passes.
+- Initial lint stopped on concurrent deployment/auth edits. Updated the existing flat-menu
+  unit test; unrelated UI timeout failures passed with reduced concurrency and intact gates.
+  No worker behavior changed or deployment performed; unrelated changes preserved.
+
 ## MCP access and file management: ready for review
 
 - All four authorized stages implemented on `codex/mcp-access-management`. New tokens select a

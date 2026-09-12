@@ -132,14 +132,14 @@ it("applies tighter vertical nav item spacing via scoped descendant styles on Si
   expect(content?.className).toContain("[&_[data-sidebar=menu]]:gap-0");
 });
 
-it("lists the System pages in order, each as its own menu item", async () => {
+it("nests feature pages beneath Features and keeps other System pages separate", async () => {
   renderSidebar({ ...me, isAdmin: true });
 
   const expected = [
-    ["Features", "/system/features"],
     ["General", "/system/general"],
     ["Storage", "/system/storage"],
     ["Shared folders", "/system/shared-folders"],
+    ["Features", "/system/features"],
     ["Thumbnails", "/system/thumbnails"],
     ["Full-text search", "/system/indexer"],
     ["Semantic search", "/system/search"],
@@ -151,9 +151,11 @@ it("lists the System pages in order, each as its own menu item", async () => {
   const links = await Promise.all(
     expected.map(([label]) => screen.findByRole("link", { name: label })),
   );
+  const featuresItem = links[3]?.closest("li");
   for (const [index, link] of links.entries()) {
     expect(link.getAttribute("href")).toBe(expected[index]?.[1]);
     expect(link.closest("li")).not.toBeNull();
+    expect(featuresItem?.contains(link)).toBe(index >= 3);
     if (index > 0) {
       const previous = links[index - 1];
       expect(previous !== undefined && isBefore(previous, link)).toBe(true);
