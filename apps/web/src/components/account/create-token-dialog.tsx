@@ -86,6 +86,10 @@ export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateToken
             <Field>
               <FieldLabel htmlFor="token-expiry">Expires</FieldLabel>
               <Select
+                items={EXPIRY_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
                 value={expiryValue}
                 onValueChange={(value) => {
                   if (value !== null) {
