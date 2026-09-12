@@ -2,7 +2,7 @@ import { type ApiError, MeResponse, ROUTES } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
+import { createFakeSftpgoServer } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
