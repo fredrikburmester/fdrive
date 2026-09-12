@@ -268,6 +268,31 @@ describe("generated file diff", () => {
   });
 });
 
+describe("compose interpolation", () => {
+  // deploy/.env feeds every compose file update.sh passes to docker compose,
+  // so a `${FDRIVE_*}` reference in one of them is a key an operator is meant
+  // to set there and preflight.sh must accept it. compose.dev.yaml is left
+  // out: tools/orchestration drives it, not deploy/.env.
+  const composeFiles = [
+    "compose.yaml",
+    "compose.arm64.yaml",
+    "compose.sftpgo.yaml",
+    "compose.office.collabora.yaml",
+  ];
+
+  it.each(composeFiles)("every FDRIVE_* key %s interpolates is a known preflight key", (file) => {
+    const source = readFileSync(join(deployDir, file), "utf-8");
+    const referenced = new Set(
+      [...source.matchAll(/\$\{(FDRIVE_[A-Z0-9_]+)/g)]
+        .map((match) => match[1])
+        .filter((key): key is string => key !== undefined),
+    );
+    const known = new Set(knownFdriveKeys());
+    const missing = [...referenced].filter((key) => !known.has(key)).sort();
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("Subsystem", () => {
   it("type is usable as a plain string union", () => {
     const subsystem: Subsystem = "core";

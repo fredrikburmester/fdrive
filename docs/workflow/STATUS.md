@@ -5,6 +5,22 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Preflight allowlist for processing worker resource keys: complete on main
+
+- A beta tester reported on 2026-09-12 that `deploy/preflight.sh` rejects every resource key
+  `compose.yaml` interpolates since the resource-cap commit (1fb84a2): the six `FDRIVE_*_CPUS`
+  and `FDRIVE_*_MEMORY` pairs, `FDRIVE_EMBED_THREADS`, `FDRIVE_IMAGE_EMBED_THREADS` and
+  `FDRIVE_TIKA_JAVA_OPTS`, 15 keys in all, so `update.sh` refuses a `.env` that follows
+  REFERENCE.md. Cause: the allowlist is generated from `DEPLOY_EXTRA_KEYS`, and that commit
+  documented the keys in REFERENCE.md without adding them to the table.
+- Fix: the 15 keys are `DEPLOY_EXTRA_KEYS` entries and `pnpm env:example` regenerated the
+  allowlist; the other generated files are unchanged. Two new tests close the gap: preflight
+  accepts a `.env` setting all 15, and every `${FDRIVE_*}` reference in `compose.yaml` and the
+  production overlays must be a known key, which is the check that was missing.
+- Evidence: `pnpm test:deploy:coverage` 59/59 at 100% coverage, `tsc -p tools/deploy`,
+  `biome check tools/deploy/`. Dropping one key from the allowlist or the table makes the new
+  tests fail.
+
 ## GitHub Actions budget: scaled down (2026-09-12)
 
 - **Evidence**: private repository on the free plan (2000 minutes/month). The 30 days to
