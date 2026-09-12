@@ -5,6 +5,25 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## GitHub Actions budget: scaled down (2026-09-12)
+
+- **Evidence**: private repository on the free plan (2000 minutes/month). The 30 days to
+  2026-09-12 billed ~2530 minutes (CI 2282, Performance 217, Office 34) and runs now fail
+  at start with the spending-limit message. A CI run cost ~30 minutes over seven jobs
+  (e2e 664 min/month, check 582, indexer 338, integration 325); 60 % of CI minutes were
+  push-to-main runs duplicating the PR run, and rapid pushes stacked without cancelling.
+- **Change**: `CI` runs only `application` on pull requests (docs/agent-config paths
+  ignored, superseded runs cancelled, ~8 min). New `Python services` runs indexer/ocr only
+  when `services/**` or the Python helpers change. New `CI (full)` holds the previous seven
+  jobs, gated on the `ci:full` PR label or `workflow_dispatch`. `Performance budgets` and
+  `Real Office editors` are `workflow_dispatch` only (both were already disabled by hand;
+  re-enable them after merge so dispatch works). No workflow runs on push to `main`.
+  Timeouts trimmed to ~2x the observed maxima; failure artifacts kept 7 days; the
+  always-on coverage artifact upload was dropped (nothing consumed it).
+- **Expected spend**: ~10 PR-runs-a-week × 8 min ≈ 350 min/month plus opt-in full runs.
+- **Trade-off**: a direct commit to `main` gets no automatic check; run
+  `gh workflow run CI --ref main` (or `"CI (full)"`) when one is wanted.
+
 ## WebDAV storage provider: complete on PR #5, awaiting merge
 
 Branch `feat/webdav-provider`, PR #5. Durable documentation: [WEBDAV.md](../WEBDAV.md),

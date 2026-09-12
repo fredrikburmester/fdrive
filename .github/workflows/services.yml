@@ -1,0 +1,70 @@
+# Python service checks, path-filtered so they bill nothing on pull requests
+# that leave services/indexer and services/ocr alone (see the budget note in
+# ci.yml). `CI (full)` runs the same two jobs unconditionally; keep the job
+# bodies in sync with that file.
+name: Python services
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'services/indexer/**'
+      - 'services/ocr/**'
+      - 'tools/orchestration/setup-python.sh'
+      - 'tools/orchestration/verify.sh'
+      - '.github/workflows/services.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: services-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  indexer:
+    name: Indexer (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install indexer system dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
+      - run: bash tools/orchestration/setup-python.sh . indexer
+        env:
+          FDRIVE_PYTHON: python
+      - run: bash tools/orchestration/verify.sh . python indexer
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexer-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  ocr:
+    name: OCR (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: bash tools/orchestration/setup-python.sh . ocr
+        env:
+          FDRIVE_PYTHON: python
+      - run: bash tools/orchestration/verify.sh . python ocr
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr-helper-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
