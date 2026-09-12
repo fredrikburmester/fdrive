@@ -5,6 +5,16 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Findings repair: ready for PR review
+
+- Branch `codex/findings-20260912`, isolated from the original checkout's MCP WIP.
+- Addressed 46 supplied findings covering downloads, archives, providers, UI state and workers.
+  Three MCP WIP findings are deferred; unrestricted legacy-token compatibility is unchanged.
+- Application, integration, workflow, 32 affected browser tests and all four Python service gates pass.
+  Live Next dev inspection confirms keyboard selection and draft recovery/save.
+- Complete dispositions, evidence and remaining provider limits:
+  [FINDINGS-2026-09-12.md](FINDINGS-2026-09-12.md). Next: review and merge the PR.
+
 ## Preflight allowlist for processing worker resource keys: complete on main
 
 - A beta tester reported on 2026-09-12 that `deploy/preflight.sh` rejects every resource key

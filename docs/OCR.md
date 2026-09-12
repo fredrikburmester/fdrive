@@ -43,9 +43,9 @@ Every outcome, including failures, is written to `idx.ocr_log` keyed on
 file whose key is already present, so a large tree with a handful of scanned
 PDFs is only ever OCR'd once, and a `failed` result is not retried on every
 single pass either (only once the file itself changes). `ocrmypdf` also runs
-with `--skip-big <ocr.max_mb>` as a second, page-level guard against runaway
-memory use on a huge scanned page, in addition to the whole-file size cap
-applied before the subprocess is even started.
+with `--skip-big 50` (50 megapixels per page, independent of the PDF megabyte
+limit) as a page-level guard against runaway memory use on a huge scanned page,
+in addition to the whole-file size cap applied before the subprocess is even started.
 
 ## Settings (read from `app.settings` before every pass)
 
