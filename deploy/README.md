@@ -121,7 +121,11 @@ ports may differ; inspect the existing service rather than assuming a port.
 ```
 
 The script pulls with fast-forward only, validates configuration, builds, and starts
-fdrive. Preserve any configured overlays in `FDRIVE_COMPOSE_FILES` in `.env` so updates
+fdrive, then waits for the saved enabled subsystems, including search and Office,
+to become ready. Disabled features do not block a fresh installation. The default
+timeout is 1200 seconds; set `FDRIVE_READY_TIMEOUT_SECONDS` in `.env` for a slower
+model download. A timeout fails the update and names the outstanding checks.
+Preserve any configured overlays in `FDRIVE_COMPOSE_FILES` in `.env` so updates
 continue using them. Do not add profiles or activation environment variables for the
 six optional processing features.
 

@@ -12,6 +12,14 @@ import type { ConfigKeyDef } from "../../apps/api/src/config-keys.ts";
  */
 export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
+    key: "FDRIVE_READY_TIMEOUT_SECONDS",
+    description: "Maximum seconds update.sh waits for enabled subsystems to finish starting.",
+    default: "1200",
+    example: "1800",
+    secret: false,
+    subsystem: "core",
+  },
+  {
     key: "POSTGRES_PASSWORD",
     description: "Hex password for the bundled Postgres database's fdrive user.",
     default: null,

@@ -16,6 +16,7 @@
 #   FDRIVE_PROFILES       optional-overlay profiles, space separated (for example "collabora").
 #   FDRIVE_HEALTH_URL     health URL to check afterwards; default derives from
 #                         FDRIVE_HTTP_PORT (8090) on localhost.
+#   FDRIVE_READY_TIMEOUT_SECONDS  enabled-subsystem startup timeout (default 1200).
 set -euo pipefail
 
 # Resolves this script's own real path through any symlinks (for example a
@@ -50,7 +51,7 @@ cd "$repo/deploy"
 # Read only stack selectors and network addresses needed for startup output
 # and the health check; never source .env as executable shell code.
 if [[ -f .env ]]; then
-  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES FDRIVE_HTTP_BIND FDRIVE_HTTP_PORT; do
+  for key in FDRIVE_COMPOSE_FILES FDRIVE_PROFILES FDRIVE_HTTP_BIND FDRIVE_HTTP_PORT FDRIVE_READY_TIMEOUT_SECONDS; do
     if [[ -z "${!key:-}" ]]; then
       # `|| true` keeps an absent key from aborting the script under pipefail.
       value="$({ grep -E "^${key}=" .env || true; } | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')"
@@ -85,6 +86,11 @@ echo
 echo "==> containers"
 docker compose "${args[@]}" ps --format '{{.Name}}\t{{.Status}}'
 echo
+echo "==> waiting for enabled subsystems"
+docker compose "${args[@]}" exec -T \
+  -e "FDRIVE_READY_TIMEOUT_SECONDS=${FDRIVE_READY_TIMEOUT_SECONDS:-1200}" \
+  api node --input-type=module-typescript < "$repo/deploy/wait-ready.ts"
+
 health_bind="${FDRIVE_HTTP_BIND:-127.0.0.1}"
 [[ "$health_bind" == "0.0.0.0" ]] && health_bind=127.0.0.1
 health="${FDRIVE_HEALTH_URL:-http://${health_bind}:${FDRIVE_HTTP_PORT:-8090}/api/v1/health}"

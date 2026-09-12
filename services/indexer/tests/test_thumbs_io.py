@@ -73,8 +73,25 @@ def test_generate_image_converts_palette_mode(tmp_path: Path) -> None:
 def test_generate_unknown_extension_returns_empty(tmp_path: Path) -> None:
     src = tmp_path / "notes.txt"
     src.write_text("hello")
-    results = thumbs_io.generate(str(src), ".txt", "sha1", src.stat().st_size, str(tmp_path / "thumbs"), max_bytes=1000)
+    logs: list[str] = []
+    results = thumbs_io.generate(
+        str(src), ".txt", "sha1", src.stat().st_size, str(tmp_path / "thumbs"), max_bytes=1000, log=logs.append
+    )
     assert results == []
+    assert logs == []
+
+
+def test_generate_empty_file_logs_skip_without_decoding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    src = tmp_path / "empty.png"
+    src.touch()
+    logs: list[str] = []
+
+    def unexpected_decode(_path: str) -> object:
+        pytest.fail("empty files should not be decoded")
+
+    monkeypatch.setattr(thumbs_io, "_open_image", unexpected_decode)
+    assert thumbs_io.generate(str(src), ".png", "empty", 0, str(tmp_path / "thumbs"), 1000, log=logs.append) == []
+    assert logs == [f"thumb: skip {src}: empty file"]
 
 
 def test_generate_over_budget_returns_empty(tmp_path: Path) -> None:
