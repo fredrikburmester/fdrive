@@ -109,6 +109,16 @@ public actor Catalog {
     public func hasListing(_ path: String) throws -> Bool { !(try rows("SELECT path FROM folders WHERE path=?", [path])).isEmpty }
     public func generation() throws -> String { try rows("SELECT value FROM state WHERE key='generation'")[0][0] }
     public func revision() throws -> Int64 { Int64(try rows("SELECT value FROM state WHERE key='revision'")[0][0]) ?? 0 }
+    /// Rename only the domain root's display metadata; preserve the catalog and cached items.
+    public func updateRootName(_ title: String) throws {
+        try transaction {
+            var root = try item("root")
+            guard root.entry.name != title else { return }
+            root.entry.name = title
+            root.metadataVersion = UUID().uuidString
+            try save(root)
+        }
+    }
     private func next() throws -> Int64 {
         try execute("UPDATE state SET value=CAST(value AS INTEGER)+1 WHERE key='revision'")
         return try revision()

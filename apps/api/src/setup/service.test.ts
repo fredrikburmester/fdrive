@@ -185,6 +185,43 @@ describe("createSetupService: complete", () => {
     });
   });
 
+  it("names a new provider during setup", async () => {
+    const h = harness();
+    await h.service.complete({ ...COMPLETE_INPUT, label: "  Home storage  " });
+    expect(await h.repos.providers.list()).toEqual([
+      expect.objectContaining({ label: "Home storage", baseUrl: COMPLETE_INPUT.baseUrl }),
+    ]);
+  });
+
+  it("names an existing provider only after verified ownership and preserves names for older clients", async () => {
+    const h = harness({ hasEnvUrl: true });
+    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
+      managedByEnv: true,
+      enabled: false,
+    });
+    await h.repos.providers.update(pinned.id, { label: "Existing" });
+    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
+      new ApiHttpError("unauthorized", "bad credentials"),
+    );
+    await expect(
+      h.service.complete({ ...COMPLETE_INPUT, label: "Home storage" }),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
+    expect((await h.repos.providers.get(pinned.id))?.label).toBe("Existing");
+    await h.service.complete({ ...COMPLETE_INPUT, label: "Home storage" });
+    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
+      label: "Home storage",
+      baseUrl: "http://env:8080",
+      managedByEnv: true,
+    });
+    const legacy = harness();
+    const legacyRow = await seedSftpgoProvider(legacy.repos, COMPLETE_INPUT.baseUrl, {
+      enabled: false,
+    });
+    await legacy.repos.providers.update(legacyRow.id, { label: "Preserved" });
+    await legacy.service.complete(COMPLETE_INPUT);
+    expect((await legacy.repos.providers.list())[0]?.label).toBe("Preserved");
+  });
+
   it("passes otp through to the login flow when given", async () => {
     const h = harness();
     await h.service.complete({ ...COMPLETE_INPUT, otp: "123456" });

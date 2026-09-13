@@ -4,6 +4,7 @@ import {
   isHttpUrl,
   type ProviderCapabilities,
   type ProviderField,
+  ProviderName,
 } from "@fdrive/contracts";
 import { CAPABILITY_KEYS, type CapabilityKey } from "@/lib/identity/capabilities";
 
@@ -92,9 +93,8 @@ export function providerFormError(
   fields: readonly ProviderField[],
   draft: ProviderDraft,
 ): string | null {
-  if (draft.label.trim().length === 0) {
-    return "Enter a name for this server.";
-  }
+  const nameError = providerNameError(draft.label);
+  if (nameError !== null) return nameError;
   if (!isHttpUrl(draft.baseUrl.trim())) {
     return "Enter the address as an http(s) URL, such as http://sftpgo:8080.";
   }
@@ -108,6 +108,12 @@ export function providerFormError(
     }
   }
   return null;
+}
+
+/** Shared setup/edit validation uses the API's trimming and length limits. */
+export function providerNameError(label: string): string | null {
+  const parsed = ProviderName.safeParse(label);
+  return parsed.success ? null : (parsed.error.issues[0]?.message ?? "Enter a storage name.");
 }
 
 /**

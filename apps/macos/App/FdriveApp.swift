@@ -101,7 +101,8 @@ private struct LocationsView: View {
                 List(model.locations) { location in
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(location.title).font(.headline)
+                            Text(location.location.displayName).font(.headline)
+                            Text(location.location.username).foregroundStyle(.secondary)
                             Text(model.status[location.id] ?? "Connected").font(.caption).foregroundStyle(.secondary)
                             if let expires = location.expiresAt { Text("Connection expires \(expires.prefix(10))").font(.caption).foregroundStyle(.secondary) }
                         }
@@ -281,6 +282,7 @@ final class AppModel: ObservableObject {
         let store = try NativeEnvironment.store()
         guard (credential.location.protocolVersion == 1 && credential.location.readOnly) || credential.location.protocolVersion == 2 else { throw DriveError.unsupported }
         let existing = locations.first { $0.server == server && $0.location.identityId == credential.location.identityId && $0.location.accountId == credential.location.accountId }
+        if let existing { _ = try existing.updatingMetadata(from: credential.location) }
         let saved = SavedLocation(id: existing?.id ?? UUID().uuidString, server: server, location: credential.location, expiresAt: credential.expiresAt)
         let previous = existing.flatMap { try? store.client($0) }
         let previousToken = existing.flatMap { try? store.token($0.id) }
@@ -347,13 +349,20 @@ final class AppModel: ObservableObject {
             do {
                 let store = try NativeEnvironment.store()
                 let client = try store.client(saved)
-                let current = try await client.location()
-                if let index = locations.firstIndex(where: { $0.id == saved.id }) {
-                    locations[index].location = current
-                    try store.save(locations)
+                let updated = try await refreshLocationMetadata(saved, client: client) {
+                    try await NativeEnvironment.updateDomainName($0)
                 }
-                let catalog = try store.catalog(saved)
+                let current = updated.location
+                let catalog = try store.catalog(updated)
+                try await catalog.updateRootName(updated.title)
                 try await catalog.configure(current.capabilities ?? .none)
+                if updated != saved {
+                    guard let index = locations.firstIndex(where: { $0.id == saved.id }) else { continue }
+                    var next = locations
+                    next[index] = updated
+                    try store.save(next)
+                    locations = next
+                }
                 // Also upgrade domains registered by older read-only app builds.
                 if let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == saved.id }),
                    domain.supportsSyncingTrash != (current.capabilities?.trash == true) {
@@ -362,7 +371,7 @@ final class AppModel: ObservableObject {
                 }
                 status[saved.id] = "Refreshing"
                 try await refreshCatalog(catalog, client: client) {
-                    let domain = NSFileProviderDomain(identifier: .init(saved.id), displayName: saved.title)
+                    let domain = NSFileProviderDomain(identifier: .init(updated.id), displayName: updated.title)
                     if let manager = NSFileProviderManager(for: domain) {
                         try await manager.signalEnumerator(for: .workingSet)
                         for folder in try await catalog.folders() {
