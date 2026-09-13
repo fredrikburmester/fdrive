@@ -7,6 +7,13 @@ not current instructions.
 
 ## Native macOS Finder app: development preview
 
+- PR #19 review fixes: `/private/tmp/fdrive-pr19-fixes`, `codex/pr19-review-fixes`.
+  Partial refreshes notify Finder and continue across failed folders/files; disconnect revokes
+  its credential without storage access; pairing admission groups IPv6 callers by /64.
+  Application, integration (460 tests), desktop browser checks, 18 Swift tests and the unsigned
+  Xcode build pass (`step.MP5TUq`, `step.2Iviyj`, `step.WMZGnr`, `step.3WpjsM`, `step.LT6YX4`).
+  Refresh regressions exercise the production helper with real SQLite and injected network/
+  notification boundaries. This follow-up does not repeat the signed Finder rehearsal below.
 - Worktree `/private/tmp/fdrive-native-macos`, branch `claude/native-macos`, updated to
   `origin/main` at `33b244f`. SwiftUI companion and replicated File Provider extension,
   macOS 26+/Apple silicon, read-only, no search. [Implementation/build guide](../MACOS.md).
