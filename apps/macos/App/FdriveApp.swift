@@ -9,12 +9,43 @@ struct FdriveApp: App {
     var body: some Scene {
         Window("FDrive", id: "locations") {
             LocationsView(model: model).frame(minWidth: 520, minHeight: 400)
+                .background(WindowActivation())
         }.defaultSize(width: 600, height: 460)
             .defaultLaunchBehavior(.presented)
             .restorationBehavior(.disabled)
         MenuBarExtra("FDrive", image: "MenuBarIcon") {
             MenuContents(model: model)
         }
+    }
+}
+
+// Observe only the locations window, without replacing SwiftUI's window delegate.
+// Losing focus, opening the menu or minimizing is not the same as closing it.
+private struct WindowActivation: NSViewRepresentable {
+    func makeNSView(context: Context) -> ActivationView { ActivationView() }
+    func updateNSView(_ nsView: ActivationView, context: Context) {}
+
+    final class ActivationView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self)
+            guard let window else { return }
+            NotificationCenter.default.addObserver(self, selector: #selector(windowOpened(_:)),
+                name: NSWindow.didBecomeKeyNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(windowClosed(_:)),
+                name: NSWindow.willCloseNotification, object: window)
+            windowOpened(nil)
+        }
+
+        @objc private func windowOpened(_ notification: Notification?) {
+            if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        }
+
+        @objc private func windowClosed(_ notification: Notification) {
+            NSApp.setActivationPolicy(.accessory)
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
     }
 }
 

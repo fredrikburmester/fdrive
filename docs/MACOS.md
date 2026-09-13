@@ -26,7 +26,11 @@ write callbacks and the desktop API also reject remote mutations. A program that
 changes local filesystem permissions may create a local change that cannot synchronize;
 the server still accepts no writes through desktop credentials.
 
-The menu-bar app refreshes browsed folders and materialized files every 60 seconds, on wake,
+The app appears in the Dock and Command-Tab while its locations window is open, including
+when minimized or behind another app. Closing the window returns it to the menu bar; choose
+**Locations and Settings** from the FD menu to reopen it.
+
+The app refreshes browsed folders and materialized files every 60 seconds, on wake,
 after pairing and on manual Refresh. Failures back off to 15 minutes independently per
 location. Closing the window keeps it running; Quit stops proactive refresh. Launch at login
 is optional. The system can invoke the extension independently to browse/download.
