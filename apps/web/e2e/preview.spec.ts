@@ -1,6 +1,80 @@
 import { expect, test } from "@playwright/test";
 import { shareHeicFixture } from "./support/share-fixture.js";
 
+for (const width of [320, 402]) {
+  test(`mobile preview header stays usable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 740 });
+    const name = `Personlighet och kommunikation - anteckningar ${width}.md`;
+    const path = `/docs/${name}`;
+    const upload = await page.request.put(`/api/v1/fs/upload?path=${encodeURIComponent(path)}`, {
+      headers: { "x-requested-with": "fdrive" },
+      data: "# Mobile header\n\nA document with a long filename.\n",
+    });
+    expect(upload.ok()).toBe(true);
+    await page.goto(`/view${path}`);
+    await expect(page.getByRole("heading", { name: "Mobile header" })).toBeVisible();
+
+    const more = page.getByRole("button", { name: "More actions" });
+    const header = page.locator("header").filter({ has: more });
+    const layout = await header.evaluate((element) => {
+      const controls = [...element.querySelectorAll<HTMLElement>("button, a")]
+        .map((control) => control.getBoundingClientRect())
+        .filter((rect) => rect.width > 0);
+      return {
+        overflow: element.scrollWidth > element.clientWidth,
+        controls: controls.map(({ width, height, left, right }) => ({
+          width,
+          height,
+          left,
+          right,
+        })),
+      };
+    });
+    expect(layout.overflow).toBe(false);
+    for (const control of layout.controls) {
+      expect(control.width).toBeGreaterThanOrEqual(44);
+      expect(control.height).toBeGreaterThanOrEqual(44);
+      expect(control.left).toBeGreaterThanOrEqual(0);
+      expect(control.right).toBeLessThanOrEqual(width);
+    }
+    const counter = header.getByText(/^\d+ \/ \d+$/);
+    await expect(counter).toBeVisible();
+    expect((await counter.boundingBox())?.height).toBeLessThan(20);
+    const next = page.getByRole("button", { name: "Next", exact: true });
+    const nextHref = await next.getAttribute("href");
+    expect(nextHref).not.toBeNull();
+    await next.click();
+    await expect(page).toHaveURL(new URL(nextHref ?? "", page.url()).href);
+    await page.goto(`/view${path}`);
+    await expect(page.getByRole("heading", { name: "Mobile header" })).toBeVisible();
+
+    await more.click();
+    await expect(page.getByRole("menuitem", { name: "Edit", exact: true })).toHaveAttribute(
+      "href",
+      `/edit/docs/${encodeURIComponent(name)}`,
+    );
+    await expect(page.getByRole("menuitem", { name: "Open in new tab" })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
+    const currentUrl = page.url();
+    await page.keyboard.press("ArrowRight");
+    await expect(page).toHaveURL(currentUrl);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toBeHidden();
+    await expect(page).toHaveURL(currentUrl);
+
+    await more.click();
+    const download = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: "Download", exact: true }).click();
+    expect((await download).suggestedFilename()).toBe(name);
+    await more.click();
+    await page.getByRole("menuitem", { name: "Info", exact: true }).click();
+    await expect(page.getByText("Size", { exact: true })).toBeVisible();
+    await expect(page.getByText("Modified", { exact: true })).toBeVisible();
+  });
+}
+
 test("opening readme.md renders it as markdown", async ({ page }) => {
   await page.goto("/view/docs/readme.md");
 
