@@ -72,6 +72,7 @@ export function useSetupComplete() {
       apiClient.setupComplete(token, request),
     onSuccess: (me) => {
       queryClient.setQueryData(queryKeys.auth.me(), me);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providers.list() });
     },
   });
 }
@@ -112,6 +113,7 @@ export const useAdminCreateProvider = () =>
     false,
     (input: AdminProviderCreateRequest) => apiClient.adminCreateProvider(input),
     queryKeys.admin.providers(),
+    queryKeys.providers.list(),
   );
 
 /** Updates one provider (label, address, configuration, enabled) and refreshes the cached list. */
@@ -122,6 +124,8 @@ export const useAdminUpdateProvider = () =>
     ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
       apiClient.adminUpdateProvider(id, patch),
     queryKeys.admin.providers(),
+    queryKeys.providers.list(),
+    queryKeys.auth.me(),
   );
 
 /** Removes a provider and refreshes the cached list. Refused while logins still use it. */
@@ -131,6 +135,7 @@ export const useAdminDeleteProvider = () =>
     false,
     (id: string) => apiClient.adminDeleteProvider(id),
     queryKeys.admin.providers(),
+    queryKeys.providers.list(),
   );
 
 /** Probes a saved provider (by id) or an unsaved candidate, without saving anything. */

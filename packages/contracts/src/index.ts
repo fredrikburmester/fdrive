@@ -122,6 +122,7 @@ export {
   ProviderField,
   ProviderFieldKind,
   ProviderFieldValues,
+  ProviderName,
   ProvidersResponse,
   ProviderType,
   PublicProvider,

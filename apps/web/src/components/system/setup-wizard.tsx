@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeApiError } from "@/lib/api/errors";
 import { useSetupComplete, useSetupTest } from "@/lib/api/system-queries";
+import { providerNameError } from "@/lib/system/connection";
 import {
   canCompleteAccountStep,
   canLeaveConnectionStep,
@@ -35,6 +36,8 @@ export function SetupWizard() {
   const [step, setStep] = useState<SetupStep>("token");
   const [token, setToken] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [label, setLabel] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
   const [testedBaseUrl, setTestedBaseUrl] = useState<string | null>(null);
 
   const [username, setUsername] = useState("");
@@ -65,11 +68,13 @@ export function SetupWizard() {
 
   function handleComplete(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (providerNameError(label) !== null) return;
     setupComplete.mutate(
       {
         token,
         request: {
           baseUrl,
+          label: label.trim(),
           homeTemplate: DEFAULT_HOME_TEMPLATE,
           username,
           password,
@@ -88,7 +93,9 @@ export function SetupWizard() {
   }
 
   const testResult = setupTest.data ?? null;
-  const canLeaveConnection = canLeaveConnectionStep(baseUrl, testResult, testedBaseUrl);
+  const nameError = providerNameError(label);
+  const canLeaveConnection =
+    nameError === null && canLeaveConnectionStep(baseUrl, testResult, testedBaseUrl);
 
   if (claimed) return <SetupFeatures />;
 
@@ -139,6 +146,26 @@ export function SetupWizard() {
 
         {step === "connection" ? (
           <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="setup-provider-name">Storage name</FieldLabel>
+              <Input
+                id="setup-provider-name"
+                placeholder="Home storage"
+                value={label}
+                maxLength={120}
+                required
+                aria-describedby="setup-provider-name-help"
+                aria-invalid={nameTouched && nameError !== null}
+                onChange={(event) => {
+                  setLabel(event.target.value);
+                  setNameTouched(true);
+                }}
+              />
+              <FieldDescription id="setup-provider-name-help">
+                Shown when choosing storage and in Finder.
+              </FieldDescription>
+              {nameTouched && nameError !== null ? <FieldError>{nameError}</FieldError> : null}
+            </Field>
             <Field>
               <FieldLabel htmlFor="setup-base-url">SFTPGo URL</FieldLabel>
               <Input
