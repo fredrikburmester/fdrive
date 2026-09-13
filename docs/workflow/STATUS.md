@@ -10,8 +10,9 @@ not current instructions.
 - Release setup: [PR #20](https://github.com/fredrikburmester/fdrive-web/pull/20),
   `/private/tmp/fdrive-macos-release`, branch `codex/macos-release`.
   Fredrik Burmester (MWD5K362T8) Developer ID identity, both profiles and all five encrypted
-  GitHub secrets are configured. GitHub Actions is enabled; default tokens remain read-only
-  and bot PR approval remains disabled. The supplied Developer API key is validated by Apple.
+  GitHub secrets are configured. GitHub Actions is disabled at the owner's request because
+  hosted CI costs too much; do not re-enable without explicit approval. Default tokens remain
+  read-only and bot PR approval remains disabled. The Developer API key is validated by Apple.
 - Local 0.1.0 build 2: Developer ID archive/export, app and DMG notarization, stapling and
   Gatekeeper checks pass (`step.BjLVra`). DMG/checksum/manifest are under
   `.fdrive-workflow/release-0.1.0-fdrive/artifacts`. Xcode profile lookup now preserves Apple's UUID
@@ -26,7 +27,8 @@ not current instructions.
   exposure/deployment still needs investigation. No server changes were made.
 - Hosted CI run 34772703133 passed lint/typecheck but one existing web search-panel test
   failed waiting for `same.txt` (1835 other web tests passed). Native distribution checks pass;
-  that exact test passes locally with one worker. A new hosted run follows the branding push.
+  that exact test passes locally with one worker. The subsequent hosted run 34773480985
+  passed on code commit 1632fd6. Actions was then disabled again for cost control.
 - PR #19 review fixes: `/private/tmp/fdrive-pr19-fixes`, `codex/pr19-review-fixes`.
   Partial refreshes notify Finder and continue across failed folders/files; disconnect revokes
   its credential without storage access; pairing admission groups IPv6 callers by /64.
