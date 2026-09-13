@@ -2,7 +2,7 @@
 
 The native companion provides read-only Finder locations on macOS 26+ (Apple silicon).
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
-Developer ID distribution and tests on another Mac.
+the first hosted release, Homebrew installation and tests on another Mac.
 
 ## Connect and use
 

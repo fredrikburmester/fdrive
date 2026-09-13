@@ -23,7 +23,7 @@ class ReleaseSafetyTests(unittest.TestCase):
             "DeveloperCertificates": [b"test certificate"],
         }
         digest = hashlib.sha1(b"test certificate").hexdigest()
-        validate_profile(profile, "ABCDEFGHIJ", APP_ID, digest)
+        self.assertEqual(validate_profile(profile, "ABCDEFGHIJ", APP_ID, digest), profile["UUID"])
         for team, app, certificate in (("OTHERTEAM1", APP_ID, digest),
                                         ("ABCDEFGHIJ", "other.app", digest),
                                         ("ABCDEFGHIJ", APP_ID, "0" * 40)):
