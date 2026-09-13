@@ -82,6 +82,21 @@ describe("provider contracts", () => {
     expect(AdminProvidersResponse.parse(list)).toEqual(list);
   });
 
+  it("normalizes names consistently for creates and label-only updates", () => {
+    const create = { type: "sftpgo", baseUrl: "http://sftpgo:8080" };
+    expect(AdminProviderCreateRequest.parse({ ...create, label: "  Home storage  " }).label).toBe(
+      "Home storage",
+    );
+    expect(AdminProviderUpdateRequest.parse({ label: "  Home storage  " })).toEqual({
+      label: "Home storage",
+    });
+    for (const label of ["", " \t\n ", "x".repeat(121)]) {
+      expect(AdminProviderCreateRequest.safeParse({ ...create, label }).success).toBe(false);
+      expect(AdminProviderUpdateRequest.safeParse({ label }).success).toBe(false);
+    }
+    expect(AdminProviderUpdateRequest.parse({ label: "x".repeat(120) }).label).toHaveLength(120);
+  });
+
   it("bounds the admin requests", () => {
     const create = { type: "sftpgo", label: "Home", baseUrl: "http://sftpgo:8080" };
     expect(AdminProviderCreateRequest.parse(create)).toEqual(create);

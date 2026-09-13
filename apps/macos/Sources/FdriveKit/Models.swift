@@ -76,6 +76,20 @@ public struct SavedLocation: Codable, Sendable, Identifiable, Equatable {
         self.id = id; self.server = server; self.location = location; self.expiresAt = expiresAt; self.disconnecting = disconnecting
     }
     public var title: String { "\(location.displayName) (\(location.username))" }
+
+    /// A metadata response can rename this connection, never rebind it or change its grants.
+    public func updatingMetadata(from fresh: Location) throws -> SavedLocation {
+        guard fresh.protocolVersion == 1, fresh.readOnly else { throw DriveError.unsupported }
+        guard fresh.accountId == location.accountId, fresh.identityId == location.identityId,
+              fresh.providerId == location.providerId else {
+            throw DriveError.server("The server returned a different storage login. This location was not changed.")
+        }
+        var updated = self
+        updated.location = Location(protocolVersion: location.protocolVersion,
+            accountId: location.accountId, identityId: location.identityId, providerId: location.providerId,
+            displayName: fresh.displayName, username: fresh.username, paths: location.paths, readOnly: location.readOnly)
+        return updated
+    }
 }
 public struct CatalogItem: Codable, Sendable, Equatable, Identifiable {
     public let id: String

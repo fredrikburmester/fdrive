@@ -54,6 +54,18 @@ describe("SetupCompleteRequest", () => {
     expect(SetupCompleteRequest.safeParse(valid).success).toBe(true);
   });
 
+  it("trims optional provider names and rejects explicit invalid names", () => {
+    expect(SetupCompleteRequest.parse({ ...valid, label: "  Home storage  " }).label).toBe(
+      "Home storage",
+    );
+    expect(SetupCompleteRequest.parse({ ...valid, label: "x".repeat(120) }).label).toHaveLength(
+      120,
+    );
+    for (const label of ["", " \t\n ", "x".repeat(121)]) {
+      expect(SetupCompleteRequest.safeParse({ ...valid, label }).success).toBe(false);
+    }
+  });
+
   it("accepts an otp", () => {
     expect(SetupCompleteRequest.safeParse({ ...valid, otp: "123456" }).success).toBe(true);
   });

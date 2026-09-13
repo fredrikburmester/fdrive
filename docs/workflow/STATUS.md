@@ -5,6 +5,31 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Friendly storage names: verified
+
+- Worktree `/private/tmp/fdrive-friendly-storage-names`, branch `codex/friendly-storage-names`,
+  based on `origin/main` at `c16cebe`. Primary checkout WIP remains untouched.
+- Setup collects a trimmed 1–120 character provider name. Existing System → Storage editing
+  invalidates provider and identity caches; older setup clients and unnamed providers work.
+  Environment-managed names survive initialization while deployment-controlled addresses stay locked.
+- Existing Mac locations validate account/identity/provider IDs before updating display metadata,
+  save the new name, and rename the same Finder domain. Endpoint, grants, token and catalog survive.
+- Application lint/typecheck/coverage pass (`step.hNbNg2` coverage); 22 Swift tests and unsigned
+  Xcode build pass (`step.RW9bXt`, `step.CGRtK8`). Signed isolated build passes (`step.LAjGGz`).
+- Real Next dev + disposable PostgreSQL/SFTPGo + the signed app: setup name, admin rename,
+  account menu, approval and existing native refresh verified. Saved binding, domain ID,
+  catalog generation, cached inode and bytes stayed unchanged; offline refresh retained the
+  name and Quick Look content. Test connection removed and dev services stopped afterward.
+- Finder's single-domain sidebar still shows the app name **FDrive**; the domain and CloudStorage
+  folder rename in place. See [platform behavior](../MACOS.md#display-name-refresh).
+- Full integration passes (460 tests, `step.WzRfBD`). Existing storage/login/desktop browser
+  cases pass (`step.cXZUU1`); the corrected naming regression passes (`step.pY1uo5`). It exercises
+  setup, label-only PATCH, account/login display, and approval refetch on a simulated tab-visibility
+  event in headless Chromium. Initial browser failures were test selector/event-delivery issues.
+  Final workflow regressions, lint and diff checks pass; integrated diff reviewed.
+- Server deployment is pending; production providers are unchanged. GitHub Actions stays disabled.
+  A server deployment and local app rebuild are needed to exercise this with production.
+
 ## Native macOS Finder app: development preview
 
 - Release setup: [PR #20](https://github.com/fredrikburmester/fdrive-web/pull/20),
@@ -29,8 +54,8 @@ not current instructions.
   its window is open or minimized; closing returns the same process to background-agent mode.
   Reopening from Applications restores foreground mode; Command-Tab away/back was exercised.
   The window observer leaves SwiftUI delegates and background refresh intact.
-  [Provider naming follow-up](../plans/PROVIDER-NAMES.md) is planned for another session;
-  existing rename support, setup naming and native rename propagation are documented there.
+  Provider naming and refresh behavior: [provider guide](../STORAGE-PROVIDERS.md#display-names)
+  and [Mac guide](../MACOS.md#display-name-refresh).
 - Hosted CI run 34772703133 passed lint/typecheck but one existing web search-panel test
   failed waiting for `same.txt` (1835 other web tests passed). Native distribution checks pass;
   that exact test passes locally with one worker. The subsequent hosted run 34773480985
