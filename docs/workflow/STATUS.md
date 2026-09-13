@@ -7,6 +7,16 @@ not current instructions.
 
 ## Native macOS Finder app: development preview
 
+- Release setup in `/private/tmp/fdrive-macos-release`, branch `codex/macos-release`.
+  Signed/notarized DMG workflow, private/public Homebrew cask publication and local credential
+  setup implemented. Six release regression tests, actionlint, unsigned Release archive and
+  native Swift/app/extension verification pass. Fredrik Burmester (MWD5K362T8) Developer ID
+  identity is installed locally; encrypted certificate/password secrets are configured in
+  `fredrikburmester/fdrive-web`. Both explicit App IDs and Developer ID profiles are created.
+  The one-time API key and profile downloads are not available locally yet; their three
+  secrets, real signed/notarized packaging, hosted release and Homebrew installation remain
+  pending. No release or server deployment. Cask publication preserves repository-wide
+  Actions permissions and provides a comparison link if bot PR creation is disabled.
 - PR #19 review fixes: `/private/tmp/fdrive-pr19-fixes`, `codex/pr19-review-fixes`.
   Partial refreshes notify Finder and continue across failed folders/files; disconnect revokes
   its credential without storage access; pairing admission groups IPv6 callers by /64.

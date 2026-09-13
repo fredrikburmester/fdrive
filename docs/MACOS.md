@@ -92,6 +92,9 @@ upgrades. An Apple Development or Apple Distribution certificate is not a substi
 Developer ID Application certificate. No notarized download is produced by the development
 verification helper. [Apple distribution guidance](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
 
+Automated signed DMGs, Apple/GitHub credential setup, release tags and private/public Homebrew
+installation are covered in the [release guide](MACOS-RELEASE.md).
+
 ## API and security
 
 Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
