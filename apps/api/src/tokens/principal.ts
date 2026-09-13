@@ -12,6 +12,8 @@ export interface ResolveTokenPrincipalDeps {
   readonly identities: IdentityRepo;
   readonly clock: () => Date;
   readonly storageFactory: IdentityStorageFactory;
+  /** A separate credential audience; defaults to the existing MCP token format. */
+  readonly acceptsToken?: (value: string) => boolean;
 }
 
 /**
@@ -25,7 +27,7 @@ export function createResolveTokenPrincipal(
   deps: ResolveTokenPrincipalDeps,
 ): (bearer: string) => Promise<Principal | null> {
   return async (bearer: string): Promise<Principal | null> => {
-    if (!looksLikeApiToken(bearer)) {
+    if (!(deps.acceptsToken ?? looksLikeApiToken)(bearer)) {
       return null;
     }
 

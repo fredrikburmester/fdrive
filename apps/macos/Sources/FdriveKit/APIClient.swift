@@ -1,0 +1,150 @@
+import CryptoKit
+import Foundation
+
+private final class TransferDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
+    let progress: Progress?
+    init(progress: Progress? = nil) { self.progress = progress }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        // Credentials and pairing secrets never follow even same-host protocol redirects.
+        completionHandler(nil)
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        progress?.totalUnitCount = totalBytesExpectedToWrite
+        progress?.completedUnitCount = totalBytesWritten
+    }
+}
+
+public struct APIClient: Sendable {
+    public let server: URL
+    private let token: String?
+    private let session: URLSession
+    public init(server: URL, token: String? = nil, session: URLSession? = nil) throws {
+        self.server = try Self.normalizeServer(server)
+        self.token = token
+        if let session { self.session = session } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpCookieStorage = nil
+            configuration.urlCache = nil
+            configuration.timeoutIntervalForRequest = 60
+            configuration.timeoutIntervalForResource = 86_400
+            configuration.httpMaximumConnectionsPerHost = 4
+            self.session = URLSession(configuration: configuration)
+        }
+    }
+    public static func normalizeServer(_ url: URL) throws -> URL {
+        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let host = parts.host?.lowercased(), !host.isEmpty,
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
+              parts.path.isEmpty || parts.path == "/",
+              parts.scheme == "https" || (parts.scheme == "http" && ["localhost", "127.0.0.1", "[::1]", "::1"].contains(host))
+        else { throw DriveError.invalidServer }
+        parts.host = host; parts.path = ""
+        guard let normalized = parts.url else { throw DriveError.invalidServer }
+        return normalized
+    }
+    private func request(_ route: String, query: [URLQueryItem] = [], body: Data? = nil) throws -> URLRequest {
+        var url = URLComponents(url: server.appendingPathComponent("api/v1/desktop/" + route), resolvingAgainstBaseURL: false)!
+        url.queryItems = query.isEmpty ? nil : query
+        var request = URLRequest(url: url.url!)
+        request.httpMethod = body == nil ? "GET" : "POST"
+        request.httpBody = body
+        request.setValue("fdrive", forHTTPHeaderField: "X-Requested-With")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+    private func check(_ response: URLResponse) throws {
+        guard let response = response as? HTTPURLResponse else { throw DriveError.unavailable }
+        switch response.statusCode {
+        case 200..<300: return
+        case 401, 403: throw DriveError.authentication
+        case 404: throw DriveError.missing
+        case 409: throw DriveError.expiredSnapshot
+        case 429, 500...599: throw DriveError.unavailable
+        default: throw DriveError.server("The server rejected this request (\(response.statusCode)).")
+        }
+    }
+    private func send<T: Decodable & Sendable>(_ route: String, query: [URLQueryItem] = [], body: Data? = nil) async throws -> T {
+        let (data, response) = try await session.data(for: request(route, query: query, body: body), delegate: TransferDelegate())
+        try check(response)
+        guard data.count <= 8 * 1024 * 1024 else { throw DriveError.server("The metadata response is too large.") }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+    public func pair(deviceName: String) async throws -> Pairing {
+        try await send("pairings", body: JSONEncoder().encode(["deviceName": deviceName]))
+    }
+    public func poll(_ pairing: Pairing) async throws -> PairResult {
+        try await send("pairings/\(pairing.id)/poll", body: JSONEncoder().encode(["secret": pairing.secret]))
+    }
+    public func cancel(_ pairing: Pairing) async throws {
+        struct Result: Decodable, Sendable { let ok: Bool }
+        let _: Result = try await send("pairings/\(pairing.id)/cancel", body: JSONEncoder().encode(["secret": pairing.secret]))
+    }
+    public func location() async throws -> Location {
+        let result: Location = try await send("location")
+        guard result.protocolVersion == 1, result.readOnly else { throw DriveError.server("Update fdrive for Mac to connect to this server.") }
+        return result
+    }
+    public func list(_ rawPath: String) async throws -> [RemoteEntry] {
+        let path = try canonicalPath(rawPath)
+        var result: [RemoteEntry] = []
+        var cursor: String?
+        var seen = Set<String>()
+        repeat {
+            try Task.checkCancellation()
+            var query = [URLQueryItem(name: "path", value: path)]
+            if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+            let page: Listing = try await send("entries", query: query)
+            for entry in page.entries {
+                guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == path,
+                      entry.path.split(separator: "/").last.map(String.init) == entry.name,
+                      seen.insert(entry.path).inserted, entry.size >= 0 else { throw DriveError.server("Invalid folder listing.") }
+            }
+            result += page.entries
+            guard result.count <= 100_000 else { throw DriveError.server("Folder exceeds the listing limit.") }
+            if page.nextCursor != nil && (page.entries.isEmpty || page.nextCursor == cursor) {
+                throw DriveError.server("The server returned an invalid continuation.")
+            }
+            cursor = page.nextCursor
+        } while cursor != nil
+        return result
+    }
+    public func stat(_ path: String) async throws -> RemoteEntry {
+        try await send("entry", query: [.init(name: "path", value: try canonicalPath(path))])
+    }
+    public func versions(_ paths: [String]) async throws -> [ContentVersion] {
+        let result: Versions = try await send("versions", body: JSONEncoder().encode(["paths": paths]))
+        guard result.items.count == paths.count, Set(result.items.map(\.path)) == Set(paths),
+              result.items.allSatisfy({ $0.version.count == 64 && $0.version.allSatisfy(\.isHexDigit) }) else {
+            throw DriveError.server("Invalid content validation response.")
+        }
+        return result.items
+    }
+    public func disconnect() async throws {
+        struct Result: Decodable, Sendable { let ok: Bool }
+        let _: Result = try await send("disconnect", body: Data("{}".utf8))
+    }
+    public func download(_ path: String, to directory: URL, progress: Progress) async throws -> (URL, String, Int64) {
+        let delegate = TransferDelegate(progress: progress)
+        let (temporary, response) = try await session.download(for: request("content", query: [.init(name: "path", value: try canonicalPath(path))]), delegate: delegate)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try check(response)
+        let file = try FileHandle(forReadingFrom: temporary)
+        defer { try? file.close() }
+        var digest = SHA256(); var size: Int64 = 0
+        while let chunk = try file.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            try Task.checkCancellation(); digest.update(data: chunk); size += Int64(chunk.count)
+        }
+        if response.expectedContentLength >= 0 && response.expectedContentLength != size {
+            throw DriveError.server("The download ended before the file was complete.")
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.moveItem(at: temporary, to: destination)
+        let hash = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        return (destination, hash, size)
+    }
+}
