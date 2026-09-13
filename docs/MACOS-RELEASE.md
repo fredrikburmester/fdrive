@@ -5,6 +5,10 @@ as the repository: downloads require authentication while it is private; after i
 public, the same versioned DMG URLs work without authentication. No second repository or
 cross-repository access token is needed.
 
+GitHub Actions is currently disabled for this repository to control hosted runner costs.
+Keep it disabled unless the owner explicitly requests re-enabling it. The local signed release
+command below remains available; merging this workflow does not enable Actions.
+
 ## Apple and GitHub setup
 
 Use the same Apple team for the app, extension and all subsequent releases. Changing teams
