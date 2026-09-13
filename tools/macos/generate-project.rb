@@ -46,6 +46,7 @@ embed.add_file_reference(extension.product_reference).settings = { 'ATTRIBUTES' 
       'PRODUCT_BUNDLE_IDENTIFIER' => target == app ? 'se.burmester.fdrive.mac' : 'se.burmester.fdrive.mac.fileprovider',
       'INFOPLIST_FILE' => target == app ? 'App/Info.plist' : 'Extension/Info.plist',
       'CODE_SIGN_ENTITLEMENTS' => 'Native/fdrive.entitlements',
+      'PROVISIONING_PROFILE_SPECIFIER' => target == app ? '$(FDRIVE_APP_PROFILE)' : '$(FDRIVE_EXTENSION_PROFILE)',
       'CURRENT_PROJECT_VERSION' => '1', 'MARKETING_VERSION' => '0.1.0',
       'LD_RUNPATH_SEARCH_PATHS' => ['$(inherited)', '@executable_path/../Frameworks', '@executable_path/../../../../Frameworks'],
       'FDRIVE_APP_GROUP' => '$(TeamIdentifierPrefix)se.burmester.fdrive.mac',
