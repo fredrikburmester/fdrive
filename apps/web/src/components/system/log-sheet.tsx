@@ -155,11 +155,12 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
           ) : null}
         </div>
       </ScrollArea>
-      <SheetFooter className="flex-row justify-end gap-2 border-t">
+      <SheetFooter className="shrink-0 border-t sm:flex-row sm:justify-end">
         <Button
           type="button"
           variant="outline"
           size="sm"
+          className="h-11 sm:h-7"
           disabled={entries.length === 0}
           onClick={() => void copy()}
         >
@@ -169,6 +170,7 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
           type="button"
           variant="outline"
           size="sm"
+          className="h-11 sm:h-7"
           disabled={entries.length === 0}
           onClick={() => download("txt")}
         >
@@ -178,6 +180,7 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
           type="button"
           variant="outline"
           size="sm"
+          className="h-11 sm:h-7"
           disabled={entries.length === 0}
           onClick={() => download("ndjson")}
         >

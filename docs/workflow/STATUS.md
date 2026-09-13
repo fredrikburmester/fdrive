@@ -5,6 +5,18 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Mobile log actions: ready for PR
+
+- Worktree `/private/tmp/fdrive-mobile-log-actions`, branch `codex/mobile-log-actions`.
+  Log exports stack at full width below 640px with 44px tap targets; desktop keeps its row.
+- Application lint/typecheck/coverage pass (`step.dYKDbz` coverage). Live Next dev checks
+  pass at 320, 402, 639, 640 and 1280px, including 320x360, in light/dark: buttons stay
+  inside the drawer, copy and both download contents work, Escape closes the drawer.
+  Screenshots and measurements: `.fdrive-workflow/evaluation/logs-*.png`, `layout-results.json`.
+- Existing log-drawer browser case passes (`step.HLfRQh`) with native PostgreSQL and the
+  composed API; storage and indexer use fixtures. Standard Docker setup is blocked:
+  `Could not find a working container runtime strategy` (`step.r7P82c`). No device Safari check.
+
 ## Processing failure transparency: implemented, Docker verification pending
 
 - Delivery: `main`. Per-feature file failures persist in PostgreSQL; System pages
