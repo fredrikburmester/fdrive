@@ -118,7 +118,7 @@ The token must have read access to the private repository. It is supplied only t
 process and the authenticated GitHub release-asset endpoint; no token appears in a saved
 cask or URL. Avoid verbose Homebrew logging when using an authentication header.
 
-Quit fdrive before upgrading:
+Quit FDrive before upgrading:
 
 ```sh
 brew update
@@ -130,7 +130,7 @@ Homebrew then uses the ordinary GitHub release URL with the same pinned checksum
 locations inside the app before uninstalling; the cask deliberately does not remove File
 Provider databases or files under `~/Library/CloudStorage`.
 
-Launch fdrive from Applications, enter `https://files.fdrive.se` (or your own fdrive HTTPS
+Launch FDrive from Applications, enter `https://files.fdrive.se` (or your own fdrive HTTPS
 web address), sign in and select storage identities. The server must include the desktop API from the native app change. No server
 address or credentials are embedded in a distributable app.
 
