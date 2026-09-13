@@ -7,14 +7,45 @@ import FdriveKit
 struct FdriveApp: App {
     @StateObject private var model = AppModel()
     var body: some Scene {
-        Window("fdrive", id: "locations") {
+        Window("FDrive", id: "locations") {
             LocationsView(model: model).frame(minWidth: 520, minHeight: 400)
+                .background(WindowActivation())
         }.defaultSize(width: 600, height: 460)
             .defaultLaunchBehavior(.presented)
             .restorationBehavior(.disabled)
-        MenuBarExtra("fdrive", systemImage: "externaldrive.badge.icloud") {
+        MenuBarExtra("FDrive", image: "MenuBarIcon") {
             MenuContents(model: model)
         }
+    }
+}
+
+// Observe only the locations window, without replacing SwiftUI's window delegate.
+// Losing focus, opening the menu or minimizing is not the same as closing it.
+private struct WindowActivation: NSViewRepresentable {
+    func makeNSView(context: Context) -> ActivationView { ActivationView() }
+    func updateNSView(_ nsView: ActivationView, context: Context) {}
+
+    final class ActivationView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self)
+            guard let window else { return }
+            NotificationCenter.default.addObserver(self, selector: #selector(windowOpened(_:)),
+                name: NSWindow.didBecomeKeyNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(windowClosed(_:)),
+                name: NSWindow.willCloseNotification, object: window)
+            windowOpened(nil)
+        }
+
+        @objc private func windowOpened(_ notification: Notification?) {
+            if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        }
+
+        @objc private func windowClosed(_ notification: Notification) {
+            NSApp.setActivationPolicy(.accessory)
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
     }
 }
 
@@ -28,7 +59,7 @@ private struct MenuContents: View {
         }
         Divider()
         Button("Refresh") { Task { await model.refresh() } }.disabled(model.refreshing)
-        Button("Quit fdrive") { NSApp.terminate(nil) }
+        Button("Quit FDrive") { NSApp.terminate(nil) }
     }
 }
 
@@ -39,9 +70,10 @@ private struct LocationsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Image(systemName: "externaldrive.badge.icloud").font(.largeTitle).foregroundStyle(.secondary)
+                Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                    .resizable().frame(width: 48, height: 48).accessibilityHidden(true)
                 VStack(alignment: .leading) {
-                    Text("fdrive").font(.title.bold())
+                    Text("FDrive").font(.title.bold())
                     Text("Your files in Finder, downloaded when needed.").foregroundStyle(.secondary)
                 }
                 Spacer()
