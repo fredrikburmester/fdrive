@@ -25,6 +25,9 @@ it("continues from a file-user account straight into feature selection without n
   fireEvent.change(screen.getByLabelText("SFTPGo URL"), {
     target: { value: "http://sftpgo:8080" },
   });
+  fireEvent.change(screen.getByLabelText("Storage name"), {
+    target: { value: "  Home storage  " },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByText(/not a SFTPGo WebAdmin account/)).toBeTruthy();
@@ -39,6 +42,7 @@ it("continues from a file-user account straight into feature selection without n
     expect.objectContaining({
       request: {
         baseUrl: "http://sftpgo:8080",
+        label: "Home storage",
         homeTemplate: "sftpgo:/{username}",
         username: "alice",
         password: "alice-password",
@@ -47,4 +51,27 @@ it("continues from a file-user account straight into feature selection without n
     expect.anything(),
   );
   expect(screen.getByText("Optional feature choices")).toBeTruthy();
+});
+
+it("requires a valid name without invalidating a successful connection test", () => {
+  mocks.test.mockImplementation((_input, options) => options.onSuccess());
+  render(<SetupWizard />);
+  fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: "claim-token" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(screen.getByLabelText("SFTPGo URL"), {
+    target: { value: "http://sftpgo:8080" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+  const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
+  expect(next.disabled).toBe(true);
+  const name = screen.getByLabelText("Storage name");
+  fireEvent.change(name, { target: { value: "   " } });
+  expect(screen.getByText("Enter a name for this storage.")).toBeTruthy();
+  expect(next.disabled).toBe(true);
+  fireEvent.change(name, { target: { value: "x".repeat(121) } });
+  expect(screen.getByText("Use 120 characters or fewer for the storage name.")).toBeTruthy();
+  expect(next.disabled).toBe(true);
+  fireEvent.change(name, { target: { value: "Home storage" } });
+  expect(next.disabled).toBe(false);
+  expect(mocks.test).toHaveBeenCalledTimes(1);
 });

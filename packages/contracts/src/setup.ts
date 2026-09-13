@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { HttpUrl } from "./http-url.ts";
+import { ProviderName } from "./providers.ts";
 
 /**
  * Shape returned by `GET /api/v1/setup/status`. `required` mirrors
@@ -39,6 +40,8 @@ export type ConnectionTestResponse = z.infer<typeof ConnectionTestResponse>;
  */
 export const SetupCompleteRequest = z.object({
   baseUrl: HttpUrl,
+  /** Optional for older setup clients; new clients collect a storage name. */
+  label: ProviderName.optional(),
   homeTemplate: z.string().min(1),
   username: z.string().min(1).max(255),
   password: z.string().min(1),

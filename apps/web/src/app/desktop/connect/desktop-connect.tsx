@@ -1,6 +1,6 @@
 "use client";
 
-import type { IdentitySummary } from "@fdrive/contracts";
+import type { MeResponse } from "@fdrive/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -8,14 +8,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
 import { describeApiError } from "@/lib/api/errors";
+import { queryKeys } from "@/lib/api/keys";
 
 export function DesktopConnect({
   requestId,
-  identities,
+  initialMe,
 }: {
   requestId: string;
-  identities: readonly IdentitySummary[];
+  initialMe: MeResponse;
 }) {
+  const me = useQuery({
+    queryKey: queryKeys.auth.me(),
+    queryFn: () => apiClient.me(),
+    initialData: initialMe,
+    staleTime: 0,
+  });
+  const identities = me.data.identities;
   const [selected, setSelected] = useState<string[]>([]);
   const request = useQuery({
     queryKey: ["desktop-pairing", requestId],

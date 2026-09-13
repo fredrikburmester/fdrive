@@ -49,6 +49,24 @@ Disconnect cancels refresh, revokes the token, removes the domain through File P
 then clears metadata/Keychain state. Failed cleanup stays visible for retry. Account → API
 tokens can revoke access independently. Revocation cannot erase previously exported copies.
 
+### Display-name refresh
+
+The app shows the provider name with its username beneath. Refresh reads current display
+metadata from the existing fdrive server and first verifies account, identity and provider IDs.
+It applies only the name and username, preserving the saved server, grants, expiry, domain ID,
+Keychain token and SQLite catalog. A failed or offline refresh retains the last saved name.
+The root item's metadata version changes when its title changes; cached child items survive.
+
+The registered Finder domain uses `NSFileProviderManager.add` with its existing identifier,
+which supports changing the display name in place. The domain is never removed for a rename.
+The signed macOS 26 rehearsal preserved downloaded bytes and file inode while the CloudStorage
+folder changed from `FDrive-Initialstorage(alice)` to `FDrive-Homestorage(alice)`.
+
+Finder controls the visible sidebar name: with one domain it may display the app name
+**FDrive** even after the registered domain and folder rename. This was observed in the signed
+rehearsal and is also reported in [Apple's developer forum](https://developer.apple.com/forums/thread/737617).
+No unsupported Finder preference changes or extra placeholder domains are used to override it.
+
 ## Build and verify
 
 Use Xcode 26+ with its command-line tools selected. The checked-in Xcode project needs no

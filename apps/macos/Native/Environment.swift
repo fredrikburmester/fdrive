@@ -3,6 +3,17 @@ import FdriveKit
 @preconcurrency import FileProvider
 
 enum NativeEnvironment {
+    static func updateDomainName(_ saved: SavedLocation) async throws {
+        guard let existing = try await NSFileProviderManager.domains().first(where: {
+            $0.identifier.rawValue == saved.id
+        }), !existing.isDisconnected else { throw DriveError.unavailable }
+        let domain = NSFileProviderDomain(identifier: existing.identifier, displayName: saved.title)
+        domain.isHidden = existing.isHidden
+        domain.supportsSyncingTrash = existing.supportsSyncingTrash
+        domain.supportsStringSearchRequest = existing.supportsStringSearchRequest
+        // Apple's same-identifier add updates the display name in place. Never remove/re-add.
+        try await NSFileProviderManager.add(domain)
+    }
     static func store() throws -> ConnectionStore {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "FdriveAppGroup") as? String,
               let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else {

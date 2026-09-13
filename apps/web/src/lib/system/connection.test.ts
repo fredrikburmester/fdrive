@@ -109,7 +109,9 @@ describe("providerFormError", () => {
   });
 
   it("asks for a name", () => {
-    expect(providerFormError([], { ...draft, label: "   " })).toBe("Enter a name for this server.");
+    expect(providerFormError([], { ...draft, label: "   " })).toBe(
+      "Enter a name for this storage.",
+    );
   });
 
   it("asks for an http(s) address", () => {
