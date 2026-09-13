@@ -5,6 +5,31 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Native macOS Finder app: development preview
+
+- Worktree `/private/tmp/fdrive-native-macos`, branch `claude/native-macos`, updated to
+  `origin/main` at `33b244f`. SwiftUI companion and replicated File Provider extension,
+  macOS 26+/Apple silicon, read-only, no search. [Implementation/build guide](../MACOS.md).
+- Browser pairing selects identities; separate `fdd_` credentials, Keychain secrets and
+  SQLite catalogs preserve provider isolation. Metadata-only enumeration, streamed downloads,
+  durable changes, refresh/backoff, reconnect and retryable disconnect are implemented.
+- Live signed Finder rehearsal: SFTPGo and Apache WebDAV, same username/path with different
+  bytes; nested browsing without content reads; Quick Look and TextEdit; same-size/same-mtime
+  external overwrite evicts old content and opens new bytes. Fixed security-scoped Finder
+  opening, team-prefixed App Group access, and metadata permission retry loops.
+- Real Finder displayed 10,000 placeholder files; catalog and system state also contained
+  all 10,000, and Apache logs recorded no GETs for them. Initial system reconciliation took
+  several minutes. A 2 GiB file downloaded and matched SHA-256 in 14.12 seconds on loopback.
+  These timings are local observations, not performance promises.
+- Application, full integration, affected browser and workflow gates passed; final application
+  coverage passed (`step.kiY7g2`), as did 13 Swift tests and the development-signed Xcode build
+  (`step.s8cmQW`, `step.uiPUV5`). Real composed API integration covers PostgreSQL/SFTPGo/Apache DAV.
+- Integrated diff reviewed. Disconnecting the temporary DAV location removed its domain while
+  the original SFTPGo location remained usable after app restart. Its local demo remains running.
+- [Remaining beta qualification](../plans/MACOS-APP.md): Developer ID/notarization, second-Mac
+  install/upgrade, broader editors/offline/low-disk/cancellation/reboot matrix and tuning the
+  cost of hashing downloaded files on each refresh. No release or production deployment.
+
 ## Mobile System page headers
 
 - Worktree `/private/tmp/fdrive-system-mobile-header`, branch `codex/system-mobile-header`.

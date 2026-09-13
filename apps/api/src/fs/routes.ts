@@ -109,7 +109,7 @@ function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | unde
  */
 export async function parseBody<T>(
   schema: z.ZodType<T>,
-  c: FsContext,
+  c: Context,
   maxBytes: number = DEFAULT_JSON_MAX_BYTES,
 ): Promise<T> {
   const reader = c.req.raw.body?.getReader();
