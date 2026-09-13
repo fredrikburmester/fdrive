@@ -10,6 +10,11 @@ vi.mock("@/components/shell/page-header", () => ({
   PageHeader: ({ breadcrumbs }: { breadcrumbs: ReactNode }) => <header>{breadcrumbs}</header>,
 }));
 
+vi.mock("./processing-failures", () => ({
+  FAILURE_FEATURES: ["thumbnails", "textSearch", "semanticSearch", "imageSearch"],
+  ProcessingFailures: () => <div>Failure history</div>,
+}));
+
 const { SystemPage } = await import("./system-page");
 
 const off = {

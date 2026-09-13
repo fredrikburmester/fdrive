@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from . import db
+from . import db, failures
 from .indexer import RootContext, log
 from .thumbs import SIZES, normalize_scope, select_candidates, skip_reason
 from .thumbs_io import generate as generate_thumbnails
@@ -137,8 +137,8 @@ def rebuild_thumbnails(
     skips. `on_file` reports whether both sizes were saved; policy skips call
     `on_skip` instead, so they are not counted as successes or failures.
 
-    Only `app.thumbnails` is written here: `text_status`, `idx.chunks`, and
-    embeddings are never touched, unlike `POST /reindex`.
+    Writes thumbnails and their failure history. `text_status`, `idx.chunks`,
+    and embeddings are never touched, unlike `POST /reindex`.
     """
     conn = root.conn()
     if candidates is None:
@@ -158,9 +158,11 @@ def rebuild_thumbnails(
             processed += 1
             continue
         ok = True
+        reasons: list[str] = []
         try:
             results = generate_thumbnails(
-                abs_path, ext, sha256, size, root.cfg.thumbs_dir, root.cfg.thumb_max_bytes, force=force, log=log
+                abs_path, ext, sha256, size, root.cfg.thumbs_dir, root.cfg.thumb_max_bytes,
+                force=force, log=log, on_error=reasons.append
             )
             for out_size, rel_thumb_path, width, height in results:
                 db.upsert_thumbnail(conn, sha256, out_size, rel_thumb_path, width, height)
@@ -169,7 +171,10 @@ def rebuild_thumbnails(
             ok = {result[0] for result in results} == set(SIZES)
         except Exception as e:  # noqa: BLE001 - one bad file must never stop the pass
             log(f"thumb rebuild: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
+            reasons.append(failures.describe(e))
             ok = False
+        failures.report(root, rel_path, "thumbnails", log,
+                        None if ok else reasons[0] if reasons else "Incomplete thumbnail: required sizes were not saved")
         if on_file is not None:
             on_file(ok)
         processed += 1
@@ -210,10 +215,12 @@ def start_rebuild(
             for ctx, rows in candidates:
                 if not ctx.feature_configuration().values.internal_thumbnails:
                     continue
-                rebuild_thumbnails(
-                    ctx, path, force, on_file=job.advance, candidates=rows,
-                    on_skip=lambda: job.advance(True, skipped=True),
-                )
+                with failures.attempt({"thumbnails": job.run_id}):
+                    rebuild_thumbnails(
+                        ctx, path, force, on_file=job.advance, candidates=rows,
+                        on_skip=lambda: job.advance(True, skipped=True),
+                    )
+                failures.prune(ctx.conn())
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
             log(f"thumbnail-rebuild job crashed: {type(e).__name__}: {e}")

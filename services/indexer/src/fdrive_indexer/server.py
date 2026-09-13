@@ -23,13 +23,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from . import db
+from . import db, failures
 from .activity import timestamp
 from .chunking import is_textual
 from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
 from .content_extract import MAX_CONTENT_BYTES, ContentExtractor
 from .directory_listing import directory_parts, directory_query, list_directory
 from .extract import embed_health
+from .failure_retry import start_retry
 from .features import FeatureConfiguration
 from .image_embed_rebuild import start_image_embed_rebuild
 from .indexer import RootContext, work_features
@@ -53,9 +54,13 @@ class ServerState:
     image_embed_rebuild_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
     image_embed_clear_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
 
+    failure_retry_job: ThumbnailRebuildJob = field(default_factory=ThumbnailRebuildJob)
+    failure_retry_feature: str = "thumbnails"
+
     instance_id: str = field(default_factory=lambda: str(uuid4()))
 
     def __post_init__(self) -> None:
+        self.failure_retry_job.admission = self.thumbnail_job.admission
         self.index_clear_job.admission = self.thumbnail_job.admission
         self.thumbnail_clear_job.admission = self.thumbnail_job.admission
         self.image_embed_rebuild_job.admission = self.thumbnail_job.admission
@@ -174,13 +179,15 @@ async def activity(request: Request) -> JSONResponse:
     for ctx in state.contexts.values():
         for operation in ctx.activity.snapshot():
             if (
-                "semanticSearch" in operation["features"]
-                and ctx.embed_backoff.waiting()
-                and ctx.feature_configuration().values.semantic_search
+                ("semanticSearch" in operation["features"] and ctx.embed_backoff.waiting()
+                 and ctx.feature_configuration().values.semantic_search)
+                or ("imageSearch" in operation["features"] and ctx.image_embed_backoff.waiting()
+                    and ctx.feature_configuration().values.image_search)
             ):
                 operation = {**operation, "state": "waiting", "phase": "waiting", "total": None, "finishedAt": None}
             operations.append(operation)
     for job, kind, features in [
+        (state.failure_retry_job, "reindex", [state.failure_retry_feature]),
         (state.thumbnail_job, "thumbnailRebuild", ["thumbnails"]),
         (state.thumbnail_clear_job, "thumbnailClear", ["thumbnails"]),
         (state.index_clear_job, "indexClear", ["textSearch", "semanticSearch"]),
@@ -426,9 +433,42 @@ async def image_embeddings_rebuild(request: Request) -> JSONResponse:
     return JSONResponse({"started": True, "total": None}, status_code=202)
 
 
+async def retry_failures(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "invalid request"}, status_code=400)
+    if not isinstance(payload, dict) or payload.get("feature") not in failures.FEATURES:
+        return JSONResponse({"error": "invalid feature"}, status_code=400)
+    feature = payload["feature"]
+    failure_id = payload.get("id")
+    if failure_id is not None and (type(failure_id) is not int or failure_id < 1):
+        return JSONResponse({"error": "invalid failure id"}, status_code=400)
+    contexts = [ctx for ctx in state.contexts.values() if ctx.feature_configuration().values.as_json()[feature]]
+    if not contexts:
+        return JSONResponse({"error": "feature disabled"}, status_code=409)
+    if failure_id is not None and not any(
+        ctx.conn().execute(
+            'SELECT 1 FROM idx.processing_failures WHERE id = %s AND root_id = %s AND feature = %s AND resolved_at IS NULL',
+            (failure_id, ctx.root_id, feature),
+        ).fetchone() is not None for ctx in contexts
+    ):
+        return JSONResponse({"error": "no unresolved failure found"}, status_code=404)
+    try:
+        started = start_retry(state.failure_retry_job, contexts, feature, failure_id)
+    except Exception:
+        return JSONResponse({"error": "could not start retry"}, status_code=500)
+    if not started:
+        return JSONResponse({"error": "maintenance busy"}, status_code=409)
+    state.failure_retry_feature = feature
+    return JSONResponse({"started": True, "operationId": state.failure_retry_job.run_id}, status_code=202)
+
+
 def create_app(state: ServerState) -> Starlette:
     app = Starlette(
         routes=[
+            Route("/failures/retry", retry_failures, methods=["POST"]),
             Route("/health", health, methods=["GET"]),
             Route("/directory", directory, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),

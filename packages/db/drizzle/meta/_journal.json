@@ -43,6 +43,13 @@
       "when": 1789248974126,
       "tag": "0005_synchronize_declared_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789284879879,
+      "tag": "0006_processing_failures",
+      "breakpoints": true
     }
   ]
 }

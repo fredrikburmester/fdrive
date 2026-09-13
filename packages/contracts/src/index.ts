@@ -108,6 +108,7 @@ export {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+export * from "./processing-failures.ts";
 export {
   AdminProvider,
   AdminProviderCreateRequest,

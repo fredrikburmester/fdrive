@@ -72,6 +72,7 @@ def _extract_video_frame(abs_path: str, at_seconds: float = 1.0) -> object:
             ],
             check=True,
             capture_output=True,
+            pass_fds=(int(abs_path.rsplit("/", 1)[1]),) if abs_path.startswith(("/proc/self/fd/", "/dev/fd/")) else (),
             timeout=60,
         )
         return Image.open(tmp_path).convert("RGB")
@@ -91,6 +92,7 @@ def generate(
     exists: Callable[[str], bool] = os.path.exists,
     remove: Callable[[str], None] = os.remove,
     log: Callable[[str], None] = lambda _msg: None,
+    on_error: Callable[[str], None] | None = None,
 ) -> list[tuple[int, str, int, int]]:
     """Generate the missing thumbnail sizes for one file. Returns
     `[(size, storage_path_relative, width, height), ...]` for every size that has a
@@ -132,6 +134,11 @@ def generate(
             w, h = _save_webp(image, dest, size)
             results.append((size, rel, w, h))
     except Exception as e:  # noqa: BLE001 - thumbnails never fail the file
-        log(f"thumb: failed for {abs_path} ({len(results)}/{len(SIZES)} sizes available): {type(e).__name__}: {e}")
+        from .failures import describe
+
+        reason = describe(e)
+        log(f"thumb: failed for {abs_path} ({len(results)}/{len(SIZES)} sizes available): {reason}")
+        if on_error is not None:
+            on_error(reason)
         return results
     return results

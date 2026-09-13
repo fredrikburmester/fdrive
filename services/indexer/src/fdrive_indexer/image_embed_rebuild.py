@@ -16,7 +16,7 @@ import os
 import threading
 from collections.abc import Callable, Sequence
 
-from . import db
+from . import db, failures
 from .image_embed import (
     dimension_guard,
     embed_images,
@@ -60,7 +60,7 @@ def rebuild_image_embeddings(
         candidates = select_image_embed_candidates(db.media_files(conn, root.root_id), normalize_scope(path))
 
     processed = 0
-    pending: list[tuple[str, str]] = []
+    pending: list[tuple[str, str, str]] = []
 
     def flush() -> None:
         nonlocal processed
@@ -68,13 +68,15 @@ def rebuild_image_embeddings(
             return
         data: list[bytes] = []
         opened: list[str] = []
-        for sha256, thumb_path in pending:
+        reasons: dict[str, str] = {}
+        for sha256, thumb_path, _rel_path in pending:
             try:
                 with open(thumb_path, "rb") as fh:
                     data.append(fh.read())
                 opened.append(sha256)
             except OSError as e:
                 log(f"image embedding rebuild: cannot read thumbnail for {sha256}: {type(e).__name__}: {e}")
+                reasons[sha256] = failures.describe(e)
 
         succeeded: set[str] = set()
         if opened:
@@ -85,25 +87,30 @@ def rebuild_image_embeddings(
                     succeeded.add(sha256)
             except Exception as e:  # noqa: BLE001 - one bad batch must never stop the pass
                 log(f"image embedding rebuild: embed request failed: {type(e).__name__}: {e}")
+                for key in opened:
+                    reasons[key] = failures.describe(e)
 
-        for sha256, _thumb_path in pending:
+        for sha256, _thumb_path, rel_path in pending:
+            failures.report(root, rel_path, "imageSearch", log,
+                            None if sha256 in succeeded else reasons.get(sha256, "Embedding unavailable: no vector returned"))
             processed += 1
             if on_file is not None:
                 on_file(sha256 in succeeded)
         pending.clear()
 
     batch_size = max(1, root.cfg.image_embed_batch_size)
-    for _rel_path, _ext, sha256, _size in candidates:
+    for rel_path, _ext, sha256, _size in candidates:
         root.maybe_refresh_features()
         if not root.feature_configuration().values.image_search:
             log("image embedding rebuild stopped: feature disabled")
             break
         existing_model = db.image_embedding_model(conn, sha256)
         if not rebuild_needs_embedding(existing_model, configured_model, force):
+            failures.report(root, rel_path, "imageSearch", log)
             if on_skip is not None:
                 on_skip()
             continue
-        pending.append((sha256, os.path.join(root.cfg.thumbs_dir, storage_path(sha256, 256))))
+        pending.append((sha256, os.path.join(root.cfg.thumbs_dir, storage_path(sha256, 256)), rel_path))
         if len(pending) >= batch_size:
             flush()
     flush()
@@ -145,10 +152,12 @@ def start_image_embed_rebuild(
             for ctx, rows in candidates:
                 if not ctx.feature_configuration().values.image_search:
                     continue
-                rebuild_image_embeddings(
-                    ctx, path, force, on_file=job.advance, candidates=rows,
-                    on_skip=lambda: job.advance(True, skipped=True),
-                )
+                with failures.attempt({"imageSearch": job.run_id}):
+                    rebuild_image_embeddings(
+                        ctx, path, force, on_file=job.advance, candidates=rows,
+                        on_skip=lambda: job.advance(True, skipped=True),
+                    )
+                failures.prune(ctx.conn())
         except Exception as e:  # noqa: BLE001 - a crashed pass must still release the job
             job.fail()
             log(f"image-embed-rebuild job crashed: {type(e).__name__}: {e}")

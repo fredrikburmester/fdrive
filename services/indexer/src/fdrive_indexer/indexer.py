@@ -15,15 +15,15 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
 
 import psycopg
 
-from . import db
+from . import db, failures
 from .activity import Operation, RootActivity
 from .chunking import chunk, max_chunks_for
 from .config import Config
+from .diagnostic_log import log as log
 from .embed_backoff import EmbedBackoff, is_backend_outage
 from .events import build_event
 from .extract import Extractor, embed_passages
@@ -32,7 +32,7 @@ from .image_embed import dimension_guard, embed_images, image_embed_health, is_i
 from .paths import ext_of
 from .rules import is_ocr_image_dir, is_text_excluded, should_index_name, should_walk_dir
 from .settings import Settings
-from .thumbs import SIZES, kind_for_ext, within_size_budget
+from .thumbs import SIZES, kind_for_ext, skip_reason, within_size_budget
 from .thumbs import storage_path as thumb_storage_path
 from .thumbs_io import generate as generate_thumbnails
 
@@ -41,10 +41,6 @@ mimetypes.add_type("application/vnd.apple.numbers", ".numbers")
 mimetypes.add_type("application/vnd.apple.keynote", ".key")
 
 _FILE_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-
-
-def log(msg: str) -> None:
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
 
 
 def sha256_of(path: str) -> str:
@@ -308,7 +304,8 @@ def _note_embed_recovery(ctx: RootContext) -> None:
         log(f"[{ctx.name}] embed backend reachable again; resuming embeddings")
 
 
-def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result, known_sha256: str | None = None) -> None:
+def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_result, known_sha256: str | None = None,
+                  only_feature: str | None = None) -> None:
     conn = ctx.conn()
     name = os.path.basename(rel_path)
     ext = ext_of(name)
@@ -319,6 +316,8 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
     from .chunking import is_image, is_textual
 
     features = ctx.feature_configuration().values
+    if only_feature == "textSearch":
+        features = replace(features, semantic_search=False, thumbnails=False, image_search=False)
     if not features.text_search:
         status, text = "disabled:text", None
     elif is_image(ext) and not features.search_ocr:
@@ -332,6 +331,8 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
 
     chars = 0
     error = None
+    semantic_error = None
+    semantic_waiting = False
     if text and status == "indexed":
         chars = len(text)
         limit = max_chunks_for(ext, ctx.cfg.max_chunks_per_file)
@@ -342,6 +343,7 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
             vecs = [None] * len(pieces)
             error = "embed:unavailable"
             status = "partial"
+            semantic_waiting = True
         elif features.semantic_search:
             try:
                 vecs = list(embed_passages(pieces, ctx.cfg.embed_url, ctx.cfg.embed_batch))
@@ -349,9 +351,11 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
             except Exception as e:  # noqa: BLE001 - keep text searchable via FTS, retry embeddings next scan
                 if is_backend_outage(e):
                     _note_embed_outage(ctx, e)
+                    semantic_waiting = True
                 else:
                     log(f"embed failed for {rel_path}: {e}")
                 vecs = [None] * len(pieces)
+                semantic_error = failures.describe(e)
                 error = f"embed:{type(e).__name__}"
                 status = "partial"
         else:
@@ -369,22 +373,60 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
 
     db.update_file_status(conn, file_id, status, chars, error)
 
+    if features.text_search:
+        failures.report(ctx, rel_path, "textSearch", log, error if status == "error" else None,
+                        skipped=status in ("excluded", "none") or status.startswith("disabled:"))
+    if features.semantic_search:
+        failures.report(ctx, rel_path, "semanticSearch", log,
+                        semantic_error if status == "partial" and error != "embed:unavailable" else None,
+                        skipped=semantic_waiting or not text)
+
     if features.internal_thumbnails:
-        try:
-            thumbs = generate_thumbnails(abs_path, ext, sha, st.st_size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes, log=log)
-            for size, rel_thumb_path, width, height in thumbs:
-                db.upsert_thumbnail(conn, sha, size, rel_thumb_path, width, height)
-        except Exception as e:  # noqa: BLE001 - thumbnails never fail the file
-            log(f"thumb: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
-
-    if features.image_search and is_image_candidate(ext):
-        try:
-            embed_thumbnail(ctx, sha)
-        except Exception as e:  # noqa: BLE001 - image embedding never fails the file
-            log(f"image embed: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
+        process_thumbnails(ctx, abs_path, rel_path, ext, sha, st.st_size)
+    if features.image_search and is_image_candidate(ext) and skip_reason(st.st_size, ctx.cfg.thumb_max_bytes) is None:
+        process_image_embedding(ctx, rel_path, sha)
 
 
-def embed_thumbnail(ctx: RootContext, sha256: str) -> bool:
+def process_thumbnails(ctx: RootContext, abs_path: str, rel_path: str, ext: str, sha: str, size: int,
+                       force: bool = False) -> tuple[bool, bool]:
+    reason = skip_reason(size, ctx.cfg.thumb_max_bytes)
+    if kind_for_ext(ext) is None or reason is not None:
+        if reason is not None:
+            log(f"thumb: skip {rel_path}: {reason}")
+        failures.report(ctx, rel_path, "thumbnails", log, skipped=True)
+        return True, True
+    errors: list[str] = []
+    try:
+        thumbs = generate_thumbnails(abs_path, ext, sha, size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes,
+                                     force=force, log=log, on_error=errors.append)
+        for out_size, rel_thumb_path, width, height in thumbs:
+            db.upsert_thumbnail(ctx.conn(), sha, out_size, rel_thumb_path, width, height)
+        if {thumb[0] for thumb in thumbs} != set(SIZES) and not errors:
+            errors.append(f"Incomplete thumbnail: {len(thumbs)}/{len(SIZES)} sizes available")
+    except Exception as exc:  # noqa: BLE001 - keep unrelated processing available
+        errors.append(failures.describe(exc))
+        log(f"thumb: unexpected failure for {rel_path}: {errors[-1]}")
+    failures.report(ctx, rel_path, "thumbnails", log, errors[0] if errors else None)
+    return not errors, False
+
+
+def process_image_embedding(ctx: RootContext, rel_path: str, sha: str) -> bool:
+    errors: list[str] = []
+    try:
+        ok = embed_thumbnail(ctx, sha, on_error=errors.append)
+        waiting = not ok and (ctx.image_embed_backoff.paused() or not ctx.cfg.image_embed_url)
+        if not ok and not errors and not waiting:
+            errors.append("Thumbnail unavailable: generate a preview before retrying image search")
+        failures.report(ctx, rel_path, "imageSearch", log, errors[0] if errors else None, skipped=waiting)
+        return ok or waiting
+    except Exception as exc:  # noqa: BLE001
+        reason = failures.describe(exc)
+        log(f"image embed: unexpected failure for {rel_path}: {reason}")
+        failures.report(ctx, rel_path, "imageSearch", log, reason)
+        return False
+
+
+def embed_thumbnail(ctx: RootContext, sha256: str, on_error: Callable[[str], None] | None = None) -> bool:
     """Embeds a file's 256px thumbnail through the image-embed sidecar and
     upserts the vector under `sha256`, unless it already has a row for the
     currently configured model. A no-op when `IMAGE_EMBED_URL` is not
@@ -418,6 +460,8 @@ def embed_thumbnail(ctx: RootContext, sha256: str) -> bool:
         return False
     except OSError as e:
         log(f"image embed: cannot read thumbnail {thumb_path}: {type(e).__name__}: {e}")
+        if on_error is not None:
+            on_error(failures.describe(e))
         return False
 
     try:
@@ -449,21 +493,9 @@ def backfill_media(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_r
     sha = db.file_content_key(ctx.conn(), ctx.root_id, rel_path)
     if sha is None:
         return False
-    ok = True
-    if kind_for_ext(ext) is not None and within_size_budget(st.st_size, ctx.cfg.thumb_max_bytes):
-        try:
-            thumbs = generate_thumbnails(abs_path, ext, sha, st.st_size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes, log=log)
-            for size, rel_thumb_path, width, height in thumbs:
-                db.upsert_thumbnail(ctx.conn(), sha, size, rel_thumb_path, width, height)
-        except Exception as e:  # noqa: BLE001
-            log(f"thumb backfill: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
-            ok = False
-    if features.image_search and is_image_candidate(ext):
-        try:
-            ok = embed_thumbnail(ctx, sha) and ok
-        except Exception as e:  # noqa: BLE001
-            log(f"image embed backfill: unexpected failure for {rel_path}: {type(e).__name__}: {e}")
-            ok = False
+    ok, skipped = process_thumbnails(ctx, abs_path, rel_path, ext, sha, st.st_size)
+    if features.image_search and is_image_candidate(ext) and not skipped:
+        ok = process_image_embedding(ctx, rel_path, sha) and ok
     return ok
 
 
@@ -497,7 +529,7 @@ def media_derivatives_missing(ctx: RootContext, rel_path: str, size_bytes: int, 
     )
 
 
-def embed_missing(ctx: RootContext, rel_path: str) -> bool:
+def embed_missing(ctx: RootContext, rel_path: str, *, expected_sha: str | None = None) -> bool:
     """Fill in embeddings for a file whose text is already chunked (status 'partial').
 
     Returns False when the embed backend is down, so the caller neither logs nor
@@ -511,18 +543,22 @@ def embed_missing(ctx: RootContext, rel_path: str) -> bool:
         if ctx.embed_backoff.paused():
             return False
         conn = ctx.conn()
+        if expected_sha is not None and db.file_content_key(conn, ctx.root_id, rel_path) != expected_sha:
+            raise ValueError("Source changed or is no longer indexed. Reindex its text before retrying semantic search.")
         rows = db.chunks_missing_embeddings(conn, ctx.root_id, rel_path)
         if rows:
             try:
                 vecs = embed_passages([t for _, t in rows], ctx.cfg.embed_url, ctx.cfg.embed_batch)
             except Exception as e:  # noqa: BLE001 - an absent backend is a service condition, not this file's error
                 if not is_backend_outage(e):
+                    failures.report(ctx, rel_path, "semanticSearch", log, failures.describe(e))
                     raise
                 _note_embed_outage(ctx, e)
                 return False
             _note_embed_recovery(ctx)
             db.set_chunk_embeddings(conn, [(cid, v) for (cid, _), v in zip(rows, vecs, strict=True)])
         db.mark_file_indexed(conn, ctx.root_id, rel_path)
+        failures.report(ctx, rel_path, "semanticSearch", log)
         return True
 
 
@@ -533,6 +569,8 @@ def safe_process(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_res
         return "indexed" if process_file(ctx, abs_path, rel_path, st) else "unchanged"
     except Exception as e:  # noqa: BLE001
         log(f"ERROR {rel_path}: {type(e).__name__}: {e}")
+        for feature in work_features(ctx.feature_configuration().values, ext_of(rel_path)):
+            failures.report(ctx, rel_path, feature, log, failures.describe(e))
         try:
             db.mark_file_error(ctx.conn(), ctx.root_id, rel_path, f"{type(e).__name__}: {str(e)[:300]}")
         except Exception:  # noqa: BLE001
@@ -572,7 +610,9 @@ def watch_index(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_resu
     ctx.maybe_refresh_features()
     if not ctx.feature_configuration().values.indexer_enabled:
         return "disabled"
-    return safe_process(ctx, abs_path, rel_path, st)
+    with failures.attempt() as observation:
+        result = safe_process(ctx, abs_path, rel_path, st)
+        return failures.FileResult(result, observation.outcomes)
 
 
 def watch_mark_deleted(ctx: RootContext, rel_path: str, is_dir: bool) -> int:
@@ -608,7 +648,7 @@ def start_watcher(ctx: RootContext, workers: int, debounce: float) -> object | N
         def queued(abs_path: str) -> Callable[[str], None]:
             configuration = ctx.feature_configuration()
             operations = ctx.activity.start_watch(work_features(configuration.values, ext_of(abs_path)), configuration.revision)
-            return lambda result: ctx.activity.finish_watch(operations, result != "error")
+            return lambda result: ctx.activity.finish_watch(operations, result != "error", getattr(result, "outcomes", None))
 
         w = Watcher(
             ctx.abs_path,
@@ -635,7 +675,8 @@ def scan_once(ctx: RootContext) -> dict[str, int]:
     outcome = "failed"
     try:
         result = _scan_once(ctx, operations)
-        outcome = "failed" if result["errors"] else "completed"
+        # Root/discovery errors have no file-stage outcome to carry the failure.
+        outcome = "failed" if result["errors"] and not any(op.errors for op in operations.values()) else "completed"
         return result
     finally:
         enabled = ctx.feature_configuration().values.as_json()
@@ -693,19 +734,31 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
             if result == "unchanged":
                 return media_ok
             ok = result == "indexed"
-        with lock:
-            counters["changed" if ok else "errors"] += 1
+        if ok:
+            with lock:
+                counters["changed"] += 1
         return ok and media_ok
 
     def tracked_job(
         abs_path: str, rel_path: str, st: os.stat_result, tracked: list[Operation], embed_only: bool, media_only: bool
     ) -> None:
-        ok = False
-        try:
-            ok = job(abs_path, rel_path, st, embed_only, media_only)
-        finally:
-            for operation in tracked:
-                operation.advance(ok)
+        with failures.attempt({op.features[0]: op.id for op in tracked}) as observation:
+            job_ok = False
+            try:
+                job_ok = job(abs_path, rel_path, st, embed_only, media_only)
+            except Exception as exc:
+                for op in tracked:
+                    feature = op.features[0]
+                    if feature not in observation.outcomes:
+                        failures.report(ctx, rel_path, feature, log, failures.describe(exc))
+                raise
+            finally:
+                if not job_ok or any(not ok for ok, _skipped in observation.outcomes.values()):
+                    with lock:
+                        counters["errors"] += 1
+                for operation in tracked:
+                    ok, skipped = observation.outcomes.get(operation.features[0], (True, True))
+                    operation.advance(ok, skipped)
 
     def submit(pool: ThreadPoolExecutor, abs_path: str, rel_path: str, st: os.stat_result,
                embed_only: bool = False, media_only: bool = False) -> Future[None]:
@@ -760,11 +813,14 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
         for f in pending:
             f.result()
 
+    # A worker can observe disablement after traversal has already finished.
+    traversal_complete = traversal_complete and ctx.feature_configuration().values.indexer_enabled
     deleted = db.sweep_vanished(conn, ctx.root_id, seen, started) if traversal_complete else 0
     if traversal_complete and ctx.needs_media_backfill() and not media_backfill_errors:
         ctx.finish_media_backfill()
     db.finish_scan(conn, scan_id, n, counters["changed"], deleted, counters["errors"])
     db.prune_events(conn, ctx.cfg.events_retention_days)
+    failures.prune(conn)
     log(
         f"[{ctx.name}] scan done: {n} files, {counters['changed']} (re)indexed, {deleted} deleted, "
         f"{counters['errors']} errors, {time.time() - t0:.0f}s"

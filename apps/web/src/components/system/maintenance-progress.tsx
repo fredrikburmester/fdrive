@@ -29,7 +29,14 @@ export function MaintenanceProgress({
                 : "Completed"}{" "}
           · {job.processed.toLocaleString()}
           {job.running && job.totalKnown === false ? "" : ` of ${job.total.toLocaleString()}`}{" "}
-          processed · {job.errors.toLocaleString()} errors
+          processed ·{" "}
+          {job.errors > 0 ? (
+            <a className="underline" href="#processing-failures">
+              {job.errors.toLocaleString()} errors
+            </a>
+          ) : (
+            "0 errors"
+          )}
         </p>
       </CardContent>
     </Card>

@@ -48,6 +48,13 @@ import {
   SystemOfficeResponse,
 } from "./office.ts";
 import {
+  type ProcessingFailuresQuery,
+  ProcessingFailuresResponse,
+  type ProcessingFeature,
+  type RetryProcessingFailuresRequest,
+  RetryProcessingFailuresResponse,
+} from "./processing-failures.ts";
+import {
   AdminProvider,
   type AdminProviderCreateRequest,
   AdminProvidersResponse,
@@ -282,6 +289,14 @@ export interface ApiClient {
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
   systemActivity(): Promise<SystemActivityResponse>;
+  processingFailures(
+    feature: ProcessingFeature,
+    query?: Partial<ProcessingFailuresQuery>,
+  ): Promise<ProcessingFailuresResponse>;
+  retryProcessingFailures(
+    feature: ProcessingFeature,
+    request?: RetryProcessingFailuresRequest,
+  ): Promise<RetryProcessingFailuresResponse>;
   systemIndexer(): Promise<SystemIndexerResponse>;
   systemUpdateIndexerSettings(
     settings: IndexerSettingsUpdateRequest,
@@ -880,6 +895,24 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     systemRebuildThumbnails(): Promise<IndexerThumbnailsRebuildResponse> {
       return post(ROUTES.system.thumbnailsRebuild, IndexerThumbnailsRebuildResponse);
+    },
+
+    processingFailures(feature, query = {}) {
+      return get(`/api/v1/system/processing-failures/${feature}`, ProcessingFailuresResponse, {
+        query: {
+          status: query.status,
+          code: query.code,
+          before: query.before === undefined ? undefined : String(query.before),
+          limit: query.limit === undefined ? undefined : String(query.limit),
+        },
+      });
+    },
+    retryProcessingFailures(feature, request = {}) {
+      return post(
+        `/api/v1/system/processing-failures/${feature}/retry`,
+        RetryProcessingFailuresResponse,
+        { jsonBody: request },
+      );
     },
 
     systemLogs(subsystem, query = {}) {

@@ -131,6 +131,16 @@ indexing or account-specific search results; still verify those after deployment
 - **Postgres restarts:** the indexer, OCR worker and API reopen their database connections when postgres goes away, for example after `docker compose up -d --force-recreate db`. While the database is down the indexer's `/health` returns 500 and its container reports unhealthy; both recover on the next probe after postgres accepts connections. No container needs to be restarted by hand.
 - **Health Check Endpoint**: `GET /api/v1/health` is an unauthenticated JSON endpoint returning status (`configured`, `not_configured`, `unreachable`, `failed`) for all services. `failed` means the worker is down and its controller reports why, with the controller's reason in `detail` (for example `worker exceeded bounded startup retries`), so a worker the controller gave up on is distinguishable from a network problem. The same reason appears in the feature's detail line on **System > Features**.
 - **Web UI Diagnostics**: Administrators can view real-time health, queue depths, and error logs for all components in the **System** section of the sidebar.
+- **Processing failures**: Thumbnails, Full-text search, Semantic search and Image search
+  retain per-file causes in PostgreSQL. **View failures** groups causes, shows paths and
+  attempts, and retries unresolved files. Details remain readable with the indexer stopped.
+  Unresolved records are retained; resolved history is limited to 30 days / 10,000 records.
+- **Indexer diagnostic retention**: `fdrive-indexer-logs` is a persistent Compose volume
+  mounted at `/logs`, initialized for `FDRIVE_INDEX_UID`. `indexer.log` plus four rotated
+  files retain up to 50 MiB through restarts and container replacement. Read the current
+  file with `docker compose exec indexer tail -n 200 /logs/indexer.log`. Normal updates
+  preserve the volume; explicitly removing volumes removes this raw log history. Older
+  lost logs cannot be reconstructed.
 
 ---
 

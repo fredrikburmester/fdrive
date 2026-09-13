@@ -138,6 +138,39 @@ export const schemaVersion = idxSchema.table("schema_version", {
   version: integer("version").primaryKey(),
 });
 
+/** Current unresolved failures plus bounded resolved history, written by processing workers. */
+export const processingFailures = idxSchema.table(
+  "processing_failures",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    feature: text("feature").notNull(),
+    code: text("code").notNull(),
+    message: text("message").notNull(),
+    operationId: text("operation_id").notNull(),
+    attempts: integer("attempts").notNull().default(1),
+    firstFailedAt: timestamp("first_failed_at", { withTimezone: true }).notNull().defaultNow(),
+    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    unique("processing_failures_root_path_feature_unique").on(
+      table.rootId,
+      table.path,
+      table.feature,
+    ),
+    index("processing_failures_feature_resolved_id_idx").on(
+      table.feature,
+      table.resolvedAt,
+      table.id.desc(),
+    ),
+    index("processing_failures_resolved_idx").on(table.resolvedAt),
+  ],
+);
+
 export const ocrLog = idxSchema.table(
   "ocr_log",
   {

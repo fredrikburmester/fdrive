@@ -46,10 +46,32 @@ Normal scans currently mark every participating feature active for the entire ro
 including discovery and the final wait for other workers. A feature's counter can therefore
 pause while its spinner continues. Discovery interleaves traversal and bounded processing;
 "Discovering files" does not mean no files are being processed yet. Counts track handled
-file attempts, not newly stored thumbnails or embeddings, and one file job's result is
-shared by its participating feature counters. These are coarse scan indicators, not proof
+file attempts, not newly stored thumbnails or embeddings. Each feature counts its own
+stage outcome: an image embedding failure does not increment thumbnail errors. Skipped
+formats and backend backoff do not count as failures. These are scan indicators, not proof
 that each feature is producing output at that moment. Failed or missing derivatives can
 be retried on later scans; the normal interval defaults to 15 minutes after completion.
+
+## Persistent failure details
+
+Thumbnails, Full-text search, Semantic search and Image search show an unresolved file
+count and a **View failures** sheet. Causes, root-relative paths, attempt counts, timestamps
+and operation IDs are stored in PostgreSQL (`idx.processing_failures`), independently of
+worker uptime. The corresponding **Logs** sheet also includes these records. Activity
+counts describe a run's attempts; the durable count describes files awaiting recovery.
+
+Successful processing resolves a record; repeated failures update the same root/path/feature
+record. Recurrence starts a new attempt count. All unresolved records remain; resolved
+history is pruned after 30 days and capped at 10,000 records. Deleted files resolve their
+records during pruning. Details lost before this feature was installed cannot be recovered.
+
+Admin-only `GET /api/v1/system/processing-failures/:feature` supports `status`, `code`,
+`limit` and an ID-based `before` cursor. Reads do not call workers and remain available
+when a feature is off. `POST .../:feature/retry` accepts `{}` for all unresolved files or
+`{"id": number}` for one. Retries share maintenance admission, preserve a fixed inventory
+on temporary disk, recheck enablement, reject symlink escapes and retry only that feature.
+Changed originals need text reindexing before semantic retry. Successful retries move to
+resolved history; interruption or dependency waiting leaves the issue unresolved.
 
 ## Percentages
 
