@@ -612,13 +612,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             <ToggleGroupItem value="all">All linked logins</ToggleGroupItem>
           </ToggleGroup>
         ) : null}
-        <div
-          className={
-            mobileLayout
-              ? "flex flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-border px-2 py-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-              : "flex flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5"
-          }
-        >
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-2 py-1.5">
           <span className="shrink-0 text-xs text-muted-foreground">File type:</span>
           <ToggleGroup
             value={[chips.type]}
@@ -630,7 +624,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             }
             size="sm"
             aria-label="File type"
-            className={mobileLayout ? "shrink-0" : undefined}
+            className="max-w-full flex-wrap"
           >
             {SEARCH_TYPE_FILTERS.map((type) => (
               <ToggleGroupItem key={type} value={type} aria-label={SEARCH_TYPE_LABELS[type]}>
@@ -645,7 +639,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             onPressedChange={(pressed) =>
               setChips((current) => ({ ...current, folderOnly: pressed }))
             }
-            className={mobileLayout ? "shrink-0" : undefined}
           >
             This folder only
           </Toggle>
