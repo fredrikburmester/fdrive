@@ -13,9 +13,9 @@ not current instructions.
   GitHub secrets are configured. GitHub Actions is disabled at the owner's request because
   hosted CI costs too much; do not re-enable without explicit approval. Default tokens remain
   read-only and bot PR approval remains disabled. The Developer API key is validated by Apple.
-- Local 0.1.0 build 3: Developer ID archive/export, app and DMG notarization, stapling and
-  Gatekeeper checks pass (`step.eko9Hf`). DMG/checksum/manifest are under
-  `.fdrive-workflow/release-0.1.0-icon/artifacts`. Xcode profile lookup now preserves Apple's UUID
+- Local 0.1.0 build 4: Developer ID archive/export, app and DMG notarization, stapling and
+  Gatekeeper checks pass (`step.TA10YZ`). DMG/checksum/manifest are under
+  `.fdrive-workflow/release-0.1.0-window/artifacts`. Xcode profile lookup now preserves Apple's UUID
   casing; the regression test covers it. Six release tests, actionlint, unsigned Release
   archive and 18 Swift tests/native build passed. Hosted release and Homebrew installation
   remain pending; no release or server deployment. Cask publication provides a comparison
@@ -24,8 +24,11 @@ not current instructions.
   `/Applications/FDrive.app` is installed and launched; the existing Finder location survives.
   The notarized installer is also in Downloads. The app and menu bar reuse the web FD icon;
   native sizes are generated from the shared SVG. Bundle IDs and shared storage remain stable.
-  The latest user screenshot reaches the production browser approval screen, superseding
-  the earlier missing desktop routes. Completed production pairing/download remains unverified.
+  Live app/Finder inspection now confirms the production connection and root folder listing.
+  Production file downloads remain unverified. FDrive appears in the Dock/Command-Tab while
+  its window is open or minimized; closing returns the same process to background-agent mode.
+  Reopening from Applications restores foreground mode; Command-Tab away/back was exercised.
+  The window observer leaves SwiftUI delegates and background refresh intact.
   [Provider naming follow-up](../plans/PROVIDER-NAMES.md) is planned for another session;
   existing rename support, setup naming and native rename propagation are documented there.
 - Hosted CI run 34772703133 passed lint/typecheck but one existing web search-panel test
