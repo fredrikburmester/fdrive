@@ -24,7 +24,10 @@ def validate_profile(profile, team, identifier, certificate_sha1=None):
         hashlib.sha1(cert).hexdigest().upper() for cert in profile.get("DeveloperCertificates", [])
     }:
         raise ValueError("Profile does not authorize the selected signing certificate")
-    return str(uuid.UUID(profile["UUID"])).upper()
+    profile_id = profile["UUID"]
+    uuid.UUID(profile_id)
+    # Xcode matches the profile specifier case-sensitively; preserve Apple's UUID.
+    return profile_id
 
 
 def install_profile(path, team, identifier, certificate_sha1=None):

@@ -8,9 +8,6 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
 
 - Complete the first [automated release](../MACOS-RELEASE.md), install its DMG and verify its
   Homebrew cask against the private GitHub asset endpoint and the public URL after publication.
-- Produce a Developer ID Application signed Release archive, notarize and staple it.
-  Local Apple Development signing is verified; no Developer ID Application identity was
-  available during implementation. An unsigned CI build does not satisfy this gate.
 - Install on a second Mac or fresh account, enable the extension, connect two identities,
   browse/open, disconnect one and manually upgrade while retaining the other domain and IDs.
 - Rehearse reboot, extension termination during transfer, crash-temp cleanup and rollback

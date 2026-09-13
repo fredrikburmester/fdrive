@@ -7,16 +7,18 @@ not current instructions.
 
 ## Native macOS Finder app: development preview
 
-- Release setup in `/private/tmp/fdrive-macos-release`, branch `codex/macos-release`.
-  Signed/notarized DMG workflow, private/public Homebrew cask publication and local credential
-  setup implemented. Six release regression tests, actionlint, unsigned Release archive and
-  native Swift/app/extension verification pass. Fredrik Burmester (MWD5K362T8) Developer ID
-  identity is installed locally; encrypted certificate/password secrets are configured in
-  `fredrikburmester/fdrive-web`. Both explicit App IDs and Developer ID profiles are created.
-  The one-time API key and profile downloads are not available locally yet; their three
-  secrets, real signed/notarized packaging, hosted release and Homebrew installation remain
-  pending. No release or server deployment. Cask publication preserves repository-wide
-  Actions permissions and provides a comparison link if bot PR creation is disabled.
+- Release setup: [PR #20](https://github.com/fredrikburmester/fdrive-web/pull/20),
+  `/private/tmp/fdrive-macos-release`, branch `codex/macos-release`.
+  Fredrik Burmester (MWD5K362T8) Developer ID identity, both profiles and all five encrypted
+  GitHub secrets are configured. GitHub Actions is enabled; default tokens remain read-only
+  and bot PR approval remains disabled. The supplied Developer API key is validated by Apple.
+- Local 0.1.0 build 1: Developer ID archive/export, app and DMG notarization, stapling and
+  Gatekeeper checks pass (`step.BwFzEQ`). DMG/checksum/manifest are under
+  `.fdrive-workflow/release-0.1.0-r2/artifacts`. Xcode profile lookup now preserves Apple's UUID
+  casing; the regression test covers it. Six release tests, actionlint, unsigned Release
+  archive and 18 Swift tests/native build passed. Hosted release and Homebrew installation
+  remain pending; no release or server deployment. Cask publication provides a comparison
+  link when repository policy blocks bot-created PRs.
 - PR #19 review fixes: `/private/tmp/fdrive-pr19-fixes`, `codex/pr19-review-fixes`.
   Partial refreshes notify Finder and continue across failed folders/files; disconnect revokes
   its credential without storage access; pairing admission groups IPv6 callers by /64.
@@ -43,7 +45,7 @@ not current instructions.
   (`step.s8cmQW`, `step.uiPUV5`). Real composed API integration covers PostgreSQL/SFTPGo/Apache DAV.
 - Integrated diff reviewed. Disconnecting the temporary DAV location removed its domain while
   the original SFTPGo location remained usable after app restart. Its local demo remains running.
-- [Remaining beta qualification](../plans/MACOS-APP.md): Developer ID/notarization, second-Mac
+- [Remaining beta qualification](../plans/MACOS-APP.md): hosted release/Homebrew, second-Mac
   install/upgrade, broader editors/offline/low-disk/cancellation/reboot matrix and tuning the
   cost of hashing downloaded files on each refresh. No release or production deployment.
 
