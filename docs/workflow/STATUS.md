@@ -24,8 +24,10 @@ not current instructions.
   `/Applications/FDrive.app` is installed and launched; the existing Finder location survives.
   The notarized installer is also in Downloads. The app and menu bar reuse the web FD icon;
   native sizes are generated from the shared SVG. Bundle IDs and shared storage remain stable.
-  `files.fdrive.se` returns an authentication error before browser pairing; its desktop API
-  exposure/deployment still needs investigation. No server changes were made.
+  The latest user screenshot reaches the production browser approval screen, superseding
+  the earlier missing desktop routes. Completed production pairing/download remains unverified.
+  [Provider naming follow-up](../plans/PROVIDER-NAMES.md) is planned for another session;
+  existing rename support, setup naming and native rename propagation are documented there.
 - Hosted CI run 34772703133 passed lint/typecheck but one existing web search-panel test
   failed waiting for `same.txt` (1835 other web tests passed). Native distribution checks pass;
   that exact test passes locally with one worker. The subsequent hosted run 34773480985
