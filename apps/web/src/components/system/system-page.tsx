@@ -14,7 +14,7 @@ export interface SystemPageProps {
   description: string;
   /** When the data behind this page was last fetched. `null` while loading. */
   lastUpdated: Date | null;
-  /** Right-aligned page-specific controls (Reindex, Run now, Rebuild, ...). */
+  /** Page-specific controls; wrap below the heading on narrow screens. */
   actions?: ReactNode;
   /**
    * The feature (or features) whose processing this page administers. The
@@ -58,19 +58,23 @@ export function SystemPage({
   return (
     <>
       <PageHeader breadcrumbs={<span className="text-sm font-medium">System / {title}</span>} />
-      <div className="flex flex-1 flex-col gap-6 p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+      <div className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6">
+        <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
             <p className="text-sm text-muted-foreground">{description}</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 max-w-full flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             {lastUpdated !== null ? (
-              <span className="text-xs text-muted-foreground">
+              <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                 Last updated {formatRelativeTime(lastUpdated, new Date())}
               </span>
             ) : null}
-            {disabled ? null : actions}
+            {disabled || !actions ? null : (
+              <div className="flex max-w-full flex-wrap items-center gap-2 [&>button]:min-h-11 sm:[&>button]:min-h-0">
+                {actions}
+              </div>
+            )}
           </div>
         </div>
         {failureFeature ? (
