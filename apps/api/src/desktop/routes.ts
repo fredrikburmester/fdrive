@@ -87,8 +87,8 @@ export function registerDesktopRoutes(
     return c.json(await files.versions(auth.principal, body.paths, c.req.raw.signal));
   });
   groups.public.post(`${base}/disconnect`, async (c) => {
-    const auth = await principal(c);
-    await pairing.revoke(auth.bearer, auth.principal);
+    c.header("Cache-Control", "no-store");
+    await pairing.revoke(c.req.header("authorization")?.replace(/^Bearer /, "") ?? "");
     return c.json({ ok: true });
   });
 }

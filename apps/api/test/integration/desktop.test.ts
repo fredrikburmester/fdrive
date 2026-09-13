@@ -158,6 +158,21 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
         })
       ).text(),
     ).toBe("delta");
+    // Environment admin rights belong to the original SFTPGo login, not the linked DAV login.
+    expect(
+      (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
+        .status,
+    ).toBe(200);
+    const disabled = await composed.app.request(`/api/v1/admin/providers/${provider.id}`, {
+      method: "PATCH",
+      headers: { cookie, "x-requested-with": "fdrive", "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(disabled.status).toBe(200);
+    const desktopHeaders = { authorization: `Bearer ${b.token}`, cookie: "" };
+    expect((await request(`${DESKTOP_API}/location`, undefined, desktopHeaders)).status).toBe(502);
+    expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(200);
+    expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(401);
   } finally {
     await composed.close();
     await dav.stop();

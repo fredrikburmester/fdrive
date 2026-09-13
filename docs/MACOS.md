@@ -30,6 +30,10 @@ The menu-bar app refreshes browsed folders and materialized files every 60 secon
 after pairing and on manual Refresh. Failures back off to 15 minutes independently per
 location. Closing the window keeps it running; Quit stops proactive refresh. Launch at login
 is optional. The system can invoke the extension independently to browse/download.
+An unreadable folder retains its last complete snapshot while other folders refresh. Completed
+changes reach Finder even when another listing or content validation fails; the failure still
+appears in the location status. A validation batch containing a missing or unreadable file
+retries files individually; server outages retain the normal batching and backoff.
 
 Previously listed folders can show their cached listing offline. Downloaded files can reopen
 while macOS retains their local copy. Unvisited folders and uncached files require the server.
@@ -109,15 +113,17 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 
 Desktop tokens use `fdd_`, distinct from MCP's `fdr_`; neither audience accepts the other.
 Tokens have identity-root read grants and expire after 365 days. Only hashes are persisted
-server-side. Every native request resolves token expiry/revocation, account ownership and
+server-side. Native read requests resolve token expiry/revocation, account ownership and
 the current provider binding. Neither a cursor nor a local item ID grants access. The native
 client refuses redirects, cookies and non-loopback HTTP, and never puts bearer secrets in URLs.
 Existing upstream OTP/reauthentication requirements still apply.
+Disconnect validates possession of the desktop secret and revokes only that token's hash;
+it works after provider disablement or token expiry without resolving storage credentials.
 
 Pairing state is in memory: server restart cancels pending pairing. Limits are eight requests
-per IP and 512 per process. One shared issuance promise handles concurrent poll retries;
-partial issuance rolls back. Snapshot cursors bind identity, bearer and path, expire after
-120 seconds and hold at most 100,000 entries; at most 32 unfinished snapshots exist per API
+per IPv4 address or IPv6 /64 and 512 per process. One shared issuance promise handles
+concurrent poll retries; partial issuance rolls back. Snapshot cursors bind identity, bearer
+and path, expire after 120 seconds and hold at most 100,000 entries; at most 32 unfinished snapshots exist per API
 process. Pages contain 500 entries. Provider-specific limits can be lower. Overflow/errors
 fail visibly instead of truncating a folder. Multi-process deployments need sticky routing
 for pairing and listing snapshots or a shared transient store.

@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import { ApiHttpError } from "../errors.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { createDesktopFiles } from "./files.js";
@@ -243,6 +244,66 @@ it("requires the app secret, cancels issued credentials, expires pending request
   expect(() => f.pairing.create("Mac", "owner")).toThrow("Too many");
   for (let i = 8; i < 512; i++) f.pairing.create("Mac", String(i));
   expect(() => f.pairing.create("Mac", "new")).toThrow("Too many");
+});
+
+it("revokes only the supplied desktop credential without resolving disabled storage", async () => {
+  const f = await fixture();
+  const pair = f.pairing.create("Mac", "owner");
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id, f.second.id]);
+  const result = await f.pairing.poll(pair.id, pair.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  const credential = result.credentials[0];
+  const other = result.credentials[1];
+  if (!credential || !other) throw new Error("Expected two locations");
+  const mcp = await createTokenService(f.deps).create(f.account.id, { name: "MCP" });
+  await f.repos.providers.update(f.provider.id, { enabled: false });
+  f.deps.storageFactory.mockClear();
+  f.deps.storageFactory.mockRejectedValue(
+    new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
+  );
+  for (const token of ["", mcp.token, mcp.token.replace("fdr_", "fdd_")]) {
+    expect((await f.request("/disconnect", {}, { authorization: `Bearer ${token}` })).status).toBe(
+      401,
+    );
+  }
+  const response = await f.request(
+    "/disconnect",
+    {},
+    {
+      authorization: `Bearer ${credential.token}`,
+    },
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(
+    (await f.repos.apiTokens.listByAccount(f.account.id)).map((token) => token.id).sort(),
+  ).toEqual([other.tokenId, mcp.item.id].sort());
+  expect(f.deps.storageFactory).not.toHaveBeenCalled();
+  // Expiration should not prevent cleanup of a credential whose hash is still stored.
+  f.advance(366 * 86_400_000);
+  expect(
+    (await f.request("/disconnect", {}, { authorization: `Bearer ${other.token}` })).status,
+  ).toBe(200);
+});
+
+it("bounds one IPv6 subscriber to eight pairing slots and preserves admission for others", async () => {
+  const f = await fixture();
+  let admitted = 0;
+  for (let address = 1; address <= 64; address++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        f.pairing.create("Mac", `2001:db8:1234:5678::${address.toString(16)}`);
+        admitted++;
+      } catch (error) {
+        expect(error).toMatchObject({ kind: "rate_limited" });
+      }
+    }
+  }
+  expect(admitted).toBe(8);
+  expect(() => f.pairing.create("Other IPv6 Mac", "2001:db8:1234:5679::1")).not.toThrow();
+  expect(() => f.pairing.create("IPv4 Mac", "203.0.113.9")).not.toThrow();
+  f.advance(300_000);
+  expect(() => f.pairing.create("Mac", "2001:db8:1234:5678::1")).not.toThrow();
 });
 
 it("rolls back partial issuance and rejects ownership changes during pairing", async () => {

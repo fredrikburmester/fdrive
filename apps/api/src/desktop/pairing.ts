@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DesktopCredential } from "@fdrive/contracts";
 import type { ApiTokenRepo, IdentityRepo, ProviderRepo } from "@fdrive/db";
+import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
@@ -103,7 +104,8 @@ export function createDesktopPairing(deps: DesktopDeps) {
   return {
     resolve,
     location,
-    create(deviceName: string, owner: string) {
+    create(deviceName: string, address: string) {
+      const owner = addressBlock(address);
       prune();
       if (
         pairs.size >= 512 ||
@@ -166,9 +168,14 @@ export function createDesktopPairing(deps: DesktopDeps) {
         );
       }
     },
-    async revoke(bearer: string, principal: Principal) {
+    async revoke(bearer: string) {
+      // Possession of this desktop secret authorizes only its own revocation. Do not
+      // require working storage, a linked identity, or an unexpired read grant to disconnect.
+      if (!looksLikeDesktopToken(bearer))
+        throw new ApiHttpError("unauthorized", "Invalid desktop credential");
       const token = await deps.apiTokens.findByHash(hashApiToken(bearer));
-      if (token) await tokens.revoke(token.id, principal.accountId);
+      if (!token) throw new ApiHttpError("unauthorized", "Invalid desktop credential");
+      await tokens.revoke(token.id, token.accountId);
     },
   };
 }

@@ -231,30 +231,14 @@ final class AppModel: ObservableObject {
                 _ = try await client.location()
                 let catalog = try store.catalog(saved)
                 status[saved.id] = "Refreshing"
-                for folder in try await catalog.folders() {
-                    do {
-                        let listing = try await catalog.beginListing(folder)
-                        let entries = try await client.list(folder)
-                        try Task.checkCancellation()
-                        try await catalog.reconcile(entries, folder: folder, listing: listing)
-                    }
-                    catch DriveError.missing { continue } // Parent reconciliation removes known descendants.
-                }
-                let cachedItems = try await catalog.all().filter { $0.materialized && $0.entry.kind == "file" }
-                let expected = Dictionary(uniqueKeysWithValues: cachedItems.map { ($0.entry.path, $0.contentVersion) })
-                let materialized = cachedItems.map { $0.entry.path }
-                for start in stride(from: 0, to: materialized.count, by: 16) {
-                    let paths = Array(materialized[start..<min(start + 16, materialized.count)])
-                    let versions = try await client.versions(paths)
-                    try Task.checkCancellation()
-                    try await catalog.validate(versions, expecting: expected)
-                }
-                let domain = NSFileProviderDomain(identifier: .init(saved.id), displayName: saved.title)
-                if let manager = NSFileProviderManager(for: domain) {
-                    try await manager.signalEnumerator(for: .workingSet)
-                    for folder in try await catalog.folders() {
-                        let item = try await catalog.itemAt(folder)
-                        try await manager.signalEnumerator(for: NativeEnvironment.id(item.id))
+                try await refreshCatalog(catalog, client: client) {
+                    let domain = NSFileProviderDomain(identifier: .init(saved.id), displayName: saved.title)
+                    if let manager = NSFileProviderManager(for: domain) {
+                        try await manager.signalEnumerator(for: .workingSet)
+                        for folder in try await catalog.folders() {
+                            let item = try await catalog.itemAt(folder)
+                            try await manager.signalEnumerator(for: NativeEnvironment.id(item.id))
+                        }
                     }
                 }
                 status[saved.id] = "Connected · Read-only"
