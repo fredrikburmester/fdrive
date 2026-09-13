@@ -18,6 +18,29 @@ not current instructions.
 - Initial application coverage failed with `listen EPERM` in sandboxed loopback fixtures;
   rerun with local socket access passed. Final workflow gate passes. Primary checkout WIP preserved.
 
+## Mobile System stat typography
+
+- Worktree `/private/tmp/fdrive-mobile-stat-text`, branch `claude/mobile-stat-text`.
+- Below 768px, stat values use 16px text and labels use 12px; desktop keeps 24px/14px.
+  Long image model names and the mismatch badge wrap inside their cards.
+- Next dev with fixture API responses passes Chromium checks at 320, 393, 402, 767, 768
+  and 1280px: computed sizes, card overflow and mismatch state; light/dark screenshots
+  inspected in `.fdrive-workflow/evaluation/stats-*.png`. No device Safari check.
+- Application lint/typecheck/coverage pass (`step.WSegxR` coverage). Standard System browser
+  setup fails because Docker is unavailable (`step.DIzuJN`). Original checkout WIP preserved.
+
+## Mobile log actions: ready for PR
+
+- Worktree `/private/tmp/fdrive-mobile-log-actions`, branch `codex/mobile-log-actions`.
+  Log exports stack at full width below 640px with 44px tap targets; desktop keeps its row.
+- Application lint/typecheck/coverage pass (`step.dYKDbz` coverage). Live Next dev checks
+  pass at 320, 402, 639, 640 and 1280px, including 320x360, in light/dark: buttons stay
+  inside the drawer, copy and both download contents work, Escape closes the drawer.
+  Screenshots and measurements: `.fdrive-workflow/evaluation/logs-*.png`, `layout-results.json`.
+- Existing log-drawer browser case passes (`step.HLfRQh`) with native PostgreSQL and the
+  composed API; storage and indexer use fixtures. Standard Docker setup is blocked:
+  `Could not find a working container runtime strategy` (`step.r7P82c`). No device Safari check.
+
 ## Processing failure transparency: implemented, Docker verification pending
 
 - Delivery: `main`. Per-feature file failures persist in PostgreSQL; System pages
