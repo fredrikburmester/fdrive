@@ -182,6 +182,14 @@ services:
     command: ["chown", "-R", "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}", "/thumbs"]
     logging: *default-logging
 
+  indexer-logs-init:
+    image: alpine:3.21
+    user: "0:0"
+    volumes:
+      - fdrive-indexer-logs:/logs
+    command: ["chown", "-R", "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}", "/logs"]
+    logging: *default-logging
+
   indexer:
     build:
       context: ../services/indexer
@@ -202,6 +210,7 @@ services:
       IMAGE_EMBED_URL: http://image-embed:8012
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
+      INDEXER_LOG_DIR: /logs
       # pytesseract spawns the tesseract binary, which parallelises over every
       # core through OpenMP. INDEX_WORKERS already runs several extractions at
       # once, so without this each of them multiplies again: two OCR files were
@@ -213,7 +222,10 @@ services:
     volumes:
       - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo:ro
       - fdrive-thumbs:/thumbs
+      - fdrive-indexer-logs:/logs
     depends_on:
+      indexer-logs-init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       thumbs-init:
@@ -397,6 +409,7 @@ services:
     logging: *default-logging
 
 volumes:
+  fdrive-indexer-logs:
   fdrive-thumbs:
   fdrive-image-embed-models:
   office_onlyoffice_data:

@@ -9,6 +9,7 @@ import {
   createIndexQueries,
   createOfficeFileRepo,
   createOfficeWriteScope,
+  createProcessingFailureReader,
   createRepos,
   createShareRepo,
   createWopiLockRepo,
@@ -91,6 +92,7 @@ import { fetchEmbedStatus } from "./system/embed-status.js";
 import { createSystemEventLog } from "./system/event-log.js";
 import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
+import { registerProcessingFailureRoutes } from "./system/processing-failures.js";
 import { createPublicUrlService } from "./system/public-url.js";
 import { registerPublicUrlRoutes } from "./system/public-url-routes.js";
 import { registerSystemRoutes } from "./system/routes.js";
@@ -760,6 +762,11 @@ export async function composeApp(
         fetch: fetchImpl,
         features: () => featureService.status(),
         office: () => officeSettings.status(null),
+      });
+      registerProcessingFailureRoutes(groups, {
+        read: createProcessingFailureReader(db),
+        indexerUrl: config.fdriveIndexerUrl,
+        fetch: fetchImpl,
       });
       registerSystemRoutes(groups, {
         settings: repos.settings,

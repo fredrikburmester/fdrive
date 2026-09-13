@@ -10,6 +10,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetFooter,
@@ -94,6 +95,11 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
       <SheetHeader className="border-b pr-12">
         <SheetTitle className="capitalize">{title}</SheetTitle>
         <SheetDescription>Newest first. Refreshes every 5 seconds while open.</SheetDescription>
+        {["thumbnails", "indexer", "search", "image-search"].includes(subsystem) ? (
+          <SheetClose render={<a href="#processing-failures" className="text-sm underline" />}>
+            View per-file failure history
+          </SheetClose>
+        ) : null}
       </SheetHeader>
       <div className="flex items-center justify-between gap-3 border-b px-4 py-2">
         <ToggleGroup

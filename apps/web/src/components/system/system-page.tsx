@@ -1,11 +1,12 @@
 "use client";
 
-import type { FeatureId } from "@fdrive/contracts";
+import type { FeatureId, ProcessingFeature } from "@fdrive/contracts";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { useSystemFeatures } from "@/lib/api/system-queries";
 import { formatRelativeTime } from "@/lib/system/format";
+import { FAILURE_FEATURES, ProcessingFailures } from "./processing-failures";
 
 export interface SystemPageProps {
   /** Shown in the breadcrumb ("System / {title}") and as the page heading. */
@@ -51,6 +52,9 @@ export function SystemPage({
     features.data !== undefined &&
     ids.every((id) => !features.data.configuration.values[id]);
   const disabled = featureOff || enabled === false;
+  const failureFeature = ids.find((id) => FAILURE_FEATURES.includes(id as ProcessingFeature)) as
+    | ProcessingFeature
+    | undefined;
   return (
     <>
       <PageHeader breadcrumbs={<span className="text-sm font-medium">System / {title}</span>} />
@@ -69,6 +73,9 @@ export function SystemPage({
             {disabled ? null : actions}
           </div>
         </div>
+        {failureFeature ? (
+          <ProcessingFailures feature={failureFeature} retryEnabled={!disabled} />
+        ) : null}
         {disabled ? (
           <div className="rounded-lg border p-5 text-sm space-y-2">
             <p className="font-medium">{title} is off</p>

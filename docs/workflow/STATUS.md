@@ -5,6 +5,29 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Processing failure transparency: implemented, Docker verification pending
+
+- Delivery: `main`. Per-feature file failures persist in PostgreSQL; System pages
+  show causes, paths, attempts, history and targeted retries. Existing Logs includes these
+  failures. Stage counters no longer share unrelated errors. Indexer raw logs rotate on
+  a persistent 50 MiB volume. [Behavior](../SYSTEM-ACTIVITY.md#persistent-failure-details).
+- Application lint/typecheck/coverage pass (`step.Bcsed7` coverage). Workflow, Python
+  ruff/mypy and Compose validation pass. Native PostgreSQL rehearsal: 561 Python tests pass
+  (25 Linux skips, one Linux-only watcher case deselected; `step.31Hi57`), and seven database log/
+  failure-reader integration tests pass (`step.GgPFzT`). These do not replace Docker gates.
+- Actual worker -> PostgreSQL -> composed API -> Next dev browser verified: corrupt PNG,
+  stopped-worker history/Logs, restart, repair, UI retry, two generated thumbnails and
+  resolved history after reload (`step.5zrYQa`). New browser regression passes with the
+  native fixture (`step.cg32x9`); 320px/desktop light/dark screenshots inspected under
+  `.fdrive-workflow/evaluation/failures-*.png`. Storage uses a fake provider; worker/DB are real.
+- Required indexer Docker coverage/inotify (`step.GE6q9a`) and standard integration
+  (`step.KhrrDp`) cannot start: Docker Desktop's engine socket is absent. Standard browser
+  setup (`step.I7sJ93`) has the same dependency. Native coverage cannot meet 95% without Linux watcher
+  execution; threshold is unchanged. [Remaining verification](../plans/PROCESSING-FAILURES.md).
+- Disposable dev services stopped after verification; screenshots and launchers retained.
+  No deployment. Unrelated System activity planning, mobile header handoff and
+  `.playwright-mcp/` preserved.
+
 ## Mobile preview header: complete
 
 - Mobile puts back/name/More on the first row and file navigation on the second. Controls

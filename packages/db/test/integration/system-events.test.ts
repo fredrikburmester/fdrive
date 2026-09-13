@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDb,
+  createProcessingFailureReader,
   createSystemEventRepo,
   type Db,
   migrate,
@@ -38,6 +39,64 @@ beforeEach(async () => {
   await db.execute(
     sql`truncate table idx.roots, idx.ocr_runs, app.system_events restart identity cascade`,
   );
+});
+
+it("keeps stage failures across reader restarts, separates roots and paginates equal timestamps", async () => {
+  const firstRoot = await insertRoot("photos");
+  const secondRoot = await insertRoot("other");
+  await db.insert(schema.processingFailures).values([
+    {
+      rootId: firstRoot,
+      path: "same.png",
+      feature: "thumbnails",
+      code: "DecodeError",
+      message: "bad image",
+      operationId: "scan-1",
+    },
+    {
+      rootId: secondRoot,
+      path: "same.png",
+      feature: "thumbnails",
+      code: "PermissionError",
+      message: "denied",
+      operationId: "scan-1",
+    },
+    {
+      rootId: firstRoot,
+      path: "same.png",
+      feature: "imageSearch",
+      code: "ModelError",
+      message: "rejected",
+      operationId: "scan-1",
+    },
+  ]);
+  const first = await createProcessingFailureReader(db)("thumbnails", { status: "open", limit: 1 });
+  expect(first.total).toBe(2);
+  expect(first.groups).toHaveLength(2);
+  expect(first.entries[0]?.root).toBe("other");
+  const next = await createProcessingFailureReader(db)("thumbnails", {
+    status: "open",
+    limit: 1,
+    before: first.nextCursor,
+  });
+  expect(next.entries[0]?.root).toBe("photos");
+  expect(next.nextCursor).toBeUndefined();
+  const logs = await repo.list("thumbnails", { limit: 10, minLevel: "error" });
+  expect(logs).toHaveLength(2);
+  expect(logs.every((entry) => entry.source === "indexer")).toBe(true);
+  await db.execute(
+    sql`update idx.processing_failures set resolved_at = now() where feature = 'thumbnails'`,
+  );
+  expect(await repo.list("thumbnails", { limit: 10, minLevel: "error" })).toHaveLength(0);
+  expect(await repo.list("thumbnails", { limit: 10 })).toHaveLength(2);
+  const resolved = await createProcessingFailureReader(db)("thumbnails", {
+    status: "resolved",
+    limit: 10,
+    code: "DecodeError",
+  });
+  expect(resolved.total).toBe(1);
+  expect(resolved.openCount).toBe(0);
+  expect(resolved.entries[0]?.resolvedAt).not.toBeNull();
 });
 
 /** Distinct, ordered instants so every assertion below is about ordering, not clock resolution. */

@@ -95,10 +95,12 @@ class RootActivity:
                 result.append(operation)
             return result
 
-    def finish_watch(self, operations: list[Operation], ok: bool) -> None:
+    def finish_watch(self, operations: list[Operation], ok: bool,
+                     outcomes: dict[str, tuple[bool, bool]] | None = None) -> None:
         with self._lock:
             for operation in operations:
-                operation.advance(ok)
+                result, skipped = (outcomes or {}).get(operation.features[0], (ok, outcomes is not None))
+                operation.advance(result, skipped)
                 if operation.processed == operation.scheduled:
                     operation.finish()
 

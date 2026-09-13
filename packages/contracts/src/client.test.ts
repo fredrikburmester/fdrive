@@ -3,6 +3,27 @@ import { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from 
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
 
+it("reads filtered persistent failures and retries selected or all unresolved files", async () => {
+  const response = { entries: [], groups: [], total: 0, openCount: 0 };
+  const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+    Response.json(init?.method === "POST" ? { started: true, operationId: "retry-1" } : response),
+  );
+  const client = createApiClient({ fetch });
+  expect(await client.processingFailures("thumbnails")).toEqual(response);
+  await client.processingFailures("textSearch", {
+    status: "resolved",
+    before: 5,
+    limit: 2,
+    code: "DecodeError",
+  });
+  expect(String(fetch.mock.calls[1]?.[0])).toContain("before=5");
+  expect(String(fetch.mock.calls[1]?.[0])).toContain("limit=2");
+  await client.retryProcessingFailures("thumbnails", { id: 3 });
+  await client.retryProcessingFailures("imageSearch");
+  expect(JSON.parse(String(fetch.mock.calls[2]?.[1]?.body))).toEqual({ id: 3 });
+  expect(JSON.parse(String(fetch.mock.calls[3]?.[1]?.body))).toEqual({});
+});
+
 describe("feature client", () => {
   it("reads and updates versioned feature settings", async () => {
     const values = {

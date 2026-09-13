@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { systemEvents } from "../schema/app.js";
-import { files, ocrLog, ocrRuns, roots, scans } from "../schema/idx.js";
+import { files, ocrLog, ocrRuns, processingFailures, roots, scans } from "../schema/idx.js";
 import type {
   SystemEvent,
   SystemEventLevel,
@@ -211,6 +211,54 @@ async function readOcrFailureEvents(db: Db, opts: SystemEventListOptions): Promi
  * them in TypeScript, so no source can crowd the others out of its own
  * query and the merged page is still bounded by `limit`.
  */
+async function readProcessingFailures(
+  db: Db,
+  subsystem: string,
+  opts: SystemEventListOptions,
+): Promise<Sortable[]> {
+  const feature = (
+    {
+      thumbnails: "thumbnails",
+      indexer: "textSearch",
+      search: "semanticSearch",
+      "image-search": "imageSearch",
+    } as Record<string, string>
+  )[subsystem];
+  if (!feature) return [];
+  const at = sql<Date>`coalesce(${processingFailures.resolvedAt}, ${processingFailures.lastFailedAt})`;
+  const rows = await db
+    .select({ failure: processingFailures, root: roots.name, at })
+    .from(processingFailures)
+    .innerJoin(roots, eq(roots.id, processingFailures.rootId))
+    .where(
+      and(
+        eq(processingFailures.feature, feature),
+        levelsAtLeast(opts.minLevel).includes("info")
+          ? undefined
+          : isNull(processingFailures.resolvedAt),
+        opts.before === undefined ? undefined : sql`${at} < ${opts.before}`,
+      ),
+    )
+    .orderBy(sql`${at} desc`, desc(processingFailures.id))
+    .limit(opts.limit);
+  return rows.map(({ failure: row, root, at: when }) => ({
+    id: `failure:${row.id}`,
+    at: new Date(when),
+    subsystem,
+    level: row.resolvedAt ? "info" : "error",
+    source: "indexer",
+    sortId: row.id,
+    message: `${root}/${row.path}: ${row.resolvedAt ? "Resolved: " : ""}${row.message}`,
+    data: {
+      root,
+      path: row.path,
+      code: row.code,
+      attempts: row.attempts,
+      operationId: row.operationId,
+    },
+  }));
+}
+
 export function createSystemEventRepo(db: Db): SystemEventRepo {
   return {
     async append(input) {
@@ -222,7 +270,10 @@ export function createSystemEventRepo(db: Db): SystemEventRepo {
       });
     },
     async list(subsystem, opts) {
-      const sources: Promise<Sortable[]>[] = [readApiEvents(db, subsystem, opts)];
+      const sources: Promise<Sortable[]>[] = [
+        readApiEvents(db, subsystem, opts),
+        readProcessingFailures(db, subsystem, opts),
+      ];
       if (subsystem === "indexer") {
         sources.push(readScanEvents(db, opts), readFileErrorEvents(db, opts));
       }

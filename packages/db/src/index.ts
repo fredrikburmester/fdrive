@@ -195,3 +195,7 @@ export async function migrate(db: Db): Promise<void> {
   const migrationsFolder = resolveMigrationsFolder(import.meta.url);
   await runMigrations(db, { migrationsFolder });
 }
+export {
+  createProcessingFailureReader,
+  type ProcessingFailureReader,
+} from "./repos/processing-failures.js";

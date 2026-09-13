@@ -1,5 +1,14 @@
 # The indexer
 
+Per-file failures for thumbnails, text extraction and embeddings are persisted in
+PostgreSQL, with recovery and retry controls in System. See
+[persistent failure details](SYSTEM-ACTIVITY.md#persistent-failure-details).
+Startup waits for the failure-history migration before processing files, including when
+the schema's compatibility version is unchanged during an upgrade.
+`INDEXER_LOG_DIR` optionally retains timestamped diagnostic output as `indexer.log` and
+four rotated files, 10 MiB each, alongside stdout. Deployment mounts a persistent named
+volume there; standalone workers must configure a writable directory to retain these logs.
+
 > [!TIP]
 > **Looking to configure or use search in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the Python indexing service.
 

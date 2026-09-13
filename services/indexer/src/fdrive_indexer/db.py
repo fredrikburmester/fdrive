@@ -38,17 +38,22 @@ def wait_for_schema_version(
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
 ) -> int | None:
-    """Poll `idx.schema_version` until it reports `expected`. Returns the version
-    seen when it matches, or `None` once `timeout_seconds` has elapsed."""
+    """Wait for the compatible schema and additive failure-history migration.
+
+    Workers can start before API migrations finish during a deployment. Do not
+    process files until their diagnostic writes can also be retained.
+    """
     deadline = now() + timeout_seconds
     while True:
         version = read_schema_version(conn)
         if version == expected:
-            return version
+            row = conn.execute("SELECT to_regclass('idx.processing_failures')").fetchone()
+            if row is not None and row[0] is not None:
+                return version
         if now() >= deadline:
-            log(f"schema_version never reached {expected} (last seen: {version}); giving up")
+            log(f"schema not ready (expected {expected}, last seen: {version}, requires processing_failures); giving up")
             return None
-        log(f"waiting for idx.schema_version = {expected} (last seen: {version})")
+        log(f"waiting for idx.schema_version = {expected} and processing_failures migration (last seen: {version})")
         sleep(5)
 
 

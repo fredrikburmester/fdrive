@@ -495,11 +495,13 @@ def test_process_file_non_textual_extension(postgres_dsn: str, monkeypatch: pyte
 def test_process_file_generates_thumbnails(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
     ctx = _make_context(cfg, "sftpgo", str(tmp_path))
-    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [(256, "ab/abc.256.webp", 256, 128)])
-    p = tmp_path / "a.zip"
-    p.write_bytes(b"PK")
-    indexer.process_file(ctx, str(p), "a.zip", os.stat(p))
-    assert db.thumbnails_count(ctx.conn()) == 1
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [
+        (size, f"ab/abc.{size}.webp", size, size // 2) for size in (256, 1024)
+    ])
+    p = tmp_path / "a.png"
+    p.write_bytes(b"image")
+    indexer.process_file(ctx, str(p), "a.png", os.stat(p))
+    assert db.thumbnails_count(ctx.conn()) == 2
 
 
 def test_semantic_disabled_indexes_text_without_calling_embed(
@@ -630,6 +632,11 @@ def test_failed_media_backfill_remains_pending_for_unchanged_file(
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *_a, **_k: generated.append("a") or [])
     indexer.scan_once(ctx)
     assert generated == ["a"]
+    assert ctx.needs_media_backfill() is True
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [
+        (size, f"ab/abc.{size}.webp", size, size // 2) for size in (256, 1024)
+    ])
+    indexer.scan_once(ctx)
     assert ctx.needs_media_backfill() is False
 
 
