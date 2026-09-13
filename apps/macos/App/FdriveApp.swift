@@ -12,7 +12,7 @@ struct FdriveApp: App {
         }.defaultSize(width: 600, height: 460)
             .defaultLaunchBehavior(.presented)
             .restorationBehavior(.disabled)
-        MenuBarExtra("FDrive", systemImage: "externaldrive.badge.icloud") {
+        MenuBarExtra("FDrive", image: "MenuBarIcon") {
             MenuContents(model: model)
         }
     }
@@ -39,7 +39,8 @@ private struct LocationsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Image(systemName: "externaldrive.badge.icloud").font(.largeTitle).foregroundStyle(.secondary)
+                Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                    .resizable().frame(width: 48, height: 48).accessibilityHidden(true)
                 VStack(alignment: .leading) {
                     Text("FDrive").font(.title.bold())
                     Text("Your files in Finder, downloaded when needed.").foregroundStyle(.secondary)

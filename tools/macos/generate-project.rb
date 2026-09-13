@@ -59,6 +59,8 @@ embed.add_file_reference(extension.product_reference).settings = { 'ATTRIBUTES' 
     })
   end
 end
+assets = project.main_group['App'].new_file('Assets.xcassets')
+app.resources_build_phase.add_file_reference(assets)
 project.save
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
