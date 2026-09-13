@@ -7,12 +7,12 @@ import FdriveKit
 struct FdriveApp: App {
     @StateObject private var model = AppModel()
     var body: some Scene {
-        Window("fdrive", id: "locations") {
+        Window("FDrive", id: "locations") {
             LocationsView(model: model).frame(minWidth: 520, minHeight: 400)
         }.defaultSize(width: 600, height: 460)
             .defaultLaunchBehavior(.presented)
             .restorationBehavior(.disabled)
-        MenuBarExtra("fdrive", systemImage: "externaldrive.badge.icloud") {
+        MenuBarExtra("FDrive", systemImage: "externaldrive.badge.icloud") {
             MenuContents(model: model)
         }
     }
@@ -28,7 +28,7 @@ private struct MenuContents: View {
         }
         Divider()
         Button("Refresh") { Task { await model.refresh() } }.disabled(model.refreshing)
-        Button("Quit fdrive") { NSApp.terminate(nil) }
+        Button("Quit FDrive") { NSApp.terminate(nil) }
     }
 }
 
@@ -41,7 +41,7 @@ private struct LocationsView: View {
             HStack {
                 Image(systemName: "externaldrive.badge.icloud").font(.largeTitle).foregroundStyle(.secondary)
                 VStack(alignment: .leading) {
-                    Text("fdrive").font(.title.bold())
+                    Text("FDrive").font(.title.bold())
                     Text("Your files in Finder, downloaded when needed.").foregroundStyle(.secondary)
                 }
                 Spacer()

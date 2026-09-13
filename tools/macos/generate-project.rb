@@ -13,6 +13,8 @@ package.relative_path = '.'
 project.root_object.package_references << package
 
 app = project.new_target(:application, 'fdrive', :osx, '26.0')
+app.product_reference.path = 'FDrive.app'
+app.product_name = 'FDrive'
 extension = project.new_target(:app_extension, 'FdriveFileProvider', :osx, '26.0')
 app.add_dependency(extension)
 embed = app.new_copy_files_build_phase('Embed App Extensions')
@@ -38,6 +40,7 @@ embed.add_file_reference(extension.product_reference).settings = { 'ATTRIBUTES' 
     end
   end
   target.build_configurations.each do |configuration|
+    configuration.build_settings['PRODUCT_NAME'] = 'FDrive' if target == app
     configuration.build_settings.merge!({
       'SWIFT_VERSION' => '6.0', 'SWIFT_STRICT_CONCURRENCY' => 'complete',
       'MACOSX_DEPLOYMENT_TARGET' => '26.0', 'ARCHS' => 'arm64',

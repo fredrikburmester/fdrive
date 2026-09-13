@@ -130,7 +130,7 @@ def release(args):
                     f"FDRIVE_APP_PROFILE={app_profile}", f"FDRIVE_EXTENSION_PROFILE={extension_profile}"]
     run(*command, "archive")
     if args.mode == "check":
-        validate_bundle(archive / "Products/Applications/fdrive.app", args.version, args.build)
+        validate_bundle(archive / "Products/Applications/FDrive.app", args.version, args.build)
         print("Unsigned Release archive verified. No distributable DMG was created.")
         return
 
@@ -143,7 +143,7 @@ def release(args):
     }))
     run("xcodebuild", "-exportArchive", "-archivePath", archive,
         "-exportOptionsPlist", export_options, "-exportPath", output / "export")
-    app = output / "export/fdrive.app"
+    app = output / "export/FDrive.app"
     validate_bundle(app, args.version, args.build, args.team)
     zip_path = output / "fdrive-notarization.zip"
     run("ditto", "-c", "-k", "--keepParent", app, zip_path)
@@ -154,12 +154,12 @@ def release(args):
 
     staging = output / "dmg-root"
     staging.mkdir()
-    run("ditto", app, staging / "fdrive.app")
+    run("ditto", app, staging / "FDrive.app")
     (staging / "Applications").symlink_to("/Applications")
     artifacts = output / "artifacts"
     artifacts.mkdir()
     dmg = artifacts / f"fdrive-{args.version}-arm64.dmg"
-    run("hdiutil", "create", "-volname", "fdrive", "-srcfolder", staging,
+    run("hdiutil", "create", "-volname", "FDrive", "-srcfolder", staging,
         "-format", "UDZO", "-ov", dmg)
     sign = ["codesign", "--sign", identity, "--timestamp"]
     if args.keychain:

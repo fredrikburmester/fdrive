@@ -12,13 +12,21 @@ not current instructions.
   Fredrik Burmester (MWD5K362T8) Developer ID identity, both profiles and all five encrypted
   GitHub secrets are configured. GitHub Actions is enabled; default tokens remain read-only
   and bot PR approval remains disabled. The supplied Developer API key is validated by Apple.
-- Local 0.1.0 build 1: Developer ID archive/export, app and DMG notarization, stapling and
-  Gatekeeper checks pass (`step.BwFzEQ`). DMG/checksum/manifest are under
-  `.fdrive-workflow/release-0.1.0-r2/artifacts`. Xcode profile lookup now preserves Apple's UUID
+- Local 0.1.0 build 2: Developer ID archive/export, app and DMG notarization, stapling and
+  Gatekeeper checks pass (`step.BjLVra`). DMG/checksum/manifest are under
+  `.fdrive-workflow/release-0.1.0-fdrive/artifacts`. Xcode profile lookup now preserves Apple's UUID
   casing; the regression test covers it. Six release tests, actionlint, unsigned Release
   archive and 18 Swift tests/native build passed. Hosted release and Homebrew installation
   remain pending; no release or server deployment. Cask publication provides a comparison
   link when repository policy blocks bot-created PRs.
+- Mac branding is **FDrive** across the app, menus, extension, DMG volume and Homebrew cask.
+  `/Applications/FDrive.app` is installed and launched; the existing Finder location survives.
+  The notarized installer is also in Downloads. Bundle IDs and shared storage remain stable.
+  `files.fdrive.se` returns an authentication error before browser pairing; its desktop API
+  exposure/deployment still needs investigation. No server changes were made.
+- Hosted CI run 34772703133 passed lint/typecheck but one existing web search-panel test
+  failed waiting for `same.txt` (1835 other web tests passed). Native distribution checks pass;
+  that exact test passes locally with one worker. A new hosted run follows the branding push.
 - PR #19 review fixes: `/private/tmp/fdrive-pr19-fixes`, `codex/pr19-review-fixes`.
   Partial refreshes notify Finder and continue across failed folders/files; disconnect revokes
   its credential without storage access; pairing admission groups IPv6 callers by /64.

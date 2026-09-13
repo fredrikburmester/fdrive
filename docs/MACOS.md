@@ -1,4 +1,4 @@
-# fdrive for Mac
+# FDrive for Mac
 
 The native companion provides read-only Finder locations on macOS 26+ (Apple silicon).
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
@@ -59,7 +59,7 @@ bash tools/orchestration/verify-macos.sh "$PWD" YOUR_TEAM_ID
 ```
 
 The signed app is under
-`.fdrive-workflow/macos-build-YOUR_TEAM_ID/Build/Products/Debug/fdrive.app`.
+`.fdrive-workflow/macos-build-YOUR_TEAM_ID/Build/Products/Debug/FDrive.app`.
 Open it through Xcode or Finder. Automatic signing may access your configured developer
 account. Unsigned builds cannot establish real File Provider signing/permission behavior.
 

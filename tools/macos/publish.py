@@ -61,18 +61,18 @@ def render_cask(repo, version, digest, asset_id):
         header: ["Accept: application/octet-stream",
                  "Authorization: Bearer #{{ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")}}"]
   end
-  name "fdrive"
+  name "FDrive"
   desc "Browse remote storage in Finder with downloads on demand"
   homepage "https://github.com/{repo}"
 
   depends_on arch: :arm64
   depends_on macos: ">= :tahoe"
 
-  app "fdrive.app"
+  app "FDrive.app"
 
   caveats <<~EOS
     Connect using your fdrive HTTPS web address, then enable the Finder location.
-    Quit fdrive before upgrading. Disconnect locations in fdrive before uninstalling.
+    Quit FDrive before upgrading. Disconnect locations in FDrive before uninstalling.
   EOS
 end
 '''
@@ -121,12 +121,12 @@ def publish(repo, directory):
     if probe.returncode == 0:
         raise ValueError("Release already exists. Use a new version; use --cask-only to repair a cask PR")
     notes = (f"Native macOS development preview {version}. Requires macOS 26+ and Apple silicon.\n\n"
-             "Download the DMG, move fdrive to Applications, then connect to your fdrive HTTPS server. "
+             "Download the DMG, move FDrive to Applications, then connect to your fdrive HTTPS server. "
              "Finder access is read-only; files download when opened.\n\n"
              "App and DMG are Developer ID signed, notarized and stapled. "
              "Broader beta qualification is ongoing. SHA256SUMS contains the final DMG checksum.\n")
     command = ["release", "create", tag, "--repo", repo, "--verify-tag", "--draft",
-               "--title", f"fdrive for Mac {version}", "--notes", notes]
+               "--title", f"FDrive for Mac {version}", "--notes", notes]
     if version.startswith("0."):
         command.append("--prerelease")
     gh(*command)
