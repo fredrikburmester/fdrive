@@ -103,6 +103,7 @@ export function registerSetupRoutes(
     try {
       result = await deps.service.complete({
         baseUrl: parsed.data.baseUrl,
+        ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
         homeTemplate: parsed.data.homeTemplate,
         username: parsed.data.username,
         password: parsed.data.password,

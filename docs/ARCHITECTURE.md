@@ -20,6 +20,10 @@ delivery evidence belongs in [workflow history](workflow/STATUS-history.md).
 
 ## Accounts and storage
 
+The optional [native macOS companion](MACOS.md) exposes read-only File Provider domains,
+one per server/account/storage identity. Its versioned desktop API uses separate identity-bound
+credentials; browser identity selection and MCP tokens cannot retarget these domains.
+
 A provider row identifies a configured backend instance; an identity is a login on that row;
 an account links identities. Sessions select an active identity. Credentials are encrypted
 and bound to their identity and provider, including during retries and background jobs.

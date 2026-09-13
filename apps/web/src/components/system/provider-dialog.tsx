@@ -166,7 +166,7 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
                 setTouched(true);
               }}
             />
-            <FieldDescription>What this server is called in fdrive.</FieldDescription>
+            <FieldDescription>Shown when choosing storage and in Finder.</FieldDescription>
           </Field>
           <Field>
             <FieldLabel htmlFor="provider-address">Address</FieldLabel>

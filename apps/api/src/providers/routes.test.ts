@@ -100,6 +100,55 @@ describe("/admin/providers", () => {
     ).toBe(403);
   });
 
+  it("refuses renames by ordinary users and rejects blank or overlong names", async () => {
+    const ordinary = buildApp({ isAdmin: false });
+    const row = await seedSftpgoProvider(ordinary.repos, "http://env:8080", { managedByEnv: true });
+    expect(
+      (
+        await ordinary.call(`/api/v1/admin/providers/${row.id}`, {
+          method: "PATCH",
+          body: { label: "Home storage" },
+        })
+      ).status,
+    ).toBe(403);
+    expect((await ordinary.repos.providers.get(row.id))?.label).toBe("");
+    const admin = buildApp({ isAdmin: true });
+    const pinned = await seedSftpgoProvider(admin.repos, "http://env:8080", { managedByEnv: true });
+    const other = await admin.service.create({
+      type: "sftpgo",
+      baseUrl: "http://other:8080",
+      label: "Home storage",
+    });
+    for (const label of ["", "   ", "x".repeat(121)]) {
+      expect(
+        (
+          await admin.call(`/api/v1/admin/providers/${pinned.id}`, {
+            method: "PATCH",
+            body: { label },
+          })
+        ).status,
+      ).toBe(400);
+    }
+    expect(
+      (
+        await admin.call(`/api/v1/admin/providers/${pinned.id}`, {
+          method: "PATCH",
+          body: { label: "  Home storage  " },
+        })
+      ).status,
+    ).toBe(200);
+    expect(await admin.repos.providers.get(pinned.id)).toEqual({
+      ...pinned,
+      label: "Home storage",
+    });
+    expect(await admin.repos.providers.get(other.id)).toEqual(other);
+    const visible = ProvidersResponse.parse(await (await admin.call("/api/v1/providers")).json());
+    expect(visible.providers.map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: pinned.id, label: "Home storage" },
+      { id: other.id, label: "Home storage" },
+    ]);
+  });
+
   it("lists rows and types, creates after a probe, updates, tests and deletes", async () => {
     const h = buildApp({ isAdmin: true });
     const created = await h.call("/api/v1/admin/providers", {

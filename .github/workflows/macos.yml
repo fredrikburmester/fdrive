@@ -1,0 +1,34 @@
+# Opt-in: hosted macOS minutes are substantially more expensive than Linux minutes.
+name: macOS native
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: bash tools/orchestration/setup-checkout.sh .
+      - run: bash tools/orchestration/verify-macos.sh .
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native-logs
+          path: .fdrive-workflow/logs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

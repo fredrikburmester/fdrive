@@ -5,6 +5,127 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Friendly storage names: verified
+
+- Worktree `/private/tmp/fdrive-friendly-storage-names`, branch `codex/friendly-storage-names`,
+  based on `origin/main` at `c16cebe`. Primary checkout WIP remains untouched.
+- Setup collects a trimmed 1–120 character provider name. Existing System → Storage editing
+  invalidates provider and identity caches; older setup clients and unnamed providers work.
+  Environment-managed names survive initialization while deployment-controlled addresses stay locked.
+- Existing Mac locations validate account/identity/provider IDs before updating display metadata,
+  save the new name, and rename the same Finder domain. Endpoint, grants, token and catalog survive.
+- Application lint/typecheck/coverage pass (`step.hNbNg2` coverage); 22 Swift tests and unsigned
+  Xcode build pass (`step.RW9bXt`, `step.CGRtK8`). Signed isolated build passes (`step.LAjGGz`).
+- Real Next dev + disposable PostgreSQL/SFTPGo + the signed app: setup name, admin rename,
+  account menu, approval and existing native refresh verified. Saved binding, domain ID,
+  catalog generation, cached inode and bytes stayed unchanged; offline refresh retained the
+  name and Quick Look content. Test connection removed and dev services stopped afterward.
+- Finder's single-domain sidebar still shows the app name **FDrive**; the domain and CloudStorage
+  folder rename in place. See [platform behavior](../MACOS.md#display-name-refresh).
+- Full integration passes (460 tests, `step.WzRfBD`). Existing storage/login/desktop browser
+  cases pass (`step.cXZUU1`); the corrected naming regression passes (`step.pY1uo5`). It exercises
+  setup, label-only PATCH, account/login display, and approval refetch on a simulated tab-visibility
+  event in headless Chromium. Initial browser failures were test selector/event-delivery issues.
+  Final workflow regressions, lint and diff checks pass; integrated diff reviewed.
+- Server deployment is pending; production providers are unchanged. GitHub Actions stays disabled.
+  A server deployment and local app rebuild are needed to exercise this with production.
+
+## Native macOS Finder app: development preview
+
+- Release setup: [PR #20](https://github.com/fredrikburmester/fdrive-web/pull/20),
+  `/private/tmp/fdrive-macos-release`, branch `codex/macos-release`.
+  Fredrik Burmester (MWD5K362T8) Developer ID identity, both profiles and all five encrypted
+  GitHub secrets are configured. GitHub Actions is disabled at the owner's request because
+  hosted CI costs too much; do not re-enable without explicit approval. Default tokens remain
+  read-only and bot PR approval remains disabled. The Developer API key is validated by Apple.
+- Local 0.1.0 build 4: Developer ID archive/export, app and DMG notarization, stapling and
+  Gatekeeper checks pass (`step.TA10YZ`). DMG/checksum/manifest are under
+  `.fdrive-workflow/release-0.1.0-window/artifacts`. Xcode profile lookup now preserves Apple's UUID
+  casing; the regression test covers it. Six release tests, actionlint, unsigned Release
+  archive and 18 Swift tests/native build passed. Hosted release and Homebrew installation
+  remain pending; no release or server deployment. Cask publication provides a comparison
+  link when repository policy blocks bot-created PRs.
+- Mac branding is **FDrive** across the app, menus, extension, DMG volume and Homebrew cask.
+  `/Applications/FDrive.app` is installed and launched; the existing Finder location survives.
+  The notarized installer is also in Downloads. The app and menu bar reuse the web FD icon;
+  native sizes are generated from the shared SVG. Bundle IDs and shared storage remain stable.
+  Live app/Finder inspection now confirms the production connection and root folder listing.
+  Production file downloads remain unverified. FDrive appears in the Dock/Command-Tab while
+  its window is open or minimized; closing returns the same process to background-agent mode.
+  Reopening from Applications restores foreground mode; Command-Tab away/back was exercised.
+  The window observer leaves SwiftUI delegates and background refresh intact.
+  Provider naming and refresh behavior: [provider guide](../STORAGE-PROVIDERS.md#display-names)
+  and [Mac guide](../MACOS.md#display-name-refresh).
+- Hosted CI run 34772703133 passed lint/typecheck but one existing web search-panel test
+  failed waiting for `same.txt` (1835 other web tests passed). Native distribution checks pass;
+  that exact test passes locally with one worker. The subsequent hosted run 34773480985
+  passed on code commit 1632fd6. Actions was then disabled again for cost control.
+- PR #19 review fixes: `/private/tmp/fdrive-pr19-fixes`, `codex/pr19-review-fixes`.
+  Partial refreshes notify Finder and continue across failed folders/files; disconnect revokes
+  its credential without storage access; pairing admission groups IPv6 callers by /64.
+  Application, integration (460 tests), desktop browser checks, 18 Swift tests and the unsigned
+  Xcode build pass (`step.MP5TUq`, `step.2Iviyj`, `step.WMZGnr`, `step.3WpjsM`, `step.LT6YX4`).
+  Refresh regressions exercise the production helper with real SQLite and injected network/
+  notification boundaries. This follow-up does not repeat the signed Finder rehearsal below.
+- Worktree `/private/tmp/fdrive-native-macos`, branch `claude/native-macos`, updated to
+  `origin/main` at `33b244f`. SwiftUI companion and replicated File Provider extension,
+  macOS 26+/Apple silicon, read-only, no search. [Implementation/build guide](../MACOS.md).
+- Browser pairing selects identities; separate `fdd_` credentials, Keychain secrets and
+  SQLite catalogs preserve provider isolation. Metadata-only enumeration, streamed downloads,
+  durable changes, refresh/backoff, reconnect and retryable disconnect are implemented.
+- Live signed Finder rehearsal: SFTPGo and Apache WebDAV, same username/path with different
+  bytes; nested browsing without content reads; Quick Look and TextEdit; same-size/same-mtime
+  external overwrite evicts old content and opens new bytes. Fixed security-scoped Finder
+  opening, team-prefixed App Group access, and metadata permission retry loops.
+- Real Finder displayed 10,000 placeholder files; catalog and system state also contained
+  all 10,000, and Apache logs recorded no GETs for them. Initial system reconciliation took
+  several minutes. A 2 GiB file downloaded and matched SHA-256 in 14.12 seconds on loopback.
+  These timings are local observations, not performance promises.
+- Application, full integration, affected browser and workflow gates passed; final application
+  coverage passed (`step.kiY7g2`), as did 13 Swift tests and the development-signed Xcode build
+  (`step.s8cmQW`, `step.uiPUV5`). Real composed API integration covers PostgreSQL/SFTPGo/Apache DAV.
+- Integrated diff reviewed. Disconnecting the temporary DAV location removed its domain while
+  the original SFTPGo location remained usable after app restart. Its local demo remains running.
+- [Remaining beta qualification](../plans/MACOS-APP.md): hosted release/Homebrew, second-Mac
+  install/upgrade, broader editors/offline/low-disk/cancellation/reboot matrix and tuning the
+  cost of hashing downloaded files on each refresh. No release or production deployment.
+
+## Mobile System page headers
+
+- Worktree `/private/tmp/fdrive-system-mobile-header`, branch `codex/system-mobile-header`.
+- Phone headers stack the timestamp above wrapping actions, retain readable labels and
+  provide 44px button heights. Desktop keeps the compact layout. Shared by all System pages.
+- Two browser regressions pass on real Next dev with a disposable HTTP API fixture
+  (`step.VZ48tw`): 320/375/402/640/768/1280px, light/dark, no header/content overflow,
+  dialogs, Logs and the four-action Full-text search header. Screenshots inspected.
+- Docker-backed browser setup unavailable: Docker Desktop's engine socket is absent.
+  No physical Safari check. Application lint/typecheck/coverage pass (`step.3bQ8Sm` coverage).
+- Initial application coverage failed with `listen EPERM` in sandboxed loopback fixtures;
+  rerun with local socket access passed. Final workflow gate passes. Primary checkout WIP preserved.
+
+## Mobile System stat typography
+
+- Worktree `/private/tmp/fdrive-mobile-stat-text`, branch `claude/mobile-stat-text`.
+- Below 768px, stat values use 16px text and labels use 12px; desktop keeps 24px/14px.
+  Long image model names and the mismatch badge wrap inside their cards.
+- Next dev with fixture API responses passes Chromium checks at 320, 393, 402, 767, 768
+  and 1280px: computed sizes, card overflow and mismatch state; light/dark screenshots
+  inspected in `.fdrive-workflow/evaluation/stats-*.png`. No device Safari check.
+- Application lint/typecheck/coverage pass (`step.WSegxR` coverage). Standard System browser
+  setup fails because Docker is unavailable (`step.DIzuJN`). Original checkout WIP preserved.
+
+## Mobile log actions: ready for PR
+
+- Worktree `/private/tmp/fdrive-mobile-log-actions`, branch `codex/mobile-log-actions`.
+  Log exports stack at full width below 640px with 44px tap targets; desktop keeps its row.
+- Application lint/typecheck/coverage pass (`step.dYKDbz` coverage). Live Next dev checks
+  pass at 320, 402, 639, 640 and 1280px, including 320x360, in light/dark: buttons stay
+  inside the drawer, copy and both download contents work, Escape closes the drawer.
+  Screenshots and measurements: `.fdrive-workflow/evaluation/logs-*.png`, `layout-results.json`.
+- Existing log-drawer browser case passes (`step.HLfRQh`) with native PostgreSQL and the
+  composed API; storage and indexer use fixtures. Standard Docker setup is blocked:
+  `Could not find a working container runtime strategy` (`step.r7P82c`). No device Safari check.
+
 ## Processing failure transparency: implemented, Docker verification pending
 
 - Delivery: `main`. Per-feature file failures persist in PostgreSQL; System pages
