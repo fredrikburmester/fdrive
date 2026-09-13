@@ -111,7 +111,11 @@ tooling typechecks pass again. Live Next dev verification also passes through th
 Features navigation: model loading, unknown-total discovery, disabled maintenance actions,
 and healthy worker readiness agree. Final workflow verification passes.
 
-Committed to local main on user request; original checkout WIP preserved. No push or deployment.
+Committed to main on user request; original checkout WIP preserved. No deployment performed.
 Integrated logs: `.fdrive-workflow/logs/step.adBUvE/` (application coverage),
 `step.4fj5Rw/` (indexer), `step.GIKa6j/` (browser), `step.AA8ymI/` (integration),
 and `step.DUKFkZ/` (live dev fixture).
+
+Push integration retained remote PR #15 (mobile search filter wrapping and input sizing).
+The combined application gate and all 18 search browser cases on Next dev pass.
+Only delivery notes conflicted; all task histories and original checkout WIP are retained.
