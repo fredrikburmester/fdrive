@@ -5,6 +5,17 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Mobile System stat typography
+
+- Worktree `/private/tmp/fdrive-mobile-stat-text`, branch `claude/mobile-stat-text`.
+- Below 768px, stat values use 16px text and labels use 12px; desktop keeps 24px/14px.
+  Long image model names and the mismatch badge wrap inside their cards.
+- Next dev with fixture API responses passes Chromium checks at 320, 393, 402, 767, 768
+  and 1280px: computed sizes, card overflow and mismatch state; light/dark screenshots
+  inspected in `.fdrive-workflow/evaluation/stats-*.png`. No device Safari check.
+- Application lint/typecheck/coverage pass (`step.WSegxR` coverage). Standard System browser
+  setup fails because Docker is unavailable (`step.DIzuJN`). Original checkout WIP preserved.
+
 ## Mobile log actions: ready for PR
 
 - Worktree `/private/tmp/fdrive-mobile-log-actions`, branch `codex/mobile-log-actions`.
