@@ -42,6 +42,7 @@ export function handleLoginSuccess(
   queryClient: QueryClient,
   router: NavigableRouter,
   me: MeResponse,
+  destination?: Route,
 ): void {
   void queryClient.cancelQueries();
   queryClient.clear();
@@ -51,7 +52,7 @@ export function handleLoginSuccess(
   pinTabIdentity(me.activeIdentityId);
   queryClient.setQueryData(queryKeys.auth.me(), me);
   accountTransition.finish(true);
-  router.push(me.isAdmin ? "/setup" : FILES_ROUTE);
+  router.push(destination ?? (me.isAdmin ? "/setup" : FILES_ROUTE));
 }
 
 /**
@@ -74,13 +75,13 @@ export function handleLogoutSuccess(queryClient: QueryClient, router: NavigableR
  * success, seeds the `auth.me` cache so the shell renders immediately and
  * navigates to `/files`.
  */
-export function useLogin() {
+export function useLogin(destination?: Route) {
   const queryClient = useQueryClient();
   const router = useRouter();
 
   return useMutation({
     mutationFn: (req: LoginRequest) => apiClient.login(req),
-    onSuccess: (me: MeResponse) => handleLoginSuccess(queryClient, router, me),
+    onSuccess: (me: MeResponse) => handleLoginSuccess(queryClient, router, me, destination),
   });
 }
 
