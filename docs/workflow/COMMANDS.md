@@ -1,5 +1,9 @@
 # Workflow commands
 
+Native macOS build/tests: `bash tools/orchestration/verify-macos.sh "$PWD" [TEAM_ID]`.
+Without a team this builds unsigned; with a team it uses Xcode development signing.
+See [MACOS.md](../MACOS.md) for Finder verification and release qualification.
+
 Policy: [WORKING.md](../../WORKING.md). Read this reference only for the task at hand.
 From any checkout root, set `T="$PWD/tools/orchestration"`; every helper takes an explicit
 checkout root. Setup/dev/prepare/verify/transfer support `--help` without setup. Helpers

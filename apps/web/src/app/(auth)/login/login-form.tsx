@@ -1,6 +1,7 @@
 "use client";
 
 import type { PublicProvider } from "@fdrive/contracts";
+import type { Route } from "next";
 import { type FormEvent, useState } from "react";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { ProviderPicker } from "@/components/identity/provider-picker";
@@ -18,6 +19,7 @@ import {
 } from "@/lib/auth/login-model";
 
 export interface LoginFormProps {
+  readonly destination?: Route;
   /** The enabled providers, resolved server-side by the page; empty when the API was unreachable. */
   readonly providers: readonly PublicProvider[];
 }
@@ -32,11 +34,11 @@ const NONE_REVEALED: ReadonlySet<string> = new Set();
  * could not be reached while rendering the page) the SFTPGo-shaped
  * defaults render and the server picks its only enabled provider.
  */
-export function LoginForm({ providers }: LoginFormProps) {
+export function LoginForm({ providers, destination }: LoginFormProps) {
   const [providerId, setProviderId] = useState<string | null>(null);
   const [values, setValues] = useState(EMPTY_VALUES);
   const [revealed, setRevealed] = useState(NONE_REVEALED);
-  const login = useLogin();
+  const login = useLogin(destination);
   const provider = selectProvider(providers, providerId);
   const fields = credentialFieldsFor(provider);
 
