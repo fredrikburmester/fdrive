@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		84A55EC7371C4DD892E2CC15 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4CBE12F3F452428595A7C79B /* Assets.xcassets */; };
 		3E3C1DAEBEC268ECE3C5BAE1 /* FdriveFileProvider.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EDCFAA9A85615F62894BFE3F /* FdriveFileProvider.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		93172E39B3ABCBF8EE9C3D9A /* ProviderEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A610A21BD428E4490CEECB1 /* ProviderEnumerator.swift */; };
 		A3DCAF3CC3D423C3295C7320 /* FdriveKit in Frameworks */ = {isa = PBXBuildFile; productRef = BE6EBA89DCD780BDDCEB2CCD /* FdriveKit */; };
@@ -45,6 +46,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4CBE12F3F452428595A7C79B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0A610A21BD428E4490CEECB1 /* ProviderEnumerator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProviderEnumerator.swift; sourceTree = "<group>"; };
 		0CE3CC0185ACEFE1825243AA /* FdriveApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FdriveApp.swift; sourceTree = "<group>"; };
 		0E488D454B2A7EEFF081631F /* Environment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Environment.swift; sourceTree = "<group>"; };
@@ -138,6 +140,7 @@
 		F0336567172BDC1E70CB4F8B /* App */ = {
 			isa = PBXGroup;
 			children = (
+				4CBE12F3F452428595A7C79B /* Assets.xcassets */,
 				0CE3CC0185ACEFE1825243AA /* FdriveApp.swift */,
 			);
 			name = App;
@@ -234,6 +237,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				84A55EC7371C4DD892E2CC15 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -65,6 +65,10 @@ account. Unsigned builds cannot establish real File Provider signing/permission 
 
 The generator is `tools/macos/generate-project.rb` (Ruby gem `xcodeproj` 1.27.0).
 Regenerate through `run-in-checkout.sh --lock` only when changing project structure/settings.
+The app and menu-bar icons reuse `apps/web/src/app/icon.svg`. The generated asset catalog
+is checked in, so Xcode builds need no image tooling. After updating the web icon, regenerate
+the macOS sizes with `bash tools/orchestration/run-in-checkout.sh "$PWD" --lock -- node tools/macos/generate-icons.mjs`
+in a checkout prepared with `pnpm install`.
 Both targets use the same team and:
 
 | Setting | Value |
