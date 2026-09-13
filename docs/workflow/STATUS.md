@@ -5,6 +5,19 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Mobile System page headers
+
+- Worktree `/private/tmp/fdrive-system-mobile-header`, branch `codex/system-mobile-header`.
+- Phone headers stack the timestamp above wrapping actions, retain readable labels and
+  provide 44px button heights. Desktop keeps the compact layout. Shared by all System pages.
+- Two browser regressions pass on real Next dev with a disposable HTTP API fixture
+  (`step.VZ48tw`): 320/375/402/640/768/1280px, light/dark, no header/content overflow,
+  dialogs, Logs and the four-action Full-text search header. Screenshots inspected.
+- Docker-backed browser setup unavailable: Docker Desktop's engine socket is absent.
+  No physical Safari check. Application lint/typecheck/coverage pass (`step.3bQ8Sm` coverage).
+- Initial application coverage failed with `listen EPERM` in sandboxed loopback fixtures;
+  rerun with local socket access passed. Final workflow gate passes. Primary checkout WIP preserved.
+
 ## Mobile System stat typography
 
 - Worktree `/private/tmp/fdrive-mobile-stat-text`, branch `claude/mobile-stat-text`.
