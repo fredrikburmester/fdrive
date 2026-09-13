@@ -5,6 +5,20 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Mobile preview header: complete
+
+- Mobile puts back/name/More on the first row and file navigation on the second. Controls
+  have 44px tap targets; the counter stays on one line. Edit, Download, Open in new tab and
+  Info remain available through More. Desktop retains the compact toolbar; blur is unchanged.
+- Application lint/typecheck/coverage pass (`step.f0u15X` coverage). All 12 affected preview
+  browser checks pass against a production build (`step.40v2T0`), including 320px/402px long
+  filenames, navigation, menu downloads, keyboard dismissal and Info. Final workflow gate passes.
+- Live Next dev header/menu inspected in light/dark and mobile/desktop layouts. Seeded
+  preview remains at `http://127.0.0.1:53766`; launcher: `.fdrive-workflow/evaluation/mobile-header-dev.ts`.
+- Initial coverage hit sandbox `listen EPERM`; rerun with loopback access passed. The first
+  dev-server browser run stopped in login setup with an empty username; production rerun passed.
+- Delivery: `main`. Unrelated System activity planning and `.playwright-mcp/` preserved.
+
 ## Inconsistency audit: complete on main
 
 - Worktree `/private/tmp/fdrive-inconsistency-audit`, branch `codex/inconsistency-audit-20260912`,

@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Ellipsis,
   ExternalLink,
   Info,
   SquarePenIcon,
@@ -20,6 +21,12 @@ import { Inspector } from "@/components/inspector/inspector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -139,6 +146,7 @@ function TopBarAction({
           <Button
             variant={active ? "secondary" : "ghost"}
             size="icon-sm"
+            className="size-11 sm:size-7 [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4"
             disabled={disabled}
             onClick={onClick}
             nativeButton={isNativeButton}
@@ -159,6 +167,7 @@ function TopBarAction({
 function PreviewShellContent({ path }: PreviewShellProps) {
   const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const parent = parentPath(path);
 
   const touchRecent = useTouchRecent();
@@ -193,7 +202,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
       // Escape is guarded along with the rest: here it leaves the page and
       // throws away what was typed, unlike a dialog's Escape, which Base UI
       // handles on the dialog itself and this listener never decides.
-      if (isEditableTarget(event.target)) {
+      if (actionsOpen || isEditableTarget(event.target)) {
         return;
       }
       if (event.key === "Escape") {
@@ -216,7 +225,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [router, backHref, siblings.prev, siblings.next, isEditable, path]);
+  }, [router, backHref, siblings.prev, siblings.next, isEditable, path, actionsOpen]);
 
   const downloadUrl = apiClient.downloadUrl(path);
   const inlineUrl = apiClient.downloadUrl(path, { inline: true });
@@ -225,28 +234,34 @@ function PreviewShellContent({ path }: PreviewShellProps) {
   return (
     <TooltipProvider>
       <div className="flex h-full min-h-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background/80 px-3 backdrop-blur-sm supports-backdrop-filter:bg-background/60">
+        <header className="grid shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 border-b bg-background/80 px-2 py-1 backdrop-blur-sm supports-backdrop-filter:bg-background/60 sm:flex sm:h-12 sm:gap-2 sm:px-3 sm:py-0">
           <TopBarAction label="Back to folder" route={backHref}>
             <ChevronLeft />
             <span className="sr-only">Back</span>
           </TopBarAction>
 
-          <Separator orientation="vertical" className="h-5" />
+          <Separator orientation="vertical" className="hidden h-5 sm:block" />
 
-          <span className="min-w-0 truncate text-sm font-medium">{entry?.name ?? "Loading…"}</span>
+          <span className="min-w-0 truncate text-sm font-medium sm:max-w-[40%]" title={entry?.name}>
+            {entry?.name ?? "Loading…"}
+          </span>
 
           {entry !== undefined && (
-            <Badge variant="secondary">{capitalize(previewKindFor(entry))}</Badge>
+            <Badge variant="secondary" className="hidden sm:inline-flex">
+              {capitalize(previewKindFor(entry))}
+            </Badge>
           )}
 
           {isEditable && (
-            <TopBarAction label="Edit" shortcut="⌘E" route={editHref(path)}>
-              <SquarePenIcon />
-              <span className="sr-only">Edit</span>
-            </TopBarAction>
+            <div className="hidden sm:flex">
+              <TopBarAction label="Edit" shortcut="⌘E" route={editHref(path)}>
+                <SquarePenIcon />
+                <span className="sr-only">Edit</span>
+              </TopBarAction>
+            </div>
           )}
 
-          <div className="flex flex-1 items-center justify-center gap-1">
+          <div className="col-span-3 row-start-2 flex shrink-0 items-center justify-center gap-3 sm:flex-1 sm:gap-1">
             <TopBarAction
               label="Previous"
               shortcut="←"
@@ -257,7 +272,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
               <span className="sr-only">Previous</span>
             </TopBarAction>
             {siblings.total > 0 && (
-              <span className="text-xs text-muted-foreground tabular-nums">
+              <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground tabular-nums">
                 {siblings.index + 1} / {siblings.total}
               </span>
             )}
@@ -272,25 +287,75 @@ function PreviewShellContent({ path }: PreviewShellProps) {
             </TopBarAction>
           </div>
 
-          <TopBarAction label="Download" href={downloadUrl} download={entry?.name ?? "download"}>
-            <Download />
-            <span className="sr-only">Download</span>
-          </TopBarAction>
+          <div className="hidden shrink-0 items-center gap-2 sm:flex">
+            <TopBarAction label="Download" href={downloadUrl} download={entry?.name ?? "download"}>
+              <Download />
+              <span className="sr-only">Download</span>
+            </TopBarAction>
 
-          <TopBarAction label="Open in new tab" href={inlineUrl} target="_blank" rel="noreferrer">
-            <ExternalLink />
-            <span className="sr-only">Open in new tab</span>
-          </TopBarAction>
+            <TopBarAction label="Open in new tab" href={inlineUrl} target="_blank" rel="noreferrer">
+              <ExternalLink />
+              <span className="sr-only">Open in new tab</span>
+            </TopBarAction>
 
-          <TopBarAction
-            label="Info"
-            shortcut="I"
-            active={infoOpen}
-            onClick={() => setInfoOpen((prev) => !prev)}
-          >
-            <Info />
-            <span className="sr-only">Info</span>
-          </TopBarAction>
+            <TopBarAction
+              label="Info"
+              shortcut="I"
+              active={infoOpen}
+              onClick={() => setInfoOpen((prev) => !prev)}
+            >
+              <Info />
+              <span className="sr-only">Info</span>
+            </TopBarAction>
+          </div>
+
+          <DropdownMenu open={actionsOpen} onOpenChange={setActionsOpen}>
+            <DropdownMenuTrigger
+              className="col-start-3 row-start-1 sm:hidden"
+              render={<Button variant="ghost" size="icon" className="size-11" />}
+            >
+              <Ellipsis className="size-5" />
+              <span className="sr-only">More actions</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              {isEditable && (
+                <DropdownMenuItem
+                  className="min-h-11 gap-3 px-3"
+                  render={<Link href={toRoute(editHref(path))} />}
+                >
+                  <SquarePenIcon />
+                  Edit
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                className="min-h-11 gap-3 px-3"
+                render={
+                  // biome-ignore lint/a11y/useAnchorContent: Base UI merges the menu item's children into this anchor
+                  <a href={downloadUrl} download={entry?.name ?? "download"} />
+                }
+              >
+                <Download />
+                Download
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11 gap-3 px-3"
+                render={
+                  // biome-ignore lint/a11y/useAnchorContent: Base UI merges the menu item's children into this anchor
+                  <a href={inlineUrl} target="_blank" rel="noreferrer" />
+                }
+              >
+                <ExternalLink />
+                Open in new tab
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11 gap-3 px-3"
+                onClick={() => setInfoOpen((prev) => !prev)}
+              >
+                <Info />
+                {infoOpen ? "Hide info" : "Info"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
 
         <div className="flex min-h-0 flex-1">
