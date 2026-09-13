@@ -36,6 +36,7 @@ import {
 } from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
+import { registerDesktopRoutes } from "./desktop/routes.js";
 import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
@@ -649,6 +650,18 @@ export async function composeApp(
         workerToken: config.fdriveWorkerToken,
       });
       auth.registerRoutes(groups);
+      registerDesktopRoutes(groups, {
+        apiTokens: repos.apiTokens,
+        identities: repos.identities,
+        providers: repos.providers,
+        storageFactory,
+        clock,
+        clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
+      });
       registerSharesRoutes(groups, {
         thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({

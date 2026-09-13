@@ -1,4 +1,6 @@
 import type { PublicProvider } from "@fdrive/contracts";
+import { AccountIdentityId } from "@fdrive/contracts";
+import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { serverApiClient } from "@/lib/api/server";
 import { LoginForm } from "./login-form";
@@ -40,10 +42,18 @@ export async function shouldRedirectToSetup(
   }
 }
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ desktopRequest?: string }>;
+}) {
   if (await shouldRedirectToSetup()) {
     redirect("/setup");
   }
   const providers = await resolveLoginProviders();
-  return <LoginForm providers={providers} />;
+  const request = AccountIdentityId.safeParse((await searchParams).desktopRequest);
+  const destination = request.success
+    ? (`/desktop/connect?request=${request.data}` as Route)
+    : undefined;
+  return <LoginForm providers={providers} {...(destination ? { destination } : {})} />;
 }

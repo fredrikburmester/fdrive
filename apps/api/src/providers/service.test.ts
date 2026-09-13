@@ -351,10 +351,14 @@ describe("createProviderService: seedFromEnvironment", () => {
       config: { homeTemplate: "env:/{username}" },
     });
     // Idempotent, and a stored template is never overwritten.
-    await h.repos.providers.update(row?.id ?? "", { config: { homeTemplate: "kept:/{username}" } });
+    await h.repos.providers.update(row?.id ?? "", {
+      label: "Home storage",
+      config: { homeTemplate: "kept:/{username}" },
+    });
     await h.service.seedFromEnvironment();
     expect(await h.service.list()).toHaveLength(1);
     expect((await h.service.list())[0]?.config).toEqual({ homeTemplate: "kept:/{username}" });
+    expect((await h.service.list())[0]?.label).toBe("Home storage");
     expect(h.events).toEqual([]);
   });
 

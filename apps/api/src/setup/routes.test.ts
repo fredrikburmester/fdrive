@@ -298,6 +298,23 @@ describe("setup routes: POST /setup/complete", () => {
     expect((await postComplete(app, validBody, "wrong")).status).toBe(401);
   });
 
+  it("forwards a trimmed provider name to setup", async () => {
+    const { app, service } = buildApp();
+    expect((await postComplete(app, { ...validBody, label: "  Home storage  " })).status).toBe(200);
+    expect(service.complete).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Home storage" }),
+    );
+  });
+
+  it.each(["", "   ", "x".repeat(121)])(
+    "rejects an invalid storage name before setup: %j",
+    async (label) => {
+      const { app, service } = buildApp();
+      expect((await postComplete(app, { ...validBody, label })).status).toBe(400);
+      expect(service.complete).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects an invalid body", async () => {
     const { app } = buildApp();
 

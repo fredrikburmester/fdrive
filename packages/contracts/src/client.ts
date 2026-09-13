@@ -8,6 +8,7 @@ import {
 } from "./accounts.ts";
 import { SystemActivityResponse } from "./activity.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
+import { DESKTOP_API, DesktopPairInfo } from "./desktop.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
 import {
@@ -199,6 +200,8 @@ export interface ApiClientImageSearchOptions {
 }
 
 export interface ApiClient {
+  desktopPairing(id: string): Promise<z.infer<typeof DesktopPairInfo>>;
+  approveDesktopPairing(id: string, identityIds: string[]): Promise<OkResponse>;
   health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
@@ -522,6 +525,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   const put = method("PUT");
 
   return {
+    desktopPairing(id) {
+      return get(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}`, DesktopPairInfo);
+    },
+    approveDesktopPairing(id, identityIds) {
+      return post(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}/approve`, OkResponse, {
+        jsonBody: { identityIds },
+      });
+    },
     listShares() {
       return get(ROUTES.shares, SharesResponse);
     },
