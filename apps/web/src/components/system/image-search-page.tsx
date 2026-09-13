@@ -143,9 +143,16 @@ export function ImageSearchPage() {
               {
                 label: "Embedding model",
                 value: (
-                  <span className="flex items-center gap-2">
-                    {data.embeddedModel ?? "None yet"}
-                    {modelMismatch ? <Badge variant="destructive">Model mismatch</Badge> : null}
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="min-w-0">{data.embeddedModel ?? "None yet"}</span>
+                    {modelMismatch ? (
+                      <Badge
+                        variant="destructive"
+                        className="h-auto min-h-5 max-w-full whitespace-normal"
+                      >
+                        Model mismatch
+                      </Badge>
+                    ) : null}
                   </span>
                 ),
                 ...(modelMismatch
