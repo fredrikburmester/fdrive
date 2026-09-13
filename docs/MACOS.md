@@ -1,8 +1,8 @@
-# fdrive for Mac
+# FDrive for Mac
 
 The native companion provides read-only Finder locations on macOS 26+ (Apple silicon).
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
-Developer ID distribution and tests on another Mac.
+the first hosted release, Homebrew installation and tests on another Mac.
 
 ## Connect and use
 
@@ -26,7 +26,11 @@ write callbacks and the desktop API also reject remote mutations. A program that
 changes local filesystem permissions may create a local change that cannot synchronize;
 the server still accepts no writes through desktop credentials.
 
-The menu-bar app refreshes browsed folders and materialized files every 60 seconds, on wake,
+The app appears in the Dock and Command-Tab while its locations window is open, including
+when minimized or behind another app. Closing the window returns it to the menu bar; choose
+**Locations and Settings** from the FD menu to reopen it.
+
+The app refreshes browsed folders and materialized files every 60 seconds, on wake,
 after pairing and on manual Refresh. Failures back off to 15 minutes independently per
 location. Closing the window keeps it running; Quit stops proactive refresh. Launch at login
 is optional. The system can invoke the extension independently to browse/download.
@@ -59,12 +63,16 @@ bash tools/orchestration/verify-macos.sh "$PWD" YOUR_TEAM_ID
 ```
 
 The signed app is under
-`.fdrive-workflow/macos-build-YOUR_TEAM_ID/Build/Products/Debug/fdrive.app`.
+`.fdrive-workflow/macos-build-YOUR_TEAM_ID/Build/Products/Debug/FDrive.app`.
 Open it through Xcode or Finder. Automatic signing may access your configured developer
 account. Unsigned builds cannot establish real File Provider signing/permission behavior.
 
 The generator is `tools/macos/generate-project.rb` (Ruby gem `xcodeproj` 1.27.0).
 Regenerate through `run-in-checkout.sh --lock` only when changing project structure/settings.
+The app and menu-bar icons reuse `apps/web/src/app/icon.svg`. The generated asset catalog
+is checked in, so Xcode builds need no image tooling. After updating the web icon, regenerate
+the macOS sizes with `bash tools/orchestration/run-in-checkout.sh "$PWD" --lock -- node tools/macos/generate-icons.mjs`
+in a checkout prepared with `pnpm install`.
 Both targets use the same team and:
 
 | Setting | Value |
@@ -91,6 +99,9 @@ Developer ID distribution, notarize and staple. Keep the same identifiers and gr
 upgrades. An Apple Development or Apple Distribution certificate is not a substitute for a
 Developer ID Application certificate. No notarized download is produced by the development
 verification helper. [Apple distribution guidance](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
+
+Automated signed DMGs, Apple/GitHub credential setup, release tags and private/public Homebrew
+installation are covered in the [release guide](MACOS-RELEASE.md).
 
 ## API and security
 

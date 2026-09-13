@@ -9,6 +9,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
+| [Provider names](PROVIDER-NAMES.md) | Friendly names during setup, in login selection and in existing Finder locations |
 
 These are a backlog, not a claim that an agent is working on every item. Current work and
 uncommitted changes belong in [STATUS](../workflow/STATUS.md).

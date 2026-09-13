@@ -13,6 +13,8 @@ package.relative_path = '.'
 project.root_object.package_references << package
 
 app = project.new_target(:application, 'fdrive', :osx, '26.0')
+app.product_reference.path = 'FDrive.app'
+app.product_name = 'FDrive'
 extension = project.new_target(:app_extension, 'FdriveFileProvider', :osx, '26.0')
 app.add_dependency(extension)
 embed = app.new_copy_files_build_phase('Embed App Extensions')
@@ -38,6 +40,7 @@ embed.add_file_reference(extension.product_reference).settings = { 'ATTRIBUTES' 
     end
   end
   target.build_configurations.each do |configuration|
+    configuration.build_settings['PRODUCT_NAME'] = 'FDrive' if target == app
     configuration.build_settings.merge!({
       'SWIFT_VERSION' => '6.0', 'SWIFT_STRICT_CONCURRENCY' => 'complete',
       'MACOSX_DEPLOYMENT_TARGET' => '26.0', 'ARCHS' => 'arm64',
@@ -46,6 +49,7 @@ embed.add_file_reference(extension.product_reference).settings = { 'ATTRIBUTES' 
       'PRODUCT_BUNDLE_IDENTIFIER' => target == app ? 'se.burmester.fdrive.mac' : 'se.burmester.fdrive.mac.fileprovider',
       'INFOPLIST_FILE' => target == app ? 'App/Info.plist' : 'Extension/Info.plist',
       'CODE_SIGN_ENTITLEMENTS' => 'Native/fdrive.entitlements',
+      'PROVISIONING_PROFILE_SPECIFIER' => target == app ? '$(FDRIVE_APP_PROFILE)' : '$(FDRIVE_EXTENSION_PROFILE)',
       'CURRENT_PROJECT_VERSION' => '1', 'MARKETING_VERSION' => '0.1.0',
       'LD_RUNPATH_SEARCH_PATHS' => ['$(inherited)', '@executable_path/../Frameworks', '@executable_path/../../../../Frameworks'],
       'FDRIVE_APP_GROUP' => '$(TeamIdentifierPrefix)se.burmester.fdrive.mac',
@@ -55,6 +59,8 @@ embed.add_file_reference(extension.product_reference).settings = { 'ATTRIBUTES' 
     })
   end
 end
+assets = project.main_group['App'].new_file('Assets.xcassets')
+app.resources_build_phase.add_file_reference(assets)
 project.save
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)

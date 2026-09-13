@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		84A55EC7371C4DD892E2CC15 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4CBE12F3F452428595A7C79B /* Assets.xcassets */; };
 		3E3C1DAEBEC268ECE3C5BAE1 /* FdriveFileProvider.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EDCFAA9A85615F62894BFE3F /* FdriveFileProvider.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		93172E39B3ABCBF8EE9C3D9A /* ProviderEnumerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A610A21BD428E4490CEECB1 /* ProviderEnumerator.swift */; };
 		A3DCAF3CC3D423C3295C7320 /* FdriveKit in Frameworks */ = {isa = PBXBuildFile; productRef = BE6EBA89DCD780BDDCEB2CCD /* FdriveKit */; };
@@ -45,13 +46,14 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4CBE12F3F452428595A7C79B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0A610A21BD428E4490CEECB1 /* ProviderEnumerator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProviderEnumerator.swift; sourceTree = "<group>"; };
 		0CE3CC0185ACEFE1825243AA /* FdriveApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FdriveApp.swift; sourceTree = "<group>"; };
 		0E488D454B2A7EEFF081631F /* Environment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Environment.swift; sourceTree = "<group>"; };
 		22993C2B682E531BBB7D8097 /* ProviderItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProviderItem.swift; sourceTree = "<group>"; };
 		260E05F513535A2039094699 /* Environment.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Environment.swift; sourceTree = "<group>"; };
 		847FB571189D8E4BB2D46E02 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
-		C5C5FB9F4D088A95D78D6A0B /* fdrive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = fdrive.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C5C5FB9F4D088A95D78D6A0B /* FDrive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FDrive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C9AFFE0E61ACF19FF427CE0F /* FileProviderExtension.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FileProviderExtension.swift; sourceTree = "<group>"; };
 		EDCFAA9A85615F62894BFE3F /* FdriveFileProvider.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FdriveFileProvider.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -89,7 +91,7 @@
 		17E0C801C6BC9A7CC0CDF131 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C5C5FB9F4D088A95D78D6A0B /* fdrive.app */,
+				C5C5FB9F4D088A95D78D6A0B /* FDrive.app */,
 				EDCFAA9A85615F62894BFE3F /* FdriveFileProvider.appex */,
 			);
 			name = Products;
@@ -138,6 +140,7 @@
 		F0336567172BDC1E70CB4F8B /* App */ = {
 			isa = PBXGroup;
 			children = (
+				4CBE12F3F452428595A7C79B /* Assets.xcassets */,
 				0CE3CC0185ACEFE1825243AA /* FdriveApp.swift */,
 			);
 			name = App;
@@ -165,8 +168,8 @@
 			packageProductDependencies = (
 				F15EA062692339D34153EDFB /* FdriveKit */,
 			);
-			productName = fdrive;
-			productReference = C5C5FB9F4D088A95D78D6A0B /* fdrive.app */;
+			productName = FDrive;
+			productReference = C5C5FB9F4D088A95D78D6A0B /* FDrive.app */;
 			productType = "com.apple.product-type.application";
 		};
 		3631B9548CE98A027EBAB89D /* FdriveFileProvider */ = {
@@ -234,6 +237,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				84A55EC7371C4DD892E2CC15 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -287,6 +291,7 @@
 				FDRIVE_KEYCHAIN_GROUP = "$(AppIdentifierPrefix)se.burmester.fdrive.mac.shared";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Extension/Info.plist;
+				PROVISIONING_PROFILE_SPECIFIER = "$(FDRIVE_EXTENSION_PROFILE)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
@@ -316,6 +321,8 @@
 				FDRIVE_KEYCHAIN_GROUP = "$(AppIdentifierPrefix)se.burmester.fdrive.mac.shared";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
+				PRODUCT_NAME = FDrive;
+				PROVISIONING_PROFILE_SPECIFIER = "$(FDRIVE_APP_PROFILE)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
@@ -404,6 +411,7 @@
 				FDRIVE_KEYCHAIN_GROUP = "$(AppIdentifierPrefix)se.burmester.fdrive.mac.shared";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Extension/Info.plist;
+				PROVISIONING_PROFILE_SPECIFIER = "$(FDRIVE_EXTENSION_PROFILE)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
@@ -433,6 +441,8 @@
 				FDRIVE_KEYCHAIN_GROUP = "$(AppIdentifierPrefix)se.burmester.fdrive.mac.shared";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
+				PRODUCT_NAME = FDrive;
+				PROVISIONING_PROFILE_SPECIFIER = "$(FDRIVE_APP_PROFILE)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
