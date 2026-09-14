@@ -72,6 +72,12 @@ retryable fdrive responses, preserving the same pending operation instead of rep
 missing file or content conflict. Requests preserve reverse-proxy URL prefixes
 and never follow redirects carrying the lease.
 
+Lease control requests recheck current account and HTTP access restrictions without
+occupying a transfer session, so renewal works during uploads for `max_sessions=1`.
+Ordinary file requests still obey that limit. Rejected leased file requests return
+HTTP 409 with `X-Fdrive-Write-Lease-Error: invalid-or-expired`; fdrive aborts the scope
+and returns a retryable storage failure. Ordinary file conflicts retain their meaning.
+
 The process-wide gate deliberately serializes native commits across all users. Acquire
 refuses while ordinary writers have an open file or mutation in progress. During a
 lease, ordinary mutation calls fail permission checks; reads continue. Expiry or release
