@@ -1,6 +1,7 @@
 import { and, eq, isNull, like, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { officeFiles } from "../schema/app.js";
+import { supersedeDesktopEffects } from "./desktop-effects.js";
 import {
   escapeOfficeLike,
   type OfficeFileRepo,
@@ -80,6 +81,7 @@ export function createOfficeFileRepoWithRunner(
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${lockKey(move.providerId, move.rootName)}, 0))`,
         );
+        await supersedeDesktopEffects(tx, move, move.from, move.to);
         const activeScope = scope(move.providerId, move.rootName);
         // A replay can have a large destination and no source. Avoid a join on that case.
         const [source] = await tx
@@ -114,6 +116,7 @@ export function createOfficeFileRepoWithRunner(
           .update(officeFiles)
           .set({
             path: sql`${move.to} || substring(${officeFiles.path} from ${Array.from(move.from).length + 1}::integer)`,
+            revision: sql`gen_random_uuid()`,
           })
           .where(and(activeScope, prefix(move.from)));
       });
@@ -125,6 +128,7 @@ export function createOfficeFileRepoWithRunner(
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${lockKey(deletion.providerId, deletion.rootName)}, 0))`,
         );
+        await supersedeDesktopEffects(tx, deletion, deletion.path, null);
         await tx
           .update(officeFiles)
           .set({ deletedAt: deletion.at })

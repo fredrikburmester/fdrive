@@ -14,6 +14,7 @@ import {
   settings,
   tags,
 } from "../schema/app.js";
+import { supersedeDesktopEffects } from "./desktop-effects.js";
 import { validateIdentityLinkId } from "./identity-links-types.js";
 import { selectPathChunks } from "./path-chunks.js";
 import { createSystemEventRepo } from "./system-events.js";
@@ -566,7 +567,7 @@ async function moveFileTagPrefix(
   `);
   await db.execute(sql`
     update "app"."file_tags"
-    set path = case when path = ${oldPath} then ${newPath}
+    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -673,7 +674,7 @@ async function moveFavoritePrefix(
   `);
   await db.execute(sql`
     update "app"."favorites"
-    set path = case when path = ${oldPath} then ${newPath}
+    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -706,7 +707,7 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
         .values({ identityId, path, kind })
         .onConflictDoUpdate({
           target: [favorites.identityId, favorites.path],
-          set: { kind },
+          set: { kind, revision: sql`gen_random_uuid()` },
         });
     },
     async remove(identityId, path) {
@@ -767,7 +768,7 @@ async function moveFolderViewPrefix(
   `);
   await db.execute(sql`
     update "app"."folder_views"
-    set path = case when path = ${oldPath} then ${newPath}
+    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end,
         updated_at = now()
     where identity_id = ${identityId}
@@ -805,7 +806,12 @@ function createFolderViewRepo(db: Db): FolderViewRepo {
         .values({ identityId, path, mode, sort: sort ?? null, updatedAt })
         .onConflictDoUpdate({
           target: [folderViews.identityId, folderViews.path],
-          set: { mode, ...(sort === undefined ? {} : { sort }), updatedAt },
+          set: {
+            mode,
+            ...(sort === undefined ? {} : { sort }),
+            updatedAt,
+            revision: sql`gen_random_uuid()`,
+          },
         });
     },
     async remove(identityId, path) {
@@ -861,7 +867,7 @@ async function moveRecentPrefix(
   `);
   await db.execute(sql`
     update "app"."recents"
-    set path = case when path = ${oldPath} then ${newPath}
+    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -900,7 +906,7 @@ function createRecentRepo(db: Db): RecentRepo {
         .values({ identityId, path, openedAt: now })
         .onConflictDoUpdate({
           target: [recents.identityId, recents.path],
-          set: { openedAt: now },
+          set: { openedAt: now, revision: sql`gen_random_uuid()` },
         });
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
@@ -911,7 +917,11 @@ function createRecentRepo(db: Db): RecentRepo {
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      await deleteRecentPrefix(db, identityId, path, isDir);
+      await db.transaction(async (tx) => {
+        await lockMetadataIdentity(tx, identityId);
+        await supersedeDesktopEffects(tx, { identityId }, path, null);
+        await deleteRecentPrefix(tx, identityId, path, isDir);
+      });
     },
     async prune(identityId, keep) {
       await db.execute(sql`
@@ -934,6 +944,7 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
       if (oldPath === newPath) return;
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
+        await supersedeDesktopEffects(tx, { identityId }, oldPath, newPath);
         await moveFileTagPrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFavoritePrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFolderViewPrefix(tx, identityId, oldPath, newPath, isDir);
@@ -943,6 +954,7 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
     async deletePrefix(identityId, path, isDir) {
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
+        await supersedeDesktopEffects(tx, { identityId }, path, null);
         await deleteFileTagPrefix(tx, identityId, path, isDir);
         await deleteFavoritePrefix(tx, identityId, path, isDir);
         await deleteFolderViewPrefix(tx, identityId, path, isDir);

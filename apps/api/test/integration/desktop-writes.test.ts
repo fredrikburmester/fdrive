@@ -8,9 +8,10 @@ import {
   DesktopWritePairResult,
   MeResponse,
 } from "@fdrive/contracts";
+import { createDb, createDesktopEffectsRepo, createRepos } from "@fdrive/db";
 import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
 import pino from "pino";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 
@@ -39,7 +40,7 @@ it.each(["webdav", "sftpgo"] as const)(
       FDRIVE_DESKTOP_STATE_DIR: stateDir,
     });
     let loseNextLease = false;
-    const composed = await composeApp(config, pino({ level: "silent" }), () => new Date(), {
+    let composed = await composeApp(config, pino({ level: "silent" }), () => new Date(), {
       fetch: async (input, init) => {
         const response = await fetch(input, init);
         if (
@@ -339,6 +340,74 @@ it.each(["webdav", "sftpgo"] as const)(
           await fetch(new URL("Tree/nested/new.txt", dav.baseUrl), { headers: upstreamHeaders })
         ).text(),
       ).toBe("new");
+
+      // A successful publication remains completed even when PostgreSQL refuses
+      // its metadata effects. A fresh API process drains the durable work.
+      const database = createDb(postgres.connectionString);
+      try {
+        const repos = createRepos(database.db);
+        const recovery = createDesktopEffectsRepo(database.db);
+        await repos.favorites.add(writable.location.identityId, "/restored.txt", "file");
+        await database.pool.query(
+          `CREATE FUNCTION app.reject_native_metadata() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.path = '/restored.txt' THEN RAISE EXCEPTION 'injected metadata outage'; END IF; RETURN NEW; END $$`,
+        );
+        await database.pool.query(
+          "CREATE TRIGGER reject_native_metadata BEFORE UPDATE ON app.favorites FOR EACH ROW EXECUTE FUNCTION app.reject_native_metadata()",
+        );
+        const rename = await move(await stat("/restored.txt"), "root", "recovered.txt");
+        const receipt = await json(`${base}/operations/${rename}/commit`, {});
+        expect(receipt).toMatchObject({ state: "completed", item: { path: "/recovered.txt" } });
+        await vi.waitFor(
+          async () => {
+            expect(
+              (await recovery.status()).find((job) => job.operationId === rename)?.attempts,
+            ).toBeGreaterThan(0);
+          },
+          { timeout: 15000 },
+        );
+        expect((await repos.favorites.list(writable.location.identityId))[0]?.path).toBe(
+          "/restored.txt",
+        );
+        expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
+        // Preserve an independently recreated source even after recovery/replay.
+        expect(
+          (
+            await fetch(new URL("restored.txt", dav.baseUrl), {
+              method: "PUT",
+              headers: upstreamHeaders,
+              body: "peer after rename",
+            })
+          ).status,
+        ).toBe(201);
+        await composed.close();
+        await database.pool.query("DROP TRIGGER reject_native_metadata ON app.favorites");
+        await database.pool.query(
+          "UPDATE app.desktop_effects SET next_attempt_at = now() WHERE state = 'pending'",
+        );
+        composed = await composeApp(config, pino({ level: "silent" }));
+        await vi.waitFor(
+          async () => {
+            expect(await recovery.pending(writable.location.identityId)).toBe(false);
+          },
+          { timeout: 15000 },
+        );
+        expect((await repos.favorites.list(writable.location.identityId))[0]?.path).toBe(
+          "/recovered.txt",
+        );
+        expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
+        expect(
+          await (
+            await fetch(new URL("recovered.txt", dav.baseUrl), { headers: upstreamHeaders })
+          ).text(),
+        ).toBe("second");
+        expect(
+          await (
+            await fetch(new URL("restored.txt", dav.baseUrl), { headers: upstreamHeaders })
+          ).text(),
+        ).toBe("peer after rename");
+      } finally {
+        await database.close();
+      }
     } finally {
       await composed.close();
       await dav.stop();
