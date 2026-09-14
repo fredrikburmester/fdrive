@@ -160,19 +160,29 @@ public actor Catalog {
             let parent = try itemAt(folder)
             guard parent.entry.kind == "dir" else { throw DriveError.unsupported }
             var names = Set<String>(); var paths = Set<String>()
+            // The synthetic recovery container occupies ".Trash" in the root folder.
+            let reserved: Set<String> = folder == "/" && (try? item("trash")) != nil ? [".trash"] : []
             for entry in entries {
                 guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == folder,
                       entry.hasValidListingName, paths.insert(entry.path).inserted else { throw DriveError.server("Invalid folder snapshot.") }
                 // Refuse an ambiguous listing on the default case-insensitive macOS volume.
-                guard names.insert(entry.name.precomposedStringWithCanonicalMapping.lowercased()).inserted,
+                let key = entry.name.precomposedStringWithCanonicalMapping.lowercased()
+                guard names.insert(key).inserted, !reserved.contains(key),
                       !entry.name.contains(":"), entry.name != ".", entry.name != ".." else {
                     throw DriveError.server("This folder contains names that conflict on macOS. Rename them in fdrive and refresh.")
                 }
             }
             let existing = try children(parent.id)
             let pendingIds = Set(try pendingWrites().filter { $0.result == nil }.map(\.localId))
-            let kinds = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0.kind) })
-            let removed = existing.filter { kinds[$0.entry.path] != $0.entry.kind }
+            let byPath = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })
+            // A different kind or server handle at an unchanged path is a removal followed
+            // by a new item, so cached bytes never serve a recreated file. A handle that
+            // moved elsewhere in this listing reclaims its item below by remote ID.
+            let removed = existing.filter { item in
+                guard let entry = byPath[item.entry.path], entry.kind == item.entry.kind else { return true }
+                if let old = item.entry.id, let new = entry.id, old != new { return true }
+                return false
+            }
             let knownItems = removed.isEmpty ? [] : try all()
             for removedItem in removed {
                 if pendingIds.contains(removedItem.id) { continue }
@@ -257,6 +267,16 @@ public actor Catalog {
                            deleted: Array(Set(changed.filter { $0[2] == "1" }.map { $0[1] } + departures)), anchor: end)
         }
     }
+    /// Extension heartbeat. No revision bump: anchors and change enumeration are unaffected.
+    public func recordCallback(error: String? = nil) throws {
+        try execute("INSERT INTO state VALUES ('lastCallbackAt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [String(Date().timeIntervalSince1970)])
+        try execute("INSERT INTO state VALUES ('lastCallbackError',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [error ?? ""])
+    }
+    public func lastCallback() throws -> (at: Date?, error: String?) {
+        let at = try rows("SELECT value FROM state WHERE key='lastCallbackAt'").first?.first.flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
+        let error = try rows("SELECT value FROM state WHERE key='lastCallbackError'").first?.first
+        return (at, error?.isEmpty == false ? error : nil)
+    }
     public func configure(_ capabilities: WriteCapabilities) throws {
         try transaction {
             // App updates can change native filesystem flags without changing any
@@ -306,20 +326,29 @@ public actor Catalog {
         var copy = pending; copy.error = error
         try execute("UPDATE pending SET value=? WHERE key=? AND completed=0", [String(decoding: try JSONEncoder().encode(copy), as: UTF8.self), pending.key])
     }
-    public func conflictCopy(_ pending: PendingWrite) throws -> PendingWrite {
+    public static let conflictAttempts = 3
+    /// Replace the pending request with a uniquely named create. A replay returns the
+    /// current attempt; `retry` starts the next one after that name was taken as well.
+    /// Nil means every attempt collided and the error should stand.
+    public func conflictCopy(_ pending: PendingWrite, retry: Bool = false) throws -> PendingWrite? {
         try transaction {
             guard let current = try pendingWrite(key: pending.key) else { throw DriveError.writeUncertain }
-            if current.supersededOperation != nil { return current }
+            if current.supersededOperation != nil && !retry { return current }
+            let attempt = (current.conflictAttempts ?? 0) + 1
+            guard attempt <= Self.conflictAttempts else { return nil }
             var copy = current
             let request = current.request
-            let name = request.name as NSString
+            let name = (current.originalName ?? request.name) as NSString
             var suffix = name.pathExtension.isEmpty ? "" : "." + name.pathExtension
             while suffix.utf8.count > 64 { suffix.removeLast() }
-            let marker = " (conflict \(current.id.prefix(8)))"
+            let marker = " (conflict \(current.id.prefix(8))\(attempt > 1 ? "-\(attempt)" : ""))"
             var stem = name.deletingPathExtension
             while stem.utf8.count + marker.utf8.count + suffix.utf8.count > 255 { stem.removeLast() }
             let conflictName = stem + marker + suffix
-            copy.supersededOperation = request.operationId
+            copy.originalName = current.originalName ?? request.name
+            copy.supersededOperation = current.supersededOperation ?? request.operationId
+            copy.conflictAttempts = attempt
+            copy.abandonedOperations = (current.abandonedOperations ?? []) + [request.operationId]
             copy.request = WriteRequest(operationId: UUID().uuidString.lowercased(), itemId: nil, parentId: request.parentId,
                                         name: conflictName, base: nil, size: request.size, sha256: request.sha256)
             copy.error = nil

@@ -226,6 +226,7 @@ export function createApp(deps: AppDeps): AppHono {
     }
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
+      uptimeSeconds: Math.max(0, (clock().getTime() - deps.startedAt.getTime()) / 1000),
       builtOn: [...attributions.values()],
       providers: status.providers.map((provider) => ({
         type: provider.type,

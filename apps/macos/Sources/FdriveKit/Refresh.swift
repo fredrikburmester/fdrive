@@ -65,7 +65,7 @@ public func refreshCatalog(_ catalog: Catalog, client: some CatalogRefreshClient
                 try await catalog.validate(versions, expecting: expected)
             } catch {
                 try Task.checkCancellation()
-                let itemFailure = (error as? DriveError) == .authentication || (error as? DriveError) == .missing
+                let itemFailure = [.authentication, .forbidden, .missing].contains(error as? DriveError)
                 if batch.count == 1 || !itemFailure { failure = failure ?? error; continue }
                 // A batch response is all-or-nothing. Retry separately so a denied file
                 // cannot prevent validation of readable files in the same batch.

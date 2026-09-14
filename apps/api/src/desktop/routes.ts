@@ -7,6 +7,7 @@ import {
   DesktopPairRequest,
   DesktopPairSecret,
   DesktopPath,
+  DesktopRecoveryResolution,
   DesktopRecoveryResponse,
   DesktopUploadRequest,
   DesktopVersionRequest,
@@ -33,6 +34,10 @@ export function registerDesktopRoutes(
 ) {
   const base = DESKTOP_API.slice("/api/v1".length);
   const writes = deps.writes;
+  const writeService = () => {
+    if (!deps.writes) throw new ApiHttpError("not_found", "Desktop writes are unavailable");
+    return deps.writes;
+  };
   groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
     c.header("Cache-Control", "no-store");
     if (!deps.recovery)
@@ -45,9 +50,33 @@ export function registerDesktopRoutes(
           createdAt: job.createdAt.toISOString(),
           nextAttemptAt: job.nextAttemptAt.toISOString(),
         })),
+        uncertain: writes ? await writes.uncertain(deps.clock()) : [],
       }),
     );
   });
+  groups.authed.post(
+    `${base}/recovery/:identityId/:operationId/resolve`,
+    createRequireAdmin(),
+    async (c) => {
+      c.header("Cache-Control", "no-store");
+      const body = await parseBody(DesktopRecoveryResolution, c);
+      const identityId = CanonicalUuid.safeParse(c.req.param("identityId"));
+      const operationId = CanonicalUuid.safeParse(c.req.param("operationId"));
+      if (!identityId.success || !operationId.success)
+        throw new ApiHttpError("bad_request", "Invalid recovery reference");
+      const identity = await deps.identities.get(identityId.data);
+      if (!identity) throw new ApiHttpError("not_found", "Storage login no longer exists");
+      return c.json(
+        await writeService().resolve(
+          identity.id,
+          identity.accountId,
+          operationId.data,
+          body.outcome,
+          deps.clock(),
+        ),
+      );
+    },
+  );
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
@@ -106,6 +135,12 @@ export function registerDesktopRoutes(
     await pairing.cancel(c.req.param("id"), body.secret);
     return c.json({ ok: true });
   });
+  groups.public.post(`${base}/pairings/:id/confirm`, async (c) => {
+    const body = await parseBody(DesktopPairSecret, c);
+    c.header("Cache-Control", "no-store");
+    await pairing.confirm(c.req.param("id"), body.secret);
+    return c.json({ ok: true });
+  });
   groups.authed.get(`${base}/pairings/:id`, (c) => {
     accountContext(c);
     return c.json(pairing.info(c.req.param("id")));
@@ -147,10 +182,6 @@ export function registerDesktopRoutes(
   });
   if (groups.v2) {
     const v2 = groups.v2;
-    const writeService = () => {
-      if (!deps.writes) throw new ApiHttpError("not_found", "Desktop writes are unavailable");
-      return deps.writes;
-    };
     const operationId = (c: Context) => {
       const parsed = CanonicalUuid.safeParse(c.req.param("id"));
       if (!parsed.success) throw new ApiHttpError("bad_request", "Invalid operation ID");
@@ -170,6 +201,12 @@ export function registerDesktopRoutes(
       c.header("Cache-Control", "no-store");
       const body = await parseBody(DesktopPairSecret, c);
       await pairing.cancel(c.req.param("id"), body.secret);
+      return c.json({ ok: true });
+    });
+    v2.post(`${base}/pairings/:id/confirm`, async (c) => {
+      c.header("Cache-Control", "no-store");
+      const body = await parseBody(DesktopPairSecret, c);
+      await pairing.confirm(c.req.param("id"), body.secret);
       return c.json({ ok: true });
     });
     v2.get(`${base}/location`, async (c) =>

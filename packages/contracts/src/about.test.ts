@@ -9,6 +9,12 @@ describe("AboutResponse", () => {
     setupRequired: false,
   };
 
+  it("accepts API uptime while remaining compatible with older servers", () => {
+    expect(AboutResponse.parse({ ...valid, uptimeSeconds: 90.5 }).uptimeSeconds).toBe(90.5);
+    expect(AboutResponse.parse(valid).uptimeSeconds).toBeUndefined();
+    expect(AboutResponse.safeParse({ ...valid, uptimeSeconds: -1 }).success).toBe(false);
+  });
+
   it("parses a valid payload", () => {
     expect(AboutResponse.parse(valid)).toEqual(valid);
   });

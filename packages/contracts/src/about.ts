@@ -15,6 +15,8 @@ import { ProviderType } from "./providers.ts";
  */
 export const AboutResponse = z.object({
   version: z.string(),
+  /** API process uptime, sampled on request. Optional for older servers. */
+  uptimeSeconds: z.number().nonnegative().optional(),
   builtOn: z.array(
     z.object({
       name: z.string(),
