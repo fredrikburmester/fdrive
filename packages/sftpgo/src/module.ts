@@ -16,6 +16,7 @@ import { SftpgoError } from "./errors.js";
 import { probeConnection } from "./probe.js";
 import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./storage-provider.js";
 import type { SftpgoClient } from "./types.js";
+import { SFTPGO_WRITE_PROTOCOL, withSftpgoWriteLease } from "./write-lease.js";
 
 /** SFTPGo's source, linked from the About page as its AGPL-3.0 NOTICE terms ask. */
 export const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
@@ -24,6 +25,14 @@ export const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
 export const DEFAULT_SFTPGO_HOME_TEMPLATE = "sftpgo:/{username}";
 
 export const SFTPGO_CONFIG_FIELDS: readonly ProviderField[] = [
+  {
+    name: "desktopWriteMode",
+    label: "Native write enforcement",
+    kind: "text",
+    required: false,
+    maxLength: 64,
+    help: 'Use "fdrive-local-v1" only with the qualified fdrive SFTPGo image. Leave blank for read-only Finder access.',
+  },
   {
     name: "homeTemplate",
     label: "Home template",
@@ -171,10 +180,25 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
     },
 
     createStorage(instance, session, ctx): StorageProvider {
-      return createSftpgoStorageProvider({
+      const withToken = withTokenFor(session);
+      const storage = createSftpgoStorageProvider({
         client: clientFor(instance, ctx),
-        withToken: withTokenFor(session),
+        withToken,
       });
+      if (instance.config.desktopWriteMode !== SFTPGO_WRITE_PROTOCOL) return storage;
+      return {
+        ...storage,
+        withWriteLease: (action, signal) =>
+          withSftpgoWriteLease(
+            {
+              baseUrl: instance.baseUrl,
+              fetch: ctx.fetch,
+              withToken,
+              ...(signal ? { signal } : {}),
+            },
+            action,
+          ),
+      };
     },
   };
 }
