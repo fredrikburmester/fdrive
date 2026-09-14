@@ -16,7 +16,7 @@ cask "fdrive" do
   homepage "https://github.com/fredrikburmester/fdrive-web"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :tahoe"
+  depends_on macos: :tahoe
 
   app "FDrive.app"
 
