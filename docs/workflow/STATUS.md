@@ -235,6 +235,21 @@ not current instructions.
   external clients can still race the provider write. No permanent deletion or public sharing.
 - Unrelated System activity planning and `.playwright-mcp/` artifacts are preserved.
 
+## About page project information
+
+- Worktree `/private/tmp/fdrive-project-info`, branch `codex/project-info`, based on
+  `origin/main` at `26bc01e`; primary checkout changes preserved.
+- About shows the API build's commit link and sampled API uptime, GitHub, the macOS app
+  guide, Buy Me a Coffee, and ten feature guides. Existing attribution and provider-host
+  privacy remain intact. [Build metadata and uptime](../../deploy/REFERENCE.md#running-version-and-uptime).
+- Application lint/typecheck/coverage pass (`step.hG5vxd` coverage); all five About browser
+  checks pass (`step.XrLJud`), including 320–1280px/light/dark and 44px resource links.
+  Live Next dev + disposable PostgreSQL/SFTPGo verified desktop and mobile content/scrolling.
+  All 497 integration tests pass (`step.aWI1oK`). A production API image builds and reports
+  the supplied Git revision from both its runtime module and OCI label; temporary image removed.
+- macOS opens the app guide because no GitHub release is published yet. No deployment or
+  hosted Actions changes; the temporary live dev stack was stopped after verification.
+
 ## System sidebar activity: shipped
 
 Merged via PR #14 (`b38690e`); implementation `ab18549`. Original checkout work preserved.

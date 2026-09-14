@@ -20,7 +20,7 @@ function run(settings = "", readinessExit = 0) {
   for (const command of ["git", "docker", "curl"]) {
     writeFileSync(
       join(bin, command),
-      `#!/bin/bash\nprintf '%s\\n' "${command} $*"\nif [[ "$*" == *"--input-type=module-typescript"* ]]; then exit ${readinessExit}; fi\n`,
+      `#!/bin/bash\nif [[ "${command}" == "git" && "$*" == "rev-parse HEAD" ]]; then echo 0123456789abcdef0123456789abcdef01234567; exit 0; fi\nif [[ "${command}" == "docker" ]]; then echo "build revision: $FDRIVE_BUILD_REVISION"; fi\nprintf '%s\\n' "${command} $*"\nif [[ "$*" == *"--input-type=module-typescript"* ]]; then exit ${readinessExit}; fi\n`,
       {
         mode: 0o755,
       },
@@ -40,6 +40,12 @@ function run(settings = "", readinessExit = 0) {
 }
 
 describe("update startup addresses", () => {
+  it("passes the pulled checkout revision to image builds instead of a stale .env value", () => {
+    const output = run("FDRIVE_BUILD_REVISION=stale\n");
+    expect(output).toContain("build revision: 0123456789abcdef0123456789abcdef01234567");
+    expect(output).not.toContain("build revision: stale");
+  });
+
   it("runs readiness with the selected overlays and timeout before reporting success", () => {
     const output = run(
       "FDRIVE_READY_TIMEOUT_SECONDS=1800\nFDRIVE_COMPOSE_FILES=compose.example.yaml\n",

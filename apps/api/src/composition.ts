@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
@@ -111,6 +108,7 @@ import { createTokenService } from "./tokens/service.js";
 import { registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
+import { readVersion } from "./version.js";
 
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
@@ -889,16 +887,4 @@ export async function composeApp(
       await pool.end();
     },
   };
-}
-
-/**
- * Reads the api package's own version from its `package.json`, the same way
- * `main.ts` read it before this module took over app composition.
- */
-function readVersion(): string {
-  const dirName = dirname(fileURLToPath(import.meta.url));
-  const pkgPath = join(dirName, "..", "package.json");
-  const raw = readFileSync(pkgPath, "utf-8");
-  const pkg = JSON.parse(raw) as { version?: string };
-  return pkg.version ?? "0.0.0";
 }
