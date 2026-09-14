@@ -14,10 +14,12 @@ and the browser owner flow including the health panel.
 
 Remaining before the feature is complete:
 
-- Real AWS S3 and Backblaze B2 round trips, including checksum, versioning and Object Lock
-  behavior against the real services. Requires the owner to name dedicated test buckets and
-  credential profiles; no bucket has been contacted. A local MinIO with versioning and
-  default Object Lock retention has been exercised through the real browser UI.
+- Real Backblaze B2 passed through the browser UI on 2026-09-14 against the owner's test
+  bucket `fdrive-local-test` (`s3.us-west-004.backblazeb2.com`, virtual-host addressing):
+  probe, upload with full readback, B2 file version IDs recorded for archive and marker,
+  byte verification, and exact-version deletion. Real AWS S3 and B2 Object Lock remain
+  untested; a local MinIO with versioning and default Object Lock retention covered those
+  paths through the same UI.
 - Hosted CI has not run on this branch (Actions is disabled for cost). Run `CI (full)` by
   dispatch before merge.
 - A real host cutover on a deployed installation, following the documented replacement and
