@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTime } from "./format";
+import { formatRelativeTime, formatUptime } from "./format";
 
 const NOW = new Date("2026-01-01T12:00:00.000Z");
 
@@ -46,5 +46,19 @@ describe("formatRelativeTime", () => {
 
   it("treats exactly the same instant as just now", () => {
     expect(formatRelativeTime(NOW, NOW)).toBe("just now");
+  });
+});
+
+describe("formatUptime", () => {
+  it.each([
+    [0, "0s"],
+    [59.9, "59s"],
+    [60, "1m"],
+    [3599, "59m"],
+    [3600, "1h 0m"],
+    [86399, "23h 59m"],
+    [90061, "1d 1h 1m"],
+  ])("formats %s seconds as %s", (seconds, expected) => {
+    expect(formatUptime(seconds)).toBe(expected);
   });
 });

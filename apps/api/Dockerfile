@@ -42,6 +42,11 @@ ENV NODE_ENV=production
 
 COPY --from=build --chown=fdrive:fdrive /out ./
 
+# Kept in the image so a container restart cannot report a newer checkout's revision.
+ARG FDRIVE_BUILD_REVISION=
+RUN printf '%s' "$FDRIVE_BUILD_REVISION" > build-revision
+LABEL org.opencontainers.image.revision=$FDRIVE_BUILD_REVISION
+
 RUN mkdir -p /var/lib/fdrive/desktop && chown fdrive:fdrive /var/lib/fdrive/desktop
 USER fdrive
 

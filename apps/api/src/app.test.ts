@@ -224,6 +224,16 @@ describe("sftpgoHostLabel", () => {
 });
 
 describe("createApp about route", () => {
+  it("samples API uptime on each request and clamps a backwards clock", async () => {
+    const clock = vi.fn().mockReturnValue(LATER);
+    const { app } = buildApp({ clock });
+    expect(await (await app.request("/api/v1/about")).json()).toMatchObject({ uptimeSeconds: 5 });
+    clock.mockReturnValue(new Date(START.getTime() + 90_000));
+    expect(await (await app.request("/api/v1/about")).json()).toMatchObject({ uptimeSeconds: 90 });
+    clock.mockReturnValue(new Date(START.getTime() - 1_000));
+    expect(await (await app.request("/api/v1/about")).json()).toMatchObject({ uptimeSeconds: 0 });
+  });
+
   it("keeps configured attribution when no provider is enabled, without exposing endpoints", async () => {
     const { app } = buildApp({
       connectionStatus: async () => ({
@@ -251,6 +261,7 @@ describe("createApp about route", () => {
     expect(AboutResponse.safeParse(body).success).toBe(true);
     expect(body).toEqual({
       version: "1.2.3",
+      uptimeSeconds: 5,
       builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
       providers: [{ type: "sftpgo", label: null }],
       setupRequired: false,

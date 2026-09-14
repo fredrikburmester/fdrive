@@ -47,6 +47,10 @@ echo "==> before: $(git log --oneline -1)"
 git pull --ff-only
 echo "==> after:  $(git log --oneline -1)"
 
+# Capture the source being built, after pulling. Bake it into the API image.
+FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)"
+export FDRIVE_BUILD_REVISION
+
 cd "$repo/deploy"
 # Read only stack selectors and network addresses needed for startup output
 # and the health check; never source .env as executable shell code.
