@@ -42,6 +42,13 @@ describe("sftpgoModule", () => {
     expect(sftpgoHomeTemplate({ config: {} })).toBeNull();
     expect(sftpgoHomeTemplate({ config: { homeTemplate: "" } })).toBeNull();
     expect(sftpgoHomeTemplate({ config: { homeTemplate: "x:/{username}" } })).toBe("x:/{username}");
+    expect(
+      sftpgoModule.indexRootName?.({ ...INSTANCE, config: { homeTemplate: "x:/{username}" } }),
+    ).toBe("x");
+    expect(sftpgoModule.indexRootName?.(INSTANCE)).toBeNull();
+    expect(
+      sftpgoModule.indexRootName?.({ ...INSTANCE, config: { homeTemplate: "invalid" } }),
+    ).toBeNull();
   });
 
   it("probes the server", async () => {

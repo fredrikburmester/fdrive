@@ -1,7 +1,8 @@
 # FDrive for Mac
 
 The native companion provides Finder locations on macOS 26+ (Apple silicon), with optional
-writes on qualified Apache WebDAV storage. SFTPGo remains read-only.
+writes on qualified Apache WebDAV or the optional fdrive SFTPGo integration.
+Stock SFTPGo remains read-only.
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
 the first hosted release, Homebrew installation and tests on another Mac.
 
@@ -53,15 +54,20 @@ tokens can revoke access independently. Revocation cannot erase previously expor
 ## Write configuration and recovery
 
 Writes require all three: an explicit **Read and write** pairing grant, persistent server
-recovery storage (`FDRIVE_DESKTOP_STATE_DIR`), and a WebDAV provider configured with
-`desktopWriteMode: "apache-webdav-exclusive"`. The deployment Compose file mounts the
+recovery storage (`FDRIVE_DESKTOP_STATE_DIR`), and a qualified storage provider. Use
+`desktopWriteMode: "apache-webdav-exclusive"` for Apache DAV, or `"fdrive-local-v1"`
+for the [optional SFTPGo integration](../integrations/sftpgo/README.md). The deployment
+Compose file mounts the
 `fdrive-desktop` volume at `/var/lib/fdrive/desktop`. Multiple API processes must share this
 filesystem and the same PostgreSQL database.
 
-Only enable this mode for Apache mod_dav when **every writer uses the same lock-enforcing
+Only enable the Apache mode for mod_dav when **every writer uses the same lock-enforcing
 DAV endpoint**. Direct filesystem/SFTP access invalidates the guarantee. SFTPGo 2.7.5 ignores
-conditional upload headers, and its REST API bypasses WebDAV locks; it therefore cannot
-qualify. Unsupported locations retain read access and show an explanation in the Mac app.
+conditional upload headers, and its REST API bypasses WebDAV locks; stock SFTPGo cannot
+qualify. The optional pinned image enforces leases in the local filesystem across SFTP,
+REST, WebDAV and FTP. It requires a single process, exclusive ownership of storage mutations,
+qualified local homes and disabled external hooks/plugins; see its qualification boundary.
+Unsupported locations retain read access and show an explanation in the Mac app.
 Existing credentials stay read-only; Reconnect grants access without changing the domain.
 
 Protocol 2 uses `/api/v2/desktop`; protocol 1 is unchanged. New apps fall back to read-only
@@ -70,7 +76,7 @@ commit, status, acknowledgement and cancel requests. Folder and move requests us
 operation ledger. UUID handles and operation IDs never replace current account/path checks.
 
 The server hashes and fsyncs the incoming body before commit. Under an exclusive, renewed
-root DAV lock it checks the source base and destination, stages and validates new bytes,
+storage lease it checks the source base and destination, stages and validates new bytes,
 backs up an existing file, then publishes with a lease-fenced MOVE. Original backups remain
 under the reserved `/.fdrive-desktop` namespace, hidden from native ordinary reads. Failed
 staging reuses its recorded directory. A commit whose publication cannot be confirmed stays

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { Content } from "testcontainers";
 import { GenericContainer, Wait } from "testcontainers";
 import { seedFileLayout } from "../file-layout.js";
@@ -14,6 +15,8 @@ const DEFAULT_IMAGE = "drakkan/sftpgo:v2.7.5";
 const HTTP_PORT = 8080;
 /** SFTPGo's own WebDAV binding: the real class 1 server the WebDAV provider is verified against. */
 const WEBDAV_PORT = 8081;
+const SFTP_PORT = 2022;
+const FTP_PORT = 2121;
 const DATA_DIR = "/srv/sftpgo/data";
 const SEED_DUMP_CONTAINER_PATH = "/tmp/seed.json";
 const ADMIN_USERNAME = "admin";
@@ -27,6 +30,8 @@ function toArchiveTarget(absolutePath: string): string {
 
 export interface StartSftpgoOptions {
   readonly image?: string;
+  /** Builds the pinned integration image and explicitly qualifies these fixture users. */
+  readonly enforcedWriteUsers?: readonly string[];
   readonly users?: readonly SeedUser[];
   readonly folders?: readonly SeedFolder[];
   readonly files?: Readonly<Record<string, Record<string, string>>>;
@@ -38,6 +43,8 @@ export interface SftpgoContainer {
   readonly baseUrl: string;
   /** The WebDAV endpoint of the same server and users, e.g. `http://localhost:32771`. */
   readonly webdavUrl: string;
+  readonly sftp: { readonly host: string; readonly port: number };
+  readonly ftp: { readonly host: string; readonly port: number };
   readonly users: readonly SeedUser[];
   stop(): Promise<void>;
 }
@@ -90,14 +97,34 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
     })),
   ];
 
-  const started = await new GenericContainer(options.image ?? DEFAULT_IMAGE)
-    .withExposedPorts(HTTP_PORT, WEBDAV_PORT)
+  const image =
+    options.image ??
+    (options.enforcedWriteUsers ? process.env.FDRIVE_TEST_SFTPGO_WRITE_IMAGE : undefined);
+  const container =
+    options.enforcedWriteUsers && !image
+      ? await GenericContainer.fromDockerfile(
+          fileURLToPath(new URL("../../../../integrations/sftpgo/", import.meta.url)),
+        )
+          .withBuildkit()
+          .withCache(true)
+          .build()
+      : new GenericContainer(image ?? DEFAULT_IMAGE);
+  const started = await container
+    .withExposedPorts(HTTP_PORT, WEBDAV_PORT, SFTP_PORT, FTP_PORT)
     .withCopyContentToContainer(contentsToCopy)
     .withEnvironment({
       SFTPGO_HTTPD__BINDINGS__0__PORT: String(HTTP_PORT),
       SFTPGO_HTTPD__BINDINGS__0__ADDRESS: "",
       SFTPGO_WEBDAVD__BINDINGS__0__PORT: String(WEBDAV_PORT),
       SFTPGO_WEBDAVD__BINDINGS__0__ADDRESS: "",
+      SFTPGO_SFTPD__BINDINGS__0__PORT: String(SFTP_PORT),
+      SFTPGO_FTPD__BINDINGS__0__PORT: String(FTP_PORT),
+      ...(options.enforcedWriteUsers
+        ? {
+            FDRIVE_SFTPGO_WRITE_ENFORCEMENT: "fdrive-local-v1",
+            FDRIVE_SFTPGO_WRITE_USERS: options.enforcedWriteUsers.join(","),
+          }
+        : {}),
       SFTPGO_LOADDATA_FROM: SEED_DUMP_CONTAINER_PATH,
       SFTPGO_LOADDATA_MODE: "0",
       SFTPGO_DEFAULT_ADMIN_USERNAME: ADMIN_USERNAME,
@@ -124,6 +151,8 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
   return {
     baseUrl,
     webdavUrl,
+    sftp: { host: started.getHost(), port: started.getMappedPort(SFTP_PORT) },
+    ftp: { host: started.getHost(), port: started.getMappedPort(FTP_PORT) },
     users,
     stop: async () => {
       await started.stop();

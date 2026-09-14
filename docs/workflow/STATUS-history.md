@@ -872,3 +872,38 @@ Implemented in order, with commits between groups:
 
 - Previous local main history is retained on `codex/main-before-docs-cleanup`; main now
   starts from the merged PR #1. Its base tree matched the documentation checkout exactly.
+
+## 2026-09-14: Native macOS writes merged in PR #21
+
+- Worktree `/private/tmp/fdrive-macos-writes`, branch `codex/macos-writes`, based on `c16cebef`.
+  Primary WIP preserved. [Write plan](../plans/MACOS-WRITES.md), [implementation](../MACOS.md#write-configuration-and-recovery).
+- Explicit v2 grants, storage-enforced Apache DAV leases, staged uploads/backups, durable
+  PostgreSQL receipts and native SQLite recovery. Finder saves, uploads, folders, rename,
+  moves, offline retry and conflict copies work on qualified DAV. SFTPGo stays read-only:
+  its conditional headers and cross-protocol locks fail the safety gate chosen by the user.
+- Application lint/typecheck pass (`step.Yfalsq`, `step.CT3774`); coverage passed except an
+  unrelated web timeout under load (`step.m3L1Vd`), whose single-worker rerun passes
+  (`step.BNPWfz`). Full integration passes (`step.l6WCwr`: 42 API cases plus DB/provider suites).
+  Browser pairing passed earlier (`step.ClTfGm`, 3 cases plus login setup); real pairing also
+  exercised during Trash verification. All 26 Swift tests/native build pass (`step.SYgqIz`,
+  `step.kgmnmH`); final isolated signed build/signature pass (`step.XhxuO3`).
+  Final workflow gate passes all orchestration regressions, lint and diff check.
+- Isolated development-signed app `se.burmester.fdrive.mac.writetest` exercised real
+  Finder/TextEdit: materialize, save, new file/folder, rename/move, offline save/reconnect,
+  both conflict versions on storage. Repeated saves exposed a timestamp issue, fixed and
+  verified with three consecutive saves. Production app/connection untouched.
+- Recoverable Finder Trash explicitly approved and implemented. Native file/folder Trash and
+  app **Restore from Trash** pass, including nested/empty folders, exact bytes, stable IDs and
+  reconnect. Rehearsal exposed permission and descendant-notification bugs, fixed with
+  regression coverage and a one-time catalog metadata refresh. Finder drag/Undo restoration
+  was unreliable in this rehearsal; the app provides an explicit Restore control to the
+  location's top level. Finder Put Back and permanent purge remain unavailable.
+  Permanent-delete callbacks reject and ask macOS to restore the local item.
+- Remaining: SFTPGo storage-side enforcement; metadata-effect outbox; safe recovery retention/
+  reclamation and administration; broader reboot/low-disk/package/cross-domain qualification.
+  Backup capacity is conservative and refuses new writes instead of discarding recovery data.
+- Isolated test location disconnected, test app quit and test services stopped. Evidence under
+  `.fdrive-workflow/evaluation/native-write-evidence.md`. Prepared for PR review; no release or
+  production deployment. Actions configuration untouched.
+
+Merged as `0b32449d`. Evidence above records the qualified DAV delivery snapshot.
