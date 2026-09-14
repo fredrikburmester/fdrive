@@ -67,6 +67,8 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
+      args:
+        FDRIVE_BUILD_REVISION: ${FDRIVE_BUILD_REVISION:-}
     environment:
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
