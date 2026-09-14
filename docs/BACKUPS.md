@@ -57,8 +57,10 @@ verified and no reported source gaps. `partial` means a source gap or destinatio
 
 Retention keeps the union of newest daily, weekly and monthly copies, always preserving pins
 and the newest copy. A shared snapshot can be retained longer because another destination
-needs it. S3 version IDs are recorded and deletions target those exact versions. Object Lock
-failures retain the catalog and report blocked retention. There is no governance-lock bypass.
+needs it. S3 version IDs are recorded and deletions target those exact versions. Deleting a
+backup removes every copy the destinations allow; a copy kept by Object Lock stays in the
+catalog with its deadline, and the request answers with which copies remain and until when.
+There is no governance-lock bypass.
 Destination bindings with retained deliveries cannot be replaced or deleted; add a new
 destination and retire the old copies deliberately. Manual policies stop new scheduled copies.
 

@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { BackupRetainedError } from "@fdrive/backup";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Logger } from "pino";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -274,6 +275,16 @@ it("enqueues run actions and validates existing run state", async () => {
   fixture.run.state = "partial";
   expect((await fixture.request(`/runs/${runId}/retry`, "POST", {})).status).toBe(202);
   expect((await fixture.request(`/runs/${runId}`, "DELETE")).status).toBe(200);
+  fixture.engine.remove.mockRejectedValueOnce(
+    new BackupRetainedError([
+      { name: "Locked bucket", retentionUntil: "2030-01-01T00:00:00.000Z" },
+    ]),
+  );
+  const retained = await fixture.request(`/runs/${runId}`, "DELETE");
+  expect(retained.status).toBe(409);
+  expect(((await retained.json()) as { error: { message: string } }).error.message).toContain(
+    "Locked bucket until 2030-01-01T00:00:00.000Z",
+  );
   const input = {
     type: "s3",
     name: "Offsite",

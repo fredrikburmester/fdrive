@@ -25,6 +25,9 @@ not current instructions.
   `browser e2e/backups.spec.ts` (`step.lW4yLM`, 2 tests, screenshots inspected). Intermediate
   failures and their fixes are listed in the handoff document.
 - Docker Desktop stopped mid-session (socket gone); it was relaunched to continue container gates.
+- Manual browser smoke test against the real dev stack, dev SFTPGo and a local MinIO (versioned
+  and Object Lock buckets) passed; it found and fixed a 500 on deleting a run with a locked
+  copy, which now answers 409 naming the retained copies. Details in the handoff document.
 - Not done: real AWS/B2 buckets (needs the owner's bucket names), hosted CI, a real host cutover.
   No commit, merge, push or deployment requested.
 

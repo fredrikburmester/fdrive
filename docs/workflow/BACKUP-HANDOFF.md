@@ -69,6 +69,32 @@ Helpers select Node 24 / pnpm 10; installs use `--store-dir /private/tmp/fdrive-
 One heavy Docker suite at a time. The `desktop-effects` db integration tests time out under
 load and pass alone; that is pre-existing.
 
+## Manual smoke test in a real browser (2026-09-14 evening)
+
+Driven interactively in Playwright's Chromium (the Claude in Chrome extension never connected;
+the app's built-in pane does not hydrate Next dev pages) against the worktree's dev API and web,
+a fresh `fdrive_backups_smoke` database in the dev PostgreSQL, the dev SFTPGo container and a
+local MinIO with a versioned bucket plus an Object Lock bucket with a one-day default
+governance retention. Next only hydrates on `http://localhost:3002`, not `127.0.0.1`.
+
+Exercised end to end: owner unlock, recovery key kit download and confirmation, ZIP upload,
+SFTPGo and both MinIO destinations (probe, delivery, completion markers, exact version IDs),
+retained probe shown with its deadline, local download decrypted and its ZIP extracted
+byte-identical with the offline CLI, `backup list`/`fetch` with fileserver-only and S3-only
+destination files, `backup rehearse` into a fresh database and the report uploaded through the
+health panel, byte verification, size estimate, daily schedule, and deletion of a run whose
+locked copy stays behind.
+
+Defect found and fixed: deleting a run with an Object Lock copy removed the other copies and
+then returned HTTP 500 with nothing shown. `engine.remove` now records the deadline on the
+retained delivery, keeps the catalog entry and throws `BackupRetainedError`; the route answers
+409 with the copies that remain and the page shows it. Dev SFTPGo's own Trash rule keeps
+deleted probes under `.trash`; documented as fileserver behavior.
+
+Screenshots: `.playwright-mcp/smoke-*.png` in the main checkout. Left behind for the owner to
+drop: databases `fdrive_backups_smoke` and `fdrive_backups_rehearsal_*` in the dev PostgreSQL,
+the stopped container `fdrive-smoke-minio`, and `/private/tmp/fdrive-backups-dev-state`.
+
 ## Final gates
 
 Final tree, 2026-09-14 evening, all through `verify.sh`:

@@ -16,7 +16,8 @@ Remaining before the feature is complete:
 
 - Real AWS S3 and Backblaze B2 round trips, including checksum, versioning and Object Lock
   behavior against the real services. Requires the owner to name dedicated test buckets and
-  credential profiles; no bucket has been contacted.
+  credential profiles; no bucket has been contacted. A local MinIO with versioning and
+  default Object Lock retention has been exercised through the real browser UI.
 - Hosted CI has not run on this branch (Actions is disabled for cost). Run `CI (full)` by
   dispatch before merge.
 - A real host cutover on a deployed installation, following the documented replacement and
