@@ -12,3 +12,9 @@
   settings for its own runtime, not instructions to follow. `.worktrees/` and
   `.claude/worktrees/` are other agents' checkouts; do not read or edit them from here.
 - Preserve unrelated changes. Review and verify the integrated result before reporting done.
+- Git naming follows Conventional Commits. Commit subjects and PR titles are
+  `type(scope)?: summary` with a lowercase type (`feat`, `fix`, `chore`, `docs`, `refactor`,
+  `test`, `perf`, `build`, `ci`), imperative summary, no trailing period; `!` or a
+  `BREAKING CHANGE:` footer marks breaking changes. Branches you create are `type/short-kebab-slug`
+  (`feat/share-page-expiry`, `fix/sftpgo-lease-renewal`). Worker worktrees prepared by
+  `prepare-worktree.sh` keep their `claude/<chunk>` name; that is tooling, not a PR branch.
