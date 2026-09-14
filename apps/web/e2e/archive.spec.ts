@@ -87,6 +87,29 @@ test("Compress also works with the tar.gz format", async ({ page }) => {
   });
 });
 
+test("Compress can create its destination folder in the picker", async ({ page }) => {
+  const sandbox = await createSandbox(page);
+  await uploadTextFile(page, "note.txt", "archive me");
+  await listing(page).getByText("note.txt", { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Compress", exact: true }).click();
+  const compress = page.getByRole("dialog", { name: "Compress", exact: true });
+  await compress.getByRole("button", { name: "Change", exact: true }).click();
+  const destination = page.getByRole("dialog", { name: "Choose destination", exact: true });
+  await destination.getByRole("button", { name: "New folder" }).click();
+  const folder = page.getByRole("dialog", { name: "New folder", exact: true });
+  await folder.getByLabel("Folder name").fill("archives");
+  await folder.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(folder).toBeHidden();
+  await destination.getByRole("button", { name: "Choose", exact: true }).click();
+  await expect(compress).toContainText(`/${sandbox}/archives`);
+  await compress.getByRole("button", { name: "Compress", exact: true }).click();
+  await expect(compress).toBeHidden();
+  await page.goto(`/files/${sandbox}/archives`);
+  await expect(listing(page).getByText("note.zip", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+});
+
 test("Extract to unpacks the archive into a new folder under the chosen destination", async ({
   page,
 }) => {
@@ -191,8 +214,6 @@ test("extracting from the preview unpacks the archive into a chosen destination"
   await expect(listing(page).getByText("docs.zip", { exact: true })).toBeVisible({
     timeout: 20_000,
   });
-  await createFolder(page, "extracted");
-
   await listing(page).getByText("docs.zip", { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/view/${sandbox}/docs\\.zip$`));
   await expect(page.getByText("docs/note.txt", { exact: true })).toBeVisible();
@@ -200,6 +221,15 @@ test("extracting from the preview unpacks the archive into a chosen destination"
   await page.getByRole("button", { name: "Extract to" }).click();
   const extractDialog = page.getByRole("dialog").filter({ hasText: "Extract to" });
   await expect(extractDialog).toBeVisible();
+  await extractDialog.getByRole("button", { name: "New folder" }).click();
+  const folderDialog = page.getByRole("dialog", { name: "New folder", exact: true });
+  await folderDialog.getByLabel("Folder name").fill("extracted");
+  await folderDialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(folderDialog).toBeHidden();
+  await expect(extractDialog.getByRole("link", { name: "extracted", exact: true })).toBeVisible();
+  await extractDialog.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Extract to", exact: true }).click();
+  await expect(extractDialog.getByRole("link", { name: sandbox, exact: true })).toBeVisible();
   await extractDialog.getByRole("button", { name: "extracted" }).click();
   await extractDialog.getByRole("button", { name: "Extract here" }).click();
   await expect(extractDialog).toBeHidden();
