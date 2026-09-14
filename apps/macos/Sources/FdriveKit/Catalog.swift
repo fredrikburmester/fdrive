@@ -160,19 +160,29 @@ public actor Catalog {
             let parent = try itemAt(folder)
             guard parent.entry.kind == "dir" else { throw DriveError.unsupported }
             var names = Set<String>(); var paths = Set<String>()
+            // The synthetic recovery container occupies ".Trash" in the root folder.
+            let reserved: Set<String> = folder == "/" && (try? item("trash")) != nil ? [".trash"] : []
             for entry in entries {
                 guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == folder,
                       entry.hasValidListingName, paths.insert(entry.path).inserted else { throw DriveError.server("Invalid folder snapshot.") }
                 // Refuse an ambiguous listing on the default case-insensitive macOS volume.
-                guard names.insert(entry.name.precomposedStringWithCanonicalMapping.lowercased()).inserted,
+                let key = entry.name.precomposedStringWithCanonicalMapping.lowercased()
+                guard names.insert(key).inserted, !reserved.contains(key),
                       !entry.name.contains(":"), entry.name != ".", entry.name != ".." else {
                     throw DriveError.server("This folder contains names that conflict on macOS. Rename them in fdrive and refresh.")
                 }
             }
             let existing = try children(parent.id)
             let pendingIds = Set(try pendingWrites().filter { $0.result == nil }.map(\.localId))
-            let kinds = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0.kind) })
-            let removed = existing.filter { kinds[$0.entry.path] != $0.entry.kind }
+            let byPath = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })
+            // A different kind or server handle at an unchanged path is a removal followed
+            // by a new item, so cached bytes never serve a recreated file. A handle that
+            // moved elsewhere in this listing reclaims its item below by remote ID.
+            let removed = existing.filter { item in
+                guard let entry = byPath[item.entry.path], entry.kind == item.entry.kind else { return true }
+                if let old = item.entry.id, let new = entry.id, old != new { return true }
+                return false
+            }
             let knownItems = removed.isEmpty ? [] : try all()
             for removedItem in removed {
                 if pendingIds.contains(removedItem.id) { continue }

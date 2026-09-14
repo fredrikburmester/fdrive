@@ -3,7 +3,7 @@ import Foundation
 public enum DriveError: Error, LocalizedError, Sendable, Equatable {
     case invalidServer, authentication, unavailable, missing, expiredSnapshot, changedContent, unsupported, cancelled
     case server(String), database(String)
-    case writeConflict(String), writeUncertain, permission, quota
+    case writeConflict(String), writeUncertain, permission, quota, forbidden, diskFull
     public var errorDescription: String? {
         switch self {
         case .invalidServer: "Enter an HTTPS fdrive address. HTTP is supported only on loopback for development."
@@ -18,6 +18,8 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
         case .writeUncertain: "The server could not confirm this save. Your pending copy is preserved in Recovery."
         case .permission: "Write access is unavailable. Your pending copy is preserved in Recovery."
         case .quota: "Storage is full or this file exceeds the upload limit. Your pending copy is preserved."
+        case .forbidden: "This connection does not have access to this item."
+        case .diskFull: "Not enough free disk space on this Mac for this file."
         case .server(let message), .database(let message): message
         }
     }
@@ -188,6 +190,12 @@ public func canonicalPath(_ raw: String) throws -> String {
     let parts = raw.split(separator: "/", omittingEmptySubsequences: true)
     guard !parts.contains(".."), !parts.contains(".") else { throw DriveError.unsupported }
     return "/" + parts.joined(separator: "/")
+}
+/// Refuse a transfer that would fill the volume; the headroom keeps the system usable.
+public func requireFreeSpace(_ bytes: Int64, at directory: URL, headroom: Int64 = 512 * 1024 * 1024) throws {
+    let attributes = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
+    guard let available = (attributes[.systemFreeSize] as? NSNumber)?.int64Value,
+          available - headroom >= bytes else { throw DriveError.diskFull }
 }
 public func parentPath(_ path: String) -> String {
     let parts = path.split(separator: "/").dropLast()
