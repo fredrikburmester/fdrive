@@ -2,6 +2,9 @@ import { definePackageConfig } from "@fdrive/config/vitest.preset";
 
 export default definePackageConfig({
   test: {
+    // Exercise this raw SQL repository on real PostgreSQL in both the coverage
+    // and integration gates. Do not exclude the new persistence boundary.
+    exclude: ["**/node_modules/**", "**/dist/**", "test/integration/!(desktop).test.ts"],
     coverage: {
       exclude: [
         "src/**/*.test.ts",

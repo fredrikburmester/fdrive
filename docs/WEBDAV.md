@@ -14,7 +14,7 @@ Verified against a real server in CI (SFTPGo's own WebDAV binding, see
 and nginx `ngx_http_dav_module` are intended targets but not part of CI; see the limitations.
 
 Not implemented: Digest or OAuth authentication, fdrive-owned shares, a remote index walker,
-Office admission, server-side zip, WebDAV locking (`LOCK`/`UNLOCK`), and `{username}` path
+Office admission, server-side zip, general-purpose WebDAV locking, and `{username}` path
 templates. The extension points are those in [the provider guide](STORAGE-PROVIDERS.md).
 
 ## Decisions
@@ -26,7 +26,7 @@ templates. The extension points are those in [the provider guide](STORAGE-PROVID
 | Authentication | Basic on every request from `session.getCredential()`; no `mint` | WebDAV has no token flow; the guide's Basic-auth path. No retry on 401: the credential itself is wrong or revoked. |
 | `authenticate` | `PROPFIND` Depth 0 on the endpoint root with the credential | Proves the credential and that the root is a collection. 401 → `unauthorized`, 403 → `forbidden`, network/5xx → `upstream_unavailable`. |
 | `probe` | `OPTIONS` on the endpoint; ok when 2xx with a `DAV` header containing class `1`, or 401/403 carrying `WWW-Authenticate` | Servers commonly refuse anonymous `OPTIONS`; a challenge still proves a reachable HTTP endpoint. Reuse SFTPGo's URL checks: http(s) only, no userinfo, no metadata hosts, 5 s timeout, 1 KiB body bound. |
-| Config fields | none | Endpoint and label are row fields. Nothing else is needed for class 1 servers. |
+| Config fields | optional `desktopWriteMode` | Only `apache-webdav-exclusive` enables the qualified native-write lease; ordinary DAV use needs no value. |
 | Credential fields | `username` (text, required, 255) and `password` (password, required) | Confirmation forms already render `password`; `ctx.expectedUsername` fills `username` on link/unlink. |
 | Redirects | `redirect: "manual"`; only a stat PROPFIND 301/308 to the exact same URL plus `/` is retried | Other redirects fail as `upstream_unavailable`. The one retry uses a locally constructed same-origin collection URL; operators enter the final endpoint URL. |
 | Capabilities | `zip` false, `setModifiedAt` false, `atomicMove` true, `trash` true, `shares` false, `office` false, `index` false, `scopeMapping` false | Only `MOVE` is a native single operation. No standard mtime setter; `X-OC-Mtime` is sent on upload as best effort but not advertised. |
@@ -87,6 +87,6 @@ error bodies capped at 1 KiB and 4 KiB.
   memory predictable. A streaming multistatus parser is not planned.
 - **Digest authentication** is refused (`unauthorized` with a clear detail when the challenge
   has no `Basic` scheme). Operators enable Basic over HTTPS.
-- **Locks**: a locked resource answers 423; mapped to `conflict`. fdrive never takes locks.
+- **Locks**: a locked resource answers 423; mapped to `conflict`. Native writes can take an exclusive root lock in the explicitly qualified Apache configuration; see [macOS writes](MACOS.md#write-configuration-and-recovery). Other DAV operations still respect the upstream lock.
 - **Second real server**: `hacdias/webdav` or Apache `mod_dav` in the integration profile
   would widen coverage. Deferred to keep one heavy container suite per run.

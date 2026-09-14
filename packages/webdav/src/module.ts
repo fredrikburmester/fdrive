@@ -15,6 +15,7 @@ import { WebdavError } from "./errors.js";
 import { probeConnection } from "./probe.js";
 import { createWebdavStorageProvider } from "./storage-provider.js";
 import type { WebdavClient } from "./types.js";
+import { withWebdavWriteLease } from "./write-lease.js";
 
 export const WEBDAV_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
@@ -70,7 +71,16 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
   return {
     type: "webdav",
     label: "WebDAV",
-    configFields: [],
+    configFields: [
+      {
+        name: "desktopWriteMode",
+        label: "Mac write support",
+        kind: "text",
+        required: false,
+        maxLength: 32,
+        help: "Use apache-webdav-exclusive only for Apache storage where every writer obeys WebDAV locks.",
+      },
+    ],
     credentialFields: WEBDAV_CREDENTIAL_FIELDS,
     capabilities: {
       zip: false,
@@ -108,7 +118,7 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
     },
 
     createStorage(instance, session: StorageSession, ctx): StorageProvider {
-      return createWebdavStorageProvider({
+      const storage = createWebdavStorageProvider({
         client: clientFor(instance, ctx),
         // The username is the identity's bound name, never the stored
         // credential's, so a credential can only ever act as its identity.
@@ -117,6 +127,26 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
           password: (await session.getCredential()).password ?? "",
         }),
       });
+      if (instance.config.desktopWriteMode !== "apache-webdav-exclusive") return storage;
+      return {
+        ...storage,
+        async withWriteLease(action, signal) {
+          const credential = {
+            username: session.externalUsername,
+            password: (await session.getCredential()).password ?? "",
+          };
+          return withWebdavWriteLease(
+            {
+              baseUrl: instance.baseUrl,
+              credential,
+              fetch: ctx.fetch,
+              ...(signal ? { signal } : {}),
+            },
+            (client) =>
+              action(createWebdavStorageProvider({ client, credential: async () => credential })),
+          );
+        },
+      };
     },
   };
 }

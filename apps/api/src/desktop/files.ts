@@ -14,16 +14,21 @@ interface Snapshot {
   expires: number;
   entries: DesktopEntry[];
 }
-export function createDesktopFiles(deps: Pick<DesktopDeps, "clock" | "trashPathForStorage">) {
+export const DESKTOP_INTERNAL_ROOT = "/.fdrive-desktop";
+export function createDesktopFiles(
+  deps: Pick<DesktopDeps, "clock" | "trashPathForStorage">,
+  writeProtocol = false,
+) {
   const snapshots = new Map<string, Snapshot>();
   const hashing = new Set<string>();
   function allowed(principal: Principal, path: string, browse = false) {
     const grants = principal.tokenAccess;
     const trash = deps.trashPathForStorage(principal.storage);
     return (
-      grants?.mode === "read" &&
+      (grants?.mode === "read" || (writeProtocol && grants?.mode === "full")) &&
       grants.paths.some((root) => contains(root, path) || (browse && contains(path, root))) &&
-      !(trash && contains(trash, path))
+      !(trash && contains(trash, path)) &&
+      !contains(DESKTOP_INTERNAL_ROOT, path)
     );
   }
   function authorize(principal: Principal, raw: string, browse = false) {

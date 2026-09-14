@@ -1,5 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import type { DesktopCredential } from "@fdrive/contracts";
+import type {
+  DesktopAccessMode,
+  DesktopCredential,
+  DesktopWriteCapabilities,
+  DesktopWriteCredential,
+} from "@fdrive/contracts";
 import type { ApiTokenRepo, IdentityRepo, ProviderRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
@@ -10,17 +15,28 @@ import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
 
+type IssuedCredential = Omit<DesktopCredential, "location"> & {
+  location: DesktopCredential["location"] | DesktopWriteCredential["location"];
+};
+
 interface Pair {
   deviceName: string;
+  protocolVersion: 1 | 2;
   owner: string;
   code: string;
   secretHash: string;
   expires: number;
   cancelled?: boolean;
-  approval?: { accountId: string; identityIds: string[] };
-  result?: Promise<DesktopCredential[]>;
+  approval?: {
+    accountId: string;
+    identityIds: string[];
+    access: Record<string, DesktopAccessMode>;
+  };
+  result?: Promise<IssuedCredential[]>;
 }
 export interface DesktopDeps {
+  writeCapabilities?: (principal: Principal) => Promise<DesktopWriteCapabilities>;
+  maxUploadBytes?: number;
   apiTokens: ApiTokenRepo;
   identities: IdentityRepo;
   providers: ProviderRepo;
@@ -51,26 +67,45 @@ export function createDesktopPairing(deps: DesktopDeps) {
       );
     return pair;
   }
-  async function location(principal: Principal) {
+  async function location(principal: Principal, protocolVersion: 1 | 2 = 1) {
     const identity = await deps.identities.get(principal.identityId);
     const provider = identity && (await deps.providers.get(identity.providerId));
     if (!identity || identity.accountId !== principal.accountId || !provider?.enabled)
       throw new ApiHttpError("unauthorized", "Storage login is no longer available");
-    return {
-      protocolVersion: 1 as const,
+    const common = {
       accountId: principal.accountId,
       identityId: identity.id,
       providerId: provider.id,
       displayName: provider.label || new URL(provider.baseUrl).host,
       username: identity.externalUsername,
       paths: principal.tokenAccess?.paths ?? [],
-      readOnly: true as const,
+    };
+    if (protocolVersion === 1)
+      return { ...common, protocolVersion: 1 as const, readOnly: true as const };
+    const capabilities =
+      principal.tokenAccess?.mode === "full" && deps.writeCapabilities
+        ? await deps.writeCapabilities(principal)
+        : { create: false, update: false, move: false, trash: false, restore: false };
+    return {
+      ...common,
+      protocolVersion: 2 as const,
+      readOnly: !Object.values(capabilities).some(Boolean),
+      capabilities,
+      maxUploadBytes: deps.maxUploadBytes ?? 16 * 1024 ** 3,
+      ...(principal.tokenAccess?.mode === "full" && !Object.values(capabilities).some(Boolean)
+        ? {
+            writeUnavailableReason:
+              provider.type === "sftpgo"
+                ? "SFTPGo cannot enforce safe conditional writes. This location remains read-only."
+                : "Safe writes and persistent upload recovery must be configured by your administrator.",
+          }
+        : {}),
     };
   }
-  async function issue(pair: Pair): Promise<DesktopCredential[]> {
+  async function issue(pair: Pair): Promise<IssuedCredential[]> {
     const approval = pair.approval;
     if (!approval) throw new ApiHttpError("conflict", "Connection has not been approved");
-    const created: DesktopCredential[] = [];
+    const created: IssuedCredential[] = [];
     const issued: string[] = [];
     try {
       for (const identityId of approval.identityIds) {
@@ -80,7 +115,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
           name: `Mac: ${pair.deviceName}`,
           identityId,
           expiresInDays: 365,
-          access: { mode: "read", paths: ["/"] },
+          access: { mode: approval.access[identityId] ?? "read", paths: ["/"] },
         });
         issued.push(credential.item.id);
         if (pair.cancelled || pair.expires <= deps.clock().getTime())
@@ -92,7 +127,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
           token: credential.token,
           tokenId: credential.item.id,
           expiresAt: credential.item.expiresAt as string,
-          location: await location(principal),
+          location: await location(principal, pair.protocolVersion),
         });
       }
       return created;
@@ -104,7 +139,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
   return {
     resolve,
     location,
-    create(deviceName: string, address: string) {
+    create(deviceName: string, address: string, protocolVersion: 1 | 2 = 1) {
       const owner = addressBlock(address);
       prune();
       if (
@@ -116,7 +151,14 @@ export function createDesktopPairing(deps: DesktopDeps) {
       const secret = randomBytes(32).toString("base64url");
       const code = randomBytes(4).toString("hex").toUpperCase();
       const expires = deps.clock().getTime() + 300_000;
-      pairs.set(id, { deviceName, owner, code, expires, secretHash: hashApiToken(secret) });
+      pairs.set(id, {
+        deviceName,
+        protocolVersion,
+        owner,
+        code,
+        expires,
+        secretHash: hashApiToken(secret),
+      });
       return { id, secret, code, expiresAt: new Date(expires).toISOString() };
     },
     info(id: string) {
@@ -126,11 +168,26 @@ export function createDesktopPairing(deps: DesktopDeps) {
         code: pair.code,
         expiresAt: new Date(pair.expires).toISOString(),
         approved: pair.approval !== undefined,
+        ...(pair.protocolVersion === 2 ? { supportsWrites: true } : {}),
       };
     },
-    async approve(id: string, accountId: string, identityIds: string[]) {
+    async approve(
+      id: string,
+      accountId: string,
+      identityIds: string[],
+      access: Record<string, DesktopAccessMode> = {},
+    ) {
       const pair = get(id);
       if (pair.approval) throw new ApiHttpError("conflict", "Connection already approved");
+      if (
+        Object.keys(access).some((identityId) => !identityIds.includes(identityId)) ||
+        (pair.protocolVersion === 1 && Object.values(access).some((mode) => mode !== "read"))
+      ) {
+        throw new ApiHttpError(
+          "bad_request",
+          "Write access requires a new connection from an updated Mac app",
+        );
+      }
       for (const identityId of identityIds) {
         const identity = await deps.identities.get(identityId);
         const provider = identity && (await deps.providers.get(identity.providerId));
@@ -143,7 +200,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       // Recheck after asynchronous ownership reads; two browser approvals cannot race.
       if (get(id) !== pair || pair.approval)
         throw new ApiHttpError("conflict", "Connection already approved");
-      pair.approval = { accountId, identityIds: [...new Set(identityIds)] };
+      pair.approval = { accountId, identityIds: [...new Set(identityIds)], access: { ...access } };
     },
     async poll(id: string, secret: string) {
       const pair = get(id);

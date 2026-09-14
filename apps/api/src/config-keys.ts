@@ -210,6 +210,14 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
+    key: "FDRIVE_DESKTOP_STATE_DIR",
+    description: "Persistent private directory for Mac upload recovery. Unset disables writes.",
+    default: null,
+    example: "/var/lib/fdrive/desktop",
+    secret: false,
+    subsystem: "core",
+  },
+  {
     key: "FDRIVE_JOB_MAX_BYTES",
     description: "Cap on the bytes a single archive/extract job may read, in bytes.",
     default: "10737418240",

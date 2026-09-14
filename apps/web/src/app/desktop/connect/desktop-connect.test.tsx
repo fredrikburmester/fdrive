@@ -21,6 +21,26 @@ function mount() {
     </QueryClientProvider>,
   );
 }
+it("defaults v2 grants to read and sends only explicitly selected write access", async () => {
+  vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
+    deviceName: "Mac",
+    code: "ABCD1234",
+    expiresAt: new Date().toISOString(),
+    approved: false,
+    supportsWrites: true,
+  });
+  const approve = vi.spyOn(apiClient, "approveDesktopPairing").mockResolvedValue({ ok: true });
+  mount();
+  fireEvent.click(await screen.findByRole("checkbox"));
+  const access = screen.getByRole("combobox", { name: "Personal access" });
+  expect((access as HTMLSelectElement).value).toBe("read");
+  fireEvent.change(access, { target: { value: "full" } });
+  fireEvent.change(access, { target: { value: "read" } });
+  fireEvent.change(access, { target: { value: "full" } });
+  fireEvent.click(screen.getByRole("button", { name: "Allow selected logins" }));
+  await screen.findByText("Connection approved");
+  expect(approve).toHaveBeenCalledWith("request", [identity.id], { [identity.id]: "full" });
+});
 it("requires explicit login selection and displays approval without credentials", async () => {
   vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
     deviceName: "Mac",
