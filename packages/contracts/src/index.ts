@@ -25,6 +25,7 @@ export type {
 } from "./client.ts";
 export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from "./client.ts";
 export * from "./desktop.ts";
+export * from "./desktop-writes.ts";
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
 export { FsEvent, JobEvent, PingEvent, SseEvent } from "./events.ts";
 export {

@@ -326,3 +326,51 @@ export const systemEvents = appSchema.table(
     index("system_events_subsystem_at_idx").on(table.subsystem, table.at.desc(), table.id.desc()),
   ],
 );
+
+/** Lazily registered desktop items; paths never act as authorization. */
+export const desktopItems = appSchema.table(
+  "desktop_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    kind: text("kind").notNull(),
+    metadataVersion: uuid("metadata_version").notNull().defaultRandom(),
+    contentVersion: text("content_version"),
+    originalPath: text("original_path"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("desktop_items_live_path")
+      .on(table.identityId, table.path)
+      .where(sql`${table.deletedAt} is null`),
+    index("desktop_items_identity").on(table.identityId),
+  ],
+);
+
+/** Immutable request identity plus durable mutation/recovery state. */
+export const desktopOperations = appSchema.table(
+  "desktop_operations",
+  {
+    id: uuid("id").notNull(),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    requestHash: text("request_hash").notNull(),
+    request: jsonb("request").$type<Record<string, unknown>>().notNull(),
+    state: text("state").notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.identityId, table.id] }),
+    index("desktop_operations_account").on(table.accountId),
+    index("desktop_operations_cleanup").on(table.state, table.updatedAt),
+  ],
+);

@@ -15,6 +15,7 @@ export const DesktopPath = z
 export const DesktopPairRequest = z.strictObject({ deviceName: z.string().trim().min(1).max(100) });
 export const DesktopPairApproval = z.strictObject({
   identityIds: z.array(CanonicalUuid).min(1).max(16),
+  access: z.record(CanonicalUuid, z.enum(["read", "full"])).optional(),
 });
 export const DesktopPairSecret = z.strictObject({
   secret: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
@@ -30,6 +31,7 @@ export const DesktopPairInfo = z.object({
   code: z.string(),
   expiresAt: z.iso.datetime(),
   approved: z.boolean(),
+  supportsWrites: z.boolean().optional(),
 });
 export const DesktopLocation = z.object({
   protocolVersion: z.literal(DESKTOP_PROTOCOL_VERSION),

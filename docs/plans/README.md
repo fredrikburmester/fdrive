@@ -8,6 +8,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
+| [macOS writes](MACOS-WRITES.md) | Native writes, durable recovery and storage-enforced publication |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
 | [Provider names](PROVIDER-NAMES.md) | Friendly names during setup, in login selection and in existing Finder locations |
 
