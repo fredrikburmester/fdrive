@@ -13,6 +13,19 @@ import type { BackupStore, DestinationRecord, RunRecord } from "./store.js";
 import { digest, fileStream, ignoreCleanupError } from "./streams.js";
 import type { BackupDestination, BackupSource } from "./types.js";
 
+/** Deletion stopped at copies a destination keeps under retention; the catalog keeps them. */
+export class BackupRetainedError extends Error {
+  constructor(readonly retained: { name: string; retentionUntil: string | null }[]) {
+    super(
+      `Retention keeps this backup at ${retained
+        .map((copy) =>
+          copy.retentionUntil ? `${copy.name} until ${copy.retentionUntil}` : copy.name,
+        )
+        .join(", ")}. Copies without retention were deleted.`,
+    );
+    this.name = "BackupRetainedError";
+  }
+}
 export interface EngineOptions {
   store: BackupStore;
   source: BackupSource;
@@ -485,22 +498,38 @@ export class BackupEngine {
   }
   async remove(id: string): Promise<void> {
     const { store } = this.options;
-    await store.lockRun(id, async (client, run) => {
+    const retained = await store.lockRun(id, async (client, run) => {
       if (!run || run.pinned || ["queued", "capturing", "transferring"].includes(run.state))
         throw Error("Backup is pinned or running");
+      const retained: BackupRetainedError["retained"] = [];
       for (const delivery of await store.deliveries(id)) {
         if (delivery.state === "deleted" || !delivery.object_key) continue;
         const destination = await store.destination(delivery.destination_id);
         if (!destination || destination.revision !== delivery.destination_revision)
           throw Error("Destination changed; cannot prune its backups");
         const transport = await this.options.destination(destination);
-        // Object Lock failures preserve the catalog. Retrying deletion is idempotent.
-        await transport.remove(delivery.object_key, delivery.version_id ?? undefined);
+        try {
+          await transport.remove(delivery.object_key, delivery.version_id ?? undefined);
+        } catch (error) {
+          // A copy the destination keeps under retention is status, not corruption: record
+          // its deadline, keep the catalog entry and continue with the other copies.
+          const information = await transport.information(delivery.object_key).catch(() => null);
+          if (!information?.retentionUntil) throw error;
+          await client.query("update app.backup_deliveries set retention_until=$2 where id=$1", [
+            delivery.id,
+            information.retentionUntil,
+          ]);
+          retained.push({ name: delivery.name, retentionUntil: information.retentionUntil });
+          continue;
+        }
         await transport.remove(`${run.id}.complete.json`, delivery.marker_version_id ?? undefined);
         await store.setDelivery(delivery.id, "deleted", null, null, null);
       }
+      if (retained.length) return retained;
       if (run.artifact) await rm(this.artifact(id), { force: true });
       await client.query("update app.backup_runs set artifact=null where id=$1", [id]);
+      return retained;
     });
+    if (retained.length) throw new BackupRetainedError(retained);
   }
 }

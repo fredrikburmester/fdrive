@@ -1,6 +1,6 @@
 import { open } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { readBounded, withBackupWriter } from "@fdrive/backup";
+import { BackupRetainedError, readBounded, withBackupWriter } from "@fdrive/backup";
 import {
   BackupAttachmentInput,
   BackupDestinationInput,
@@ -249,7 +249,12 @@ export function registerBackupRoutes(
     return c.json({ ok: true });
   });
   router.delete(`${BASE}/runs/:id`, async (c) => {
-    await module.engine.remove(id(c.req.param("id")));
+    try {
+      await module.engine.remove(id(c.req.param("id")));
+    } catch (error) {
+      if (error instanceof BackupRetainedError) throw new ApiHttpError("conflict", error.message);
+      throw error;
+    }
     return c.json({ ok: true });
   });
   router.get(`${BASE}/runs/:id/download`, async (c) => {

@@ -362,7 +362,14 @@ it("captures, verifies, discovers and downloads one immutable archive to indepen
   await expect(worker.remove(id)).rejects.toThrow("pinned");
   await db.pool.query("update app.backup_runs set pinned=false where id=$1", [id]);
   transport.lock(true);
-  await expect(worker.remove(id)).rejects.toThrow("Object Lock");
+  await expect(worker.remove(id)).rejects.toThrow(
+    "Retention keeps this backup at Bucket until 2030-01-01T00:00:00.000Z",
+  );
+  expect((await store.deliveries(id))[0]).toMatchObject({
+    state: "complete",
+    retention_until: new Date("2030-01-01T00:00:00.000Z"),
+  });
+  expect((await store.run(id))?.artifact).not.toBeNull();
   transport.lock(false);
   await worker.remove(id);
   expect((await store.run(id))?.artifact).toBeNull();
