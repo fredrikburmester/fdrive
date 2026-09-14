@@ -7,6 +7,7 @@ import {
   createDesktopEffectsRepo,
   createDesktopRepo,
   createOfficeFileRepo,
+  createOfficeWriteScope,
   createRepos,
   type DesktopEffectContext,
   migrate,
@@ -61,7 +62,7 @@ async function fixture() {
       request: {},
       state: "committing",
     });
-    const effects: DesktopEffectContext = {
+    const contextToCapture: DesktopEffectContext = {
       from: "/old",
       to: "/new",
       directory: true,
@@ -69,6 +70,7 @@ async function fixture() {
       office: null,
       ...context,
     };
+    const effects = await desktop.captureEffects(identity.id, account.id, contextToCapture);
     expect(await desktop.complete(identity.id, account.id, id, result, effects)).toBe(true);
     return { id, result, effects };
   };
@@ -154,7 +156,7 @@ it("atomically records a receipt and replays metadata once across pools, includi
   );
 });
 
-it("rolls back every metadata change and completion on failure; restart retries without storage or Mac state", async () => {
+it("commits metadata before delivery and retries only notification after a failure or restart", async () => {
   const f = await fixture();
   await f.seed("/old/a");
   const job = await f.commit();
@@ -162,8 +164,10 @@ it("rolls back every metadata change and completion on failure; restart retries 
     throw Error("secret credentials should not enter status");
   });
   expect(await f.worker.processNext(failing, f.identity.id)).toMatchObject({ state: "failed" });
-  expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/old/a");
-  expect((await f.repos.fileTags.pathsForTag(f.identity.id, f.tag.id))[0]).toBe("/old/a");
+  expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/new/a");
+  expect((await f.repos.fileTags.pathsForTag(f.identity.id, f.tag.id))[0]).toBe("/new/a");
+  // Recreated source rows must survive a notification-only retry.
+  await f.seed("/old/a");
   expect((await f.worker.status()).find((j) => j.operationId === job.id)).toMatchObject({
     attempts: 1,
     lastError: "Metadata recovery failed; retry scheduled.",
@@ -177,6 +181,10 @@ it("rolls back every metadata change and completion on failure; restart retries 
     state: "completed",
   });
   expect(await f.worker.pending(f.identity.id)).toBe(false);
+  expect((await f.repos.favorites.list(f.identity.id)).map((r) => r.path).sort()).toEqual([
+    "/new/a",
+    "/old/a",
+  ]);
 });
 
 it("preserves reused source paths and refuses newer destination metadata atomically", async () => {
@@ -280,7 +288,7 @@ it("retires work after identity ownership changes", async () => {
   expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/old");
 });
 
-it("rolls back the receipt if snapshotting or outbox insertion fails", async () => {
+it("rejects oversized snapshots and ownership changes before receipt publication", async () => {
   const f = await fixture();
   const id = randomUUID();
   await f.desktop.reserve({
@@ -296,17 +304,26 @@ it("rolls back the receipt if snapshotting or outbox insertion fails", async () 
     sql`insert into app.favorites (identity_id,path,kind) select ${f.identity.id}, '/old/' || n, 'file' from generate_series(1,100001) n`,
   );
   await expect(
-    f.desktop.complete(
-      f.identity.id,
-      f.account.id,
-      id,
-      { state: "completed" },
-      { from: "/old", to: "/new", directory: true, trash: false, office: null },
-    ),
+    f.desktop.captureEffects(f.identity.id, f.account.id, {
+      from: "/old",
+      to: "/new",
+      directory: true,
+      trash: false,
+      office: null,
+    }),
   ).rejects.toThrow("capacity");
   expect((await f.desktop.operation(f.identity.id, f.account.id, id))?.state).toBe("committing");
   expect(await f.worker.pending(f.identity.id)).toBe(false);
   await first.db.execute(sql`delete from app.favorites where identity_id = ${f.identity.id}`);
+  await expect(
+    f.desktop.captureEffects(f.identity.id, randomUUID(), {
+      from: null,
+      to: "/new",
+      directory: false,
+      trash: false,
+      office: null,
+    }),
+  ).rejects.toThrow("ownership");
 });
 
 it("does not follow metadata moved away and back before recovery, including Office registrations", async () => {
@@ -407,4 +424,171 @@ it("backs off a locked identity while another worker can finish another identity
   }
   await f.due();
   expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({ state: "completed" });
+});
+
+it.each(["move", "delete", "trash", "child", "ancestor", "replace"] as const)(
+  "refuses recovery after a later virtual %s even when no target metadata existed",
+  async (kind) => {
+    const f = await fixture();
+    await f.seed("/old/a");
+    await f.commit({ to: "/target/new" });
+    if (kind === "delete")
+      await f.repos.metadataPaths.deletePrefix(f.identity.id, "/target/new", true);
+    else if (kind === "trash")
+      await f.repos.recents.deletePrefix(f.identity.id, "/target/new", true);
+    else
+      await f.repos.metadataPaths.movePrefix(
+        f.identity.id,
+        kind === "child"
+          ? "/target/new/a"
+          : kind === "ancestor"
+            ? "/target"
+            : kind === "replace"
+              ? "/peer"
+              : "/target/new",
+        kind === "replace" ? "/target/new" : "/elsewhere",
+        true,
+      );
+    expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({ state: "failed" });
+    expect(
+      (await f.worker.status()).find((job) => job.identityId === f.identity.id)?.lastError,
+    ).toContain("superseded");
+    expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/old/a");
+  },
+);
+
+it.each(["move", "delete", "root"] as const)(
+  "refuses recovery after a physical Office %s before virtual hooks",
+  async (kind) => {
+    const f = await fixture();
+    await f.seed("/old/a");
+    const source = await f.office.ensure({
+      providerId: f.provider.id,
+      rootName: "root",
+      path: "alice/old/a",
+    });
+    await f.commit({
+      office: { providerId: f.provider.id, rootName: "root", from: "alice/old", to: "alice/new" },
+    });
+    if (kind === "move")
+      await f.office.movePrefix({
+        providerId: f.provider.id,
+        rootName: "root",
+        from: "alice/new/a",
+        to: "alice/elsewhere",
+        at: new Date(),
+      });
+    else
+      await f.office.deletePrefix({
+        providerId: f.provider.id,
+        rootName: "root",
+        path: kind === "root" ? "" : "alice/new",
+        at: new Date(),
+      });
+    expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({ state: "failed" });
+    expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/old/a");
+    if (kind !== "root") expect((await f.office.get(source.id))?.path).toBe("alice/old/a");
+  },
+);
+
+it("allows exact indexer move replays and unrelated path changes before recovery", async () => {
+  const f = await fixture();
+  await f.seed("/old/a");
+  const source = await f.office.ensure({
+    providerId: f.provider.id,
+    rootName: "root",
+    path: "alice/old/a",
+  });
+  await f.commit({
+    office: { providerId: f.provider.id, rootName: "root", from: "alice/old", to: "alice/new" },
+  });
+  await f.repos.metadataPaths.movePrefix(f.identity.id, "/new-extra", "/elsewhere", true);
+  await f.repos.metadataPaths.movePrefix(f.identity.id, "/old", "/new", true);
+  await f.office.movePrefix({
+    providerId: f.provider.id,
+    rootName: "root",
+    from: "alice/old",
+    to: "alice/new",
+    at: new Date(),
+  });
+  expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({ state: "completed" });
+  expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/new/a");
+  expect((await f.office.get(source.id))?.path).toBe("alice/new/a");
+});
+
+it("commits the prepublication snapshot without recapturing concurrent metadata growth", async () => {
+  const f = await fixture();
+  await f.seed("/old/a");
+  const context = { from: "/old", to: "/new", directory: true, trash: false, office: null };
+  const payload = await f.desktop.captureEffects(f.identity.id, f.account.id, context);
+  await first.db.execute(
+    sql`insert into app.favorites (identity_id,path,kind) select ${f.identity.id}, '/old/' || n, 'file' from generate_series(1,100001) n`,
+  );
+  const id = randomUUID();
+  await f.desktop.reserve({
+    id,
+    identityId: f.identity.id,
+    accountId: f.account.id,
+    requestHash: id,
+    request: {},
+    state: "committing",
+  });
+  expect(
+    await f.desktop.complete(f.identity.id, f.account.id, id, { state: "completed" }, payload),
+  ).toBe(true);
+  expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({ state: "completed" });
+  const rows = await first.db.execute(
+    sql`select count(*)::int as count from app.favorites where identity_id = ${f.identity.id} and starts_with(path, '/old/')`,
+  );
+  expect(rows.rows[0]?.count).toBe(100001);
+  await first.db.execute(sql`delete from app.favorites where identity_id = ${f.identity.id}`);
+});
+
+it("rechecks invalidation after an in-flight physical hook without inverting Office/job locks", async () => {
+  const f = await fixture();
+  await f.seed("/old/a");
+  await f.commit({
+    office: { providerId: f.provider.id, rootName: "root", from: "alice/old", to: "alice/new" },
+  });
+  let release!: () => void;
+  let ready!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const hook = createOfficeWriteScope(second.db)(f.provider.id, async ({ files }) => {
+    await files.movePrefix({
+      providerId: f.provider.id,
+      rootName: "root",
+      from: "alice/new",
+      to: "alice/later",
+      at: new Date(),
+    });
+    ready();
+    await held;
+  });
+  let processing: ReturnType<typeof f.worker.processNext> | undefined;
+  try {
+    await started;
+    processing = f.worker.processNext(vi.fn(), f.identity.id);
+    await vi.waitFor(async () => {
+      const waiting = await first.pool.query(
+        "SELECT count(*)::int AS count FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+      );
+      expect(waiting.rows[0].count).toBeGreaterThan(0);
+    });
+    release();
+    await hook;
+    expect(await processing).toMatchObject({ state: "failed" });
+    expect(
+      (await f.worker.status()).find((job) => job.identityId === f.identity.id)?.lastError,
+    ).toContain("superseded");
+    expect((await f.repos.favorites.list(f.identity.id))[0]?.path).toBe("/old/a");
+  } finally {
+    release();
+    await hook;
+    await processing;
+  }
 });

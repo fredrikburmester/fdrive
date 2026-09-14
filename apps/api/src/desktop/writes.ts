@@ -597,9 +597,14 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               "unsupported",
               "Restore this item outside its original folder hierarchy to preserve metadata.",
             );
-          const effects = deps.effectContext
+          const effectContext = deps.effectContext
             ? await deps.effectContext(principal, context)
             : { ...context, office: null };
+          const effects = await repo.captureEffects(
+            principal.identityId,
+            principal.accountId,
+            effectContext,
+          );
           let recoveryId: string | null = null;
           if (request.kind === "upload") {
             if (source && source.kind !== "file")
@@ -707,6 +712,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             "operation_uncertain",
             "Commit could not be confirmed. The pending file and recovery copies are preserved; do not retry with a new operation ID.",
           );
+        if (
+          error instanceof Error &&
+          error.message === "Desktop metadata recovery capacity reached"
+        )
+          throw new ApiHttpError("rate_limited", error.message, { code: "quota_exceeded" });
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }

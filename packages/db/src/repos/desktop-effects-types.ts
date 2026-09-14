@@ -19,6 +19,10 @@ export interface EffectSnapshot {
 }
 export interface DesktopEffectPayload extends DesktopEffectContext {
   snapshots: EffectSnapshot[];
+  /** Metadata committed; only event delivery remains. */
+  metadataApplied?: boolean;
+  /** A later path mutation superseded this destination. Preserve snapshots for attention. */
+  superseded?: boolean;
 }
 
 export interface DesktopEffectEvent {
@@ -40,7 +44,7 @@ export interface DesktopEffectStatus {
 }
 
 export interface DesktopEffectsRepo {
-  /** Applies one due job atomically; concurrent workers claim disjoint rows. */
+  /** Applies metadata atomically, then delivers after commit; concurrent workers serialize. */
   processNext(
     publish: (event: DesktopEffectEvent) => void,
     identityId?: string,
