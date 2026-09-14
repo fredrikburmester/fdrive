@@ -1099,3 +1099,24 @@ it.each(["folder", "move"] as const)(
     expect(await f.read("/old.txt")).toBe("old");
   },
 );
+
+it("rejects metadata capacity before staging or publishing, and retries the same operation", async () => {
+  const f = await fixture();
+  const existing = await f.service.stat(f.principal, "/old.txt");
+  const request = await f.stage("old.txt", "new", existing);
+  vi.spyOn(f.repo, "captureEffects").mockRejectedValueOnce(
+    Error("Desktop metadata recovery capacity reached"),
+  );
+  const upload = vi.spyOn(f.raw, "upload");
+  const move = vi.spyOn(f.raw, "move");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "rate_limited",
+    details: { code: "quota_exceeded" },
+  });
+  expect(upload).not.toHaveBeenCalled();
+  expect(move).not.toHaveBeenCalled();
+  expect(await f.read("/old.txt")).toBe("old");
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
+  expect((await f.service.commit(f.principal, request.operationId)).state).toBe("completed");
+  expect(await f.read("/old.txt")).toBe("new");
+});

@@ -10,6 +10,22 @@ Archived snapshots through 2026-09-12. Read [current STATUS](STATUS.md) and
 below describe their original handoff, not current instructions. Removed brief names are
 historical identifiers; their originals remain in Git history.
 
+## 2026-09-14 PR #23 metadata recovery review fixes
+
+Later virtual metadata and physical Office path hooks invalidate overlapping queued targets,
+including empty prefixes and directory descendants. Superseded recovery preserves snapshots
+for inspection. Recovery takes identity/Office locks before job rows and rechecks invalidation
+under those locks. Exact move replays remain idempotent.
+
+The bounded revision snapshot is captured before filesystem publication; capacity failures leave
+the source untouched and the operation ready. Notification delivery is a separate durable phase
+after metadata commits. Failed delivery never reapplies metadata to a reused source path.
+
+Application lint/typecheck/coverage pass (`step.WhVDBA`), including 2,242 API tests and 256 DB tests.
+All 497 integration tests pass (`step.uuBMtI`), including the three review reproductions, Office
+hook lock contention and concurrent metadata growth. Workflow helper regressions, lint and diff
+checks pass. No native binary or storage image changed.
+
 ## 2026-09-14 Native metadata recovery
 
 Implemented in `/private/tmp/fdrive-native-metadata-recovery`, branch

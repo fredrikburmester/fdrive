@@ -14,6 +14,7 @@ import {
   settings,
   tags,
 } from "../schema/app.js";
+import { supersedeDesktopEffects } from "./desktop-effects.js";
 import { validateIdentityLinkId } from "./identity-links-types.js";
 import { selectPathChunks } from "./path-chunks.js";
 import { createSystemEventRepo } from "./system-events.js";
@@ -916,7 +917,11 @@ function createRecentRepo(db: Db): RecentRepo {
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      await deleteRecentPrefix(db, identityId, path, isDir);
+      await db.transaction(async (tx) => {
+        await lockMetadataIdentity(tx, identityId);
+        await supersedeDesktopEffects(tx, { identityId }, path, null);
+        await deleteRecentPrefix(tx, identityId, path, isDir);
+      });
     },
     async prune(identityId, keep) {
       await db.execute(sql`
@@ -939,6 +944,7 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
       if (oldPath === newPath) return;
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
+        await supersedeDesktopEffects(tx, { identityId }, oldPath, newPath);
         await moveFileTagPrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFavoritePrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFolderViewPrefix(tx, identityId, oldPath, newPath, isDir);
@@ -948,6 +954,7 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
     async deletePrefix(identityId, path, isDir) {
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
+        await supersedeDesktopEffects(tx, { identityId }, path, null);
         await deleteFileTagPrefix(tx, identityId, path, isDir);
         await deleteFavoritePrefix(tx, identityId, path, isDir);
         await deleteFolderViewPrefix(tx, identityId, path, isDir);
