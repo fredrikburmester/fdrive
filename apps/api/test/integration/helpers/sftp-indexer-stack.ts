@@ -258,7 +258,7 @@ export class SftpIndexerStack {
 
   async stop(): Promise<void> {
     const results = await Promise.allSettled(
-      this.containers.map((name) => this.docker(["rm", "-f", name])),
+      this.containers.map((name) => this.docker(["rm", "-f", "-v", name])),
     );
     const cleanup = await Promise.allSettled([
       ...(this.volumeCreated ? [this.docker(["volume", "rm", this.prefix])] : []),

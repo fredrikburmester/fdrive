@@ -69,4 +69,11 @@ struct APIClientTests {
         let (api, session) = try client(Responses([(200, json)])); defer { session.invalidateAndCancel() }
         await #expect(throws: DriveError.self) { try await api.versions(["/a"]) }
     }
+    @Test func preservesRetryAndQuotaErrorsForPendingWrites() async throws {
+        for (status, expected) in [(413, DriveError.quota), (502, .unavailable), (503, .unavailable)] {
+            let (api, session) = try client(Responses([(status, "{\"error\":{\"message\":\"Storage rejected the save\"}}")]))
+            defer { session.invalidateAndCancel() }
+            await #expect(throws: expected) { try await api.commitWrite(UUID().uuidString.lowercased()) }
+        }
+    }
 }
