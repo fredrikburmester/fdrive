@@ -42,7 +42,7 @@ ENV NODE_ENV=production
 
 COPY --from=build --chown=fdrive:fdrive /out ./
 
-RUN mkdir -p /var/lib/fdrive/desktop && chown fdrive:fdrive /var/lib/fdrive/desktop
+RUN mkdir -p /var/lib/fdrive/desktop /var/lib/fdrive/backups && chown fdrive:fdrive /var/lib/fdrive/desktop /var/lib/fdrive/backups
 USER fdrive
 
 EXPOSE 3001

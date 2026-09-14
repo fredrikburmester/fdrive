@@ -5,6 +5,29 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Installation backups: implemented, final gates in progress
+
+- Worktree `/private/tmp/fdrive-backups`, branch `codex/backups`, everything uncommitted; main
+  checkout WIP preserved. Detailed evidence and remaining items:
+  [backup handoff](BACKUP-HANDOFF.md); operator guide [BACKUPS.md](../BACKUPS.md);
+  remaining acceptance [plan](../plans/BACKUPS.md).
+- Resumed 2026-09-14: fixed the fixture that scheduled before key confirmation, the null-owner
+  queue call and the web BigInt/typing errors; formatted the tree. Added retention-kept probe
+  handling (no lock bypass, deadline shown), bounded spool sweep for orphaned archives and
+  markers, a ten-minute estimate deadline with connection failures caught, and transient
+  credential fields stripped before a fileserver destination is verified and saved.
+- New qualification: Apache WebDAV and SFTPGo destinations with a 64 MiB streamed archive,
+  completion catalog, fileserver-only fetch and restore into fresh databases; a CLI cutover and
+  rollback rehearsal; a benchmark fixture whose numbers are published in the guide; browser
+  coverage of the health panel (estimate and rehearsal report upload) in `backups.spec.ts`.
+- Final tree passes `workflow`, `application` (`step.sxrWn3`: backup 44, API 2278, web 1852
+  tests, thresholds met), `integration` (`step.8bOT2w`, six packages) and
+  `browser e2e/backups.spec.ts` (`step.lW4yLM`, 2 tests, screenshots inspected). Intermediate
+  failures and their fixes are listed in the handoff document.
+- Docker Desktop stopped mid-session (socket gone); it was relaunched to continue container gates.
+- Not done: real AWS/B2 buckets (needs the owner's bucket names), hosted CI, a real host cutover.
+  No commit, merge, push or deployment requested.
+
 ## Friendly storage names: verified
 
 - Worktree `/private/tmp/fdrive-friendly-storage-names`, branch `codex/friendly-storage-names`,

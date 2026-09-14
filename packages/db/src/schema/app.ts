@@ -417,3 +417,87 @@ export const desktopEffects = appSchema.table(
     index("desktop_effects_account").on(table.accountId),
   ],
 );
+
+/** Installation backup configuration. Private keys are never persisted here. */
+export const backupConfiguration = appSchema.table("backup_configuration", {
+  id: integer("id").primaryKey().default(1),
+  installationId: uuid("installation_id").notNull().defaultRandom(),
+  recipient: text("recipient"),
+  confirmed: boolean("confirmed").notNull().default(false),
+  challengeHash: text("challenge_hash"),
+  challengeExpiresAt: timestamp("challenge_expires_at", { withTimezone: true }),
+  schedule: jsonb("schedule")
+    .notNull()
+    .default({ frequency: "manual", timezone: "UTC", hour: 3, daily: 7, weekly: 4, monthly: 12 }),
+  nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+  restored: boolean("restored").notNull().default(false),
+});
+export const backupDestinations = appSchema.table("backup_destinations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  revision: uuid("revision").notNull().defaultRandom(),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  config: jsonb("config").notNull(),
+  secret: bytea("secret").notNull(),
+  enabled: boolean("enabled").notNull().default(false),
+  testedAt: timestamp("tested_at", { withTimezone: true }),
+});
+export const backupRuns = appSchema.table(
+  "backup_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    state: text("state").notNull().default("queued"),
+    leaseId: uuid("lease_id"),
+    verificationRequested: boolean("verification_requested").notNull().default(false),
+    verificationError: text("verification_error"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    requestedBy: uuid("requested_by"),
+    scheduleSlot: text("schedule_slot").unique(),
+    request: jsonb("request").notNull(),
+    recipient: text("recipient").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    bytes: text("bytes").notNull().default("0"),
+    sha256: text("sha256"),
+    error: text("error"),
+    coverage: jsonb("coverage").notNull().default([]),
+    pinned: boolean("pinned").notNull().default(false),
+    artifact: text("artifact"),
+  },
+  (table) => [index("backup_runs_created_idx").on(table.createdAt)],
+);
+export const backupDeliveries = appSchema.table(
+  "backup_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => backupRuns.id, { onDelete: "cascade" }),
+    destinationId: uuid("destination_id").notNull(),
+    destinationRevision: uuid("destination_revision").notNull(),
+    name: text("name").notNull(),
+    state: text("state").notNull().default("pending"),
+    objectKey: text("object_key"),
+    markerVersionId: text("marker_version_id"),
+    retentionUntil: timestamp("retention_until", { withTimezone: true }),
+    versionId: text("version_id"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    error: text("error"),
+  },
+  (table) => [
+    index("backup_deliveries_run_idx").on(table.runId),
+    unique("backup_delivery_run_destination").on(table.runId, table.destinationId),
+  ],
+);
+export const backupAttachments = appSchema.table("backup_attachments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  versionId: uuid("version_id").notNull(),
+  label: text("label").notNull(),
+  filename: text("filename").notNull(),
+  sourceDate: timestamp("source_date", { withTimezone: true }),
+  notes: text("notes").notNull().default(""),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+  bytes: text("bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  secret: bytea("secret").notNull(),
+});

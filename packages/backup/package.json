@@ -1,0 +1,42 @@
+{
+  "name": "@fdrive/backup",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1131.0",
+    "@aws-sdk/lib-storage": "3.1131.0",
+    "@fdrive/contracts": "workspace:*",
+    "@fdrive/core": "workspace:*",
+    "@fdrive/db": "workspace:*",
+    "age-encryption": "0.3.1",
+    "pg": "^8.23.0",
+    "tar-stream": "^2.2.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@fdrive/config": "workspace:*",
+    "@fdrive/testkit": "workspace:*",
+    "@types/node": "^24",
+    "@types/pg": "^8.23.1",
+    "@types/tar-stream": "^2.2.3",
+    "@vitest/coverage-v8": "^5.0.0",
+    "testcontainers": "12.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

@@ -126,6 +126,14 @@ describe("loadConfig", () => {
     const config = loadConfig(REQUIRED_ENV);
 
     expect(config).toEqual({
+      fdriveBackupSources: [],
+      fdriveBackupWorker: false,
+      fdriveRestoreMode: false,
+      fdriveEmbedRuntimeUrl: undefined,
+      fdriveImageEmbedRuntimeUrl: undefined,
+      fdriveImageEmbedUrl: undefined,
+      fdriveTikaRuntimeUrl: undefined,
+      fdriveTikaUrl: undefined,
       fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
@@ -210,6 +218,14 @@ describe("loadConfig", () => {
     });
 
     expect(config).toEqual({
+      fdriveBackupSources: [],
+      fdriveBackupWorker: false,
+      fdriveRestoreMode: false,
+      fdriveEmbedRuntimeUrl: undefined,
+      fdriveImageEmbedRuntimeUrl: undefined,
+      fdriveImageEmbedUrl: undefined,
+      fdriveTikaRuntimeUrl: undefined,
+      fdriveTikaUrl: undefined,
       fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
@@ -558,4 +574,42 @@ describe("explicit processing probe URLs", () => {
     expect(loadConfig({ ...REQUIRED_ENV, [key]: "" })[property]).toBeUndefined();
     expect(() => loadConfig({ ...REQUIRED_ENV, [key]: "file:///tmp/worker" })).toThrow(key);
   });
+});
+
+it("requires absolute, explicitly classified backup sources and validates worker modes", () => {
+  const base = {
+    DATABASE_URL: "postgres://localhost/test",
+    FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
+  };
+  const roots = [
+    { kind: "ocr", path: "/originals" },
+    { kind: "logs", path: "/logs" },
+    { kind: "office", path: "/office" },
+  ];
+  expect(
+    loadConfig({
+      ...base,
+      FDRIVE_BACKUP_STATE_DIR: "/backups",
+      FDRIVE_BACKUP_WORKER: "true",
+      FDRIVE_RESTORE_MODE: "true",
+      FDRIVE_BACKUP_SOURCES: JSON.stringify(roots),
+    }),
+  ).toMatchObject({
+    fdriveBackupStateDir: "/backups",
+    fdriveBackupSources: roots,
+    fdriveBackupWorker: true,
+    fdriveRestoreMode: true,
+  });
+  for (const value of [
+    "broken",
+    "null",
+    "{}",
+    '[{"kind":"unknown","path":"/data"}]',
+    '[{"kind":"ocr","path":"relative"}]',
+  ])
+    expect(() => loadConfig({ ...base, FDRIVE_BACKUP_SOURCES: value })).toThrow(
+      "FDRIVE_BACKUP_SOURCES",
+    );
+  for (const name of ["FDRIVE_BACKUP_WORKER", "FDRIVE_RESTORE_MODE"])
+    expect(() => loadConfig({ ...base, [name]: "maybe" })).toThrow(name);
 });

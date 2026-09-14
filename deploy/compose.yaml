@@ -67,7 +67,7 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
-    environment:
+    environment: &api-environment
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
       # compose network. FDRIVE_THUMBS_DIR, FDRIVE_OCR_URL, FDRIVE_INDEXER_URL,
@@ -76,6 +76,9 @@ services:
       # or model loading until the owner enables a feature in the walkthrough.
       FDRIVE_THUMBS_DIR: /thumbs
       FDRIVE_DESKTOP_STATE_DIR: /var/lib/fdrive/desktop
+      FDRIVE_BACKUP_STATE_DIR: /var/lib/fdrive/backups
+      FDRIVE_BACKUP_WORKER: "false"
+      FDRIVE_BACKUP_SOURCES: '[{"kind":"ocr","path":"/backup-sources/ocr"},{"kind":"logs","path":"/backup-sources/logs"},{"kind":"office","path":"/backup-sources/office"}]'
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       SFTPGO_URL: ${SFTPGO_URL:-}
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
@@ -104,6 +107,7 @@ services:
       # choose scopes below it, but cannot add arbitrary host mounts at runtime.
       FDRIVE_INDEX_ROOTS: '[{"name":"sftpgo","sftpgoPath":"${FDRIVE_INDEX_SFTPGO_PATH:-/srv/sftpgo/data}","indexerPath":"/roots/sftpgo"}]'
       # BEGIN GENERATED CONFIG KEYS (tools/deploy/generate-env-example.ts)
+      FDRIVE_RESTORE_MODE: ${FDRIVE_RESTORE_MODE:-}
       HOST: ${HOST:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
       FDRIVE_HOME_TEMPLATE: ${FDRIVE_HOME_TEMPLATE:-}
@@ -129,10 +133,42 @@ services:
     volumes:
       - fdrive-thumbs:/thumbs:ro
       - fdrive-desktop:/var/lib/fdrive/desktop
+      - fdrive-backups:/var/lib/fdrive/backups
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
     pids_limit: 512
+    logging: *default-logging
+
+  backup:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: ["node", "dist/main.js", "backup", "worker"]
+    environment:
+      <<: *api-environment
+    # Source state has different owners and may be mode 0600. The worker can
+    # read it, but source mounts are read-only. No Docker socket or host root.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE, CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    volumes:
+      - fdrive-backups:/var/lib/fdrive/backups
+      - fdrive-desktop:/var/lib/fdrive/desktop:ro
+      - ${FDRIVE_DATA_DIR:-./data}/ocr:/backup-sources/ocr:ro
+      - fdrive-indexer-logs:/backup-sources/logs:ro
+      - office_onlyoffice_data:/backup-sources/office:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    stop_grace_period: 65s
+    pids_limit: 128
     logging: *default-logging
 
   db:
@@ -411,6 +447,7 @@ services:
     logging: *default-logging
 
 volumes:
+  fdrive-backups:
   fdrive-desktop:
   fdrive-indexer-logs:
   fdrive-thumbs:

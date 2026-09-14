@@ -7,7 +7,8 @@ indexer) and `idx.roots` (upserting by name, same as the indexer), and owns
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import psycopg
 
@@ -134,3 +135,15 @@ def last_run(conn: psycopg.Connection) -> RunSummary | None:
             skipped=int(row[4]),
             failed=int(row[5]),
         )
+
+
+@contextmanager
+def backup_checkpoint(conn: psycopg.Connection) -> Iterator[None]:
+    """Match the API's blob writer gate through rewrite and its durable receipt."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock_shared(%s)", (736591204,))
+    try:
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock_shared(%s)", (736591204,))
