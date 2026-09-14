@@ -1,6 +1,6 @@
 # Current handoff
 
-Updated: 2026-09-13. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-14. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
@@ -29,6 +29,21 @@ not current instructions.
   Final workflow regressions, lint and diff checks pass; integrated diff reviewed.
 - Server deployment is pending; production providers are unchanged. GitHub Actions stays disabled.
   A server deployment and local app rebuild are needed to exercise this with production.
+
+## Native metadata recovery follow-up
+
+- [PR #23](https://github.com/fredrikburmester/fdrive-web/pull/23), worktree
+  `/private/tmp/fdrive-native-metadata-recovery`, branch `codex/native-metadata-recovery`;
+  primary WIP preserved.
+- All three review fixes implemented: later path hooks invalidate superseded recovery targets,
+  snapshot capacity is checked before publication, and notification delivery retries separately
+  after metadata commits. [Behavior and limits](../MACOS.md#write-configuration-and-recovery).
+- Application lint/typecheck/coverage pass (`step.WhVDBA` coverage), including 2,242 API tests
+  and 256 DB tests; queue SQL retains 100% line coverage on real PostgreSQL. All 497 integration
+  tests pass (`step.uuBMtI`), including all three review regressions and WebDAV/SFTPGo recovery.
+  Workflow helper regressions, lint and diff checks pass. Ready for re-review.
+- Remaining beta work: backup reclamation/recovery administration and broader native/editor
+  qualification. No native UI, storage image, production or release changes.
 
 ## Native macOS Finder app: development preview
 

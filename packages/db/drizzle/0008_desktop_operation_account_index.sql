@@ -1,0 +1,1 @@
+CREATE INDEX "desktop_operations_account" ON "app"."desktop_operations" USING btree ("account_id");

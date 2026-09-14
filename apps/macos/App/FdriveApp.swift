@@ -67,6 +67,7 @@ private struct LocationsView: View {
     @ObservedObject var model: AppModel
     @State private var address = ""
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var trashLocation: SavedLocation?
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
@@ -110,6 +111,10 @@ private struct LocationsView: View {
                         Menu {
                             Button("Refresh") { Task { await model.refresh() } }
                             Button("Reconnect") { address = location.server.absoluteString; Task { await model.connect(address) } }
+                            Button("Show recovery files") { Task { await model.revealRecovery(location) } }
+                            if location.location.capabilities?.restore == true {
+                                Button("Restore from Trash…") { trashLocation = location }
+                            }
                             Button("Disconnect") { Task { await model.disconnect(location) } }
                         } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24).disabled(model.pairing)
                     }.padding(.vertical, 6)
@@ -122,9 +127,73 @@ private struct LocationsView: View {
                     catch { model.error = error.localizedDescription; launchAtLogin = SMAppService.mainApp.status == .enabled }
                 }
                 Spacer()
-                Text("Read-only · macOS 26+").font(.caption).foregroundStyle(.secondary)
+                Text("macOS 26+").font(.caption).foregroundStyle(.secondary)
             }
         }.padding(24)
+            .sheet(item: $trashLocation) { TrashRecoveryView(location: $0) }
+    }
+}
+
+private struct TrashRecoveryView: View {
+    let location: SavedLocation
+    @Environment(\.dismiss) private var dismiss
+    @State private var items: [CatalogItem] = []
+    @State private var busy = true
+    @State private var error: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Restore from Trash").font(.title2.bold())
+            Text("Items return to the top level of \(location.title). Existing files are preserved.")
+                .foregroundStyle(.secondary)
+            if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if busy { ProgressView().controlSize(.small) }
+            List(items) { item in
+                HStack {
+                    Image(systemName: item.entry.kind == "dir" ? "folder" : "doc")
+                    Text(item.entry.name).lineLimit(2)
+                    Spacer()
+                    Button("Restore") { Task { await restore(item) } }.disabled(busy)
+                }.padding(.vertical, 4)
+            }.overlay {
+                if items.isEmpty && !busy && error == nil { Text("Trash is empty").foregroundStyle(.secondary) }
+            }
+            HStack {
+                Button("Refresh") { Task { await load() } }.disabled(busy)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+            }
+        }.padding(24).frame(width: 560, height: 380)
+            .interactiveDismissDisabled(busy)
+            .task { await load() }
+    }
+    private func load() async {
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            let store = try NativeEnvironment.store(), catalog = try store.catalog(location)
+            let listing = try await catalog.beginListing(RemoteEntry.trashPath)
+            let entries = try await store.client(location).list(RemoteEntry.trashPath)
+            try await catalog.reconcile(entries, folder: RemoteEntry.trashPath, listing: listing)
+            items = try await catalog.children("trash").sorted { $0.entry.name.localizedStandardCompare($1.entry.name) == .orderedAscending }
+        } catch { self.error = error.localizedDescription }
+    }
+    private func restore(_ item: CatalogItem) async {
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            let store = try NativeEnvironment.store(), catalog = try store.catalog(location)
+            _ = try await WriteCoordinator(catalog: catalog, client: store.client(location)).perform(
+                route: "moves", localId: item.id, templateKey: item.id, parentId: "root", name: item.entry.name,
+                base: WriteVersion(content: item.contentVersion, metadata: item.metadataVersion),
+                contents: nil, progress: Progress(totalUnitCount: -1))
+            let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
+            if let manager = NSFileProviderManager(for: domain) {
+                for id: NSFileProviderItemIdentifier in [.workingSet, .trashContainer, .rootContainer] {
+                    try await manager.signalEnumerator(for: id)
+                }
+            }
+            await load()
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -167,8 +236,13 @@ final class AppModel: ObservableObject {
             var pending: (APIClient, Pairing)?
             do {
                 guard let url = URL(string: address) else { throw DriveError.invalidServer }
-                let client = try APIClient(server: url)
-                let request = try await client.pair(deviceName: Host.current().localizedName ?? "Mac")
+                var client = try APIClient(server: url, protocolVersion: 2)
+                let request: Pairing
+                do { request = try await client.pair(deviceName: Host.current().localizedName ?? "Mac") }
+                catch DriveError.missing {
+                    client = try APIClient(server: url)
+                    request = try await client.pair(deviceName: Host.current().localizedName ?? "Mac")
+                }
                 pending = (client, request)
                 pairCode = request.code
                 var approvalURL = URLComponents(url: client.server.appendingPathComponent("desktop/connect"), resolvingAgainstBaseURL: false)!
@@ -188,7 +262,7 @@ final class AppModel: ObservableObject {
                             do { try await install(credential, server: client.server) }
                             catch {
                                 self.error = error.localizedDescription
-                                try? await APIClient(server: client.server, token: credential.token).disconnect()
+                                try? await APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion).disconnect()
                             }
                         }
                         await refresh(); return
@@ -206,7 +280,7 @@ final class AppModel: ObservableObject {
     func cancelPairing() { pairingTask?.cancel() }
     private func install(_ credential: Credential, server: URL) async throws {
         let store = try NativeEnvironment.store()
-        guard credential.location.protocolVersion == 1, credential.location.readOnly else { throw DriveError.unsupported }
+        guard (credential.location.protocolVersion == 1 && credential.location.readOnly) || credential.location.protocolVersion == 2 else { throw DriveError.unsupported }
         let existing = locations.first { $0.server == server && $0.location.identityId == credential.location.identityId && $0.location.accountId == credential.location.accountId }
         if let existing { _ = try existing.updatingMetadata(from: credential.location) }
         let saved = SavedLocation(id: existing?.id ?? UUID().uuidString, server: server, location: credential.location, expiresAt: credential.expiresAt)
@@ -214,12 +288,13 @@ final class AppModel: ObservableObject {
         let previousToken = existing.flatMap { try? store.token($0.id) }
         let previousLocations = locations
         let domain = NSFileProviderDomain(identifier: .init(saved.id), displayName: saved.title)
-        domain.supportsSyncingTrash = false
+        domain.supportsSyncingTrash = credential.location.capabilities?.trash == true
         domain.supportsStringSearchRequest = false
         try store.setToken(credential.token, id: saved.id)
         do {
             locations.removeAll { $0.id == saved.id }; locations.append(saved)
             try store.save(locations)
+            try await store.catalog(saved).configure(credential.location.capabilities ?? .none)
             try await NSFileProviderManager.add(domain)
         } catch {
             if existing != nil {
@@ -247,6 +322,18 @@ final class AppModel: ObservableObject {
             _ = try await NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
         } catch { self.error = error.localizedDescription }
     }
+    func revealRecovery(_ location: SavedLocation) async {
+        do {
+            let catalog = try NativeEnvironment.store().catalog(location)
+            let pending = try await catalog.pendingWrites().filter { $0.result == nil }
+            try FileManager.default.createDirectory(at: catalog.recoveryDirectory, withIntermediateDirectories: true)
+            // Human-readable names and errors, never credentials. Payloads remain
+            // untouched so opening Recovery cannot discard a pending save.
+            let details = pending.map { "\($0.id): \($0.request.name)\n\($0.error ?? "Waiting to upload")\n" }.joined(separator: "\n")
+            try details.write(to: catalog.recoveryDirectory.appendingPathComponent("Pending saves.txt"), atomically: true, encoding: .utf8)
+            NSWorkspace.shared.open(catalog.recoveryDirectory)
+        } catch { self.error = error.localizedDescription }
+    }
     func refresh(automatic: Bool = false) async {
         guard !refreshing, !(automatic && pairing) else { return }
         refreshing = true
@@ -265,14 +352,22 @@ final class AppModel: ObservableObject {
                 let updated = try await refreshLocationMetadata(saved, client: client) {
                     try await NativeEnvironment.updateDomainName($0)
                 }
+                let current = updated.location
                 let catalog = try store.catalog(updated)
                 try await catalog.updateRootName(updated.title)
+                try await catalog.configure(current.capabilities ?? .none)
                 if updated != saved {
                     guard let index = locations.firstIndex(where: { $0.id == saved.id }) else { continue }
                     var next = locations
                     next[index] = updated
                     try store.save(next)
                     locations = next
+                }
+                // Also upgrade domains registered by older read-only app builds.
+                if let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == saved.id }),
+                   domain.supportsSyncingTrash != (current.capabilities?.trash == true) {
+                    domain.supportsSyncingTrash = current.capabilities?.trash == true
+                    try await NSFileProviderManager.add(domain)
                 }
                 status[saved.id] = "Refreshing"
                 try await refreshCatalog(catalog, client: client) {
@@ -285,7 +380,8 @@ final class AppModel: ObservableObject {
                         }
                     }
                 }
-                status[saved.id] = "Connected · Read-only"
+                let pending = try await catalog.pendingWrites().filter { $0.result == nil }
+                status[saved.id] = pending.isEmpty ? (current.readOnly ? current.writeUnavailableReason ?? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
                 retryAfter[saved.id] = nil; failures[saved.id] = nil
             } catch {
                 if Task.isCancelled { return }
@@ -302,13 +398,18 @@ final class AppModel: ObservableObject {
         refreshOperation?.cancel(); await refreshOperation?.value
         do {
             let store = try NativeEnvironment.store()
-            let client = try APIClient(server: location.server, token: store.token(location.id))
+            let catalog = try store.catalog(location)
+            guard try await catalog.pendingWrites().allSatisfy({ $0.result != nil }) else {
+                throw DriveError.server("This location has pending changes. Recover or finish them before disconnecting.")
+            }
+            let client = try APIClient(server: location.server, token: store.token(location.id), protocolVersion: location.location.protocolVersion)
             // Keep enough state to retry cleanup after network or framework failures.
             if let index = locations.firstIndex(where: { $0.id == location.id }) { locations[index].disconnecting = true }
             try store.save(locations)
             do { try await client.disconnect() } catch DriveError.authentication {} catch DriveError.missing {}
             let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
-            try await NSFileProviderManager.remove(domain)
+            let preserved = try await NSFileProviderManager.remove(domain, mode: .preserveDirtyUserData)
+            if let preserved { NSWorkspace.shared.open(preserved) }
             try store.removeToken(location.id); try store.removeMetadata(location.id)
             locations.removeAll { $0.id == location.id }; try store.save(locations)
             status.removeValue(forKey: location.id)

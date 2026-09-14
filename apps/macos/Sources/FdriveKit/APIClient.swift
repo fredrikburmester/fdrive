@@ -15,15 +15,22 @@ private final class TransferDelegate: NSObject, URLSessionTaskDelegate, URLSessi
         progress?.totalUnitCount = totalBytesExpectedToWrite
         progress?.completedUnitCount = totalBytesWritten
     }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        progress?.totalUnitCount = totalBytesExpectedToSend
+        progress?.completedUnitCount = totalBytesSent
+    }
 }
 
 public struct APIClient: Sendable {
     public let server: URL
+    public let protocolVersion: Int
     private let token: String?
     private let session: URLSession
-    public init(server: URL, token: String? = nil, session: URLSession? = nil) throws {
+    public init(server: URL, token: String? = nil, session: URLSession? = nil, protocolVersion: Int = 1) throws {
         self.server = try Self.normalizeServer(server)
         self.token = token
+        self.protocolVersion = protocolVersion
         if let session { self.session = session } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpCookieStorage = nil
@@ -46,7 +53,7 @@ public struct APIClient: Sendable {
         return normalized
     }
     private func request(_ route: String, query: [URLQueryItem] = [], body: Data? = nil) throws -> URLRequest {
-        var url = URLComponents(url: server.appendingPathComponent("api/v1/desktop/" + route), resolvingAgainstBaseURL: false)!
+        var url = URLComponents(url: server.appendingPathComponent("api/v\(protocolVersion)/desktop/" + route), resolvingAgainstBaseURL: false)!
         url.queryItems = query.isEmpty ? nil : query
         var request = URLRequest(url: url.url!)
         request.httpMethod = body == nil ? "GET" : "POST"
@@ -56,20 +63,34 @@ public struct APIClient: Sendable {
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         return request
     }
-    private func check(_ response: URLResponse) throws {
+    private func check(_ response: URLResponse, data: Data? = nil, writing: Bool = false) throws {
         guard let response = response as? HTTPURLResponse else { throw DriveError.unavailable }
+        if writing, let data,
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = object["error"] as? [String: Any], let details = error["details"] as? [String: Any],
+           let code = details["code"] as? String {
+            switch code {
+            case "version_conflict", "name_collision": throw DriveError.writeConflict(error["message"] as? String ?? "This item changed remotely. Your pending copy is preserved.")
+            case "operation_uncertain": throw DriveError.writeUncertain
+            case "quota_exceeded": throw DriveError.quota
+            case "unsupported", "permission_denied": throw DriveError.permission
+            default: break
+            }
+        }
         switch response.statusCode {
         case 200..<300: return
-        case 401, 403: throw DriveError.authentication
+        case 401: throw DriveError.authentication
+        case 403: throw writing ? DriveError.permission : DriveError.authentication
         case 404: throw DriveError.missing
         case 409: throw DriveError.expiredSnapshot
+        case 413 where writing: throw DriveError.quota
         case 429, 500...599: throw DriveError.unavailable
         default: throw DriveError.server("The server rejected this request (\(response.statusCode)).")
         }
     }
-    private func send<T: Decodable & Sendable>(_ route: String, query: [URLQueryItem] = [], body: Data? = nil) async throws -> T {
+    private func send<T: Decodable & Sendable>(_ route: String, query: [URLQueryItem] = [], body: Data? = nil, writing: Bool = false) async throws -> T {
         let (data, response) = try await session.data(for: request(route, query: query, body: body), delegate: TransferDelegate())
-        try check(response)
+        try check(response, data: data, writing: writing)
         guard data.count <= 8 * 1024 * 1024 else { throw DriveError.server("The metadata response is too large.") }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -85,7 +106,7 @@ public struct APIClient: Sendable {
     }
     public func location() async throws -> Location {
         let result: Location = try await send("location")
-        guard result.protocolVersion == 1, result.readOnly else { throw DriveError.server("Update fdrive for Mac to connect to this server.") }
+        guard (result.protocolVersion == 1 && result.readOnly) || (result.protocolVersion == 2 && result.capabilities != nil) else { throw DriveError.server("Update fdrive for Mac to connect to this server.") }
         return result
     }
     public func list(_ rawPath: String) async throws -> [RemoteEntry] {
@@ -100,7 +121,7 @@ public struct APIClient: Sendable {
             let page: Listing = try await send("entries", query: query)
             for entry in page.entries {
                 guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == path,
-                      entry.path.split(separator: "/").last.map(String.init) == entry.name,
+                      entry.hasValidListingName,
                       seen.insert(entry.path).inserted, entry.size >= 0 else { throw DriveError.server("Invalid folder listing.") }
             }
             result += page.entries
@@ -126,6 +147,26 @@ public struct APIClient: Sendable {
     public func disconnect() async throws {
         struct Result: Decodable, Sendable { let ok: Bool }
         let _: Result = try await send("disconnect", body: Data("{}".utf8))
+    }
+    public func prepareWrite(_ operation: WriteRequest, route: String) async throws -> WriteResult {
+        guard protocolVersion == 2 else { throw DriveError.permission }
+        return try await send(route, body: operation.body(route: route), writing: true)
+    }
+    public func uploadWrite(_ id: String, file: URL, progress: Progress) async throws -> WriteResult {
+        var upload = try request("operations/\(id)/content")
+        upload.httpMethod = "PUT"; upload.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: upload, fromFile: file, delegate: TransferDelegate(progress: progress))
+        try check(response, data: data, writing: true)
+        return try JSONDecoder().decode(WriteResult.self, from: data)
+    }
+    public func commitWrite(_ id: String) async throws -> WriteResult {
+        try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true)
+    }
+    public func acknowledgeWrite(_ id: String) async throws {
+        let _: WriteResult = try await send("operations/\(id)/acknowledge", body: Data("{}".utf8), writing: true)
+    }
+    public func cancelWrite(_ id: String) async throws {
+        let _: WriteResult = try await send("operations/\(id)/cancel", body: Data("{}".utf8), writing: true)
     }
     public func download(_ path: String, to directory: URL, progress: Progress) async throws -> (URL, String, Int64) {
         let delegate = TransferDelegate(progress: progress)

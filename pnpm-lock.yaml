@@ -391,9 +391,15 @@ importers:
       '@fdrive/testkit':
         specifier: workspace:*
         version: link:../testkit
+      '@types/ssh2':
+        specifier: ^1.15.6
+        version: 1.15.6
       '@vitest/coverage-v8':
         specifier: ^5.0.0
         version: 5.0.0(vitest@5.0.0)
+      ssh2:
+        specifier: ^1.17.0
+        version: 1.17.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -6451,7 +6457,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 5.0.0(@types/node@24.13.3)(@vitest/coverage-v8@5.0.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
+      vitest: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(jsdom@30.0.1)(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
   '@vitest/istanbul-lib-coverage@1.0.1': {}
 
