@@ -117,11 +117,13 @@ python3 tools/macos/publish.py --repo fredrikburmester/fdrive-web \
 ## Install or upgrade with Homebrew
 
 After the first release and cask PR are merged, use the source repository as the tap. The
-explicit URL is required because the repository isn't named `homebrew-fdrive-web`:
+explicit URL is required because the repository isn't named `homebrew-fdrive-web`. Homebrew 7
+refuses to load casks from untrusted third-party taps and aborts the tap, so trust it first:
 
 ```sh
 gh auth login
 gh auth setup-git
+brew trust --tap fredrikburmester/fdrive-web
 brew tap fredrikburmester/fdrive-web https://github.com/fredrikburmester/fdrive-web.git
 HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" brew install --cask fredrikburmester/fdrive-web/fdrive
 ```
