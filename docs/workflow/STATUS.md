@@ -5,6 +5,13 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Licensing: AGPL retained
+
+- Keep AGPL for the server, web interface and native Mac app. README scope and root
+  package metadata now explicitly use `AGPL-3.0-only`; the license text is unchanged.
+- README distinguishes stock external SFTPGo from the optional modified integration.
+  No commercial terms or purchase enforcement added. Workflow checks pass.
+
 ## Native metadata recovery follow-up
 
 - [PR #23](https://github.com/fredrikburmester/fdrive-web/pull/23), worktree
