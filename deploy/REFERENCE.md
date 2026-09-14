@@ -144,6 +144,28 @@ indexing or account-specific search results; still verify those after deployment
 
 ---
 
+## Running version and uptime
+
+The account menu's **About** page links to the project, feature guides, FDrive for macOS,
+and Buy Me a Coffee. Server version is the API image's Git revision, linked to its commit.
+API uptime is sampled when the page loads and resets on API restart; it is not host uptime.
+Both values are available from `GET /api/v1/about`, without probing optional workers.
+
+`update.sh` sets `FDRIVE_BUILD_REVISION` to the pulled checkout's full Git SHA before
+Compose builds the API. The Dockerfile stores it in the image and its OCI revision label,
+so restarting an older image does not report a newer checkout. For manual builds:
+
+```sh
+FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" docker compose -f deploy/compose.yaml up -d --build
+# Or, with the repository root as build context:
+docker build --build-arg FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" -f apps/api/Dockerfile .
+```
+
+Local API development resolves the checkout's HEAD once at startup. Without build metadata
+or Git, a package release version is used if present; the placeholder `0.0.0` is shown as
+**Development (version unavailable)**. Feature guides follow GitHub's `main` branch.
+The macOS link opens the app guide, which includes its requirements and release instructions.
+
 ## Processing Worker Resource Limits
 
 Every heavy container sizes its own concurrency from what it can see, and Docker shows it the
