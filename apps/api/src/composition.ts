@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
+  createDesktopEffectsRepo,
+  createDesktopRepo,
   createIdentityLinksRepo,
   createIdentityOwnershipGuard,
   createIndexQueries,
@@ -36,7 +38,10 @@ import {
 } from "./auth/storage-factory.ts";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
+import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
+import { withDesktopMetadata } from "./desktop/metadata.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
+import { createDesktopWrites } from "./desktop/writes.js";
 import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
@@ -362,9 +367,12 @@ export async function composeApp(
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
   const metadataService = createMetadataService(repos);
+  const desktopRepo = createDesktopRepo(db);
+  const desktopEffects = createDesktopEffectsRepo(db);
+  const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
   const officeFiles = createOfficeFileRepo(db);
   const fsMetadata = withOfficeMetadata(
-    metadataService,
+    withDesktopMetadata(metadataService, desktopRepo),
     officeFiles,
     repos.identities,
     scopeResolver.configuredMappings,
@@ -651,6 +659,21 @@ export async function composeApp(
       });
       auth.registerRoutes(groups);
       registerDesktopRoutes(groups, {
+        recovery: desktopEffects,
+        writes: createDesktopWrites({
+          repo: desktopRepo,
+          clock,
+          effectContext: createDesktopEffectContext(
+            repos.identities,
+            scopeResolver.configuredMappings,
+          ),
+          effects: desktopEffectsWorker,
+          ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
+          trashPathForStorage: (storage) => {
+            const settings = trashSettingsForStorage(storage);
+            return settings?.enabled === true ? settings.path : null;
+          },
+        }),
         apiTokens: repos.apiTokens,
         identities: repos.identities,
         providers: repos.providers,
@@ -855,9 +878,11 @@ export async function composeApp(
     },
   });
 
+  desktopEffectsWorker.start();
   return {
     app,
     close: async () => {
+      await desktopEffectsWorker.stop();
       if (indexerListener !== null) {
         await indexerListener.stop();
       }

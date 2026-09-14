@@ -20,7 +20,7 @@ private struct MetadataClient: LocationMetadataClient {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try ConnectionStore(directory: directory)
-    let saved = SavedLocation(server: URL(string: "https://drive.example")!, location: metadataLocation(name: "Old storage", paths: ["/docs"]), expiresAt: "2027-09-13")
+    let saved = SavedLocation(server: URL(string: "https://drive.example")!, location: metadataLocation(name: "Old storage", paths: ["/docs"], version: 2, readOnly: false), expiresAt: "2027-09-13")
     let other = SavedLocation(server: saved.server, location: metadataLocation(identity: "other", provider: "other"))
     try store.save([saved, other])
     let catalog = try store.catalog(saved)
@@ -32,7 +32,7 @@ private struct MetadataClient: LocationMetadataClient {
     let generation = try await catalog.generation()
     let anchor = try await catalog.revision()
     var domains: [SavedLocation] = []
-    let updated = try await refreshLocationMetadata(saved, client: MetadataClient(result: metadataLocation())) {
+    let updated = try await refreshLocationMetadata(saved, client: MetadataClient(result: metadataLocation(paths: ["/docs"], version: 2, readOnly: false))) {
         domains.append($0)
     }
     #expect(domains == [updated])
@@ -56,7 +56,7 @@ private struct MetadataClient: LocationMetadataClient {
 
 @Test func mismatchedMetadataNeverUpdatesAnyDomain() async throws {
     let saved = SavedLocation(server: URL(string: "https://drive.example")!, location: metadataLocation(name: "Old"))
-    for fresh in [metadataLocation(account: "other"), metadataLocation(identity: "other"), metadataLocation(provider: "other"), metadataLocation(version: 2), metadataLocation(readOnly: false)] {
+    for fresh in [metadataLocation(account: "other"), metadataLocation(identity: "other"), metadataLocation(provider: "other"), metadataLocation(version: 3), metadataLocation(version: 1, readOnly: false)] {
         var updated = false
         await #expect(throws: (any Error).self) {
             _ = try await refreshLocationMetadata(saved, client: MetadataClient(result: fresh)) { _ in updated = true }

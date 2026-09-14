@@ -48,6 +48,12 @@ export interface ConnectionStatus {
   readonly providers: readonly { readonly type: string; readonly host: string }[];
 }
 
+export interface AppRouteGroups {
+  public: AppHono;
+  authed: AuthedHono;
+  v2: AppHono;
+}
+
 export interface AppDeps {
   readonly config: AppConfig;
   readonly logger: Logger;
@@ -74,7 +80,7 @@ export interface AppDeps {
    * `public` has no auth requirement; `authed` runs `createRequireAuth`
    * first.
    */
-  readonly registerRoutes?: (groups: { public: AppHono; authed: AuthedHono }) => void;
+  readonly registerRoutes?: (groups: AppRouteGroups) => void;
   /**
    * Probes reachability for whichever subsystems have a liveness check
    * (indexer, embed/search, OCR, office), called on every `GET
@@ -168,19 +174,22 @@ export function createApp(deps: AppDeps): AppHono {
     );
   });
 
-  app.use("/api/v1/*", createCsrfGuard());
+  for (const prefix of ["/api/v1/*", "/api/v2/*"]) {
+    app.use(prefix, createCsrfGuard());
 
-  app.use("/api/v1/*", async (c, next) => {
-    if (!isSetupExempt(c.req.path)) {
-      const status = await connectionStatus();
-      if (status.required) {
-        throw new ApiHttpError("setup_required", "fdrive setup has not been completed yet");
+    app.use(prefix, async (c, next) => {
+      if (!isSetupExempt(c.req.path)) {
+        const status = await connectionStatus();
+        if (status.required) {
+          throw new ApiHttpError("setup_required", "fdrive setup has not been completed yet");
+        }
       }
-    }
-    await next();
-  });
+      await next();
+    });
+  }
 
   const v1: AppHono = new Hono();
+  const v2: AppHono = new Hono();
 
   const subsystemReachability = deps.subsystemReachability ?? (async () => ({}));
 
@@ -227,10 +236,11 @@ export function createApp(deps: AppDeps): AppHono {
   const authed: AuthedHono = new Hono();
   authed.use("*", createRequireAuth(principalResolver));
 
-  deps.registerRoutes?.({ public: v1, authed });
+  deps.registerRoutes?.({ public: v1, authed, v2 });
 
   app.route("/api/v1", v1);
   app.route("/api/v1", authed);
+  app.route("/api/v2", v2);
 
   app.notFound((c) => {
     const body: ApiError = toApiError(

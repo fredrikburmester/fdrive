@@ -25,13 +25,21 @@ export function DesktopConnect({
   });
   const identities = me.data.identities;
   const [selected, setSelected] = useState<string[]>([]);
+  const [access, setAccess] = useState<Record<string, "read" | "full">>({});
   const request = useQuery({
     queryKey: ["desktop-pairing", requestId],
     queryFn: () => apiClient.desktopPairing(requestId),
     retry: false,
   });
   const approval = useMutation({
-    mutationFn: () => apiClient.approveDesktopPairing(requestId, selected),
+    mutationFn: () =>
+      request.data?.supportsWrites
+        ? apiClient.approveDesktopPairing(
+            requestId,
+            selected,
+            Object.fromEntries(selected.map((id) => [id, access[id] ?? "read"])),
+          )
+        : apiClient.approveDesktopPairing(requestId, selected),
   });
   const approved = approval.isSuccess || request.data?.approved;
   return (
@@ -42,7 +50,7 @@ export function DesktopConnect({
           <CardDescription>
             {approved
               ? "Return to the Mac app to open your locations in Finder."
-              : "Choose which storage logins this Mac can browse and download."}
+              : "Choose the storage logins and access for this Mac."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -87,9 +95,31 @@ export function DesktopConnect({
                   </label>
                 ))}
               </fieldset>
+              {request.data.supportsWrites &&
+                selected.map((id) => (
+                  <label key={id} className="flex flex-col gap-2 text-sm">
+                    {identities.find((identity) => identity.id === id)?.providerLabel} access
+                    <select
+                      className="h-10 rounded-md border bg-background px-3"
+                      value={access[id] ?? "read"}
+                      disabled={approval.isPending}
+                      onChange={(event) =>
+                        setAccess((current) => ({
+                          ...current,
+                          [id]: event.target.value === "full" ? "full" : "read",
+                        }))
+                      }
+                    >
+                      <option value="read">Read only</option>
+                      <option value="full">Read and write</option>
+                    </select>
+                  </label>
+                ))}
               <p className="text-sm text-muted-foreground">
-                Read access only. This Mac cannot change your remote files. Connections expire after
-                one year and can be revoked from Account → API tokens.
+                {request.data.supportsWrites
+                  ? "Write access lets this Mac change files where the storage supports safe writes. "
+                  : "Read access only. This Mac cannot change your remote files. "}
+                Connections expire after one year and can be revoked from Account → API tokens.
               </p>
               {approval.isError && <p role="alert">{describeApiError(approval.error)}</p>}
               <Button

@@ -54,7 +54,7 @@ public struct ConnectionStore: Sendable {
     }
     public func client(_ location: SavedLocation) throws -> APIClient {
         guard !location.disconnecting else { throw DriveError.authentication }
-        return try APIClient(server: location.server, token: token(location.id))
+        return try APIClient(server: location.server, token: token(location.id), protocolVersion: location.location.protocolVersion)
     }
     public func removeMetadata(_ id: String) throws {
         for suffix in [".sqlite", ".sqlite-wal", ".sqlite-shm"] {

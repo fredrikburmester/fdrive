@@ -76,6 +76,17 @@ export interface EntryStat {
  *   offer them; `ProviderCapabilities` says which.
  */
 export interface StorageProvider {
+  /**
+   * Runs under a storage-enforced exclusive namespace lease. Only provided for
+   * explicitly qualified configurations whose writers all obey that lease.
+   * The scoped storage must reject use after release/loss. Uploads still need
+   * staging: a lease alone does not make a streaming overwrite atomic.
+   */
+  withWriteLease?<T>(
+    action: (storage: StorageProvider) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T>;
+
   list(path: string): Promise<FileEntry[]>;
 
   /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */

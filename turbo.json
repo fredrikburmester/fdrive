@@ -1,6 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["VITEST_MAX_WORKERS"],
+  "globalPassThroughEnv": ["VITEST_MAX_WORKERS", "FDRIVE_TEST_SFTPGO_WRITE_IMAGE"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

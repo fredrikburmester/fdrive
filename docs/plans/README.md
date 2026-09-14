@@ -8,6 +8,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
+| [macOS writes](MACOS-WRITES.md) | Retention, recovery administration and native write beta qualification |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
 
 These are a backlog, not a claim that an agent is working on every item. Current work and

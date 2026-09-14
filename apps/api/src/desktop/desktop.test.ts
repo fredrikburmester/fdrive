@@ -1,9 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
-import { StorageError } from "@fdrive/core";
+import { StorageError, type StorageProvider } from "@fdrive/core";
+import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { memoryRepo } from "../../test/helpers/desktop-repo.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
@@ -13,8 +18,128 @@ import { createTokenService } from "../tokens/service.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing } from "./pairing.js";
 import { registerDesktopRoutes } from "./routes.js";
+import { createDesktopWrites } from "./writes.js";
 
-async function fixture() {
+it("runs the complete v2 routes with explicit grants, streamed content, receipts and revocation", async () => {
+  const f = await fixture(true);
+  const base = "/api/v2/desktop";
+  const pair = f.pairing.create("Mac", "test", 2);
+  // The route owns a separate transient pairing store, so pair through that API.
+  const created = await f.app.request(`${base}/pairings`, {
+    method: "POST",
+    headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
+    body: JSON.stringify({ deviceName: "Mac" }),
+  });
+  expect(created.status).toBe(201);
+  const request = DesktopPairing.parse(await created.json());
+  expect(
+    (
+      await f.request(
+        `/pairings/${request.id}/approve`,
+        { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+        { cookie: "fdrive_session=test" },
+      )
+    ).status,
+  ).toBe(200);
+  const polled = await f.app.request(`${base}/pairings/${request.id}/poll`, {
+    method: "POST",
+    headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
+    body: JSON.stringify({ secret: request.secret }),
+  });
+  const connected = (await polled.json()) as { credentials: Array<{ token: string }> };
+  const token = connected.credentials[0]?.token;
+  if (!token) throw Error("Missing token");
+  const headers = {
+    authorization: `Bearer ${token}`,
+    "x-requested-with": "fdrive",
+    "content-type": "application/json",
+  };
+  const call = (route: string, body?: unknown) =>
+    f.app.request(base + route, {
+      method: body === undefined ? "GET" : "POST",
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  expect(await (await call("/location")).json()).toMatchObject({
+    protocolVersion: 2,
+    readOnly: false,
+  });
+  expect((await f.request("/location", undefined, headers)).status).toBe(401);
+  expect((await call("/operations/invalid")).status).toBe(400);
+  expect((await call("/operations/" + randomUUID())).status).toBe(404);
+  expect((await call("/entries?path=/")).status).toBe(200);
+  expect((await call("/entry?path=/docs/a.txt")).status).toBe(200);
+  expect(await (await call("/content?path=/docs/a.txt")).text()).toBe("alpha");
+  expect((await call("/versions", { paths: ["/docs/a.txt"] })).status).toBe(200);
+  const folderId = randomUUID();
+  expect(
+    (await call("/folders", { operationId: folderId, parentId: "root", name: "new-folder" }))
+      .status,
+  ).toBe(200);
+  const folder = (await (await call(`/operations/${folderId}/commit`, {})).json()) as {
+    item: { id: string; version: { content: string; metadata: string } };
+  };
+  const movedId = randomUUID();
+  expect(
+    (
+      await call("/moves", {
+        operationId: movedId,
+        itemId: folder.item.id,
+        parentId: "root",
+        name: "renamed-folder",
+        base: folder.item.version,
+      })
+    ).status,
+  ).toBe(200);
+  expect((await call(`/operations/${movedId}/commit`, {})).status).toBe(200);
+  const operationId = randomUUID();
+  const digest = createHash("sha256").update("").digest("hex");
+  expect(
+    (
+      await call("/uploads", {
+        operationId,
+        parentId: "root",
+        name: "empty",
+        base: null,
+        size: 0,
+        sha256: digest,
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (await f.app.request(`${base}/operations/${operationId}/content`, { method: "PUT", headers }))
+      .status,
+  ).toBe(200);
+  expect((await call(`/operations/${operationId}/commit`, {})).status).toBe(200);
+  expect((await call(`/operations/${operationId}`)).status).toBe(200);
+  expect((await call(`/operations/${operationId}/acknowledge`, {})).status).toBe(200);
+  const cancelId = randomUUID();
+  await call("/folders", { operationId: cancelId, parentId: "root", name: "cancelled" });
+  expect((await call(`/operations/${cancelId}/cancel`, {})).status).toBe(200);
+  expect((await call("/disconnect", {})).status).toBe(200);
+  expect((await call("/location")).status).toBe(401);
+  // Unknown pairing secrets and cancelled requests cannot be reused.
+  expect((await call(`/pairings/${pair.id}/cancel`, { secret: pair.secret })).status).toBe(404);
+  const next = DesktopPairing.parse(
+    await (
+      await f.app.request(`${base}/pairings`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ deviceName: "Cancel" }),
+      })
+    ).json(),
+  );
+  expect((await call(`/pairings/${next.id}/cancel`, { secret: next.secret })).status).toBe(200);
+  expect((await call(`/pairings/${next.id}/poll`, { secret: next.secret })).status).toBe(404);
+});
+
+const desktopDirectories: string[] = [];
+afterEach(async () => {
+  await Promise.all(
+    desktopDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
+async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "status">) {
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
@@ -37,11 +162,17 @@ async function fixture() {
     providerId: secondProvider.id,
     externalUsername: "alice",
   });
-  const storage = createMemoryStorage({
+  const storage: StorageProvider = createMemoryStorage({
     "/docs/a.txt": "alpha",
     "/.trash/old": "trash",
     "/hidden/b.txt": "private",
   });
+  if (writable) {
+    const raw = { ...storage };
+    storage.withWriteLease = async (action) => action(raw);
+  }
+  const stateDir = writable ? await mkdtemp(join(tmpdir(), "desktop-routes-")) : undefined;
+  if (stateDir) desktopDirectories.push(stateDir);
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
   const deps = {
     ...repos,
@@ -72,7 +203,15 @@ async function fixture() {
       providers: [{ type: "sftpgo", host: "sftpgo.invalid" }],
     }),
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
-    registerRoutes: (groups) => registerDesktopRoutes(groups, { ...deps, clientIp: () => "test" }),
+    registerRoutes: (groups) =>
+      registerDesktopRoutes(groups, {
+        ...deps,
+        ...(recovery ? { recovery } : {}),
+        clientIp: () => "test",
+        ...(stateDir
+          ? { writes: createDesktopWrites({ ...deps, repo: memoryRepo().repo, stateDir }) }
+          : {}),
+      }),
   });
   function request(route: string, body?: unknown, headers: Record<string, string> = {}) {
     return app.request(DESKTOP_API + route, {
@@ -449,4 +588,201 @@ it("detects equal-size replacements, rejects short streams and releases validati
   );
   expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
   expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+});
+
+it("requires explicit per-identity write approval and never upgrades protocol-1 credentials", async () => {
+  const f = await fixture();
+  const legacy = f.pairing.create("Old Mac", "legacy");
+  await expect(
+    f.pairing.approve(legacy.id, f.account.id, [f.identity.id], {
+      [f.identity.id]: "full",
+    }),
+  ).rejects.toMatchObject({ kind: "bad_request" });
+  const modern = f.pairing.create("New Mac", "modern", 2);
+  expect(f.pairing.info(modern.id)).toMatchObject({ supportsWrites: true });
+  await expect(
+    f.pairing.approve(modern.id, f.account.id, [f.identity.id], {
+      [f.second.id]: "full",
+    }),
+  ).rejects.toMatchObject({ kind: "bad_request" });
+  await f.pairing.approve(modern.id, f.account.id, [f.identity.id, f.second.id], {
+    [f.identity.id]: "full",
+  });
+  const result = await f.pairing.poll(modern.id, modern.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  const first = result.credentials[0];
+  const second = result.credentials[1];
+  if (!first || !second) throw new Error("Expected both identities");
+  const one = await f.pairing.resolve(first.token);
+  const two = await f.pairing.resolve(second.token);
+  expect(one?.tokenAccess?.mode).toBe("full");
+  expect(two?.tokenAccess?.mode).toBe("read");
+  // A requested write grant does not manufacture unsupported backend capabilities.
+  expect(first.location).toMatchObject({ protocolVersion: 2, readOnly: true });
+  expect(
+    (await f.request("/location", undefined, { authorization: `Bearer ${first.token}` })).status,
+  ).toBe(401);
+  expect(await createResolveTokenPrincipal(f.deps)(first.token)).toBeNull();
+});
+
+it("rolls back every write credential when pairing expires or its identity disappears during issuance", async () => {
+  for (const fault of ["creation", "between-identities", "identity"] as const) {
+    const f = await fixture(true);
+    const pair = f.pairing.create("Mac", "test", 2);
+    await f.pairing.approve(pair.id, f.account.id, [f.identity.id, f.second.id], {
+      [f.identity.id]: "full",
+    });
+    if (fault === "between-identities") {
+      f.deps.storageFactory.mockImplementation(async () => {
+        f.advance(16 * 60_000);
+        return f.storage;
+      });
+    } else {
+      const create = f.repos.apiTokens.create.bind(f.repos.apiTokens);
+      vi.spyOn(f.repos.apiTokens, "create").mockImplementation(async (input) => {
+        const token = await create(input);
+        if (fault === "creation") f.advance(16 * 60_000);
+        else vi.spyOn(f.repos.identities, "get").mockResolvedValue(null);
+        return token;
+      });
+    }
+    await expect(f.pairing.poll(pair.id, pair.secret)).rejects.toMatchObject({
+      kind: fault === "identity" ? "unauthorized" : "not_found",
+    });
+    expect(await f.repos.apiTokens.listByAccount(f.account.id)).toEqual([]);
+  }
+});
+
+it("cancels an in-flight write credential issuance and tolerates a broken validation stream", async () => {
+  const f = await fixture(true);
+  const pair = f.pairing.create("Mac", "cancel", 2);
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
+  let release: (() => void) | undefined;
+  let announce: (() => void) | undefined;
+  const entered = new Promise<void>((resolve) => {
+    announce = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const create = f.repos.apiTokens.create.bind(f.repos.apiTokens);
+  vi.spyOn(f.repos.apiTokens, "create").mockImplementation(async (input) => {
+    announce?.();
+    await blocked;
+    return create(input);
+  });
+  const issuing = f.pairing.poll(pair.id, pair.secret);
+  const rejection = expect(issuing).rejects.toMatchObject({ kind: "not_found" });
+  await entered;
+  const cancellation = f.pairing.cancel(pair.id, pair.secret);
+  release?.();
+  await cancellation;
+  await rejection;
+  expect(await f.repos.apiTokens.listByAccount(f.account.id)).toEqual([]);
+  const download = f.storage.download.bind(f.storage);
+  vi.spyOn(f.storage, "download").mockImplementation(async (...args) => ({
+    ...(await download(...args)),
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("Broken content stream"));
+      },
+    }),
+  }));
+  await expect(
+    f.files.versions(f.principal, ["/docs/a.txt"], new AbortController().signal),
+  ).rejects.toThrow("Broken content stream");
+});
+
+it("applies CSRF and browser ownership to v2 pairing while keeping v1 requests unchanged", async () => {
+  const f = await fixture();
+  const base = "/api/v2/desktop";
+  expect(
+    (
+      await f.app.request(`${base}/pairings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deviceName: "Mac" }),
+      })
+    ).status,
+  ).toBe(403);
+  const created = await f.app.request(`${base}/pairings`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+    body: JSON.stringify({ deviceName: "Mac" }),
+  });
+  expect(created.status).toBe(201);
+  const pair = DesktopPairing.parse(await created.json());
+  expect(
+    await (
+      await f.request(`/pairings/${pair.id}`, undefined, { cookie: "fdrive_session=test" })
+    ).json(),
+  ).toMatchObject({ supportsWrites: true });
+  expect(
+    (
+      await f.request(
+        `/pairings/${pair.id}/approve`,
+        { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+        { cookie: "fdrive_session=test" },
+      )
+    ).status,
+  ).toBe(200);
+  const polled = await f.app.request(`${base}/pairings/${pair.id}/poll`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+    body: JSON.stringify({ secret: pair.secret }),
+  });
+  const result = (await polled.json()) as {
+    credentials: { token: string; location: { protocolVersion: number } }[];
+  };
+  expect(result.credentials[0]?.location.protocolVersion).toBe(2);
+  const bearer = `Bearer ${result.credentials[0]?.token}`;
+  expect(
+    (await f.app.request(`${base}/location`, { headers: { authorization: bearer } })).status,
+  ).toBe(200);
+  expect(
+    (await f.app.request(`${base}/location`, { headers: { cookie: "fdrive_session=test" } }))
+      .status,
+  ).toBe(401);
+  expect(
+    (
+      await f.app.request(`${base}/disconnect`, {
+        method: "POST",
+        headers: { authorization: bearer, "x-requested-with": "fdrive" },
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (await f.app.request(`${base}/location`, { headers: { authorization: bearer } })).status,
+  ).toBe(401);
+});
+
+it("limits recovery status to administrators and returns safe bounded job details", async () => {
+  const status = vi.fn(async () => [
+    {
+      identityId: randomUUID(),
+      operationId: randomUUID(),
+      attempts: 1,
+      lastError: "Retry scheduled",
+      createdAt: new Date(0),
+      nextAttemptAt: new Date(5000),
+    },
+  ]);
+  const f = await fixture(false, { status });
+  expect((await f.request("/recovery")).status).toBe(401);
+  expect((await f.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status).toBe(
+    403,
+  );
+  expect(status).not.toHaveBeenCalled();
+  Object.assign(f.principal, { isAdmin: true, tokenAccess: undefined });
+  const response = await f.request("/recovery", undefined, { cookie: "fdrive_session=test" });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toMatchObject({
+    pending: [{ attempts: 1, nextAttemptAt: new Date(5000).toISOString() }],
+  });
+  const unavailable = await fixture();
+  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
+  expect(
+    (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
+  ).toBe(502);
 });

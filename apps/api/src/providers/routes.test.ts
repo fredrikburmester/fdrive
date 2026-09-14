@@ -312,7 +312,7 @@ describe("/admin/providers with a WebDAV type", () => {
     const type = list.types.find((entry) => entry.type === "webdav");
     expect(type).toMatchObject({
       label: "WebDAV",
-      configFields: [],
+      configFields: [{ name: "desktopWriteMode", required: false }],
       capabilities: {
         zip: false,
         setModifiedAt: false,
