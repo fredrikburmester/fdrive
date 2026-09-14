@@ -64,6 +64,13 @@
       "when": 1789362658945,
       "tag": "0008_desktop_operation_account_index",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789384058043,
+      "tag": "0009_desktop_metadata_recovery",
+      "breakpoints": true
     }
   ]
 }

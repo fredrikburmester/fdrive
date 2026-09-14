@@ -14,7 +14,12 @@ import type {
   DesktopWriteEntry,
 } from "@fdrive/contracts";
 import { isUnderPath, parentPath, StorageError, type StorageProvider } from "@fdrive/core";
-import type { DesktopItemRecord, DesktopOperationRecord, DesktopRepo } from "@fdrive/db";
+import type {
+  DesktopEffectContext,
+  DesktopItemRecord,
+  DesktopOperationRecord,
+  DesktopRepo,
+} from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
@@ -37,12 +42,11 @@ type Request =
 export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "trashPathForStorage"> {
   repo: DesktopRepo;
   stateDir?: string;
-  changed?: (
+  effectContext?: (
     principal: Principal,
-    from: string | null,
-    to: string,
-    directory: boolean,
-  ) => Promise<void>;
+    context: Omit<DesktopEffectContext, "office">,
+  ) => Promise<DesktopEffectContext>;
+  effects?: { beforeWrite(identityId: string): Promise<void>; kick(): void };
 }
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function fail(code: string, message: string): never {
@@ -551,6 +555,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           // Re-prove authorization immediately before the storage operation. The scoped
           // adapter intentionally has no reusable lease method of its own.
           await authority(principal);
+          await deps.effects?.beforeWrite(principal.identityId);
           const parent = await record(scoped, request.parentId);
           const source =
             "itemId" in request && request.itemId
@@ -576,6 +581,30 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             await checkBase(scoped, source, request.base, request.kind === "upload");
           if (source && isUnderPath(source.path, target))
             throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
+          const context: Omit<DesktopEffectContext, "office"> = {
+            from: source?.originalPath ?? source?.path ?? null,
+            to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
+            directory: request.kind === "folder" || source?.kind === "dir",
+            trash: trashing,
+          };
+          if (
+            context.from &&
+            context.from !== context.to &&
+            !trashing &&
+            (context.to.startsWith(context.from + "/") || context.from.startsWith(context.to + "/"))
+          )
+            fail(
+              "unsupported",
+              "Restore this item outside its original folder hierarchy to preserve metadata.",
+            );
+          const effectContext = deps.effectContext
+            ? await deps.effectContext(principal, context)
+            : { ...context, office: null };
+          const effects = await repo.captureEffects(
+            principal.identityId,
+            principal.accountId,
+            effectContext,
+          );
           let recoveryId: string | null = null;
           if (request.kind === "upload") {
             if (source && source.kind !== "file")
@@ -629,11 +658,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             if (source && source.path !== target)
               await storage.move(source.path, `${internal}/renamed-original`, { overwrite: false });
           } else if (request.kind === "folder") {
+            await authority(principal);
             publicationStarted = true;
             await storage.mkdir(target);
           } else if (source) {
             if (trashing) await internalDirectory(storage, trashRoot(principal));
             if (source.path !== target) {
+              await authority(principal);
               publicationStarted = true;
               await storage.move(source.path, target, { overwrite: false });
             }
@@ -652,23 +683,25 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             entry,
             request.kind === "upload" ? request.sha256 : undefined,
           );
-          await deps.changed?.(
-            principal,
-            source?.originalPath ?? source?.path ?? null,
-            item.path,
-            entry.kind === "dir",
-          );
           const result: DesktopOperationResult = {
             operationId: id,
             state: "completed",
             item,
             recoveryId,
           };
-          if (!(await transition(principal, id, "committing", "completed", result)))
+          if (
+            !(await repo.complete(principal.identityId, principal.accountId, id, result, effects))
+          )
             throw Error("Could not persist commit receipt");
           return result;
         });
         if (!receipt) throw Error("Write lease is unavailable");
+        // The durable queue owns failures after the receipt commits.
+        try {
+          deps.effects?.kick();
+        } catch {
+          /* Startup/timer recovery will retry. */
+        }
         return receipt;
       } catch (error) {
         const conflict = error instanceof ApiHttpError && error.kind === "conflict";
@@ -679,6 +712,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             "operation_uncertain",
             "Commit could not be confirmed. The pending file and recovery copies are preserved; do not retry with a new operation ID.",
           );
+        if (
+          error instanceof Error &&
+          error.message === "Desktop metadata recovery capacity reached"
+        )
+          throw new ApiHttpError("rate_limited", error.message, { code: "quota_exceeded" });
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }

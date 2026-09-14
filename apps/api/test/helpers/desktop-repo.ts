@@ -100,6 +100,12 @@ export function memoryRepo() {
       });
       return true;
     },
+    async captureEffects(_identityId, _accountId, context) {
+      return { ...context, snapshots: [] };
+    },
+    async complete(identityId, accountId, id, result) {
+      return repo.transition(identityId, accountId, id, "committing", "completed", result);
+    },
   };
   return { repo, items, operations };
 }

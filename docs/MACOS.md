@@ -80,8 +80,42 @@ storage lease it checks the source base and destination, stages and validates ne
 backs up an existing file, then publishes with a lease-fenced MOVE. Original backups remain
 under the reserved `/.fdrive-desktop` namespace, hidden from native ordinary reads. Failed
 staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
-uncertain and cannot automatically replay as a new write. Metadata-hook failure after
-publication has the same conservative outcome; a durable metadata-effect outbox is unfinished.
+uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
+recovery job commit in one PostgreSQL transaction after publication. A failure before that
+transaction commits remains uncertain; an effect failure after it commits leaves the receipt
+completed. Replaying or acknowledging that receipt never republishes the file.
+
+The API drains the durable queue at startup, after saves and every five seconds. Each job
+updates tags, favorites, recents, folder views and mapped Office registrations atomically,
+then commits before dispatching its filesystem notification. Delivery is a second durable
+pending phase: retries send only the notification and never reapply metadata. Before another
+native publication, older pending work for the identity must finish; other identities continue. Recovery bounds lock waits to two seconds and individual
+statements to fifteen seconds. Failed jobs use exponential backoff, capped at five minutes.
+Shutdown waits for active recovery before closing the database. No Mac connection or storage
+credential is needed, and the worker never changes file contents or backups.
+
+Jobs capture trusted Office locations and metadata row revisions before filesystem publication
+(at most 100,000 source/destination revisions). Capacity exhaustion returns `quota_exceeded`
+with the operation still ready and the source untouched. Receipt persistence uses that bounded
+snapshot without recapturing later metadata growth. Identity, Office-root and row locks
+protect concurrent edits. Upgrade all API writers together; older binaries neither rotate
+these revisions nor invalidate superseded recovery destinations.
+Recovery only changes matching captured revisions: later source edits survive, and newer
+destination metadata blocks the transaction for inspection. Later web/MCP/Office/indexer
+move or delete hooks invalidate overlapping queued destinations, including descendants and
+paths with no current metadata. Exact move replays remain idempotent. Superseded jobs preserve
+their snapshots and stay pending for attention rather than attaching metadata to a reused path.
+Account ownership changes retire old jobs. Successful metadata application discards snapshots
+while retaining notification delivery state. Restoring into an overlapping original path
+hierarchy is refused before publication to avoid overlapping metadata moves.
+
+Administrators can inspect the first 100 pending jobs at `GET /api/v1/desktop/recovery`;
+`attempts`, `lastError` and `nextAttemptAt` show retry/failure state without file contents or
+credentials. Failures also appear in the General System log. Do not delete queue or receipt rows
+to clear a conflict: inspect the preserved source/destination metadata first. A recovery
+administration UI and forced reconciliation remain separate work. Filesystem notifications use
+the existing identity-scoped in-process event bus; a crash can repeat a notification. Disconnected
+clients refresh on reconnect, and indexing remains the indexer's responsibility.
 
 A file is limited to 16 GiB. Admission allows 1024 active operations and 64 GiB of combined
 pending payload/recovery reservations across the installation. Acknowledgement releases the

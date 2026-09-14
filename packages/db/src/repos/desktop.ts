@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull, like, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { desktopItems, desktopOperations } from "../schema/app.js";
+import { desktopEffects, desktopItems, desktopOperations } from "../schema/app.js";
+import { captureDesktopEffects } from "./desktop-effects.js";
+import type { DesktopEffectContext, DesktopEffectPayload } from "./desktop-effects-types.js";
 
 export type DesktopItemRecord = typeof desktopItems.$inferSelect;
 export type DesktopOperationRecord = typeof desktopOperations.$inferSelect;
@@ -38,6 +40,20 @@ export interface DesktopRepo {
     state: string,
     result?: Record<string, unknown>,
     attempt?: string,
+  ): Promise<boolean>;
+  /** Bound recovery work before publishing storage changes. */
+  captureEffects(
+    identityId: string,
+    accountId: string,
+    effects: DesktopEffectContext,
+  ): Promise<DesktopEffectPayload>;
+  /** Commit the publication receipt and its metadata recovery work together. */
+  complete(
+    identityId: string,
+    accountId: string,
+    id: string,
+    result: Record<string, unknown>,
+    effects: DesktopEffectPayload,
   ): Promise<boolean>;
 }
 const escaped = (path: string) => path.replace(/[\\%_]/g, (value) => `\\${value}`);
@@ -197,6 +213,37 @@ export function createDesktopRepo(db: Db): DesktopRepo {
             .where(op(identityId, accountId, id))
         )[0] ?? null
       );
+    },
+    async captureEffects(identityId, accountId, effects) {
+      return db.transaction(async (tx) => {
+        const owner = await tx.execute(
+          sql`select account_id from app.identities where id = ${identityId} for update`,
+        );
+        if (owner.rows[0]?.account_id !== accountId) throw Error("Identity ownership changed");
+        const office = effects.office;
+        if (office)
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["office-files", office.providerId, office.rootName])}, 0))`,
+          );
+        return captureDesktopEffects(tx, identityId, effects);
+      });
+    },
+    async complete(identityId, accountId, id, result, effects) {
+      return db.transaction(async (tx) => {
+        const owner = await tx.execute(
+          sql`select account_id from app.identities where id = ${identityId} for update`,
+        );
+        if (owner.rows[0]?.account_id !== accountId) return false;
+        const updated = await tx
+          .update(desktopOperations)
+          .set({ state: "completed", result, updatedAt: new Date() })
+          .where(and(op(identityId, accountId, id), eq(desktopOperations.state, "committing")))
+          .returning({ id: desktopOperations.id });
+        if (!updated.length) return false;
+        const payload = effects;
+        await tx.insert(desktopEffects).values({ operationId: id, identityId, accountId, payload });
+        return true;
+      });
     },
     async transition(identityId, accountId, id, expected, state, result, attempt) {
       const updated = await db
