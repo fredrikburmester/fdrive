@@ -8,7 +8,8 @@ not current instructions.
 ## Upload completion reveal: review fixes verified in worktree
 
 - Worktree `/private/tmp/fdrive-upload-reveal`, branch `feat/upload-reveal`, based on
-  `origin/main` at `b4cc8eb`. Primary checkout changes are untouched. Prepared for PR; no merge requested.
+  `origin/main` at `b4cc8eb`. Primary checkout changes and the original `codex/upload-reveal`
+  branch are preserved. Only the upload commit was copied to this PR branch; no merge requested.
 - Completed uploads select successful files together and scroll the focused item into view
   in list, grid and tree modes. Folder uploads select their top-level folders. Failed,
   skipped and cancelled items are excluded; leaving the folder or switching login cancels
@@ -19,13 +20,14 @@ not current instructions.
   Fully removed batches are consumed without selecting later files that reuse their paths.
 - Twelve hook regressions use real query refreshes, including cancellation/restart and
   unchanged replacement metadata (`step.Fmc4sA`). All 15 affected browser tests pass
-  (`step.tfkXgf`), including replacement size-sort scrolling, Retry, list/grid/tree,
+  on the current-main PR branch (`step.0ZHVg9`), including replacement size-sort scrolling, Retry, list/grid/tree,
   folder uploads, existing reveal controls and pointer/keyboard selection.
 - Standalone disposable dev verification passes at 1440px/light and 390px/dark, with long
   filenames, no page overflow and selection retained when scrolling away (`step.1OBNPC`).
   Screenshots: `.fdrive-workflow/evaluation/upload-{desktop,mobile-dark}.png`.
-- Application lint/typecheck/coverage pass (`VITEST_MAX_WORKERS=1`, `step.kOfZz7` coverage,
-  including 1,852 web tests). No limits or thresholds changed. Integrated diff reviewed.
+- Application lint/typecheck/coverage pass on the current-main PR branch
+  (`VITEST_MAX_WORKERS=1`, `step.sTOwL0` coverage, including 1,875 web tests).
+  No limits or thresholds changed. Integrated diff reviewed.
 
 ## Licensing: AGPL retained
 
