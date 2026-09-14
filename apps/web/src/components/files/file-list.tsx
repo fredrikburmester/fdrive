@@ -28,6 +28,7 @@ import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 
 export const FILE_ROW_HEIGHT = 36;
+const FILE_LIST_HEADER_HEIGHT = 36;
 
 /** Indent, in pixels, added per tree depth level in tree view. */
 export const TREE_INDENT_PX = 20;
@@ -186,6 +187,8 @@ export function FileList({
     count: entries.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => FILE_ROW_HEIGHT,
+    scrollMargin: FILE_LIST_HEADER_HEIGHT,
+    scrollPaddingStart: FILE_LIST_HEADER_HEIGHT,
     overscan: 10,
   });
 
@@ -350,7 +353,7 @@ export function FileList({
                 className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-inset data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
                 style={{
                   height: virtualRow.size,
-                  transform: `translateY(${virtualRow.start}px)`,
+                  transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
                   paddingLeft: 12 + depth * TREE_INDENT_PX,
                   paddingRight: 12,
                 }}

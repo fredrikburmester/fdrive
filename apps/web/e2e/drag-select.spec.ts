@@ -78,6 +78,8 @@ test("dragging the pointer across two rows in list view leaves the selection unc
 
   const rowA = entryFor(page, fileA);
   const rowB = entryFor(page, fileB);
+  await expect(page.locator("header").getByText("2 selected", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Clear selection", exact: true }).click();
   await expect(rowA).toHaveAttribute("data-selected", "false");
   await expect(rowB).toHaveAttribute("data-selected", "false");
 
@@ -113,6 +115,8 @@ test("dragging the pointer across two tiles in grid view leaves the selection un
 
   const tileA = entryFor(page, fileA);
   const tileB = entryFor(page, fileB);
+  await expect(page.locator("header").getByText("2 selected", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Clear selection", exact: true }).click();
   await expect(tileA).toHaveAttribute("data-selected", "false");
   await expect(tileB).toHaveAttribute("data-selected", "false");
 

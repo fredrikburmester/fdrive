@@ -42,7 +42,9 @@ test.describe("file controls ux", () => {
       };
     });
     await uploadFiles(page, files);
-    await expect(fileListRow(page, "item-00.txt")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(`${files.length} selected`, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
 
     // Navigate to enclosing folder with select query pointing to the last item
     const targetFile = "item-34.txt";
@@ -75,7 +77,9 @@ test.describe("file controls ux", () => {
       };
     });
     await uploadFiles(page, files);
-    await expect(fileListRow(page, "item-00.txt")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(`${files.length} selected`, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
 
     const targetFile = "item-34.txt";
     await page.goto(`/files/${sandbox}?select=${targetFile}`);
@@ -115,7 +119,9 @@ test.describe("file controls ux", () => {
       };
     });
     await uploadFiles(page, files);
-    await expect(fileListRow(page, "item-00.txt")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(`${files.length} selected`, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
 
     const targetFile = "item-24.txt";
     await page.goto(`/files/${sandbox}?select=${targetFile}`);
