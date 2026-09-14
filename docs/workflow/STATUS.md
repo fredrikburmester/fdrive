@@ -540,3 +540,17 @@ conformance, manual browser pass) is archived in [history](STATUS-history.md).
 - Provider binding has integrated two-HTTP-server fixture coverage (SFTPGo fakes).
 - Remaining feature/verification gaps are listed in plans; completed work and old worker
   assignments must not be restarted from historical briefs.
+
+## Destination picker folder creation
+
+- Worktree `/private/tmp/fdrive-destination-new-folder`, branch `codex/destination-new-folder`.
+- Shared Move, Copy, Extract, archive destination and Restore pickers offer New folder.
+  Creation uses the displayed directory, enters the returned folder and waits for the
+  operation's confirmation. Cancellation, failed-name retry and source restrictions remain.
+- Folder naming rejects unsafe path segments; pending creation blocks duplicate submissions
+  and dismissal. Long breadcrumbs truncate with full-name hover text; mobile actions are 44px.
+- All 30 affected Chromium browser checks pass on Next dev with disposable PostgreSQL/SFTPGo
+  and WebDAV (`step.ZGlqwv`), including creation in all five destination modes. Light/dark
+  screenshots at 320/402/1280px reviewed under `.fdrive-workflow/evaluation/destination-picker/`.
+- Final application lint/typecheck/coverage pass (`step.tYRT79` coverage). Workflow helper
+  regressions, lint and diff checks pass. No production or hosted Actions changes.
