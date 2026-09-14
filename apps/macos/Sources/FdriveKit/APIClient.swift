@@ -65,12 +65,11 @@ public struct APIClient: Sendable {
     }
     private func check(_ response: URLResponse, data: Data? = nil, writing: Bool = false) throws {
         guard let response = response as? HTTPURLResponse else { throw DriveError.unavailable }
-        if writing, let data,
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let error = object["error"] as? [String: Any], let details = error["details"] as? [String: Any],
-           let code = details["code"] as? String {
+        let error = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["error"] as? [String: Any]
+        let message = error?["message"] as? String
+        if writing, let details = error?["details"] as? [String: Any], let code = details["code"] as? String {
             switch code {
-            case "version_conflict", "name_collision": throw DriveError.writeConflict(error["message"] as? String ?? "This item changed remotely. Your pending copy is preserved.")
+            case "version_conflict", "name_collision": throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved.")
             case "operation_uncertain": throw DriveError.writeUncertain
             case "quota_exceeded": throw DriveError.quota
             case "unsupported", "permission_denied": throw DriveError.permission
@@ -80,8 +79,11 @@ public struct APIClient: Sendable {
         switch response.statusCode {
         case 200..<300: return
         case 401: throw DriveError.authentication
-        case 403: throw writing ? DriveError.permission : DriveError.authentication
+        // A denied path is not an expired login; reconnecting cannot repair it.
+        case 403: throw writing ? DriveError.permission : DriveError.forbidden
         case 404: throw DriveError.missing
+        // Storage locks and other unclassified write refusals are conflicts, not stale listings.
+        case 409 where writing: throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved in Recovery.")
         case 409: throw DriveError.expiredSnapshot
         case 413 where writing: throw DriveError.quota
         case 429, 500...599: throw DriveError.unavailable

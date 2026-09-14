@@ -19,6 +19,14 @@ public struct WriteCoordinator: Sendable {
         let previous = try await localId.mapAsync { try await catalog.item($0) }
         guard let serverParent = parent.id == "root" ? "root" : parent.entry.id,
               localId == nil || previous?.entry.id != nil else { throw DriveError.unavailable }
+        if route == "moves", let localId {
+            // Refuse a cycle natively; the server rejects it again at commit.
+            var ancestor = parentId, depth = 0
+            while ancestor != "root", ancestor != "trash", depth < 4096 {
+                guard ancestor != localId else { throw DriveError.unsupported }
+                ancestor = try await catalog.item(ancestor).parentId; depth += 1
+            }
+        }
         let operationId = UUID().uuidString.lowercased()
         let directory = catalog.recoveryDirectory.appendingPathComponent(operationId)
         var retained = false
@@ -29,9 +37,7 @@ public struct WriteCoordinator: Sendable {
             let kind = try contents.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
             guard kind.isRegularFile == true, kind.isSymbolicLink != true else { throw DriveError.unsupported }
             guard let sourceSize = kind.fileSize, sourceSize <= 16 * 1024 * 1024 * 1024 else { throw DriveError.quota }
-            let volume = try FileManager.default.attributesOfFileSystem(forPath: catalog.recoveryDirectory.deletingLastPathComponent().path)
-            guard let available = volume[.systemFreeSize] as? NSNumber,
-                  available.int64Value >= Int64(sourceSize) + 512 * 1024 * 1024 else { throw DriveError.quota }
+            try requireFreeSpace(Int64(sourceSize), at: catalog.recoveryDirectory.deletingLastPathComponent())
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             let payload = directory.appendingPathComponent("content")
@@ -62,6 +68,27 @@ public struct WriteCoordinator: Sendable {
         let pending = try await catalog.beginWrite(candidate)
         retained = pending.id == operationId
         return try await resume(pending, progress: progress)
+    }
+    /// A reimport (`mayAlreadyExist`) acknowledges an existing remote item of the same
+    /// name and kind when the local bytes match its verified content. Different bytes
+    /// return nil so the caller creates normally and the server keeps both. Absence of
+    /// bytes never means an empty-file replacement.
+    public func reimport(parentId: String, name: String, directory: Bool, contents: URL?) async throws -> CatalogItem? {
+        let parent = try await catalog.item(parentId)
+        let listing = try await catalog.beginListing(parent.entry.path)
+        try await catalog.reconcile(client.list(parent.entry.path), folder: parent.entry.path, listing: listing)
+        let path = (parent.entry.path == "/" ? "" : parent.entry.path) + "/" + name
+        let existing: CatalogItem
+        do { existing = try await catalog.itemAt(path) } catch DriveError.missing { return nil }
+        guard (existing.entry.kind == "dir") == directory else { throw DriveError.unsupported }
+        guard !directory, let contents else { return existing }
+        let local = try streamingSHA256(contents)
+        let verified = existing.contentVersion.count == 64 && existing.contentVersion.allSatisfy(\.isHexDigit)
+        let remote = existing.materialized && verified
+            ? existing.contentVersion
+            : try await client.versions([path]).first?.version
+        guard remote == local.digest else { return nil }
+        return try await catalog.downloaded(existing.id, hash: local.digest, size: local.size, expectedVersion: existing.contentVersion)
     }
     public func resume(_ pending: PendingWrite, progress: Progress = Progress(totalUnitCount: -1)) async throws -> CatalogItem {
         if let result = pending.result { return result }
@@ -107,6 +134,16 @@ public struct WriteCoordinator: Sendable {
             throw error
         }
     }
+}
+
+private func streamingSHA256(_ url: URL) throws -> (digest: String, size: Int64) {
+    let file = try FileHandle(forReadingFrom: url)
+    defer { try? file.close() }
+    var sha = SHA256(); var size: Int64 = 0
+    while let data = try file.read(upToCount: 1024 * 1024), !data.isEmpty {
+        try Task.checkCancellation(); size += Int64(data.count); sha.update(data: data)
+    }
+    return (sha.finalize().map { String(format: "%02x", $0) }.joined(), size)
 }
 
 private extension Optional where Wrapped: Sendable {

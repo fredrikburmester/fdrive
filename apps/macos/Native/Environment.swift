@@ -39,7 +39,19 @@ enum NativeEnvironment {
             return NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.cannotSynchronize.rawValue,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         case .unsupported: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
+        case .forbidden:
+            return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+                           userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
+        case .diskFull:
+            return NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError,
+                           userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         default:
+            if let failure = error as? URLError, [.cannotCreateFile, .cannotOpenFile, .cannotWriteToFile, .cannotCloseFile,
+                                                  .cannotMoveFile, .cannotRemoveFile].contains(failure.code) {
+                // A local write failure is not a server outage; retrying cannot free space.
+                return NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+                               userInfo: [NSLocalizedDescriptionKey: "Could not save the download on this Mac. Check free disk space."])
+            }
             if error is URLError || (error as? DriveError) == .unavailable { return NSFileProviderError(.serverUnreachable) as NSError }
             return NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])

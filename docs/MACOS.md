@@ -159,6 +159,11 @@ reconnect because the server retains its original-path mapping. Finder **Put Bac
 available. Permanent-delete callbacks reject the request and ask macOS to restore the local
 item; no desktop purge endpoint exists, even if Finder displays Delete Immediately or Empty.
 
+Moving a folder into its own descendant is refused natively before any pending record exists
+and again by the server at commit. A system reimport (`mayAlreadyExist`) acknowledges an
+existing remote item of the same name and kind when the local bytes match its verified
+content; differing bytes create normally so the server's collision handling keeps both, and
+absent bytes never replace remote content.
 Catalog v3 preserves existing local IDs, tracks server handles, pending writes and both sides
 of parent changes. Acknowledged folder moves retain cached descendants. Refresh skips pending
 items. Own saves retain the editor's timestamp independently of canonical remote versions.
@@ -266,9 +271,13 @@ newer snapshot. Only complete valid listings reconcile; failures never imply del
 Schema v3 migrates v1/v2 in place. Metadata edits preserve IDs; an observed removal tombstones
 the item and known descendants, and a later recreation receives a new ID. External moves
 appear as removal plus addition. Path-only backends cannot prove a delete/recreate or rename
-that occurred entirely between observations. Names colliding by Unicode normalization/case,
-or containing a colon, fail the listing with guidance rather than merge distinct files.
-Symlinks and other special entries have no reading capability.
+that occurred entirely between observations. With protocol 2 server handles, a changed
+handle or kind at an unchanged path is treated as delete plus recreate, so cached bytes are
+never served for the new item; a handle observed at another path keeps its item and
+downloaded content. Names colliding by Unicode normalization/case, containing a colon, or
+named `.Trash` in the root of a writable location fail the listing with guidance rather
+than merge, hide or shadow distinct entries. Symlinks and other special entries have no
+reading capability.
 
 The most recent 100,000 revisions retain deletion evidence. Older tombstones are pruned;
 anchors before the retained floor or from another generation force resynchronization.
@@ -282,8 +291,10 @@ No originals are sent to the Mac by validation, but upstream bandwidth remains a
 gate. SFTPGo/WebDAV currently supply no common strong validator through the storage port.
 
 Downloads use URLSession temporary files, then the manager-provided transfer directory.
-Cancellation/validation failures remove files owned by the failed operation. On success,
-ownership passes to macOS. Transfer progress is native; resume/sparse fetching is deferred,
+A free-space preflight (file size plus 512 MiB headroom) refuses downloads and saves that
+would fill the volume with a distinct out-of-space error; local write failures are never
+reported as server outages. Cancellation/validation failures remove files owned by the
+failed operation. On success, ownership passes to macOS. Transfer progress is native; resume/sparse fetching is deferred,
 so opening a large file may require its complete initial download. Crash/low-disk cleanup
 and multi-gigabyte transfer behavior still need the release rehearsal listed in the plan.
 
@@ -293,3 +304,6 @@ logs for `FdriveFileProvider`. Native registration/opening issues are distinct f
 connectivity. `getUserVisibleURL` is security-scoped and must remain scoped through Finder
 launch. Local metadata-only callbacks return canonical attributes; rejected remote
 writes use File Provider's persistent `cannotSynchronize` error, avoiding transient retry loops.
+A 401 means the credential expired or was revoked (reconnect); a 403 on reads is a denied
+path or unsupported entry and is not reported as an expired login. Unclassified 409s on
+writes, including WebDAV lock refusals, surface as conflicts rather than stale listings.
