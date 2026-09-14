@@ -4,6 +4,7 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
     case invalidServer, authentication, unavailable, missing, expiredSnapshot, changedContent, unsupported, cancelled
     case server(String), database(String)
     case writeConflict(String), writeUncertain, permission, quota, forbidden, diskFull
+    case nameCollision(String)
     public var errorDescription: String? {
         switch self {
         case .invalidServer: "Enter an HTTPS fdrive address. HTTP is supported only on loopback for development."
@@ -14,7 +15,7 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
         case .changedContent: "The file changed during download. Open it again to get the current version."
         case .unsupported: "This location supports reading regular files and folders only."
         case .cancelled: "The operation was cancelled."
-        case .writeConflict(let message): message
+        case .writeConflict(let message), .nameCollision(let message): message
         case .writeUncertain: "The server could not confirm this save. Your pending copy is preserved in Recovery."
         case .permission: "Write access is unavailable. Your pending copy is preserved in Recovery."
         case .quota: "Storage is full or this file exceeds the upload limit. Your pending copy is preserved."
@@ -79,15 +80,66 @@ public struct Credential: Codable, Sendable {
     public let expiresAt: String
     public let location: Location
 }
-public struct Pairing: Codable, Sendable {
+public struct Pairing: Codable, Sendable, Equatable {
     public let id: String
     public let secret: String
     public let code: String
     public let expiresAt: String
+    public init(id: String, secret: String, code: String, expiresAt: String) {
+        self.id = id; self.secret = secret; self.code = code; self.expiresAt = expiresAt
+    }
 }
 public struct PairResult: Codable, Sendable {
     public let status: String
     public let credentials: [Credential]?
+}
+/// A pairing the app has started but not yet confirmed. Persisted before the first poll so
+/// a crash between redemption and Keychain storage can be resumed instead of orphaning the
+/// server credential; the server revokes bundles nobody confirms when the window closes.
+public struct PendingPairing: Codable, Sendable, Equatable {
+    public let server: URL
+    public let pairing: Pairing
+    public init(server: URL, pairing: Pairing) { self.server = server; self.pairing = pairing }
+    public func isExpired(now: Date = Date()) -> Bool {
+        let format = ISO8601DateFormatter()
+        format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let expires = format.date(from: pairing.expiresAt) ?? ISO8601DateFormatter().date(from: pairing.expiresAt) else { return true }
+        return expires <= now
+    }
+}
+/// What the File Provider framework reports about a location's domain.
+public struct DomainState: Equatable, Sendable {
+    public var userEnabled: Bool
+    public var disconnected: Bool
+    public init(userEnabled: Bool, disconnected: Bool) { self.userEnabled = userEnabled; self.disconnected = disconnected }
+}
+public enum LocationHealth: Equatable, Sendable {
+    case ready, unregistered, disabled, disconnected
+    /// Shown beneath the status; nil when Finder can serve the location.
+    public var guidance: String? {
+        switch self {
+        case .ready: nil
+        case .unregistered: "This location is not registered with Finder. Choose Reconnect."
+        case .disabled: "Enable FDrive under System Settings › General › Login Items & Extensions › File Providers."
+        case .disconnected: "Finder disconnected this location. Choose Reconnect."
+        }
+    }
+    public var needsSystemSettings: Bool { self == .disabled }
+    /// Network refresh is pointless without a domain to publish into.
+    public var canRefresh: Bool { self != .unregistered }
+}
+public func locationHealth(_ state: DomainState?) -> LocationHealth {
+    guard let state else { return .unregistered }
+    if !state.userEnabled { return .disabled }
+    if state.disconnected { return .disconnected }
+    return .ready
+}
+/// Finder should answer a signalled enumerator well within one refresh interval. Two
+/// intervals without any extension callback means the daemon, not the server, is stuck.
+public func enumerationStale(lastCallback: Date?, signalled: Date?, now: Date, interval: TimeInterval = 60) -> Bool {
+    guard let signalled, now.timeIntervalSince(signalled) >= 2 * interval else { return false }
+    guard let lastCallback else { return true }
+    return lastCallback < signalled
 }
 public struct Listing: Codable, Sendable { public let entries: [RemoteEntry]; public let nextCursor: String? }
 public struct ContentVersion: Codable, Sendable { public let path: String; public let version: String; public let size: Int64 }
@@ -179,6 +231,11 @@ public struct PendingWrite: Codable, Sendable, Identifiable {
     public var keepBoth: Bool? = nil
     public var localModificationDate: Date? = nil
     public var supersededOperation: String? = nil
+    /// The editor's name, retained across renamed conflict-copy attempts.
+    public var originalName: String? = nil
+    public var conflictAttempts: Int? = nil
+    /// Server operations replaced by a conflict copy; cancelled after the durable commit.
+    public var abandonedOperations: [String]? = nil
     public var result: CatalogItem?
     public var error: String?
 }

@@ -13,6 +13,12 @@ the first hosted release, Homebrew installation and tests on another Mac.
 3. Sign in in the browser, compare the connection code and select storage logins and access.
 4. Open a location from the app. Click **Enable** in Finder if macOS requests it.
 
+The app checks each location's Finder registration on every refresh. A location whose
+extension was turned off shows the System Settings path (General › Login Items &
+Extensions › File Providers) with an **Open System Settings** button; one whose domain is
+missing or disconnected asks for Reconnect. Server refresh continues for disabled locations
+so re-enabling shows current data.
+
 Each selected server/account/identity gets its own domain, token and metadata database.
 SFTPGo and WebDAV adapters run on the fdrive server; the Mac does not implement either
 protocol. Switching the web app's active login cannot retarget a native location.
@@ -31,7 +37,10 @@ when minimized or behind another app. Closing the window returns it to the menu 
 **Locations and Settings** from the FD menu to reopen it.
 
 The app refreshes browsed folders and materialized files every 60 seconds, on wake,
-after pairing and on manual Refresh. Failures back off to 15 minutes independently per
+after pairing and on manual Refresh. The extension records a heartbeat in the shared
+catalog on every enumeration and download callback; if Finder has not answered a signalled
+refresh within two intervals while the domain is enabled, the location shows a warning that
+Finder, not the server, is unresponsive. Nothing is restarted automatically. Failures back off to 15 minutes independently per
 location. Closing the window keeps it running; Quit stops proactive refresh. Launch at login
 is optional. The system can invoke the extension independently to browse/download.
 An unreadable folder retains its last complete snapshot while other folders refresh. Completed
@@ -129,23 +138,35 @@ hierarchy is refused before publication to avoid overlapping metadata moves.
 
 Administrators can inspect the first 100 pending jobs at `GET /api/v1/desktop/recovery`;
 `attempts`, `lastError` and `nextAttemptAt` show retry/failure state without file contents or
-credentials. Failures also appear in the General System log. Do not delete queue or receipt rows
-to clear a conflict: inspect the preserved source/destination metadata first. A recovery
-administration UI and forced reconciliation remain separate work. Filesystem notifications use
+credentials. The same response lists up to 100 `uncertain` commits (state, kind, name and
+whether a `committing` row has stalled for 15 minutes). After inspecting storage, an
+administrator resolves one with `POST /api/v1/desktop/recovery/:identityId/:operationId/resolve`
+and `{"outcome":"published"}` or `{"outcome":"discarded"}`. `published` verifies the target
+exists (and, for saves, carries the uploaded digest), records the receipt and queues the
+usual metadata recovery; `discarded` cancels the operation and leaves spool and backups to
+retention. Neither replays bytes. Failures also appear in the General System log. Do not
+delete queue or receipt rows to clear a conflict: inspect the preserved source/destination
+metadata first. A recovery administration UI remains separate work. Filesystem notifications use
 the existing identity-scoped in-process event bus; a crash can repeat a notification. Disconnected
 clients refresh on reconnect, and indexing remains the indexer's responsibility.
 
 A file is limited to 16 GiB. Admission allows 1024 active operations and 64 GiB of combined
 pending payload/recovery reservations across the installation. Acknowledgement releases the
 incoming-body reservation, while retained originals stay charged. Cancelled operations keep
-their reservation because remote staging may remain. No automatic backup purge is implemented;
-capacity exhaustion refuses new writes. Retention/reclamation and recovery-management UI
-remain beta qualification work; do not remove ledger rows to bypass capacity checks.
+their reservation because remote staging may remain. A retention job runs every ten minutes:
+bodies idle for 24 hours and conflicts untouched for 7 days are cancelled and their spool
+removed; acknowledged and cancelled operations older than `FDRIVE_DESKTOP_RETENTION_DAYS`
+(default 30) have their remote recovery tree removed under a write lease, then their
+reservation released. Only directories containing the expected `incoming`, `previous` and
+`renamed-original` files are removed; anything unexpected defers that operation with a
+General System log warning. Committing and uncertain operations are never reclaimed.
+Capacity exhaustion still refuses new writes; do not remove ledger rows to bypass it.
 
 The native catalog stores immutable pending copies before networking, and records the remote
 receipt before acknowledging Finder. Retry uses the same operation. Offline edits synchronize
 when the connection recovers. A conflicting file save creates a uniquely named conflict copy,
-preserving the remote original; `failOnConflict` retains the local edit with a visible error.
+preserving the remote original; if that name is taken too, numbered names are tried up to
+three times before the error stands. `failOnConflict` retains the local edit with a visible error.
 **Show recovery files** opens pending contents and a readable operation/error list. Never erase
 that directory to clear a synchronization error. Uncertain commits require manual recovery.
 
@@ -236,7 +257,8 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `GET /pairings/:id` | Signed-in browser reads device/code/expiry only |
 | `POST /pairings/:id/approve` | Browser session, CSRF and ownership of selected identities |
 | `POST /pairings/:id/poll` | App secret; repeated redemption returns the same issued bundle |
-| `POST /pairings/:id/cancel` | App secret; cancels issuance and revokes any credentials issued |
+| `POST /pairings/:id/cancel` | App secret; cancels issuance and revokes unconfirmed credentials |
+| `POST /pairings/:id/confirm` | App secret; the bundle is stored on the Mac and survives expiry |
 | `GET /location` | Desktop bearer; current identity/provider and readonly protocol |
 | `GET /entries?path=&cursor=` | Authorized, bounded metadata snapshot |
 | `GET /entry?path=` | Current entry, with ancestor/symlink checks |
@@ -255,7 +277,11 @@ it works after provider disablement or token expiry without resolving storage cr
 
 Pairing state is in memory: server restart cancels pending pairing. Limits are eight requests
 per IPv4 address or IPv6 /64 and 512 per process. One shared issuance promise handles
-concurrent poll retries; partial issuance rolls back. Snapshot cursors bind identity, bearer
+concurrent poll retries; partial issuance rolls back. The app persists the pairing record
+(server, request ID, secret, expiry) in its App Group container before the first poll and
+confirms after every credential is in the Keychain; a crash in between is resumed at the
+next launch with the same bundle. A bundle nobody confirms is revoked when the five-minute
+window closes, so an orphaned credential never outlives the pairing. Snapshot cursors bind identity, bearer
 and path, expire after 120 seconds and hold at most 100,000 entries; at most 32 unfinished snapshots exist per API
 process. Pages contain 500 entries. Provider-specific limits can be lower. Overflow/errors
 fail visibly instead of truncating a folder. Multi-process deployments need sticky routing
@@ -300,7 +326,9 @@ and multi-gigabyte transfer behavior still need the release rehearsal listed in 
 
 Never modify File Provider's databases or `~/Library/CloudStorage` internals. Diagnose through
 the app status, `fileproviderctl dump se.burmester.fdrive.mac.fileprovider -l`, and unified
-logs for `FdriveFileProvider`. Native registration/opening issues are distinct from API
+logs for `FdriveFileProvider`. The "Finder has not responded" warning means the extension has
+not run a callback since the app last signalled it: check the `fileproviderctl` output and
+logs for the daemon rather than the server. Native registration/opening issues are distinct from API
 connectivity. `getUserVisibleURL` is security-scoped and must remain scoped through Finder
 launch. Local metadata-only callbacks return canonical attributes; rejected remote
 writes use File Provider's persistent `cannotSynchronize` error, avoiding transient retry loops.

@@ -104,6 +104,15 @@ private struct LocationsView: View {
                             Text(location.location.displayName).font(.headline)
                             Text(location.location.username).foregroundStyle(.secondary)
                             Text(model.status[location.id] ?? "Connected").font(.caption).foregroundStyle(.secondary)
+                            if let guidance = model.health[location.id]?.guidance {
+                                Text(guidance).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                                if model.health[location.id]?.needsSystemSettings == true {
+                                    Button("Open System Settings") { model.openExtensionSettings() }.buttonStyle(.link).font(.caption)
+                                }
+                            }
+                            if let warning = model.warnings[location.id] {
+                                Text(warning).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                            }
                             if let expires = location.expiresAt { Text("Connection expires \(expires.prefix(10))").font(.caption).foregroundStyle(.secondary) }
                         }
                         Spacer()
@@ -205,6 +214,11 @@ final class AppModel: ObservableObject {
     @Published var pairing = false
     @Published var pairCode: String?
     @Published var refreshing = false
+    /// Framework-side state of each location's domain, refreshed with the location.
+    @Published var health: [String: LocationHealth] = [:]
+    /// Finder stopped answering signalled enumerators; the server itself is reachable.
+    @Published var warnings: [String: String] = [:]
+    private var signalledAt: [String: Date] = [:]
     private var pairingTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshOperation: Task<Void, Never>?
@@ -216,6 +230,7 @@ final class AppModel: ObservableObject {
         do { locations = try NativeEnvironment.store().load() } catch { self.error = error.localizedDescription }
         for location in locations where location.disconnecting { status[location.id] = "Disconnect incomplete — retry" }
         refreshTask = Task { [weak self] in
+            await self?.resumePairing()
             while !Task.isCancelled {
                 await self?.refresh(automatic: true)
                 try? await Task.sleep(for: .seconds(60))
@@ -244,40 +259,69 @@ final class AppModel: ObservableObject {
                     request = try await client.pair(deviceName: Host.current().localizedName ?? "Mac")
                 }
                 pending = (client, request)
+                // Persist before the first poll: a crash after redemption can be resumed.
+                try NativeEnvironment.store().savePendingPairing(PendingPairing(server: client.server, pairing: request))
                 pairCode = request.code
                 var approvalURL = URLComponents(url: client.server.appendingPathComponent("desktop/connect"), resolvingAgainstBaseURL: false)!
                 approvalURL.queryItems = [.init(name: "request", value: request.id)]
                 guard NSWorkspace.shared.open(approvalURL.url!) else { throw DriveError.server("Could not open the browser.") }
-                for _ in 0..<150 {
-                    try Task.checkCancellation()
-                    let result = try await client.poll(request)
-                    if let credentials = result.credentials, result.status == "connected" {
-                        try Task.checkCancellation()
-                        refreshOperation?.cancel(); await refreshOperation?.value
-                        // Once installation starts, retain successful locations if a later one
-                        // fails. Revoke only the failed credential, never the entire bundle.
-                        pairCode = nil
-                        pending = nil
-                        for credential in credentials {
-                            do { try await install(credential, server: client.server) }
-                            catch {
-                                self.error = error.localizedDescription
-                                try? await APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion).disconnect()
-                            }
-                        }
-                        await refresh(); return
-                    }
-                    try await Task.sleep(for: .seconds(2))
-                }
+                if try await redeem(client: client, request: request) { pending = nil; await refresh(); return }
                 throw DriveError.server("The connection request expired. Connect again.")
             } catch is CancellationError {} catch { self.error = error.localizedDescription }
             if let (client, request) = pending {
+                try? NativeEnvironment.store().clearPendingPairing()
                 await Task.detached { try? await client.cancel(request) }.value
             }
         }
         await pairingTask?.value
     }
     func cancelPairing() { pairingTask?.cancel() }
+    /// Poll until approved, install every credential, then confirm. Returns false on expiry.
+    private func redeem(client: APIClient, request: Pairing) async throws -> Bool {
+        for _ in 0..<150 {
+            try Task.checkCancellation()
+            let result = try await client.poll(request)
+            if let credentials = result.credentials, result.status == "connected" {
+                try Task.checkCancellation()
+                refreshOperation?.cancel(); await refreshOperation?.value
+                // Once installation starts, retain successful locations if a later one
+                // fails. Revoke only the failed credential, never the entire bundle.
+                pairCode = nil
+                for credential in credentials {
+                    do { try await install(credential, server: client.server) }
+                    catch {
+                        self.error = error.localizedDescription
+                        try? await APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion).disconnect()
+                    }
+                }
+                // Confirmation after the Keychain write; an unconfirmed bundle is revoked
+                // by the server at expiry, and launch retries this while the record exists.
+                do { try await client.confirm(request); try NativeEnvironment.store().clearPendingPairing() }
+                catch DriveError.missing { try? NativeEnvironment.store().clearPendingPairing() }
+                catch { self.error = "Connected, but the server could not confirm it yet. The app retries at next launch." }
+                return true
+            }
+            try await Task.sleep(for: .seconds(2))
+        }
+        return false
+    }
+    /// A crash between redemption and Keychain storage leaves a pending record; finish it.
+    private func resumePairing() async {
+        guard !pairing, let store = try? NativeEnvironment.store(), let pending = try? store.pendingPairing() else { return }
+        if pending.isExpired() { try? store.clearPendingPairing(); return }
+        pairing = true
+        defer { pairing = false; pairCode = nil }
+        do {
+            let client = try APIClient(server: pending.server, protocolVersion: 2)
+            pairCode = pending.pairing.code
+            if try await redeem(client: client, request: pending.pairing) { await refresh() }
+            else { try store.clearPendingPairing() }
+        } catch DriveError.missing { try? store.clearPendingPairing() }
+        catch { self.error = error.localizedDescription }
+    }
+    func openExtensionSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+    }
     private func install(_ credential: Credential, server: URL) async throws {
         let store = try NativeEnvironment.store()
         guard (credential.location.protocolVersion == 1 && credential.location.readOnly) || credential.location.protocolVersion == 2 else { throw DriveError.unsupported }
@@ -309,7 +353,8 @@ final class AppModel: ObservableObject {
             }
             throw error
         }
-        if let previous { try? await previous.disconnect() }
+        // A resumed pairing re-installs the same bundle; never revoke the token just stored.
+        if let previous, previousToken != credential.token { try? await previous.disconnect() }
         status[saved.id] = "Connected"
     }
     func reveal(_ location: SavedLocation) async {
@@ -348,6 +393,9 @@ final class AppModel: ObservableObject {
             if automatic, let retry = retryAfter[saved.id], retry > Date() { continue }
             do {
                 let store = try NativeEnvironment.store()
+                let domainHealth = locationHealth(try await NativeEnvironment.domainState(saved.id))
+                health[saved.id] = domainHealth
+                guard domainHealth.canRefresh else { status[saved.id] = "Not available in Finder"; continue }
                 let client = try store.client(saved)
                 let updated = try await refreshLocationMetadata(saved, client: client) {
                     try await NativeEnvironment.updateDomainName($0)
@@ -370,6 +418,12 @@ final class AppModel: ObservableObject {
                     try await NSFileProviderManager.add(domain)
                 }
                 status[saved.id] = "Refreshing"
+                // Judge the previous signal now: a healthy daemon answered it long ago.
+                let callback = try await catalog.lastCallback()
+                if domainHealth == .ready,
+                   enumerationStale(lastCallback: callback.at, signalled: signalledAt[saved.id], now: Date()) {
+                    warnings[saved.id] = "Finder has not responded to this location's updates. See Troubleshooting in the macOS guide."
+                } else { warnings.removeValue(forKey: saved.id) }
                 try await refreshCatalog(catalog, client: client) {
                     let domain = NSFileProviderDomain(identifier: .init(updated.id), displayName: updated.title)
                     if let manager = NSFileProviderManager(for: domain) {
@@ -380,6 +434,7 @@ final class AppModel: ObservableObject {
                         }
                     }
                 }
+                signalledAt[saved.id] = Date()
                 let pending = try await catalog.pendingWrites().filter { $0.result == nil }
                 status[saved.id] = pending.isEmpty ? (current.readOnly ? current.writeUnavailableReason ?? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
                 retryAfter[saved.id] = nil; failures[saved.id] = nil

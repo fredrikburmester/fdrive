@@ -13,6 +13,7 @@ export {
   type DesktopItemRecord,
   type DesktopOperationRecord,
   type DesktopRepo,
+  type DesktopRetention,
 } from "./repos/desktop.js";
 export { createDesktopEffectsRepo } from "./repos/desktop-effects.js";
 export type {

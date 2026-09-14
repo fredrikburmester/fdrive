@@ -50,10 +50,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     throw NSFileProviderError(.versionNoLongerAvailable)
                 }
                 let record = try await repository.downloaded(item.id, hash: digest, size: size, expectedVersion: item.contentVersion)
+                try? await repository.recordCallback()
                 handler.value(url, ProviderItem(record), nil)
                 temporary = nil // Ownership passes to File Provider only after success.
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at: temporary) }
+                if let (repository, _) = try? connection() { try? await repository.recordCallback(error: error.localizedDescription) }
                 handler.value(nil, nil, NativeEnvironment.error(error))
             }
         }

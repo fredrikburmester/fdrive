@@ -122,13 +122,28 @@ public struct WriteCoordinator: Sendable {
             // The durable catalog commit precedes both the callback and spool cleanup.
             // Failure to acknowledge only retains an extra recovery copy.
             try? await client.acknowledgeWrite(pending.request.operationId)
-            if let superseded = pending.supersededOperation { try? await client.cancelWrite(superseded) }
+            for abandoned in pending.abandonedOperations ?? [] { try? await client.cancelWrite(abandoned) }
             try? FileManager.default.removeItem(at: catalog.recoveryDirectory.appendingPathComponent(pending.id))
             progress.completedUnitCount = progress.totalUnitCount
             return result
         } catch {
-            if case DriveError.writeConflict = error, pending.route == "uploads", pending.keepBoth != false, pending.supersededOperation == nil {
-                return try await resume(catalog.conflictCopy(pending), progress: progress)
+            let collision: Bool
+            switch error {
+            case DriveError.writeConflict: collision = false
+            case DriveError.nameCollision: collision = true
+            default:
+                try? await catalog.writeFailed(pending, error: error.localizedDescription)
+                throw error
+            }
+            if pending.route == "uploads", pending.keepBoth != false {
+                // A remote change or taken name keeps the editor's bytes under a new name.
+                // A conflict name that is itself taken gets a numbered retry, bounded.
+                if pending.supersededOperation == nil, let copy = try await catalog.conflictCopy(pending) {
+                    return try await resume(copy, progress: progress)
+                }
+                if collision, let copy = try await catalog.conflictCopy(pending, retry: true) {
+                    return try await resume(copy, progress: progress)
+                }
             }
             try? await catalog.writeFailed(pending, error: error.localizedDescription)
             throw error
