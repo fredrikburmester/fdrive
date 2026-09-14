@@ -11,8 +11,8 @@ enum NativeEnvironment {
         return try ConnectionStore(directory: directory.appendingPathComponent("Library/Application Support/fdrive"),
                                    keychainGroup: Bundle.main.object(forInfoDictionaryKey: "FdriveKeychainGroup") as? String)
     }
-    static func id(_ id: NSFileProviderItemIdentifier) -> String { id == .rootContainer ? "root" : id.rawValue }
-    static func id(_ id: String) -> NSFileProviderItemIdentifier { id == "root" ? .rootContainer : .init(id) }
+    static func id(_ id: NSFileProviderItemIdentifier) -> String { id == .rootContainer ? "root" : id == .trashContainer ? "trash" : id.rawValue }
+    static func id(_ id: String) -> NSFileProviderItemIdentifier { id == "root" ? .rootContainer : id == "trash" ? .trashContainer : .init(id) }
     static func error(_ error: Error) -> NSError {
         if error is CancellationError || (error as? URLError)?.code == .cancelled {
             return NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
@@ -24,6 +24,9 @@ enum NativeEnvironment {
         case .missing: return NSFileProviderError(.noSuchItem) as NSError
         case .expiredSnapshot: return NSFileProviderError(.syncAnchorExpired) as NSError
         case .changedContent: return NSFileProviderError(.versionNoLongerAvailable) as NSError
+        case .writeConflict, .writeUncertain, .permission, .quota:
+            return NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.cannotSynchronize.rawValue,
+                           userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         case .unsupported: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
         default:
             if error is URLError || (error as? DriveError) == .unavailable { return NSFileProviderError(.serverUnreachable) as NSError }

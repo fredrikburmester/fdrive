@@ -8,6 +8,12 @@ import * as idxSchema from "./schema/idx.js";
 
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
+export {
+  createDesktopRepo,
+  type DesktopItemRecord,
+  type DesktopOperationRecord,
+  type DesktopRepo,
+} from "./repos/desktop.js";
 export { createRepos } from "./repos/drizzle.js";
 export { createIdentityLinksRepo, createIdentityOwnershipGuard } from "./repos/identity-links.js";
 export type {

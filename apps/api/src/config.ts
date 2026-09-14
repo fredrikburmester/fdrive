@@ -69,6 +69,8 @@ export interface AppConfig {
   readonly fdriveAutoMigrate: boolean;
   /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
   readonly fdriveTmpDir: string;
+  /** Durable, private spool. Unset disables desktop writes. */
+  readonly fdriveDesktopStateDir?: string;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
   /**
@@ -313,6 +315,7 @@ const envSchema = z.object({
     z.enum(["true", "false"]).transform((value) => value === "true"),
   ),
   FDRIVE_TMP_DIR: z.preprocess((value) => withDefault(value, tmpdir()), z.string().min(1)),
+  FDRIVE_DESKTOP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
   FDRIVE_JOB_MAX_BYTES: z.preprocess(
     (value) => withDefault(value, String(DEFAULT_JOB_MAX_BYTES)),
     z
@@ -501,6 +504,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     nodeEnv: parsed.NODE_ENV,
     fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
+    ...(parsed.FDRIVE_DESKTOP_STATE_DIR
+      ? { fdriveDesktopStateDir: parsed.FDRIVE_DESKTOP_STATE_DIR }
+      : {}),
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
     fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,
     fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,

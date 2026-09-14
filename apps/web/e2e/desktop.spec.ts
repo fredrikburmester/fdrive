@@ -50,3 +50,45 @@ test("returns to the connection request after signing in", async ({ page }) => {
     data: { secret: pair.secret },
   });
 });
+
+test("requires an explicit write grant and keeps an unsupported backend read-only", async ({
+  page,
+}) => {
+  const api = "/api/v2/desktop";
+  const created = await page.request.post(`${api}/pairings`, {
+    headers: { "x-requested-with": "fdrive" },
+    data: { deviceName: "Write test Mac" },
+  });
+  expect(created.status()).toBe(201);
+  const pair = (await created.json()) as { id: string; code: string; secret: string };
+  await page.goto(`/desktop/connect?request=${pair.id}`);
+  await expect(page.getByRole("status", { name: "Connection code" })).toHaveText(pair.code);
+  await page.getByRole("checkbox").first().check();
+  const access = page.getByRole("combobox");
+  await expect(access).toHaveValue("read");
+  await access.selectOption("full");
+  await page.getByRole("button", { name: "Allow selected logins" }).click();
+  await expect(page.getByText("Connection approved", { exact: true })).toBeVisible();
+  const response = await page.request.post(`${api}/pairings/${pair.id}/poll`, {
+    headers: { "x-requested-with": "fdrive" },
+    data: { secret: pair.secret },
+  });
+  expect(await response.json()).toMatchObject({
+    status: "connected",
+    credentials: [
+      {
+        location: {
+          protocolVersion: 2,
+          readOnly: true,
+          capabilities: { create: false, update: false },
+          writeUnavailableReason:
+            "SFTPGo cannot enforce safe conditional writes. This location remains read-only.",
+        },
+      },
+    ],
+  });
+  await page.request.post(`${api}/pairings/${pair.id}/cancel`, {
+    headers: { "x-requested-with": "fdrive" },
+    data: { secret: pair.secret },
+  });
+});
