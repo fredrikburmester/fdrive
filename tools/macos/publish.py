@@ -43,6 +43,15 @@ def read_manifest(directory):
     return manifest
 
 
+def release_asset_id(pages, tag, filename):
+    # The numeric REST asset ID is returned by the release API, not gh's GraphQL node ID.
+    # Drafts are absent from the releases/tags endpoint, so find the release in the listing.
+    for release in (item for page in pages for item in page):
+        if release["tag_name"] == tag:
+            return next(asset["id"] for asset in release["assets"] if asset["name"] == filename)
+    raise ValueError(f"Release {tag} not found")
+
+
 def render_cask(repo, version, digest, asset_id):
     repository_value(repo)
     version_value(version)
@@ -66,7 +75,7 @@ def render_cask(repo, version, digest, asset_id):
   homepage "https://github.com/{repo}"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :tahoe"
+  depends_on macos: :tahoe
 
   app "FDrive.app"
 
@@ -81,7 +90,7 @@ end
 def propose_cask(repo, version, cask):
     repository_value(repo)
     version_value(version)
-    branch = f"release/macos-cask-{version}"
+    branch = f"chore/macos-cask-{version}"
     metadata = json.loads(gh("api", f"repos/{repo}"))
     base = metadata["default_branch"]
     sha = json.loads(gh("api", f"repos/{repo}/git/ref/heads/{base}"))["object"]["sha"]
@@ -91,7 +100,7 @@ def propose_cask(repo, version, cask):
            payload={"ref": f"refs/heads/{branch}", "sha": sha})
     tree = json.loads(gh("api", f"repos/{repo}/git/trees/{branch}?recursive=1"))
     existing = next((item for item in tree["tree"] if item["path"] == "Casks/fdrive.rb"), None)
-    payload = {"message": f"Update fdrive Mac cask to {version}", "branch": branch,
+    payload = {"message": f"chore(macos): update fdrive cask to {version}", "branch": branch,
                "content": base64.b64encode(cask.encode()).decode()}
     if existing:
         payload["sha"] = existing["sha"]
@@ -102,7 +111,7 @@ def propose_cask(repo, version, cask):
     else:
         try:
             print(gh("pr", "create", "--repo", repo, "--head", branch, "--base", base,
-                     "--title", f"Update fdrive Mac cask to {version}", "--body",
+                     "--title", f"chore(macos): update fdrive cask to {version}", "--body",
                      f"Install the signed, notarized macos-v{version} release through Homebrew. "
                      "The cask pins the final DMG checksum and supports authenticated private downloads. "
                      "The release workflow verified both the app and DMG before publishing."))
@@ -132,9 +141,8 @@ def publish(repo, directory):
     gh(*command)
     gh("release", "upload", tag, "--repo", repo, directory / manifest["filename"],
        directory / "SHA256SUMS", directory / "release.json")
-    # The numeric REST asset ID is returned by the release API, not gh's GraphQL node ID.
-    release_info = json.loads(gh("api", f"repos/{repo}/releases/tags/{tag}"))
-    asset_id = next(item["id"] for item in release_info["assets"] if item["name"] == manifest["filename"])
+    releases = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases"))
+    asset_id = release_asset_id(releases, tag, manifest["filename"])
     cask = render_cask(repo, version, manifest["sha256"], asset_id)
     cask_path = directory / "fdrive.rb"
     cask_path.write_text(cask)

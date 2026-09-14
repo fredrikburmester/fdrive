@@ -106,6 +106,14 @@ settings. Outputs are under the specified directory; install the DMG only after 
 reports success. First-time Developer ID provisioning or restricted Apple capabilities may
 require additional account setup; an unsigned archive does not verify that setup.
 
+While Actions is disabled, publish a local build the same way: push the `macos-vX.Y.Z` tag
+for the commit you built, then run the publisher on its artifacts and merge the cask PR:
+
+```sh
+python3 tools/macos/publish.py --repo fredrikburmester/fdrive-web \
+  --artifacts .fdrive-workflow/release-0.1.0/artifacts
+```
+
 ## Install or upgrade with Homebrew
 
 After the first release and cask PR are merged, use the source repository as the tap. The
