@@ -15,7 +15,7 @@ export default async function DesktopConnectPage({
   const client = await serverApiClient();
   try {
     const me = await client.me();
-    return <DesktopConnect requestId={parsed.data} identities={me.identities} />;
+    return <DesktopConnect requestId={parsed.data} initialMe={me} />;
   } catch (error) {
     if (error instanceof ApiClientError && error.kind === "unauthorized") {
       redirect(`/login?desktopRequest=${parsed.data}` as Route);

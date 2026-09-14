@@ -25,7 +25,8 @@ Trusted administration must preserve these requirements when changing configurat
 Do not enable this on an existing production mount merely by setting the mode.
 Qualify its complete writer inventory and exercise recovery on disposable data first.
 fdrive's retained backups, operation ledger and native pending copies are still required.
-This integration does not implement backup reclamation or complete macOS beta qualification.
+fdrive's retention job reclaims acknowledged backups under a lease after the configured
+retention period. This integration does not complete macOS beta qualification.
 
 ## Build and enable
 

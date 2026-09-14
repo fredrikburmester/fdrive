@@ -3,6 +3,22 @@ import FdriveKit
 @preconcurrency import FileProvider
 
 enum NativeEnvironment {
+    static func updateDomainName(_ saved: SavedLocation) async throws {
+        guard let existing = try await NSFileProviderManager.domains().first(where: {
+            $0.identifier.rawValue == saved.id
+        }), !existing.isDisconnected else { throw DriveError.unavailable }
+        let domain = NSFileProviderDomain(identifier: existing.identifier, displayName: saved.title)
+        domain.isHidden = existing.isHidden
+        domain.supportsSyncingTrash = existing.supportsSyncingTrash
+        domain.supportsStringSearchRequest = existing.supportsStringSearchRequest
+        // Apple's same-identifier add updates the display name in place. Never remove/re-add.
+        try await NSFileProviderManager.add(domain)
+    }
+    /// nil when no domain with this identifier is registered.
+    static func domainState(_ id: String) async throws -> DomainState? {
+        guard let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == id }) else { return nil }
+        return DomainState(userEnabled: domain.userEnabled, disconnected: domain.isDisconnected)
+    }
     static func store() throws -> ConnectionStore {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "FdriveAppGroup") as? String,
               let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else {
@@ -24,11 +40,23 @@ enum NativeEnvironment {
         case .missing: return NSFileProviderError(.noSuchItem) as NSError
         case .expiredSnapshot: return NSFileProviderError(.syncAnchorExpired) as NSError
         case .changedContent: return NSFileProviderError(.versionNoLongerAvailable) as NSError
-        case .writeConflict, .writeUncertain, .permission, .quota:
+        case .writeConflict, .nameCollision, .writeUncertain, .permission, .quota:
             return NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.cannotSynchronize.rawValue,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         case .unsupported: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
+        case .forbidden:
+            return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+                           userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
+        case .diskFull:
+            return NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError,
+                           userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         default:
+            if let failure = error as? URLError, [.cannotCreateFile, .cannotOpenFile, .cannotWriteToFile, .cannotCloseFile,
+                                                  .cannotMoveFile, .cannotRemoveFile].contains(failure.code) {
+                // A local write failure is not a server outage; retrying cannot free space.
+                return NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+                               userInfo: [NSLocalizedDescriptionKey: "Could not save the download on this Mac. Check free disk space."])
+            }
             if error is URLError || (error as? DriveError) == .unavailable { return NSFileProviderError(.serverUnreachable) as NSError }
             return NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])

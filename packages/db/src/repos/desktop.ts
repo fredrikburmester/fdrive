@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { desktopEffects, desktopItems, desktopOperations } from "../schema/app.js";
 import { captureDesktopEffects } from "./desktop-effects.js";
@@ -7,6 +7,15 @@ import type { DesktopEffectContext, DesktopEffectPayload } from "./desktop-effec
 
 export type DesktopItemRecord = typeof desktopItems.$inferSelect;
 export type DesktopOperationRecord = typeof desktopOperations.$inferSelect;
+/** Milliseconds after an operation's last change before the reaper may act on it. */
+export interface DesktopRetention {
+  /** `receiving`/`uploading` bodies that never completed. */
+  idleMs: number;
+  /** `conflict` operations the app never retried or cancelled. */
+  conflictMs: number;
+  /** `acknowledged`/`cancelled` operations whose remote backups may be reclaimed. */
+  retainMs: number;
+}
 export interface DesktopRepo {
   ensure(identityId: string, path: string, kind: string): Promise<DesktopItemRecord>;
   item(identityId: string, id: string): Promise<DesktopItemRecord | null>;
@@ -55,6 +64,12 @@ export interface DesktopRepo {
     result: Record<string, unknown>,
     effects: DesktopEffectPayload,
   ): Promise<boolean>;
+  /** Operations past their retention window, oldest first. Reclaimed rows are excluded. */
+  expired(now: Date, retention: DesktopRetention, limit: number): Promise<DesktopOperationRecord[]>;
+  /** Commits that never produced a receipt, oldest first, for administrator inspection. */
+  uncertain(limit: number): Promise<DesktopOperationRecord[]>;
+  /** Release a finished operation's reservation once its remote and local copies are gone. */
+  reclaim(identityId: string, accountId: string, id: string, at: Date): Promise<boolean>;
 }
 const escaped = (path: string) => path.replace(/[\\%_]/g, (value) => `\\${value}`);
 const live = (identityId: string) =>
@@ -187,7 +202,7 @@ export function createDesktopRepo(db: Db): DesktopRepo {
           .where(op(input.identityId, input.accountId, input.id));
         if (prior.length) return;
         const usage = await tx.execute(
-          sql`select count(*) filter (where state not in ('acknowledged','cancelled'))::int as count, coalesce(sum(coalesce((request->>'recoveryBytes')::bigint,0) + case when state='acknowledged' then 0 else coalesce((request->>'size')::bigint,0) end),0)::text as bytes from ${desktopOperations}`,
+          sql`select count(*) filter (where state not in ('acknowledged','cancelled'))::int as count, coalesce(sum(coalesce((request->>'recoveryBytes')::bigint,0) + case when state='acknowledged' then 0 else coalesce((request->>'size')::bigint,0) end) filter (where result->>'reclaimedAt' is null),0)::text as bytes from ${desktopOperations}`,
         );
         const row = usage.rows[0] as { count: number; bytes: string };
         if (
@@ -244,6 +259,55 @@ export function createDesktopRepo(db: Db): DesktopRepo {
         await tx.insert(desktopEffects).values({ operationId: id, identityId, accountId, payload });
         return true;
       });
+    },
+    async expired(now, retention, limit) {
+      const before = (ms: number) => new Date(now.getTime() - ms);
+      return db
+        .select()
+        .from(desktopOperations)
+        .where(
+          or(
+            and(
+              inArray(desktopOperations.state, ["receiving", "uploading"]),
+              lt(desktopOperations.updatedAt, before(retention.idleMs)),
+            ),
+            and(
+              eq(desktopOperations.state, "conflict"),
+              lt(desktopOperations.updatedAt, before(retention.conflictMs)),
+            ),
+            and(
+              inArray(desktopOperations.state, ["acknowledged", "cancelled"]),
+              lt(desktopOperations.updatedAt, before(retention.retainMs)),
+              sql`${desktopOperations.result}->>'reclaimedAt' is null`,
+            ),
+          ),
+        )
+        .orderBy(asc(desktopOperations.updatedAt))
+        .limit(limit);
+    },
+    async uncertain(limit) {
+      return db
+        .select()
+        .from(desktopOperations)
+        .where(inArray(desktopOperations.state, ["committing", "uncertain"]))
+        .orderBy(asc(desktopOperations.updatedAt))
+        .limit(limit);
+    },
+    async reclaim(identityId, accountId, id, at) {
+      const updated = await db
+        .update(desktopOperations)
+        .set({
+          result: sql`coalesce(${desktopOperations.result}, '{}'::jsonb) || jsonb_build_object('reclaimedAt', ${at.toISOString()}::text)`,
+        })
+        .where(
+          and(
+            op(identityId, accountId, id),
+            inArray(desktopOperations.state, ["acknowledged", "cancelled"]),
+            sql`${desktopOperations.result}->>'reclaimedAt' is null`,
+          ),
+        )
+        .returning({ id: desktopOperations.id });
+      return updated.length === 1;
     },
     async transition(identityId, accountId, id, expected, state, result, attempt) {
       const updated = await db

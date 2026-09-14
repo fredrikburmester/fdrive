@@ -21,6 +21,19 @@ public struct ConnectionStore: Sendable {
     public func save(_ locations: [SavedLocation]) throws {
         try JSONEncoder().encode(Configuration(version: 1, locations: locations)).write(to: directory.appendingPathComponent("locations.json"), options: .atomic)
     }
+    private var pendingPairingURL: URL { directory.appendingPathComponent("pending-pairing.json") }
+    public func pendingPairing() throws -> PendingPairing? {
+        guard FileManager.default.fileExists(atPath: pendingPairingURL.path) else { return nil }
+        return try JSONDecoder().decode(PendingPairing.self, from: Data(contentsOf: pendingPairingURL))
+    }
+    /// The secret only redeems, confirms or cancels this one pairing for at most five minutes.
+    public func savePendingPairing(_ pending: PendingPairing) throws {
+        try JSONEncoder().encode(pending).write(to: pendingPairingURL, options: [.atomic, .completeFileProtection])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingPairingURL.path)
+    }
+    public func clearPendingPairing() throws {
+        if FileManager.default.fileExists(atPath: pendingPairingURL.path) { try FileManager.default.removeItem(at: pendingPairingURL) }
+    }
     public func catalog(_ location: SavedLocation) throws -> Catalog {
         try Catalog(url: directory.appendingPathComponent(location.id + ".sqlite"), title: location.title)
     }

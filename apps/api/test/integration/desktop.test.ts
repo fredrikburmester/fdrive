@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { DESKTOP_API, DesktopPairing, DesktopPairResult, MeResponse } from "@fdrive/contracts";
+import {
+  AdminProvidersResponse,
+  DESKTOP_API,
+  DesktopPairing,
+  DesktopPairResult,
+  MeResponse,
+  ProvidersResponse,
+} from "@fdrive/contracts";
 import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it } from "vitest";
@@ -86,6 +93,83 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
       (credential) => credential.location.providerId === provider.id,
     );
     if (!a || !b) throw new Error("Expected two isolated locations");
+    // A label-only admin patch propagates to linked logins, existing credentials and new pairings.
+    expect(
+      (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
+        .status,
+    ).toBe(200);
+    const beforeProviders = AdminProvidersResponse.parse(
+      await (await request("/api/v1/admin/providers")).json(),
+    );
+    const beforeTokens = await (await request("/api/v1/account/tokens")).json();
+    const renamed = await composed.app.request(`/api/v1/admin/providers/${a.location.providerId}`, {
+      method: "PATCH",
+      headers: { cookie, "x-requested-with": "fdrive", "content-type": "application/json" },
+      body: JSON.stringify({ label: "  Home storage  " }),
+    });
+    expect(renamed.status).toBe(200);
+    const afterProviders = AdminProvidersResponse.parse(
+      await (await request("/api/v1/admin/providers")).json(),
+    );
+    for (const before of beforeProviders.providers) {
+      const after = afterProviders.providers.find((row: { id: string }) => row.id === before.id);
+      if (!after) throw new Error("Provider disappeared during rename");
+      expect(after).toEqual({
+        ...before,
+        checkedAt: after.checkedAt,
+        ...(before.id === a.location.providerId ? { label: "Home storage" } : {}),
+      });
+    }
+    expect(await (await request("/api/v1/account/tokens")).json()).toEqual(beforeTokens);
+    const namedMe = MeResponse.parse(await (await request("/api/v1/auth/me")).json());
+    expect(namedMe.identities).toEqual(
+      me.identities.map((identity) => ({
+        ...identity,
+        ...(identity.providerId === a.location.providerId ? { providerLabel: "Home storage" } : {}),
+      })),
+    );
+    const publicProviders = ProvidersResponse.parse(
+      await (await request("/api/v1/providers")).json(),
+    );
+    expect(publicProviders.providers.find((row) => row.id === a.location.providerId)?.label).toBe(
+      "Home storage",
+    );
+    expect(
+      await (
+        await request(`${DESKTOP_API}/location`, undefined, {
+          authorization: `Bearer ${a.token}`,
+          cookie: "",
+        })
+      ).json(),
+    ).toEqual({ ...a.location, displayName: "Home storage" });
+    expect(
+      await (
+        await request(`${DESKTOP_API}/location`, undefined, {
+          authorization: `Bearer ${b.token}`,
+          cookie: "",
+        })
+      ).json(),
+    ).toEqual(b.location);
+    const freshPair = DesktopPairing.parse(
+      await (await request(`${DESKTOP_API}/pairings`, { deviceName: "New Mac" })).json(),
+    );
+    expect(
+      (
+        await request(`${DESKTOP_API}/pairings/${freshPair.id}/approve`, {
+          identityIds: [a.location.identityId],
+        })
+      ).status,
+    ).toBe(200);
+    const freshResult = DesktopPairResult.parse(
+      await (
+        await request(`${DESKTOP_API}/pairings/${freshPair.id}/poll`, { secret: freshPair.secret })
+      ).json(),
+    );
+    expect(freshResult).toMatchObject({
+      status: "connected",
+      credentials: [{ location: { ...a.location, displayName: "Home storage" } }],
+    });
+    await request(`${DESKTOP_API}/pairings/${freshPair.id}/cancel`, { secret: freshPair.secret });
     for (const [credential, expected] of [
       [a, "alpha"],
       [b, "bravo"],

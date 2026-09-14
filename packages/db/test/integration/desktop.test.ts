@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { sql } from "drizzle-orm";
 import { expect, it } from "vitest";
 import { createDb, createDesktopRepo, createRepos, migrate } from "../../src/index.js";
 
@@ -114,6 +115,39 @@ it("coordinates desktop identities and operation receipts across independent Pos
     expect((await b.operation(identity.id, account.id, input.id))?.result).toEqual({
       receipt: "durable",
     });
+    // Retention: only expired states qualify, reclaiming releases the reservation once.
+    const retention = { idleMs: 1000, conflictMs: 2000, retainMs: 3000 };
+    const now = new Date();
+    const stale = new Date(now.getTime() - 5000);
+    const seed = async (state: string, size: number, updatedAt = stale, recoveryBytes = 0) => {
+      const op = { ...input, id: randomUUID(), state, request: { size, recoveryBytes } };
+      await a.reserve(op);
+      await first.db.execute(
+        sql`update app.desktop_operations set updated_at = ${updatedAt.toISOString()}::timestamptz, state = ${state} where id = ${op.id}`,
+      );
+      return op.id;
+    };
+    const idle = await seed("uploading", 1);
+    const fresh = await seed("receiving", 1, now);
+    const conflict = await seed("conflict", 1);
+    const acknowledged = await seed("acknowledged", 0, stale, 64 * 1024 ** 3 - 64);
+    const uncertain = await seed("uncertain", 1);
+    const committing = await seed("committing", 1);
+    expect((await a.expired(now, retention, 10)).map((op) => op.id).sort()).toEqual(
+      [idle, conflict, acknowledged].sort(),
+    );
+    expect((await b.uncertain(10)).map((op) => op.id).sort()).toEqual(
+      [uncertain, committing].sort(),
+    );
+    expect(fresh).toBeTruthy();
+    await expect(a.reserve({ ...input, id: randomUUID(), request: { size: 60 } })).rejects.toThrow(
+      "capacity",
+    );
+    expect(await a.reclaim(identity.id, account.id, idle, now)).toBe(false);
+    expect(await a.reclaim(identity.id, account.id, acknowledged, now)).toBe(true);
+    expect(await b.reclaim(identity.id, account.id, acknowledged, now)).toBe(false);
+    expect((await a.expired(now, retention, 10)).map((op) => op.id)).not.toContain(acknowledged);
+    await a.reserve({ ...input, id: randomUUID(), request: { size: 60 } });
   } finally {
     await first.close();
     await second.close();

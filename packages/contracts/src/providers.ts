@@ -107,9 +107,16 @@ export const AdminProvidersResponse = z.object({
 });
 export type AdminProvidersResponse = z.infer<typeof AdminProvidersResponse>;
 
+/** One administrator-managed display name, shared by this provider's logins. */
+export const ProviderName = z
+  .string()
+  .trim()
+  .min(1, "Enter a name for this storage.")
+  .max(120, "Use 120 characters or fewer for the storage name.");
+
 export const AdminProviderCreateRequest = z.strictObject({
   type: ProviderType,
-  label: z.string().min(1).max(120),
+  label: ProviderName,
   baseUrl: HttpUrl,
   config: ProviderFieldValues.optional(),
 });

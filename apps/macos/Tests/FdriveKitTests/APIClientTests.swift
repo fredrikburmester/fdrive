@@ -59,7 +59,7 @@ struct APIClientTests {
         await #expect(throws: DriveError.self) { try await api.list("/") }
     }
     @Test func reportsOfflineAuthenticationAndExpiredSnapshotsWithoutEmptyListings() async throws {
-        for (status, expected) in [(401, DriveError.authentication), (403, .authentication), (404, .missing), (409, .expiredSnapshot), (429, .unavailable), (503, .unavailable)] {
+        for (status, expected) in [(401, DriveError.authentication), (403, .forbidden), (404, .missing), (409, .expiredSnapshot), (429, .unavailable), (503, .unavailable)] {
             let (api, session) = try client(Responses([(status, "{}")])); defer { session.invalidateAndCancel() }
             await #expect(throws: expected) { try await api.list("/") }
         }
@@ -68,6 +68,12 @@ struct APIClientTests {
         let json = "{\"items\":[{\"path\":\"/other\",\"version\":\"bad\",\"size\":3}]}"
         let (api, session) = try client(Responses([(200, json)])); defer { session.invalidateAndCancel() }
         await #expect(throws: DriveError.self) { try await api.versions(["/a"]) }
+    }
+    // Case 83: a storage lock or unclassified 409 on a write is a conflict, never an expired listing.
+    @Test func unclassifiedWriteConflictsAreConflictsNotExpiredSnapshots() async throws {
+        let (api, session) = try client(Responses([(409, "{\"error\":{\"kind\":\"conflict\",\"message\":\"Locked by another client\"}}")]))
+        defer { session.invalidateAndCancel() }
+        await #expect(throws: DriveError.writeConflict("Locked by another client")) { try await api.commitWrite(UUID().uuidString.lowercased()) }
     }
     @Test func preservesRetryAndQuotaErrorsForPendingWrites() async throws {
         for (status, expected) in [(413, DriveError.quota), (502, .unavailable), (503, .unavailable)] {

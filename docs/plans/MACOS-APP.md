@@ -12,6 +12,10 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
   browse/open, disconnect one and manually upgrade while retaining the other domain and IDs.
 - Rehearse reboot, extension termination during transfer, crash-temp cleanup and rollback
   to the previous installable version. Verify launch-at-login and wake across real sleep.
+- Disable and re-enable the extension in System Settings to confirm the location guidance
+  and button; suspend `fileproviderd` (`kill -STOP`) to observe the stalled-Finder warning
+  and its clearance; quit the app between pairing redemption and confirmation to exercise
+  the resumed pairing at next launch.
 
 ## Reliability and scale gate
 

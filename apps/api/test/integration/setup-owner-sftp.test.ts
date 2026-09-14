@@ -110,7 +110,11 @@ describe("setup owner against SFTPGo v2.7.5", () => {
           composed.app.request("/api/v1/setup/complete", {
             method: "POST",
             headers: setupHeaders(token),
-            body: JSON.stringify({ ...candidate, homeTemplate: "sftpgo:/{username}" }),
+            body: JSON.stringify({
+              ...candidate,
+              label: "  Home storage  ",
+              homeTemplate: "sftpgo:/{username}",
+            }),
           }),
         ),
       );
@@ -132,6 +136,11 @@ describe("setup owner against SFTPGo v2.7.5", () => {
         providers: 1,
       });
       expect(claimed.status).toBe(200);
+      expect(await claimed.json()).toMatchObject({
+        identities: [{ providerLabel: "Home storage" }],
+      });
+      const named = await inspection.db.execute(sql`select label from app.providers`);
+      expect(named.rows).toEqual([{ label: "Home storage" }]);
       const cookie = claimed.headers.get("set-cookie")?.split(";")[0];
       if (cookie === undefined) throw new Error("expected owner session cookie");
       expect(cookie).toContain("fdrive_session=");
