@@ -37,6 +37,24 @@ The request path is:
 | Credential validation and post-login binding checks | [credential verification](../apps/api/src/accounts/credentials.ts) |
 | Credential decryption and token caching | [token source](../apps/api/src/auth/token-source.ts) |
 
+### Display names
+
+Initial setup collects **Storage name**. Administrators can rename an existing instance at
+**System → Storage → Edit → Name**, including environment-managed instances whose address is
+deployment-controlled. The existing `label` is shared by all logins on that provider. Names
+are trimmed and must contain 1–120 characters; labels render as plain text. Equal names never
+combine provider or identity IDs. Usernames remain visible beside or beneath the name.
+
+Older setup clients may omit `label`. Unnamed instances retain their existing fallback labels
+and can be named later; environment initialization preserves saved nonempty labels.
+A label-only update changes no endpoint, credentials, identity binding or token grants.
+It invalidates web provider/identity caches; desktop approval also refreshes identity data on
+focus. New desktop connections receive the current name, and existing Mac connections update
+on refresh as described in [the Mac guide](MACOS.md#display-name-refresh).
+
+The Mac connects to the entered fdrive server. Only that server accesses the provider endpoint;
+the technical address belongs in administrator connection settings.
+
 ## 1. Create a workspace package
 
 Use `packages/provider-example` with package name `@fdrive/provider-example`, replacing

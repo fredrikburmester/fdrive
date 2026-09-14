@@ -7,6 +7,7 @@ import type { ProviderService } from "../providers/service.js";
 
 export interface SetupCompleteInput {
   readonly baseUrl: string;
+  readonly label?: string;
   readonly homeTemplate: string;
   readonly username: string;
   readonly password: string;
@@ -141,15 +142,14 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
       // disabled and removed again should the login fail. An existing row
       // (env-pinned, or found by address) is left untouched until the login
       // has been verified and the claim taken: a wrong password must not
-      // rewrite a live provider's configuration. The label stays empty so
-      // the public login page names the product, not the host; admins see
-      // the host until they set a name.
+      // rewrite a live provider's configuration or name. Older setup clients
+      // omit the name; those providers remain usable with the existing fallback.
       const created =
         existing === null
           ? await deps.providers.create(
               {
                 type: "sftpgo",
-                label: "",
+                label: input.label?.trim() ?? "",
                 baseUrl,
                 config: { homeTemplate: input.homeTemplate },
               },
@@ -205,6 +205,7 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
         // A crash after the claim is recoverable: the same verified identity
         // resumes the pending claim, while another process cannot overwrite it.
         await deps.providers.update(candidate.id, {
+          ...(input.label !== undefined ? { label: input.label.trim() } : {}),
           ...(existing === null
             ? {}
             : { config: { ...stringConfig(existing.config), homeTemplate: input.homeTemplate } }),

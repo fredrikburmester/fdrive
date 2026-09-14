@@ -1,5 +1,27 @@
 import Foundation
 
+public protocol LocationMetadataClient: Sendable {
+    func location() async throws -> Location
+}
+extension APIClient: LocationMetadataClient {}
+
+/// Keep the last saved metadata on network/framework failure. Repeating the same-ID
+/// domain update repairs a previous update interrupted before the configuration was saved.
+public func refreshLocationMetadata(
+    _ saved: SavedLocation,
+    client: some LocationMetadataClient,
+    isolation: isolated (any Actor)? = #isolation,
+    updateDomain: (SavedLocation) async throws -> Void
+) async throws -> SavedLocation {
+    let updated = try saved.updatingMetadata(from: await client.location())
+    try Task.checkCancellation()
+    if updated.title != saved.title {
+        try await updateDomain(updated)
+        try Task.checkCancellation()
+    }
+    return updated
+}
+
 public protocol CatalogRefreshClient: Sendable {
     func list(_ path: String) async throws -> [RemoteEntry]
     func versions(_ paths: [String]) async throws -> [ContentVersion]
@@ -43,7 +65,7 @@ public func refreshCatalog(_ catalog: Catalog, client: some CatalogRefreshClient
                 try await catalog.validate(versions, expecting: expected)
             } catch {
                 try Task.checkCancellation()
-                let itemFailure = (error as? DriveError) == .authentication || (error as? DriveError) == .missing
+                let itemFailure = [.authentication, .forbidden, .missing].contains(error as? DriveError)
                 if batch.count == 1 || !itemFailure { failure = failure ?? error; continue }
                 // A batch response is all-or-nothing. Retry separately so a denied file
                 // cannot prevent validation of readable files in the same batch.

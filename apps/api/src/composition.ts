@@ -37,6 +37,7 @@ import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
+import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
 import { ApiHttpError } from "./errors.js";
@@ -368,6 +369,17 @@ export async function composeApp(
   const desktopRepo = createDesktopRepo(db);
   const desktopEffects = createDesktopEffectsRepo(db);
   const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
+  const desktopRetention = createDesktopRetention({
+    repo: desktopRepo,
+    storageForIdentity: storageFactory,
+    clock,
+    eventLog,
+    retention: {
+      ...DEFAULT_DESKTOP_RETENTION,
+      retainMs: config.fdriveDesktopRetentionDays * 24 * 60 * 60_000,
+    },
+    ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
+  });
   const officeFiles = createOfficeFileRepo(db);
   const fsMetadata = withOfficeMetadata(
     withDesktopMetadata(metadataService, desktopRepo),
@@ -666,6 +678,7 @@ export async function composeApp(
             scopeResolver.configuredMappings,
           ),
           effects: desktopEffectsWorker,
+          storageForIdentity: storageFactory,
           ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
@@ -877,9 +890,11 @@ export async function composeApp(
   });
 
   desktopEffectsWorker.start();
+  desktopRetention.start();
   return {
     app,
     close: async () => {
+      await desktopRetention.stop();
       await desktopEffectsWorker.stop();
       if (indexerListener !== null) {
         await indexerListener.stop();

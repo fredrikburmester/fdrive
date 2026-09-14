@@ -47,7 +47,11 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "trashPath
     context: Omit<DesktopEffectContext, "office">,
   ) => Promise<DesktopEffectContext>;
   effects?: { beforeWrite(identityId: string): Promise<void>; kick(): void };
+  /** Administrator resolution of uncertain commits needs the identity's storage. */
+  storageForIdentity?: (identityId: string) => Promise<StorageProvider>;
 }
+/** A commit that has not progressed for this long is treated as abandoned by its process. */
+export const DESKTOP_COMMIT_STALL_MS = 15 * 60_000;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function fail(code: string, message: string): never {
   throw new ApiHttpError("conflict", message, { code });
@@ -720,6 +724,140 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }
+    },
+    /** Commits without a receipt, oldest first, for administrator inspection. */
+    async uncertain(now: Date) {
+      return (await repo.uncertain(100)).map((op) => {
+        const request = op.request as Request;
+        return {
+          identityId: op.identityId,
+          operationId: op.id,
+          state: op.state as "committing" | "uncertain",
+          stalled:
+            op.state === "uncertain" ||
+            now.getTime() - op.updatedAt.getTime() > DESKTOP_COMMIT_STALL_MS,
+          kind: request.kind,
+          name: request.name,
+          updatedAt: op.updatedAt.toISOString(),
+        };
+      });
+    },
+    /** The administrator inspected storage. `published` records the receipt from the
+     * current target and queues metadata recovery; `discarded` cancels without touching
+     * storage, spool or backups (retention reclaims them later). Never replays a write. */
+    async resolve(
+      identityId: string,
+      accountId: string,
+      id: string,
+      outcome: "published" | "discarded",
+      now: Date,
+    ): Promise<DesktopOperationResult> {
+      const op = await repo.operation(identityId, accountId, id);
+      if (!op) throw new ApiHttpError("not_found", "Operation is not available");
+      const stalled =
+        op.state === "uncertain" ||
+        (op.state === "committing" &&
+          now.getTime() - op.updatedAt.getTime() > DESKTOP_COMMIT_STALL_MS);
+      if (!stalled)
+        throw new ApiHttpError("conflict", "Only an uncertain or stalled commit can be resolved");
+      if (outcome === "discarded") {
+        if (!(await repo.transition(identityId, accountId, id, op.state, "cancelled")))
+          throw new ApiHttpError("conflict", "Operation changed while resolving");
+        const cancelled = await repo.operation(identityId, accountId, id);
+        if (!cancelled) throw new ApiHttpError("not_found", "Operation is not available");
+        return status(cancelled);
+      }
+      if (!deps.storageForIdentity)
+        throw new ApiHttpError("upstream_unavailable", "Recovery resolution is unavailable");
+      const storage = await deps.storageForIdentity(identityId);
+      const principal: Principal = {
+        accountId,
+        identityId,
+        username: "administrator",
+        isAdmin: true,
+        storage,
+        tokenAccess: { mode: "full", paths: ["/"] },
+      };
+      const request = op.request as Request;
+      const parent = await record(principal, request.parentId);
+      const source =
+        "itemId" in request && request.itemId ? await repo.item(identityId, request.itemId) : null;
+      if ("itemId" in request && request.itemId && !source)
+        throw new ApiHttpError("conflict", "The source handle no longer exists; choose discarded");
+      const trashing = request.parentId === "trash";
+      const name =
+        source?.originalPath && request.name === trashName(source)
+          ? (source.originalPath.split("/").at(-1) as string)
+          : request.name;
+      const target =
+        trashing && source
+          ? `${trashRoot(principal)}/${source.id}`
+          : `${parent.path === "/" ? "" : parent.path}/${name}`;
+      // Storage evidence is checked before any registry change.
+      const missing = new ApiHttpError(
+        "conflict",
+        "Nothing was published at the target; choose discarded",
+      );
+      let entry: DesktopEntry | undefined;
+      if (trashing) {
+        const listed = await storage.list(trashRoot(principal)).catch(() => []);
+        if (!listed.some((candidate) => candidate.path === target)) throw missing;
+      } else {
+        try {
+          entry = await files.stat(principal, target);
+        } catch (error) {
+          if (error instanceof ApiHttpError && error.kind === "not_found") throw missing;
+          throw error;
+        }
+        if (request.kind === "upload" && entry.kind !== "file")
+          throw new ApiHttpError("conflict", "The target is not a file; choose discarded");
+        if (request.kind === "upload" && (await digest(storage, target)).sha256 !== request.sha256)
+          throw new ApiHttpError(
+            "conflict",
+            "The target's bytes differ from the upload; choose discarded",
+          );
+      }
+      // Registry updates that the interrupted commit may not have reached.
+      if (source && source.path !== target) await repo.move(identityId, source.path, target);
+      if (source && trashing)
+        await repo.update(identityId, source.id, { originalPath: source.path });
+      else if (source?.originalPath && !inTrash(principal, target))
+        await repo.update(identityId, source.id, { originalPath: null });
+      entry ??= await trashEntry(principal, target);
+      const context: Omit<DesktopEffectContext, "office"> = {
+        from: source?.originalPath ?? source?.path ?? null,
+        to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
+        directory: request.kind === "folder" || source?.kind === "dir",
+        trash: trashing,
+      };
+      const effectContext = deps.effectContext
+        ? await deps.effectContext(principal, context)
+        : { ...context, office: null };
+      const effects = await repo.captureEffects(identityId, accountId, effectContext);
+      const item = await decorate(
+        principal,
+        entry,
+        request.kind === "upload" ? request.sha256 : undefined,
+      );
+      const result: DesktopOperationResult = {
+        operationId: id,
+        state: "completed",
+        item,
+        recoveryId: request.kind === "upload" && source ? id : null,
+      };
+      if (
+        op.state === "uncertain" &&
+        !(await repo.transition(identityId, accountId, id, "uncertain", "committing"))
+      )
+        throw new ApiHttpError("conflict", "Operation changed while resolving");
+      if (!(await repo.complete(identityId, accountId, id, result, effects)))
+        throw new ApiHttpError("conflict", "Operation changed while resolving");
+      try {
+        deps.effects?.kick();
+      } catch {
+        /* Startup/timer recovery will retry. */
+      }
+      return result;
     },
     async acknowledge(principal: Principal, id: string) {
       const op = await operation(principal, id);

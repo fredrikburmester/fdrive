@@ -164,12 +164,12 @@ private func pending(_ item: CatalogItem, parent: CatalogItem, name: String, rou
     let restarted = try Catalog(url: url, title: "Writes")
     #expect(try await restarted.pendingWrites().first?.error == "Offline")
     #expect(try await restarted.beginWrite(operation).id == operation.id)
-    let copy = try await restarted.conflictCopy(operation)
+    let copy = try #require(try await restarted.conflictCopy(operation))
     #expect(copy.request.itemId == nil)
     #expect(copy.request.base == nil)
     #expect(copy.request.name.contains("conflict"))
     #expect(copy.request.operationId != operation.id)
-    #expect(try await restarted.conflictCopy(operation).request.operationId == copy.request.operationId)
+    #expect(try await restarted.conflictCopy(operation)?.request.operationId == copy.request.operationId)
 }
 
 @Test func upgradingRemoteHandlesPreservesLocalIdentifiersAndContentBases() async throws {

@@ -100,6 +100,43 @@ export function memoryRepo() {
       });
       return true;
     },
+    async expired(now, retention, limit) {
+      const age = (value: DesktopOperationRecord) => now.getTime() - value.updatedAt.getTime();
+      return [...operations.values()]
+        .filter(
+          (value) =>
+            (["receiving", "uploading"].includes(value.state) && age(value) > retention.idleMs) ||
+            (value.state === "conflict" && age(value) > retention.conflictMs) ||
+            (["acknowledged", "cancelled"].includes(value.state) &&
+              age(value) > retention.retainMs &&
+              !value.result?.reclaimedAt),
+        )
+        .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+        .slice(0, limit)
+        .map((value) => ({ ...value }));
+    },
+    async uncertain(limit) {
+      return [...operations.values()]
+        .filter((value) => ["committing", "uncertain"].includes(value.state))
+        .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+        .slice(0, limit)
+        .map((value) => ({ ...value }));
+    },
+    async reclaim(identityId, accountId, id, at) {
+      const old = operations.get(identityId + id);
+      if (
+        !old ||
+        old.accountId !== accountId ||
+        !["acknowledged", "cancelled"].includes(old.state) ||
+        old.result?.reclaimedAt
+      )
+        return false;
+      operations.set(identityId + id, {
+        ...old,
+        result: { ...old.result, reclaimedAt: at.toISOString() },
+      });
+      return true;
+    },
     async captureEffects(_identityId, _accountId, context) {
       return { ...context, snapshots: [] };
     },
