@@ -6,6 +6,7 @@ import {
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
+import { withoutBackupPaths } from "../backups/reserved-storage.js";
 import type { ProviderService } from "../providers/service.js";
 import type { TokenSource } from "./token-source.js";
 
@@ -120,10 +121,12 @@ export function createIdentityStorageFactory(
 ): IdentityStorageFactory {
   return async (identityId) => {
     const { identity, module, instance } = await deps.providers.forIdentity(identityId);
-    const storage = module.createStorage(
-      instance,
-      deps.tokenSource.sessionFor(identityId, identity.externalUsername),
-      { fetch: deps.fetch },
+    const storage = withoutBackupPaths(
+      module.createStorage(
+        instance,
+        deps.tokenSource.sessionFor(identityId, identity.externalUsername),
+        { fetch: deps.fetch },
+      ),
     );
     const settings = await deps.resolveTrashSettings?.(identityId);
     let result = storage;
@@ -153,15 +156,17 @@ export function createPinnedStorageFactory(
       throw new Error("identity is not bound to the requested provider");
     }
     const token = await deps.tokenSource.get(identityId);
-    return module.createStorage(
-      instance,
-      {
-        externalUsername: identity.externalUsername,
-        getCredential: () => deps.tokenSource.credential(identityId),
-        getToken: async () => token,
-        invalidateToken: async () => {},
-      },
-      { fetch: deps.fetch },
+    return withoutBackupPaths(
+      module.createStorage(
+        instance,
+        {
+          externalUsername: identity.externalUsername,
+          getCredential: () => deps.tokenSource.credential(identityId),
+          getToken: async () => token,
+          invalidateToken: async () => {},
+        },
+        { fetch: deps.fetch },
+      ),
     );
   };
 }

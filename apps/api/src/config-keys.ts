@@ -48,6 +48,41 @@ export interface ConfigKeyDef {
  */
 export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
+    key: "FDRIVE_BACKUP_STATE_DIR",
+    description:
+      "Private persistent directory for encrypted backups and configuration uploads. Unset disables backups.",
+    default: null,
+    example: "/var/lib/fdrive/backups",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_RESTORE_MODE",
+    description:
+      "Start the isolated restore service. Normal API routes and all workers remain paused.",
+    default: "false",
+    example: "false",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_BACKUP_WORKER",
+    description: "Run the backup worker in this process; use one dedicated worker in production.",
+    default: "false",
+    example: "true",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_BACKUP_SOURCES",
+    description:
+      "JSON list of persistent source mounts with kind (ocr, logs, office) and absolute path.",
+    default: "[]",
+    example: '[{"kind":"ocr","path":"/var/lib/fdrive/ocr"}]',
+    secret: false,
+    subsystem: "core",
+  },
+  {
     key: "FDRIVE_EMBED_RUNTIME_URL",
     description:
       "Optional controller base URL; unset probes the worker directly without controller revision checks.",

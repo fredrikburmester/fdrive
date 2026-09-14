@@ -40,7 +40,9 @@
     "tar-stream": "^2.2.0",
     "yauzl": "^3.4.0",
     "yazl": "^3.3.1",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+    "age-encryption": "0.3.1",
+    "@fdrive/backup": "workspace:*"
   },
   "devDependencies": {
     "@fdrive/config": "workspace:*",

@@ -32,7 +32,7 @@ MASK = IN_CLOSE_WRITE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE | IN
 _HDR = struct.Struct("iIII")
 
 DEFAULT_SKIP_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", ".localized"})
-DEFAULT_SKIP_DIRS = frozenset({"@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
+DEFAULT_SKIP_DIRS = frozenset({".fdrive-backups", "@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 _libc.inotify_init1.argtypes = [ctypes.c_int]

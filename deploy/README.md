@@ -212,3 +212,12 @@ requires container recreation, not merely `docker restart`.
 For further diagnostics, inspect `docker compose -f compose.yaml logs --tail=100 indexer`
 and **System** in fdrive. Include configured `-f` overlays when targeting services that
 only exist in an overlay. See the [advanced reference](REFERENCE.md) for additional layouts.
+
+## Installation backups
+
+Compose includes a dedicated backup worker and persistent encrypted backup storage. Configure
+the recovery key, optional S3/B2 or fileserver destinations, and schedules in System → Backups.
+Upload exported external configuration ZIPs there to include their saved versions. Keep the
+recovery key and destination credentials outside fdrive. Original user files still need a
+fileserver backup. See [backup and recovery operations](../docs/BACKUPS.md), including recovery
+into a fresh database and the host-only ownership repair for older installations.
