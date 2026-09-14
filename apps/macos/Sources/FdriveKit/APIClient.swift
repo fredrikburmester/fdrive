@@ -83,6 +83,7 @@ public struct APIClient: Sendable {
         case 403: throw writing ? DriveError.permission : DriveError.authentication
         case 404: throw DriveError.missing
         case 409: throw DriveError.expiredSnapshot
+        case 413 where writing: throw DriveError.quota
         case 429, 500...599: throw DriveError.unavailable
         default: throw DriveError.server("The server rejected this request (\(response.statusCode)).")
         }

@@ -89,6 +89,8 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     // The closed Type trigger shows the type's label, not its raw value.
     await expect(dialog.getByLabel("Type")).toHaveText(/SFTPGo/);
     await expect(dialog.getByLabel("Type")).not.toContainText("sftpgo");
+    await expect(dialog.getByLabel("Native write enforcement")).toHaveValue("");
+    await expect(dialog.getByText(/qualified fdrive SFTPGo image/)).toBeVisible();
     await dialog.getByLabel("Name").fill("Second");
     await dialog.getByLabel("Address").fill(address);
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
@@ -104,6 +106,7 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     await expect(second.getByText("Reachable", { exact: true })).toBeVisible();
 
     await second.getByRole("button", { name: "Edit Second" }).click();
+    await expect(dialog.getByLabel("Native write enforcement")).toHaveValue("");
     await dialog.getByLabel("Name").fill("Second renamed");
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(dialog).toBeHidden();
