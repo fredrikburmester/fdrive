@@ -117,7 +117,7 @@ test.describe("trash available", () => {
 
     // The sidebar shows Trash once the identity's storage exposes one.
     await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash" }),
+      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();
 
     const fileName = `${uniqueName("trash-me")}.txt`;
@@ -173,6 +173,31 @@ test.describe("trash available", () => {
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete permanently" }).click();
     await expect(conflictRow).toBeHidden();
 
+    // Restore to can create a destination without leaving the Trash flow.
+    const restoreFileName = `${uniqueName("restore-to")}.txt`;
+    const restoreFolderName = uniqueName("restored");
+    await page.goto(`${webBaseUrl}/files`);
+    await uploadFiles(page, [
+      { name: restoreFileName, mimeType: "text/plain", contents: "restore me" },
+    ]);
+    await expect(listing(page).getByText(restoreFileName, { exact: true })).toBeVisible();
+    await moveToTrash(page, restoreFileName);
+    await page.goto(`${webBaseUrl}/trash`);
+    const restoreRow = trashRow(page, restoreFileName);
+    await restoreRow.getByRole("checkbox", { name: `Select ${restoreFileName}` }).check();
+    await page.getByRole("button", { name: "Restore to", exact: true }).click();
+    const destination = page.getByRole("dialog", { name: "Restore to", exact: true });
+    await destination.getByRole("button", { name: "New folder" }).click();
+    const folderDialog = page.getByRole("dialog", { name: "New folder", exact: true });
+    await folderDialog.getByLabel("Folder name").fill(restoreFolderName);
+    await folderDialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(folderDialog).toBeHidden();
+    await destination.getByRole("button", { name: "Restore here" }).click();
+    await expect(destination).toBeHidden();
+    await expect(restoreRow).toBeHidden();
+    await page.goto(`${webBaseUrl}/files/${restoreFolderName}`);
+    await expect(listing(page).getByText(restoreFileName, { exact: true })).toBeVisible();
+
     // Empty Trash clears whatever remains.
     const secondFileName = `${uniqueName("empty-me")}.txt`;
     await page.goto(`${webBaseUrl}/files`);
@@ -197,7 +222,7 @@ test.describe("trash available", () => {
     await page.getByRole("switch", { name: "Enable Trash" }).click();
     await page.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash" }),
+      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeHidden();
     await page.reload();
     await expect(page.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
@@ -265,7 +290,7 @@ test.describe("trash available", () => {
     await page.getByLabel("Trash folder").fill("/.trash-webdav");
     await page.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash" }),
+      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();
 
     const fileName = `${uniqueName("dav-trash-me")}.txt`;
@@ -316,7 +341,7 @@ test.describe("trash not configured", () => {
     await page.goto(`/files${sandbox}`);
 
     await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash" }),
+      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeHidden();
 
     const fileName = `${uniqueName("no-trash")}.txt`;
