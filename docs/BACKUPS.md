@@ -45,7 +45,9 @@ type, endpoint, provider configuration and authenticated username, independent o
 browsing identity. Its objects live beneath `<private directory>/.fdrive-backups/<installation ID>`.
 The normal fdrive storage API hides that namespace and rejects ancestor archive/mutation
 operations that would include it. Server ACLs remain the boundary against other clients and
-aliases; ciphertext encryption protects its contents.
+aliases; ciphertext encryption protects its contents. The fileserver's own rules still apply
+to that directory: an SFTPGo Trash rule, for example, keeps deleted probes and pruned archives
+under its `.trash` folder until its own retention removes them.
 
 Copies use one encrypted archive per snapshot. Each transfer is read back in full and checked
 with SHA-256 before a completion marker is published. Multipart failures are aborted; retries
