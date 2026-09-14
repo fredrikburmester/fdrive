@@ -41,8 +41,12 @@ final class ProviderEnumerator: NSObject, NSFileProviderEnumerator, @unchecked S
                 for offset in stride(from: 0, to: items.count, by: 500) {
                     observer.value.didEnumerate(items[offset..<min(offset + 500, items.count)].map(ProviderItem.init))
                 }
+                try? await repository.recordCallback()
                 observer.value.finishEnumerating(upTo: nil)
-            } catch { observer.value.finishEnumeratingWithError(NativeEnvironment.error(error)) }
+            } catch {
+                try? await repository.recordCallback(error: error.localizedDescription)
+                observer.value.finishEnumeratingWithError(NativeEnvironment.error(error))
+            }
         })
     }
     private func anchor(_ revision: Int64) async throws -> NSFileProviderSyncAnchor {
@@ -64,8 +68,12 @@ final class ProviderEnumerator: NSObject, NSFileProviderEnumerator, @unchecked S
                 try Task.checkCancellation()
                 observer.value.didUpdate(changes.items.map(ProviderItem.init))
                 observer.value.didDeleteItems(withIdentifiers: changes.deleted.map(NativeEnvironment.id))
+                try? await repository.recordCallback()
                 observer.value.finishEnumeratingChanges(upTo: try await self.anchor(changes.anchor), moreComing: false)
-            } catch { observer.value.finishEnumeratingWithError(NativeEnvironment.error(error)) }
+            } catch {
+                try? await repository.recordCallback(error: error.localizedDescription)
+                observer.value.finishEnumeratingWithError(NativeEnvironment.error(error))
+            }
         })
     }
 }

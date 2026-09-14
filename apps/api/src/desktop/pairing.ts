@@ -27,6 +27,8 @@ interface Pair {
   secretHash: string;
   expires: number;
   cancelled?: boolean;
+  /** The app persisted the issued bundle. Unconfirmed bundles are revoked at expiry. */
+  confirmed?: boolean;
   approval?: {
     accountId: string;
     identityIds: string[];
@@ -48,14 +50,35 @@ export interface DesktopDeps {
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
  * One promise issues credentials once; retries with the app's secret retrieve the same bundle.
  * Secrets are retained only for the five-minute pairing window, never in browser responses.
+ * A bundle the app never confirms (crash between poll and Keychain) is revoked when the
+ * window closes, so an orphaned credential lives at most five minutes.
  */
 export function createDesktopPairing(deps: DesktopDeps) {
   const pairs = new Map<string, Pair>();
   const tokens = createTokenService({ ...deps, generateToken: generateDesktopToken });
   const resolve = createResolveTokenPrincipal({ ...deps, acceptsToken: looksLikeDesktopToken });
+  const revocations = new Set<Promise<void>>();
+  let sweeper: ReturnType<typeof setInterval> | undefined;
+  async function revokeIssued(pair: Pair) {
+    // A poll already issuing credentials must finish/roll back before revocation.
+    const credentials = await pair.result?.catch(() => []);
+    if (!pair.approval || !credentials) return;
+    const accountId = pair.approval.accountId;
+    await Promise.all(
+      credentials.map((credential) => tokens.revoke(credential.tokenId, accountId)),
+    );
+  }
+  function track(promise: Promise<void>) {
+    const tracked = promise.catch(() => undefined).finally(() => revocations.delete(tracked));
+    revocations.add(tracked);
+  }
   function prune() {
     const now = deps.clock().getTime();
-    for (const [id, pair] of pairs) if (pair.expires <= now) pairs.delete(id);
+    for (const [id, pair] of pairs) {
+      if (pair.expires > now) continue;
+      pairs.delete(id);
+      if (pair.result && !pair.confirmed) track(revokeIssued(pair));
+    }
   }
   function get(id: string): Pair {
     prune();
@@ -151,6 +174,11 @@ export function createDesktopPairing(deps: DesktopDeps) {
       const secret = randomBytes(32).toString("base64url");
       const code = randomBytes(4).toString("hex").toUpperCase();
       const expires = deps.clock().getTime() + 300_000;
+      if (!sweeper) {
+        // Expiry revocation must not depend on another request arriving.
+        sweeper = setInterval(prune, 60_000);
+        sweeper.unref();
+      }
       pairs.set(id, {
         deviceName,
         protocolVersion,
@@ -210,20 +238,27 @@ export function createDesktopPairing(deps: DesktopDeps) {
       pair.result ??= issue(pair);
       return { status: "connected" as const, credentials: await pair.result };
     },
+    async confirm(id: string, secret: string) {
+      const pair = get(id);
+      if (pair.secretHash !== hashApiToken(secret))
+        throw new ApiHttpError("unauthorized", "Invalid connection secret");
+      if (!pair.result) throw new ApiHttpError("conflict", "Connection has not been redeemed");
+      await pair.result;
+      pair.confirmed = true;
+    },
     async cancel(id: string, secret: string) {
       const pair = get(id);
       if (pair.secretHash !== hashApiToken(secret))
         throw new ApiHttpError("unauthorized", "Invalid connection secret");
       pair.cancelled = true;
       pairs.delete(id);
-      // A poll already issuing credentials must finish/roll back before cancellation returns.
-      const credentials = await pair.result?.catch(() => []);
-      if (pair.approval && credentials) {
-        const accountId = pair.approval.accountId;
-        await Promise.all(
-          credentials.map((credential) => tokens.revoke(credential.tokenId, accountId)),
-        );
-      }
+      // Installed (confirmed) locations are revoked individually by the app, never here.
+      if (!pair.confirmed) await revokeIssued(pair);
+    },
+    /** Expire pairings now and wait for any resulting revocations (tests and shutdown). */
+    async sweep() {
+      prune();
+      await Promise.all([...revocations]);
     },
     async revoke(bearer: string) {
       // Possession of this desktop secret authorizes only its own revocation. Do not

@@ -27,30 +27,24 @@ not current instructions.
 - Remaining beta work: backup reclamation/recovery administration and broader native/editor
   qualification. No native UI, storage image, production or release changes.
 
-## Native edge-case hardening: implemented, native verification pending
+## Native gaps: implemented on `claude/macos-gaps`, review pending
 
-- Reviewed 100 generated macOS edge cases against `apps/macos` and `apps/api/src/desktop`.
-  Most are already covered by existing tests or are Finder/OS rehearsal items listed in
-  [beta qualification](../plans/MACOS-APP.md) and [write work](../plans/MACOS-WRITES.md).
-- Fixed with new `FdriveKitTests/EdgeCaseTests.swift` regressions: a changed server handle
-  or kind at an unchanged path is delete-plus-recreate (cached bytes never serve the new
-  item; a moved handle whose old path is reused keeps both entries in either page order);
-  a remote root entry named `.Trash` fails the listing instead of shadowing the recovery
-  container; read 403 maps to a distinct access error rather than an expired login;
-  unclassified 409s on writes (WebDAV 423 locks) are conflicts, not stale listings; a local
-  free-space preflight precedes downloads and saves with a distinct out-of-space error;
-  moves into an item's own descendant are refused natively; reimports with matching bytes
-  acknowledge the remote item instead of creating a conflict copy.
-- The five remaining gaps (orphaned pairing credential, disabled extension, stalled
-  enumeration, staging retention, conflict-name retry) are planned in
-  [macOS gaps](../plans/MACOS-GAPS.md); no implementation yet.
-- Merge commit `c92232e` brings PRs #21–#23 into the local friendly-names commits: metadata
-  refresh now accepts protocol 2 and adopts server write capabilities after ID checks.
-- Pre-pull local planning edits (stale pre-implementation macOS proposal and write plan)
-  are preserved in `.fdrive-workflow/prepull-2026-09-14/`; unrelated plan rows restored.
-- `verify-macos.sh` passes (38 Swift tests, unsigned app/extension build); `application`
-  (lint, typecheck, coverage) and `workflow` pass after `pnpm install --frozen-lockfile` for
-  the merged `ssh2` dependency. No signed Finder rehearsal of the new paths yet.
+- Worktree `.worktrees/macos-gaps`, branch `claude/macos-gaps`, rebased onto `origin/main`
+  (carries the friendly-storage-names commit and the edge-case hardening commit). Primary
+  checkout WIP preserved.
+- Pairing confirmation: the app persists the pairing record before polling and confirms
+  after Keychain storage; the server revokes unconfirmed bundles at expiry and resumes the
+  same bundle at next launch. Domain health from `NSFileProviderManager.domains()` shows
+  System Settings guidance for a disabled extension. An extension heartbeat in the shared
+  catalog drives a stalled-Finder warning. A retention job cancels idle bodies and stale
+  conflicts and reclaims acknowledged backups after `FDRIVE_DESKTOP_RETENTION_DAYS`;
+  administrators list and resolve uncertain commits. Conflict-copy names retry numbered
+  up to three times. Behavior: [macOS](../MACOS.md).
+- Edge-case hardening (handle reassignment, `.Trash` root collision, 403/409 mapping, disk
+  preflight, native cycle refusal, reimport acknowledgement) is the first commit; the
+  100-case review found the rest covered, documented or rehearsal-only.
+- Verification: see the pull request. Signed Finder rehearsal of the new paths is listed in
+  [beta qualification](../plans/MACOS-APP.md).
 
 ## Friendly storage names: verified
 

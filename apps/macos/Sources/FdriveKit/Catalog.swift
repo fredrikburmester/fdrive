@@ -267,6 +267,16 @@ public actor Catalog {
                            deleted: Array(Set(changed.filter { $0[2] == "1" }.map { $0[1] } + departures)), anchor: end)
         }
     }
+    /// Extension heartbeat. No revision bump: anchors and change enumeration are unaffected.
+    public func recordCallback(error: String? = nil) throws {
+        try execute("INSERT INTO state VALUES ('lastCallbackAt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [String(Date().timeIntervalSince1970)])
+        try execute("INSERT INTO state VALUES ('lastCallbackError',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [error ?? ""])
+    }
+    public func lastCallback() throws -> (at: Date?, error: String?) {
+        let at = try rows("SELECT value FROM state WHERE key='lastCallbackAt'").first?.first.flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
+        let error = try rows("SELECT value FROM state WHERE key='lastCallbackError'").first?.first
+        return (at, error?.isEmpty == false ? error : nil)
+    }
     public func configure(_ capabilities: WriteCapabilities) throws {
         try transaction {
             // App updates can change native filesystem flags without changing any
@@ -316,20 +326,29 @@ public actor Catalog {
         var copy = pending; copy.error = error
         try execute("UPDATE pending SET value=? WHERE key=? AND completed=0", [String(decoding: try JSONEncoder().encode(copy), as: UTF8.self), pending.key])
     }
-    public func conflictCopy(_ pending: PendingWrite) throws -> PendingWrite {
+    public static let conflictAttempts = 3
+    /// Replace the pending request with a uniquely named create. A replay returns the
+    /// current attempt; `retry` starts the next one after that name was taken as well.
+    /// Nil means every attempt collided and the error should stand.
+    public func conflictCopy(_ pending: PendingWrite, retry: Bool = false) throws -> PendingWrite? {
         try transaction {
             guard let current = try pendingWrite(key: pending.key) else { throw DriveError.writeUncertain }
-            if current.supersededOperation != nil { return current }
+            if current.supersededOperation != nil && !retry { return current }
+            let attempt = (current.conflictAttempts ?? 0) + 1
+            guard attempt <= Self.conflictAttempts else { return nil }
             var copy = current
             let request = current.request
-            let name = request.name as NSString
+            let name = (current.originalName ?? request.name) as NSString
             var suffix = name.pathExtension.isEmpty ? "" : "." + name.pathExtension
             while suffix.utf8.count > 64 { suffix.removeLast() }
-            let marker = " (conflict \(current.id.prefix(8)))"
+            let marker = " (conflict \(current.id.prefix(8))\(attempt > 1 ? "-\(attempt)" : ""))"
             var stem = name.deletingPathExtension
             while stem.utf8.count + marker.utf8.count + suffix.utf8.count > 255 { stem.removeLast() }
             let conflictName = stem + marker + suffix
-            copy.supersededOperation = request.operationId
+            copy.originalName = current.originalName ?? request.name
+            copy.supersededOperation = current.supersededOperation ?? request.operationId
+            copy.conflictAttempts = attempt
+            copy.abandonedOperations = (current.abandonedOperations ?? []) + [request.operationId]
             copy.request = WriteRequest(operationId: UUID().uuidString.lowercased(), itemId: nil, parentId: request.parentId,
                                         name: conflictName, base: nil, size: request.size, sha256: request.sha256)
             copy.error = nil

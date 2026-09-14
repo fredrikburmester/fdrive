@@ -14,6 +14,11 @@ enum NativeEnvironment {
         // Apple's same-identifier add updates the display name in place. Never remove/re-add.
         try await NSFileProviderManager.add(domain)
     }
+    /// nil when no domain with this identifier is registered.
+    static func domainState(_ id: String) async throws -> DomainState? {
+        guard let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == id }) else { return nil }
+        return DomainState(userEnabled: domain.userEnabled, disconnected: domain.isDisconnected)
+    }
     static func store() throws -> ConnectionStore {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "FdriveAppGroup") as? String,
               let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else {
@@ -35,7 +40,7 @@ enum NativeEnvironment {
         case .missing: return NSFileProviderError(.noSuchItem) as NSError
         case .expiredSnapshot: return NSFileProviderError(.syncAnchorExpired) as NSError
         case .changedContent: return NSFileProviderError(.versionNoLongerAvailable) as NSError
-        case .writeConflict, .writeUncertain, .permission, .quota:
+        case .writeConflict, .nameCollision, .writeUncertain, .permission, .quota:
             return NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.cannotSynchronize.rawValue,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         case .unsupported: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)

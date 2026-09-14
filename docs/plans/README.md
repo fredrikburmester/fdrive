@@ -7,7 +7,6 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Roadmap](ROADMAP.md) | Remaining requested features and acceptance criteria |
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
-| [macOS gaps](MACOS-GAPS.md) | Orphaned pairing credentials, disabled-extension and stalled-enumeration status, staging retention, conflict-name retries |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
 | [macOS writes](MACOS-WRITES.md) | Retention, recovery administration and native write beta qualification |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |

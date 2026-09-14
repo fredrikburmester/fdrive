@@ -69,7 +69,8 @@ public struct APIClient: Sendable {
         let message = error?["message"] as? String
         if writing, let details = error?["details"] as? [String: Any], let code = details["code"] as? String {
             switch code {
-            case "version_conflict", "name_collision": throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved.")
+            case "version_conflict": throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved.")
+            case "name_collision": throw DriveError.nameCollision(message ?? "An item with this name already exists. Your pending copy is preserved.")
             case "operation_uncertain": throw DriveError.writeUncertain
             case "quota_exceeded": throw DriveError.quota
             case "unsupported", "permission_denied": throw DriveError.permission
@@ -105,6 +106,11 @@ public struct APIClient: Sendable {
     public func cancel(_ pairing: Pairing) async throws {
         struct Result: Decodable, Sendable { let ok: Bool }
         let _: Result = try await send("pairings/\(pairing.id)/cancel", body: JSONEncoder().encode(["secret": pairing.secret]))
+    }
+    /// Tell the server the issued bundle is stored; unconfirmed bundles are revoked at expiry.
+    public func confirm(_ pairing: Pairing) async throws {
+        struct Result: Decodable, Sendable { let ok: Bool }
+        let _: Result = try await send("pairings/\(pairing.id)/confirm", body: JSONEncoder().encode(["secret": pairing.secret]))
     }
     public func location() async throws -> Location {
         let result: Location = try await send("location")

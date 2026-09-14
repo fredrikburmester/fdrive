@@ -32,6 +32,7 @@ function buildConfig(): AppConfig {
     nodeEnv: "test",
     fdriveAutoMigrate: true,
     fdriveTmpDir: "/tmp",
+    fdriveDesktopRetentionDays: 30,
     fdriveJobMaxBytes: 1_000_000_000,
     fdriveJsonMaxBytes: 1_048_576,
     fdriveShareUploadMaxBytes: 1_000_000_000,

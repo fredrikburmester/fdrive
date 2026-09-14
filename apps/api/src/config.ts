@@ -71,6 +71,8 @@ export interface AppConfig {
   readonly fdriveTmpDir: string;
   /** Durable, private spool. Unset disables desktop writes. */
   readonly fdriveDesktopStateDir?: string;
+  /** Days before acknowledged or cancelled Mac write backups are reclaimed. */
+  readonly fdriveDesktopRetentionDays: number;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
   /**
@@ -316,6 +318,10 @@ const envSchema = z.object({
   ),
   FDRIVE_TMP_DIR: z.preprocess((value) => withDefault(value, tmpdir()), z.string().min(1)),
   FDRIVE_DESKTOP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
+  FDRIVE_DESKTOP_RETENTION_DAYS: z.preprocess(
+    (value) => withDefault(value, "30"),
+    z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(3650)),
+  ),
   FDRIVE_JOB_MAX_BYTES: z.preprocess(
     (value) => withDefault(value, String(DEFAULT_JOB_MAX_BYTES)),
     z
@@ -507,6 +513,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     ...(parsed.FDRIVE_DESKTOP_STATE_DIR
       ? { fdriveDesktopStateDir: parsed.FDRIVE_DESKTOP_STATE_DIR }
       : {}),
+    fdriveDesktopRetentionDays: parsed.FDRIVE_DESKTOP_RETENTION_DAYS,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
     fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,
     fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,
