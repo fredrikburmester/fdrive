@@ -502,6 +502,29 @@ it("pins provider backup credentials and keeps reserved ciphertext independently
     ),
   ).toEqual({ username: "alice", password: "alice-password" });
   await module.engine.testDestination(record);
+  // The offline CLI reaches the same directory with a provider destination file and no database.
+  const listed: string[] = [];
+  await runBackupCommand(
+    config,
+    [
+      "list",
+      "--destination-file",
+      await secretFile(
+        "provider-destination.json",
+        JSON.stringify({
+          type: "sftpgo",
+          id: provider,
+          baseUrl: "http://source.invalid",
+          config: {},
+          username: "alice",
+          prefix: record.config.prefix,
+          credential: { username: "alice", password: "alice-password" },
+        }),
+      ),
+    ],
+    (value) => listed.push(value),
+  );
+  expect(JSON.parse(listed.join(""))).toEqual([]);
   const transport = await module.destination({ ...record, enabled: true });
   const file = await secretFile("payload", "encrypted bytes");
   await transport.put("copy.age", file);

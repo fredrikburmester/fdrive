@@ -285,6 +285,8 @@ it("enqueues run actions and validates existing run state", async () => {
   expect(((await retained.json()) as { error: { message: string } }).error.message).toContain(
     "Locked bucket until 2030-01-01T00:00:00.000Z",
   );
+  fixture.engine.remove.mockRejectedValueOnce(Error("destination exploded"));
+  expect((await fixture.request(`/runs/${runId}`, "DELETE")).status).toBe(500);
   const input = {
     type: "s3",
     name: "Offsite",
