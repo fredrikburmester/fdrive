@@ -59,21 +59,71 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         progress.cancellationHandler = { task.cancel() }
         return progress
     }
-    // Cocoa permission errors are treated as transient by File Provider and retried
-    // indefinitely. cannotSynchronize is a persistent, visible rejection of a write.
-    private var writeDenied: NSError { NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.cannotSynchronize.rawValue,
-                                              userInfo: [NSLocalizedDescriptionKey: "This fdrive location is read-only. Save a copy outside it."]) }
     func createItem(basedOn itemTemplate: NSFileProviderItem, fields: NSFileProviderItemFields, contents url: URL?,
                     options: NSFileProviderCreateItemOptions, request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, writeDenied); return Progress(totalUnitCount: 0)
+        let handler = Callback(completionHandler)
+        let parentId = NativeEnvironment.id(itemTemplate.parentItemIdentifier)
+        let templateKey = itemTemplate.itemIdentifier.rawValue
+        let name = itemTemplate.filename
+        let modificationDate = itemTemplate.contentModificationDate ?? nil
+        let directory = itemTemplate.contentType?.conforms(to: .directory) == true
+        let reimport = options.contains(.mayAlreadyExist)
+        let progress = Progress(totalUnitCount: -1)
+        let task = Task {
+            do {
+                let (repository, client) = try connection()
+                if reimport && url == nil {
+                    // Dataless reimports acknowledge existing remote metadata only.
+                    // Absence of bytes never means an empty-file replacement.
+                    let parent = try await repository.item(parentId)
+                    let listing = try await repository.beginListing(parent.entry.path)
+                    try await repository.reconcile(client.list(parent.entry.path), folder: parent.entry.path, listing: listing)
+                    let path = (parent.entry.path == "/" ? "" : parent.entry.path) + "/" + name
+                    let existing = try await repository.itemAt(path)
+                    guard (existing.entry.kind == "dir") == directory else { throw DriveError.unsupported }
+                    handler.value(ProviderItem(existing), [], !directory, nil)
+                    return
+                }
+                let result = try await WriteCoordinator(catalog: repository, client: client).perform(
+                    route: directory ? "folders" : "uploads", localId: nil, templateKey: templateKey,
+                    parentId: parentId, name: name, base: nil, contents: url, progress: progress, modificationDate: modificationDate)
+                await signalChanges(parents: [parentId])
+                handler.value(ProviderItem(result), [], false, nil)
+            } catch { handler.value(nil, [], false, NativeEnvironment.error(error)) }
+        }
+        progress.cancellationHandler = { task.cancel() }
+        return progress
     }
     func modifyItem(_ item: NSFileProviderItem, baseVersion version: NSFileProviderItemVersion, changedFields: NSFileProviderItemFields,
                     contents newContents: URL?, options: NSFileProviderModifyItemOptions, request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
         let remoteFields: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
-        guard newContents == nil, changedFields.intersection(remoteFields).isEmpty else {
-            completionHandler(nil, [], false, writeDenied); return Progress(totalUnitCount: 0)
+        if newContents != nil || !changedFields.intersection(remoteFields).isEmpty {
+            let handler = Callback(completionHandler)
+            let id = NativeEnvironment.id(item.itemIdentifier)
+            let parentId = NativeEnvironment.id(item.parentItemIdentifier)
+            let name = item.filename
+            let modificationDate = item.contentModificationDate ?? nil
+            let base = WriteVersion(content: String(decoding: version.contentVersion, as: UTF8.self),
+                                    metadata: String(decoding: version.metadataVersion, as: UTF8.self))
+            let hasContents = changedFields.contains(.contents)
+            let keepBoth = !options.contains(.failOnConflict)
+            let progress = Progress(totalUnitCount: -1)
+            let task = Task {
+                do {
+                    let (repository, client) = try connection()
+                    let previous = try await repository.item(id)
+                    guard !hasContents || newContents != nil else { throw DriveError.unsupported }
+                    let result = try await WriteCoordinator(catalog: repository, client: client).perform(
+                        route: hasContents ? "uploads" : "moves", localId: id, templateKey: id,
+                        parentId: parentId, name: name, base: base, contents: newContents, progress: progress, keepBoth: keepBoth, modificationDate: modificationDate)
+                    await signalChanges(parents: [previous.parentId, parentId])
+                    handler.value(ProviderItem(result), [], false, nil)
+                } catch { handler.value(nil, [], false, NativeEnvironment.error(error)) }
+            }
+            progress.cancellationHandler = { task.cancel() }
+            return progress
         }
         // Local Finder/editor bookkeeping (including TextEdit's Unlock chmod) never goes
         // to storage. Returning canonical metadata restores read-only permissions without
@@ -84,7 +134,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion version: NSFileProviderItemVersion,
                     options: NSFileProviderDeleteItemOptions, request: NSFileProviderRequest,
                     completionHandler: @escaping (Error?) -> Void) -> Progress {
-        completionHandler(writeDenied); return Progress(totalUnitCount: 0)
+        // Finder trashing uses modifyItem -> trashContainer. This callback means
+        // permanent removal, including direct unlink requests from applications.
+        // Rejection makes the system restore its local item instead of losing it.
+        completionHandler(NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.deletionRejected.rawValue,
+                                  userInfo: [NSLocalizedDescriptionKey: "Permanent deletion is disabled. Use Move to Trash to retain a recoverable copy."]))
+        return Progress(totalUnitCount: 0)
+    }
+    private func signalChanges(parents: [String]) async {
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        try? await manager.signalEnumerator(for: .workingSet)
+        for parent in Set(parents) { try? await manager.signalEnumerator(for: NativeEnvironment.id(parent)) }
     }
     func materializedItemsDidChange(completionHandler: @escaping () -> Void) {
         guard let (repository, _) = try? connection(), let manager = NSFileProviderManager(for: domain) else {

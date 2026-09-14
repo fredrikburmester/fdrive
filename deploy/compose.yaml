@@ -75,6 +75,7 @@ services:
       # managed worker processes are always present but start no processing
       # or model loading until the owner enables a feature in the walkthrough.
       FDRIVE_THUMBS_DIR: /thumbs
+      FDRIVE_DESKTOP_STATE_DIR: /var/lib/fdrive/desktop
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       SFTPGO_URL: ${SFTPGO_URL:-}
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
@@ -127,6 +128,7 @@ services:
         condition: service_healthy
     volumes:
       - fdrive-thumbs:/thumbs:ro
+      - fdrive-desktop:/var/lib/fdrive/desktop
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -409,6 +411,7 @@ services:
     logging: *default-logging
 
 volumes:
+  fdrive-desktop:
   fdrive-indexer-logs:
   fdrive-thumbs:
   fdrive-image-embed-models:

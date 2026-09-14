@@ -201,7 +201,11 @@ export interface ApiClientImageSearchOptions {
 
 export interface ApiClient {
   desktopPairing(id: string): Promise<z.infer<typeof DesktopPairInfo>>;
-  approveDesktopPairing(id: string, identityIds: string[]): Promise<OkResponse>;
+  approveDesktopPairing(
+    id: string,
+    identityIds: string[],
+    access?: Record<string, "read" | "full">,
+  ): Promise<OkResponse>;
   health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
@@ -528,9 +532,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     desktopPairing(id) {
       return get(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}`, DesktopPairInfo);
     },
-    approveDesktopPairing(id, identityIds) {
+    approveDesktopPairing(id, identityIds, access) {
       return post(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}/approve`, OkResponse, {
-        jsonBody: { identityIds },
+        jsonBody: { identityIds, ...(access ? { access } : {}) },
       });
     },
     listShares() {
