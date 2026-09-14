@@ -132,13 +132,12 @@ not current instructions.
   GitHub secrets are configured. GitHub Actions is disabled at the owner's request because
   hosted CI costs too much; do not re-enable without explicit approval. Default tokens remain
   read-only and bot PR approval remains disabled. The Developer API key is validated by Apple.
-- Local 0.1.0 build 4: Developer ID archive/export, app and DMG notarization, stapling and
-  Gatekeeper checks pass (`step.TA10YZ`). DMG/checksum/manifest are under
-  `.fdrive-workflow/release-0.1.0-window/artifacts`. Xcode profile lookup now preserves Apple's UUID
-  casing; the regression test covers it. Six release tests, actionlint, unsigned Release
-  archive and 18 Swift tests/native build passed. Hosted release and Homebrew installation
-  remain pending; no release or server deployment. Cask publication provides a comparison
-  link when repository policy blocks bot-created PRs.
+- Published [macos-v0.1.0](https://github.com/fredrikburmester/fdrive-web/releases/tag/macos-v0.1.0)
+  (prerelease, build 5, commit `3a5ab76`) with the local signed release: app and DMG notarized,
+  stapled and Gatekeeper-accepted. `Casks/fdrive.rb` on `main` pins its SHA-256; the
+  authenticated asset download matched it and `brew fetch` from a temporary tap passed.
+  Publishing a draft exposed a 404 on `releases/tags/<tag>`; asset lookup now uses the release
+  listing. Homebrew install on a Mac is pending (owner runs it).
 - Mac branding is **FDrive** across the app, menus, extension, DMG volume and Homebrew cask.
   `/Applications/FDrive.app` is installed and launched; the existing Finder location survives.
   The notarized installer is also in Downloads. The app and menu bar reuse the web FD icon;
@@ -180,9 +179,9 @@ not current instructions.
   (`step.s8cmQW`, `step.uiPUV5`). Real composed API integration covers PostgreSQL/SFTPGo/Apache DAV.
 - Integrated diff reviewed. Disconnecting the temporary DAV location removed its domain while
   the original SFTPGo location remained usable after app restart. Its local demo remains running.
-- [Remaining beta qualification](../plans/MACOS-APP.md): hosted release/Homebrew, second-Mac
+- [Remaining beta qualification](../plans/MACOS-APP.md): Homebrew install, second-Mac
   install/upgrade, broader editors/offline/low-disk/cancellation/reboot matrix and tuning the
-  cost of hashing downloaded files on each refresh. No release or production deployment.
+  cost of hashing downloaded files on each refresh. No production deployment.
 
 ## Mobile System page headers
 
@@ -351,7 +350,7 @@ not current instructions.
   Live Next dev + disposable PostgreSQL/SFTPGo verified desktop and mobile content/scrolling.
   All 497 integration tests pass (`step.aWI1oK`). A production API image builds and reports
   the supplied Git revision from both its runtime module and OCI label; temporary image removed.
-- macOS opens the app guide because no GitHub release is published yet. No deployment or
+- macOS opens the app guide; no GitHub release was published at the time. No deployment or
   hosted Actions changes; the temporary live dev stack was stopped after verification.
 
 ## System sidebar activity: shipped

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from publish import read_manifest, render_cask, repository_value
+from publish import read_manifest, release_asset_id, render_cask, repository_value
 from release import APP_ID, notarize, validate_entitlements, version_value
 from profiles import validate_profile
 
@@ -87,11 +87,21 @@ class ReleaseSafetyTests(unittest.TestCase):
             with patch("release.run", return_value=b'{"status":"Accepted"}'):
                 notarize(root / "app.zip", "profile", None, root / "notary.json")
 
+    def test_asset_lookup_finds_draft_release_across_pages(self):
+        dmg = "fdrive-0.1.0-arm64.dmg"
+        pages = [[{"tag_name": "macos-v0.0.9", "assets": [{"id": 1, "name": dmg}]}],
+                 [{"tag_name": "macos-v0.1.0", "draft": True,
+                   "assets": [{"id": 2, "name": "SHA256SUMS"}, {"id": 3, "name": dmg}]}]]
+        self.assertEqual(release_asset_id(pages, "macos-v0.1.0", dmg), 3)
+        with self.assertRaises(ValueError):
+            release_asset_id(pages, "macos-v0.2.0", dmg)
+
     def test_cask_supports_private_and_public_downloads_without_embedded_credentials(self):
         cask = render_cask("owner/repo", "0.1.0", "a" * 64, 123)
         self.assertIn("https://api.github.com/repos/owner/repo/releases/assets/123", cask)
         self.assertIn("https://github.com/owner/repo/releases/download/", cask)
         self.assertIn('ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")', cask)
+        self.assertIn("depends_on macos: :tahoe", cask)
         result = subprocess.run(["ruby", "-c"], input=cask.encode(), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
