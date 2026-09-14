@@ -13,6 +13,16 @@ not current instructions.
   Open writers prevent acquisition; expiry fences old tokens until admitted handles drain.
   Native fdrive operations retain ordinary permissions/quotas and use staged publication.
   Stock SFTPGo stays read-only. [Qualification/deployment boundary](../../integrations/sftpgo/README.md).
+- PR #22 review fixes: lease control rechecks account/HTTP policy without occupying a
+  transfer session; single-session uploads can renew. A distinct lease-loss response
+  marker aborts scoped work as retryable, preserving ordinary file conflicts. Regression
+  coverage includes response cancellation failure and same-operation desktop commit retry.
+- Review-fix image build/Go race tests and source-archive comparison pass (`step.uNreN3`);
+  application gates pass (`step.LRNG3O` coverage). Focused real-server regressions pass
+  (`step.XeXhBK`). Docker disk exhaustion interrupted earlier fixture runs; removing only
+  this worktree's disposable Go/indexer build caches restored space. No assertions relaxed.
+- Complete review-fix integration gate passes (`step.paR2zQ`), including desktop
+  same-operation retry after lease loss and unchanged quota/conflict protections.
 - Application lint/typecheck/coverage and provider coverage pass. Pinned image builds with
   Go race tests; checked-in overlay matches its included source archive. All 470 integration
   cases pass across full/focused runs (`step.8J44Ls`, `step.24qJeG`, `step.LLerdE`): one

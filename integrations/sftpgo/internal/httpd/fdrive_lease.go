@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/drakkan/sftpgo/v2/internal/common"
 	"github.com/drakkan/sftpgo/v2/internal/dataprovider"
 	"github.com/drakkan/sftpgo/v2/internal/fdrivelease"
+	"github.com/drakkan/sftpgo/v2/internal/jwt"
 	"github.com/go-chi/render"
 	"github.com/sftpgo/sdk"
 )
@@ -23,13 +23,20 @@ func handleFdriveLease(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	connection, err := getUserConnection(w, r)
-	if err != nil {
+	claims, err := jwt.FromContext(r.Context())
+	if err != nil || claims.Username == "" {
+		sendAPIResponse(w, r, err, "Invalid token claims", http.StatusBadRequest)
 		return
 	}
-	defer connection.CloseFS() //nolint:errcheck
-	defer common.Connections.Remove(connection.ID)
-	if !fdriveLeaseUser(&connection.User) {
+	// Lease control must not consume a transfer session: a single-session user
+	// needs to renew while an upload occupies that session. Keep fresh account,
+	// group, protocol, login-method and address checks without creating a connection.
+	user, err := getActiveUser(claims.Username, r)
+	if err != nil {
+		sendAPIResponse(w, r, nil, "Unable to retrieve your user", getRespStatus(err))
+		return
+	}
+	if !fdriveLeaseUser(&user) {
 		sendAPIResponse(w, r, nil, "This user is not qualified for native write leases", http.StatusForbidden)
 		return
 	}
@@ -40,11 +47,11 @@ func handleFdriveLease(w http.ResponseWriter, r *http.Request) {
 			sendAPIResponse(w, r, nil, "Acquire requires no existing lease", http.StatusBadRequest)
 			return
 		}
-		token, err = fdrivelease.Global.Acquire(connection.User.Username)
+		token, err = fdrivelease.Global.Acquire(user.Username)
 	case http.MethodPatch:
-		err = fdrivelease.Global.Renew(token, connection.User.Username)
+		err = fdrivelease.Global.Renew(token, user.Username)
 	case http.MethodDelete:
-		err = fdrivelease.Global.Release(token, connection.User.Username)
+		err = fdrivelease.Global.Release(token, user.Username)
 	}
 	if err != nil {
 		sendAPIResponse(w, r, nil, "Storage is busy or the lease expired", http.StatusConflict)

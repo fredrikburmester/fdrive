@@ -24,9 +24,10 @@ index c51a288..81133fb 100644
 +++ b/internal/httpd/api_http_user.go
 @@ -33,0 +34 @@ import (
 +	"github.com/drakkan/sftpgo/v2/internal/fdrivelease"
-@@ -49,0 +51,7 @@ func getUserConnection(w http.ResponseWriter, r *http.Request) (*Connection, err
+@@ -49,0 +51,8 @@ func getUserConnection(w http.ResponseWriter, r *http.Request) (*Connection, err
 +	if token := r.Header.Get(fdrivelease.Header); token != "" {
 +		if !fdriveLeaseUser(&user) || !fdrivelease.Global.Validate(token, user.Username) {
++			w.Header().Set("X-Fdrive-Write-Lease-Error", "invalid-or-expired")
 +			sendAPIResponse(w, r, nil, "Storage lease is invalid or expired", http.StatusConflict)
 +			return nil, fdrivelease.ErrLocked
 +		}

@@ -38,7 +38,26 @@ it.each(["webdav", "sftpgo"] as const)(
       FDRIVE_ADMIN_USERS: "alice",
       FDRIVE_DESKTOP_STATE_DIR: stateDir,
     });
-    const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
+    let loseNextLease = false;
+    const composed = await composeApp(config, pino({ level: "silent" }), () => new Date(), {
+      fetch: async (input, init) => {
+        const response = await fetch(input, init);
+        if (
+          loseNextLease &&
+          String(input) === `${qualified?.baseUrl}/api/v2/user/fdrive/lease` &&
+          init?.method === "POST" &&
+          response.ok
+        ) {
+          loseNextLease = false;
+          const lease = ((await response.clone().json()) as { token: string }).token;
+          const headers = new Headers(init.headers);
+          headers.set("X-Fdrive-Write-Lease", lease);
+          const released = await fetch(input, { method: "DELETE", headers });
+          expect(released.status).toBe(204);
+        }
+        return response;
+      },
+    });
     let cookie = "";
     let bearer = "";
     const call = (path: string, body?: unknown, method = body === undefined ? "GET" : "POST") =>
@@ -156,6 +175,15 @@ it.each(["webdav", "sftpgo"] as const)(
             headers: { ...headers, "X-Fdrive-Write-Lease": lease },
           });
         }
+        // Loss between acquisition and the first file request must preserve the
+        // same ready operation for retry, rather than return a snapshot conflict.
+        loseNextLease = true;
+        expect((await call(`${base}/operations/${id}/commit`, {})).status).toBe(502);
+        expect(loseNextLease).toBe(false);
+        expect(await json(`${base}/operations/${id}`)).toMatchObject({ state: "ready" });
+        expect(
+          (await fetch(new URL("save.txt", dav.baseUrl), { headers: upstreamHeaders })).status,
+        ).toBe(404);
       }
       const result = (await json(`${base}/operations/${id}/commit`, {})) as { item: unknown };
       const original = DesktopWriteEntry.parse(result.item);

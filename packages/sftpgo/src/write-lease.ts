@@ -6,6 +6,7 @@ import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./s
 
 export const SFTPGO_WRITE_PROTOCOL = "fdrive-local-v1";
 export const SFTPGO_LEASE_HEADER = "X-Fdrive-Write-Lease";
+export const SFTPGO_LEASE_ERROR_HEADER = "X-Fdrive-Write-Lease-Error";
 interface LeaseOptions {
   baseUrl: string;
   fetch: typeof globalThis.fetch;
@@ -118,12 +119,24 @@ export async function withSftpgoWriteLease<T>(
     }
     const headers = new Headers(init?.headers);
     headers.set(SFTPGO_LEASE_HEADER, leaseToken);
-    return options.fetch(input, {
+    const response = await options.fetch(input, {
       ...init,
       headers,
       redirect: "manual",
       signal: init?.signal ? AbortSignal.any([scopeSignal, init.signal]) : scopeSignal,
     });
+    if (
+      response.status === 409 &&
+      response.headers.get(SFTPGO_LEASE_ERROR_HEADER) === "invalid-or-expired"
+    ) {
+      // Lease loss may reach a file request before the next renewal notices it.
+      // Fence the whole scope, preserving ordinary file/name conflicts separately.
+      const error = new StorageError("upstream_unavailable", "Storage write lease was lost");
+      aborted.abort(error);
+      await response.body?.cancel().catch(() => {});
+      throw error;
+    }
+    return response;
   };
 
   try {

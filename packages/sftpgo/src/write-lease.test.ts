@@ -3,7 +3,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createSftpgoClient } from "./client.js";
 import { createFakeSftpgoServer } from "./fake/server.js";
 import { sftpgoModule } from "./module.js";
-import { SFTPGO_LEASE_HEADER, SFTPGO_WRITE_PROTOCOL, withSftpgoWriteLease } from "./write-lease.js";
+import {
+  SFTPGO_LEASE_ERROR_HEADER,
+  SFTPGO_LEASE_HEADER,
+  SFTPGO_WRITE_PROTOCOL,
+  withSftpgoWriteLease,
+} from "./write-lease.js";
 
 const token = "a".repeat(64);
 const baseUrl = "http://sftpgo.test/prefix";
@@ -169,6 +174,59 @@ it("renews, fences requests on lease loss, and releases using an independent sig
   });
   expect(f.calls.map((c) => c.method)).toEqual(["POST", "PATCH", "DELETE"]);
   expect(f.calls.at(-1)?.signal?.aborted).toBe(false);
+});
+
+it.each([false, true])(
+  "fences scoped lease loss even if body cancellation fails (%s)",
+  async (cancelFails) => {
+    const f = await fixture();
+    const cancel = vi.fn(async () => {
+      if (cancelFails) throw new Error("body already aborted");
+    });
+    let fileSignal: AbortSignal | null | undefined;
+    let fileCalls = 0;
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      if (String(input) === leaseUrl) return f.options.fetch(input, init);
+      fileCalls++;
+      fileSignal = init?.signal;
+      return new Response(new ReadableStream({ cancel }), {
+        status: 409,
+        headers: { [SFTPGO_LEASE_ERROR_HEADER]: "invalid-or-expired" },
+      });
+    };
+    vi.useFakeTimers();
+    await withSftpgoWriteLease({ ...f.options, fetch }, async (storage) => {
+      await expect(storage.list("/")).rejects.toMatchObject({ kind: "upstream_unavailable" });
+      expect(fileSignal?.aborted).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      await expect(storage.upload("/later.txt", new Uint8Array())).rejects.toMatchObject({
+        kind: "upstream_unavailable",
+      });
+      expect(fileCalls).toBe(1);
+    });
+    expect(f.calls.map((c) => c.method)).toEqual(["POST", "DELETE"]);
+    expect(f.calls.at(-1)?.signal?.aborted).toBe(false);
+  },
+);
+
+it.each([
+  [409, undefined, "conflict"],
+  [409, "unknown", "conflict"],
+  [403, "invalid-or-expired", "forbidden"],
+] as const)("preserves ordinary storage errors (%s, %s)", async (status, marker, kind) => {
+  const f = await fixture();
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    if (String(input) === leaseUrl) return f.options.fetch(input, init);
+    return Response.json(
+      { message: "ordinary failure" },
+      { status, headers: marker ? { [SFTPGO_LEASE_ERROR_HEADER]: marker } : {} },
+    );
+  };
+  await withSftpgoWriteLease({ ...f.options, fetch }, async (storage) => {
+    await expect(storage.list("/")).rejects.toMatchObject({ kind });
+    // An ordinary conflict/permission failure must not abort the lease scope.
+    await expect(storage.list("/")).rejects.toMatchObject({ kind });
+  });
 });
 
 it("rejects a changed renewal token and never renews after scope completion", async () => {

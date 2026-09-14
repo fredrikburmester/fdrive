@@ -6,7 +6,11 @@ import { startSftpgo } from "@fdrive/testkit";
 import { Client } from "ssh2";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSftpgoClient } from "../../src/client.js";
-import { SFTPGO_LEASE_HEADER, withSftpgoWriteLease } from "../../src/write-lease.js";
+import {
+  SFTPGO_LEASE_ERROR_HEADER,
+  SFTPGO_LEASE_HEADER,
+  withSftpgoWriteLease,
+} from "../../src/write-lease.js";
 
 describe("qualified SFTPGo storage enforcement across protocols", () => {
   let container: Awaited<ReturnType<typeof startSftpgo>>;
@@ -17,7 +21,9 @@ describe("qualified SFTPGo storage enforcement across protocols", () => {
   const body = Buffer.from("original");
 
   beforeAll(async () => {
-    container = await startSftpgo({ enforcedWriteUsers: ["alice", "bob", "carol", "quota"] });
+    container = await startSftpgo({
+      enforcedWriteUsers: ["alice", "bob", "carol", "quota", "limited"],
+    });
     client = createSftpgoClient({ baseUrl: container.baseUrl });
     jwt = (await client.login({ username: "alice", password: "alice-password" })).accessToken;
     bob = (await client.login({ username: "bob", password: "bob-password" })).accessToken;
@@ -49,6 +55,16 @@ describe("qualified SFTPGo storage enforcement across protocols", () => {
     expect(value).toMatchObject({ protocol: "fdrive-local-v1", timeoutSeconds: 60 });
     expect(value.token).toMatch(/^[a-f0-9]{64}$/);
     return value.token;
+  }
+  async function adminHeaders() {
+    const login = await fetch(`${container.baseUrl}/api/v2/token`, {
+      headers: {
+        Authorization: `Basic ${Buffer.from("admin:admin-password-for-tests").toString("base64")}`,
+      },
+    });
+    expect(login.status).toBe(200);
+    const admin = ((await login.json()) as { access_token: string }).access_token;
+    return { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" };
   }
   async function ssh() {
     const connection = new Client();
@@ -226,16 +242,9 @@ describe("qualified SFTPGo storage enforcement across protocols", () => {
   }, 90_000);
 
   it("keeps upstream quota checks on leased uploads", async () => {
-    const login = await fetch(`${container.baseUrl}/api/v2/token`, {
-      headers: {
-        Authorization: `Basic ${Buffer.from("admin:admin-password-for-tests").toString("base64")}`,
-      },
-    });
-    expect(login.status).toBe(200);
-    const admin = ((await login.json()) as { access_token: string }).access_token;
     const created = await fetch(`${container.baseUrl}/api/v2/users`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
+      headers: await adminHeaders(),
       body: JSON.stringify({
         username: "quota",
         password: "quota-test-password",
@@ -267,6 +276,127 @@ describe("qualified SFTPGo storage enforcement across protocols", () => {
     } finally {
       await request("fdrive/lease", "DELETE", token, user);
     }
+  });
+
+  it("renews during a single-session upload while ordinary requests still obey its limit", async () => {
+    const headers = await adminHeaders();
+    const user = {
+      username: "limited",
+      password: "limited-test-password",
+      status: 1,
+      home_dir: "/srv/sftpgo/data/limited",
+      permissions: { "/": ["*"] },
+      max_sessions: 1,
+    };
+    const created = await fetch(`${container.baseUrl}/api/v2/users`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(user),
+    });
+    expect(created.status, await created.clone().text()).toBe(201);
+    const token = (await client.login(user)).accessToken;
+    let uploading = false;
+    let renewals = 0;
+    const observedFetch: typeof fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      if (init?.method === "PATCH" && response.ok && uploading) renewals++;
+      return response;
+    };
+    await withSftpgoWriteLease(
+      {
+        baseUrl: container.baseUrl,
+        fetch: observedFetch,
+        withToken: async (fn) => fn(token),
+        renewIntervalMs: 100,
+      },
+      async (storage) => {
+        let streamController!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(body);
+          },
+        });
+        const upload = storage.upload("/slow.txt", stream).then(
+          () => ({ ok: true }),
+          (error: unknown) => ({ ok: false, error }),
+        );
+        try {
+          await expect
+            .poll(async () => {
+              const response = await fetch(`${container.baseUrl}/api/v2/connections`, { headers });
+              const connections = (await response.json()) as { username: string }[];
+              return connections.filter((connection) => connection.username === user.username)
+                .length;
+            })
+            .toBe(1);
+          expect((await request("dirs?path=%2F", "GET", undefined, token)).status).toBe(429);
+          uploading = true;
+          await expect.poll(() => renewals).toBeGreaterThan(0);
+        } finally {
+          uploading = false;
+          streamController.close();
+          expect(await upload).toEqual({ ok: true });
+        }
+        expect(await new Response((await storage.download("/slow.txt")).body).text()).toBe(
+          "original",
+        );
+      },
+    );
+    // Lease control still checks fresh account policy with an already-issued JWT.
+    const acquired = await request("fdrive/lease", "POST", undefined, token);
+    expect(acquired.status).toBe(200);
+    const lease = ((await acquired.json()) as { token: string }).token;
+    try {
+      for (const [restriction, status] of [
+        [{ status: 0 }, 404],
+        [{ filters: { denied_protocols: ["HTTP"] } }, 404],
+        [{ filters: { web_client: ["write-disabled"] } }, 403],
+      ] as const) {
+        const updated = await fetch(`${container.baseUrl}/api/v2/users/limited`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ ...user, ...restriction }),
+        });
+        expect(updated.status).toBe(200);
+        expect((await request("fdrive/lease", "PATCH", lease, token)).status).toBe(status);
+      }
+    } finally {
+      const restored = await fetch(`${container.baseUrl}/api/v2/users/limited`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ ...user, filters: {} }),
+      });
+      expect(restored.status).toBe(200);
+      expect((await request("fdrive/lease", "DELETE", lease, token)).status).toBe(204);
+    }
+  });
+
+  it("makes lease loss on a scoped file request retryable and fences later mutations", async () => {
+    let lease: string | undefined;
+    const observedFetch: typeof fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      if (String(input).endsWith("/fdrive/lease") && init?.method === "POST") {
+        lease = ((await response.clone().json()) as { token: string }).token;
+      }
+      return response;
+    };
+    await withSftpgoWriteLease(
+      { baseUrl: container.baseUrl, fetch: observedFetch, withToken: async (fn) => fn(jwt) },
+      async (storage) => {
+        expect((await request("fdrive/lease", "DELETE", lease)).status).toBe(204);
+        const rejected = await request("dirs?path=%2F", "GET", lease);
+        expect(rejected.status).toBe(409);
+        expect(rejected.headers.get(SFTPGO_LEASE_ERROR_HEADER)).toBe("invalid-or-expired");
+        await expect(storage.list("/")).rejects.toMatchObject({ kind: "upstream_unavailable" });
+        await expect(storage.upload("/lease-lost.txt", body)).rejects.toMatchObject({
+          kind: "upstream_unavailable",
+        });
+      },
+    );
+    await expect(client.user(jwt).statFile("/lease-lost.txt")).rejects.toMatchObject({
+      kind: "not_found",
+    });
   });
 
   it("runs the real adapter with no-overwrite checks and automatic renewal", async () => {
