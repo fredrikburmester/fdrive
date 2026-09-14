@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesktopWriteEntry } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import type { DesktopEffectContext } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
@@ -36,13 +37,18 @@ async function fixture() {
     tokenAccess: { mode: "full", paths: ["/"] },
     verifyAuthority: vi.fn(async () => true),
   };
-  const changed = vi.fn(async () => {});
+  const effectContext = vi.fn(
+    async (_principal: Principal, context: Omit<DesktopEffectContext, "office">) => ({
+      ...context,
+      office: null,
+    }),
+  );
   const deps = {
     repo: memory.repo,
     stateDir,
     clock: () => new Date(),
     trashPathForStorage: () => null,
-    changed,
+    effectContext,
   };
   const service = createDesktopWrites(deps);
   const stage = async (name: string, bytes: string, existing?: DesktopWriteEntry) => {
@@ -61,7 +67,18 @@ async function fixture() {
     return request;
   };
   const read = async (path: string) => new Response((await raw.download(path)).body).text();
-  return { ...memory, raw, storage, principal, service, deps, stateDir, stage, read, changed };
+  return {
+    ...memory,
+    raw,
+    storage,
+    principal,
+    service,
+    deps,
+    stateDir,
+    stage,
+    read,
+    effectContext,
+  };
 }
 
 it("retains a durable upload receipt and never republishes after acknowledgement/restart", async () => {
@@ -89,7 +106,12 @@ it("retains a durable upload receipt and never republishes after acknowledgement
   expect(result.item?.id).toBe(original.id);
   expect(result.item?.version.content).toBe(sha("saved"));
   expect(await f.read("/old.txt")).toBe("saved");
-  expect(f.changed).toHaveBeenCalledWith(f.principal, "/old.txt", "/old.txt", false);
+  expect(f.effectContext).toHaveBeenCalledWith(f.principal, {
+    from: "/old.txt",
+    to: "/old.txt",
+    directory: false,
+    trash: false,
+  });
   const restarted = createDesktopWrites(f.deps);
   expect(await restarted.commit(f.principal, request.operationId)).toEqual(result);
   await restarted.acknowledge(f.principal, request.operationId);
@@ -975,3 +997,105 @@ it("preserves a save when its source is trashed after preparation or a hashing s
     ).text(),
   ).toBe("old");
 });
+
+it("blocks a new publication while an earlier save needs metadata recovery", async () => {
+  const f = await fixture();
+  const request = await f.stage("new.txt", "saved");
+  const effects = {
+    beforeWrite: vi.fn(async (): Promise<void> => {
+      throw new StorageError("upstream_unavailable", "Recovery pending");
+    }),
+    kick: vi.fn(),
+  };
+  const service = createDesktopWrites({ ...f.deps, effects });
+  await expect(service.commit(f.principal, request.operationId)).rejects.toThrow(
+    "Recovery pending",
+  );
+  expect(
+    (await f.repo.operation(f.principal.identityId, f.principal.accountId, request.operationId))
+      ?.state,
+  ).toBe("ready");
+  expect((await f.raw.list("/")).map((item) => item.path)).not.toContain("/new.txt");
+  effects.beforeWrite.mockResolvedValueOnce(undefined);
+  expect((await service.commit(f.principal, request.operationId)).state).toBe("completed");
+  expect(await f.read("/new.txt")).toBe("saved");
+});
+
+it("keeps the committed receipt when waking metadata recovery fails", async () => {
+  const f = await fixture();
+  const request = await f.stage("saved.txt", "saved");
+  const service = createDesktopWrites({
+    ...f.deps,
+    effects: {
+      beforeWrite: async () => {},
+      kick: () => {
+        throw Error("worker unavailable");
+      },
+    },
+  });
+  const receipt = await service.commit(f.principal, request.operationId);
+  expect(receipt.state).toBe("completed");
+  expect(await service.commit(f.principal, request.operationId)).toEqual(receipt);
+  expect(await f.read("/saved.txt")).toBe("saved");
+});
+
+it("refuses overlapping restore metadata paths before changing storage", async () => {
+  const f = await fixture();
+  const source = await f.service.stat(f.principal, "/folder");
+  const trashId = randomUUID();
+  await f.service.prepare(f.principal, {
+    kind: "move",
+    operationId: trashId,
+    itemId: source.id,
+    parentId: "trash",
+    name: "folder",
+    base: source.version,
+  });
+  const trashed = required((await f.service.commit(f.principal, trashId)).item);
+  await f.raw.mkdir("/folder");
+  const parent = await f.service.stat(f.principal, "/folder");
+  const restoreId = randomUUID();
+  await f.service.prepare(f.principal, {
+    kind: "move",
+    operationId: restoreId,
+    itemId: trashed.id,
+    parentId: parent.id,
+    name: "nested",
+    base: trashed.version,
+  });
+  await expect(f.service.commit(f.principal, restoreId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "unsupported" },
+  });
+  expect((await f.service.stat(f.principal, trashed.path)).trashed).toBe(true);
+  expect(await f.raw.list("/folder")).toEqual([]);
+});
+
+it.each(["folder", "move"] as const)(
+  "rechecks authority after recovery waits before publishing a %s",
+  async (kind) => {
+    const f = await fixture();
+    const item = await f.service.stat(f.principal, "/old.txt");
+    const operationId = randomUUID();
+    await f.service.prepare(
+      f.principal,
+      kind === "folder"
+        ? { kind, operationId, parentId: "root", name: "new" }
+        : { kind, operationId, parentId: "root", itemId: item.id, name: "new", base: item.version },
+    );
+    const service = createDesktopWrites({
+      ...f.deps,
+      effects: {
+        beforeWrite: async () => {
+          vi.mocked(required(f.principal.verifyAuthority)).mockResolvedValue(false);
+        },
+        kick: () => {},
+      },
+    });
+    await expect(service.commit(f.principal, operationId)).rejects.toMatchObject({
+      kind: "unauthorized",
+    });
+    expect((await f.raw.list("/")).map((entry) => entry.path)).not.toContain("/new");
+    expect(await f.read("/old.txt")).toBe("old");
+  },
+);

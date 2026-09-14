@@ -1,7 +1,7 @@
 # macOS write beta: remaining work
 
 Updated 2026-09-14. Apache DAV native writes merged in PR #21. The optional pinned
-SFTPGo integration is implemented in `codex/sftpgo-write-enforcement`; full beta
+SFTPGo integration merged in PR #22; full beta
 qualification remains open. Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
 Storage requirements: [SFTPGo enforcement](../../integrations/sftpgo/README.md).
 Delivery evidence: [handoff](../workflow/STATUS.md) and [history](../workflow/STATUS-history.md).
@@ -24,9 +24,6 @@ external delete/recreate, particularly with identical bytes.
 
 ## Implementation still required
 
-- **Durable metadata-effect outbox.** Persist post-publication tags/favorites/recent-path,
-  folder-view, Office and storage/index effects for retry. A failed effect must never rerun
-  publication. Recover independently after API restart, with observable pending/failure state.
 - **Retention and recovery administration.** Define retained receipt and backup lifetimes,
   inspect/export/reconcile uncertain operations, and reclaim only unreferenced acknowledged
   data. Protect active uploads and expired-operation retries. The current 64 GiB reservation

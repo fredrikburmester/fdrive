@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
@@ -138,7 +139,7 @@ afterEach(async () => {
     desktopDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(writable = false) {
+async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "status">) {
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
@@ -205,6 +206,7 @@ async function fixture(writable = false) {
     registerRoutes: (groups) =>
       registerDesktopRoutes(groups, {
         ...deps,
+        ...(recovery ? { recovery } : {}),
         clientIp: () => "test",
         ...(stateDir
           ? { writes: createDesktopWrites({ ...deps, repo: memoryRepo().repo, stateDir }) }
@@ -752,4 +754,35 @@ it("applies CSRF and browser ownership to v2 pairing while keeping v1 requests u
   expect(
     (await f.app.request(`${base}/location`, { headers: { authorization: bearer } })).status,
   ).toBe(401);
+});
+
+it("limits recovery status to administrators and returns safe bounded job details", async () => {
+  const status = vi.fn(async () => [
+    {
+      identityId: randomUUID(),
+      operationId: randomUUID(),
+      attempts: 1,
+      lastError: "Retry scheduled",
+      createdAt: new Date(0),
+      nextAttemptAt: new Date(5000),
+    },
+  ]);
+  const f = await fixture(false, { status });
+  expect((await f.request("/recovery")).status).toBe(401);
+  expect((await f.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status).toBe(
+    403,
+  );
+  expect(status).not.toHaveBeenCalled();
+  Object.assign(f.principal, { isAdmin: true, tokenAccess: undefined });
+  const response = await f.request("/recovery", undefined, { cookie: "fdrive_session=test" });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toMatchObject({
+    pending: [{ attempts: 1, nextAttemptAt: new Date(5000).toISOString() }],
+  });
+  const unavailable = await fixture();
+  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
+  expect(
+    (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
+  ).toBe(502);
 });

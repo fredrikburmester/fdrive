@@ -100,6 +100,9 @@ export function memoryRepo() {
       });
       return true;
     },
+    async complete(identityId, accountId, id, result) {
+      return repo.transition(identityId, accountId, id, "committing", "completed", result);
+    },
   };
   return { repo, items, operations };
 }

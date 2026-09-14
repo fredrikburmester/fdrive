@@ -114,6 +114,7 @@ export function createOfficeFileRepoWithRunner(
           .update(officeFiles)
           .set({
             path: sql`${move.to} || substring(${officeFiles.path} from ${Array.from(move.from).length + 1}::integer)`,
+            revision: sql`gen_random_uuid()`,
           })
           .where(and(activeScope, prefix(move.from)));
       });
