@@ -16,6 +16,18 @@ export {
   WorkerActivity,
 } from "./activity.ts";
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
+export { createBackupClient } from "./backup-client.ts";
+export {
+  BackupAttachmentInput,
+  BackupDestinationInput,
+  BackupEstimateJob,
+  BackupRecoveryStatus,
+  BackupRehearsal,
+  BackupRunInput,
+  BackupRunSummary,
+  BackupSchedule,
+  BackupsResponse,
+} from "./backups.ts";
 export { CanonicalUuid } from "./canonical-uuid.ts";
 export type {
   ApiClient,

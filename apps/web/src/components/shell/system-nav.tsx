@@ -2,6 +2,7 @@
 
 import type { SystemActivityItem } from "@fdrive/contracts";
 import {
+  Archive,
   ChevronRight,
   CircleAlert,
   Database,
@@ -41,6 +42,7 @@ const FEATURES_ITEM = {
   Icon: ToggleRight,
 } as const;
 const SYSTEM_ITEMS = [
+  { id: "backups", href: "/system/backups", label: "Backups", Icon: Archive },
   { id: "general", href: "/system/general", label: "General", Icon: Settings2 },
   { id: "storage", href: "/system/storage", label: "Storage", Icon: HardDrive },
 ] as const;
@@ -157,10 +159,12 @@ export function SystemNav() {
         item={item}
         activity={query.data?.items.find((entry) => entry.id === item.id)}
         pending={
-          query.pending.has(item.id) ||
+          (item.id !== "backups" && query.pending.has(item.id)) ||
           (item.id === "features" && FEATURE_ITEMS.some(({ id }) => query.pending.has(id)))
         }
-        stale={query.isError && !["general", "storage", "sharedFolders"].includes(item.id)}
+        stale={
+          query.isError && !["general", "storage", "sharedFolders", "backups"].includes(item.id)
+        }
       />
     );
   }

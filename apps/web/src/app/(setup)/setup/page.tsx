@@ -1,4 +1,5 @@
 import type { Route } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { MeHydration } from "@/components/shell/me-hydration";
 import { SetupFeatures } from "@/components/system/features-page";
@@ -53,5 +54,15 @@ export default async function SetupPage() {
       );
     redirect(FILES_ROUTE);
   }
-  return <SetupWizard />;
+  return (
+    <>
+      <SetupWizard />
+      <p className="pb-8 text-center text-sm text-muted-foreground">
+        Recovering an installation?{" "}
+        <Link className="underline underline-offset-4" href="/restore">
+          Restore a backup
+        </Link>
+      </p>
+    </>
+  );
 }

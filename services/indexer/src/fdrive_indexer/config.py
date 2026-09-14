@@ -55,7 +55,7 @@ class Config:
         self.text_exclude_globs = split_prefixes(os.environ.get("TEXT_EXCLUDE_GLOBS", ""))
         self.tesseract_langs = os.environ.get("TESSERACT_LANGS", "swe+eng")
         self.skip_names = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", ".localized"})
-        self.skip_dirs = frozenset({"@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
+        self.skip_dirs = frozenset({".fdrive-backups", "@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
         self.watch = _bool("WATCH", True)
         self.watch_debounce = float(os.environ.get("WATCH_DEBOUNCE_SECONDS", "2"))
         self.workers = int(os.environ.get("INDEX_WORKERS", "4"))

@@ -71,6 +71,10 @@ export interface AppConfig {
   readonly fdriveTmpDir: string;
   /** Durable, private spool. Unset disables desktop writes. */
   readonly fdriveDesktopStateDir?: string;
+  readonly fdriveBackupStateDir?: string;
+  readonly fdriveBackupSources?: { kind: "ocr" | "logs" | "office"; path: string }[];
+  readonly fdriveBackupWorker?: boolean;
+  readonly fdriveRestoreMode?: boolean;
   /** Days before acknowledged or cancelled Mac write backups are reclaimed. */
   readonly fdriveDesktopRetentionDays: number;
   /** Total bytes a single archive/extract job may read before it fails. */
@@ -317,6 +321,33 @@ const envSchema = z.object({
     z.enum(["true", "false"]).transform((value) => value === "true"),
   ),
   FDRIVE_TMP_DIR: z.preprocess((value) => withDefault(value, tmpdir()), z.string().min(1)),
+  FDRIVE_BACKUP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
+  FDRIVE_RESTORE_MODE: z.preprocess(
+    (value) => withDefault(value, "false"),
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ),
+  FDRIVE_BACKUP_WORKER: z.preprocess(
+    (value) => withDefault(value, "false"),
+    z.enum(["true", "false"]).transform((value) => value === "true"),
+  ),
+  FDRIVE_BACKUP_SOURCES: z.preprocess(
+    (value) => {
+      if (value === undefined || value === "") return [];
+      if (typeof value !== "string") return value;
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    },
+    z
+      .array(
+        z
+          .object({ kind: z.enum(["ocr", "logs", "office"]), path: z.string().startsWith("/") })
+          .strict(),
+      )
+      .max(20),
+  ),
   FDRIVE_DESKTOP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
   FDRIVE_DESKTOP_RETENTION_DAYS: z.preprocess(
     (value) => withDefault(value, "30"),
@@ -513,6 +544,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     ...(parsed.FDRIVE_DESKTOP_STATE_DIR
       ? { fdriveDesktopStateDir: parsed.FDRIVE_DESKTOP_STATE_DIR }
       : {}),
+    ...(parsed.FDRIVE_BACKUP_STATE_DIR
+      ? { fdriveBackupStateDir: parsed.FDRIVE_BACKUP_STATE_DIR }
+      : {}),
+    fdriveBackupSources: parsed.FDRIVE_BACKUP_SOURCES,
+    fdriveRestoreMode: parsed.FDRIVE_RESTORE_MODE,
+    fdriveBackupWorker: parsed.FDRIVE_BACKUP_WORKER,
     fdriveDesktopRetentionDays: parsed.FDRIVE_DESKTOP_RETENTION_DAYS,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
     fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,

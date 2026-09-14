@@ -47,7 +47,7 @@ ARG FDRIVE_BUILD_REVISION=
 RUN printf '%s' "$FDRIVE_BUILD_REVISION" > build-revision
 LABEL org.opencontainers.image.revision=$FDRIVE_BUILD_REVISION
 
-RUN mkdir -p /var/lib/fdrive/desktop && chown fdrive:fdrive /var/lib/fdrive/desktop
+RUN mkdir -p /var/lib/fdrive/desktop /var/lib/fdrive/backups && chown fdrive:fdrive /var/lib/fdrive/desktop /var/lib/fdrive/backups
 USER fdrive
 
 EXPOSE 3001

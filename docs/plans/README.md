@@ -4,6 +4,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 
 | Document | Purpose |
 | --- | --- |
+| [Backup verification](BACKUPS.md) | Remaining gates for installation backups and isolated recovery |
 | [Roadmap](ROADMAP.md) | Remaining requested features and acceptance criteria |
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
