@@ -1,6 +1,8 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { isSafeSegment } from "@fdrive/core";
+import { Loader2Icon } from "lucide-react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,6 +33,7 @@ export function NewFolderDialog({
 }: NewFolderDialogProps) {
   const [name, setName] = useState(DEFAULT_NAME);
   const inputRef = useRef<HTMLInputElement>(null);
+  const errorId = useId();
 
   useEffect(() => {
     if (open) {
@@ -50,17 +53,22 @@ export function NewFolderDialog({
   }
 
   const trimmed = name.trim();
+  const valid = isSafeSegment(trimmed);
+
+  function handleOpenChange(next: boolean) {
+    if (!pending) onOpenChange(next);
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (trimmed.length > 0) {
+    if (valid && !pending) {
       onCreate(trimmed);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent initialFocus={focusAndSelectAll}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent initialFocus={focusAndSelectAll} showCloseButton={!pending}>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>New folder</DialogTitle>
@@ -72,14 +80,34 @@ export function NewFolderDialog({
               value={name}
               onChange={(event) => setName(event.target.value)}
               aria-label="Folder name"
+              disabled={pending}
+              aria-invalid={trimmed.length > 0 && !valid}
+              aria-describedby={trimmed.length > 0 && !valid ? errorId : undefined}
             />
+            {trimmed.length > 0 && !valid && (
+              <p id={errorId} className="text-sm text-destructive">
+                Choose a shorter folder name without /, other than . or ..
+              </p>
+            )}
           </Field>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 sm:h-8"
+              disabled={pending}
+              onClick={() => handleOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={trimmed.length === 0 || pending}>
-              Create
+            <Button
+              type="submit"
+              className="h-11 sm:h-8"
+              disabled={!valid || pending}
+              aria-busy={pending}
+            >
+              {pending && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
+              {pending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>
