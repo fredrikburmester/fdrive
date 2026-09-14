@@ -17,6 +17,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
+import { useUploadReveal } from "@/components/files/use-upload-reveal";
 import { Inspector } from "@/components/inspector/inspector";
 import { TagsEditDialog } from "@/components/metadata/tags-edit-dialog";
 import { NewOfficeDocumentDialog } from "@/components/office/new-document-dialog";
@@ -180,7 +181,7 @@ export function FileBrowser({
   const searchParams = useSearchParams();
   const selectName = parseSelectParam(searchParams.toString());
   const queryClient = useQueryClient();
-  const { data, isLoading, isError, error, refetch } = useListing(path);
+  const { data, isLoading, isFetching, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const { data: trashStatus } = useTrashStatus();
   const capabilities = capabilitiesFor(me);
@@ -319,6 +320,15 @@ export function FileBrowser({
   const handleScrollConsumed = useCallback((token: number) => {
     setScrollRequest((current) => (current?.token === token ? null : current));
   }, []);
+
+  const revealUploads = useCallback((paths: string[]) => {
+    const targetPath = paths.at(-1);
+    if (!targetPath) return;
+    dispatchSelection({ type: "set", paths });
+    scrollTokenRef.current += 1;
+    setScrollRequest({ path: targetPath, token: scrollTokenRef.current });
+  }, []);
+  useUploadReveal(path, me?.activeIdentityId, orderedPaths, { data, isFetching }, revealUploads);
 
   // "Reveal in folder" (from the search panel): once this folder's listing
   // has loaded and contains the named item, select it, scroll it into
