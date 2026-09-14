@@ -1,3 +1,4 @@
+import { withBackupWriter } from "@fdrive/backup";
 import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
@@ -16,6 +17,7 @@ import {
 } from "@fdrive/db";
 import { createSftpgoClient } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
+import { verifyCredentials } from "./accounts/credentials.js";
 import { registerAccountsRoutes } from "./accounts/routes.ts";
 import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
@@ -33,6 +35,9 @@ import {
   createPinnedStorageFactory,
   trashSettingsForStorage,
 } from "./auth/storage-factory.ts";
+import { createBackupModule } from "./backups/module.js";
+import { createRecoveryApp } from "./backups/recovery.js";
+import { registerBackupRoutes } from "./backups/routes.js";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
@@ -158,6 +163,11 @@ export async function composeApp(
     await migrate(db);
   }
   const repos = createRepos(db);
+  const restored = await repos.settings.get("backup.restore.v1");
+  if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
+  const backups = createBackupModule(config);
+  await backups.start();
+
   const eventLog = createSystemEventLog({ repo: repos.systemEvents, logger });
 
   const fetchImpl = deps.fetch ?? globalThis.fetch;
@@ -185,7 +195,8 @@ export async function composeApp(
     },
     trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
   });
-  await providerService.seedFromEnvironment();
+  if (!(await repos.settings.get("backup.recovery.v1")))
+    await providerService.seedFromEnvironment();
 
   const featureService = createFeatureService({
     probeCacheMs: 2000,
@@ -641,6 +652,22 @@ export async function composeApp(
   const subsystemReachability = () => cachedProbe();
 
   const app = createApp({
+    ...(config.fdriveBackupStateDir
+      ? {
+          requestGate: async (path: string, method: string, work: () => Promise<void>) => {
+            if (
+              ["GET", "HEAD", "OPTIONS"].includes(method) ||
+              path.includes("/system/backups") ||
+              path.includes("/setup/") ||
+              path.includes("/health") ||
+              path.includes("/about") ||
+              path.includes("/internal/")
+            )
+              return work();
+            await withBackupWriter(backups.gatePool, work);
+          },
+        }
+      : {}),
     config,
     logger,
     clock,
@@ -662,6 +689,27 @@ export async function composeApp(
       };
     },
     registerRoutes: (groups) => {
+      registerBackupRoutes(
+        groups,
+        backups,
+        async (accountId, identityId, credential, ip) => {
+          const identity = await repos.identities.get(identityId);
+          if (!identity || identity.accountId !== accountId)
+            throw new ApiHttpError("unauthorized", "Storage identity changed");
+          const verified = await verifyCredentials(
+            { repos, providers: providerService, limiter, fetch: fetchImpl },
+            {
+              providerId: identity.providerId,
+              expectedUsername: identity.externalUsername,
+              credential,
+              ip,
+            },
+          );
+          if (verified.externalUsername !== identity.externalUsername)
+            throw new ApiHttpError("unauthorized", "Storage identity changed");
+        },
+        config.fdriveTrustedProxyHops,
+      );
       registerFeatureAdmission(groups.authed, featureService);
       registerFeatureRoutes(groups, {
         service: featureService,
@@ -894,6 +942,7 @@ export async function composeApp(
   return {
     app,
     close: async () => {
+      await backups.close();
       await desktopRetention.stop();
       await desktopEffectsWorker.stop();
       if (indexerListener !== null) {

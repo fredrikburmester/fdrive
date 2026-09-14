@@ -15,6 +15,7 @@ module is the glue, mirroring filesai's `run.sh` behaviour:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import signal
@@ -31,7 +32,7 @@ from .decide import STATUS_FAILED, STATUS_TIMEOUT, decide
 from .rules import is_candidate_pdf, is_excluded, is_too_big
 from .settings import Settings
 
-SKIP_DIRS = frozenset({"@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
+SKIP_DIRS = frozenset({".fdrive-backups", "@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
 PROCESS_GROUP_KILL_WAIT_SECONDS = 5
 
 
@@ -174,7 +175,42 @@ def apply_rewrite(
         os.makedirs(originals_dir, exist_ok=True)
         dest = originals_dest(state_dir, root, rel_path, size, mtime_ns)
         if not os.path.exists(dest):
-            shutil.copy2(src, dest)
+            fd, pending = tempfile.mkstemp(prefix=".original-", dir=originals_dir)
+            try:
+                with os.fdopen(fd, "wb") as output, open(src, "rb") as original:
+                    shutil.copyfileobj(original, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                shutil.copystat(src, pending)
+                os.replace(pending, dest)
+            finally:
+                if os.path.exists(pending):
+                    os.remove(pending)
+        # The legacy filename is a hash, not a reversible mapping. Preserve exact
+        # source facts alongside every newly accepted original before rewriting.
+        mappings_dir = os.path.join(state_dir, "original-mappings")
+        os.makedirs(mappings_dir, exist_ok=True)
+        with open(dest, "rb") as original:
+            digest = hashlib.file_digest(original, "sha256").hexdigest()
+        mapping = {"version": 1, "root": root, "path": rel_path, "size": size,
+                   "mtime_ns": str(mtime_ns), "original": os.path.basename(dest), "sha256": digest}
+        fd, pending = tempfile.mkstemp(prefix=".mapping-", dir=mappings_dir)
+        try:
+            with os.fdopen(fd, "w") as output:
+                json.dump(mapping, output)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(pending, os.path.join(mappings_dir, f"{os.path.basename(dest)}.json"))
+        finally:
+            if os.path.exists(pending):
+                os.remove(pending)
+        # Persist both directory entries before the source can be overwritten.
+        for retained_dir in (originals_dir, mappings_dir, state_dir):
+            directory_fd = os.open(retained_dir, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     os.chmod(tmp_out, stat.S_IMODE(st_before.st_mode))
     try:
         os.chown(tmp_out, st_before.st_uid, st_before.st_gid)
@@ -221,11 +257,15 @@ def process_file(
         )
         decision = decide(exit_code, stderr, timed_out)
         if decision.rewrite:
-            apply_rewrite(abs_path, tmp_out, state_dir, target.name, rel_path, size, mtime_ns, settings.keep_originals)
-            new_st = os.stat(abs_path)
-            db.record_ocr_log(
-                conn, target.root_id, rel_path, new_st.st_size, new_st.st_mtime_ns, decision.status, decision.detail
-            )
+            with db.backup_checkpoint(conn):
+                current = os.stat(abs_path)
+                if (current.st_size, current.st_mtime_ns) != (size, mtime_ns):
+                    raise RuntimeError("Source changed while OCR was running")
+                apply_rewrite(abs_path, tmp_out, state_dir, target.name, rel_path, size, mtime_ns, settings.keep_originals)
+                new_st = os.stat(abs_path)
+                db.record_ocr_log(
+                    conn, target.root_id, rel_path, new_st.st_size, new_st.st_mtime_ns, decision.status, decision.detail
+                )
             log(f"[{target.name}] OCR'd: {rel_path}")
         else:
             db.record_ocr_log(conn, target.root_id, rel_path, size, mtime_ns, decision.status, decision.detail)
