@@ -28,6 +28,9 @@ not current instructions.
 - Manual browser smoke test against the real dev stack, dev SFTPGo and a local MinIO (versioned
   and Object Lock buckets) passed; it found and fixed a 500 on deleting a run with a locked
   copy, which now answers 409 naming the retained copies. Details in the handoff document.
+- Real Backblaze B2 round trip passed through the browser UI on the owner's test bucket:
+  probe, delivery with readback, version IDs, byte verification and exact-version deletion.
+  Real AWS S3 and B2 Object Lock remain untested.
 - Not done: real AWS/B2 buckets (needs the owner's bucket names), hosted CI, a real host cutover.
   No commit, merge, push or deployment requested.
 

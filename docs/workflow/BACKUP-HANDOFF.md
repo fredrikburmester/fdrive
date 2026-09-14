@@ -95,6 +95,18 @@ Screenshots: `.playwright-mcp/smoke-*.png` in the main checkout. Left behind for
 drop: databases `fdrive_backups_smoke` and `fdrive_backups_rehearsal_*` in the dev PostgreSQL,
 the stopped container `fdrive-smoke-minio`, and `/private/tmp/fdrive-backups-dev-state`.
 
+## Real Backblaze B2 (2026-09-14 evening)
+
+The owner entered a throwaway application key into the destination form in the app's browser
+pane; the agent prefilled the non-secret fields and never handled the key. Bucket
+`fdrive-local-test` on `s3.us-west-004.backblazeb2.com`, virtual-host addressing, prefix
+`fdrive-backups/<installation>`. Passed: probe (create, read, delete), delivery with full
+readback (run `48c5e91b`), B2 file version IDs recorded for the archive and the completion
+marker, byte verification, and deletion by exact version. In the same run the two MinIO
+destinations failed independently because their container was stopped, and the run reported
+each delivery separately. Not covered: large transfers, B2 Object Lock, the offline CLI
+against B2 (needs the secret). The owner was asked to delete the key afterwards.
+
 ## Final gates
 
 Final tree, 2026-09-14 evening, all through `verify.sh`:

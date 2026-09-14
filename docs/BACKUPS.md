@@ -255,8 +255,9 @@ Limitations these numbers expose:
   Large recovery collections make captures long; schedule them at quiet hours.
 - Restore memory grows with history volume (471 MiB for this fixture). Size the recovery host
   accordingly.
-- Real AWS S3 and Backblaze B2 round trips have not been measured; MinIO, Apache WebDAV and
-  SFTPGo qualification does not stand in for them.
+- A real Backblaze B2 bucket has been exercised for probe, delivery with readback, byte
+  verification and exact-version deletion, but not measured for large transfers. Real AWS S3
+  has not been contacted; MinIO qualification does not stand in for it.
 
 ```sh
 node dist/main.js backup resume --review-file review.json
