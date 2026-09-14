@@ -253,6 +253,15 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
+    key: "FDRIVE_DESKTOP_RETENTION_DAYS",
+    description:
+      "Days to keep acknowledged or cancelled Mac write backups before reclaiming their storage.",
+    default: "30",
+    example: "30",
+    secret: false,
+    subsystem: "core",
+  },
+  {
     key: "FDRIVE_JOB_MAX_BYTES",
     description: "Cap on the bytes a single archive/extract job may read, in bytes.",
     default: "10737418240",

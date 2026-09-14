@@ -67,6 +67,8 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
+      args:
+        FDRIVE_BUILD_REVISION: ${FDRIVE_BUILD_REVISION:-}
     environment: &api-environment
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
@@ -117,6 +119,7 @@ services:
       FDRIVE_TRUSTED_PROXY_HOPS: ${FDRIVE_TRUSTED_PROXY_HOPS:-}
       FDRIVE_AUTO_MIGRATE: ${FDRIVE_AUTO_MIGRATE:-}
       FDRIVE_TMP_DIR: ${FDRIVE_TMP_DIR:-}
+      FDRIVE_DESKTOP_RETENTION_DAYS: ${FDRIVE_DESKTOP_RETENTION_DAYS:-}
       FDRIVE_JOB_MAX_BYTES: ${FDRIVE_JOB_MAX_BYTES:-}
       FDRIVE_JSON_MAX_BYTES: ${FDRIVE_JSON_MAX_BYTES:-}
       FDRIVE_ARCHIVE_PEEK_MAX_BYTES: ${FDRIVE_ARCHIVE_PEEK_MAX_BYTES:-}

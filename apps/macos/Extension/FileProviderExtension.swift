@@ -42,6 +42,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                 guard item.entry.kind == "file", item.entry.readable else { throw DriveError.unsupported }
                 guard let manager = NSFileProviderManager(for: domain) else { throw DriveError.unavailable }
                 let directory = try manager.temporaryDirectoryURL()
+                try requireFreeSpace(item.entry.size, at: directory)
                 let (url, digest, size) = try await client.download(item.entry.path, to: directory, progress: progress)
                 temporary = url
                 try Task.checkCancellation()
@@ -49,10 +50,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     throw NSFileProviderError(.versionNoLongerAvailable)
                 }
                 let record = try await repository.downloaded(item.id, hash: digest, size: size, expectedVersion: item.contentVersion)
+                try? await repository.recordCallback()
                 handler.value(url, ProviderItem(record), nil)
                 temporary = nil // Ownership passes to File Provider only after success.
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at: temporary) }
+                if let (repository, _) = try? connection() { try? await repository.recordCallback(error: error.localizedDescription) }
                 handler.value(nil, nil, NativeEnvironment.error(error))
             }
         }
@@ -73,19 +76,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let task = Task {
             do {
                 let (repository, client) = try connection()
-                if reimport && url == nil {
-                    // Dataless reimports acknowledge existing remote metadata only.
-                    // Absence of bytes never means an empty-file replacement.
-                    let parent = try await repository.item(parentId)
-                    let listing = try await repository.beginListing(parent.entry.path)
-                    try await repository.reconcile(client.list(parent.entry.path), folder: parent.entry.path, listing: listing)
-                    let path = (parent.entry.path == "/" ? "" : parent.entry.path) + "/" + name
-                    let existing = try await repository.itemAt(path)
-                    guard (existing.entry.kind == "dir") == directory else { throw DriveError.unsupported }
-                    handler.value(ProviderItem(existing), [], !directory, nil)
-                    return
+                let coordinator = WriteCoordinator(catalog: repository, client: client)
+                if reimport {
+                    // Matching remote bytes or metadata are acknowledged without a second
+                    // copy; differing bytes fall through to a create that keeps both.
+                    if let existing = try await coordinator.reimport(parentId: parentId, name: name, directory: directory, contents: url) {
+                        handler.value(ProviderItem(existing), [], url == nil && !directory, nil)
+                        return
+                    }
+                    guard url != nil || directory else { throw DriveError.missing }
                 }
-                let result = try await WriteCoordinator(catalog: repository, client: client).perform(
+                let result = try await coordinator.perform(
                     route: directory ? "folders" : "uploads", localId: nil, templateKey: templateKey,
                     parentId: parentId, name: name, base: nil, contents: url, progress: progress, modificationDate: modificationDate)
                 await signalChanges(parents: [parentId])

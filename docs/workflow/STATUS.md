@@ -34,6 +34,71 @@ not current instructions.
 - Not done: real AWS/B2 buckets (needs the owner's bucket names), hosted CI, a real host cutover.
   No commit, merge, push or deployment requested.
 
+## Upload completion reveal: review fixes verified in worktree
+
+- Worktree `/private/tmp/fdrive-upload-reveal`, branch `feat/upload-reveal`, based on
+  `origin/main` at `b4cc8eb`. Primary checkout changes and the original `codex/upload-reveal`
+  branch are preserved. Only the upload commit was copied to this PR branch; no merge requested.
+- Completed uploads select successful files together and scroll the focused item into view
+  in list, grid and tree modes. Folder uploads select their top-level folders. Failed,
+  skipped and cancelled items are excluded; leaving the folder or switching login cancels
+  pending automatic selection. Old Activity entries are not replayed.
+- List/tree reveal accounts for the sticky header. Review fixes track successful retries,
+  require a newer query result rendered in the current sort order before revealing
+  replacements, and reveal surviving uploads if earlier files were renamed or removed.
+  Fully removed batches are consumed without selecting later files that reuse their paths.
+- Twelve hook regressions use real query refreshes, including cancellation/restart and
+  unchanged replacement metadata (`step.Fmc4sA`). All 15 affected browser tests pass
+  on the current-main PR branch (`step.0ZHVg9`), including replacement size-sort scrolling, Retry, list/grid/tree,
+  folder uploads, existing reveal controls and pointer/keyboard selection.
+- Standalone disposable dev verification passes at 1440px/light and 390px/dark, with long
+  filenames, no page overflow and selection retained when scrolling away (`step.1OBNPC`).
+  Screenshots: `.fdrive-workflow/evaluation/upload-{desktop,mobile-dark}.png`.
+- Application lint/typecheck/coverage pass on the current-main PR branch
+  (`VITEST_MAX_WORKERS=1`, `step.sTOwL0` coverage, including 1,875 web tests).
+  No limits or thresholds changed. Integrated diff reviewed.
+
+## Licensing: AGPL retained
+
+- Keep AGPL for the server, web interface and native Mac app. README scope and root
+  package metadata now explicitly use `AGPL-3.0-only`; the license text is unchanged.
+- README distinguishes stock external SFTPGo from the optional modified integration.
+  No commercial terms or purchase enforcement added. Workflow checks pass.
+
+## Native metadata recovery follow-up
+
+- [PR #23](https://github.com/fredrikburmester/fdrive-web/pull/23), worktree
+  `/private/tmp/fdrive-native-metadata-recovery`, branch `codex/native-metadata-recovery`;
+  primary WIP preserved.
+- All three review fixes implemented: later path hooks invalidate superseded recovery targets,
+  snapshot capacity is checked before publication, and notification delivery retries separately
+  after metadata commits. [Behavior and limits](../MACOS.md#write-configuration-and-recovery).
+- Application lint/typecheck/coverage pass (`step.WhVDBA` coverage), including 2,242 API tests
+  and 256 DB tests; queue SQL retains 100% line coverage on real PostgreSQL. All 497 integration
+  tests pass (`step.uuBMtI`), including all three review regressions and WebDAV/SFTPGo recovery.
+  Workflow helper regressions, lint and diff checks pass. Ready for re-review.
+- Remaining beta work: backup reclamation/recovery administration and broader native/editor
+  qualification. No native UI, storage image, production or release changes.
+
+## Native gaps: implemented on `claude/macos-gaps`, review pending
+
+- Worktree `.worktrees/macos-gaps`, branch `claude/macos-gaps`, rebased onto `origin/main`
+  (carries the friendly-storage-names commit and the edge-case hardening commit). Primary
+  checkout WIP preserved.
+- Pairing confirmation: the app persists the pairing record before polling and confirms
+  after Keychain storage; the server revokes unconfirmed bundles at expiry and resumes the
+  same bundle at next launch. Domain health from `NSFileProviderManager.domains()` shows
+  System Settings guidance for a disabled extension. An extension heartbeat in the shared
+  catalog drives a stalled-Finder warning. A retention job cancels idle bodies and stale
+  conflicts and reclaims acknowledged backups after `FDRIVE_DESKTOP_RETENTION_DAYS`;
+  administrators list and resolve uncertain commits. Conflict-copy names retry numbered
+  up to three times. Behavior: [macOS](../MACOS.md).
+- Edge-case hardening (handle reassignment, `.Trash` root collision, 403/409 mapping, disk
+  preflight, native cycle refusal, reimport acknowledgement) is the first commit; the
+  100-case review found the rest covered, documented or rehearsal-only.
+- Verification: see the pull request. Signed Finder rehearsal of the new paths is listed in
+  [beta qualification](../plans/MACOS-APP.md).
+
 ## Friendly storage names: verified
 
 - Worktree `/private/tmp/fdrive-friendly-storage-names`, branch `codex/friendly-storage-names`,
@@ -58,21 +123,6 @@ not current instructions.
   Final workflow regressions, lint and diff checks pass; integrated diff reviewed.
 - Server deployment is pending; production providers are unchanged. GitHub Actions stays disabled.
   A server deployment and local app rebuild are needed to exercise this with production.
-
-## Native metadata recovery follow-up
-
-- [PR #23](https://github.com/fredrikburmester/fdrive-web/pull/23), worktree
-  `/private/tmp/fdrive-native-metadata-recovery`, branch `codex/native-metadata-recovery`;
-  primary WIP preserved.
-- All three review fixes implemented: later path hooks invalidate superseded recovery targets,
-  snapshot capacity is checked before publication, and notification delivery retries separately
-  after metadata commits. [Behavior and limits](../MACOS.md#write-configuration-and-recovery).
-- Application lint/typecheck/coverage pass (`step.WhVDBA` coverage), including 2,242 API tests
-  and 256 DB tests; queue SQL retains 100% line coverage on real PostgreSQL. All 497 integration
-  tests pass (`step.uuBMtI`), including all three review regressions and WebDAV/SFTPGo recovery.
-  Workflow helper regressions, lint and diff checks pass. Ready for re-review.
-- Remaining beta work: backup reclamation/recovery administration and broader native/editor
-  qualification. No native UI, storage image, production or release changes.
 
 ## Native macOS Finder app: development preview
 
@@ -288,6 +338,21 @@ not current instructions.
 - Reads/uploads/edits have a 4 MiB cap. SHA-256 guards MCP edits within one API process;
   external clients can still race the provider write. No permanent deletion or public sharing.
 - Unrelated System activity planning and `.playwright-mcp/` artifacts are preserved.
+
+## About page project information
+
+- Worktree `/private/tmp/fdrive-project-info`, branch `codex/project-info`, based on
+  `origin/main` at `26bc01e`; primary checkout changes preserved.
+- About shows the API build's commit link and sampled API uptime, GitHub, the macOS app
+  guide, Buy Me a Coffee, and ten feature guides. Existing attribution and provider-host
+  privacy remain intact. [Build metadata and uptime](../../deploy/REFERENCE.md#running-version-and-uptime).
+- Application lint/typecheck/coverage pass (`step.hG5vxd` coverage); all five About browser
+  checks pass (`step.XrLJud`), including 320–1280px/light/dark and 44px resource links.
+  Live Next dev + disposable PostgreSQL/SFTPGo verified desktop and mobile content/scrolling.
+  All 497 integration tests pass (`step.aWI1oK`). A production API image builds and reports
+  the supplied Git revision from both its runtime module and OCI label; temporary image removed.
+- macOS opens the app guide because no GitHub release is published yet. No deployment or
+  hosted Actions changes; the temporary live dev stack was stopped after verification.
 
 ## System sidebar activity: shipped
 
@@ -576,3 +641,17 @@ conformance, manual browser pass) is archived in [history](STATUS-history.md).
 - Provider binding has integrated two-HTTP-server fixture coverage (SFTPGo fakes).
 - Remaining feature/verification gaps are listed in plans; completed work and old worker
   assignments must not be restarted from historical briefs.
+
+## Destination picker folder creation
+
+- Worktree `/private/tmp/fdrive-destination-new-folder`, branch `codex/destination-new-folder`.
+- Shared Move, Copy, Extract, archive destination and Restore pickers offer New folder.
+  Creation uses the displayed directory, enters the returned folder and waits for the
+  operation's confirmation. Cancellation, failed-name retry and source restrictions remain.
+- Folder naming rejects unsafe path segments; pending creation blocks duplicate submissions
+  and dismissal. Long breadcrumbs truncate with full-name hover text; mobile actions are 44px.
+- All 30 affected Chromium browser checks pass on Next dev with disposable PostgreSQL/SFTPGo
+  and WebDAV (`step.ZGlqwv`), including creation in all five destination modes. Light/dark
+  screenshots at 320/402/1280px reviewed under `.fdrive-workflow/evaluation/destination-picker/`.
+- Final application lint/typecheck/coverage pass (`step.tYRT79` coverage). Workflow helper
+  regressions, lint and diff checks pass. No production or hosted Actions changes.

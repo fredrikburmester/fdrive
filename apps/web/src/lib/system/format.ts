@@ -32,3 +32,14 @@ export function formatRelativeTime(target: Date, now: Date): string {
 
   return diffMs < 0 ? `${value}${unit} ago` : `in ${value}${unit}`;
 }
+
+/** Compact duration for API process uptime (not host or container uptime). */
+export function formatUptime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  if (minutes === 0) return `${Math.floor(seconds)}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours === 0) return `${minutes}m`;
+  const days = Math.floor(hours / 24);
+  if (days === 0) return `${hours}h ${minutes % 60}m`;
+  return `${days}d ${hours % 24}h ${minutes % 60}m`;
+}

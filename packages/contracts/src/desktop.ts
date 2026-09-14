@@ -17,6 +17,24 @@ export const DesktopRecoveryResponse = z.object({
       }),
     )
     .max(100),
+  /** Commits without a receipt. `stalled` means the commit stopped reporting progress. */
+  uncertain: z
+    .array(
+      z.object({
+        identityId: CanonicalUuid,
+        operationId: CanonicalUuid,
+        state: z.enum(["committing", "uncertain"]),
+        stalled: z.boolean(),
+        kind: z.enum(["upload", "folder", "move"]),
+        name: z.string(),
+        updatedAt: z.iso.datetime(),
+      }),
+    )
+    .max(100),
+});
+/** The administrator inspected storage: the publication happened, or it did not. */
+export const DesktopRecoveryResolution = z.strictObject({
+  outcome: z.enum(["published", "discarded"]),
 });
 export const DesktopPath = z
   .string()

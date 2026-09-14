@@ -12,6 +12,15 @@ import type { ConfigKeyDef } from "../../apps/api/src/config-keys.ts";
  */
 export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
+    key: "FDRIVE_BUILD_REVISION",
+    description:
+      "Git commit baked into the API image; update.sh sets it automatically after pulling.",
+    default: null,
+    example: "0123456789abcdef0123456789abcdef01234567",
+    secret: false,
+    subsystem: "core",
+  },
+  {
     key: "FDRIVE_READY_TIMEOUT_SECONDS",
     description: "Maximum seconds update.sh waits for enabled subsystems to finish starting.",
     default: "1200",

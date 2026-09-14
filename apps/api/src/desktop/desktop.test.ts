@@ -385,6 +385,60 @@ it("requires the app secret, cancels issued credentials, expires pending request
   expect(() => f.pairing.create("Mac", "new")).toThrow("Too many");
 });
 
+it("revokes issued credentials the app never confirms and keeps confirmed ones", async () => {
+  const f = await fixture();
+  const pair = f.pairing.create("Mac", "owner");
+  await expect(f.pairing.confirm(pair.id, pair.secret)).rejects.toMatchObject({
+    kind: "conflict",
+  });
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+  await expect(f.pairing.confirm(pair.id, "wrong")).rejects.toMatchObject({
+    kind: "unauthorized",
+  });
+  await expect(f.pairing.confirm(pair.id, pair.secret)).rejects.toMatchObject({
+    kind: "conflict",
+  });
+  const connected = await f.pairing.poll(pair.id, pair.secret);
+  expect(connected.status).toBe("connected");
+  await f.pairing.confirm(pair.id, pair.secret);
+  // The same bundle stays available inside the window; cancel no longer revokes it.
+  expect(await f.pairing.poll(pair.id, pair.secret)).toEqual(connected);
+  await f.pairing.cancel(pair.id, pair.secret);
+  expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(1);
+  // The HTTP routes own a separate pairing store; confirm through them as the app does.
+  const routed = DesktopPairing.parse(
+    await (await f.request("/pairings", { deviceName: "Routed Mac" })).json(),
+  );
+  await f.request(
+    `/pairings/${routed.id}/approve`,
+    { identityIds: [f.identity.id] },
+    { cookie: "fdrive_session=test" },
+  );
+  await f.request(`/pairings/${routed.id}/poll`, { secret: routed.secret });
+  expect((await f.request(`/pairings/${routed.id}/confirm`, { secret: "x" })).status).toBe(400);
+  expect(
+    (await f.request(`/pairings/${routed.id}/confirm`, { secret: routed.secret })).status,
+  ).toBe(200);
+  expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(2);
+  const orphan = f.pairing.create("Mac", "owner");
+  await f.pairing.approve(orphan.id, f.account.id, [f.identity.id]);
+  expect((await f.pairing.poll(orphan.id, orphan.secret)).status).toBe("connected");
+  expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(3);
+  f.advance(300_000);
+  await f.pairing.sweep();
+  expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(2);
+  await expect(f.pairing.confirm(orphan.id, orphan.secret)).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  // Confirmation on the v2 route follows the same rules.
+  const v2 = await f.app.request("/api/v2/desktop/pairings/unknown/confirm", {
+    method: "POST",
+    headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
+    body: JSON.stringify({ secret: orphan.secret }),
+  });
+  expect(v2.status).toBe(404);
+});
+
 it("revokes only the supplied desktop credential without resolving disabled storage", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
@@ -785,4 +839,91 @@ it("limits recovery status to administrators and returns safe bounded job detail
   expect(
     (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
   ).toBe(502);
+  // Uncertain commits are listed for administrators and resolved only through storage evidence.
+  const writable = await fixture(true, { status: vi.fn(async () => []) });
+  const admin = { cookie: "fdrive_session=test" };
+  const resolve = `/recovery/${writable.identity.id}/${randomUUID()}/resolve`;
+  expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(403);
+  Object.assign(writable.principal, { isAdmin: true, tokenAccess: undefined });
+  expect((await writable.request(resolve, { outcome: "later" }, admin)).status).toBe(400);
+  expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(404);
+  expect(
+    (
+      await writable.request(
+        `/recovery/${randomUUID()}/${randomUUID()}/resolve`,
+        { outcome: "discarded" },
+        admin,
+      )
+    ).status,
+  ).toBe(404);
+  expect(await (await writable.request("/recovery", undefined, admin)).json()).toEqual({
+    pending: [],
+    uncertain: [],
+  });
+  expect(
+    (
+      await writable.request(
+        `/recovery/not-a-uuid/${randomUUID()}/resolve`,
+        { outcome: "discarded" },
+        admin,
+      )
+    ).status,
+  ).toBe(400);
+  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
+  expect(
+    (
+      await unavailable.request(
+        `/recovery/${unavailable.identity.id}/${randomUUID()}/resolve`,
+        { outcome: "discarded" },
+        admin,
+      )
+    ).status,
+  ).toBe(404);
+});
+
+it("confirms a write-capable pairing through the v2 routes", async () => {
+  const f = await fixture(true);
+  const base = "/api/v2/desktop";
+  const post = (route: string, body: unknown, headers: Record<string, string> = {}) =>
+    f.app.request(base + route, {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive", "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  const request = DesktopPairing.parse(
+    await (await post("/pairings", { deviceName: "Mac" })).json(),
+  );
+  expect(
+    (
+      await f.request(
+        `/pairings/${request.id}/approve`,
+        { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+        { cookie: "fdrive_session=test" },
+      )
+    ).status,
+  ).toBe(200);
+  expect((await post(`/pairings/${request.id}/confirm`, { secret: request.secret })).status).toBe(
+    409,
+  );
+  expect((await post(`/pairings/${request.id}/poll`, { secret: request.secret })).status).toBe(200);
+  expect((await post(`/pairings/${request.id}/confirm`, { secret: request.secret })).status).toBe(
+    200,
+  );
+});
+
+it("expires unconfirmed pairings on its own timer without another request", async () => {
+  vi.useFakeTimers();
+  try {
+    const f = await fixture();
+    const pair = f.pairing.create("Mac", "owner");
+    await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+    expect((await f.pairing.poll(pair.id, pair.secret)).status).toBe("connected");
+    expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(1);
+    f.advance(300_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await f.pairing.sweep();
+    expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });

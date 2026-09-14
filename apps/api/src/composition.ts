@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { withBackupWriter } from "@fdrive/backup";
 import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
@@ -45,6 +42,7 @@ import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
+import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
 import { ApiHttpError } from "./errors.js";
@@ -116,6 +114,7 @@ import { createTokenService } from "./tokens/service.js";
 import { registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
+import { readVersion } from "./version.js";
 
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
@@ -381,6 +380,17 @@ export async function composeApp(
   const desktopRepo = createDesktopRepo(db);
   const desktopEffects = createDesktopEffectsRepo(db);
   const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
+  const desktopRetention = createDesktopRetention({
+    repo: desktopRepo,
+    storageForIdentity: storageFactory,
+    clock,
+    eventLog,
+    retention: {
+      ...DEFAULT_DESKTOP_RETENTION,
+      retainMs: config.fdriveDesktopRetentionDays * 24 * 60 * 60_000,
+    },
+    ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
+  });
   const officeFiles = createOfficeFileRepo(db);
   const fsMetadata = withOfficeMetadata(
     withDesktopMetadata(metadataService, desktopRepo),
@@ -716,6 +726,7 @@ export async function composeApp(
             scopeResolver.configuredMappings,
           ),
           effects: desktopEffectsWorker,
+          storageForIdentity: storageFactory,
           ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
@@ -927,10 +938,12 @@ export async function composeApp(
   });
 
   desktopEffectsWorker.start();
+  desktopRetention.start();
   return {
     app,
     close: async () => {
       await backups.close();
+      await desktopRetention.stop();
       await desktopEffectsWorker.stop();
       if (indexerListener !== null) {
         await indexerListener.stop();
@@ -938,16 +951,4 @@ export async function composeApp(
       await pool.end();
     },
   };
-}
-
-/**
- * Reads the api package's own version from its `package.json`, the same way
- * `main.ts` read it before this module took over app composition.
- */
-function readVersion(): string {
-  const dirName = dirname(fileURLToPath(import.meta.url));
-  const pkgPath = join(dirName, "..", "package.json");
-  const raw = readFileSync(pkgPath, "utf-8");
-  const pkg = JSON.parse(raw) as { version?: string };
-  return pkg.version ?? "0.0.0";
 }
