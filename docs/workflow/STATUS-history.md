@@ -10,6 +10,55 @@ Archived snapshots through 2026-09-12. Read [current STATUS](STATUS.md) and
 below describe their original handoff, not current instructions. Removed brief names are
 historical identifiers; their originals remain in Git history.
 
+## 2026-09-14 Native metadata recovery
+
+Implemented in `/private/tmp/fdrive-native-metadata-recovery`, branch
+`codex/native-metadata-recovery`, from merged PR #22 (`922da2e`). Completed receipts and
+metadata recovery jobs commit together; revision checks, identity ownership, transaction
+rollback and bounded retries protect delayed work. [Current behavior and deployment
+limits](../MACOS.md#write-configuration-and-recovery).
+
+Application lint/typecheck/coverage pass (`step.MHu3XE` coverage); API worker coverage is
+100%, and real PostgreSQL queue coverage retains the project thresholds. All 482 integration
+tests pass (`step.mipVT0`), including WebDAV/SFTPGo publication with injected metadata failure,
+API restart, unchanged receipts and preservation of independently recreated source files.
+Workflow orchestration regressions, lint and diff checks pass.
+No native binary/UI, storage image, production deployment or release changed.
+
+## 2026-09-14 Native macOS writes: SFTPGo enforcement
+
+- PR #21 merged as `0b32449d`. Worktree `/private/tmp/fdrive-macos-writes`, branch
+  `codex/sftpgo-write-enforcement`; primary WIP preserved.
+- Optional pinned SFTPGo v2.7.5 image adds cross-protocol local filesystem leases.
+  Open writers prevent acquisition; expiry fences old tokens until admitted handles drain.
+  Native fdrive operations retain ordinary permissions/quotas and use staged publication.
+  Stock SFTPGo stays read-only. [Qualification/deployment boundary](../../integrations/sftpgo/README.md).
+- PR #22 review fixes: lease control rechecks account/HTTP policy without occupying a
+  transfer session; single-session uploads can renew. A distinct lease-loss response
+  marker aborts scoped work as retryable, preserving ordinary file conflicts. Regression
+  coverage includes response cancellation failure and same-operation desktop commit retry.
+- Review-fix image build/Go race tests and source-archive comparison pass (`step.uNreN3`);
+  application gates pass (`step.LRNG3O` coverage). Focused real-server regressions pass
+  (`step.XeXhBK`). Docker disk exhaustion interrupted earlier fixture runs; removing only
+  this worktree's disposable Go/indexer build caches restored space. No assertions relaxed.
+- Complete review-fix integration gate passes (`step.paR2zQ`), including desktop
+  same-operation retry after lease loss and unchanged quota/conflict protections.
+- Application lint/typecheck/coverage and provider coverage pass. Pinned image builds with
+  Go race tests; checked-in overlay matches its included source archive. All 470 integration
+  cases pass across full/focused runs (`step.8J44Ls`, `step.24qJeG`, `step.LLerdE`): one
+  disk-interrupted indexer setup passed on isolated rerun. No gates or assertions weakened.
+- Seven storage/pairing browser checks pass (`step.ughPKk`); 27 Swift tests and unsigned build
+  pass (`step.Rs7wZR`, `step.dVPQ71`). Isolated signed build and signature verification pass
+  (`step.WVBONH`). Real Finder/TextEdit save and a competing-lease retry reach exact remote
+  bytes; Finder Trash/native Restore retain bytes and IDs. All four journal entries completed.
+- Final workflow gate passes all orchestration regressions, lint and diff checks.
+- Test location disconnected, isolated app quit and fixture services stopped. Evidence:
+  `.fdrive-workflow/evaluation/sftpgo-native-evidence.md`. Production app/connection unchanged.
+- Full beta still needs metadata-effect outbox, backup reclamation/recovery administration
+  and the broader failure/editor/release matrix in [the write plan](../plans/MACOS-WRITES.md).
+  No production installation, deployment, release or Actions change.
+
+
 ## 2026-09-13 Inconsistency audit
 
 Confirmed audit defects repaired in `codex/inconsistency-audit-20260912` from `6e9f2ce`.

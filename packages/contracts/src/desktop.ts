@@ -3,6 +3,21 @@ import { CanonicalUuid } from "./canonical-uuid.ts";
 
 export const DESKTOP_API = "/api/v1/desktop";
 export const DESKTOP_PROTOCOL_VERSION = 1;
+/** Administrator-only bounded queue view. No file payloads or credentials. */
+export const DesktopRecoveryResponse = z.object({
+  pending: z
+    .array(
+      z.object({
+        identityId: CanonicalUuid,
+        operationId: CanonicalUuid,
+        attempts: z.number().int().nonnegative(),
+        lastError: z.string().nullable(),
+        createdAt: z.iso.datetime(),
+        nextAttemptAt: z.iso.datetime(),
+      }),
+    )
+    .max(100),
+});
 export const DesktopPath = z
   .string()
   .min(1)

@@ -7,13 +7,15 @@ import {
   DesktopPairRequest,
   DesktopPairSecret,
   DesktopPath,
+  DesktopRecoveryResponse,
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
+import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
 import { accountContext } from "../accounts/routes.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import type { Principal } from "../auth/principal.js";
+import { createRequireAdmin, type Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
 import { hashApiToken } from "../tokens/token-format.js";
@@ -23,10 +25,29 @@ import type { DesktopWrites } from "./writes.js";
 
 export function registerDesktopRoutes(
   groups: { public: AppHono; authed: AuthedHono; v2?: AppHono },
-  deps: DesktopDeps & { clientIp: (c: Context) => string; writes?: DesktopWrites },
+  deps: DesktopDeps & {
+    clientIp: (c: Context) => string;
+    writes?: DesktopWrites;
+    recovery?: Pick<DesktopEffectsRepo, "status">;
+  },
 ) {
   const base = DESKTOP_API.slice("/api/v1".length);
   const writes = deps.writes;
+  groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
+    c.header("Cache-Control", "no-store");
+    if (!deps.recovery)
+      throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
+    const pending = await deps.recovery.status();
+    return c.json(
+      DesktopRecoveryResponse.parse({
+        pending: pending.map((job) => ({
+          ...job,
+          createdAt: job.createdAt.toISOString(),
+          nextAttemptAt: job.nextAttemptAt.toISOString(),
+        })),
+      }),
+    );
+  });
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
