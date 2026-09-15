@@ -8,8 +8,10 @@ Search remains excluded.
 
 ## Safety boundary
 
-The user chose **storage-side enforcement, with no optimistic fallback**. Stock SFTPGo
-remains read-only. Qualified Apache DAV requires every writer to obey its exclusive locks.
+The user chose **storage-side enforcement** for the two leased modes, and later accepted a
+separate, weaker `verified-optimistic` contract for stock SFTPGo; see
+[STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md). Qualified Apache DAV requires every writer
+to obey its exclusive locks.
 The optional SFTPGo image fences local filesystem mutations across REST, SFTP, FTP and
 WebDAV in one process. Direct host writers, writable service mounts and multiple SFTPGo
 processes invalidate that qualification. Native virtual-folder identities and non-local
