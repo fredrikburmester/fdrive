@@ -277,13 +277,40 @@ def test_scan_lifecycle(db_conn: psycopg.Connection) -> None:
 def test_sweep_vanished_marks_untouched_rows_deleted(db_conn: psycopg.Connection) -> None:
     root_id = db.upsert_root(db_conn, "sftpgo")
     db.upsert_file(db_conn, root_id, "kept.txt", "kept.txt", ".txt", 1, 1, "sha1", None)
-    db.upsert_file(db_conn, root_id, "vanished.txt", "vanished.txt", ".txt", 1, 1, "sha2", None)
+    vanished_id = db.upsert_file(db_conn, root_id, "vanished.txt", "vanished.txt", ".txt", 1, 1, "sha2", None)
+    db.insert_chunks(db_conn, vanished_id, ["gone text"], [None])
     _scan_id, started_at = db.start_scan(db_conn, root_id)
-    deleted = db.sweep_vanished(db_conn, root_id, ["kept.txt"], started_at)
+    deleted = db.sweep_vanished(db_conn, root_id, {"vanished.txt"}, started_at)
     assert deleted == 1
     manifest = db.get_manifest(db_conn, root_id)
     assert manifest["kept.txt"][3] is None
     assert manifest["vanished.txt"][3] is not None
+    assert db.chunks_missing_embeddings(db_conn, root_id, "vanished.txt") == []
+
+
+def test_sweep_vanished_spares_rows_written_after_the_scan_started(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    db.upsert_file(db_conn, root_id, "old.txt", "old.txt", ".txt", 1, 1, "sha1", None)
+    _scan_id, started_at = db.start_scan(db_conn, root_id)
+    # The watcher recreated it after the walk passed its directory.
+    db.upsert_file(db_conn, root_id, "recreated.txt", "recreated.txt", ".txt", 1, 1, "sha2", None)
+    assert db.sweep_vanished(db_conn, root_id, {"old.txt", "recreated.txt", "never-indexed.txt"}, started_at) == 1
+    manifest = db.get_manifest(db_conn, root_id)
+    assert manifest["old.txt"][3] is not None
+    assert manifest["recreated.txt"][3] is None
+
+
+def test_sweep_vanished_counts_each_row_once_across_batches(
+    db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    for name in ("a.txt", "b.txt", "c.txt"):
+        db.upsert_file(db_conn, root_id, name, name, ".txt", 1, 1, name, None)
+    db.mark_deleted(db_conn, root_id, "c.txt", False)
+    _scan_id, started_at = db.start_scan(db_conn, root_id)
+    monkeypatch.setattr(db, "SWEEP_BATCH", 1)
+    assert db.sweep_vanished(db_conn, root_id, {"a.txt", "b.txt", "c.txt"}, started_at) == 2
+    assert db.sweep_vanished(db_conn, root_id, set(), started_at) == 0
 
 
 def test_read_settings(db_conn: psycopg.Connection) -> None:

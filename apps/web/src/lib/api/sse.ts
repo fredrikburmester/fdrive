@@ -2,7 +2,13 @@
 
 import { type JobStatus, SseEvent } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
-import { type QueryClient, type QueryKey, useQueryClient } from "@tanstack/react-query";
+import {
+  hashKey,
+  type InvalidateQueryFilters,
+  type QueryClient,
+  type QueryKey,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { accountTransition } from "../account/transition";
 import { archiveKeysToInvalidate } from "../archive/invalidation";
@@ -14,6 +20,11 @@ import { queryKeys } from "./keys";
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
+
+/** How long invalidation waits for more events in the same burst. */
+export const INVALIDATION_QUIET_MS = 250;
+/** The longest a steady stream of events can hold invalidation back. */
+export const INVALIDATION_MAX_WAIT_MS = 1000;
 
 /**
  * The SSE event names the API sends (one per `SseEvent` variant's own
@@ -112,17 +123,74 @@ export function parseSseMessage(data: string): SseEvent | undefined {
   return result.success ? result.data : undefined;
 }
 
-/** Invalidates every query key affected by `event`, via `keysToInvalidate`. */
-export function invalidateForEvent(queryClient: QueryClient, event: SseEvent): void {
-  for (const key of keysToInvalidate(event)) {
-    void queryClient.invalidateQueries({ queryKey: key });
+export interface InvalidationBatch {
+  add(keys: readonly QueryKey[]): void;
+  dispose(): void;
+}
+
+/**
+ * Applies the invalidations from a burst of events once per distinct key. An upload or
+ * an indexer scan sends one event per file, and invalidating on each one refetched the
+ * open listing and every stat and folder size that many times. Flushes wait for
+ * `INVALIDATION_QUIET_MS` of quiet, but never longer than `INVALIDATION_MAX_WAIT_MS`.
+ *
+ * A query that is already fetching is left to finish rather than cancelled: restarting
+ * it on every flush would starve a slow listing under a steady stream, and the server
+ * keeps doing the abandoned work anyway. Its response may predate the change, so it is
+ * invalidated again once that fetch settles.
+ */
+export function createInvalidationBatch(queryClient: QueryClient): InvalidationBatch {
+  const pending = new Map<string, InvalidateQueryFilters>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let firstQueuedAt: number | undefined;
+
+  function schedule(): void {
+    const now = Date.now();
+    firstQueuedAt ??= now;
+    if (timer !== undefined) clearTimeout(timer);
+    const delay = Math.min(INVALIDATION_QUIET_MS, firstQueuedAt + INVALIDATION_MAX_WAIT_MS - now);
+    timer = setTimeout(flush, Math.max(0, delay));
   }
+
+  function flush(): void {
+    timer = undefined;
+    firstQueuedAt = undefined;
+    const filters = [...pending.values()];
+    pending.clear();
+    // Check every filter before invalidating any: a refetch this flush starts is not one
+    // that may predate the change, even when a broader key matches the same query.
+    for (const filter of filters) {
+      for (const query of queryClient.getQueryCache().findAll(filter)) {
+        if (query.state.fetchStatus === "fetching") {
+          pending.set(query.queryHash, { queryKey: query.queryKey, exact: true });
+        }
+      }
+    }
+    for (const filter of filters) {
+      void queryClient.invalidateQueries(filter, { cancelRefetch: false });
+    }
+    if (pending.size > 0) schedule();
+  }
+
+  return {
+    add(keys) {
+      if (keys.length === 0) return;
+      for (const queryKey of keys) pending.set(hashKey(queryKey), { queryKey });
+      schedule();
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+      firstQueuedAt = undefined;
+      pending.clear();
+    },
+  };
 }
 
 /**
  * Opens a single `EventSource` to `ROUTES.events` for the lifetime of the
  * mounted component, parsing each message as an `SseEvent`, invalidating
- * the fs list queries it affects, and feeding `job` events into the jobs
+ * the fs list queries it affects in batches, and feeding `job` events into the jobs
  * store (defaulting to the app-wide `useJobsStore`; overridable so tests
  * never need to touch that global singleton). Reconnects with exponential
  * backoff (`nextBackoffMs`) on error, and closes the connection on unmount.
@@ -135,10 +203,12 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
     let source: EventSource | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
+    const invalidations = createInvalidationBatch(queryClient);
     const unsubscribe = accountTransition.subscribe(() => {
       if (accountTransition.getSnapshot().pending) {
         cancelled = true;
         source?.close();
+        invalidations.dispose();
         if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       }
     });
@@ -153,7 +223,7 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
           return;
         }
         backoffRef.current = undefined;
-        invalidateForEvent(queryClient, event);
+        invalidations.add(keysToInvalidate(event));
         applyJobEvent(jobsStore, event);
       }
 
@@ -181,6 +251,7 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
     return () => {
       cancelled = true;
       unsubscribe();
+      invalidations.dispose();
       source?.close();
       if (reconnectTimer !== undefined) {
         clearTimeout(reconnectTimer);
