@@ -138,6 +138,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     directoriesWithFiles: overrides.directoriesWithFiles ?? (async () => []),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
+    fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
     duplicates: overrides.duplicates ?? (async () => fail("duplicates")),
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),

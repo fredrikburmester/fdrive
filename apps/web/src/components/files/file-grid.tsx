@@ -74,6 +74,8 @@ export interface FileGridProps {
   /** Shows "Reveal in folder" for a virtual listing. */
   showReveal?: boolean;
   /** Hides archive actions for a virtual listing. */
+  /** Shows "Organize" in each row's context menu (see `FileContextMenu`). */
+  showOrganize?: boolean;
   hideArchive?: boolean;
   /** What the active login's storage can do, for every tile's context menu
    * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
@@ -158,6 +160,7 @@ export function FileGrid({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
+  showOrganize = false,
   capabilities = DEFAULT_CAPABILITIES,
   scrollRequest = null,
   onScrollConsumed,
@@ -366,6 +369,7 @@ export function FileGrid({
                         hideMoveCopy={hideMoveCopy}
                         showReveal={showReveal}
                         hideArchive={hideArchive}
+                        showOrganize={showOrganize}
                         tags={tags}
                         tagCheckState={(tagId) =>
                           computeTagCheckState(

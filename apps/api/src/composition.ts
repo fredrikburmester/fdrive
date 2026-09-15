@@ -24,13 +24,20 @@ import { registerAccountsRoutes } from "./accounts/routes.ts";
 import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
+import { createOrganizeRuns } from "./ai/organize/runs.ts";
+import { createOrganizeService } from "./ai/organize/service.ts";
+import { createAiModel } from "./ai/provider.ts";
+import { registerAiRoutes } from "./ai/routes.ts";
+import { createAiSettingsService, type ResolvedAiConfig } from "./ai/settings.ts";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
 import {
   createAuthModule,
   createLoginLimiter,
   createTokenSource,
+  open,
   parseMasterKey,
+  seal,
 } from "./auth/index.js";
 import {
   createIdentityStorageFactory,
@@ -56,6 +63,7 @@ import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import type { McpToolDeps } from "./mcp/handlers.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
@@ -671,6 +679,67 @@ export async function composeApp(
   });
   const subsystemReachability = () => cachedProbe();
 
+  const mcpToolDeps: McpToolDeps = {
+    indexQueries,
+    searchService,
+    scopeResolver,
+    identities: repos.identities,
+    publicUrl: () => publicUrl.current(),
+    indexerClient: indexerExtractClient,
+    writesEnabled: config.fdriveMcpWrites,
+    metadata: metadataService,
+    imageSearchService,
+    onMutation: async (principal, change) => {
+      try {
+        if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata)) {
+          await fsMetadata.onMoved(
+            principal.identityId,
+            change.path,
+            change.target ?? change.path,
+            change.isDir,
+          );
+        } else if (change.kind === "trash") {
+          await fsMetadata.onTrashed(principal.identityId, change.path, change.isDir);
+        } else if (change.kind === "copy") {
+          fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
+        }
+      } finally {
+        const kind =
+          change.kind === "trash" ? "delete" : change.kind === "restore" ? "move" : change.kind;
+        publishFsEvent(
+          { bus, clock },
+          principal,
+          kind,
+          [change.eventPath ?? change.path],
+          change.target === undefined ? undefined : [change.target],
+        );
+      }
+    },
+    clock,
+    trashPathForStorage: (storage) => {
+      const settings = trashSettingsForStorage(storage);
+      return settings?.enabled === true ? settings.path : null;
+    },
+  };
+  const aiSettings = createAiSettingsService({
+    settings: repos.settings,
+    secrets: {
+      seal: (bytes, context) => seal(master, bytes, context),
+      open: (bytes, context) => open(master, bytes, context),
+    },
+    eventLog,
+  });
+  const aiModelFor = (aiConfig: ResolvedAiConfig) => createAiModel(aiConfig, { fetch: fetchImpl });
+  const organizeService = createOrganizeService({
+    settings: aiSettings,
+    modelFor: aiModelFor,
+    runs: createOrganizeRuns({
+      clock,
+      onUnexpectedError: (error) => logger.warn({ err: error }, "organize run failed"),
+    }),
+    mcp: mcpToolDeps,
+  });
+
   const app = createApp({
     ...(config.fdriveBackupStateDir
       ? {
@@ -848,6 +917,11 @@ export async function composeApp(
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });
+      registerAiRoutes(groups, {
+        settings: aiSettings,
+        organize: organizeService,
+        modelFor: aiModelFor,
+      });
       registerEventRoutes(groups, { bus, clock });
       registerSearchRoutes(groups, {
         features: featureValues,
@@ -913,48 +987,7 @@ export async function composeApp(
     resolveToken: resolveTokenPrincipal,
     limiter: createLoginLimiter({ clock }),
     clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
-    toolDeps: {
-      indexQueries,
-      searchService,
-      scopeResolver,
-      identities: repos.identities,
-      publicUrl: () => publicUrl.current(),
-      indexerClient: indexerExtractClient,
-      writesEnabled: config.fdriveMcpWrites,
-      metadata: metadataService,
-      imageSearchService,
-      onMutation: async (principal, change) => {
-        try {
-          if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata)) {
-            await fsMetadata.onMoved(
-              principal.identityId,
-              change.path,
-              change.target ?? change.path,
-              change.isDir,
-            );
-          } else if (change.kind === "trash") {
-            await fsMetadata.onTrashed(principal.identityId, change.path, change.isDir);
-          } else if (change.kind === "copy") {
-            fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
-          }
-        } finally {
-          const kind =
-            change.kind === "trash" ? "delete" : change.kind === "restore" ? "move" : change.kind;
-          publishFsEvent(
-            { bus, clock },
-            principal,
-            kind,
-            [change.eventPath ?? change.path],
-            change.target === undefined ? undefined : [change.target],
-          );
-        }
-      },
-      clock,
-      trashPathForStorage: (storage) => {
-        const settings = trashSettingsForStorage(storage);
-        return settings?.enabled === true ? settings.path : null;
-      },
-    },
+    toolDeps: mcpToolDeps,
   });
 
   desktopEffectsWorker.start();

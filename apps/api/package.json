@@ -25,6 +25,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@fdrive/contracts": "workspace:*",
     "@fdrive/core": "workspace:*",
     "@fdrive/db": "workspace:*",

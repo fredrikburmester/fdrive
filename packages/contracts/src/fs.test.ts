@@ -16,6 +16,8 @@ import {
   isValidEntryName,
   ListResponse,
   MkdirRequest,
+  MoveManyRequest,
+  MoveManyResponse,
   MoveRequest,
   OkResponse,
   PathQuery,
@@ -155,6 +157,37 @@ describe("MkdirRequest", () => {
 
   it("rejects a missing path", () => {
     expect(MkdirRequest.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("MoveManyRequest", () => {
+  it("accepts up to 1000 moves with an optional createParents flag", () => {
+    const items = Array.from({ length: 1000 }, (_, index) => ({
+      path: `/a/${index}`,
+      target: `/b/${index}`,
+    }));
+    expect(MoveManyRequest.safeParse({ items, createParents: true }).success).toBe(true);
+    expect(MoveManyRequest.safeParse({ items: [...items, items[0]] }).success).toBe(false);
+    expect(MoveManyRequest.safeParse({ items: [] }).success).toBe(false);
+    expect(MoveManyRequest.safeParse({ items: [items[0]], extra: 1 }).success).toBe(false);
+  });
+
+  it("reports each outcome, with an error only on failures", () => {
+    const response = {
+      results: [
+        { ok: true, path: "/a", target: "/b/a" },
+        {
+          ok: false,
+          path: "/c",
+          target: "/b/c",
+          error: { kind: "conflict", message: "something already exists at /b/c" },
+        },
+      ],
+    };
+    expect(MoveManyResponse.parse(response)).toEqual(response);
+    expect(
+      MoveManyResponse.safeParse({ results: [{ ok: false, path: "/c", target: "/d" }] }).success,
+    ).toBe(false);
   });
 });
 

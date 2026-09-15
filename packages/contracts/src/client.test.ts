@@ -1778,3 +1778,69 @@ it("reads the typed public health route", async () => {
   expect(await createApiClient({ fetch }).health()).toEqual(response);
   expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/health");
 });
+
+describe("AI client", () => {
+  it("reads, updates and tests the administrator's AI settings", async () => {
+    const response = {
+      configuration: {
+        revision: 1,
+        enabled: true,
+        provider: "anthropic" as const,
+        model: "claude-opus-5",
+        baseUrl: null,
+        hasApiKey: true,
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (url) =>
+      Response.json(String(url).endsWith("/test") ? { ok: true, message: "Connected." } : response),
+    );
+    const client = createApiClient({ fetch: fetchMock });
+    expect(await client.systemAi()).toEqual(response);
+    const { hasApiKey: _hasApiKey, ...input } = response.configuration;
+    expect(await client.systemUpdateAi({ ...input, apiKey: "sk-ant" })).toEqual(response);
+    expect(await client.systemTestAi()).toEqual({ ok: true, message: "Connected." });
+    expect(fetchMock.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+      ["/api/v1/system/ai", "GET"],
+      ["/api/v1/system/ai", "PUT"],
+      ["/api/v1/system/ai/test", "POST"],
+    ]);
+  });
+
+  it("starts, polls and cancels organize runs and applies moves", async () => {
+    const run = {
+      id: "run 1",
+      state: "running" as const,
+      createdAt: "2026-09-15T10:00:00.000Z",
+      updatedAt: "2026-09-15T10:00:00.000Z",
+      itemCount: 1,
+      activity: [],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/status"))
+        return Response.json({ available: true, provider: "anthropic" });
+      if (path.endsWith("/move-many"))
+        return Response.json({ results: [{ ok: true, path: "/a", target: "/b/a" }] });
+      return Response.json(run);
+    });
+    const client = createApiClient({ fetch: fetchMock });
+    expect(await client.aiStatus()).toEqual({ available: true, provider: "anthropic" });
+    expect(await client.startOrganize({ paths: ["/a"] })).toEqual(run);
+    expect(await client.organizeRun(run.id)).toEqual(run);
+    expect(await client.cancelOrganize(run.id)).toEqual(run);
+    expect(
+      await client.moveMany({ items: [{ path: "/a", target: "/b/a" }], createParents: true }),
+    ).toEqual({ results: [{ ok: true, path: "/a", target: "/b/a" }] });
+    expect(fetchMock.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+      ["/api/v1/ai/status", "GET"],
+      ["/api/v1/ai/organize", "POST"],
+      ["/api/v1/ai/organize/run%201", "GET"],
+      ["/api/v1/ai/organize/run%201/cancel", "POST"],
+      ["/api/v1/fs/move-many", "POST"],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toEqual({
+      items: [{ path: "/a", target: "/b/a" }],
+      createParents: true,
+    });
+  });
+});

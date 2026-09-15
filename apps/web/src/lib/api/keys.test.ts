@@ -10,6 +10,11 @@ describe("queryKeys", () => {
       "/photos",
     ]);
   });
+  it("AI keys separate status, one run per id, and the admin settings", () => {
+    expect(queryKeys.ai.status()).toEqual(["ai", "status"]);
+    expect(queryKeys.ai.run("run-1")).toEqual(["ai", "organize", "run-1"]);
+    expect(queryKeys.system.ai()).toEqual(["system", "ai"]);
+  });
   it("auth.me() builds a stable key", () => {
     expect(queryKeys.auth.me()).toEqual(["auth", "me"]);
   });

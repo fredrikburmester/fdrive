@@ -52,3 +52,5 @@ or necessarily purge previously cached results. A rule-preview UI remains in the
 - [Image embedding service](../services/image-embed/README.md): model, bounded HTTP contract
   and model-free unit-test setup.
 - [Scoping](SCOPING.md): mapping and authorization requirements for every consumer.
+- [AI organize](AI.md): the language-model feature, which reads index excerpts but runs no
+  local model.

@@ -8,6 +8,8 @@ import {
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
+  organizeRunCancelRoute,
+  organizeRunRoute,
   ROUTES,
   systemLogsRoute,
   tagFilesRoute,
@@ -32,6 +34,7 @@ describe("ROUTES", () => {
       upload: "/api/v1/fs/upload",
       mkdir: "/api/v1/fs/mkdir",
       move: "/api/v1/fs/move",
+      moveMany: "/api/v1/fs/move-many",
       copy: "/api/v1/fs/copy",
       rename: "/api/v1/fs/rename",
       delete: "/api/v1/fs/delete",
@@ -118,6 +121,8 @@ describe("ROUTES", () => {
       features: "/api/v1/system/features",
       publicUrl: "/api/v1/system/public-url",
       office: "/api/v1/system/office",
+      ai: "/api/v1/system/ai",
+      aiTest: "/api/v1/system/ai/test",
       trash: "/api/v1/system/trash",
       mountMappings: "/api/v1/system/mount-mappings",
       indexer: "/api/v1/system/indexer",
@@ -161,6 +166,17 @@ describe("jobRoute", () => {
 
   it("url-encodes the id", () => {
     expect(jobRoute("a/b")).toBe("/api/v1/fs/jobs/a%2Fb");
+  });
+});
+
+describe("AI routes", () => {
+  it("defines the AI routes and encodes organize run ids", () => {
+    expect(ROUTES.ai).toEqual({
+      status: "/api/v1/ai/status",
+      organize: "/api/v1/ai/organize",
+    });
+    expect(organizeRunRoute("run/1")).toBe("/api/v1/ai/organize/run%2F1");
+    expect(organizeRunCancelRoute("run-1")).toBe("/api/v1/ai/organize/run-1/cancel");
   });
 });
 
