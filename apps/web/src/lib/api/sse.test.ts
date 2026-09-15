@@ -274,6 +274,43 @@ describe("createInvalidationBatch", () => {
     unsubscribe();
   });
 
+  it("refetches a query once when a broader key covers it in the same flush", async () => {
+    vi.useRealTimers();
+    const queryClient = new QueryClient();
+    let fetches = 0;
+    const releases: Array<() => void> = [];
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ["fs", "stat", "/a/b.txt"],
+      queryFn: () => {
+        const fetch = ++fetches;
+        return new Promise<string>((resolve) => releases.push(() => resolve(`stat ${fetch}`)));
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    const batch = createInvalidationBatch(queryClient);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, INVALIDATION_QUIET_MS + 50));
+    releases[0]?.();
+    await settle();
+    void observer.refetch();
+
+    // The first flush finds the stat refetching and holds it back for another pass.
+    batch.add([["fs", "stat"]]);
+    await settle();
+    expect(fetches).toBe(2);
+
+    // The next event's prefix and that held-back entry now reach the same flush.
+    batch.add([["fs", "stat"]]);
+    releases[1]?.();
+    await settle();
+    expect(fetches).toBe(3);
+
+    releases[2]?.();
+    await settle();
+    expect(fetches).toBe(3);
+    batch.dispose();
+    unsubscribe();
+  });
+
   it("drops pending invalidations when disposed", () => {
     const queryClient = new QueryClient();
     const spy = vi.spyOn(queryClient, "invalidateQueries");

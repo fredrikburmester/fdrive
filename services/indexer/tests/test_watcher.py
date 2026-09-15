@@ -333,6 +333,33 @@ def test_flush_submits_a_queued_path_once(watcher_module: object, tmp_path: Path
     assert [rel for _abs, rel in rec.indexed] == ["busy.pdf", "a.txt", "busy.pdf"]
 
 
+def test_stopping_ends_the_activity_of_jobs_that_never_started(watcher_module: object, tmp_path: Path) -> None:
+    rec = BlockingRecorder({"slow.pdf"})
+    finished: list[tuple[str, str]] = []
+
+    def on_queue(abs_path: str) -> object:
+        return lambda result: finished.append((os.path.relpath(abs_path, tmp_path), str(result)))
+
+    w = watcher_module.Watcher(
+        str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename, workers=1, debounce=0.0,
+        on_queue=on_queue,
+    )
+    w.start()
+    try:
+        (tmp_path / "slow.pdf").write_text("slow")
+        assert _wait_until(lambda: rec.started == ["slow.pdf"])
+        for name in ("a.txt", "b.txt"):
+            (tmp_path / name).write_text(name)
+        assert _wait_until(lambda: w._queued == {"a.txt", "b.txt"})
+    finally:
+        w.stop()
+        rec.release.set()
+    assert _wait_until(
+        lambda: sorted(finished) == [("a.txt", "cancelled"), ("b.txt", "cancelled"), ("slow.pdf", "indexed")]
+    )
+    assert [rel for _abs, rel in rec.indexed] == ["slow.pdf"]
+
+
 def test_rename_rechecks_the_new_path_of_a_file_still_being_indexed(watcher_module: object, tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
 

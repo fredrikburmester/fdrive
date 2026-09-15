@@ -157,12 +157,16 @@ export function createInvalidationBatch(queryClient: QueryClient): InvalidationB
     firstQueuedAt = undefined;
     const filters = [...pending.values()];
     pending.clear();
+    // Check every filter before invalidating any: a refetch this flush starts is not one
+    // that may predate the change, even when a broader key matches the same query.
     for (const filter of filters) {
       for (const query of queryClient.getQueryCache().findAll(filter)) {
         if (query.state.fetchStatus === "fetching") {
           pending.set(query.queryHash, { queryKey: query.queryKey, exact: true });
         }
       }
+    }
+    for (const filter of filters) {
       void queryClient.invalidateQueries(filter, { cancelRefetch: false });
     }
     if (pending.size > 0) schedule();

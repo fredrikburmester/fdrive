@@ -346,7 +346,10 @@ class Watcher:
 
         def done(future: Future[str]) -> None:
             nonlocal remaining
-            result = "error" if future.cancelled() or future.exception() is not None else future.result()
+            if future.cancelled():
+                result = "cancelled"
+            else:
+                result = "error" if future.exception() is not None else future.result()
             with lock:
                 tally[result] += 1
                 remaining -= 1
@@ -390,14 +393,21 @@ class Watcher:
                         del self._running[rel]
                 if finish is not None:
                     finish(result)
+        def cancelled(future: Future[str]) -> None:
+            # Stopping the watcher cancels jobs that never started; their activity still has to end.
+            if future.cancelled() and finish is not None:
+                finish("cancelled")
+
         try:
-            return pool.submit(run)
+            future = pool.submit(run)
         except Exception:
             with self._mu:
                 self._queued.discard(rel)
             if finish is not None:
                 finish("error")
             raise
+        future.add_done_callback(cancelled)
+        return future
 
     def _index(self, abs_path: str) -> str:
         rel = os.path.relpath(abs_path, self.root)
