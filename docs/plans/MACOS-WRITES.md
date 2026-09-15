@@ -4,7 +4,6 @@ Updated 2026-09-14. Apache DAV native writes merged in PR #21. The optional pinn
 SFTPGo integration merged in PR #22; full beta
 qualification remains open. Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
 Storage requirements: [SFTPGo enforcement](../../integrations/sftpgo/README.md).
-Delivery evidence: [handoff](../workflow/STATUS.md) and [history](../workflow/STATUS-history.md).
 Search remains excluded.
 
 ## Safety boundary
@@ -80,11 +79,12 @@ Do not promise support for arbitrary package documents or live databases.
   attributes and package documents. Publish specific compatibility limits for editors/packages
   that cannot meet their save semantics; no claim that an arbitrary live database is supported.
 
-Use `tools/orchestration/verify.sh` for `application`, `integration`, affected `browser` tests
-(including desktop approval) and `workflow`; use the merged `verify-macos.sh` for Swift tests
-and native builds. Focus tests on recovery/state transitions and real backend behavior. Signed
-Finder/editor tests supplement unit and API tests. Documentation-only planning runs `workflow`;
-it does not establish that any native write or backend guarantee already works.
+Run the application, integration and affected browser checks from [AGENTS.md](../../AGENTS.md)
+(including desktop approval), and the Swift tests and native builds from
+[macOS](../MACOS.md#build-and-verify). Focus tests on recovery/state transitions and real
+backend behavior. Signed Finder/editor tests supplement unit and API tests.
+Documentation-only planning does not establish that any native write or backend guarantee
+already works.
 
 Apple API basis: [createItem](https://developer.apple.com/documentation/fileprovider/nsfileproviderreplicatedextension/createitem%28basedon%3Afields%3Acontents%3Aoptions%3Arequest%3Acompletionhandler%3A%29),
 [modifyItem](https://developer.apple.com/documentation/fileprovider/nsfileproviderreplicatedextension/modifyitem%28_%3Abaseversion%3Achangedfields%3Acontents%3Aoptions%3Arequest%3Acompletionhandler%3A%29),

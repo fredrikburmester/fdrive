@@ -281,7 +281,7 @@ describe("compose interpolation", () => {
   // deploy/.env feeds every compose file update.sh passes to docker compose,
   // so a `${FDRIVE_*}` reference in one of them is a key an operator is meant
   // to set there and preflight.sh must accept it. compose.dev.yaml is left
-  // out: tools/orchestration drives it, not deploy/.env.
+  // out: `pnpm dev:env` drives it, not deploy/.env.
   const composeFiles = [
     "compose.yaml",
     "compose.arm64.yaml",

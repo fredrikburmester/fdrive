@@ -195,14 +195,21 @@ writes, resource forks and cross-domain move guarantees are not supported. The c
 ## Build and verify
 
 Use Xcode 26+ with its command-line tools selected. The checked-in Xcode project needs no
-generator dependencies for normal builds. From a prepared checkout:
+generator dependencies for normal builds. From the repository root:
 
 ```sh
-# Shared Swift tests plus unsigned app/extension build:
-bash tools/orchestration/verify-macos.sh "$PWD"
+# Shared Swift tests:
+swift test --package-path apps/macos --scratch-path .fdrive-workflow/swift-build
+
+# Unsigned app/extension build:
+xcodebuild -project apps/macos/fdrive.xcodeproj -scheme fdrive -configuration Debug \
+  -derivedDataPath .fdrive-workflow/macos-build-unsigned -destination 'platform=macOS,arch=arm64' \
+  build CODE_SIGNING_ALLOWED=NO
 
 # Development-signed build using your Xcode signing account/team:
-bash tools/orchestration/verify-macos.sh "$PWD" YOUR_TEAM_ID
+xcodebuild -project apps/macos/fdrive.xcodeproj -scheme fdrive -configuration Debug \
+  -derivedDataPath .fdrive-workflow/macos-build-YOUR_TEAM_ID -destination 'platform=macOS,arch=arm64' \
+  build DEVELOPMENT_TEAM=YOUR_TEAM_ID -allowProvisioningUpdates
 ```
 
 The signed app is under
@@ -211,10 +218,10 @@ Open it through Xcode or Finder. Automatic signing may access your configured de
 account. Unsigned builds cannot establish real File Provider signing/permission behavior.
 
 The generator is `tools/macos/generate-project.rb` (Ruby gem `xcodeproj` 1.27.0).
-Regenerate through `run-in-checkout.sh --lock` only when changing project structure/settings.
+Regenerate it only when changing project structure/settings.
 The app and menu-bar icons reuse `apps/web/src/app/icon.svg`. The generated asset catalog
 is checked in, so Xcode builds need no image tooling. After updating the web icon, regenerate
-the macOS sizes with `bash tools/orchestration/run-in-checkout.sh "$PWD" --lock -- node tools/macos/generate-icons.mjs`
+the macOS sizes with `node tools/macos/generate-icons.mjs`
 in a checkout prepared with `pnpm install`.
 Both targets use the same team and:
 
@@ -233,9 +240,9 @@ extension, causing Finder's generic loading error. See
 Credentials use the shared Data Protection Keychain with AfterFirstUnlockThisDeviceOnly.
 
 The **macOS native** GitHub workflow is manual to preserve the repository's Actions budget.
-It builds unsigned and runs Swift tests. Backend work still requires `application` and
-`integration`, browser pairing requires `browser desktop.spec.ts` and live UI inspection,
-and docs/tools require `workflow`. Native checks supplement these gates.
+It builds unsigned and runs Swift tests. Backend work still requires the application and
+integration checks, and browser pairing requires `pnpm test:e2e e2e/desktop.spec.ts` and live
+UI inspection. Native checks supplement these gates.
 
 For distribution, archive the Release scheme with Developer ID signing in Xcode, export via
 Developer ID distribution, notarize and staple. Keep the same identifiers and groups for

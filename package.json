@@ -8,6 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "bootstrap": "pnpm install --frozen-lockfile && pnpm --filter \"@fdrive/db...\" run build && pnpm install --frozen-lockfile",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "turbo run typecheck && pnpm typecheck:tools",
@@ -25,8 +26,6 @@
     "perf": "tsx --conditions=development tools/perf/run.ts",
     "perf:quick": "tsx --conditions=development tools/perf/run.ts --quick",
     "test:tools": "vitest run --config tools/perf/vitest.config.ts && pnpm test:office:tools && pnpm test:deploy:tools && pnpm test:dev:tools",
-    "test:indexer": "bash tools/orchestration/verify.sh . python indexer",
-    "test:ocr": "bash tools/orchestration/verify.sh . python ocr",
     "test:office:tools": "vitest run --config tools/office/vitest.config.ts",
     "test:office:coverage": "vitest run --coverage --config tools/office/vitest.config.ts",
     "test:e2e:office": "pnpm --filter @fdrive/web test:e2e:office",
