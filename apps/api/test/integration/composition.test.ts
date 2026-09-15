@@ -145,11 +145,7 @@ describe("composeApp", () => {
         await storageDb.db.execute(sql`update app.providers set enabled = false`);
         const about = await composed.app.request("/api/v1/about");
         expect(about.status).toBe(200);
-        expect(await about.json()).toMatchObject({
-          setupRequired: false,
-          providers: [],
-          builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
-        });
+        expect(await about.json()).toMatchObject({ setupRequired: false, providers: [] });
       } finally {
         await storageDb.db.execute(sql`update app.providers set enabled = true`);
         await storageDb.close();

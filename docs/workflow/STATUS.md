@@ -1,9 +1,29 @@
 # Current handoff
 
-Updated: 2026-09-14. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-15. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
+
+## About attribution removed: "Built on SFTPGo." dropped
+
+- Branch `refactor/remove-sftpgo-attribution` off `main`, opened as a PR; the OCR-originals and
+  backups WIP in the main checkout stays out of that commit.
+- With several data sources supported, the About page no longer credits any upstream project:
+  `attribution` is gone from `ProviderModule`, `builtOn` from `AboutResponse` and the `/about`
+  handler, and `ConnectionStatus.configuredProviderTypes` with it (it existed only to feed
+  attribution from disabled providers). The factual "Connected to <provider> at <host>." line
+  and the AGPL licence line stay.
+- Licence check: stock SFTPGo runs as an external service over REST, unmodified and not
+  distributed by fdrive, so the AGPL notice terms the old docstrings cited do not reach the web
+  UI. The optional `integrations/sftpgo` image does carry AGPL modifications; its notice and
+  source-offer duties stay where they are, in that image and its README.
+- Verified: `pnpm typecheck` clean; `pnpm test` 6574 passed with one unrelated timeout in
+  `apps/api/src/backups/recovery.test.ts` that passes on its own (known full-suite flake);
+  `integration` and `browser e2e/about.spec.ts` passed; `workflow` passed every gate but lint.
+- Lint blocker is not from this change: `pnpm lint` fails only on two untracked non-source
+  files, `.claude/launch.json` and `.playwright-mcp/rehearsal.json`. `biome check apps packages`
+  is clean. `.playwright-mcp/` looks like it wants a gitignore entry.
 
 ## Installation backups: implemented, final gates in progress
 

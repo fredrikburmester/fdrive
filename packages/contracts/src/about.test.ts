@@ -4,7 +4,6 @@ import { AboutResponse } from "./about";
 describe("AboutResponse", () => {
   const valid = {
     version: "1.0.0",
-    builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
     providers: [{ type: "sftpgo", label: "localhost:8080" }],
     setupRequired: false,
   };
@@ -20,18 +19,13 @@ describe("AboutResponse", () => {
   });
 
   it("parses a payload with no providers and setupRequired true", () => {
-    const payload = { ...valid, builtOn: [], providers: [], setupRequired: true };
+    const payload = { ...valid, providers: [], setupRequired: true };
     expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 
   it("parses a payload where setup is complete but the caller is anonymous (null label)", () => {
     const payload = { ...valid, providers: [{ type: "sftpgo" as const, label: null }] };
     expect(AboutResponse.parse(payload)).toEqual(payload);
-  });
-
-  it("rejects a non-url sourceUrl", () => {
-    const payload = { ...valid, builtOn: [{ name: "SFTPGo", sourceUrl: "not-a-url" }] };
-    expect(AboutResponse.safeParse(payload).success).toBe(false);
   });
 
   it("rejects a missing version", () => {

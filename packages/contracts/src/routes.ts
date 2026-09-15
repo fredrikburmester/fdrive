@@ -113,7 +113,7 @@ export const ROUTES = {
     /** POST: permanently delete every entry -> `OkResponse`. */
     empty: "/api/v1/trash/empty",
   },
-  /** GET: version and provider attribution -> `AboutResponse`. */
+  /** GET: version and configured providers -> `AboutResponse`. */
   about: "/api/v1/about",
   /** GET, public: the enabled providers and their credential forms -> `ProvidersResponse`. */
   providers: "/api/v1/providers",

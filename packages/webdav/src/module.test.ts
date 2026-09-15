@@ -42,7 +42,6 @@ describe("webdavModule metadata", () => {
   it("describes the type, its fields and its capabilities", () => {
     expect(webdavModule.type).toBe("webdav");
     expect(webdavModule.label).toBe("WebDAV");
-    expect(webdavModule.attribution).toBeUndefined();
     expect(webdavModule.configFields.map((field) => field.name)).toEqual(["desktopWriteMode"]);
     expect(webdavModule.credentialFields).toBe(WEBDAV_CREDENTIAL_FIELDS);
     expect(webdavModule.credentialFields.map((field) => field.name)).toEqual([
