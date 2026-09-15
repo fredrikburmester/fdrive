@@ -6,7 +6,6 @@ logged and never raised, per the plan: one bad file must never fail the scan.
 
 from __future__ import annotations
 
-import functools
 import os
 import subprocess
 import tempfile
@@ -34,16 +33,6 @@ def _save_webp(image: object, dest: str, size: int) -> tuple[int, int]:
     return w, h
 
 
-@functools.cache
-def _allow_large_png_metadata() -> None:
-    """Pillow rejects a PNG whose compressed text or ICC chunk inflates past 1 MiB, which
-    ordinary files in real libraries exceed. Each chunk stays capped at the 64 MiB Pillow
-    already allows for all of a file's text together."""
-    from PIL import PngImagePlugin
-
-    PngImagePlugin.MAX_TEXT_CHUNK = PngImagePlugin.MAX_TEXT_MEMORY
-
-
 def _open_reduced_jpeg(abs_path: str) -> ImageFile.ImageFile | None:
     """Pillow refuses sources over its pixel limit while opening, before a JPEG can be told
     to decode at a reduced DCT scale, so camera panoramas fail. Reopen a JPEG directly,
@@ -67,9 +56,10 @@ def _open_image(abs_path: str) -> object:
     from PIL import Image, ImageOps
 
     from .heif import register_heif_opener
+    from .png import allow_large_png_metadata
 
     register_heif_opener()
-    _allow_large_png_metadata()
+    allow_large_png_metadata()
     try:
         opened = Image.open(abs_path)
     except Image.DecompressionBombError:

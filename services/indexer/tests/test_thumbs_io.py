@@ -329,9 +329,10 @@ def test_generate_image_still_over_pixel_limit_fails(tmp_path: Path, monkeypatch
         assert len(errors) == 1 and errors[0].startswith("DecompressionBombError"), src
 
 
-def test_generate_png_with_large_compressed_metadata(tmp_path: Path) -> None:
-    from PIL import Image, PngImagePlugin
+def test_generate_png_with_large_compressed_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image, ImageFile, PngImagePlugin
 
+    monkeypatch.setattr(PngImagePlugin, "MAX_TEXT_CHUNK", ImageFile.SAFEBLOCK)  # Pillow's default
     src = tmp_path / "icon.png"
     info = PngImagePlugin.PngInfo()
     info.add_text("XML:com.adobe.xmp", "x" * (4 * 1024 * 1024), zip=True)
