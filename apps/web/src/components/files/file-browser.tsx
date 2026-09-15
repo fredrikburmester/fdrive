@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { OrganizeSheet } from "@/components/ai/organize-sheet";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
 import { useUploadReveal } from "@/components/files/use-upload-reveal";
 import { Inspector } from "@/components/inspector/inspector";
@@ -26,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
 import { accountTransition } from "@/lib/account/transition";
+import { useAiStatus } from "@/lib/ai/queries";
 import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import {
@@ -175,6 +177,9 @@ export function FileBrowser({
   const router = useRouter();
   const { data: me } = useMe();
   const { data: officeStatus } = useOfficeStatus();
+  const { data: aiStatus } = useAiStatus();
+  const organizeAvailable = aiStatus?.available === true;
+  const [organizeEntries, setOrganizeEntries] = useState<FsEntry[] | null>(null);
   const [officeKind, setOfficeKind] = useState<OfficeDocumentKind | null>(null);
   const [officePending, setOfficePending] = useState(false);
   const [officeError, setOfficeError] = useState<string | null>(null);
@@ -547,6 +552,9 @@ export function FileBrowser({
       case "copyTo":
         setDestinationPicker({ mode: "copy", paths: pathsForAction(entry) });
         break;
+      case "organize":
+        if (organizeAvailable) setOrganizeEntries(entriesForAction(entry));
+        break;
       case "delete":
         setDeleteTargets(entriesForAction(entry));
         break;
@@ -876,6 +884,11 @@ export function FileBrowser({
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
+            onOrganizeSelection={
+              organizeAvailable && selectedEntries.length > 0
+                ? () => setOrganizeEntries(selectedEntries)
+                : undefined
+            }
             onDownloadSelection={handleDownloadSelection}
             showThumbnails={showThumbnails && capabilities.index}
             onShowThumbnailsChange={setShowThumbnails}
@@ -937,6 +950,7 @@ export function FileBrowser({
                 onEntryDoubleClick={handleOpen}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
+                showOrganize={organizeAvailable}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -959,6 +973,7 @@ export function FileBrowser({
                 onEntryDoubleClick={handleOpen}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
+                showOrganize={organizeAvailable}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -981,6 +996,7 @@ export function FileBrowser({
                 onEntryDoubleClick={handleOpen}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
+                showOrganize={organizeAvailable}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -1023,6 +1039,12 @@ export function FileBrowser({
         />
       )}
       {sharing && <ShareDialog entries={sharing} onClose={() => setSharing(null)} />}
+      <OrganizeSheet
+        entries={organizeEntries}
+        provider={aiStatus?.provider ?? null}
+        onClose={() => setOrganizeEntries(null)}
+        onMoved={() => dispatchSelection({ type: "clear" })}
+      />
       <NewFolderDialog
         open={newFolderOpen}
         onOpenChange={setNewFolderOpen}

@@ -578,6 +578,29 @@ describe("index-queries", () => {
     });
   });
 
+  describe("fileTextPrefix", () => {
+    it("joins one file's chunks in order and cuts at the limit", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/scan.pdf");
+      const other = await insertFile(rootId, "alice/other.pdf");
+      await insertChunk(file.id, 1, "second part");
+      await insertChunk(file.id, 0, "first part");
+      await insertChunk(other.id, 0, "not this file");
+
+      expect(await queries.fileTextPrefix(file.id, 100)).toBe("first part\nsecond part");
+      expect(await queries.fileTextPrefix(file.id, 5)).toBe("first");
+    });
+
+    it("returns an empty string for a file without text or a zero limit", async () => {
+      const rootId = await insertRoot("primary");
+      const file = await insertFile(rootId, "alice/photo.jpg");
+      await insertChunk(file.id, 0, "caption");
+
+      expect(await queries.fileTextPrefix(file.id + 1000, 100)).toBe("");
+      expect(await queries.fileTextPrefix(file.id, 0)).toBe("");
+    });
+  });
+
   describe("statsForFileIds", () => {
     it("counts chunks only for the given file ids, ignoring other files in scope", async () => {
       const rootId = await insertRoot("primary");

@@ -14,6 +14,8 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - The Python indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
   OCR may write to mounted originals. Browser file operations use provider credentials.
   See [indexer](INDEXER.md), [OCR](OCR.md) and [search](SEARCH-AND-AI.md).
+- Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
+  tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
 - SFTPGo and WebDAV storage adapters ship. SFTPGo stays independently administered;
   fdrive does not need WebAdmin access or read its database. The bundled SFTPGo overlay is opt-in.
 

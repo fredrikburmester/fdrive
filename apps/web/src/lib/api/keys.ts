@@ -30,6 +30,7 @@ export const queryKeys = {
     activity: () => ["system", "activity"] as const,
     publicUrl: () => ["system", "public-url"] as const,
     office: () => ["system", "office"] as const,
+    ai: () => ["system", "ai"] as const,
     trash: () => ["system", "trash"] as const,
     features: () => ["system", "features"] as const,
     indexer: () => ["system", "indexer"] as const,
@@ -58,6 +59,10 @@ export const queryKeys = {
   },
   recents: {
     list: () => ["recents", "list"] as const,
+  },
+  ai: {
+    status: () => ["ai", "status"] as const,
+    run: (id: string) => ["ai", "organize", id] as const,
   },
   trash: {
     status: () => ["trash", "status"] as const,

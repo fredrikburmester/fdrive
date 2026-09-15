@@ -7,6 +7,14 @@ import {
   type UnlinkIdentityRequest,
 } from "./accounts.ts";
 import { SystemActivityResponse } from "./activity.ts";
+import {
+  AiConnectionTestResponse,
+  type AiSettingsUpdateRequest,
+  AiStatusResponse,
+  type OrganizeRequest,
+  OrganizeRun,
+  SystemAiResponse,
+} from "./ai.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { DESKTOP_API, DesktopPairInfo } from "./desktop.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
@@ -20,6 +28,8 @@ import {
   FolderSizeResponse,
   type FsEntry,
   ListResponse,
+  type MoveManyRequest,
+  MoveManyResponse,
   OkResponse,
 } from "./fs.ts";
 import { HealthResponse } from "./health.ts";
@@ -75,6 +85,8 @@ import {
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
+  organizeRunCancelRoute,
+  organizeRunRoute,
   publicShareRoute,
   ROUTES,
   shareRoute,
@@ -218,6 +230,15 @@ export interface ApiClient {
   systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings>;
   systemOffice(): Promise<SystemOfficeResponse>;
   systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse>;
+  systemAi(): Promise<SystemAiResponse>;
+  systemUpdateAi(input: AiSettingsUpdateRequest): Promise<SystemAiResponse>;
+  /** Admin only: one short request against the saved AI settings. */
+  systemTestAi(): Promise<AiConnectionTestResponse>;
+  aiStatus(): Promise<AiStatusResponse>;
+  /** Starts an organize run; poll `organizeRun` until it leaves `running`. Nothing moves. */
+  startOrganize(req: OrganizeRequest): Promise<OrganizeRun>;
+  organizeRun(id: string): Promise<OrganizeRun>;
+  cancelOrganize(id: string): Promise<OrganizeRun>;
   systemTrash(): Promise<TrashSettings>;
   systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
   listShares(): Promise<SharesResponse>;
@@ -266,6 +287,8 @@ export interface ApiClient {
   stat(path: string, signal?: AbortSignal): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
   move(path: string, target: string): Promise<FsEntry>;
+  /** Moves each item in order and reports every outcome; a failed item does not stop the rest. */
+  moveMany(req: MoveManyRequest): Promise<MoveManyResponse>;
   copy(path: string, target: string): Promise<FsEntry>;
   rename(path: string, newName: string): Promise<FsEntry>;
   remove(items: DeleteRequest["items"]): Promise<OkResponse>;
@@ -671,6 +694,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(ROUTES.fs.move, EntryResponse, { jsonBody: { path, target } });
     },
 
+    moveMany(req: MoveManyRequest): Promise<MoveManyResponse> {
+      return post(ROUTES.fs.moveMany, MoveManyResponse, { jsonBody: req });
+    },
+
     copy(path: string, target: string): Promise<FsEntry> {
       return post(ROUTES.fs.copy, EntryResponse, { jsonBody: { path, target } });
     },
@@ -841,6 +868,27 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse> {
       return put(ROUTES.system.office, SystemOfficeResponse, { jsonBody: input });
+    },
+    systemAi(): Promise<SystemAiResponse> {
+      return get(ROUTES.system.ai, SystemAiResponse);
+    },
+    systemUpdateAi(input: AiSettingsUpdateRequest): Promise<SystemAiResponse> {
+      return put(ROUTES.system.ai, SystemAiResponse, { jsonBody: input });
+    },
+    systemTestAi(): Promise<AiConnectionTestResponse> {
+      return post(ROUTES.system.aiTest, AiConnectionTestResponse);
+    },
+    aiStatus(): Promise<AiStatusResponse> {
+      return get(ROUTES.ai.status, AiStatusResponse);
+    },
+    startOrganize(req: OrganizeRequest): Promise<OrganizeRun> {
+      return post(ROUTES.ai.organize, OrganizeRun, { jsonBody: req });
+    },
+    organizeRun(id: string): Promise<OrganizeRun> {
+      return get(organizeRunRoute(id), OrganizeRun);
+    },
+    cancelOrganize(id: string): Promise<OrganizeRun> {
+      return post(organizeRunCancelRoute(id), OrganizeRun);
     },
     systemTrash(): Promise<TrashSettings> {
       return get(ROUTES.system.trash, TrashSettings);

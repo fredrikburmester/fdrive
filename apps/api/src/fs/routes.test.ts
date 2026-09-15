@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import type { MoveManyResponse } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
@@ -995,6 +996,194 @@ describe("POST /fs/move", () => {
     );
 
     expect(res.status).toBe(409);
+  });
+});
+
+describe("POST /fs/move-many", () => {
+  function moveMany(body: unknown): RequestInit {
+    return requestedWith({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("moves every item it can, creates missing folders once, and reports each outcome", async () => {
+    const storage = createMemoryStorage({
+      "/inbox/a.pdf": "a",
+      "/inbox/b.pdf": "b",
+      "/inbox/c.txt": "c",
+      "/notes/c.txt": "taken",
+    });
+    const mkdir = vi.spyOn(storage, "mkdir");
+    const metadata = createMetadataService(createMemoryRepos());
+    const onMoved = vi.spyOn(metadata, "onMoved");
+    const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+
+    const res = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({
+        createParents: true,
+        items: [
+          { path: "/inbox/a.pdf", target: "/Finance/2024/a.pdf" },
+          { path: "/inbox/c.txt", target: "/notes/c.txt" },
+          { path: "/inbox//b.pdf", target: "/Finance/2024/b.pdf" },
+        ],
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      results: [
+        { ok: true, path: "/inbox/a.pdf", target: "/Finance/2024/a.pdf" },
+        {
+          ok: false,
+          path: "/inbox/c.txt",
+          target: "/notes/c.txt",
+          error: { kind: "conflict", message: "something already exists at /notes/c.txt" },
+        },
+        { ok: true, path: "/inbox/b.pdf", target: "/Finance/2024/b.pdf" },
+      ],
+    });
+    expect(mkdir).toHaveBeenCalledTimes(1);
+    expect(storage.dump()).toEqual({
+      "/Finance/2024/a.pdf": "a",
+      "/Finance/2024/b.pdf": "b",
+      "/inbox/c.txt": "c",
+      "/notes/c.txt": "taken",
+    });
+    expect(onMoved).toHaveBeenCalledWith(
+      ALICE_IDENTITY_ID,
+      "/inbox/a.pdf",
+      "/Finance/2024/a.pdf",
+      false,
+    );
+    expect(events).toEqual([
+      {
+        type: "fs",
+        op: "mkdir",
+        identityId: ALICE_IDENTITY_ID,
+        paths: ["/Finance/2024"],
+        at: CLOCK_ISO,
+      },
+      {
+        type: "fs",
+        op: "move",
+        identityId: ALICE_IDENTITY_ID,
+        paths: ["/inbox/a.pdf", "/inbox/b.pdf"],
+        targetPaths: ["/Finance/2024/a.pdf", "/Finance/2024/b.pdf"],
+        at: CLOCK_ISO,
+      },
+    ]);
+  });
+
+  it("reports invalid paths per item and creates no folders unless asked", async () => {
+    const storage = createMemoryStorage({ "/inbox/a.pdf": "a", "/inbox/b.pdf": "b" });
+    const mkdir = vi.spyOn(storage, "mkdir");
+    const { app, events } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({
+        items: [
+          { path: "/inbox/a\u0000.pdf", target: "/a.pdf" },
+          { path: "/inbox/a.pdf", target: "/a.pdf" },
+        ],
+      }),
+    );
+    const existingParent = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({ createParents: true, items: [{ path: "/inbox/b.pdf", target: "/inbox/c.pdf" }] }),
+    );
+
+    expect((await readJson<MoveManyResponse>(res)).results).toEqual([
+      {
+        ok: false,
+        path: "/inbox/a\u0000.pdf",
+        target: "/a.pdf",
+        error: { kind: "bad_request", message: "path must not contain a NUL byte" },
+      },
+      { ok: true, path: "/inbox/a.pdf", target: "/a.pdf" },
+    ]);
+    expect((await readJson<MoveManyResponse>(existingParent)).results).toEqual([
+      { ok: true, path: "/inbox/b.pdf", target: "/inbox/c.pdf" },
+    ]);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(events.map((event) => (event.type === "fs" ? event.op : event.type))).toEqual([
+      "move",
+      "move",
+    ]);
+  });
+
+  it("maps a storage failure while preparing a folder to that item's error", async () => {
+    const storage = createMemoryStorage({ "/inbox/a.pdf": "a" });
+    vi.spyOn(storage, "stat").mockRejectedValueOnce(new StorageError("forbidden", "no access"));
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({
+        createParents: true,
+        items: [{ path: "/inbox/a.pdf", target: "/Private/a.pdf" }],
+      }),
+    );
+
+    expect((await readJson<MoveManyResponse>(res)).results).toEqual([
+      {
+        ok: false,
+        path: "/inbox/a.pdf",
+        target: "/Private/a.pdf",
+        error: { kind: "forbidden", message: "no access" },
+      },
+    ]);
+  });
+
+  it("keeps a completed move when its metadata cannot follow, with a warning", async () => {
+    const storage = createMemoryStorage({ "/inbox/a.pdf": "a" });
+    const metadata = createMetadataService(createMemoryRepos());
+    vi.spyOn(metadata, "onMoved").mockRejectedValueOnce(new Error("database down"));
+    const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+
+    const res = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({ items: [{ path: "/inbox/a.pdf", target: "/a.pdf" }] }),
+    );
+
+    expect((await readJson<MoveManyResponse>(res)).results).toEqual([
+      {
+        ok: true,
+        path: "/inbox/a.pdf",
+        target: "/a.pdf",
+        warning: "Moved, but its tags, favorite or recent entry could not follow it.",
+      },
+    ]);
+    expect(events).toHaveLength(1);
+  });
+
+  it("stops on an unexpected failure but still publishes the moves already made", async () => {
+    const storage = createMemoryStorage({ "/a.txt": "a", "/b.txt": "b" });
+    const move = storage.move.bind(storage);
+    vi.spyOn(storage, "move")
+      .mockImplementationOnce(move)
+      .mockRejectedValueOnce(new Error("socket closed"));
+    const { app, events } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({
+        items: [
+          { path: "/a.txt", target: "/x/a.txt" },
+          { path: "/b.txt", target: "/b2.txt" },
+        ],
+        createParents: true,
+      }),
+    );
+
+    expect(res.status).toBe(500);
+    expect(events).toMatchObject([
+      { op: "mkdir", paths: ["/x"] },
+      { op: "move", paths: ["/a.txt"], targetPaths: ["/x/a.txt"] },
+    ]);
   });
 });
 

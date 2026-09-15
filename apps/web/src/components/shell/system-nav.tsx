@@ -15,6 +15,7 @@ import {
   ScanText,
   Search,
   Settings2,
+  Sparkles,
   ToggleRight,
 } from "lucide-react";
 import type { Route } from "next";
@@ -32,7 +33,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useSystemActivity } from "@/lib/api/activity-queries";
 import { readSidebarSectionOpen, writeSidebarSectionOpen } from "@/lib/metadata/sidebar-sections";
-import { FEATURE_PAGES, OFFICE_PAGE } from "@/lib/system/pages";
+import { AI_PAGE, FEATURE_PAGES, OFFICE_PAGE } from "@/lib/system/pages";
 import { cn } from "@/lib/utils";
 
 const FEATURES_ITEM = {
@@ -59,6 +60,7 @@ const FEATURE_ITEMS = [
   { id: "pdfOcr", ...FEATURE_PAGES.pdfOcr, Icon: ScanText },
   { id: "imageSearch", ...FEATURE_PAGES.imageSearch, Icon: Images },
   { id: "office", ...OFFICE_PAGE, Icon: FileText },
+  { id: "ai", ...AI_PAGE, Icon: Sparkles },
 ] as const;
 
 type NavItem =
@@ -159,11 +161,13 @@ export function SystemNav() {
         item={item}
         activity={query.data?.items.find((entry) => entry.id === item.id)}
         pending={
-          (item.id !== "backups" && query.pending.has(item.id)) ||
-          (item.id === "features" && FEATURE_ITEMS.some(({ id }) => query.pending.has(id)))
+          (item.id !== "backups" && item.id !== "ai" && query.pending.has(item.id)) ||
+          (item.id === "features" &&
+            FEATURE_ITEMS.some(({ id }) => id !== "ai" && query.pending.has(id)))
         }
         stale={
-          query.isError && !["general", "storage", "sharedFolders", "backups"].includes(item.id)
+          query.isError &&
+          !["general", "storage", "sharedFolders", "backups", "ai"].includes(item.id)
         }
       />
     );

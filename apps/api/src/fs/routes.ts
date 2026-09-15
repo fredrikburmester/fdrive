@@ -8,6 +8,9 @@ import {
   ListResponse,
   MkdirRequest,
   MODIFIED_AT_HEADER,
+  MoveManyRequest,
+  MoveManyResponse,
+  type MoveManyResult,
   MoveRequest,
   OkResponse,
   PathQuery,
@@ -27,6 +30,7 @@ import {
   isStorageError,
   mimeFromExtension,
   normalizePath,
+  parentPath,
   parseRangeHeader,
   type StorageError,
   type StorageProvider,
@@ -513,6 +517,77 @@ export function registerFsRoutes(
     publishFsEvent(deps, principal, "move", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
+  });
+
+  authed.post(routePath(ROUTES.fs.moveMany), async (c) => {
+    const principal = c.get("principal");
+    const body = await parseBody(MoveManyRequest, c, jsonMaxBytes);
+    const results: MoveManyResult[] = [];
+    const moved: { path: string; target: string }[] = [];
+    const created: string[] = [];
+    const readyParents = new Set<string>();
+
+    async function ensureParent(target: string): Promise<void> {
+      const parent = parentPath(target);
+      if (readyParents.has(parent)) return;
+      try {
+        await principal.storage.stat(parent);
+      } catch (error) {
+        if (!isStorageError(error) || error.kind !== "not_found") throw error;
+        await principal.storage.mkdir(parent, { parents: true });
+        created.push(parent);
+      }
+      readyParents.add(parent);
+    }
+
+    try {
+      for (const item of body.items) {
+        try {
+          const path = normalizeOrThrow(item.path);
+          const target = normalizeOrThrow(item.target);
+          if (body.createParents === true) await runStorageCall(() => ensureParent(target));
+          await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+          moved.push({ path, target });
+          try {
+            const entry = await statEntry(principal.storage, target);
+            await deps.metadata?.onMoved(principal.identityId, path, target, entry.kind === "dir");
+            results.push({ ok: true, path, target });
+          } catch {
+            results.push({
+              ok: true,
+              path,
+              target,
+              warning: "Moved, but its tags, favorite or recent entry could not follow it.",
+            });
+          }
+        } catch (error) {
+          const mapped =
+            error instanceof ApiHttpError
+              ? error
+              : isStorageError(error)
+                ? toApiHttpError(error)
+                : null;
+          if (mapped === null) throw error;
+          results.push({
+            ok: false,
+            path: item.path,
+            target: item.target,
+            error: { kind: mapped.kind, message: mapped.message },
+          });
+        }
+      }
+    } finally {
+      if (created.length > 0) publishFsEvent(deps, principal, "mkdir", created);
+      if (moved.length > 0)
+        publishFsEvent(
+          deps,
+          principal,
+          "move",
+          moved.map((entry) => entry.path),
+          moved.map((entry) => entry.target),
+        );
+    }
+    return c.json(MoveManyResponse.parse({ results }));
   });
 
   authed.post(routePath(ROUTES.fs.copy), async (c) => {

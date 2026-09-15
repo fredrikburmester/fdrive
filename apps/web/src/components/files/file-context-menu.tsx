@@ -13,6 +13,7 @@ import {
   Link2Icon,
   PackageOpenIcon,
   PencilIcon,
+  SparklesIcon,
   StarIcon,
   StarOffIcon,
   TagIcon,
@@ -52,6 +53,7 @@ export type RowContextAction =
   | "rename"
   | "moveTo"
   | "copyTo"
+  | "organize"
   | "delete"
   | "duplicate"
   | "compress"
@@ -87,6 +89,8 @@ export interface FileContextMenuProps {
    * sense. Both items show by default.
    */
   hideMoveCopy?: boolean;
+  /** Shows "Organize" after "Move to"/"Copy to", when AI is set up. Hidden by default. */
+  showOrganize?: boolean;
   /** Shows "Reveal in folder" above "Open", for a "virtual listing" whose
    * rows are not already inside the folder they live in (favorites,
    * recents, a tag's files). Hidden by default, since the plain file
@@ -127,6 +131,7 @@ export function FileContextMenu({
   selection,
   capabilities = DEFAULT_CAPABILITIES,
   hideMoveCopy = false,
+  showOrganize = false,
   showReveal = false,
   hideArchive = false,
   tags = DEFAULT_TAGS,
@@ -190,6 +195,12 @@ export function FileContextMenu({
               <FilesIcon />
               Copy to
             </ContextMenuItem>
+            {showOrganize && (
+              <ContextMenuItem onClick={() => onAction("organize", entry)}>
+                <SparklesIcon />
+                Organize
+              </ContextMenuItem>
+            )}
           </>
         )}
         <ContextMenuSeparator />
