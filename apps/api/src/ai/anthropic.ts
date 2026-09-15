@@ -5,6 +5,7 @@ import type {
   BetaMessageStreamParams,
   BetaToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/beta/messages/messages";
+import type { ModelInfo } from "@anthropic-ai/sdk/resources/models";
 import {
   type AiConversation,
   type AiInput,
@@ -30,9 +31,21 @@ const FALLBACK_MODELS = new Set(["claude-opus-5", "claude-fable-5-1"]);
 /** Output room per turn: enough for adaptive thinking plus a large final tool call. */
 const MAX_TOKENS = 32_000;
 
-/** Haiku 4.5 predates adaptive thinking and rejects it. */
-function supportsAdaptiveThinking(model: string): boolean {
-  return !model.startsWith("claude-haiku-4-5");
+/** What the configured model accepts, as the Models API reports it. */
+interface ModelLimits {
+  readonly adaptiveThinking: boolean;
+  readonly maxTokens: number;
+}
+
+/**
+ * Older models reject adaptive thinking or a 32k output budget, and model
+ * IDs do not reliably say which, so both come from the model's own entry.
+ */
+function limitsFrom(info: ModelInfo): ModelLimits {
+  return {
+    adaptiveThinking: info.capabilities?.thinking.types.adaptive.supported === true,
+    maxTokens: Math.min(MAX_TOKENS, info.max_tokens ?? MAX_TOKENS),
+  };
 }
 
 function toProviderError(error: unknown): unknown {
@@ -66,14 +79,16 @@ function turnFrom(message: BetaMessage): AiTurn {
 }
 
 /**
- * Claude through the official SDK. Streams every turn (long thinking never
- * hits an HTTP timeout), caches the growing prefix automatically, and replays
+ * Claude through the official SDK. Looks up the model's limits once, streams
+ * every turn (long thinking never hits an HTTP timeout), caches the growing
+ * prefix automatically, and replays
  * each assistant turn unchanged so thinking blocks stay valid across tool
  * calls.
  */
 export function createAnthropicModel(options: AnthropicModelOptions): AiModel {
   const client = options.client ?? new Anthropic({ apiKey: options.apiKey });
   const model = options.model;
+  let limits: ModelLimits | undefined;
 
   return {
     start({ system, tools }: { system: string; tools: readonly AiToolSpec[] }): AiConversation {
@@ -95,28 +110,29 @@ export function createAnthropicModel(options: AnthropicModelOptions): AiModel {
                   ),
                 },
           );
-          const params: BetaMessageStreamParams = {
-            model,
-            max_tokens: MAX_TOKENS,
-            system,
-            messages,
-            cache_control: { type: "ephemeral" },
-            ...(tools.length > 0
-              ? {
-                  tools: tools.map((tool) => ({
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: { type: "object" as const, ...tool.inputSchema },
-                  })),
-                }
-              : {}),
-            ...(supportsAdaptiveThinking(model) ? { thinking: { type: "adaptive" as const } } : {}),
-            ...(FALLBACK_MODELS.has(model)
-              ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
-              : {}),
-          };
           let message: BetaMessage;
           try {
+            limits ??= limitsFrom(await client.models.retrieve(model, {}, { signal }));
+            const params: BetaMessageStreamParams = {
+              model,
+              max_tokens: limits.maxTokens,
+              system,
+              messages,
+              cache_control: { type: "ephemeral" },
+              ...(tools.length > 0
+                ? {
+                    tools: tools.map((tool) => ({
+                      name: tool.name,
+                      description: tool.description,
+                      input_schema: { type: "object" as const, ...tool.inputSchema },
+                    })),
+                  }
+                : {}),
+              ...(limits.adaptiveThinking ? { thinking: { type: "adaptive" as const } } : {}),
+              ...(FALLBACK_MODELS.has(model)
+                ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
+                : {}),
+            };
             message = await client.beta.messages.stream(params, { signal }).finalMessage();
           } catch (error) {
             throw toProviderError(error);

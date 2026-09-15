@@ -41,6 +41,25 @@ const toolUse = (id: string, input: unknown) => ({
   input,
 });
 
+/** A Models API entry; by default a current model with adaptive thinking and 128k output. */
+function modelInfo(
+  overrides: { adaptive?: boolean; maxTokens?: number | null; noCapabilities?: true } = {},
+) {
+  return {
+    id: "claude-opus-5",
+    display_name: "Claude Opus 5",
+    max_tokens: overrides.maxTokens === undefined ? 128_000 : overrides.maxTokens,
+    capabilities: overrides.noCapabilities
+      ? null
+      : {
+          thinking: {
+            supported: true,
+            types: { adaptive: { supported: overrides.adaptive ?? true } },
+          },
+        },
+  };
+}
+
 /** A fake SDK client that answers each streamed request with the next queued message or error. */
 function fakeClient(replies: (BetaMessage | Error)[] = []) {
   const requests: BetaMessageStreamParams[] = [];
@@ -55,7 +74,7 @@ function fakeClient(replies: (BetaMessage | Error)[] = []) {
       },
     };
   });
-  const retrieve = vi.fn();
+  const retrieve = vi.fn().mockResolvedValue(modelInfo());
   const client = {
     beta: { messages: { stream } },
     models: { retrieve },
@@ -116,35 +135,71 @@ describe("Anthropic model", () => {
   });
 
   it.each([
-    { model: "claude-fable-5-1", thinking: true, fallbacks: true },
-    { model: "claude-sonnet-5", thinking: true, fallbacks: false },
-    { model: "claude-haiku-4-5", thinking: false, fallbacks: false },
-    { model: "claude-haiku-4-5-20251001", thinking: false, fallbacks: false },
-  ])("configures thinking and fallbacks for $model", async (expected) => {
-    const fake = fakeClient([message([text("Hi")])]);
-    const model = createAnthropicModel({
-      apiKey: "sk",
-      model: expected.model,
-      client: fake.client,
-    });
-    await model
-      .start({ system: "s", tools: [] })
-      .send({ kind: "user", text: "hi" }, new AbortController().signal);
-
-    const params = request(fake.requests, 0);
-    expect(params).not.toHaveProperty("tools");
-    if (expected.thinking) expect(params.thinking).toEqual({ type: "adaptive" });
-    else expect(params).not.toHaveProperty("thinking");
-    if (expected.fallbacks) {
-      expect(params).toMatchObject({
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
+    {
+      model: "claude-fable-5-1",
+      info: modelInfo(),
+      thinking: true,
+      maxTokens: 32_000,
+      fallbacks: true,
+    },
+    {
+      model: "claude-sonnet-5",
+      info: modelInfo(),
+      thinking: true,
+      maxTokens: 32_000,
+      fallbacks: false,
+    },
+    {
+      model: "claude-sonnet-4-5",
+      info: modelInfo({ adaptive: false, maxTokens: 64_000 }),
+      thinking: false,
+      maxTokens: 32_000,
+      fallbacks: false,
+    },
+    {
+      model: "claude-3-haiku-20240307",
+      info: modelInfo({ noCapabilities: true, maxTokens: 4_096 }),
+      thinking: false,
+      maxTokens: 4_096,
+      fallbacks: false,
+    },
+    {
+      model: "claude-next",
+      info: modelInfo({ maxTokens: null }),
+      thinking: true,
+      maxTokens: 32_000,
+      fallbacks: false,
+    },
+  ])(
+    "configures thinking, output and fallbacks for $model from its model entry",
+    async (expected) => {
+      const fake = fakeClient([message([text("Hi")])]);
+      fake.retrieve.mockResolvedValue(expected.info);
+      const model = createAnthropicModel({
+        apiKey: "sk",
+        model: expected.model,
+        client: fake.client,
       });
-    } else {
-      expect(params).not.toHaveProperty("betas");
-      expect(params).not.toHaveProperty("fallbacks");
-    }
-  });
+      await model
+        .start({ system: "s", tools: [] })
+        .send({ kind: "user", text: "hi" }, new AbortController().signal);
+
+      const params = request(fake.requests, 0);
+      expect(params).not.toHaveProperty("tools");
+      expect(params.max_tokens).toBe(expected.maxTokens);
+      if (expected.thinking) expect(params.thinking).toEqual({ type: "adaptive" });
+      else expect(params).not.toHaveProperty("thinking");
+      if (expected.fallbacks) {
+        expect(params).toMatchObject({
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+        });
+      } else {
+        expect(params).not.toHaveProperty("betas");
+        expect(params).not.toHaveProperty("fallbacks");
+      }
+    },
+  );
 
   it("replays the assistant turn unchanged and sends tool results back", async () => {
     const firstContent = [thinking, text("Looking around."), toolUse("toolu_1", { path: "/" })];
@@ -174,6 +229,8 @@ describe("Anthropic model", () => {
       signal,
     );
     expect(second).toEqual({ text: "Done.", toolCalls: [], stop: "end_turn" });
+    expect(fake.retrieve).toHaveBeenCalledTimes(1);
+    expect(fake.retrieve).toHaveBeenCalledWith("claude-opus-5", {}, { signal });
     expect(request(fake.requests, 1).messages).toEqual([
       { role: "user", content: "Organize." },
       { role: "assistant", content: firstContent },
@@ -275,6 +332,21 @@ describe("Anthropic model", () => {
       );
       expect(thrown).toBeInstanceOf(AiProviderError);
       expect((thrown as AiProviderError).message).toBe(expected);
+    });
+
+    it("maps a model lookup failure before sending anything", async () => {
+      const fake = fakeClient([message([text("never sent")])]);
+      fake.retrieve.mockRejectedValue(new Anthropic.NotFoundError(404, {}, "no model", headers));
+      const conversation = createAnthropicModel({
+        apiKey: "sk",
+        model: "claude-typo",
+        client: fake.client,
+      }).start({ system: "s", tools: [] });
+      const thrown = await failure(
+        conversation.send({ kind: "user", text: "hi" }, new AbortController().signal),
+      );
+      expect((thrown as AiProviderError).message).toBe("Anthropic does not recognize this model.");
+      expect(fake.stream).not.toHaveBeenCalled();
     });
 
     it.each([

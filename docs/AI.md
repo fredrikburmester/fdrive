@@ -32,9 +32,10 @@ Search and similar-file tools report which folders hold matches, not other files
 
 ## How a run works
 
-1. `POST /api/v1/ai/organize` starts an in-memory run (one per login at a time, kept for an hour,
-   lost on restart) and returns `202`. The browser polls `GET /api/v1/ai/organize/:id`; closing
-   the sheet cancels a running request.
+1. `POST /api/v1/ai/organize` starts an in-memory run and returns `202`. A login has one running
+   run: a new request replaces it, so a reload or closed tab never blocks the next one. Runs stop
+   after 30 minutes, stay readable for an hour and are lost on restart. The browser polls
+   `GET /api/v1/ai/organize/:id`; closing the sheet cancels the request, even one still starting.
 2. The organizer runs a tool loop with **read-only** tools: `folder_tree`, `list_folder`, and,
    for indexed logins, `read_excerpts`, `search_drive` and `similar_files`. It ends by calling
    `submit_suggestions`. Runs stop after 40 turns, and the session's authority is re-checked
@@ -42,12 +43,16 @@ Search and similar-file tools report which folders hold matches, not other files
 3. The server checks every suggestion against storage: it must name a selected item and a
    destination outside Trash, outside the selection and outside the item's current folder. Each
    suggestion is marked when its folder is new or its target name is taken. Unusable
-   suggestions are listed as unchanged, with the reason.
+   suggestions, and ones storage could not check, are listed as unchanged with the reason.
+   Paths are matched by how names read, since macOS stores accents as separate marks and models
+   write them as single characters: `Husarö` finds the stored folder instead of becoming a
+   look-alike new one. The tools resolve paths the same way.
 4. The review groups suggestions by destination. Conflicts start unchecked, and any item can be
    pointed at another folder. **Move** calls `POST /api/v1/fs/move-many` with
    `createParents: true`. That endpoint moves items in order, continues past failures, never
-   overwrites, and reports each outcome. **Undo** sends the reverse moves; folders created by
-   the apply stay.
+   overwrites, and reports each outcome. It checks each source before creating folders, so an
+   item that cannot move leaves none behind. **Undo** sends the reverse moves, for the login
+   that made them; folders created by the apply stay.
 
 File names and contents reach the model as data. A prompt injection can at most produce bad
 suggestions, which the person still has to approve; the organizer has no tool that writes.
@@ -56,7 +61,8 @@ suggestions, which the person still has to approve; the organizer has no tool th
 
 - `apps/api/src/ai/model.ts` is the provider-neutral port. Each adapter keeps its own native
   history, so Claude's thinking blocks are replayed unchanged between tool calls.
-- The Claude adapter streams every turn with adaptive thinking (omitted for Haiku 4.5),
+- The Claude adapter reads the model's entry from the Models API once per run and uses adaptive
+  thinking and up to 32k output tokens only where that entry allows. It streams every turn with
   automatic prompt caching and server-side refusal fallbacks on `claude-opus-5` and
   `claude-fable-5-1`. The OpenAI-compatible adapter uses `fetch`, refuses redirects and allows
   five minutes per turn.

@@ -280,29 +280,65 @@ describe("createOrganizeRuns", () => {
     expect(control.ctx().signal.aborted).toBe(false);
   });
 
-  it("refuses a second running run for the same identity but not for another identity", async () => {
-    const { runs } = setup();
-    const first = controllableWork();
-    runs.start("identity-1", 1, first.work);
-
-    expect(() => runs.start("identity-1", 1, controllableWork().work)).toThrow(OrganizeBusyError);
-    expect(() => runs.start("identity-1", 1, controllableWork().work)).toThrow(
-      "An organize request is already running. Wait for it to finish.",
-    );
-    expect(runs.start("identity-2", 1, controllableWork().work).state).toBe("running");
-
-    first.result.resolve(PROPOSAL);
+  it("replaces a login's running run with a new one and leaves other logins' runs alone", async () => {
+    const { runs, setNow } = setup();
+    const lost = controllableWork();
+    const other = controllableWork();
+    runs.start("identity-1", 1, lost.work);
+    runs.start("identity-2", 1, other.work);
     await flush();
-    expect(runs.start("identity-1", 1, controllableWork().work).state).toBe("running");
+
+    setNow(T1);
+    const next = runs.start("identity-1", 1, controllableWork().work);
+
+    expect(next).toMatchObject({ id: "run-3", state: "running" });
+    expect(runs.get("run-1", "identity-1")).toMatchObject({
+      state: "failed",
+      error: "A newer organize request from this login replaced this one.",
+      updatedAt: T1.toISOString(),
+    });
+    expect(lost.ctx().signal.aborted).toBe(true);
+    expect(other.ctx().signal.aborted).toBe(false);
+    expect(runs.get("run-2", "identity-2")?.state).toBe("running");
+
+    lost.result.resolve(PROPOSAL);
+    await flush();
+    expect(runs.get("run-1", "identity-1")).not.toHaveProperty("proposal");
   });
 
-  it("allows as many running runs per identity as configured", () => {
-    const { runs } = setup({ maxRunningPerIdentity: 2 });
+  it("stops a run that works longer than maxDurationMs", async () => {
+    vi.useFakeTimers();
+    const onUnexpectedError = vi.fn();
+    const { runs } = setup({ maxDurationMs: 1000, onUnexpectedError });
+    const control = controllableWork();
+    runs.start("identity-1", 1, control.work);
+    await flush();
 
-    runs.start("identity-1", 1, controllableWork().work);
-    runs.start("identity-1", 1, controllableWork().work);
+    vi.advanceTimersByTime(999);
+    expect(runs.get("run-1", "identity-1")?.state).toBe("running");
 
-    expect(() => runs.start("identity-1", 1, controllableWork().work)).toThrow(OrganizeBusyError);
+    vi.advanceTimersByTime(1);
+    expect(runs.get("run-1", "identity-1")).toMatchObject({
+      state: "failed",
+      error: "Organizing took too long and was stopped. Try fewer items at once.",
+    });
+    expect(control.ctx().signal.aborted).toBe(true);
+    control.result.reject(new DOMException("The operation was aborted.", "AbortError"));
+    await flush();
+    expect(onUnexpectedError).not.toHaveBeenCalled();
+  });
+
+  it("does not stop a run that finished before its time limit", async () => {
+    vi.useFakeTimers();
+    const { runs } = setup({ maxDurationMs: 1000, retentionMs: 5000 });
+    const control = controllableWork();
+    runs.start("identity-1", 1, control.work);
+    control.result.resolve(PROPOSAL);
+    await flush();
+
+    vi.advanceTimersByTime(1000);
+
+    expect(runs.get("run-1", "identity-1")).toMatchObject({ state: "done", proposal: PROPOSAL });
   });
 
   it("drops the oldest finished runs to make room once maxRuns is reached", async () => {
@@ -326,7 +362,9 @@ describe("createOrganizeRuns", () => {
     runs.start("identity-1", 1, controllableWork().work);
     runs.start("identity-2", 1, controllableWork().work);
 
-    expect(() => runs.start("identity-3", 1, controllableWork().work)).toThrow(OrganizeBusyError);
+    expect(() => runs.start("identity-3", 1, controllableWork().work)).toThrow(
+      "Too many organize requests are running. Try again in a few minutes.",
+    );
     expect(runs.get("run-1", "identity-1")?.state).toBe("running");
     expect(runs.get("run-2", "identity-2")?.state).toBe("running");
   });
@@ -357,14 +395,18 @@ describe("createOrganizeRuns", () => {
     expect(runs.get("run-1", "identity-1")).toBeNull();
   });
 
-  it("uses random ids, one running run per identity and an hour of retention by default", async () => {
+  it("uses random ids, a 30-minute limit and an hour of retention by default", async () => {
     vi.useFakeTimers();
     const runs = createOrganizeRuns({ clock: () => T0 });
-    const control = controllableWork();
+    const slow = runs.start("identity-2", 1, controllableWork().work);
+    vi.advanceTimersByTime(30 * 60 * 1000 - 1);
+    expect(runs.get(slow.id, "identity-2")?.state).toBe("running");
+    vi.advanceTimersByTime(1);
+    expect(runs.get(slow.id, "identity-2")?.state).toBe("failed");
 
+    const control = controllableWork();
     const run = runs.start("identity-1", 1, control.work);
     expect(run.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(() => runs.start("identity-1", 1, controllableWork().work)).toThrow(OrganizeBusyError);
 
     // No onUnexpectedError handler: an unexpected failure is still reported generically.
     control.result.reject(new Error("boom"));

@@ -17,7 +17,7 @@ import {
 } from "../model.ts";
 import type { ResolvedAiConfig } from "../settings.ts";
 import { SUBMIT_TOOL } from "./agent.ts";
-import { createOrganizeRuns, type OrganizeRuns } from "./runs.ts";
+import { createOrganizeRuns, OrganizeBusyError, type OrganizeRuns } from "./runs.ts";
 import { createOrganizeService, type OrganizeServiceDeps } from "./service.ts";
 
 const CONFIG: ResolvedAiConfig = {
@@ -230,16 +230,22 @@ describe("createOrganizeService", () => {
       service.cancel(principalWith(drive()), run.id);
     });
 
-    it("refuses a second run while one is still going", async () => {
-      const { service } = setup();
-      const principal = principalWith(drive());
-      const first = await service.start(principal, { paths: ["/Inbox/a.pdf"] });
+    it("reports a full run table as rate limited", async () => {
+      const runs: OrganizeRuns = {
+        start: () => {
+          throw new OrganizeBusyError();
+        },
+        get: () => null,
+        cancel: () => null,
+      };
+      const { service } = setup({ runs });
 
-      const error = await startError(service, principal, { paths: ["/Inbox/b.pdf"] });
+      const error = await startError(service, principalWith(drive()), { paths: ["/Inbox/a.pdf"] });
 
       expect(error.kind).toBe("rate_limited");
-      expect(error.message).toBe("An organize request is already running. Wait for it to finish.");
-      service.cancel(principal, first.id);
+      expect(error.message).toBe(
+        "Too many organize requests are running. Try again in a few minutes.",
+      );
     });
 
     it("passes other failures to start the run through", async () => {

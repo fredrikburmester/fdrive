@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { OrganizeProposal, OrganizeRun, OrganizeRunState } from "@fdrive/contracts";
 
-/** Thrown by `start` when the identity already has `maxRunningPerIdentity` runs in progress, or memory is full. */
+/** Thrown by `start` when `maxRuns` runs are all still in progress. */
 export class OrganizeBusyError extends Error {
   constructor() {
-    super("An organize request is already running. Wait for it to finish.");
+    super("Too many organize requests are running. Try again in a few minutes.");
     this.name = "OrganizeBusyError";
   }
 }
@@ -24,6 +24,10 @@ export interface OrganizeWorkContext {
 }
 
 export interface OrganizeRuns {
+  /**
+   * Starts a run, stopping any run the identity still has going. A person
+   * who lost track of a run (a reload, a closed tab) can always start again.
+   */
   start(
     identityId: string,
     itemCount: number,
@@ -36,12 +40,12 @@ export interface OrganizeRuns {
 
 export interface OrganizeRunsOptions {
   readonly clock: () => Date;
-  /** Default 1. */
-  readonly maxRunningPerIdentity?: number;
   /** Runs kept in memory at once, running or finished. Default 200. */
   readonly maxRuns?: number;
   /** How long a finished run stays readable. Default 1 hour. */
   readonly retentionMs?: number;
+  /** How long a run may work before it is stopped, so no run goes on unseen. Default 30 minutes. */
+  readonly maxDurationMs?: number;
   readonly idGenerator?: () => string;
   /** Called with failures that are not `OrganizeError`s, whose messages stay out of the response. */
   readonly onUnexpectedError?: (error: unknown) => void;
@@ -58,10 +62,13 @@ interface InternalRun {
   activity: string[];
   proposal?: OrganizeProposal;
   error?: string;
+  deadline?: ReturnType<typeof setTimeout>;
 }
 
 const MAX_ACTIVITY = 50;
 const UNEXPECTED_ERROR = "Something went wrong while organizing. Try again.";
+const REPLACED = "A newer organize request from this login replaced this one.";
+const TIMED_OUT = "Organizing took too long and was stopped. Try fewer items at once.";
 
 function toStatus(run: InternalRun): OrganizeRun {
   return {
@@ -83,9 +90,9 @@ function toStatus(run: InternalRun): OrganizeRun {
  */
 export function createOrganizeRuns(options: OrganizeRunsOptions): OrganizeRuns {
   const clock = options.clock;
-  const maxRunning = options.maxRunningPerIdentity ?? 1;
   const maxRuns = options.maxRuns ?? 200;
   const retentionMs = options.retentionMs ?? 60 * 60 * 1000;
+  const maxDurationMs = options.maxDurationMs ?? 30 * 60 * 1000;
   const idGenerator = options.idGenerator ?? randomUUID;
   const runs = new Map<string, InternalRun>();
 
@@ -99,16 +106,22 @@ export function createOrganizeRuns(options: OrganizeRunsOptions): OrganizeRuns {
   function finish(run: InternalRun, state: Exclude<OrganizeRunState, "running">): void {
     run.state = state;
     run.updatedAt = clock();
+    clearTimeout(run.deadline);
     const timer = setTimeout(() => runs.delete(run.id), retentionMs);
     timer.unref?.();
   }
 
+  /** Aborts a running run and fails it with a message for the person who started it. */
+  function stop(run: InternalRun, error: string): void {
+    run.controller.abort();
+    run.error = error;
+    finish(run, "failed");
+  }
+
   return {
     start(identityId, itemCount, work) {
-      const running = [...runs.values()].filter(
-        (run) => run.identityId === identityId && run.state === "running",
-      ).length;
-      if (running >= maxRunning) throw new OrganizeBusyError();
+      for (const run of runs.values())
+        if (run.identityId === identityId && run.state === "running") stop(run, REPLACED);
       prune();
       if (runs.size >= maxRuns) throw new OrganizeBusyError();
 
@@ -124,6 +137,8 @@ export function createOrganizeRuns(options: OrganizeRunsOptions): OrganizeRuns {
         activity: [],
       };
       runs.set(run.id, run);
+      run.deadline = setTimeout(() => stop(run, TIMED_OUT), maxDurationMs);
+      run.deadline.unref?.();
 
       const ctx: OrganizeWorkContext = {
         signal: run.controller.signal,

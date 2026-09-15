@@ -273,28 +273,51 @@ describe("buildProposal", () => {
     expect(proposal.unchanged[0]?.reason).toBe("u".repeat(300));
   });
 
-  it("rejects when storage fails for a reason other than a missing path", async () => {
+  it("sets aside only the suggestions storage could not check", async () => {
     const memory = drive();
-    const denied: StorageProvider = {
+    const flaky: StorageProvider = {
       ...memory,
       stat: async (path) => {
-        if (path === "/Finance") throw new StorageError("forbidden", "denied");
+        if (path === "/Private") throw new StorageError("forbidden", "denied");
+        if (path === "/Finance/Receipts/c.pdf") throw new StorageError("rate_limited", "slow down");
         return memory.stat(path);
       },
     };
+
+    const proposal = await build({
+      storage: flaky,
+      items: [file("/Inbox/a.pdf"), file("/Inbox/b.pdf"), file("/Inbox/c.pdf")],
+      submission: submission({
+        moves: [
+          move("/Inbox/a.pdf", "/Private"),
+          move("/Inbox/b.pdf", "/Old"),
+          move("/Inbox/c.pdf", "/Finance/Receipts"),
+        ],
+      }),
+    });
+
+    expect(proposal.suggestions.map((suggestion) => suggestion.path)).toEqual(["/Inbox/b.pdf"]);
+    expect(proposal.unchanged).toEqual([
+      { path: "/Inbox/a.pdf", reason: "fdrive could not check the suggested folder." },
+      { path: "/Inbox/c.pdf", reason: "fdrive could not check the suggested folder." },
+    ]);
+  });
+
+  it("rejects when checking storage fails with something other than a storage error", async () => {
     const broken: StorageProvider = {
-      ...memory,
+      ...drive(),
       stat: async () => {
         throw new Error("socket closed");
       },
     };
-    const input = {
-      items: [file("/Inbox/a.pdf")],
-      submission: submission({ moves: [move("/Inbox/a.pdf", "/Finance")] }),
-    };
 
-    await expect(build({ ...input, storage: denied })).rejects.toBeInstanceOf(StorageError);
-    await expect(build({ ...input, storage: broken })).rejects.toThrow("socket closed");
+    await expect(
+      build({
+        storage: broken,
+        items: [file("/Inbox/a.pdf")],
+        submission: submission({ moves: [move("/Inbox/a.pdf", "/Finance")] }),
+      }),
+    ).rejects.toThrow("socket closed");
   });
 
   it("checks each path in storage only once", async () => {
@@ -320,6 +343,134 @@ describe("buildProposal", () => {
       "/Archive/a.pdf",
       "/Archive/b.pdf",
       "/Archive/c.pdf",
+    ]);
+  });
+
+  describe("names whose accents are encoded differently", () => {
+    /** As macOS stores names: accents as separate combining marks. */
+    const mac = (text: string) => text.normalize("NFD");
+    /** As a model writes paths: accents as single characters. */
+    const typed = (text: string) => text.normalize("NFC");
+
+    function swedishDrive() {
+      return createMemoryStorage({
+        [mac("/Drop/Kårstämma 2021.pdf")]: "k",
+        [mac("/Drop/påskrift 2022.jpeg")]: "p",
+        [mac("/Drop/Årsmöte 2023.docx")]: "a",
+        [mac("/Drop/Husarö/keep.txt")]: "h",
+        [mac("/Work/Husarö/Dokument 2015-2020/old.pdf")]: "o",
+        [`${mac("/Work/Husarö")}/${typed("Årsmöte 2023.docx")}`]: "taken",
+      });
+    }
+
+    it("matches the selection and reuses existing folders by how their names read", async () => {
+      const proposal = await build({
+        storage: swedishDrive(),
+        items: [file(mac("/Drop/Kårstämma 2021.pdf")), file(mac("/Drop/påskrift 2022.jpeg"))],
+        submission: submission({
+          moves: [
+            move(typed("/Drop/Kårstämma 2021.pdf"), typed("/Work/Husarö/Dokument 2021-2023")),
+          ],
+          unchanged: [{ path: typed("/Drop/påskrift 2022.jpeg"), reason: "Unreadable scan." }],
+        }),
+      });
+
+      expect(proposal.suggestions).toEqual([
+        expect.objectContaining({
+          path: mac("/Drop/Kårstämma 2021.pdf"),
+          destination: `${mac("/Work/Husarö")}/${typed("Dokument 2021-2023")}`,
+          target: `${mac("/Work/Husarö")}/${typed("Dokument 2021-2023")}/${mac("Kårstämma 2021.pdf")}`,
+          newFolder: true,
+          conflict: false,
+        }),
+      ]);
+      expect(proposal.unchanged).toEqual([
+        { path: mac("/Drop/påskrift 2022.jpeg"), reason: "Unreadable scan." },
+      ]);
+    });
+
+    it("flags a target that already holds a look-alike name", async () => {
+      const proposal = await build({
+        storage: swedishDrive(),
+        items: [file(mac("/Drop/Årsmöte 2023.docx"))],
+        submission: submission({
+          moves: [move(typed("/Drop/Årsmöte 2023.docx"), typed("/Work/Husarö"))],
+        }),
+      });
+
+      expect(proposal.suggestions).toEqual([
+        expect.objectContaining({
+          destination: mac("/Work/Husarö"),
+          target: `${mac("/Work/Husarö")}/${mac("Årsmöte 2023.docx")}`,
+          newFolder: false,
+          conflict: true,
+        }),
+      ]);
+    });
+
+    it("recognizes the current folder and selected folders spelled differently", async () => {
+      const proposal = await build({
+        storage: swedishDrive(),
+        items: [
+          file(mac("/Work/Husarö/Dokument 2015-2020/old.pdf")),
+          file(mac("/Drop/påskrift 2022.jpeg")),
+          dir(mac("/Drop/Husarö")),
+        ],
+        submission: submission({
+          moves: [
+            move(
+              typed("/Work/Husarö/Dokument 2015-2020/old.pdf"),
+              typed("/Work/Husarö/Dokument 2015-2020"),
+              "Belongs here.",
+            ),
+            move(typed("/Drop/påskrift 2022.jpeg"), typed("/Drop/Husarö/Scans")),
+            move(typed("/Drop/Husarö"), "/Work"),
+          ],
+        }),
+      });
+
+      expect(proposal.unchanged).toEqual([
+        { path: mac("/Work/Husarö/Dokument 2015-2020/old.pdf"), reason: "Belongs here." },
+        {
+          path: mac("/Drop/påskrift 2022.jpeg"),
+          reason: "The suggested folder is itself part of the selection.",
+        },
+      ]);
+      expect(proposal.suggestions.map((s) => s.path)).toEqual([mac("/Drop/Husarö")]);
+    });
+
+    it("flags a second suggestion whose target only differs in how its accents are encoded", async () => {
+      const proposal = await build({
+        storage: createMemoryStorage({
+          [mac("/Drop/Kårstämma.pdf")]: "a",
+          [typed("/Old/Kårstämma.pdf")]: "b",
+        }),
+        items: [file(mac("/Drop/Kårstämma.pdf")), file(typed("/Old/Kårstämma.pdf"))],
+        submission: submission({
+          moves: [
+            move(typed("/Drop/Kårstämma.pdf"), "/Archive"),
+            move(typed("/Old/Kårstämma.pdf"), "/Archive"),
+          ],
+        }),
+      });
+
+      expect(proposal.suggestions.map((s) => s.conflict)).toEqual([false, true]);
+    });
+  });
+
+  it("says when the assistant's suggestions named paths that match no selected item", async () => {
+    const proposal = await build({
+      items: [file("/Inbox/a.pdf"), file("/Inbox/b.pdf")],
+      submission: submission({
+        moves: [move("/Inbox/b.pdf", "/Finance"), move("/Downloads/a.pdf", "/Finance")],
+      }),
+    });
+
+    expect(proposal.unchanged).toEqual([
+      {
+        path: "/Inbox/a.pdf",
+        reason: "The assistant's suggestions did not name this item's path.",
+      },
     ]);
   });
 
