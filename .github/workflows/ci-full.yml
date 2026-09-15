@@ -19,29 +19,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  workflow:
-    name: Workflow helpers
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . workflow
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workflow-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-
   check:
     name: Lint, typecheck, test
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
@@ -54,16 +31,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . application
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: check-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+      - run: pnpm bootstrap
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:coverage
 
   integration:
     name: Integration tests
@@ -78,65 +49,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . integration
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-
-  # Keep the Python jobs in sync with services.yml, which runs them path-filtered.
-  indexer:
-    name: Indexer (Python)
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install indexer system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
-      - run: bash tools/orchestration/setup-python.sh . indexer
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python indexer
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: indexer-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-
-  ocr:
-    name: OCR (Python)
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: bash tools/orchestration/setup-python.sh . ocr
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python ocr
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ocr-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+      - run: pnpm bootstrap
+      - run: pnpm test:integration
 
   e2e:
     name: End-to-end tests
@@ -151,22 +65,14 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
+      - run: pnpm bootstrap
       - run: pnpm --filter @fdrive/web exec playwright install --with-deps chromium
-      - run: bash tools/orchestration/verify.sh . browser
+      - run: pnpm test:e2e
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: apps/web/playwright-report
-          retention-days: 7
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
           retention-days: 7
 
   # The images an operator actually builds. `check` type-checks the sources, but
@@ -199,29 +105,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  supporting-services:
-    name: Python (${{ matrix.service }})
+  python:
+    name: Python services
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [image-embed, runtime]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: bash tools/orchestration/setup-python.sh . "${{ matrix.service }}"
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python "${{ matrix.service }}"
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.service }}-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+    uses: ./.github/workflows/services.yml

@@ -6,7 +6,6 @@ while its Logs sheet contains only API requests. Worker stderr/stdout is contain
 Implementation is present in the checkout. Application, native database/indexer regressions
 and the real worker/browser recovery path pass. Required Docker coverage/inotify, full
 integration and standard browser setup remain blocked by the unavailable Docker engine.
-See [current evidence](../workflow/STATUS.md#processing-failure-transparency-implemented-docker-verification-pending).
 
 ## Delivery
 

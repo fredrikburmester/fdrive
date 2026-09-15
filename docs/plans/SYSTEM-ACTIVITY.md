@@ -159,9 +159,8 @@ No application implementation, commit or deployment is authorized by this planni
   share probes, and a sidebar plus an open settings page does not multiply identical probes.
 - Cover accessible descriptions, keyboard tooltips, reduced motion, light/dark themes, mobile
   sidebar and the long labels shown in the screenshot.
-- During implementation run focused contracts/API/web and Python tests, then required helpers:
-  `application`, `integration`, `python indexer`, `python ocr`, `workflow`, and affected
-  `browser` specs (`system`, `features`, `office-settings`, `system-storage`). Serialize Docker
+- During implementation run focused contracts/API/web and Python tests, then the required checks:
+  application, integration, indexer and OCR Python checks, and affected browser specs (`system`, `features`, `office-settings`, `system-storage`). Serialize Docker
   work. Verify the real dev app and at least one real background-processing path; intercepted
   Playwright responses alone do not establish worker behavior.
 - Planning validation is limited to source inspection and documentation checks. It does not

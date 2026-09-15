@@ -271,11 +271,10 @@ external event. Background reconciliation is bounded to tracked locations and cu
   Set explicit performance budgets from this fixture before qualification.
 - Inspect 320/393/768px and desktop, light/dark, long paths/names, keyboard, accessible labels,
   44px mobile actions and no horizontal overflow. Verify grouped details and lineage navigation.
-- Use orchestration helpers: focused checks, then `application`, `integration`, affected
-  `browser`, native checks when changed, and `workflow`. Verify real PostgreSQL/SFTPGo/WebDAV,
+- Run focused checks, then application, integration, affected browser and native checks when
+  changed. Verify real PostgreSQL/SFTPGo/WebDAV,
   relevant Office/MCP/native paths and the real dev UI. Preserve all existing quality gates.
 
 Planning verification covers source/document checks only; runtime and completeness remain
 unverified until implementation. No application implementation, commit or deployment here.
-The latest amendment passed local link/anchor and whitespace checks. The full workflow gate
-was not rerun while another task's merge left unrelated conflicts in the shared checkout.
+The latest amendment passed local link/anchor and whitespace checks.
