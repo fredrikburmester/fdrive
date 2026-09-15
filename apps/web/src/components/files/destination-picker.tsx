@@ -1,7 +1,7 @@
 "use client";
 
 import { isWithin, joinPath } from "@fdrive/core";
-import { FolderPlusIcon } from "lucide-react";
+import { FolderPlusIcon, Loader2 } from "lucide-react";
 import { useState } from "react";
 import {
   Breadcrumb,
@@ -37,14 +37,16 @@ export type DestinationPickerMode =
 interface DestinationPickerLabels {
   readonly title: string;
   readonly confirmLabel: string;
+  /** The confirm button's label while `pending`; defaults to `confirmLabel`. */
+  readonly pendingLabel?: string;
 }
 
 const LABELS: Record<DestinationPickerMode, DestinationPickerLabels> = {
-  move: { title: "Move to", confirmLabel: "Move here" },
-  copy: { title: "Copy to", confirmLabel: "Copy here" },
+  move: { title: "Move to", confirmLabel: "Move here", pendingLabel: "Moving…" },
+  copy: { title: "Copy to", confirmLabel: "Copy here", pendingLabel: "Copying…" },
   compressDestination: { title: "Choose destination", confirmLabel: "Choose" },
   extractTo: { title: "Extract to", confirmLabel: "Extract here" },
-  restoreTo: { title: "Restore to", confirmLabel: "Restore here" },
+  restoreTo: { title: "Restore to", confirmLabel: "Restore here", pendingLabel: "Restoring…" },
 };
 
 export interface DestinationPickerProps {
@@ -55,6 +57,11 @@ export interface DestinationPickerProps {
   sourcePaths?: readonly string[];
   onOpenChange: (open: boolean) => void;
   onConfirm: (destination: string) => void;
+  /**
+   * Whether the caller's request is in flight. While it is, the confirm
+   * button shows a spinner with progressive copy and the dialog blocks
+   * navigation and dismissal until the request settles.
+   */
   pending?: boolean;
   /** A caution shown under the description, e.g. that this provider moves a folder by copying it. */
   warning?: string | null;
@@ -183,9 +190,11 @@ function DestinationPickerContent({
             type="button"
             className="h-11 sm:h-8"
             disabled={busy || newFolderOpen || !canConfirm}
+            aria-busy={pending}
             onClick={() => onConfirm(path)}
           >
-            {labels.confirmLabel}
+            {pending && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {pending ? (labels.pendingLabel ?? labels.confirmLabel) : labels.confirmLabel}
           </Button>
         </DialogFooter>
         <NewFolderDialog
