@@ -164,3 +164,28 @@ it("toolbar hides Show thumbnails without index", async () => {
   fireEvent.click(screen.getByTitle("View"));
   expect(await screen.findByText("Show thumbnails")).toBeTruthy();
 });
+
+it("offers Organize in the menu and selection bar only when AI is set up", async () => {
+  const onAction = vi.fn();
+  render(
+    <FileContextMenu entry={file} capabilities={everything} showOrganize onAction={onAction}>
+      <span>Row</span>
+    </FileContextMenu>,
+  );
+  fireEvent.contextMenu(screen.getByText("Row"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Organize" }));
+  expect(onAction).toHaveBeenCalledWith("organize", file);
+  cleanup();
+
+  await openMenu(file);
+  expect(screen.queryByRole("menuitem", { name: "Organize" })).toBeNull();
+  cleanup();
+
+  const onOrganizeSelection = vi.fn();
+  render(<FilesToolbarActions {...toolbarProps({ onOrganizeSelection })} />);
+  fireEvent.click(screen.getByLabelText("Organize"));
+  expect(onOrganizeSelection).toHaveBeenCalled();
+  cleanup();
+  render(<FilesToolbarActions {...toolbarProps()} />);
+  expect(screen.queryByLabelText("Organize")).toBeNull();
+});

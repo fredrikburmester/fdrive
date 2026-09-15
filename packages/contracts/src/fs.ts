@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ApiError } from "./error.ts";
 import { ArchiveFormat } from "./jobs.ts";
 
 /**
@@ -94,6 +95,42 @@ export const MoveRequest = z.object({
 });
 
 export type MoveRequest = z.infer<typeof MoveRequest>;
+
+/**
+ * Moves each item in order, continuing past failures. With
+ * `createParents`, a missing destination folder is created first. Nothing
+ * is ever overwritten.
+ */
+export const MoveManyRequest = z.strictObject({
+  items: z.array(MoveRequest).min(1).max(1000),
+  createParents: z.boolean().optional(),
+});
+
+export type MoveManyRequest = z.infer<typeof MoveManyRequest>;
+
+export const MoveManyResult = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    path: z.string(),
+    target: z.string(),
+    /** The item moved, but tags, favorites or recents could not follow it. */
+    warning: z.string().optional(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    path: z.string(),
+    target: z.string(),
+    error: ApiError.shape.error,
+  }),
+]);
+
+export type MoveManyResult = z.infer<typeof MoveManyResult>;
+
+export const MoveManyResponse = z.object({
+  results: z.array(MoveManyResult),
+});
+
+export type MoveManyResponse = z.infer<typeof MoveManyResponse>;
 
 export const CopyRequest = z.object({
   path: z.string(),

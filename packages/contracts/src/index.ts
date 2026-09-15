@@ -15,6 +15,22 @@ export {
   SystemActivityResponse,
   WorkerActivity,
 } from "./activity.ts";
+export {
+  AI_SETTINGS_KEY,
+  AiConnectionTestResponse,
+  AiProvider,
+  AiSettings,
+  AiSettingsUpdateRequest,
+  AiStatusResponse,
+  DEFAULT_AI_MODEL,
+  MAX_ORGANIZE_ITEMS,
+  OrganizeProposal,
+  OrganizeRequest,
+  OrganizeRun,
+  OrganizeRunState,
+  OrganizeSuggestion,
+  SystemAiResponse,
+} from "./ai.ts";
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export { createBackupClient } from "./backup-client.ts";
 export {
@@ -69,6 +85,9 @@ export {
   isValidEntryName,
   ListResponse,
   MkdirRequest,
+  MoveManyRequest,
+  MoveManyResponse,
+  MoveManyResult,
   MoveRequest,
   OkResponse,
   PathQuery,
@@ -157,6 +176,8 @@ export {
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
+  organizeRunCancelRoute,
+  organizeRunRoute,
   PUBLIC_SHARE_SUFFIXES,
   publicShareRoute,
   ROUTES,

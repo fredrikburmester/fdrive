@@ -18,6 +18,7 @@ import {
   MoreHorizontalIcon,
   PanelRightIcon,
   PlusIcon,
+  SparklesIcon,
   UploadIcon,
   XIcon,
 } from "lucide-react";
@@ -265,6 +266,8 @@ export interface FilesToolbarActionsProps {
   onDuplicateSelection: () => void;
   /** Opens the compress dialog for the current selection (any size). */
   onCompressSelection: () => void;
+  /** Asks the assistant where the selection belongs. Hidden when AI is not set up. */
+  onOrganizeSelection?: (() => void) | undefined;
   /** Downloads the currently selected entries (single direct download or zip). */
   onDownloadSelection: () => void;
   /** Whether image thumbnails are shown in list view. */
@@ -462,6 +465,7 @@ export function FilesToolbarActions({
   onClearSelection,
   onDuplicateSelection,
   onCompressSelection,
+  onOrganizeSelection,
   onDownloadSelection,
   showThumbnails,
   onShowThumbnailsChange,
@@ -552,6 +556,23 @@ export function FilesToolbarActions({
       {!inOverflow && selectedCount > 0 && (
         <div className="flex items-center gap-1 rounded-md bg-muted py-1 pr-1 pl-2 text-muted-foreground text-xs">
           <span className="tabular-nums">{selectedCount} selected</span>
+          {onOrganizeSelection !== undefined && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Organize"
+                    onClick={onOrganizeSelection}
+                  />
+                }
+              >
+                <SparklesIcon />
+              </TooltipTrigger>
+              <TooltipContent>Organize</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -690,6 +711,12 @@ export function FilesToolbarActions({
               <FileArchiveIcon />
               Compress
             </DropdownMenuItem>
+            {onOrganizeSelection !== undefined && (
+              <DropdownMenuItem disabled={selectedCount === 0} onClick={onOrganizeSelection}>
+                <SparklesIcon />
+                Organize
+              </DropdownMenuItem>
+            )}
             {overflow.includes("download") && downloadAvailable && (
               <DropdownMenuItem disabled={selectedCount === 0} onClick={onDownloadSelection}>
                 <DownloadIcon />

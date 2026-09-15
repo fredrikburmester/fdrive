@@ -59,6 +59,7 @@ function stubIndexQueries(): IndexQueries {
     directoriesWithFiles: async () => [],
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
+    fileTextPrefix: async () => "",
     duplicates: async () => [],
     similar: async () => fail("similar"),
     recentFiles: async () => fail("recentFiles"),

@@ -119,6 +119,8 @@ export interface FileListProps {
   /** Hides "Compress" and "Extract" in every row's context menu, for
    * a "virtual listing" that does not run the archive jobs. Defaults to
    * `false`. */
+  /** Shows "Organize" in each row's context menu (see `FileContextMenu`). */
+  showOrganize?: boolean;
   hideArchive?: boolean;
   /** What the active login's storage can do, for every row's context menu
    * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
@@ -171,6 +173,7 @@ export function FileList({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
+  showOrganize = false,
   capabilities = DEFAULT_CAPABILITIES,
   scrollRequest = null,
   onScrollConsumed,
@@ -326,6 +329,7 @@ export function FileList({
               hideMoveCopy={hideMoveCopy}
               showReveal={showReveal}
               hideArchive={hideArchive}
+              showOrganize={showOrganize}
               tags={tags}
               tagCheckState={(tagId) =>
                 computeTagCheckState(

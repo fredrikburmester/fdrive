@@ -1,5 +1,6 @@
 import {
   and,
+  asc,
   count,
   countDistinct,
   desc,
@@ -310,6 +311,12 @@ export interface IndexQueries {
    * every row `stats` would otherwise count regardless of authorization.
    */
   statsForFileIds(fileIds: readonly number[]): Promise<FileIdStats>;
+  /**
+   * The start of one file's extracted text, its chunks joined in order and
+   * cut at `maxChars`; empty when it has none. Looked up by exact id, so the
+   * caller must already have mapped and read-authorized the file.
+   */
+  fileTextPrefix(fileId: number, maxChars: number): Promise<string>;
   /** Groups of byte-identical files at least `minSize` bytes, largest waste first. */
   duplicates(
     scopePrefixes: readonly ScopePrefix[],
@@ -400,6 +407,9 @@ function movePathScopeCondition(
 }
 
 const SNIPPET_LENGTH = 300;
+
+/** Chunks `fileTextPrefix` reads at most; a prefix is meant to be short. */
+const FILE_TEXT_PREFIX_CHUNKS = 8;
 
 /** Builds every `IndexQueries` method as Drizzle queries against `db`. */
 export function createIndexQueries(db: Db): IndexQueries {
@@ -684,6 +694,20 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(chunks)
         .where(inArray(chunks.fileId, capped as number[]));
       return { chunks: Number(row?.chunks ?? 0), chunksEmbedded: Number(row?.embedded ?? 0) };
+    },
+
+    async fileTextPrefix(fileId, maxChars) {
+      if (maxChars <= 0) return "";
+      const rows = await db
+        .select({ text: sql<string>`substring(${chunks.text} for ${maxChars})` })
+        .from(chunks)
+        .where(eq(chunks.fileId, fileId))
+        .orderBy(asc(chunks.idx))
+        .limit(FILE_TEXT_PREFIX_CHUNKS);
+      return rows
+        .map((row) => row.text)
+        .join("\n")
+        .slice(0, maxChars);
     },
 
     async duplicates(scopePrefixes, minSize, limit) {

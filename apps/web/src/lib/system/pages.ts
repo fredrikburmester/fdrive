@@ -28,3 +28,6 @@ export const FEATURE_PAGES: Record<FeatureId, SystemPageLink> = {
  * but it has a page in the same System group.
  */
 export const OFFICE_PAGE: SystemPageLink = { href: "/system/office" as Route, label: "Office" };
+
+/** AI keeps its own settings record too, and lives in the same group. */
+export const AI_PAGE: SystemPageLink = { href: "/system/ai" as Route, label: "AI" };

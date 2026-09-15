@@ -38,6 +38,8 @@ export const ROUTES = {
     mkdir: "/api/v1/fs/mkdir",
     /** POST: move a path. */
     move: "/api/v1/fs/move",
+    /** POST: move several paths, continuing past failures -> `MoveManyResponse`. */
+    moveMany: "/api/v1/fs/move-many",
     /** POST: copy a path. */
     copy: "/api/v1/fs/copy",
     /** POST: rename a path in place. */
@@ -113,6 +115,12 @@ export const ROUTES = {
     /** POST: permanently delete every entry -> `OkResponse`. */
     empty: "/api/v1/trash/empty",
   },
+  ai: {
+    /** GET: whether AI actions are available to the caller -> `AiStatusResponse`. */
+    status: "/api/v1/ai/status",
+    /** POST: ask the assistant where selected items belong -> `OrganizeRun` (202). Nothing moves. */
+    organize: "/api/v1/ai/organize",
+  },
   /** GET: version and configured providers -> `AboutResponse`. */
   about: "/api/v1/about",
   /** GET, public: the enabled providers and their credential forms -> `ProvidersResponse`. */
@@ -138,6 +146,10 @@ export const ROUTES = {
     publicUrl: "/api/v1/system/public-url",
     /** GET/PUT, admin only: Office activation and editing permission. */
     office: "/api/v1/system/office",
+    /** GET/PUT, admin only: the AI provider, model and key -> `SystemAiResponse`. */
+    ai: "/api/v1/system/ai",
+    /** POST, admin only: send one short request with the saved AI settings -> `AiConnectionTestResponse`. */
+    aiTest: "/api/v1/system/ai/test",
     /** GET/PUT, admin only: provider-bound Trash configuration. */
     trash: "/api/v1/system/trash",
     /** GET/PUT, admin only: folder-level virtual folder mappings -> `MountMappingsResponse`. */
@@ -212,6 +224,16 @@ export function adminProviderTestRoute(id: string): string {
 /** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
 export function jobRoute(id: string): string {
   return `${ROUTES.fs.jobs}/${encodeURIComponent(id)}`;
+}
+
+/** GET: one organize run -> `OrganizeRun`. 404 for a run that belongs to another identity. */
+export function organizeRunRoute(id: string): string {
+  return `${ROUTES.ai.organize}/${encodeURIComponent(id)}`;
+}
+
+/** POST: stop an organize run -> `OrganizeRun`. 404 for a run that belongs to another identity. */
+export function organizeRunCancelRoute(id: string): string {
+  return `${organizeRunRoute(id)}/cancel`;
 }
 
 /** GET, admin only: one subsystem's event log -> `SystemLogsResponse`. */
