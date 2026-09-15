@@ -18,7 +18,7 @@ from .chunking import normalize as normalize_text
 from .config import Config
 from .content_extract import ContentExtractor
 from .extract import Extractor
-from .features import FeatureConfiguration, disabled, resolve_features
+from .features import resolve_features
 from .indexer import RootContext, log, scan_once, start_watcher
 from .server import ServerState, create_app
 from .settings import diff_changed, resolve_settings
@@ -48,7 +48,9 @@ def build_context(cfg: Config, conn_dsn: str, name: str, abs_path: str) -> RootC
         cfg=cfg,
         settings=settings,
         extractor=extractor,
-        features=FeatureConfiguration(0, disabled()),
+        # Start from the persisted selection: a restart is not a feature transition,
+        # and treating it as one re-runs the media backfill over every file on disk.
+        features=resolve_features(db.read_settings(conn)),
     )
     ctx.feature_refresh_seconds = cfg.settings_refresh_seconds
     ctx.feature_refresher = refresh_features

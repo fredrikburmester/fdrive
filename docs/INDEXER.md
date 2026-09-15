@@ -102,10 +102,13 @@ Absent `IMAGE_EMBED_URL`, this is entirely off: no error, `GET /stats`
 reports `image_embeddings: 0`, matching how OCR degrades without its own
 sidecar.
 
-The pass hangs off the same per-file step as thumbnail generation
-(`indexer.py`'s `embed_thumbnail`, called right after a thumbnail is
-written): before writing anything, it checks the sidecar's `GET /health`
-against the column's fixed dimension (1024) and an `"ok"` status; on a
+The pass follows thumbnail generation (`indexer.py`'s `embed_thumbnail`,
+called once a thumbnail is written). Watcher changes and retries embed inline;
+a scan hands embeddings to one thread per root, because the sidecar runs one
+inference at a time and waiting inline would pace every scan worker at the
+model's speed. Before writing anything, it checks the sidecar's `GET /health`
+against the column's fixed dimension (1024) and an `"ok"` status, reusing a
+passing answer for 30 seconds; on a
 mismatch it logs an error naming both numbers and skips embedding for that
 file without writing (never truncating, padding, or otherwise coercing the
 vector). A file already embedded by the currently configured model is

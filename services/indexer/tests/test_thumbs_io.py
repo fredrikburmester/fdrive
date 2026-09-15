@@ -25,6 +25,43 @@ def test_generate_image_writes_both_sizes(tmp_path: Path) -> None:
         assert h == size // 2
 
 
+def test_generate_large_jpeg_keeps_exact_sizes_and_exif_orientation(tmp_path: Path) -> None:
+    from PIL import Image
+
+    # Large enough for a reduced-scale JPEG decode; orientation 6 displays it portrait.
+    src = tmp_path / "camera.jpg"
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("RGB", (4000, 2000), color="orange").save(src, exif=exif)
+    thumbs_dir = tmp_path / "thumbs"
+
+    results = thumbs_io.generate(str(src), ".jpg", "camerasha", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000)
+
+    assert [(size, w, h) for size, _rel, w, h in results] == [(256, 128, 256), (1024, 512, 1024)]
+    for _size, rel, w, h in results:
+        with Image.open(thumbs_dir / rel) as written:
+            assert written.size == (w, h)
+
+
+def test_generate_missing_small_size_leaves_existing_large_size(tmp_path: Path) -> None:
+    from PIL import Image
+
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (3000, 1500), color="purple").save(src)
+    thumbs_dir = tmp_path / "thumbs"
+    first = thumbs_io.generate(str(src), ".jpg", "sha1", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000)
+    small, large = (thumbs_dir / rel for _size, rel, _w, _h in first)
+    small.unlink()
+    large_written = large.stat().st_mtime_ns
+
+    second = thumbs_io.generate(str(src), ".jpg", "sha1", src.stat().st_size, str(thumbs_dir), max_bytes=10_000_000)
+
+    assert second == first
+    assert large.stat().st_mtime_ns == large_written
+    with Image.open(small) as regenerated:
+        assert regenerated.size == (256, 128)
+
+
 def test_generate_heic_image_writes_both_sizes(tmp_path: Path) -> None:
     from PIL import Image
 

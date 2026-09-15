@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from .http_client import shared as _http
 from .thumbs import MediaRow, is_thumbnail_candidate, kind_for_ext
 
 # `vision_config.hidden_size` / `text_config.hidden_size` of
@@ -63,7 +64,7 @@ def image_embed_health(embed_url: str, timeout: float = 5) -> ImageEmbedHealth |
     (connection refused, timeout, non-2xx) -- distinct from a reachable
     sidecar reporting `status: "loading"`, which `parse_health` returns."""
     try:
-        r = httpx.get(f"{embed_url}/health", timeout=timeout)
+        r = _http.get(f"{embed_url}/health", timeout=timeout)
         r.raise_for_status()
         return parse_health(r.json())
     except Exception:  # noqa: BLE001 - an unreachable sidecar must never raise
@@ -112,7 +113,7 @@ def embed_images(
     for i in range(0, len(image_bytes), step):
         batch = image_bytes[i : i + step]
         files = [("images", (f"{i + j}.bin", data, "application/octet-stream")) for j, data in enumerate(batch)]
-        r = httpx.post(f"{embed_url}/embed/image", files=files, timeout=httpx.Timeout(timeout, connect=10.0))
+        r = _http.post(f"{embed_url}/embed/image", files=files, timeout=httpx.Timeout(timeout, connect=10.0))
         r.raise_for_status()
         embeddings, model = parse_embed_response(r.json())
         out.extend(embeddings)

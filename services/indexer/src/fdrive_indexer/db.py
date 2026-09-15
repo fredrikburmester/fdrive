@@ -88,6 +88,20 @@ def get_manifest(conn: psycopg.Connection, root_id: int) -> dict[str, tuple[int,
         return {r[0]: (r[1], r[2], r[3], r[4]) for r in cur.fetchall()}
 
 
+def scan_manifest(conn: psycopg.Connection, root_id: int) -> dict[str, tuple[int, int, str, Any, str | None, bool]]:
+    """`get_manifest` plus each row's content key and whether that key has an image
+    embedding, so a scan can decide which unchanged files need media work without a
+    query per file. The result is a snapshot: workers recheck before writing."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT f.path, f.size, f.mtime_ns, f.text_status, f.deleted_at, f.sha256, e.content_key IS NOT NULL '
+            'FROM "idx"."files" f LEFT JOIN "app"."image_embeddings" e ON e.content_key = f.sha256 '
+            "WHERE f.root_id = %s",
+            (root_id,),
+        )
+        return {r[0]: (r[1], r[2], r[3], r[4], r[5], bool(r[6])) for r in cur.fetchall()}
+
+
 def upsert_file(
     conn: psycopg.Connection,
     root_id: int,

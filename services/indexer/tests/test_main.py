@@ -61,6 +61,34 @@ def test_refresh_features_requires_explicit_persisted_selection(
     assert ctx.feature_configuration().values.text_search is True
 
 
+def test_restart_with_persisted_features_is_not_a_media_backfill_transition(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    cfg = Config()
+    values = {
+        "thumbnails": True,
+        "textSearch": False,
+        "searchOcr": False,
+        "semanticSearch": False,
+        "imageSearch": True,
+        "pdfOcr": False,
+    }
+    with db.connect(postgres_dsn) as conn:
+        conn.execute(
+            'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
+            (FEATURES_KEY, Json({"version": 1, "revision": 4, "values": values})),
+        )
+
+    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    main.refresh_settings(ctx)
+
+    assert ctx.feature_configuration().values.image_search is True
+    # Missing derivatives are still found from durable state; only a live toggle
+    # refreshes every existing thumbnail.
+    assert ctx.needs_media_backfill() is False
+
+
 def test_refresh_settings_updates_ctx_and_logs_changes(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
