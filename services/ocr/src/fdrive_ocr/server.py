@@ -1,7 +1,13 @@
 """Internal HTTP API, bound to the compose network only, no auth: health, stats,
-and a manual run trigger. Built on Starlette, matching the indexer's
-`server.py`. A `RunLock` shared with the nightly scheduler loop (`main.py`)
-prevents a manual `/run` from racing the scheduled pass.
+a manual run trigger, and administration of the originals kept before each
+rewrite. Built on Starlette, matching the indexer's `server.py`. A `RunLock`
+shared with the nightly scheduler loop (`main.py`) prevents a manual `/run`
+from racing the scheduled pass.
+
+Only `/run` is gated on the `pdfOcr` feature. Listing, downloading, restoring
+and deleting kept originals stay available while OCR is switched off, because
+switching it off is exactly what an operator does first when a pass has
+damaged a file they now need back.
 """
 
 from __future__ import annotations
@@ -9,7 +15,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -17,12 +23,20 @@ from uuid import uuid4
 import psycopg
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from . import db
 from .features import FeatureConfiguration, resolve_features
-from .runner import RootTarget, originals_stats, run_pass
+from .restore import (
+    OriginalsIndex,
+    delete_original,
+    list_originals,
+    open_original,
+    prune_originals,
+    restore_original,
+)
+from .runner import RootTarget, run_pass
 from .schedule import next_run_at
 from .settings import Settings, resolve_settings
 from .stats import shape_health, shape_stats
@@ -122,6 +136,7 @@ class ServerState:
     now: Callable[[], datetime]
     schema_ready: Callable[[], bool]
     log: Callable[[str], None]
+    originals: OriginalsIndex = field(default_factory=OriginalsIndex)
     # Env-only (OCR_INCLUDE_GLOBS), not part of app.settings; see rules.is_excluded.
     include_globs: tuple[str, ...] = ()
 
@@ -160,7 +175,7 @@ async def stats(request: Request) -> JSONResponse:
         last = db.last_run(conn)
     finally:
         conn.close()
-    originals_count, originals_bytes = originals_stats(state.state_dir)
+    originals_count, originals_bytes = state.originals.stats(state.state_dir)
     next_at = next_run_at(state.now(), settings.hour)
     body = shape_stats(
         last,
@@ -170,6 +185,7 @@ async def stats(request: Request) -> JSONResponse:
         list(settings.exclude_globs),
         settings.max_mb,
         settings.keep_originals,
+        settings.originals_retention_days,
         originals_count,
         originals_bytes,
         state.run_lock.running,
@@ -212,6 +228,7 @@ async def trigger_run(request: Request) -> JSONResponse:
                 is_enabled=lambda: state.features(db.read_settings(conn)).values.pdf_ocr,
                 on_file=state.run_lock.advance, on_stopped=state.run_lock.stop,
             )
+            prune_originals(state.state_dir, state.originals, settings.originals_retention_days, state.log)
         except Exception as e:  # noqa: BLE001
             state.run_lock.fail()
             state.log(f"OCR pass crashed: {type(e).__name__}: {e}")
@@ -232,6 +249,116 @@ async def trigger_run(request: Request) -> JSONResponse:
     return JSONResponse({"started": True}, status_code=202)
 
 
+DEFAULT_PAGE_LIMIT = 50
+MAX_PAGE_LIMIT = 200
+
+#: Why a restore was refused, and the status the API layer should surface. A
+#: refusal is never a server fault: the caller either asked for an original that
+#: is not there, or declined to opt into a destructive case it can now see.
+RESTORE_REFUSAL_STATUS = {
+    "not_found": 404,
+    "unresolved": 409,
+    "unknown_root": 409,
+    "invalid_path": 409,
+    "target_parent_missing": 409,
+    "target_missing": 409,
+    "target_changed": 409,
+    "corrupt": 409,
+}
+
+
+def _int_param(request: Request, name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = request.query_params.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+async def originals(request: Request) -> JSONResponse:
+    """One page of kept originals. Deliberately not gated on the `pdfOcr`
+    feature: an operator who turned OCR off because it damaged a file still
+    needs to find and undo what it did."""
+    state: ServerState = request.app.state.server_state
+    limit = _int_param(request, "limit", DEFAULT_PAGE_LIMIT, 1, MAX_PAGE_LIMIT)
+    offset = _int_param(request, "offset", 0, 0, 2**31 - 1)
+    query = request.query_params.get("query", "")
+    conn = state.conn_factory()
+    try:
+        items, total = list_originals(conn, state.state_dir, state.targets, state.originals, query, offset, limit)
+    finally:
+        conn.close()
+    return JSONResponse(
+        {"items": [item.as_json() for item in items], "total": total, "offset": offset, "limit": limit}
+    )
+
+
+async def download_original(request: Request) -> Response:
+    """Streams a kept original's bytes so it can be compared against the live
+    file before anything is overwritten, and so an original whose source path
+    can no longer be resolved is still recoverable by hand."""
+    state: ServerState = request.app.state.server_state
+    original_id = request.query_params.get("id", "")
+    found = open_original(state.state_dir, original_id)
+    if found is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    path, _size = found
+    return FileResponse(path, media_type="application/pdf", filename=original_id)
+
+
+async def restore(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    body = await _json_body(request)
+    original_id = body.get("id")
+    if not isinstance(original_id, str):
+        return JSONResponse({"error": "id is required"}, status_code=400)
+    conn = state.conn_factory()
+    try:
+        outcome = restore_original(
+            conn,
+            state.state_dir,
+            state.targets,
+            state.originals,
+            original_id,
+            body.get("allow_recreate") is True,
+            body.get("allow_overwrite_changed") is True,
+            state.log,
+        )
+    finally:
+        conn.close()
+    if not outcome.ok:
+        reason = outcome.reason or "not_found"
+        state.log(f"restore refused ({reason}): {original_id}")
+        return JSONResponse(
+            {"error": reason, "state": outcome.state, "root": outcome.root, "path": outcome.path},
+            status_code=RESTORE_REFUSAL_STATUS.get(reason, 409),
+        )
+    return JSONResponse({"restored": True, "root": outcome.root, "path": outcome.path, "previous_state": outcome.state})
+
+
+async def delete(request: Request) -> JSONResponse:
+    state: ServerState = request.app.state.server_state
+    body = await _json_body(request)
+    original_id = body.get("id")
+    if not isinstance(original_id, str):
+        return JSONResponse({"error": "id is required"}, status_code=400)
+    if not delete_original(state.state_dir, state.originals, original_id):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    state.log(f"deleted kept original: {original_id}")
+    return JSONResponse({"deleted": True})
+
+
 def create_app(state: ServerState) -> Starlette:
     app = Starlette(
         routes=[
@@ -239,6 +366,10 @@ def create_app(state: ServerState) -> Starlette:
             Route("/stats", stats, methods=["GET"]),
             Route("/activity", activity, methods=["GET"]),
             Route("/run", trigger_run, methods=["POST"]),
+            Route("/originals", originals, methods=["GET"]),
+            Route("/originals/download", download_original, methods=["GET"]),
+            Route("/originals/restore", restore, methods=["POST"]),
+            Route("/originals/delete", delete, methods=["POST"]),
         ]
     )
     app.state.server_state = state

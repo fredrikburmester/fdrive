@@ -17,6 +17,7 @@ import uvicorn
 from . import db
 from .config import Config
 from .features import resolve_features
+from .restore import OriginalsIndex, prune_originals
 from .runner import RootTarget, run_pass
 from .schedule import next_run_at, resolve_timezone, seconds_until
 from .server import RunLock, ServerState, create_app
@@ -43,9 +44,11 @@ def run_once(
     jobs: int,
     log_fn: Callable[[str], None],
     include_globs: tuple[str, ...] = (),
+    originals: OriginalsIndex | None = None,
 ) -> bool:
-    """Attempts one pass. Returns whether it actually ran: `False` means a run
-    was already in progress and this cycle was skipped."""
+    """Attempts one pass, then prunes kept originals the retention window has
+    aged out. Returns whether it actually ran: `False` means a run was already
+    in progress and this cycle was skipped."""
     if not run_lock.try_acquire():
         log_fn("scheduled OCR pass skipped: a run is already in progress")
         return False
@@ -72,6 +75,9 @@ def run_once(
                 is_enabled=lambda: resolve_features(db.read_settings(conn)).values.pdf_ocr,
                 on_file=run_lock.advance, on_stopped=run_lock.stop,
             )
+            prune_originals(
+                state_dir, originals if originals is not None else OriginalsIndex(), settings.originals_retention_days, log_fn
+            )
         finally:
             conn.close()
     except Exception as e:  # noqa: BLE001
@@ -96,6 +102,7 @@ def scheduler_loop(
     sleep: Callable[[float], None] = time.sleep,
     include_globs: tuple[str, ...] = (),
     settings_refresh_seconds: int = 5,
+    originals: OriginalsIndex | None = None,
 ) -> None:
     """Runs forever: re-reads settings each cycle (an admin edit to `ocr.hour`
     takes effect on the next wakeup), computes the next scheduled hour, sleeps
@@ -111,6 +118,7 @@ def scheduler_loop(
             jobs,
             log_fn,
             include_globs,
+            originals,
         )
 
     refresh_wait_s = max(1, settings_refresh_seconds)
@@ -162,6 +170,7 @@ def scheduler_loop(
             jobs,
             log_fn,
             include_globs,
+            originals,
         )
 
 
@@ -179,6 +188,9 @@ def main() -> None:
     finally:
         bootstrap_conn.close()
     run_lock = RunLock()
+    # One scan of the kept originals, shared by the scheduler's prune and the
+    # HTTP handlers that list and total them.
+    originals_index = OriginalsIndex()
 
     def scheduler_conn_factory() -> psycopg.Connection:
         return db.connect(cfg.database_url)
@@ -215,6 +227,7 @@ def main() -> None:
         kwargs={
             "include_globs": cfg.include_globs,
             "settings_refresh_seconds": cfg.settings_refresh_seconds,
+            "originals": originals_index,
         },
         daemon=True,
         name="ocr-scheduler",
@@ -232,6 +245,7 @@ def main() -> None:
         now=lambda: datetime.now(tz),
         schema_ready=schema_ready,
         log=log,
+        originals=originals_index,
         include_globs=cfg.include_globs,
     )
     app = create_app(state)

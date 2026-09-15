@@ -43,6 +43,7 @@ export function ocrSettingsDirty(saved: OcrSettingsValue, draft: OcrSettingsValu
     saved.langs !== draft.langs ||
     saved.maxMb !== draft.maxMb ||
     saved.keepOriginals !== draft.keepOriginals ||
+    saved.originalsRetentionDays !== draft.originalsRetentionDays ||
     !arraysEqual(saved.excludeGlobs, draft.excludeGlobs)
   );
 }
@@ -86,6 +87,13 @@ export function validateOcrSettings(draft: OcrSettingsValue): string[] {
   }
   if (!Number.isInteger(draft.maxMb) || draft.maxMb < 1) {
     messages.push("Max size must be at least 1 MB.");
+  }
+  if (
+    !Number.isInteger(draft.originalsRetentionDays) ||
+    draft.originalsRetentionDays < 0 ||
+    draft.originalsRetentionDays > 3650
+  ) {
+    messages.push("Keep originals for must be between 0 and 3650 days.");
   }
   return messages;
 }

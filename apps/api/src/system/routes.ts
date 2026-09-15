@@ -6,6 +6,11 @@ import {
   IndexerSettingsUpdateRequest,
   IndexerThumbnailsRebuildRequest,
   type IndexerThumbnailsRebuildResponse,
+  OcrOriginalDeleteRequest,
+  type OcrOriginalDeleteResponse,
+  OcrOriginalRestoreRequest,
+  type OcrOriginalRestoreResponse,
+  type OcrOriginalsResponse,
   type OcrRunResponse,
   type OcrSettingsResponse,
   OcrSettingsUpdateRequest,
@@ -31,7 +36,7 @@ import type { ImageEmbedClient } from "../search/image-embed-client.js";
 import { fetchEmbedStatus } from "./embed-status.js";
 import type { SystemEventLog } from "./event-log.js";
 import type { IndexerClient } from "./indexer-client.js";
-import type { OcrClient } from "./ocr-client.js";
+import { type OcrClient, type OcrRefusal, ocrRefusal } from "./ocr-client.js";
 import {
   indexerSettingsEntries,
   ocrSettingsEntries,
@@ -83,6 +88,40 @@ function sidecarErrorMessage(
 ): string {
   if (result.status === 409) return `${service} is busy or processing is disabled.`;
   return `${service} is ${result.reason === "unreachable" ? "unreachable" : "returning an unexpected response"}: ${result.detail}`;
+}
+
+/** Paging and search for `GET /system/ocr/originals`, parsed from the query string. */
+const OcrOriginalsQuery = z.object({
+  query: z.string().optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+/**
+ * Turns a refusal from the OCR service into something an administrator can act
+ * on. The two destructive cases name the opt-in that would allow them; the
+ * rest describe a state no opt-in can fix.
+ */
+function restoreRefusalMessage(refusal: OcrRefusal): string {
+  const where = refusal.path !== null ? ` (${refusal.path})` : "";
+  switch (refusal.reason) {
+    case "target_changed":
+      return `That file changed after OCR ran${where}. Restoring would discard those changes; confirm to continue.`;
+    case "target_missing":
+      return `That file no longer exists${where}. Restoring would recreate it; confirm to continue.`;
+    case "target_parent_missing":
+      return `The folder that held that file no longer exists${where}. Download the original and put it back by hand.`;
+    case "corrupt":
+      return `The kept copy no longer matches its checksum${where}, so it was not written over the live file.`;
+    case "unresolved":
+      return "The source path of that original could not be recovered. Download it and put it back by hand.";
+    case "unknown_root":
+      return `That original belongs to an index root the OCR service is not configured for${where}.`;
+    case "invalid_path":
+      return "That original records a source path outside its index root and was refused.";
+    default:
+      return `The OCR service refused that restore: ${refusal.reason}.`;
+  }
 }
 
 /**
@@ -504,6 +543,127 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     deps.eventLog.record("ocr", "info", "OCR run requested");
 
     const body: OcrRunResponse = result.data;
+    return c.json(body);
+  });
+
+  authed.get(withoutApiV1Prefix(ROUTES.system.ocrOriginals), requireAdmin, async (c) => {
+    if (deps.ocrClient === null) {
+      throw new ApiHttpError("bad_request", "OCR is not configured");
+    }
+    const parsed = OcrOriginalsQuery.safeParse({
+      query: c.req.query("query"),
+      offset: c.req.query("offset"),
+      limit: c.req.query("limit"),
+    });
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid originals query", {
+        issues: parsed.error.issues,
+      });
+    }
+
+    const result = await deps.ocrClient.originals(parsed.data);
+    if (!result.ok) {
+      throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("OCR", result));
+    }
+    const body: OcrOriginalsResponse = result.data;
+    return c.json(body);
+  });
+
+  authed.get(withoutApiV1Prefix(ROUTES.system.ocrOriginalDownload), requireAdmin, async (c) => {
+    if (deps.ocrClient === null) {
+      throw new ApiHttpError("bad_request", "OCR is not configured");
+    }
+    const id = c.req.query("id");
+    if (id === undefined || id === "") {
+      throw new ApiHttpError("bad_request", "id is required");
+    }
+
+    const result = await deps.ocrClient.downloadOriginal(id);
+    if (!result.ok) {
+      if (result.status === 404) {
+        throw new ApiHttpError("not_found", "that original is no longer kept");
+      }
+      throw new ApiHttpError(
+        "upstream_unavailable",
+        sidecarErrorMessage("OCR", { reason: "unreachable", detail: result.detail }),
+      );
+    }
+    deps.eventLog.record("ocr", "info", "Kept original downloaded", { id });
+    const length = result.response.headers.get("content-length");
+    // A zero-byte original is legitimate, and `Response.body` is null for one.
+    return c.body(result.response.body ?? "", 200, {
+      "Content-Type": "application/pdf",
+      ...(length !== null ? { "Content-Length": length } : {}),
+      // The kept bytes are an admin artefact, never a shared or cacheable one.
+      "Content-Disposition": `attachment; filename="${encodeURIComponent(id)}"`,
+      "Cache-Control": "private, no-store",
+    });
+  });
+
+  authed.post(withoutApiV1Prefix(ROUTES.system.ocrOriginalRestore), requireAdmin, async (c) => {
+    if (deps.ocrClient === null) {
+      throw new ApiHttpError("bad_request", "OCR is not configured");
+    }
+    const rawBody: unknown = await c.req.json().catch(() => undefined);
+    const parsed = OcrOriginalRestoreRequest.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid restore request", {
+        issues: parsed.error.issues,
+      });
+    }
+
+    const result = await deps.ocrClient.restoreOriginal(parsed.data);
+    if (!result.ok) {
+      const refusal = ocrRefusal(result);
+      if (refusal !== null) {
+        deps.eventLog.record("ocr", "warn", `Restore refused: ${refusal.reason}`, {
+          id: parsed.data.id,
+          ...(refusal.path !== null ? { path: refusal.path } : {}),
+          ...(refusal.state !== null ? { state: refusal.state } : {}),
+        });
+        throw new ApiHttpError(
+          refusal.status === 404 ? "not_found" : "conflict",
+          restoreRefusalMessage(refusal),
+          { reason: refusal.reason, ...(refusal.state !== null ? { state: refusal.state } : {}) },
+        );
+      }
+      deps.eventLog.record("ocr", "error", `Restore failed: ${result.detail}`);
+      throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("OCR", result));
+    }
+
+    // Warn, not info: a restore overwrites a file in place, and the event log
+    // is the only record of who asked for it and what it replaced.
+    deps.eventLog.record("ocr", "warn", "Original restored", {
+      id: parsed.data.id,
+      ...(result.data.root !== null ? { root: result.data.root } : {}),
+      ...(result.data.path !== null ? { path: result.data.path } : {}),
+      ...(result.data.previousState !== null ? { replaced: result.data.previousState } : {}),
+    });
+    const body: OcrOriginalRestoreResponse = result.data;
+    return c.json(body);
+  });
+
+  authed.post(withoutApiV1Prefix(ROUTES.system.ocrOriginalDelete), requireAdmin, async (c) => {
+    if (deps.ocrClient === null) {
+      throw new ApiHttpError("bad_request", "OCR is not configured");
+    }
+    const rawBody: unknown = await c.req.json().catch(() => undefined);
+    const parsed = OcrOriginalDeleteRequest.safeParse(rawBody);
+    if (!parsed.success) {
+      throw new ApiHttpError("bad_request", "invalid delete request", {
+        issues: parsed.error.issues,
+      });
+    }
+
+    const result = await deps.ocrClient.deleteOriginal(parsed.data.id);
+    if (!result.ok) {
+      if (result.status === 404) {
+        throw new ApiHttpError("not_found", "that original is no longer kept");
+      }
+      throw new ApiHttpError("upstream_unavailable", sidecarErrorMessage("OCR", result));
+    }
+    deps.eventLog.record("ocr", "warn", "Kept original deleted", { id: parsed.data.id });
+    const body: OcrOriginalDeleteResponse = result.data;
     return c.json(body);
   });
 

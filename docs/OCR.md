@@ -30,7 +30,7 @@ has a text layer is left completely alone.
 
 | `ocrmypdf` result | Recorded status | What happens to the file |
 | --- | --- | --- |
-| Exit 0 | `ocred` | The output replaces the original, keeping its owner, mode, and mtime. The original bytes are kept under `<state_dir>/originals` when `ocr.keep_originals` is set. |
+| Exit 0 | `ocred` | The output replaces the original, keeping its owner, mode, and mtime. The original bytes are kept under `<state_dir>/originals` when `ocr.keep_originals` is set, and can be put back later; see [Kept originals](#kept-originals). |
 | Exit 6, or stderr mentions `TaggedPDFError` | `has_text` | Untouched. `ocrmypdf` already found a text layer (an office-generated PDF sometimes only reports this via the error message, not the exit code). |
 | stderr mentions `DigitalSignatureError` | `signed` | Untouched. Signed PDFs are refused outright: OCR would invalidate the signature. |
 | stderr mentions `EncryptedPdfError` | `encrypted` | Untouched. |
@@ -56,6 +56,7 @@ in addition to the whole-file size cap applied before the subprocess is even sta
 | `ocr.exclude_globs` | list of strings, matched with `fnmatch` against `<root>/<rel path>` (same convention as the indexer's `indexer.text_exclude_globs`) | `["Programs/**", "Photos/**", "Videos/**"]` |
 | `ocr.max_mb` | integer | `200` |
 | `ocr.keep_originals` | boolean | `true` |
+| `ocr.originals_retention_days` | integer, `0` keeps forever | `0` |
 
 **On the `exclude_globs` default.** The match key is `<root>/<rel path>`, the
 same convention the indexer uses, so a bare `"Photos/**"` only excludes paths
@@ -92,8 +93,16 @@ only from other containers on the compose network.
 | --- | --- | --- |
 | `/health` | GET | `{ ok, running }`. `ok` is `false` until the schema handshake with `idx.schema_version` has completed. |
 | `/activity` | GET | In-memory current/last OCR operation, including live processed/skipped/error counts; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
-| `/stats` | GET | `{ last_run, next_run_at, schedule_hour, langs, exclude_globs, max_mb, keep_originals, originals_count, originals_bytes, running }`. `last_run` is `{ started_at, finished_at, seen, ocred, skipped, failed }` or `null` if no pass has ever run. `originals_count` / `originals_bytes` describe `<state_dir>/originals` on disk right now. |
+| `/stats` | GET | `{ last_run, next_run_at, schedule_hour, langs, exclude_globs, max_mb, keep_originals, originals_retention_days, originals_count, originals_bytes, running }`. `last_run` is `{ started_at, finished_at, seen, ocred, skipped, failed }` or `null` if no pass has ever run. `originals_count` / `originals_bytes` describe `<state_dir>/originals` on disk right now. |
 | `/run` | POST | `202 { started: true }`, or `409 { error: "already running" }` if a pass (scheduled or manual) is already in progress. Runs in the background; poll `/stats` or `/health` for completion. |
+| `/originals` | GET | One page of kept originals: `{ items, total, offset, limit }`, newest first. `query` (substring of `<root>/<path>`), `offset` and `limit` (max 200) are query parameters. |
+| `/originals/download` | GET | The kept bytes for `?id=`, as `application/pdf`. |
+| `/originals/restore` | POST | `{ id, allow_recreate?, allow_overwrite_changed? }`. `200 { restored: true, root, path, previous_state }`, `404` for an unknown id, or `409 { error, state, root, path }` for a refusal. |
+| `/originals/delete` | POST | `{ id }` -> `200 { deleted: true }` or `404`. Deletes the kept bytes and their sidecar. |
+
+Only `/run` is gated on the `pdfOcr` feature. Everything under `/originals`
+keeps working while OCR is switched off, because switching it off is exactly
+what an operator does first when a pass has damaged a file they now need back.
 
 `seen` in a run summary counts every candidate PDF the walk encountered,
 including ones already in the done-log; `ocred` / `skipped` / `failed` only
@@ -102,6 +111,82 @@ count files actually decided on this pass (`too_big`, `excluded`, `has_text`,
 
 The admin **Logs** sheet on System > OCR reads `idx.ocr_runs` and failed or timed-out
 `idx.ocr_log` rows, alongside API-side events such as settings saves and run requests.
+
+## Kept originals
+
+Every rewrite copies the pre-OCR bytes to
+`<state_dir>/originals/<16 hex digits>_<basename>` and writes a sidecar next to
+it at `<state_dir>/original-mappings/<that name>.json`, fsynced before the
+source file can be overwritten:
+
+```json
+{"version":1,"root":"sftpgo","path":"fredrik/docs/scan.pdf","size":184320,
+ "mtime_ns":"1757000000123456789","original":"0123456789abcdef_scan.pdf",
+ "sha256":"...","kept_at_ns":"1757200000000000000"}
+```
+
+The kept filename embeds a truncated hash of `root:path:size:mtime_ns`, which
+is not reversible; the sidecar is what makes a restore possible at all. Note
+that `apply_rewrite` copies the *source's* mtime onto the kept copy, so the
+kept file's own mtime is the age of the document, never the age of the copy:
+`kept_at_ns` is the only honest record of when the bytes were kept, and it is
+what retention and the admin UI use. Originals kept before `kept_at_ns`
+existed fall back to the sidecar's own mtime, and ones kept before sidecars
+existed fall back to the kept file's ctime.
+
+### Restoring
+
+`System > Searchable PDFs > Kept originals` in the web app lists them; the API
+proxies the endpoints above under `/api/v1/system/ocr/originals`. A restore is
+`apply_rewrite` run backwards and inherits its durability properties: the
+replacement is staged in the destination directory, hashed while it is copied,
+fsynced, given the destination's ownership and the recorded mtime, and only
+then swapped in with `os.replace`, all inside the same `db.backup_checkpoint`
+advisory-lock gate a rewrite takes. Bytes that no longer hash to the sidecar's
+`sha256` are refused rather than written over the live file.
+
+The state of the file at a kept original's source path decides what a restore
+means. A rewrite keeps the source's mtime and only changes its size, so these
+do not overlap:
+
+| State | Meaning | Restoring |
+| --- | --- | --- |
+| `ocred` | the live file matches a done-log row recorded as `ocred` for that path | the ordinary case, no opt-in |
+| `restored` | the live bytes already match the kept original | a no-op, no opt-in |
+| `changed` | the file matches neither: edited or replaced after OCR ran | needs `allow_overwrite_changed` |
+| `missing` | nothing is at that path any more | needs `allow_recreate` |
+
+A successful restore records an `idx.ocr_log` row for the *restored* file's own
+`(path, size, mtime_ns)` key with status `restored`. Without it the next pass
+would see a key it has never decided on and OCR the file straight back again,
+which is what made the old manual "copy it back over the PDF yourself"
+procedure silently undo itself. The kept copy is not deleted, so a restore can
+be repeated, and the pre-rewrite row for the OCR output is left alone.
+
+A restore is refused, never half-applied, when the sidecar cannot be resolved,
+its root is not configured on this service, its recorded path does not stay
+inside that root, or the directory that held the file is gone. In every one of
+those cases the bytes are still downloadable, so a manual recovery remains
+possible.
+
+### Originals kept before sidecars existed
+
+An original with no sidecar is resolved from the done-log: rows whose
+`mtime_ns` and basename match the kept copy are reverse-hashed against the kept
+filename, and only an unambiguous single match is accepted (the same rule
+`packages/backup/src/ocr-mappings.ts` applies to archived bytes). A resolved
+match is written back out as a sidecar, dated to the kept file's ctime so the
+backfill does not restart the retention clock, and the lookup happens once.
+Anything ambiguous stays listed as unresolved and download-only.
+
+### Retention
+
+`ocr.originals_retention_days` deletes kept originals older than the window at
+the end of each pass. It defaults to `0`, keeping them forever, so an
+installation that upgrades into this setting never loses bytes it was already
+holding. `OCR_ORIGINALS_RETENTION_DAYS` sets the default for an installation
+with no stored value. Individual originals can also be deleted from the admin
+sheet; that is the only way to reclaim their space.
 
 ## Compose
 
@@ -145,8 +230,8 @@ itself uses, so running it twice is a no-op the second time.
 ## Testing
 
 Pure modules (`schedule.py`, `decide.py`, `rules.py`, `settings.py`,
-`stats.py`) have no I/O and are covered at 100%. I/O modules (`db.py`,
-`runner.py`, `server.py`, `main.py`) are tested against a real Postgres via
+`stats.py`, `originals.py`) have no I/O and are covered at 100%. I/O modules
+(`db.py`, `runner.py`, `restore.py`, `server.py`, `main.py`) are tested against a real Postgres via
 `testcontainers`, with the repo's own `packages/db/drizzle/*.sql` migrations
 applied in a fixture, and a fake `ocrmypdf` executable
 (`tests/fixtures/ocrmypdf`) placed first on `PATH` by an autouse fixture in

@@ -22,6 +22,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -29,6 +30,7 @@ import psycopg
 
 from . import db
 from .decide import STATUS_FAILED, STATUS_TIMEOUT, decide
+from .originals import Mapping, mapping_document
 from .rules import is_candidate_pdf, is_excluded, is_too_big
 from .settings import Settings
 
@@ -74,20 +76,6 @@ def originals_dest(state_dir: str, root: str, rel_path: str, size: int, mtime_ns
     key = f"{root}:{rel_path}:{size}:{mtime_ns}"
     digest = hashlib.sha256(key.encode()).hexdigest()[:16]
     return os.path.join(state_dir, "originals", f"{digest}_{os.path.basename(rel_path)}")
-
-
-def originals_stats(state_dir: str) -> tuple[int, int]:
-    """Count and total bytes of files under `<state_dir>/originals`."""
-    originals_dir = os.path.join(state_dir, "originals")
-    if not os.path.isdir(originals_dir):
-        return 0, 0
-    count = 0
-    total = 0
-    for entry in os.scandir(originals_dir):
-        if entry.is_file():
-            count += 1
-            total += entry.stat().st_size
-    return count, total
 
 
 MAX_OCR_PAGE_MEGAPIXELS = 50
@@ -188,12 +176,24 @@ def apply_rewrite(
                     os.remove(pending)
         # The legacy filename is a hash, not a reversible mapping. Preserve exact
         # source facts alongside every newly accepted original before rewriting.
+        # `kept_at_ns` is recorded because the copy carries the *source's* mtime,
+        # so nothing else on disk says when the bytes were actually kept.
         mappings_dir = os.path.join(state_dir, "original-mappings")
         os.makedirs(mappings_dir, exist_ok=True)
         with open(dest, "rb") as original:
             digest = hashlib.file_digest(original, "sha256").hexdigest()
-        mapping = {"version": 1, "root": root, "path": rel_path, "size": size,
-                   "mtime_ns": str(mtime_ns), "original": os.path.basename(dest), "sha256": digest}
+        mapping = mapping_document(
+            Mapping(
+                root=root,
+                path=rel_path,
+                size=size,
+                mtime_ns=mtime_ns,
+                original=os.path.basename(dest),
+                sha256=digest,
+                legacy=False,
+                kept_at_ns=time.time_ns(),
+            )
+        )
         fd, pending = tempfile.mkstemp(prefix=".mapping-", dir=mappings_dir)
         try:
             with os.fdopen(fd, "w") as output:

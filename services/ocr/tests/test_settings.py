@@ -38,7 +38,9 @@ def test_resolve_settings_overrides_every_field() -> None:
         KEEP_ORIGINALS_KEY: False,
     }
     resolved = resolve_settings(raw, DEFAULTS)
-    assert resolved == Settings(hour=4, langs="eng", exclude_globs=("A/**", "B/**"), max_mb=50, keep_originals=False)
+    assert resolved == Settings(
+        hour=4, langs="eng", exclude_globs=("A/**", "B/**"), max_mb=50, keep_originals=False, originals_retention_days=0
+    )
 
 
 def test_resolve_settings_decodes_json_strings_from_a_text_only_driver() -> None:
@@ -106,7 +108,9 @@ def test_decode_invalid_json_string_passes_through() -> None:
 
 
 def test_diff_changed_detects_each_field() -> None:
-    changed = Settings(hour=4, langs="eng", exclude_globs=("A/**",), max_mb=10, keep_originals=False)
+    changed = Settings(
+        hour=4, langs="eng", exclude_globs=("A/**",), max_mb=10, keep_originals=False, originals_retention_days=0
+    )
     names = diff_changed(DEFAULTS, changed)
     assert set(names) == {"hour", "langs", "exclude_globs", "max_mb", "keep_originals"}
 

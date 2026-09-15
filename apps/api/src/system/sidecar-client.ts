@@ -21,6 +21,10 @@ export type SidecarResult<T> =
        * caller distinguish a specific status (e.g. 409) from "unreachable"
        * in general. */
       readonly status?: number;
+      /** The non-2xx response's decoded JSON body, when it sent one. A sidecar
+       * that refuses an operation explains why in the body, and that reason is
+       * what the operator needs to see; the caller validates its own shape. */
+      readonly body?: unknown;
     };
 
 export interface SidecarRequestDeps {
@@ -31,6 +35,9 @@ export interface SidecarRequestDeps {
 export interface SidecarRequestOptions {
   readonly method?: string;
   readonly jsonBody?: unknown;
+  /** Overrides `deps.timeoutMs` for one call. A restore copies file bytes, so
+   * it needs more than the health-check budget the default is sized for. */
+  readonly timeoutMs?: number;
 }
 
 function messageFor(err: unknown): string {
@@ -61,7 +68,10 @@ export async function callSidecar<T>(
   deps: SidecarRequestDeps,
 ): Promise<SidecarResult<T>> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? DEFAULT_SIDECAR_TIMEOUT_MS);
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? deps.timeoutMs ?? DEFAULT_SIDECAR_TIMEOUT_MS,
+  );
 
   try {
     const init: RequestInit = {
@@ -83,12 +93,18 @@ export async function callSidecar<T>(
     }
 
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      let body: unknown;
+      if (response.headers.get("content-type")?.includes("application/json") === true) {
+        body = await (response.json() as Promise<unknown>).catch(() => undefined);
+      } else {
+        await response.body?.cancel().catch(() => undefined);
+      }
       return {
         ok: false,
         reason: "unreachable",
         detail: `status ${response.status}`,
         status: response.status,
+        ...(body !== undefined ? { body } : {}),
       };
     }
 

@@ -17,6 +17,7 @@ LANGS_KEY = "ocr.langs"
 EXCLUDE_GLOBS_KEY = "ocr.exclude_globs"
 MAX_MB_KEY = "ocr.max_mb"
 KEEP_ORIGINALS_KEY = "ocr.keep_originals"
+ORIGINALS_RETENTION_DAYS_KEY = "ocr.originals_retention_days"
 
 MIN_HOUR = 0
 MAX_HOUR = 23
@@ -26,6 +27,9 @@ DEFAULT_LANGS = "swe+eng"
 DEFAULT_EXCLUDE_GLOBS: tuple[str, ...] = ("Programs/**", "Photos/**", "Videos/**")
 DEFAULT_MAX_MB = 200
 DEFAULT_KEEP_ORIGINALS = True
+# Zero keeps originals forever. An installation upgrading into this setting must
+# never start deleting kept bytes because a new default said so.
+DEFAULT_ORIGINALS_RETENTION_DAYS = 0
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,7 @@ class Settings:
     exclude_globs: tuple[str, ...]
     max_mb: int
     keep_originals: bool
+    originals_retention_days: int
 
 
 def default_settings() -> Settings:
@@ -44,6 +49,7 @@ def default_settings() -> Settings:
         exclude_globs=DEFAULT_EXCLUDE_GLOBS,
         max_mb=DEFAULT_MAX_MB,
         keep_originals=DEFAULT_KEEP_ORIGINALS,
+        originals_retention_days=DEFAULT_ORIGINALS_RETENTION_DAYS,
     )
 
 
@@ -108,6 +114,13 @@ def _parse_bool(raw: object, default: bool) -> bool:
     return default
 
 
+def _parse_retention_days(raw: object, default: int) -> int:
+    """Negative spellings of "keep forever" are normalised to zero so the
+    resolved value can be compared and displayed without a second rule."""
+    value = _parse_int(raw, default)
+    return max(value, 0)
+
+
 def resolve_settings(raw: dict[str, object], defaults: Settings) -> Settings:
     return Settings(
         hour=_parse_hour(raw.get(HOUR_KEY), defaults.hour),
@@ -115,6 +128,9 @@ def resolve_settings(raw: dict[str, object], defaults: Settings) -> Settings:
         exclude_globs=_parse_glob_list(raw.get(EXCLUDE_GLOBS_KEY), defaults.exclude_globs),
         max_mb=_parse_int(raw.get(MAX_MB_KEY), defaults.max_mb),
         keep_originals=_parse_bool(raw.get(KEEP_ORIGINALS_KEY), defaults.keep_originals),
+        originals_retention_days=_parse_retention_days(
+            raw.get(ORIGINALS_RETENTION_DAYS_KEY), defaults.originals_retention_days
+        ),
     )
 
 

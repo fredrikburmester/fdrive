@@ -3,6 +3,8 @@ import {
   IndexerClearResponse,
   IndexerSettingsResponse,
   IndexerThumbnailsRebuildResponse,
+  OcrOriginalRestoreResponse,
+  OcrOriginalsResponse,
   OcrRunResponse,
   OcrSettingsResponse,
   SystemImageSearchResponse,
@@ -93,6 +95,10 @@ function fakeOcrClient(overrides: Partial<OcrClient> = {}): OcrClient {
     health: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     stats: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     run: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    originals: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    restoreOriginal: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    deleteOriginal: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
+    downloadOriginal: async () => ({ ok: false, detail: "not stubbed" }),
     ...overrides,
   };
 }
@@ -887,6 +893,7 @@ describe("GET /system/ocr", () => {
       excludeGlobs: [],
       maxMb: 200,
       keepOriginals: false,
+      originalsRetentionDays: 0,
       originalsCount: 0,
       originalsBytes: 0,
       running: false,
@@ -944,7 +951,14 @@ describe("PUT /system/ocr/settings", () => {
 
   it("writes every key and returns the resolved values", async () => {
     const { app, settings } = buildApp({});
-    const patch = { hour: 4, langs: "eng", excludeGlobs: [], maxMb: 100, keepOriginals: true };
+    const patch = {
+      hour: 4,
+      langs: "eng",
+      excludeGlobs: [],
+      maxMb: 100,
+      keepOriginals: true,
+      originalsRetentionDays: 90,
+    };
 
     const res = await app.request("/api/v1/system/ocr/settings", {
       method: "PUT",
@@ -994,6 +1008,255 @@ describe("POST /system/ocr/run", () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual({ started: true });
+  });
+});
+
+describe("GET /system/ocr/originals", () => {
+  const original = {
+    id: "0123456789abcdef_scan.pdf",
+    root: "sftpgo",
+    path: "docs/scan.pdf",
+    size: 1024,
+    keptAt: "2026-09-07T03:00:00.000Z",
+    sha256: "a".repeat(64),
+    legacy: false,
+    state: "ocred" as const,
+  };
+
+  it("400s when OCR is not configured", async () => {
+    const { app } = buildApp({});
+    expect((await app.request("/api/v1/system/ocr/originals")).status).toBe(400);
+  });
+
+  it("lists kept originals", async () => {
+    const originals = vi
+      .fn()
+      .mockResolvedValue({ ok: true, data: { items: [original], total: 1, offset: 0, limit: 50 } });
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ originals }) } });
+
+    const res = await app.request("/api/v1/system/ocr/originals?query=scan&offset=0&limit=25");
+    const body = OcrOriginalsResponse.parse(await res.json());
+
+    expect(res.status).toBe(200);
+    expect(body.items).toEqual([original]);
+    expect(originals).toHaveBeenCalledWith({ query: "scan", offset: 0, limit: 25 });
+  });
+
+  it("rejects a page size beyond the cap", async () => {
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient() } });
+    expect((await app.request("/api/v1/system/ocr/originals?limit=5000")).status).toBe(400);
+  });
+
+  it("502s when OCR is unreachable", async () => {
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient() } });
+    expect((await app.request("/api/v1/system/ocr/originals")).status).toBe(502);
+  });
+
+  it("403s for a non-admin", async () => {
+    const { app } = buildApp({ isAdmin: false, deps: { ocrClient: fakeOcrClient() } });
+    expect((await app.request("/api/v1/system/ocr/originals")).status).toBe(403);
+  });
+});
+
+describe("GET /system/ocr/originals/download", () => {
+  it("streams the kept bytes as an attachment that is never cached", async () => {
+    const downloadOriginal = vi
+      .fn()
+      .mockResolvedValue({ ok: true, response: new Response("pdf bytes") });
+    const { app, recorded } = buildApp({
+      deps: { ocrClient: fakeOcrClient({ downloadOriginal }) },
+    });
+
+    const res = await app.request("/api/v1/system/ocr/originals/download?id=abc_scan.pdf");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("content-disposition")).toContain("attachment");
+    expect(await res.text()).toBe("pdf bytes");
+    expect(recorded.map((event) => event.message)).toContain("Kept original downloaded");
+  });
+
+  it("400s without an id and 404s for one that is no longer kept", async () => {
+    const downloadOriginal = vi
+      .fn()
+      .mockResolvedValue({ ok: false, detail: "status 404", status: 404 });
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ downloadOriginal }) } });
+
+    expect((await app.request("/api/v1/system/ocr/originals/download")).status).toBe(400);
+    expect((await app.request("/api/v1/system/ocr/originals/download?id=a")).status).toBe(404);
+  });
+
+  it("502s when the OCR service cannot be reached", async () => {
+    const downloadOriginal = vi.fn().mockResolvedValue({ ok: false, detail: "refused" });
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ downloadOriginal }) } });
+    expect((await app.request("/api/v1/system/ocr/originals/download?id=a")).status).toBe(502);
+  });
+});
+
+describe("POST /system/ocr/originals/restore", () => {
+  const post = (app: { request: typeof fetch }, body: unknown) =>
+    app.request("/api/v1/system/ocr/originals/restore", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify(body),
+    });
+
+  it("restores and records what it replaced", async () => {
+    const restoreOriginal = vi.fn().mockResolvedValue({
+      ok: true,
+      data: { restored: true, root: "sftpgo", path: "docs/scan.pdf", previousState: "ocred" },
+    });
+    const { app, recorded } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
+
+    const res = await post(app as never, { id: "abc_scan.pdf" });
+
+    expect(res.status).toBe(200);
+    expect(OcrOriginalRestoreResponse.parse(await res.json()).restored).toBe(true);
+    expect(recorded).toContainEqual({
+      subsystem: "ocr",
+      level: "warn",
+      message: "Original restored",
+      data: { id: "abc_scan.pdf", root: "sftpgo", path: "docs/scan.pdf", replaced: "ocred" },
+    });
+  });
+
+  it("turns a refusal into a 409 that names the reason and the state", async () => {
+    const restoreOriginal = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 409",
+      status: 409,
+      body: { error: "target_changed", state: "changed", root: "sftpgo", path: "docs/scan.pdf" },
+    });
+    const { app, recorded } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
+
+    const res = await post(app as never, { id: "abc_scan.pdf" });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { message: string; details?: unknown } };
+    expect(body.error.message).toContain("changed after OCR ran");
+    expect(body.error.details).toMatchObject({ reason: "target_changed", state: "changed" });
+    expect(recorded.map((event) => event.message)).toContain("Restore refused: target_changed");
+  });
+
+  it("turns an unknown original into a 404", async () => {
+    const restoreOriginal = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 404",
+      status: 404,
+      body: { error: "not_found" },
+    });
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
+
+    expect((await post(app as never, { id: "abc_scan.pdf" })).status).toBe(404);
+  });
+
+  it("502s when the failure carries no refusal to explain it", async () => {
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient() } });
+    expect((await post(app as never, { id: "abc_scan.pdf" })).status).toBe(502);
+  });
+
+  it("400s on a body without an id, on one that is not JSON, and when OCR is not configured", async () => {
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient() } });
+    expect((await post(app as never, { id: "" })).status).toBe(400);
+
+    const malformed = await app.request("/api/v1/system/ocr/originals/restore", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: "not json",
+    });
+    expect(malformed.status).toBe(400);
+
+    const { app: unconfigured } = buildApp({});
+    expect((await post(unconfigured as never, { id: "a" })).status).toBe(400);
+  });
+});
+
+describe.each([
+  ["target_changed", /changed after OCR ran/],
+  ["target_missing", /no longer exists/],
+  ["target_parent_missing", /folder that held that file no longer exists/],
+  ["corrupt", /no longer matches its checksum/],
+  ["unresolved", /could not be recovered/],
+  ["unknown_root", /index root the OCR service is not configured for/],
+  ["invalid_path", /source path outside its index root/],
+  ["something_new", /refused that restore: something_new/],
+])("a %s refusal", (reason, expected) => {
+  it("is reported as a 409 an administrator can act on", async () => {
+    const restoreOriginal = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 409",
+      status: 409,
+      body: { error: reason, state: null, root: "sftpgo", path: "docs/scan.pdf" },
+    });
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
+
+    const res = await app.request("/api/v1/system/ocr/originals/restore", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ id: "abc_scan.pdf" }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toMatch(expected);
+  });
+});
+
+describe("POST /system/ocr/originals/delete", () => {
+  const post = (app: { request: typeof fetch }, body: unknown) =>
+    app.request("/api/v1/system/ocr/originals/delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify(body),
+    });
+
+  it("deletes and records it", async () => {
+    const deleteOriginal = vi.fn().mockResolvedValue({ ok: true, data: { deleted: true } });
+    const { app, recorded } = buildApp({ deps: { ocrClient: fakeOcrClient({ deleteOriginal }) } });
+
+    const res = await post(app as never, { id: "abc_scan.pdf" });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ deleted: true });
+    expect(recorded).toContainEqual({
+      subsystem: "ocr",
+      level: "warn",
+      message: "Kept original deleted",
+      data: { id: "abc_scan.pdf" },
+    });
+  });
+
+  it("404s for an original that is already gone", async () => {
+    const deleteOriginal = vi
+      .fn()
+      .mockResolvedValue({ ok: false, reason: "unreachable", detail: "status 404", status: 404 });
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ deleteOriginal }) } });
+
+    expect((await post(app as never, { id: "abc_scan.pdf" })).status).toBe(404);
+  });
+
+  it("502s when OCR is unreachable, and 400s on a bad body or no OCR", async () => {
+    const { app } = buildApp({ deps: { ocrClient: fakeOcrClient() } });
+    expect((await post(app as never, { id: "abc_scan.pdf" })).status).toBe(502);
+
+    const malformed = await app.request("/api/v1/system/ocr/originals/delete", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: "not json",
+    });
+    expect(malformed.status).toBe(400);
+
+    const { app: unconfigured } = buildApp({});
+    expect((await post(unconfigured as never, { id: "a" })).status).toBe(400);
+  });
+
+  it("403s for a non-admin", async () => {
+    const { app } = buildApp({ isAdmin: false, deps: { ocrClient: fakeOcrClient() } });
+    expect((await post(app as never, { id: "abc_scan.pdf" })).status).toBe(403);
   });
 });
 
@@ -1404,6 +1667,7 @@ describe("system routes: recorded events", () => {
         excludeGlobs: [],
         maxMb: 200,
         keepOriginals: false,
+        originalsRetentionDays: 0,
       }),
     });
 
@@ -1535,11 +1799,11 @@ it.each(["indexer/reindex", "search/reembed", "ocr/run"])(
       deps: {
         indexRootNames: ["sftpgo"],
         indexerClient: fakeIndexerClient({ reindex: async () => failure }),
-        ocrClient: {
+        ocrClient: fakeOcrClient({
           health: async () => failure,
           stats: async () => failure,
           run: async () => failure,
-        },
+        }),
       },
     });
     const response = await app.request(`/api/v1/system/${route}`, {

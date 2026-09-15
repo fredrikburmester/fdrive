@@ -25,6 +25,35 @@ not current instructions.
   files, `.claude/launch.json` and `.playwright-mcp/rehearsal.json`. `biome check apps packages`
   is clean. `.playwright-mcp/` looks like it wants a gitignore entry.
 
+## Restoring OCR originals: implemented in the primary checkout
+
+- Branch `feat/ocr-restore-originals` off `main` at `e303c12`. The pre-existing backup WIP in
+  `apps/web/e2e/backups.spec.ts` and `apps/web/src/components/system/backup-*` is untouched and
+  uncommitted.
+- Kept originals had no reader: `apply_rewrite` wrote them and their sidecars, and nothing ever
+  put one back. Recovery meant copying the file off the host by hand, and the next nightly pass
+  then OCR'd it straight back again, because a rewrite re-keys its done-log row to the new size
+  and the pre-OCR key was never recorded.
+- New `services/ocr` modules `originals.py` (pure) and `restore.py` (I/O), four `/originals`
+  endpoints, and a `restored` done-log row that stops the next pass from undoing a restore.
+  Restores are refused rather than half-applied for a changed or missing target without the
+  caller's opt-in, a checksum mismatch, an unresolvable sidecar, a path outside its root, an
+  unconfigured root, or a missing parent directory. Legacy originals resolve from the done-log
+  and backfill their sidecar. `ocr.originals_retention_days` prunes at the end of each pass,
+  defaulting to 0 (keep forever). Behaviour: [OCR](../OCR.md#kept-originals).
+- Admin UI is `System > Searchable PDFs > Kept originals`: search, per-row state, restore,
+  download and delete, with state-specific confirmations. Everything but `/run` works while the
+  `pdfOcr` feature is off, which is the state an operator is in when a pass has damaged a file.
+- Per-file restore from the file browser was deliberately not built; the authorization reason is
+  in [deferred](../plans/DEFERRED.md).
+- Gates: `python ocr` (ruff, mypy, 96% coverage), `integration`, `browser e2e/ocr-originals.spec.ts`
+  (screenshots inspected), and `application` typecheck plus `VITEST_MAX_WORKERS=1 pnpm test:coverage`
+  (10/10 tasks). At full turbo concurrency the pre-existing backup tests flake on timing; they
+  pass in isolation and under one worker.
+- `application`'s repo-wide lint gate fails on two untracked local artifacts that predate this
+  work, `.claude/launch.json` and `.playwright-mcp/`. `npx biome check $(git ls-files)` is clean.
+  Either gitignore them or add `!**/.playwright-mcp` to `biome.json`.
+
 ## Installation backups: implemented, final gates in progress
 
 - Worktree `/private/tmp/fdrive-backups`, branch `codex/backups`, everything uncommitted; main

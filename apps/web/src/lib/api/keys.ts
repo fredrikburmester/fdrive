@@ -35,6 +35,8 @@ export const queryKeys = {
     indexer: () => ["system", "indexer"] as const,
     search: () => ["system", "search"] as const,
     ocr: () => ["system", "ocr"] as const,
+    ocrOriginals: (query: string, offset: number) =>
+      ["system", "ocr", "originals", query, offset] as const,
     thumbnails: () => ["system", "thumbnails"] as const,
     imageSearch: () => ["system", "image-search"] as const,
     mountMappings: () => ["system", "mount-mappings"] as const,
