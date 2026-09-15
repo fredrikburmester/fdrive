@@ -28,6 +28,7 @@ import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
 import { accountTransition } from "@/lib/account/transition";
 import { useAiStatus } from "@/lib/ai/queries";
+import { useOrganize } from "@/lib/ai/use-organize";
 import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import {
@@ -179,7 +180,7 @@ export function FileBrowser({
   const { data: officeStatus } = useOfficeStatus();
   const { data: aiStatus } = useAiStatus();
   const organizeAvailable = aiStatus?.available === true;
-  const [organizeEntries, setOrganizeEntries] = useState<FsEntry[] | null>(null);
+  const organize = useOrganize();
   const [officeKind, setOfficeKind] = useState<OfficeDocumentKind | null>(null);
   const [officePending, setOfficePending] = useState(false);
   const [officeError, setOfficeError] = useState<string | null>(null);
@@ -553,7 +554,7 @@ export function FileBrowser({
         setDestinationPicker({ mode: "copy", paths: pathsForAction(entry) });
         break;
       case "organize":
-        if (organizeAvailable) setOrganizeEntries(entriesForAction(entry));
+        if (organizeAvailable) organize.open(entriesForAction(entry));
         break;
       case "delete":
         setDeleteTargets(entriesForAction(entry));
@@ -886,8 +887,11 @@ export function FileBrowser({
             onCompressSelection={handleCompressSelection}
             onOrganizeSelection={
               organizeAvailable && selectedEntries.length > 0
-                ? () => setOrganizeEntries(selectedEntries)
+                ? () => organize.open(selectedEntries)
                 : undefined
+            }
+            organizeStatus={
+              organize.status === null ? undefined : { ...organize.status, onOpen: organize.show }
             }
             onDownloadSelection={handleDownloadSelection}
             showThumbnails={showThumbnails && capabilities.index}
@@ -1040,9 +1044,8 @@ export function FileBrowser({
       )}
       {sharing && <ShareDialog entries={sharing} onClose={() => setSharing(null)} />}
       <OrganizeSheet
-        entries={organizeEntries}
+        organize={organize}
         provider={aiStatus?.provider ?? null}
-        onClose={() => setOrganizeEntries(null)}
         onMoved={() => dispatchSelection({ type: "clear" })}
       />
       <NewFolderDialog

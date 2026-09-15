@@ -8,6 +8,7 @@ import {
   safeEntryPath,
   stripArchiveExtension,
   uniqueCopyName,
+  uniqueNumberedName,
 } from "./archive-names.ts";
 import { isWithin, normalizePath } from "./paths.ts";
 
@@ -43,6 +44,26 @@ describe("uniqueCopyName", () => {
   it("tolerates a gap in the numbered sequence", () => {
     const existing = new Set(["a.txt", "a copy.txt", "a copy 2.txt", "a copy 3.txt"]);
     expect(uniqueCopyName("a.txt", existing)).toBe("a copy 4.txt");
+  });
+});
+
+describe("uniqueNumberedName", () => {
+  it("keeps a free name", () => {
+    expect(uniqueNumberedName("report.pdf", new Set(["other.pdf"]))).toBe("report.pdf");
+  });
+
+  it("numbers a taken name from 2, before the extension", () => {
+    expect(uniqueNumberedName("report.pdf", new Set(["report.pdf"]))).toBe("report (2).pdf");
+    const taken = new Set(["report.pdf", "report (2).pdf", "report (3).pdf"]);
+    expect(uniqueNumberedName("report.pdf", taken)).toBe("report (4).pdf");
+  });
+
+  it("handles folders, dotfiles and compound extensions", () => {
+    expect(uniqueNumberedName("docs", new Set(["docs"]))).toBe("docs (2)");
+    expect(uniqueNumberedName(".env", new Set([".env"]))).toBe(".env (2)");
+    expect(uniqueNumberedName("backup.tar.gz", new Set(["backup.tar.gz"]))).toBe(
+      "backup (2).tar.gz",
+    );
   });
 });
 

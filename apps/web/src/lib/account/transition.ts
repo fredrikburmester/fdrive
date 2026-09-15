@@ -4,6 +4,7 @@ import type { MeResponse } from "@fdrive/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
 import { useSyncExternalStore } from "react";
+import { useOrganizeSessionStore } from "@/lib/ai/organize-session";
 import { pinTabIdentity } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
 import { useJobsStore } from "@/lib/jobs/store";
@@ -69,6 +70,7 @@ export async function transitionAccount(
     pinTabIdentity(me.activeIdentityId);
     queryClient.setQueryData(queryKeys.auth.me(), me);
     useJobsStore.getState().reset();
+    useOrganizeSessionStore.getState().reset();
     useUploadStore.getState().setActiveIdentity(me.activeIdentityId);
     navigate(target as Route);
     return me;
