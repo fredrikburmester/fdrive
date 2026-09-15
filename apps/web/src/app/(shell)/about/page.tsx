@@ -126,20 +126,6 @@ export default async function AboutPage() {
           </CardContent>
         </Card>
         <div className="flex w-full max-w-3xl flex-col gap-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
-          {about.builtOn.map((attribution) => (
-            <p key={attribution.name}>
-              Built on{" "}
-              <a
-                href={attribution.sourceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-              >
-                {attribution.name}
-              </a>
-              .
-            </p>
-          ))}
           {about.providers
             .filter((provider) => provider.label !== null)
             .map((provider) => (

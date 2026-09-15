@@ -43,7 +43,6 @@ describe("shouldRedirectToSetup", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: [],
         providers: [],
         setupRequired: true,
       }),
@@ -56,7 +55,6 @@ describe("shouldRedirectToSetup", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
         providers: [{ type: "sftpgo", label: null }],
         setupRequired: false,
       }),

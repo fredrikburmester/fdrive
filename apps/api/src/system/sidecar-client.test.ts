@@ -104,7 +104,13 @@ describe("callSidecar", () => {
       { fetch: fetchStub },
     );
 
-    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 500", status: 500 });
+    expect(result).toEqual({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 500",
+      status: 500,
+      body: { error: "boom" },
+    });
   });
 
   it("carries the status through for a 409 response", async () => {
@@ -118,7 +124,13 @@ describe("callSidecar", () => {
       { fetch: fetchStub },
     );
 
-    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 409", status: 409 });
+    expect(result).toEqual({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 409",
+      status: 409,
+      body: { error: "already running" },
+    });
   });
 
   it("reports invalid when the body is not valid JSON", async () => {
@@ -207,4 +219,47 @@ it("keeps the HTTP error status when cancelling its body also fails", async () =
   );
   expect(result).toMatchObject({ ok: false, status: 503 });
   expect(cancel).toHaveBeenCalledOnce();
+});
+
+describe("callSidecar: refusal bodies", () => {
+  const SCHEMA_ = z.object({ ok: z.boolean() });
+
+  it("omits the body when the failure response is not JSON", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(new Response("nope", { status: 500 }));
+
+    const result = await callSidecar("http://ocr:8011", "/x", SCHEMA_, {}, { fetch: fetchStub });
+
+    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 500", status: 500 });
+  });
+
+  it("omits the body when a JSON failure response cannot be decoded", async () => {
+    const fetchStub = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("{", { status: 409, headers: { "content-type": "application/json" } }),
+      );
+
+    const result = await callSidecar("http://ocr:8011", "/x", SCHEMA_, {}, { fetch: fetchStub });
+
+    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 409", status: 409 });
+  });
+
+  it("lets one call override the shared timeout", async () => {
+    const fetchStub = vi.fn().mockResolvedValue(
+      new Response('{"ok":true}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const result = await callSidecar(
+      "http://ocr:8011",
+      "/x",
+      SCHEMA_,
+      { timeoutMs: 60_000 },
+      { fetch: fetchStub, timeoutMs: 1 },
+    );
+
+    expect(result).toEqual({ ok: true, data: { ok: true } });
+  });
 });

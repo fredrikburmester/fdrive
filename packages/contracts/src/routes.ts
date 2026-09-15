@@ -113,7 +113,7 @@ export const ROUTES = {
     /** POST: permanently delete every entry -> `OkResponse`. */
     empty: "/api/v1/trash/empty",
   },
-  /** GET: version and provider attribution -> `AboutResponse`. */
+  /** GET: version and configured providers -> `AboutResponse`. */
   about: "/api/v1/about",
   /** GET, public: the enabled providers and their credential forms -> `ProvidersResponse`. */
   providers: "/api/v1/providers",
@@ -167,6 +167,14 @@ export const ROUTES = {
     ocrSettings: "/api/v1/system/ocr/settings",
     /** POST, admin only: run the OCR pass now -> `OcrRunResponse`. */
     ocrRun: "/api/v1/system/ocr/run",
+    /** GET, admin only: originals kept before an OCR rewrite -> `OcrOriginalsResponse`. */
+    ocrOriginals: "/api/v1/system/ocr/originals",
+    /** GET, admin only: stream one kept original's bytes. */
+    ocrOriginalDownload: "/api/v1/system/ocr/originals/download",
+    /** POST, admin only: put one kept original back -> `OcrOriginalRestoreResponse`. */
+    ocrOriginalRestore: "/api/v1/system/ocr/originals/restore",
+    /** POST, admin only: delete one kept original -> `OcrOriginalDeleteResponse`. */
+    ocrOriginalDelete: "/api/v1/system/ocr/originals/delete",
     /** GET, admin only: thumbnail cache size -> `SystemThumbnailsResponse`. */
     thumbnails: "/api/v1/system/thumbnails",
     /** POST, admin only: rebuild every missing thumbnail -> `IndexerThumbnailsRebuildResponse` (202). */

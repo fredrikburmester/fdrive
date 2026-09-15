@@ -18,7 +18,12 @@ from fdrive_ocr.decide import STATUS_TIMEOUT
 from fdrive_ocr.settings import Settings
 
 DEFAULT_SETTINGS = Settings(
-    hour=3, langs="swe+eng", exclude_globs=("Programs/**", "Photos/**", "Videos/**"), max_mb=200, keep_originals=True
+    hour=3,
+    langs="swe+eng",
+    exclude_globs=("Programs/**", "Photos/**", "Videos/**"),
+    max_mb=200,
+    keep_originals=True,
+    originals_retention_days=0,
 )
 
 
@@ -52,7 +57,7 @@ def test_iter_candidate_pdfs_skips_configured_dirs(tmp_path: Path) -> None:
     assert found[0].endswith("visible.pdf")
 
 
-# -- originals_dest / originals_stats ------------------------------------------
+# -- originals_dest --------------------------------------------------------------
 
 
 def test_originals_dest_is_stable_for_same_key(tmp_path: Path) -> None:
@@ -66,24 +71,6 @@ def test_originals_dest_differs_for_different_keys(tmp_path: Path) -> None:
     a = runner.originals_dest(str(tmp_path), "sftpgo", "docs/a.pdf", 100, 111)
     b = runner.originals_dest(str(tmp_path), "sftpgo", "docs/a.pdf", 100, 222)
     assert a != b
-
-
-def test_originals_stats_empty_when_missing_dir(tmp_path: Path) -> None:
-    assert runner.originals_stats(str(tmp_path / "nope")) == (0, 0)
-
-
-def test_originals_stats_counts_files(tmp_path: Path) -> None:
-    originals = tmp_path / "originals"
-    originals.mkdir()
-    (originals / "a").write_bytes(b"1234")
-    (originals / "b").write_bytes(b"12")
-    sub = originals / "sub"
-    sub.mkdir()
-    (sub / "c").write_bytes(b"999")  # not counted: scandir is not recursive
-
-    count, total = runner.originals_stats(str(tmp_path))
-    assert count == 2
-    assert total == 6
 
 
 # -- run_ocrmypdf ---------------------------------------------------------------
@@ -317,7 +304,7 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
     src = root / "a.pdf"
     _write_pdf(src, "OK")
     target = runner.RootTarget(name="sftpgo", root_id=1, abs_path=str(root))
-    settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=200, keep_originals=False)
+    settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=200, keep_originals=False, originals_retention_days=0)
     real_replace = os.replace
 
     def fake_run_ocrmypdf(
@@ -333,6 +320,8 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
 
     monkeypatch.setattr(runner, "run_ocrmypdf", fake_run_ocrmypdf)
     monkeypatch.setattr(runner.db, "record_ocr_log", lambda *args: None)
+    monkeypatch.setattr(runner.db, "is_done", lambda *args: False)
+    monkeypatch.setattr(runner.db, "ocr_file_lock", lambda *args: nullcontext())
     monkeypatch.setattr(runner.db, "backup_checkpoint", lambda _conn: nullcontext())
     monkeypatch.setattr(runner.os, "replace", replace_across_mounts_fails)
 
@@ -381,7 +370,14 @@ def test_process_file_excluded(postgres_dsn: str, tmp_path: Path) -> None:
         (tmp_path / "Photos").mkdir()
         f = tmp_path / "Photos" / "a.pdf"
         _write_pdf(f, "OK")
-        settings = Settings(hour=3, langs="eng", exclude_globs=("sftpgo/Photos/**",), max_mb=200, keep_originals=True)
+        settings = Settings(
+            hour=3,
+            langs="eng",
+            exclude_globs=("sftpgo/Photos/**",),
+            max_mb=200,
+            keep_originals=True,
+            originals_retention_days=0,
+        )
         logs: list[str] = []
         status, rewrite = runner.process_file(
             conn, target, str(f), settings, str(tmp_path / "state"), 30, 2, set(), logs.append
@@ -401,7 +397,7 @@ def test_process_file_too_big(postgres_dsn: str, tmp_path: Path) -> None:
         target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         f.write_bytes(b"x" * 10)
-        settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=0, keep_originals=True)
+        settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=0, keep_originals=True, originals_retention_days=0)
         logs: list[str] = []
         status, rewrite = runner.process_file(
             conn, target, str(f), settings, str(tmp_path / "state"), 30, 2, set(), logs.append

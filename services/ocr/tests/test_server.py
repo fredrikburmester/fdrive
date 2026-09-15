@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,13 +12,15 @@ import pytest
 from psycopg.types.json import Json
 from starlette.testclient import TestClient
 
-from fdrive_ocr import db, server
+from fdrive_ocr import db, runner, server
 from fdrive_ocr.features import FEATURES_KEY
 from fdrive_ocr.runner import RootTarget
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
-DEFAULT_SETTINGS = Settings(hour=3, langs="swe+eng", exclude_globs=("Programs/**",), max_mb=200, keep_originals=True)
+DEFAULT_SETTINGS = Settings(
+    hour=3, langs="swe+eng", exclude_globs=("Programs/**",), max_mb=200, keep_originals=True, originals_retention_days=0
+)
 
 
 def _set_pdf_ocr(state: server.ServerState) -> None:
@@ -305,3 +311,182 @@ def test_activity_counts_done_skips_and_errors_without_storage_reads(postgres_ds
     lock.release()
     newer = client.get("/activity").json()["operations"][0]
     assert newer["id"] != operation["id"] and newer["state"] == "stopped"
+
+
+# -- /originals ---------------------------------------------------------------------
+
+
+def _keep_original(state: server.ServerState, root: Path, rel_path: str = "docs/scan.pdf") -> str:
+    """Rewrites one file through `apply_rewrite` so the state directory holds a
+    kept original with its sidecar, exactly as a pass would leave it."""
+    source = root / rel_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"OK\noriginal\n")
+    info = source.stat()
+    rewritten = root / "rewritten.pdf"
+    rewritten.write_bytes(b"OK-OCRED-OUTPUT\n")
+    runner.apply_rewrite(
+        str(source), str(rewritten), state.state_dir, "sftpgo", rel_path, info.st_size, info.st_mtime_ns, True
+    )
+    state.originals.invalidate()
+    return os.path.basename(runner.originals_dest(state.state_dir, "sftpgo", rel_path, info.st_size, info.st_mtime_ns))
+
+
+def test_originals_lists_kept_files_with_their_source_path(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    body = TestClient(server.create_app(state)).get("/originals").json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == original_id
+    assert body["items"][0]["path"] == "docs/scan.pdf"
+    assert body["items"][0]["state"] == "changed"
+
+
+def test_originals_are_administrable_while_pdf_ocr_is_switched_off(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    client = TestClient(server.create_app(state))
+
+    assert client.post("/run").status_code == 409  # the feature gate still applies to a pass
+    assert client.get("/originals").json()["total"] == 1
+    assert client.post("/originals/restore", json={"id": original_id, "allow_overwrite_changed": True}).status_code == 200
+    assert (tmp_path / "docs" / "scan.pdf").read_bytes() == b"OK\noriginal\n"
+
+
+def test_originals_pages_and_searches(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    _keep_original(state, tmp_path, "docs/invoice.pdf")
+    _keep_original(state, tmp_path, "photos/holiday.pdf")
+    client = TestClient(server.create_app(state))
+
+    assert client.get("/originals", params={"limit": 1}).json()["total"] == 2
+    assert len(client.get("/originals", params={"limit": 1}).json()["items"]) == 1
+    found = client.get("/originals", params={"query": "holiday"}).json()
+    assert [item["path"] for item in found["items"]] == ["photos/holiday.pdf"]
+
+
+def test_originals_ignores_unparsable_paging_parameters(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    _keep_original(state, tmp_path)
+    body = TestClient(server.create_app(state)).get("/originals", params={"limit": "many", "offset": "-4"}).json()
+    assert (body["limit"], body["offset"]) == (server.DEFAULT_PAGE_LIMIT, 0)
+    assert body["total"] == 1
+
+
+def test_originals_clamps_an_oversized_page(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    body = TestClient(server.create_app(state)).get("/originals", params={"limit": "100000"}).json()
+    assert body["limit"] == server.MAX_PAGE_LIMIT
+
+
+def test_download_streams_the_kept_bytes(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    resp = TestClient(server.create_app(state)).get("/originals/download", params={"id": original_id})
+    assert resp.status_code == 200
+    assert resp.content == b"OK\noriginal\n"
+    assert resp.headers["content-type"] == "application/pdf"
+
+
+def test_download_404s_for_an_unknown_original(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    client = TestClient(server.create_app(state))
+    assert client.get("/originals/download", params={"id": "nope.pdf"}).status_code == 404
+    assert client.get("/originals/download", params={"id": "../../etc/passwd"}).status_code == 404
+
+
+def test_restore_reports_the_refusal_that_needs_an_opt_in(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    client = TestClient(server.create_app(state))
+
+    refused = client.post("/originals/restore", json={"id": original_id})
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "target_changed"
+    assert refused.json()["state"] == "changed"
+    assert (tmp_path / "docs" / "scan.pdf").read_bytes() == b"OK-OCRED-OUTPUT\n"
+
+
+def test_restore_404s_for_an_unknown_original(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    resp = TestClient(server.create_app(state)).post("/originals/restore", json={"id": "nope.pdf"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.parametrize("body", [{}, {"id": 5}, "not-an-object"])
+def test_restore_and_delete_require_an_identifier(postgres_dsn: str, tmp_path: Path, body: object) -> None:
+    client = TestClient(server.create_app(_make_state(postgres_dsn, tmp_path)))
+    assert client.post("/originals/restore", json=body).status_code == 400
+    assert client.post("/originals/delete", json=body).status_code == 400
+
+
+def test_restore_rejects_a_body_that_is_not_json(postgres_dsn: str, tmp_path: Path) -> None:
+    client = TestClient(server.create_app(_make_state(postgres_dsn, tmp_path)))
+    assert client.post("/originals/restore", content=b"{").status_code == 400
+
+
+def test_delete_removes_a_kept_original(postgres_dsn: str, tmp_path: Path) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    client = TestClient(server.create_app(state))
+
+    assert client.post("/originals/delete", json={"id": original_id}).status_code == 200
+    assert client.get("/originals").json()["total"] == 0
+    assert client.post("/originals/delete", json={"id": original_id}).status_code == 404
+
+
+@pytest.mark.parametrize("operation", ["restore", "delete"])
+def test_original_mutation_does_not_block_health(
+    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    started, release = threading.Event(), threading.Event()
+    original = getattr(server, f"{operation}_original")
+
+    def paused(*args: object) -> object:
+        started.set()
+        assert release.wait(10)
+        return original(*args)
+
+    monkeypatch.setattr(server, f"{operation}_original", paused)
+    with TestClient(server.create_app(state)) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        mutation = pool.submit(
+            client.post, f"/originals/{operation}", json={"id": original_id, "allow_overwrite_changed": True},
+        )
+        try:
+            assert started.wait(5)
+            health = pool.submit(client.get, "/health").result(timeout=3)
+            assert health.status_code == 200
+            assert not mutation.done()
+        finally:
+            release.set()
+        assert mutation.result(timeout=5).status_code == 200
+
+
+def test_a_manual_run_prunes_aged_originals(postgres_dsn: str, tmp_path: Path) -> None:
+    # The root is a subdirectory so the pass does not walk into the state
+    # directory and treat the kept originals themselves as candidate PDFs.
+    root = tmp_path / "root"
+    root.mkdir()
+    root_id = db.upsert_root(db.connect(postgres_dsn), "sftpgo")
+    state = _make_state(postgres_dsn, tmp_path, targets=[RootTarget(name="sftpgo", root_id=root_id, abs_path=str(root))])
+    _set_pdf_ocr(state)
+    original_id = _keep_original(state, root)
+    conn = state.conn_factory()
+    with conn.cursor() as cur:
+        cur.execute(
+            'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
+            ("ocr.originals_retention_days", Json(1)),
+        )
+    conn.close()
+    sidecar = Path(state.state_dir, "original-mappings", f"{original_id}.json")
+    document = json.loads(sidecar.read_text())
+    sidecar.write_text(json.dumps({**document, "kept_at_ns": str(int((time.time() - 86400 * 5) * 1_000_000_000))}))
+    state.originals.invalidate()
+
+    client = TestClient(server.create_app(state))
+    assert client.post("/run").status_code == 202
+    assert _wait_until(lambda: not state.run_lock.running)
+    assert client.get("/originals").json()["total"] == 0

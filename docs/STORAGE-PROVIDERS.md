@@ -83,8 +83,8 @@ verify that the new dependency builds and is included in the deployed API depend
 
 Export a module with `type`, `label`, `configFields`, `credentialFields`, all eight capability
 flags, a Trash strategy, `probe`, `authenticate` and `createStorage`. Optional members are
-`attribution`, `indexRootName` and `mint`. There is no `configSchema`, `credentialSchema` or
-`createShares` member.
+`indexRootName` and `mint`. There is no `attribution`, `configSchema`, `credentialSchema` or
+`createShares` member: `/about` names the connected provider, not its upstream project.
 
 This compilable wiring skeleton uses injected protocol implementations. It does not implement
 an example backend: the driver must supply the three real operations before registration.

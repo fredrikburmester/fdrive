@@ -281,6 +281,7 @@ describe("createIndexerClient: thumbnailsRebuild", () => {
       reason: "unreachable",
       detail: "status 409",
       status: 409,
+      body: { error: "already running" },
     });
   });
 });
@@ -317,7 +318,13 @@ describe("createIndexerClient: imageEmbeddingsRebuild", () => {
 
     const result = await client.imageEmbeddingsRebuild();
 
-    expect(result).toEqual({ ok: false, reason: "unreachable", detail: "status 409", status: 409 });
+    expect(result).toEqual({
+      ok: false,
+      reason: "unreachable",
+      detail: "status 409",
+      status: 409,
+      body: { error: "already running" },
+    });
   });
 });
 

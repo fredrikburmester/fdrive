@@ -18,9 +18,6 @@ import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./s
 import type { SftpgoClient } from "./types.js";
 import { SFTPGO_WRITE_PROTOCOL, withSftpgoWriteLease } from "./write-lease.js";
 
-/** SFTPGo's source, linked from the About page as its AGPL-3.0 NOTICE terms ask. */
-export const SFTPGO_SOURCE_URL = "https://github.com/drakkan/sftpgo";
-
 /** Default used by deployment setup; never inferred for an unmapped provider row. */
 export const DEFAULT_SFTPGO_HOME_TEMPLATE = "sftpgo:/{username}";
 
@@ -131,7 +128,6 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
   return {
     type: "sftpgo",
     label: "SFTPGo",
-    attribution: { name: "SFTPGo", sourceUrl: SFTPGO_SOURCE_URL },
     configFields: SFTPGO_CONFIG_FIELDS,
     credentialFields: SFTPGO_CREDENTIAL_FIELDS,
     capabilities: {

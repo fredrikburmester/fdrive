@@ -33,6 +33,14 @@ Remote or unmapped storage can still be browsed, but does not automatically gain
 thumbnails. For account-wide queries, text may span linked identities while visual results
 remain scoped to the active identity.
 
+PDF conversion rewrites the file in place, so System > Searchable PDFs keeps the file each
+rewrite replaced. **Kept originals** there lists them with what each one would overwrite, and
+restores, downloads or deletes one. A restore puts the exact pre-OCR bytes back and stops the
+next pass from converting that file again; overwriting a file that changed after conversion,
+or recreating one that was deleted, each require a separate confirmation. Turning off
+*Keep originals* saves disk space and makes every later rewrite permanent; *Keep originals
+for* deletes kept copies after a set number of days, and keeps them forever at zero.
+
 Rule changes take effect through the service settings cycle; they do not remove originals
 or necessarily purge previously cached results. A rule-preview UI remains in the
 [roadmap](plans/ROADMAP.md). Partial text-result messaging is tracked in

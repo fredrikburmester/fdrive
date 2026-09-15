@@ -65,6 +65,7 @@ class Config:
         # is needed here the way OCR_EXCLUDE_GLOBS above needs one.
         self.include_globs = parse_glob_list(os.environ.get("OCR_INCLUDE_GLOBS", ""))
         self.default_max_mb = int(os.environ.get("OCR_MAX_MB", "200"))
+        self.default_originals_retention_days = int(os.environ.get("OCR_ORIGINALS_RETENTION_DAYS", "0"))
         self.settings_refresh_seconds = max(1, int(os.environ.get("SETTINGS_REFRESH_SECONDS", "5")))
 
     def default_settings(self) -> Settings:
@@ -74,4 +75,5 @@ class Config:
             exclude_globs=self.default_exclude_globs,
             max_mb=self.default_max_mb,
             keep_originals=True,
+            originals_retention_days=self.default_originals_retention_days,
         )

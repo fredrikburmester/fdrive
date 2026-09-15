@@ -17,6 +17,8 @@ import {
   IndexerThumbnailsRebuildResponse,
   OcrHealth,
   OcrLastRun,
+  OcrOriginal,
+  OcrOriginalRestoreRequest,
   OcrRunResponse,
   OcrSettingsResponse,
   OcrSettingsUpdateRequest,
@@ -493,6 +495,7 @@ describe("OcrStats", () => {
       excludeGlobs: [],
       maxMb: 200,
       keepOriginals: false,
+      originalsRetentionDays: 0,
       originalsCount: 0,
       originalsBytes: 0,
       running: false,
@@ -509,6 +512,7 @@ describe("OcrStats", () => {
       excludeGlobs: [],
       maxMb: 200,
       keepOriginals: false,
+      originalsRetentionDays: 0,
       originalsCount: 0,
       originalsBytes: 0,
       running: false,
@@ -525,6 +529,7 @@ describe("OcrStats", () => {
       excludeGlobs: [],
       maxMb: 200,
       keepOriginals: false,
+      originalsRetentionDays: 0,
       originalsCount: 0,
       originalsBytes: 0,
       running: false,
@@ -542,6 +547,7 @@ describe("OcrSettingsResponse", () => {
         excludeGlobs: [],
         maxMb: 200,
         keepOriginals: false,
+        originalsRetentionDays: 0,
       },
       sources: {
         hour: "default",
@@ -549,6 +555,7 @@ describe("OcrSettingsResponse", () => {
         excludeGlobs: "default",
         maxMb: "default",
         keepOriginals: "default",
+        originalsRetentionDays: "default",
       },
     };
     expect(OcrSettingsResponse.parse(valid)).toEqual(valid);
@@ -557,13 +564,21 @@ describe("OcrSettingsResponse", () => {
 
 describe("SystemOcrResponse", () => {
   const settings = {
-    values: { hour: 3, langs: "swe+eng", excludeGlobs: [], maxMb: 200, keepOriginals: false },
+    values: {
+      hour: 3,
+      langs: "swe+eng",
+      excludeGlobs: [],
+      maxMb: 200,
+      keepOriginals: false,
+      originalsRetentionDays: 0,
+    },
     sources: {
       hour: "default",
       langs: "default",
       excludeGlobs: "default",
       maxMb: "default",
       keepOriginals: "default",
+      originalsRetentionDays: "default",
     },
   };
 
@@ -583,6 +598,7 @@ describe("OcrSettingsUpdateRequest", () => {
     excludeGlobs: ["**/private/**"],
     maxMb: 200,
     keepOriginals: true,
+    originalsRetentionDays: 0,
   };
 
   it("accepts a valid payload", () => {
@@ -603,6 +619,67 @@ describe("OcrSettingsUpdateRequest", () => {
 
   it("rejects a maxMb below 1", () => {
     expect(OcrSettingsUpdateRequest.safeParse({ ...valid, maxMb: 0 }).success).toBe(false);
+  });
+
+  it("rejects a negative retention window", () => {
+    expect(
+      OcrSettingsUpdateRequest.safeParse({ ...valid, originalsRetentionDays: -1 }).success,
+    ).toBe(false);
+  });
+
+  it("accepts zero as keep originals forever", () => {
+    expect(
+      OcrSettingsUpdateRequest.safeParse({ ...valid, originalsRetentionDays: 0 }).success,
+    ).toBe(true);
+  });
+});
+
+describe("OcrOriginal", () => {
+  const valid = {
+    id: "0123456789abcdef_scan.pdf",
+    root: "sftpgo",
+    path: "fredrik/docs/scan.pdf",
+    size: 1024,
+    keptAt: "2026-09-07T03:00:00+00:00",
+    sha256: "a".repeat(64),
+    legacy: false,
+    state: "ocred",
+  };
+
+  it("parses a resolved original", () => {
+    expect(OcrOriginal.parse(valid)).toEqual(valid);
+  });
+
+  it("parses an unresolved legacy original with no source path or state", () => {
+    const unresolved = {
+      ...valid,
+      root: null,
+      path: null,
+      sha256: null,
+      legacy: true,
+      state: null,
+    };
+    expect(OcrOriginal.parse(unresolved)).toEqual(unresolved);
+  });
+
+  it("rejects a state it does not define", () => {
+    expect(OcrOriginal.safeParse({ ...valid, state: "deleted" }).success).toBe(false);
+  });
+});
+
+describe("OcrOriginalRestoreRequest", () => {
+  it("defaults both destructive opt-ins to absent", () => {
+    const parsed = OcrOriginalRestoreRequest.parse({ id: "abc_scan.pdf" });
+    expect(parsed).toEqual({ id: "abc_scan.pdf" });
+  });
+
+  it("carries the opt-ins when given", () => {
+    const req = { id: "abc_scan.pdf", allowRecreate: true, allowOverwriteChanged: true };
+    expect(OcrOriginalRestoreRequest.parse(req)).toEqual(req);
+  });
+
+  it("rejects an empty id", () => {
+    expect(OcrOriginalRestoreRequest.safeParse({ id: "" }).success).toBe(false);
   });
 });
 

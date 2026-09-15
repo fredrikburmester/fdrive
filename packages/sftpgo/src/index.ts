@@ -17,7 +17,6 @@ export {
   DEFAULT_SFTPGO_HOME_TEMPLATE,
   SFTPGO_CONFIG_FIELDS,
   SFTPGO_CREDENTIAL_FIELDS,
-  SFTPGO_SOURCE_URL,
   sftpgoHomeTemplate,
   sftpgoModule,
 } from "./module.js";
