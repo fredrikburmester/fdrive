@@ -52,7 +52,8 @@ embedded with the `passage:` prefix against a TEI server
 so an imported index needs no re-embedding).
 
 Additionally, images, the first page of PDFs, and one frame of videos (via
-ffmpeg, at 1 second in) get thumbnails at 256px and 1024px on the longest side,
+ffmpeg, at 1 second in, or the first frame for shorter clips) get thumbnails at
+256px and 1024px on the longest side,
 written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 `app.thumbnails`, keyed by the file's sha256 so identical files never generate
 the same thumbnail twice. Thumbnail failures are logged once and never fail the
@@ -83,9 +84,11 @@ time process-wide) and its progress is visible at `GET /stats` under
 A file succeeds only when both thumbnail sizes are available and their database
 rows are saved. Missing or undecodable sources and partially generated thumbnails
 increment `errors`; the pass continues with other files. Empty files and files
-over the `THUMB_MAX_MB` limit are skipped with a reason. Activity `processed` includes
-those skips, and `skipped` counts them separately; generation errors include the
-number of sizes available in the worker log.
+over the `THUMB_MAX_MB` limit are skipped with a reason. Videos without a video stream
+are skipped too; ffprobe has read those files, so the skip also resolves an earlier
+thumbnail failure. Activity `processed` includes those skips, and `skipped` counts them
+separately; generation errors include the number of sizes available in the worker log.
+JPEGs over Pillow's pixel limit, such as camera panoramas, decode at a reduced scale.
 
 ### Image embeddings (optional)
 

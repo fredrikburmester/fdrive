@@ -396,9 +396,13 @@ def process_thumbnails(ctx: RootContext, abs_path: str, rel_path: str, ext: str,
         failures.report(ctx, rel_path, "thumbnails", log, skipped=True)
         return True, True
     errors: list[str] = []
+    nothing_to_render: list[str] = []
     try:
         thumbs = generate_thumbnails(abs_path, ext, sha, size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes,
-                                     force=force, log=log, on_error=errors.append)
+                                     force=force, log=log, on_error=errors.append, on_skip=nothing_to_render.append)
+        if nothing_to_render:
+            failures.report(ctx, rel_path, "thumbnails", log, skipped=True, resolves=True)
+            return True, True
         for out_size, rel_thumb_path, width, height in thumbs:
             db.upsert_thumbnail(ctx.conn(), sha, out_size, rel_thumb_path, width, height)
         if {thumb[0] for thumb in thumbs} != set(SIZES) and not errors:

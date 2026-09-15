@@ -74,6 +74,23 @@ def test_extract_image_ocr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert text == "recognised text from the scan"
 
 
+def test_extract_image_with_large_compressed_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image, ImageFile, PngImagePlugin
+
+    monkeypatch.setattr(PngImagePlugin, "MAX_TEXT_CHUNK", ImageFile.SAFEBLOCK)  # Pillow's default
+    img_path = tmp_path / "scan.png"
+    info = PngImagePlugin.PngInfo()
+    info.add_text("XML:com.adobe.xmp", "x" * (4 * 1024 * 1024), zip=True)
+    Image.new("RGB", (100, 50), color="white").save(img_path, pnginfo=info)
+
+    import pytesseract
+
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda *a, **k: "recognised text from the scan")
+    text, status = extract.extract_image(str(img_path), langs="eng", normalize=normalize)
+    assert status == "indexed"
+    assert text == "recognised text from the scan"
+
+
 def test_extract_image_short_text_is_no_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from PIL import Image
 

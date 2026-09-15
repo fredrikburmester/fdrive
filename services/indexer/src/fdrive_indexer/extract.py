@@ -66,8 +66,10 @@ def extract_image(abs_path: str, langs: str, normalize: Normalizer) -> tuple[str
     from PIL import Image, ImageOps
 
     from .heif import register_heif_opener
+    from .png import allow_large_png_metadata
 
     register_heif_opener()
+    allow_large_png_metadata()
     with Image.open(abs_path) as opened:
         picture: Image.Image = ImageOps.exif_transpose(opened) or opened
         if picture.mode not in ("L", "RGB"):

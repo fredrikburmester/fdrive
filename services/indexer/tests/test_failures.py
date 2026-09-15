@@ -87,6 +87,31 @@ def test_skip_is_not_failure_or_false_recovery(context):
     assert records(context.conn())[0][4] is None
 
 
+def test_video_without_picture_resolves_earlier_failure_as_skip(context, monkeypatch: pytest.MonkeyPatch):
+    from fdrive_indexer import thumbs_io
+
+    def audio_only(_path: str) -> object:
+        raise thumbs_io.NoThumbnail("no video stream")
+
+    monkeypatch.setattr(thumbs_io, "_extract_video_frame", audio_only)
+    source = Path(context.abs_path) / "voice.mp4"
+    source.write_bytes(b"audio only")
+    _upsert_media_file(context, source.name, ".mp4", source, hashlib.sha256(source.read_bytes()).hexdigest())
+    message = "CalledProcessError: Output file does not contain any stream"
+    failures.report(context, source.name, "thumbnails", print, message)
+    assert retry_file(context, source.name, "thumbnails") == (True, True)
+    assert records(context.conn())[0][4] is not None
+
+    failures.report(context, source.name, "thumbnails", print, message)
+    outcomes: list[str] = []
+    with failures.attempt() as observation:
+        rebuild_thumbnails(context, on_file=lambda ok: outcomes.append(f"file:{ok}"), on_skip=lambda: outcomes.append("skip"))
+    assert outcomes == ["skip"]
+    assert observation.outcomes["thumbnails"] == (True, True)
+    assert records(context.conn())[0][4] is not None
+    assert context.conn().execute('SELECT count(*) FROM app.thumbnails').fetchone()[0] == 0
+
+
 def test_retry_rejects_symlink_and_missing_file(context, tmp_path: Path):
     outside = tmp_path / "outside.png"
     _write_png(outside)
