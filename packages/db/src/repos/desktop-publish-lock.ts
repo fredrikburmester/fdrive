@@ -4,11 +4,12 @@ import type { Pool } from "pg";
  * Serializes the storage publication phase of desktop writes for one identity.
  *
  * This is a *session* advisory lock on a dedicated pooled connection, not the
- * transaction lock the registry uses in `desktop.ts`: the critical section is a
- * handful of storage round trips rather than database work, and wrapping them in
- * an open transaction would pin a backend and block vacuum for their duration. A
- * session lock is released by the backend when the connection dies, so an API
- * process that crashes mid-publish frees the identity without operator action.
+ * transaction lock the registry uses in `desktop.ts`: the critical section is
+ * mostly storage round trips, plus the holder's own short queries on the main
+ * pool to re-prove its authority, and wrapping them in an open transaction would
+ * pin a backend and block vacuum for their duration. A session lock is released
+ * by the backend when the connection dies, so an API process that crashes
+ * mid-publish frees the identity without operator action.
  *
  * Give it a pool of its own. A holder keeps a connection for the whole critical
  * section — storage round trips, and for a replace-upload a digest of the file
@@ -30,12 +31,15 @@ export type DesktopPublishLock = <T>(identityId: string, run: () => Promise<T>) 
 /** Raised when the identity could not be taken within the wait. Retryable. */
 export class DesktopPublishBusyError extends Error {
   constructor(identityId: string, options?: { cause: unknown }) {
-    super(`Another write is publishing for identity ${identityId}`, options);
+    super(`Publication is busy for identity ${identityId}`, options);
     this.name = "DesktopPublishBusyError";
   }
 }
 
 export interface DesktopPublishLockOptions {
+  /** Receives the reason a connection could not be checked out; the resulting
+   * busy error reaches the client as a retryable status that carries no cause. */
+  readonly onConnectError?: (cause: unknown) => void;
   /** Total time to wait for a busy identity before giving up. */
   readonly waitMs?: number;
   /** Delay between acquisition attempts. */
@@ -70,9 +74,11 @@ export function createDesktopPublishLock(
       // refuse publication to every other identity in the deployment.
       //
       // Reaching the lock at all can fail: a bounded pool refuses once it is
-      // saturated. Publication has not started, so the caller can retry — report
-      // that rather than a server error, and keep the cause for the log.
+      // saturated, whichever identities hold it. Publication has not started, so
+      // the caller can retry — report that rather than a server error, and hand
+      // the cause to the log because the client's 429 will not carry it.
       const client = await pool.connect().catch((cause: unknown) => {
+        options.onConnectError?.(cause);
         throw new DesktopPublishBusyError(identityId, { cause });
       });
       const held = await client

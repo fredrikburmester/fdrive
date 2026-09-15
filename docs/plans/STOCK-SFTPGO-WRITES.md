@@ -1,9 +1,10 @@
 # Native writes on stock storage
 
 Updated 2026-09-15. Outcome: Finder create/update/move/trash/restore works against
-**unmodified** SFTPGo, without the forked image. Current behavior: stock SFTPGo is read-only
-from the Mac (`packages/sftpgo/src/module.ts` returns storage without `withWriteLease`, so
-`capabilities()` in `apps/api/src/desktop/writes.ts` yields `NO_WRITES`). Related:
+**unmodified** SFTPGo, without the forked image. Current behavior: delivered as the
+`verified-optimistic` mode (`packages/sftpgo/src/module.ts` sets `optimisticPublish`, and
+`capabilities()` in `apps/api/src/desktop/writes.ts` grants writes once the publish lock is
+configured); blank or unknown modes still yield `NO_WRITES`. Related:
 [macOS writes](MACOS-WRITES.md), [macOS behavior](../MACOS.md#write-configuration-and-recovery),
 [provider development](../STORAGE-PROVIDERS.md).
 
@@ -182,11 +183,13 @@ re-entrancy hazard.
 
 That moved name resolution out of the serialized region, which needed handling. `unoccupied()`
 (`writes.ts:258`) refuses a name that is already taken; run outside serialization, two writers
-creating the same new name both find it free, and the loser's `overwrite: false` rename fails as
-an unclassified storage conflict — which the Mac client forks into a conflict copy, the same
-wrong outcome as the busy mapping above. So publication re-runs `unoccupied` inside the critical
-section, one `list` call, and the loser gets `name_collision`, which `Writes.swift:140` resolves
-with a bounded numbered retry.
+creating the same new name both find it free. Stock SFTPGo's REST rename ignores
+`overwrite: false`, so without more the loser would silently replace the winner; the provider now
+emulates the refusal with a stat before every guarded upload, move and copy (`withOverwriteGuard`
+in `packages/sftpgo/src/write-lease.ts`), which is exact under the lock for desktop writers and
+best-effort against anyone outside it. Publication also re-checks the name inside the critical
+section, one `list` call of the parent, skipped under a lease, so the loser gets
+`name_collision`, which `Writes.swift:140` resolves with a bounded numbered retry.
 
 **Bound what the lock can consume.** The lock now gets its own pool: `createPool` in
 `packages/db/src/index.ts`, wired in `composition.ts` with `max: 4` and a 5s

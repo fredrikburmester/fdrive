@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StorageProvider } from "@fdrive/core";
+import { StorageError, type StorageProvider } from "@fdrive/core";
 import { DesktopPublishBusyError, type DesktopPublishLock } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
@@ -26,6 +26,8 @@ async function fixture(
     lease?: boolean;
     onAuthority?: () => Promise<void>;
     onCopy?: (to: string) => Promise<void>;
+    onStat?: (path: string) => Promise<void>;
+    onDownload?: (path: string) => Promise<void>;
   } = {},
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), "optimistic-"));
@@ -45,6 +47,14 @@ async function fixture(
     upload: async (path, body, opts) => {
       uploaded.push(path);
       return raw.upload(path, body, opts);
+    },
+    stat: async (path) => {
+      await options.onStat?.(path);
+      return raw.stat(path);
+    },
+    download: async (path, opts) => {
+      await options.onDownload?.(path);
+      return raw.download(path, opts);
     },
   };
   const storage: StorageProvider = options.lease
@@ -356,4 +366,53 @@ it("proves the live destination when a recovery copy survives an earlier attempt
     details: { code: "version_conflict" },
   });
   expect(await f.read("/old.txt")).toBe("new");
+});
+
+it("reports a failed destination recheck as retryable, not as a remote change", async () => {
+  // The recheck is one stat. A storage failure there says nothing about the
+  // destination, and a 409 would make the Mac fork a conflict copy of a file that
+  // nobody touched. Only a vanished entry is a conflict.
+  let stats = 0;
+  const f = await fixture({
+    onStat: async (path) => {
+      if (path !== "/old.txt") return;
+      stats += 1;
+      if (stats === 2) throw new StorageError("upstream_unavailable", "HEAD failed");
+    },
+  });
+  const request = await f.rename("renamed.txt");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  expect(stats).toBe(2);
+  expect(await f.read("/old.txt")).toBe("old");
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
+});
+
+it("reports a failed live read of the original as retryable, not as a conflict", async () => {
+  // A retained recovery copy forces the live digest. When that read fails the
+  // destination is unproven, not changed: the operation stays retryable.
+  let attempts = 0;
+  let armed = false;
+  const f = await fixture({
+    onCopy: async (to) => {
+      if (to.endsWith("/previous") && attempts === 1) throw new Error("interrupted");
+    },
+    publishLock: async (_id, run) => {
+      attempts += 1;
+      armed = attempts === 2;
+      return run();
+    },
+    onDownload: async (path) => {
+      if (armed && path === "/old.txt")
+        throw new StorageError("upstream_unavailable", "download failed");
+    },
+  });
+  const request = await f.stage("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow("interrupted");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  expect(await f.read("/old.txt")).toBe("old");
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
 });

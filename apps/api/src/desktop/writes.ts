@@ -13,7 +13,13 @@ import type {
   DesktopWriteCapabilities,
   DesktopWriteEntry,
 } from "@fdrive/contracts";
-import { isUnderPath, parentPath, StorageError, type StorageProvider } from "@fdrive/core";
+import {
+  isStorageError,
+  isUnderPath,
+  parentPath,
+  StorageError,
+  type StorageProvider,
+} from "@fdrive/core";
 import {
   type DesktopEffectContext,
   type DesktopItemRecord,
@@ -22,6 +28,7 @@ import {
   type DesktopRepo,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
+import { withIdempotentMkdir } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import { createDesktopFiles, DESKTOP_INTERNAL_ROOT } from "./files.js";
@@ -134,15 +141,22 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * mtime tick and cannot close the final instant before the rename at all. That
    * is why a replace-upload does not rely on it: the recovery copy's digest, taken
    * inside the serialized section, is what proves the destination's content there.
-   * This remains the whole guard for moves, which have no content to digest.
-   * See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   * This remains the whole guard for moves, of files and directories alike, which
+   * have no content to digest. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   *
+   * Only a missing entry is a conflict. Any other storage failure propagates so
+   * the caller maps it to a retryable status; reporting it as a remote change
+   * would make the client fork a conflict copy of an untouched file.
    */
   async function unchanged(
     storage: StorageProvider,
     path: string,
     witness: { size: number; modifiedAt: Date | null },
   ) {
-    const live = await storage.statFile(path).catch(() => undefined);
+    const live = await storage.stat(path).catch((error: unknown) => {
+      if (isStorageError(error) && error.kind === "not_found") return undefined;
+      throw error;
+    });
     if (
       !live ||
       live.size !== witness.size ||
@@ -211,14 +225,17 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       trashed,
     };
   }
+  /** The shared ancestors run outside the serialized section, so two commits for
+   * one identity may both find one missing; the loser's mkdir must not fail. */
   async function internalDirectory(storage: StorageProvider, path: string) {
+    const tolerant = withIdempotentMkdir(storage);
     let parent = "/";
     for (const name of path.slice(1).split("/")) {
       const next = `${parent === "/" ? "" : parent}/${name}`;
       const item = (await storage.list(parent)).find((item) => item.path === next);
       if (item && item.kind !== "dir")
         throw new ApiHttpError("forbidden", "Recovery path is not a regular directory");
-      if (!item) await storage.mkdir(next);
+      if (!item) await tolerant.mkdir(next);
       parent = next;
     }
   }
@@ -300,6 +317,16 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       collisionName(name) === collisionName(DESKTOP_INTERNAL_ROOT.slice(1))
     )
       throw new ApiHttpError("forbidden", "Reserved folder name");
+    await free(principal, parent, name, source);
+    return `${parent.path === "/" ? "" : parent.path}/${name}`;
+  }
+  /** The collision half of `unoccupied`: one listing of the parent, nothing else. */
+  async function free(
+    principal: Principal,
+    parent: DesktopItemRecord,
+    name: string,
+    source?: string,
+  ) {
     const candidates = await principal.storage.list(parent.path);
     if (
       candidates.some(
@@ -307,7 +334,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       )
     )
       fail("name_collision", "An item with this name already exists");
-    return `${parent.path === "/" ? "" : parent.path}/${name}`;
   }
   async function checkBase(
     principal: Principal,
@@ -636,21 +662,22 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
           if (request.kind === "upload" && source && inTrash(principal, source.path))
             throw new ApiHttpError("forbidden", "Restore this item before editing it");
-          // Re-run inside the critical section before publishing. `unoccupied`
-          // refuses a taken name, and outside serialization two writers racing for
-          // the same new name would both pass it and the loser would fail its
-          // `overwrite: false` rename as an unclassified conflict instead.
-          const resolveTarget = () =>
-            unoccupied(
-              scoped,
-              parent,
-              source?.originalPath && request.name === trashName(source)
-                ? (source.originalPath.split("/").at(-1) as string)
-                : request.name,
-              source?.path,
-            );
+          const name =
+            source?.originalPath && request.name === trashName(source)
+              ? (source.originalPath.split("/").at(-1) as string)
+              : request.name;
           const target =
-            trashing && source ? `${trashRoot(principal)}/${source.id}` : await resolveTarget();
+            trashing && source
+              ? `${trashRoot(principal)}/${source.id}`
+              : await unoccupied(scoped, parent, name, source?.path);
+          // Re-checked inside the critical section before publishing: outside
+          // serialization two writers racing for the same new name would both pass
+          // `unoccupied`, and the loser would fail its `overwrite: false` rename as
+          // an unclassified conflict instead. One listing of the parent is enough;
+          // the grants and the target were settled above. A lease already fenced
+          // the first check for the whole action, so there is nothing to re-check.
+          const stillFree = () =>
+            serialize === direct ? Promise.resolve() : free(scoped, parent, name, source?.path);
           if (source && "base" in request && request.base)
             await checkBase(scoped, source, request.base, request.kind === "upload");
           // The one observation publication must still match, taken the instant the
@@ -658,7 +685,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           // the staged upload, the recovery copy and its digest — is inside the
           // window `unchanged` covers. Re-stating it later would narrow that window
           // to nothing by adopting whatever an external writer had just written.
-          if (source?.kind === "file") witness = await storage.statFile(source.path);
+          if (source) witness = await storage.stat(source.path);
           if (source && isUnderPath(source.path, target))
             throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
           const context: Omit<DesktopEffectContext, "office"> = {
@@ -717,8 +744,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               throw Error("Staged content failed validation");
             if (source) recoveryId = id;
             await serialize(async () => {
-              await authority(principal);
-              await resolveTarget();
+              await stillFree();
               if (source) {
                 // The recovery copy is taken here, inside the section, because
                 // digesting it is the only proof that the destination still holds
@@ -745,13 +771,22 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
                 // writer that changed the destination apart from a copy that is merely
                 // damaged: the first is the client's conflict to resolve, the second is
                 // ours to retry, and reporting a conflict for it would fork the file.
+                // Only a vanished original is a conflict here. A failed or truncated
+                // read is a storage failure to retry, not a remote change.
                 if (previous || backup.sha256 !== request.base?.content) {
-                  const live = await digest(storage, source.path).catch(() => undefined);
+                  const live = await digest(storage, source.path).catch((error: unknown) => {
+                    if (isStorageError(error) && error.kind === "not_found") return undefined;
+                    throw error;
+                  });
                   if (live?.sha256 !== request.base?.content) fail("version_conflict", CHANGED);
                 }
                 if (backup.sha256 !== request.base?.content)
                   throw Error("Recovery copy failed validation");
               }
+              // Re-proved after the copy and its digests, so a pairing revoked during
+              // that transfer-length work still cannot publish; only the stat below
+              // separates it from the rename.
+              await authority(principal);
               if (source && witness) await unchanged(storage, source.path, witness);
               // Publication is the only operation allowed to replace the original.
               // Apache evaluates the source/destination lease tokens atomically.
@@ -766,8 +801,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             });
           } else if (request.kind === "folder") {
             await serialize(async () => {
+              await stillFree();
               await authority(principal);
-              await resolveTarget();
               publicationStarted = true;
               await storage.mkdir(target);
             });
@@ -775,8 +810,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             if (trashing) await internalDirectory(storage, trashRoot(principal));
             if (source.path !== target) {
               await serialize(async () => {
+                if (!trashing) await stillFree();
                 await authority(principal);
-                if (!trashing) await resolveTarget();
                 if (witness) await unchanged(storage, source.path, witness);
                 publicationStarted = true;
                 await storage.move(source.path, target, { overwrite: false });
@@ -835,7 +870,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         // client fork the pending bytes into a conflict copy; 429 without a details
         // code reaches `DriveError.unavailable`, which File Provider retries.
         if (error instanceof DesktopPublishBusyError)
-          throw new ApiHttpError("rate_limited", "Another write is finishing for this account");
+          throw new ApiHttpError("rate_limited", "Publication is busy; retry shortly");
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }

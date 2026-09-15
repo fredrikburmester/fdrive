@@ -286,4 +286,16 @@ it("offers optimistic publication for stock SFTPGo without ever issuing a lease"
     ).toBeUndefined();
   }
   expect(f.calls).toEqual([]);
+  // Stock REST renames over an existing target, so `overwrite: false` has to be
+  // emulated here too or the publish path's guards are no-ops on this storage.
+  await expect(
+    stock.upload("/original.txt", new Blob(["mine"]).stream(), { overwrite: false }),
+  ).rejects.toMatchObject({ kind: "conflict" });
+  await expect(
+    stock.move("/missing.txt", "/original.txt", { overwrite: false }),
+  ).rejects.toMatchObject({ kind: "conflict" });
+  await expect(
+    stock.copy("/missing.txt", "/original.txt", { overwrite: false }),
+  ).rejects.toMatchObject({ kind: "conflict" });
+  expect(f.calls.map((call) => call.method)).toEqual(["HEAD", "HEAD", "HEAD"]);
 });

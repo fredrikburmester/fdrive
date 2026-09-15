@@ -7,11 +7,47 @@ import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./s
 export const SFTPGO_WRITE_PROTOCOL = "fdrive-local-v1";
 /**
  * Publication without a storage lease, valid on unmodified SFTPGo. fdrive
- * serializes the writers it mediates and rechecks the destination immediately
- * before an atomic server-side rename; a direct SFTP/FTP/WebDAV write inside
- * that window is silently lost.
+ * serializes Mac desktop writes against each other and rechecks the destination
+ * immediately before an atomic server-side rename; any other writer — the web
+ * app, Collabora, OCR, or a direct SFTP/FTP/WebDAV client — landing inside that
+ * window is silently lost.
  */
 export const SFTPGO_OPTIMISTIC_MODE = "verified-optimistic";
+
+/**
+ * Stock REST ignores `overwrite: false` on upload, move and copy, so the refusal
+ * is emulated with a stat before the mutation. Under the storage lease that is
+ * exact: expiry fences the subsequent filesystem mutation. Under optimistic
+ * publication it is only as strong as the fdrive-side lock that serializes the
+ * callers, and a writer outside that lock can still land between the stat and
+ * the mutation; without it the rename silently replaces whatever is there.
+ */
+export function withOverwriteGuard(storage: StorageProvider): StorageProvider {
+  async function absent(path: string) {
+    try {
+      await storage.stat(path);
+    } catch (error) {
+      if (isStorageError(error) && error.kind === "not_found") return;
+      throw error;
+    }
+    throw new StorageError("conflict", "The destination already exists");
+  }
+  return {
+    ...storage,
+    async upload(path, body, opts) {
+      if (opts?.overwrite === false) await absent(path);
+      await storage.upload(path, body, opts);
+    },
+    async move(path, target, opts) {
+      if (opts?.overwrite === false) await absent(target);
+      await storage.move(path, target, opts);
+    },
+    async copy(path, target, opts) {
+      if (opts?.overwrite === false) await absent(target);
+      await storage.copy(path, target, opts);
+    },
+  };
+}
 export const SFTPGO_LEASE_HEADER = "X-Fdrive-Write-Lease";
 export const SFTPGO_LEASE_ERROR_HEADER = "X-Fdrive-Write-Lease-Error";
 interface LeaseOptions {
@@ -165,28 +201,9 @@ export async function withSftpgoWriteLease<T>(
         return options.withToken(fn, opts);
       },
     });
-    async function absent(path: string) {
-      try {
-        await storage.stat(path);
-      } catch (error) {
-        if (isStorageError(error) && error.kind === "not_found") return;
-        throw error;
-      }
-      throw new StorageError("conflict", "The destination already exists");
-    }
-    // Stock REST ignores overwrite=false. The check is safe only inside this
+    // Stock REST ignores overwrite=false. The emulated check is exact inside this
     // storage-enforced lease; expiry fences the subsequent filesystem mutation.
-    return await action({
-      ...storage,
-      async upload(path, body, opts) {
-        if (opts?.overwrite === false) await absent(path);
-        await storage.upload(path, body, opts);
-      },
-      async move(path, target, opts) {
-        if (opts?.overwrite === false) await absent(target);
-        await storage.move(path, target, opts);
-      },
-    });
+    return await action(withOverwriteGuard(storage));
   } finally {
     active = false;
     clearInterval(interval);

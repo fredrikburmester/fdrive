@@ -45,8 +45,8 @@ export interface DesktopDeps {
   storageFactory: IdentityStorageFactory;
   clock: () => Date;
   trashPathForStorage: (storage: Principal["storage"]) => string | null;
-  /** Serializes publication for one identity across every fdrive writer.
-   * Absent means storage without a lease stays read-only. */
+  /** Serializes Mac desktop commits for one identity; no other fdrive writer
+   * takes it. Absent means storage without a lease stays read-only. */
   publishLock?: DesktopPublishLock;
 }
 
@@ -122,7 +122,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
         ? {
             writeUnavailableReason:
               provider.type === "sftpgo"
-                ? "SFTPGo cannot enforce safe conditional writes. This location remains read-only."
+                ? 'Set the provider\'s desktop write mode ("verified-optimistic" for stock SFTPGo) to enable writes. This location remains read-only.'
                 : "Safe writes and persistent upload recovery must be configured by your administrator.",
           }
         : {}),

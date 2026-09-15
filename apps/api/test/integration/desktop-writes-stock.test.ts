@@ -153,6 +153,9 @@ it("publishes on stock SFTPGo under verified-optimistic and refuses an out-of-ba
 
     // A writer fdrive does not mediate changes the file. The next publication must
     // refuse rather than drop it, and the external content must survive untouched.
+    // The refusal here is `checkBase`'s, taken before the serialized section: the
+    // change lands before the commit starts. The in-section proofs need a write
+    // that lands mid-commit, which `optimistic-publish.test.ts` injects with hooks.
     expect((await webdav("/stock.txt", "PUT", "written over WebDAV")).ok).toBe(true);
     const refused = await publish("stock.txt", "third", second, "second");
     expect(refused.status).toBe(409);
