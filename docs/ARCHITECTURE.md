@@ -1,7 +1,6 @@
 # Architecture
 
-Current implementation reference. Unfinished work belongs in [plans](plans/README.md);
-delivery evidence belongs in [workflow history](workflow/STATUS-history.md).
+Current implementation reference. Unfinished work belongs in [plans](plans/README.md).
 
 ## Boundaries
 
@@ -79,7 +78,7 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
 
 ## Verification
 
-[WORKING.md](../WORKING.md) defines required verification profiles. Executable coverage
+[AGENTS.md](../AGENTS.md) lists the required checks. Executable coverage
 thresholds and CI configuration are authoritative; do not copy historic phase targets.
 [Performance](PERF.md) describes the blocking harness and budgets.
 

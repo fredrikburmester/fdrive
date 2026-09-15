@@ -1,4 +1,4 @@
-# Python service checks, path-filtered. Keep service jobs in sync with ci-full.yml.
+# Python service checks, path-filtered. CI (full) also calls this workflow.
 name: Python services
 
 on:
@@ -9,87 +9,45 @@ on:
       - 'services/ocr/**'
       - 'services/image-embed/**'
       - 'services/runtime/**'
-      - 'tools/orchestration/setup-python.sh'
-      - 'tools/orchestration/verify.sh'
       - '.github/workflows/services.yml'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: services-${{ github.ref }}
+  group: services-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  indexer:
-    name: Indexer (Python)
+  python:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Indexer (Python), service: indexer, module: fdrive_indexer }
+          - { name: OCR (Python), service: ocr, module: fdrive_ocr }
+          - { name: Python (image-embed), service: image-embed, module: fdrive_image_embed }
+          - { name: Python (runtime), service: runtime, module: fdrive_runtime }
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install indexer system dependencies
+        if: matrix.service == 'indexer'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
-      - run: bash tools/orchestration/setup-python.sh . indexer
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python indexer
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: indexer-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-
-  ocr:
-    name: OCR (Python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: bash tools/orchestration/setup-python.sh . ocr
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python ocr
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ocr-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
-
-  supporting-services:
-    name: Python (${{ matrix.service }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [image-embed, runtime]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: bash tools/orchestration/setup-python.sh . "${{ matrix.service }}"
-        env:
-          FDRIVE_PYTHON: python
-      - run: bash tools/orchestration/verify.sh . python "${{ matrix.service }}"
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.service }}-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check src tests $([[ -d scripts ]] && echo scripts)
+      - run: mypy src $([[ -d scripts ]] && echo scripts)
+      - run: pytest -q --cov=${{ matrix.module }} --cov-report=term-missing --cov-fail-under=95
+      - name: Linux inotify tests
+        if: matrix.service == 'indexer'
+        run: bash scripts/test-in-docker.sh

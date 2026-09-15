@@ -33,8 +33,7 @@ retention period. This integration does not complete macOS beta qualification.
 From the repository root:
 
 ```sh
-bash tools/orchestration/run-in-checkout.sh "$PWD" --lock -- \
-  docker build -t fdrive-sftpgo:local-v1 integrations/sftpgo
+docker build -t fdrive-sftpgo:local-v1 integrations/sftpgo
 ```
 
 The build runs Go race tests before producing the image. It pins SFTPGo v2.7.5 at
@@ -104,8 +103,8 @@ protection. The API integration suite runs native creation/replacement, receipt 
 conflicts, file/folder Trash and restore against both qualified backends.
 
 ```sh
-bash tools/orchestration/verify.sh "$PWD" application
-bash tools/orchestration/verify.sh "$PWD" integration
+pnpm lint && pnpm typecheck && pnpm test:coverage
+pnpm test:integration
 ```
 
 Do not silently rebase this patch onto a new SFTPGo version. Audit every filesystem

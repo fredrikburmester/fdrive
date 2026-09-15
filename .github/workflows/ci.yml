@@ -24,8 +24,6 @@ on:
       - 'docs/**'
       - '**.md'
       - 'LICENSE'
-      - '.claude/**'
-      - '.codex/**'
   workflow_dispatch:
 
 permissions:
@@ -47,13 +45,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . application
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: check-helper-logs
-          path: .fdrive-workflow/logs/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+      - run: pnpm bootstrap
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:coverage
