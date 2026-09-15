@@ -38,8 +38,12 @@ export const NO_WRITES: DesktopWriteCapabilities = {
 };
 export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
 /**
- * Wraps the publication step — the recheck, the rename, and nothing slower. Kept
- * to that span deliberately: the staged upload before it writes only to a path
+ * Wraps the publication step: everything that proves the destination, and the
+ * rename. For a replace-upload that includes the recovery copy and its digest,
+ * which is the proof — a snapshot taken before the section would say what the
+ * destination held then, not at the rename.
+ *
+ * What stays outside is the transfer. The staged upload writes only to a path
  * keyed by operation id and a per-attempt UUID, which no other operation can
  * reach, so serializing it would hold a lock and its connection for the length of
  * a transfer to no purpose. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
@@ -69,6 +73,8 @@ function fail(code: string, message: string): never {
   throw new ApiHttpError("conflict", message, { code });
 }
 const collisionName = (value: string) => value.normalize("NFC").toLowerCase();
+/** What the client is told whenever the destination no longer holds what it edited. */
+const CHANGED = "This file changed remotely. Your pending copy is preserved.";
 
 /** A database receipt is written before success. Committing without a receipt is
  * deliberately uncertain after restart: never infer ownership from matching bytes.
@@ -122,11 +128,14 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   }
   /**
    * Refuses publication when the destination's size or modification time no longer
-   * matches the observation the content verification was based on. On storage without
-   * a lease this is the only thing between a concurrent external write and a silent
-   * lost update. It is deliberately a stat rather than a re-digest, so it cannot see
-   * a same-size replacement inside one mtime tick, and it cannot close the final
-   * instant before the rename at all; see `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   * matches the observation the content verification was based on.
+   *
+   * A stat, not a re-digest, so it cannot see a same-size replacement inside one
+   * mtime tick and cannot close the final instant before the rename at all. That
+   * is why a replace-upload does not rely on it: the recovery copy's digest, taken
+   * inside the serialized section, is what proves the destination's content there.
+   * This remains the whole guard for moves, which have no content to digest.
+   * See `docs/plans/STOCK-SFTPGO-WRITES.md`.
    */
   async function unchanged(
     storage: StorageProvider,
@@ -139,7 +148,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       live.size !== witness.size ||
       (live.modifiedAt?.getTime() ?? null) !== (witness.modifiedAt?.getTime() ?? null)
     )
-      fail("version_conflict", "This file changed remotely. Your pending copy is preserved.");
+      fail("version_conflict", CHANGED);
   }
   async function authority(principal: Principal) {
     if (!capabilities(principal).create)
@@ -325,7 +334,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       (contentRequired || /^[a-f0-9]{64}$/.test(base.content)) &&
       (await digest(principal.storage, item.path)).sha256 !== base.content
     )
-      fail("version_conflict", "This file changed remotely. Your pending copy is preserved.");
+      fail("version_conflict", CHANGED);
     return live;
   }
   async function operation(principal: Principal, id: string) {
@@ -706,22 +715,43 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             const verified = await digest(storage, stage);
             if (verified.size !== request.size || verified.sha256 !== request.sha256)
               throw Error("Staged content failed validation");
-            if (source) {
-              recoveryId = id;
-              const previous = (await storage.list(internal)).find(
-                (item) => item.path === `${internal}/previous`,
-              );
-              if (previous && previous.kind !== "file")
-                throw new ApiHttpError("forbidden", "Unsupported recovery entry");
-              if (!previous)
-                await storage.copy(source.path, `${internal}/previous`, { overwrite: false });
-              const backup = await digest(storage, `${internal}/previous`);
-              if (backup.sha256 !== request.base?.content)
-                throw Error("Recovery copy failed validation");
-            }
+            if (source) recoveryId = id;
             await serialize(async () => {
               await authority(principal);
               await resolveTarget();
+              if (source) {
+                // The recovery copy is taken here, inside the section, because
+                // digesting it is the only proof that the destination still holds
+                // what the client based its write on. `unchanged` below cannot be
+                // that proof: SFTPGo reports `Last-Modified` as an HTTP date, so the
+                // recheck's resolution is a whole second, and two fdrive writers
+                // replacing one file with equal-length content inside that second
+                // look identical to it. Taking the snapshot under the lock means no
+                // writer that honours the lock can have written between the proof and
+                // the rename. It costs no extra I/O — this digest already ran, just
+                // outside. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+                const previous = (await storage.list(internal)).find(
+                  (item) => item.path === `${internal}/previous`,
+                );
+                if (previous && previous.kind !== "file")
+                  throw new ApiHttpError("forbidden", "Unsupported recovery entry");
+                if (!previous)
+                  await storage.copy(source.path, `${internal}/previous`, { overwrite: false });
+                const backup = await digest(storage, `${internal}/previous`);
+                // Two reasons to look at the live file instead of trusting the copy. A
+                // copy retained from an earlier attempt records what the destination
+                // held *then*, so on a retry it proves nothing about now. And when the
+                // copy's digest disagrees with the base, the live file is what tells a
+                // writer that changed the destination apart from a copy that is merely
+                // damaged: the first is the client's conflict to resolve, the second is
+                // ours to retry, and reporting a conflict for it would fork the file.
+                if (previous || backup.sha256 !== request.base?.content) {
+                  const live = await digest(storage, source.path).catch(() => undefined);
+                  if (live?.sha256 !== request.base?.content) fail("version_conflict", CHANGED);
+                }
+                if (backup.sha256 !== request.base?.content)
+                  throw Error("Recovery copy failed validation");
+              }
               if (source && witness) await unchanged(storage, source.path, witness);
               // Publication is the only operation allowed to replace the original.
               // Apache evaluates the source/destination lease tokens atomically.

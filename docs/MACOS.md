@@ -92,7 +92,7 @@ filesystem and the same PostgreSQL database.
 | --- | --- | --- |
 | `apache-webdav-exclusive` | Apache mod_dav | Storage-enforced DAV locks; every writer must use that same endpoint |
 | `fdrive-local-v1` | The [optional pinned SFTPGo image](../integrations/sftpgo/README.md) | Leases enforced in the local filesystem across SFTP, REST, WebDAV and FTP |
-| `verified-optimistic` | Stock SFTPGo, unmodified | fdrive serializes its own writers and rechecks the destination before replacing it; an external write in that instant is lost |
+| `verified-optimistic` | Stock SFTPGo, unmodified | fdrive serializes its own Mac writes and proves the destination's content before replacing it; another writer landing in that instant is lost |
 
 Only enable the Apache mode for mod_dav when **every writer uses the same lock-enforcing
 DAV endpoint**. Direct filesystem/SFTP access invalidates the guarantee. The pinned image
@@ -101,16 +101,20 @@ and disabled external hooks/plugins; see its qualification boundary.
 
 `verified-optimistic` asks for none of that, and gives less in return. SFTPGo 2.7.5 ignores
 conditional upload headers and its REST API bypasses WebDAV locks, so nothing in stock SFTPGo
-can fence a concurrent writer. Instead fdrive serializes every write it mediates itself — the
-Mac app, the web app and the retention job — through a per-identity PostgreSQL lock, and
-rechecks the destination's size and modification time immediately before the atomic rename
-that publishes. A change made at any earlier point is refused as a conflict with the pending
-copy preserved. A direct SFTP, FTP or WebDAV write landing inside that final instant is
-silently lost, and the retained backup holds the pre-fdrive content rather than the lost
-version. Choose this mode knowing that; it is the only one that works on storage you have not
-modified. The OCR service writes the same volume directly and is *not* covered by that
-serialization, though its own size/mtime checks mean a collision is refused on both sides
-rather than silently applied.
+can fence a concurrent writer. Instead fdrive serializes Mac writes against each other through
+a per-identity PostgreSQL lock and, holding it, snapshots the destination and digests that
+snapshot against the version the Mac edited, immediately before the atomic rename that
+publishes. A change made at any earlier point is refused as a conflict with the pending copy
+preserved.
+
+That lock covers Mac writes only. The web app, Collabora and the OCR service write the volume
+directly and do not take it: for each of them publication *is* the transfer, and holding an
+identity for the length of an upload is the cost this mode exists to avoid. The content proof
+catches them the same way it catches a writer outside fdrive entirely — and, the same way, a
+write of theirs landing between that proof and the rename is silently lost, with the retained
+backup holding the pre-fdrive content rather than the lost version. OCR's own size and mtime
+checks mean a collision there is refused on both sides rather than silently applied. Choose this
+mode knowing all of that; it is the only one that works on storage you have not modified.
 
 Publication is refused entirely, and the location stays read-only, when a mode needs
 serialization that is not configured. Unsupported locations retain read access and show an

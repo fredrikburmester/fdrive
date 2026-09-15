@@ -78,6 +78,32 @@ it("serializes one identity's publications across independent pools and frees it
     } finally {
       await bounded.end();
     }
+
+    // A waiter must not keep a connection while it polls. With the pool bounded to
+    // two, a holder plus one waiter on a single identity would otherwise consume
+    // both and refuse every other identity until that wait expired.
+    const small = createPool(container.getConnectionUri(), {
+      max: 2,
+      connectionTimeoutMillis: 1_000,
+    });
+    try {
+      const contended = randomUUID();
+      const holder = createDesktopPublishLock(small, { waitMs: 30_000, pollMs: 25 });
+      const waiter = createDesktopPublishLock(small, { waitMs: 10_000, pollMs: 25 });
+      const releaseHolder = await hold(holder, contended);
+      let resumed = false;
+      const queued = waiter(contended, async () => {
+        resumed = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(resumed).toBe(false);
+      await expect(waiter(randomUUID(), async () => "free")).resolves.toBe("free");
+      releaseHolder();
+      await queued;
+      expect(resumed).toBe(true);
+    } finally {
+      await small.end();
+    }
   } finally {
     await first.close();
     await second.close();

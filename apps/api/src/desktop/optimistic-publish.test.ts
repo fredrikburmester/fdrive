@@ -91,6 +91,24 @@ async function fixture(
     return request;
   };
   const read = async (path: string) => new Response((await raw.download(path)).body).text();
+  const folder = async (name: string) => {
+    const request = { kind: "folder" as const, operationId: randomUUID(), parentId: "root", name };
+    await service.prepare(principal, request);
+    return request;
+  };
+  const rename = async (name: string) => {
+    const original = await service.stat(principal, "/old.txt");
+    const request = {
+      kind: "move" as const,
+      operationId: randomUUID(),
+      itemId: original.id,
+      parentId: "root",
+      name,
+      base: original.version,
+    };
+    await service.prepare(principal, request);
+    return request;
+  };
   const create = async (name: string, bytes: string) => {
     const request = {
       kind: "upload" as const,
@@ -105,7 +123,19 @@ async function fixture(
     await service.upload(principal, request.operationId, body(bytes), new AbortController().signal);
     return request;
   };
-  return { ...memory, raw, principal, service, stage, create, read, uploaded, copied };
+  return {
+    ...memory,
+    raw,
+    principal,
+    service,
+    stage,
+    create,
+    folder,
+    rename,
+    read,
+    uploaded,
+    copied,
+  };
 }
 
 it("qualifies publication by lease, or by fdrive serialization, and never by neither", () => {
@@ -227,10 +257,12 @@ it("takes the lock for publication only, not for the staged upload", async () =>
   });
   const request = await f.stage("saved");
   await f.service.commit(f.principal, request.operationId);
-  // Both the staged upload and the recovery copy are already done by the time the
-  // identity is taken, so the critical section is the rename rather than the write.
+  // The transfer is done by the time the identity is taken, so the critical section
+  // is the publication rather than the write. The recovery copy is not done: it is
+  // the proof that the destination is unchanged, and a snapshot taken before the
+  // lock would prove nothing about the state at the rename.
   expect(uploadsFirst).toBe(1);
-  expect(copiesFirst).toBe(1);
+  expect(copiesFirst).toBe(0);
   expect(await f.read("/old.txt")).toBe("saved");
 });
 
@@ -250,4 +282,78 @@ it("refuses a name taken between resolution and publication", async () => {
     details: { code: "name_collision" },
   });
   expect(await f.read("/new.txt")).toBe("theirs");
+});
+
+it("refuses a same-size replacement that the destination stat cannot see", async () => {
+  // SFTPGo answers `statFile` with a HEAD, so the recheck compares a `Last-Modified`
+  // of whole-second resolution: a writer replacing the original with equal-length
+  // content inside one tick is invisible to it. The recovery copy is taken inside the
+  // critical section precisely so its digest sees what the stat cannot.
+  const f = await fixture({
+    publishLock: async (_id, run) => {
+      await f.raw.upload("/old.txt", body("new"), { overwrite: true });
+      return run();
+    },
+  });
+  const request = await f.stage("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "version_conflict" },
+  });
+  expect(await f.read("/old.txt")).toBe("new");
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("conflict");
+});
+
+it("refuses a folder whose name is taken between resolution and publication", async () => {
+  const f = await fixture({
+    publishLock: async (_id, run) => {
+      await f.raw.upload("/reports", body("theirs"), { overwrite: true });
+      return run();
+    },
+  });
+  const request = await f.folder("reports");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "name_collision" },
+  });
+});
+
+it("refuses a move whose name is taken between resolution and publication", async () => {
+  const f = await fixture({
+    publishLock: async (_id, run) => {
+      await f.raw.upload("/taken.txt", body("theirs"), { overwrite: true });
+      return run();
+    },
+  });
+  const request = await f.rename("taken.txt");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "name_collision" },
+  });
+  expect(await f.read("/taken.txt")).toBe("theirs");
+  expect(await f.read("/old.txt")).toBe("old");
+});
+
+it("proves the live destination when a recovery copy survives an earlier attempt", async () => {
+  // A retained copy records what the destination held during the attempt that took
+  // it, so on a retry it proves nothing about now. The commit has to look at the
+  // live file instead, or a replacement of equal length slips past the stat again.
+  let attempts = 0;
+  const f = await fixture({
+    onCopy: async (to) => {
+      if (to.endsWith("/previous") && attempts === 1) throw new Error("interrupted");
+    },
+    publishLock: async (_id, run) => {
+      attempts += 1;
+      if (attempts === 2) await f.raw.upload("/old.txt", body("new"), { overwrite: true });
+      return run();
+    },
+  });
+  const request = await f.stage("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow("interrupted");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "version_conflict" },
+  });
+  expect(await f.read("/old.txt")).toBe("new");
 });

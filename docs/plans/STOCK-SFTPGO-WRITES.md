@@ -24,7 +24,7 @@ every fdrive writer is reachable, and leaves optimistic verification for genuine
 
 ## Delivered
 
-**1. fdrive's own writers are serialized.** `createDesktopPublishLock` in
+**1. Desktop commits are serialized against each other.** `createDesktopPublishLock` in
 `packages/db/src/repos/desktop-publish-lock.ts` takes a *session* advisory lock on a connection
 from its own pool, keyed `["desktop-publish", identityId]`, held across the publication step.
 A session lock rather than the registry's `pg_advisory_xact_lock` because the critical section
@@ -38,15 +38,29 @@ it must not reach the client as a 409, which `APIClient.check` turns into
 conflict copy. A 429 with no details code reaches `DriveError.unavailable`, which File Provider
 retries.
 
-**2. The destination is rechecked immediately before publication.** `unchanged` in
-`apps/api/src/desktop/writes.ts` compares the destination's size and modification time against
-the observation the content verification was based on, and fails `version_conflict` on any
-difference. That observation is taken once, immediately after the base check, so the staged
-upload, the recovery copy and the copy's digest all sit inside the covered window. Re-stating it
-closer to the rename would narrow the window to nothing, because the fresh stat would adopt
-whatever an external writer had just written; `optimistic-publish.test.ts` pins that with a
-regression test that fires a write the instant the recovery copy is taken. It is a stat, not a
-re-digest, so it cannot see a same-size replacement inside one mtime tick.
+It fences desktop commits and nothing else. Web mutations (`apps/api/src/fs/routes.ts`),
+Collabora saves (`apps/api/src/office/writes.ts`), the retention job and the OCR pass never take
+it, and could not cheaply: their publication *is* their transfer, and holding an identity across
+a transfer is what this design exists to avoid. A desktop commit is not exposed to them, because
+item 2 proves the destination's content rather than trusting the lock to have excluded everyone.
+
+**2. The destination's content is proven inside the serialized section.** For a replace-upload,
+`apps/api/src/desktop/writes.ts` takes the recovery copy *inside* the section and digests it
+against the client's base version. A copy is a snapshot, so a digest matching the base proves
+the destination still held that content at the moment of the copy — and the copy happened under
+the lock, so no other desktop commit can have written between the proof and the rename. On a
+retry the copy is retained from the earlier attempt and records what the destination held
+*then*, so that case digests the live file directly instead. This costs no extra I/O: the digest
+already ran, just outside the section.
+
+`unchanged` still runs, and is the whole guard for moves, which carry no content to digest. It
+compares the destination's size and modification time against an observation taken once,
+immediately after the base check. It cannot be the guard for content: `statFile` on SFTPGo is a
+HEAD whose `Last-Modified` is an HTTP date, so its resolution is a whole second, and two writers
+replacing one file with equal-length content inside that second are indistinguishable to it.
+Re-stating the observation closer to the rename would narrow its window to nothing, because the
+fresh stat would adopt whatever another writer had just written; `optimistic-publish.test.ts`
+pins that with a regression test firing a write the instant the recovery copy is taken.
 
 **3. `verified-optimistic` is selectable on stock SFTPGo.** The capability gate moved off
 `storage.withWriteLease` onto `publishesSafely` in `apps/api/src/desktop/publish-gate.ts`, which
@@ -82,10 +96,13 @@ detection after the fact; it does not close the window and is not required to sh
 
 ## Accepted residual risk
 
-A direct SFTP, FTP or WebDAV write to the same path inside the window between the final stat and
-the rename is silently lost, and the retained `previous` holds pre-fdrive content rather than the
-lost version. Items 1, 2 and the detection proposal shrink and surface it; only the VFS hook in
-the forked image eliminates it. Document this in the mode's help text and in MACOS.md; do not
+A write to the same path landing between the recovery copy that proves the destination and the
+rename that replaces it is silently lost, and the retained `previous` holds pre-fdrive content
+rather than the lost version. That window is the few storage round trips inside the serialized
+section, and it is open to every writer that does not take the publish lock: a direct SFTP, FTP
+or WebDAV client, but also fdrive's own web uploads, Collabora saves and the OCR pass, which are
+listed in item 1 as deliberately outside it. Items 1, 2 and the detection proposal shrink and
+surface it; only the VFS hook in the forked image eliminates it. Document this in the mode's help text and in MACOS.md; do not
 describe the stock path as conflict-proof anywhere.
 
 ## Verified
@@ -202,6 +219,62 @@ ceiling for an API also serving web sessions. Proposal, not a requirement of thi
 Not covered by a test: that concurrent uploads no longer delay unrelated queries. The isolated
 pool makes that structural rather than behavioral, and a load test asserting it would be timing
 dependent.
+
+## What the narrowing cost, and how it was taken back
+
+Narrowing the critical section to publication moved `checkBase` out of it. That was a real loss,
+not a wash, and review caught it after the fact.
+
+### What it used to do
+
+With the lock spanning the whole callback, two desktop commits on one file were separated by a
+content digest: the loser's `checkBase` ran *after* the winner's rename and failed against the
+client's base hash, deterministically. Narrowed, both commits digest the old bytes concurrently
+and both pass, and the only remaining guard is `unchanged` — a size and a `Last-Modified` header
+SFTPGo reports to the second. Two writers replacing one file with equal-length content inside
+that second both publish, and the second silently overwrites the first.
+
+### What changed
+
+**The recovery copy is taken inside the section.** The copy is a snapshot, so digesting it
+against the client's base proves the destination's content at the moment of the copy; taking it
+under the lock means nothing that honours the lock wrote between the proof and the rename. The
+digest already existed — it just ran outside — so the operation performs the same I/O and only
+the lock hold grows, by one server-side copy plus a read of the file being replaced.
+
+A copy retained from an earlier attempt is explicitly not accepted as proof: it records what the
+destination held during *that* attempt. When one is found, the live destination is digested
+directly instead.
+
+**A failed recovery digest is now a conflict.** It used to raise a bare `Error`, which left the
+operation `ready` and invited the client to retry against a base that could never match again.
+It is the fdrive-versus-fdrive conflict detector now, so it reports `version_conflict`.
+
+**Waiters release their connection between polls.** A session lock has to be taken and released
+on one connection, but waiting for one owns nothing. Holding it across the wait made the pool's
+`max: 4` bound cover waiters as well as holders, so one slow identity could refuse publication to
+every other identity in the deployment.
+
+**The lock's documentation no longer claims what it does not do.** It said it fenced "every
+writer fdrive mediates — desktop commits, web mutations, the retention job and the OCR pass".
+Only desktop commits take it. The correction is in the type's doc comment, in item 1 above, and
+in the residual-risk section, which now names fdrive's own unfenced writers alongside external
+ones.
+
+### Verified
+
+- `optimistic-publish.test.ts` gained four cases, each confirmed by mutation: a same-size
+  replacement the stat cannot see (fails if the copy moves back outside the section), a retained
+  copy from an interrupted attempt (fails if the live digest is dropped), and the folder and move
+  branches' name recheck (each fails if its own `resolveTarget()` is dropped). The lock-scope
+  test now pins `copiesFirst === 0` alongside `uploadsFirst === 1`.
+- `desktop-publish-lock.test.ts` adds a pool bounded to two where a third identity acquires while
+  a waiter polls. Restoring the hold-across-poll loop fails it with `DesktopPublishBusyError`.
+
+Not taken: making the web, Collabora and OCR paths take the lock. Their publication is their
+transfer, so serializing it would hold an identity for the length of an upload — the cost this
+design removed. Proving the destination inside the section protects the desktop commit from them
+without that.
 
 ## Acceptance and verification
 

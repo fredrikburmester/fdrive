@@ -10,14 +10,20 @@ import type { Pool } from "pg";
  * session lock is released by the backend when the connection dies, so an API
  * process that crashes mid-publish frees the identity without operator action.
  *
- * Give it a pool of its own. A connection is held for the whole critical section,
- * which is longer than a query even though it is far shorter than a transfer, and
- * the holder runs its own queries meanwhile — on a shared pool a saturated one
- * would leave holders unable to finish and release.
+ * Give it a pool of its own. A holder keeps a connection for the whole critical
+ * section — storage round trips, and for a replace-upload a digest of the file
+ * being replaced — and runs its own queries meanwhile, so on a shared pool a
+ * saturated one would leave holders unable to finish and release. Waiters keep
+ * nothing: the connection goes back between attempts, so the pool's bound sizes
+ * concurrent publications rather than everyone queued behind them.
  *
- * It fences every writer fdrive mediates — desktop commits, web mutations, the
- * retention job and the OCR pass. It cannot fence a client writing the storage
- * directly; that residual is the accepted risk in `docs/plans/STOCK-SFTPGO-WRITES.md`.
+ * It fences desktop commits against each other and nothing else. Web mutations
+ * (`apps/api/src/fs/routes.ts`), Collabora saves (`apps/api/src/office/writes.ts`),
+ * the OCR pass and any client writing the storage directly never take it, because
+ * their publication *is* their transfer and serializing that is what this design
+ * exists to avoid. A desktop commit is protected from all of them by proving the
+ * destination's content inside the section instead; see
+ * `docs/plans/STOCK-SFTPGO-WRITES.md`.
  */
 export type DesktopPublishLock = <T>(identityId: string, run: () => Promise<T>) => Promise<T>;
 
@@ -55,39 +61,44 @@ export function createDesktopPublishLock(
   const sleep = options.sleep ?? defaultSleep;
   return async (identityId, run) => {
     const key = KEY(identityId);
-    // Reaching the lock at all can fail: a bounded pool refuses once it is
-    // saturated. Publication has not started, so the caller can retry — report
-    // that rather than a server error, and keep the cause for the log.
-    const client = await pool.connect().catch((cause: unknown) => {
-      throw new DesktopPublishBusyError(identityId, { cause });
-    });
-    let held = false;
-    try {
-      const deadline = now() + waitMs;
-      for (;;) {
-        const result = await client.query<{ held: boolean }>(
-          "select pg_try_advisory_lock(hashtextextended($1, 0)) as held",
-          [key],
-        );
-        if (result.rows[0]?.held) {
-          held = true;
-          break;
-        }
-        if (now() >= deadline) throw new DesktopPublishBusyError(identityId);
-        await sleep(pollMs);
-      }
-      return await run();
-    } finally {
+    const deadline = now() + waitMs;
+    for (;;) {
+      // Checked out per attempt and given back again while waiting. A session lock
+      // has to be taken and released on one connection, but *waiting* for one owns
+      // nothing, and holding a connection across the wait would make the pool's
+      // bound cover waiters as well as holders — so a single slow identity could
+      // refuse publication to every other identity in the deployment.
+      //
+      // Reaching the lock at all can fail: a bounded pool refuses once it is
+      // saturated. Publication has not started, so the caller can retry — report
+      // that rather than a server error, and keep the cause for the log.
+      const client = await pool.connect().catch((cause: unknown) => {
+        throw new DesktopPublishBusyError(identityId, { cause });
+      });
+      const held = await client
+        .query<{ held: boolean }>("select pg_try_advisory_lock(hashtextextended($1, 0)) as held", [
+          key,
+        ])
+        .then((result) => result.rows[0]?.held === true)
+        .catch((error: unknown) => {
+          client.release(error as Error);
+          throw error;
+        });
       if (held) {
-        // A failed unlock means the session is unusable; destroy it rather than
-        // return a connection that still owns the identity to the pool.
-        await client
-          .query("select pg_advisory_unlock(hashtextextended($1, 0))", [key])
-          .then(() => client.release())
-          .catch((error: unknown) => client.release(error as Error));
-      } else {
-        client.release();
+        try {
+          return await run();
+        } finally {
+          // A failed unlock means the session is unusable; destroy it rather than
+          // return a connection that still owns the identity to the pool.
+          await client
+            .query("select pg_advisory_unlock(hashtextextended($1, 0))", [key])
+            .then(() => client.release())
+            .catch((error: unknown) => client.release(error as Error));
+        }
       }
+      client.release();
+      if (now() >= deadline) throw new DesktopPublishBusyError(identityId);
+      await sleep(pollMs);
     }
   };
 }
