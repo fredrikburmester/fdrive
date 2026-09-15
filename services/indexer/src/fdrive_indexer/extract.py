@@ -11,6 +11,7 @@ from collections.abc import Callable
 import httpx
 
 from .chunking import is_image, is_pdf, is_plain, is_tika
+from .http_client import shared as _http
 from .rules import is_ocr_image_dir, is_text_excluded
 
 Normalizer = Callable[[str], str]
@@ -102,7 +103,7 @@ def extract_plain(abs_path: str, cap: int, normalize: Normalizer) -> tuple[str |
 
 def extract_tika(abs_path: str, tika_url: str, normalize: Normalizer) -> tuple[str | None, str]:
     with open(abs_path, "rb") as fh:
-        r = httpx.put(
+        r = _http.put(
             f"{tika_url}/tika",
             content=fh,
             headers={"Accept": "text/plain", "X-Tika-Skip-Embedded": "false"},
@@ -184,7 +185,7 @@ def _embed(inputs: list[str], embed_url: str, batch_size: int) -> list[list[floa
     out: list[list[float]] = []
     for i in range(0, len(inputs), batch_size):
         batch = inputs[i : i + batch_size]
-        r = httpx.post(
+        r = _http.post(
             f"{embed_url}/embed",
             json={"inputs": batch, "truncate": True, "normalize": True},
             timeout=httpx.Timeout(600.0, connect=10.0),
@@ -196,6 +197,6 @@ def _embed(inputs: list[str], embed_url: str, batch_size: int) -> list[list[floa
 
 def embed_health(embed_url: str, timeout: float = 5) -> bool:
     try:
-        return httpx.get(f"{embed_url}/health", timeout=timeout).status_code == 200
+        return _http.get(f"{embed_url}/health", timeout=timeout).status_code == 200
     except Exception:  # noqa: BLE001
         return False
