@@ -159,11 +159,18 @@ def rebuild_thumbnails(
             continue
         ok = True
         reasons: list[str] = []
+        nothing_to_render: list[str] = []
         try:
             results = generate_thumbnails(
                 abs_path, ext, sha256, size, root.cfg.thumbs_dir, root.cfg.thumb_max_bytes,
-                force=force, log=log, on_error=reasons.append
+                force=force, log=log, on_error=reasons.append, on_skip=nothing_to_render.append
             )
+            if nothing_to_render:
+                failures.report(root, rel_path, "thumbnails", log, skipped=True, resolves=True)
+                if on_skip is not None:
+                    on_skip()
+                processed += 1
+                continue
             for out_size, rel_thumb_path, width, height in results:
                 db.upsert_thumbnail(conn, sha256, out_size, rel_thumb_path, width, height)
             # Generation deliberately catches per-file errors. Empty or partial
