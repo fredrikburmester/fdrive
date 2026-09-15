@@ -426,6 +426,19 @@ describe("list_folder", () => {
     expect(second).toHaveLength(51);
   });
 
+  it("opens a folder whose accents the model encoded differently", async () => {
+    const stored = "/Work/Husarö".normalize("NFD");
+    const storage = createMemoryStorage({ [`${stored}/Dokument/old.pdf`]: "x" });
+    const { tool } = toolsFor({ storage });
+
+    expect(await runTool(tool("list_folder"), { path: "/Work/Husarö".normalize("NFC") })).toBe(
+      [`${stored}: 1 entries`, "Dokument/"].join("\n"),
+    );
+    expect(
+      await runTool(tool("folder_tree"), { path: "/Work/Husarö".normalize("NFC"), depth: 1 }),
+    ).toBe(`${stored}/ 1 folders, 0 files\n  Dokument/`);
+  });
+
   it("rejects an invalid path and passes storage errors through", async () => {
     const { tool } = toolsFor();
 
@@ -559,6 +572,32 @@ describe("read_excerpts", () => {
         "### /Inbox/blank.pdf\n(No extracted text; status: empty.)",
         "### /Inbox/Folder/inner.txt\ninner text",
       ].join("\n\n"),
+    );
+  });
+
+  it("reads a selected file whose accents the model encoded differently", async () => {
+    const stored = "/Inbox/Årsmöte.pdf".normalize("NFD");
+    const memory = createMemoryStorage({ [stored]: "x" });
+    const fileByPath = vi.fn(async (_rootId: number, path: string) =>
+      path === `alice/${baseName(stored)}` ? indexedFile(6, path) : null,
+    );
+    const { tool } = toolsFor({
+      storage: memory,
+      selected: [stored],
+      mcp: {
+        indexQueries: {
+          rootIdsByName: async () => ({ sftpgo: 1 }),
+          fileByPath,
+          fileTextPrefix: async () => "Protokoll",
+        } as unknown as IndexQueries,
+        scopeResolver: {
+          verifiedIndexScopes: async () => ({ available: true, scopes: EXCERPT_SCOPES }),
+        },
+      },
+    });
+
+    expect(await runTool(tool("read_excerpts"), { paths: [stored.normalize("NFC")] })).toBe(
+      `### ${stored}\nProtokoll`,
     );
   });
 
@@ -765,6 +804,19 @@ describe("similar_files", () => {
       OrganizeToolError,
     );
     expect(runSimilarFiles).not.toHaveBeenCalled();
+  });
+
+  it("compares a selected file whose accents the model encoded differently", async () => {
+    const stored = "/Drop/Kårstämma.pdf".normalize("NFD");
+    vi.mocked(runSimilarFiles).mockResolvedValue({ path: stored, results: [] });
+    const { tool, mcp, principal } = toolsFor({
+      storage: createMemoryStorage({ [stored]: "x" }),
+      selected: [stored],
+    });
+
+    await runTool(tool("similar_files"), { path: stored.normalize("NFC") });
+
+    expect(runSimilarFiles).toHaveBeenCalledWith(mcp, principal, { path: stored, limit: 20 });
   });
 
   it("groups similar files by folder, leaving out the selection", async () => {
