@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Download, LoaderCircle, Plus, ShieldCheck } from "lucide-react";
 import { type ReactNode, useId, useRef, useState } from "react";
+import { toast } from "sonner";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import {
   AlertDialog,
@@ -223,6 +224,7 @@ function Destinations({
   const providers = useAdminProviders();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
   const [pathStyle, setPathStyle] = useState(false);
   const [type, setType] = useState("s3");
   const [name, setName] = useState("");
@@ -280,13 +282,36 @@ function Destinations({
                   : "No complete copy yet";
               })()}
             </p>
+            <p className="text-xs text-muted-foreground">
+              {item.testedAt
+                ? `Last tested: ${new Date(item.testedAt).toLocaleString()}`
+                : "Not tested yet"}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               disabled={busy || !unlocked}
-              onClick={() => void act(() => backupClient.testDestination(item.id))}
+              onClick={() =>
+                void act(async () => {
+                  setTesting(item.id);
+                  try {
+                    await backupClient.testDestination(item.id);
+                    toast.success(`${item.name} passed the test`, {
+                      description: "fdrive wrote, read back and removed a test object.",
+                    });
+                  } catch (reason) {
+                    toast.error(`${item.name} failed the test`, {
+                      description: reason instanceof Error ? reason.message : undefined,
+                    });
+                    throw reason;
+                  } finally {
+                    setTesting(null);
+                  }
+                })
+              }
             >
+              {testing === item.id && <LoaderCircle className="animate-spin" />}
               Test
             </Button>
             <Button
