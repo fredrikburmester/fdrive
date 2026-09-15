@@ -1,4 +1,4 @@
-import type { SystemAiResponse } from "@fdrive/contracts";
+import type { ListResponse, SystemAiResponse } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 import { FAKE_AI_MODEL, startFakeAi } from "./support/fake-ai.js";
@@ -24,9 +24,11 @@ async function openFolder(page: Page, name: string, url: RegExp): Promise<void> 
   await expect(page).toHaveURL(url);
 }
 
-test("Organize suggests other folders, moves what is kept checked, and undoes it", async ({
+test("Organize suggests other folders, keeps both on a clash, moves what is kept checked, and undoes it", async ({
   page,
 }) => {
+  // Two sandboxes' worth of folders and uploads before the assistant is even asked.
+  test.setTimeout(60_000);
   const fakeAi = await startFakeAi();
   const original = (await (await page.request.get(AI_URL)).json()) as SystemAiResponse;
   try {
@@ -51,6 +53,13 @@ test("Organize suggests other folders, moves what is kept checked, and undoes it
     await openFolder(page, sandbox, new RegExp(`/files/${sandbox}$`));
     await createFolder(page, "Finance");
     await createFolder(page, "inbox");
+    // An older invoice already in Finance clashes with the one the assistant will file there.
+    await openFolder(page, "Finance", new RegExp(`/files/${sandbox}/Finance$`));
+    await uploadFiles(page, [
+      { name: "invoice-2024.txt", mimeType: "text/plain", contents: "Invoice 2023-009" },
+    ]);
+    await expect(listing(page).getByText("invoice-2024.txt", { exact: true })).toBeVisible();
+    await page.goto(`/files/${sandbox}`);
     await openFolder(page, "inbox", new RegExp(`/files/${sandbox}/inbox$`));
     await uploadFiles(page, [
       { name: "invoice-2024.txt", mimeType: "text/plain", contents: "Invoice 2024-001" },
@@ -71,19 +80,42 @@ test("Organize suggests other folders, moves what is kept checked, and undoes it
     await expect(
       organize.getByText("Invoices go to Finance and notes to a new Notes folder."),
     ).toBeVisible();
-    const finance = organize.getByRole("region", { name: `/${sandbox}/Finance` });
-    await expect(finance.getByText("invoice-2024.txt")).toBeVisible();
+    const financeGroup = organize.getByRole("region", { name: `/${sandbox}/Finance` });
+    await expect(financeGroup.getByText("invoice-2024.txt")).toBeVisible();
+    await expect(
+      financeGroup.getByText("Something with this name is already there."),
+    ).toBeVisible();
     const notes = organize.getByRole("region", { name: `/${sandbox}/Notes` });
     await expect(notes.getByText("New folder")).toBeVisible();
+    await expect(organize.getByRole("button", { name: "Move 1 item" })).toBeVisible();
     // The assistant looked at the drive before answering.
     expect(fakeAi.requests.length).toBe(2);
     expect(fakeAi.requests[1]?.messages.some((message) => message.role === "tool")).toBe(true);
+
+    // Keeping both files the invoice under a numbered name.
+    await financeGroup.getByRole("button", { name: "Keep both" }).click();
+    await expect(financeGroup.getByText("invoice-2024 (2).txt")).toBeVisible();
+    await expect(organize.getByRole("button", { name: "Move 2 items" })).toBeVisible();
+
+    // Closing the sheet keeps the review; the toolbar leads back to it.
+    await organize.getByRole("button", { name: "Close" }).last().click();
+    await expect(organize).toBeHidden();
+    await page.getByRole("button", { name: "Suggestions ready" }).click();
+    await expect(organize.getByRole("button", { name: "Move 2 items" })).toBeVisible();
 
     await organize.getByRole("button", { name: "Move 2 items" }).click();
     await expect(organize).toBeHidden();
     await expect(page.getByText("Moved 2 items")).toBeVisible();
     await expect(listing(page).getByText("invoice-2024.txt", { exact: true })).toBeHidden();
     await expect(listing(page).getByText("shopping.txt", { exact: true })).toBeHidden();
+    // Read Finance over the API: a page load would dismiss the toast that offers Undo.
+    const finance = (await (
+      await page.request.get(`/api/v1/fs/list?path=${encodeURIComponent(`/${sandbox}/Finance`)}`)
+    ).json()) as ListResponse;
+    expect(finance.entries.map((entry) => entry.name).sort()).toEqual([
+      "invoice-2024 (2).txt",
+      "invoice-2024.txt",
+    ]);
 
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(page.getByText("Moved 2 items back")).toBeVisible();

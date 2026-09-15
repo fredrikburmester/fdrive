@@ -5,6 +5,7 @@ import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tansta
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { accountTransition, useAccountTransition } from "@/lib/account/transition";
+import { useOrganizeSessionStore } from "@/lib/ai/organize-session";
 import { useJobsStore } from "@/lib/jobs/store";
 import { useUploadStore } from "@/lib/upload/store";
 import { apiClient, pinTabIdentity } from "./client";
@@ -47,6 +48,7 @@ export function handleLoginSuccess(
   void queryClient.cancelQueries();
   queryClient.clear();
   useJobsStore.getState().reset();
+  useOrganizeSessionStore.getState().reset();
   useUploadStore.getState().reset();
   useUploadStore.getState().setActiveIdentity(me.activeIdentityId);
   pinTabIdentity(me.activeIdentityId);
@@ -65,6 +67,7 @@ export function handleLogoutSuccess(queryClient: QueryClient, router: NavigableR
   void queryClient.cancelQueries();
   queryClient.clear();
   useJobsStore.getState().reset();
+  useOrganizeSessionStore.getState().reset();
   useUploadStore.getState().reset();
   accountTransition.finish(true);
   router.push("/login");

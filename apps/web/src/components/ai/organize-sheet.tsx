@@ -5,12 +5,12 @@ import type {
   FsEntry,
   MoveManyRequest,
   OrganizeProposal,
-  OrganizeRun,
   OrganizeSuggestion,
 } from "@fdrive/contracts";
-import { baseName, extensionOf } from "@fdrive/core";
+import { baseName, extensionOf, parentPath, uniqueNumberedName } from "@fdrive/core";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon, FolderIcon, FolderInputIcon, LoaderCircle } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DestinationPicker } from "@/components/files/destination-picker";
 import { FileIcon } from "@/components/files/file-icon";
@@ -31,7 +31,6 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   groupSuggestions,
-  initiallyChecked,
   itemCount,
   type MoveOutcome,
   movesFor,
@@ -39,16 +38,23 @@ import {
   recentSteps,
   summarizeMoves,
   undoMoves,
-  withDestination,
 } from "@/lib/ai/organize";
-import { useCancelOrganize, useMoveMany, useOrganizeRun, useStartOrganize } from "@/lib/ai/queries";
+import {
+  type OrganizeSession,
+  type ReviewEdits,
+  reviewChecked,
+  reviewSuggestions,
+} from "@/lib/ai/organize-session";
+import { useMoveMany } from "@/lib/ai/queries";
+import type { OrganizeController } from "@/lib/ai/use-organize";
+import { apiClient } from "@/lib/api/client";
+import { queryKeys } from "@/lib/api/keys";
 import { describeFsError } from "@/lib/files/queries";
 
 export interface OrganizeSheetProps {
-  /** The selection to organize; the sheet is open while this is non-null. */
-  entries: readonly FsEntry[] | null;
+  /** The session to show; the sheet is open while it has one that is open. */
+  organize: OrganizeController;
   provider: AiProvider | null;
-  onClose: () => void;
   /** Called with the new paths once items moved, so the browser can update its selection. */
   onMoved?: (targets: readonly string[]) => void;
 }
@@ -56,10 +62,12 @@ export interface OrganizeSheetProps {
 /**
  * Asks the assistant where the selected items belong, shows its suggestions
  * grouped by destination for review, and moves only what the person keeps
- * checked. A toast offers to undo the moves.
+ * checked. A toast offers to undo the moves. Closing the sheet keeps a run
+ * or a review going; the session it shows lives in `useOrganize`.
  */
-export function OrganizeSheet({ entries, provider, onClose, onMoved }: OrganizeSheetProps) {
+export function OrganizeSheet({ organize, provider, onMoved }: OrganizeSheetProps) {
   const moveMany = useMoveMany();
+  const { session } = organize;
 
   async function undo(moved: MoveOutcome["moved"]) {
     const request = undoMoves(moved);
@@ -97,19 +105,19 @@ export function OrganizeSheet({ entries, provider, onClose, onMoved }: OrganizeS
 
   return (
     <Sheet
-      open={entries !== null}
+      open={session?.open === true}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open) organize.hide();
       }}
     >
       <SheetContent side="right" className="gap-0 sm:max-w-2xl">
-        {entries !== null ? (
+        {session !== null ? (
           <OrganizeSheetBody
-            entries={entries}
+            session={session}
+            organize={organize}
             provider={provider}
             applying={moveMany.isPending}
             onApply={apply}
-            onClose={onClose}
           />
         ) : null}
       </SheetContent>
@@ -118,58 +126,20 @@ export function OrganizeSheet({ entries, provider, onClose, onMoved }: OrganizeS
 }
 
 interface BodyProps {
-  entries: readonly FsEntry[];
+  session: OrganizeSession;
+  organize: OrganizeController;
   provider: AiProvider | null;
   applying: boolean;
   onApply: (request: MoveManyRequest) => Promise<MoveOutcome | null>;
-  onClose: () => void;
 }
 
-function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: BodyProps) {
-  const [instructions, setInstructions] = useState("");
-  const [runId, setRunId] = useState<string | null>(null);
-  const start = useStartOrganize();
-  const cancel = useCancelOrganize();
-  const run = useOrganizeRun(runId);
-  const state = run.data?.state;
-  const running = start.isPending || state === "running";
-
-  // Closing the sheet mid-run stops the assistant rather than leaving it working unseen.
-  const live = useRef({ runId, running: state === "running", cancel: cancel.mutate });
-  live.current = { runId, running: state === "running", cancel: cancel.mutate };
-  const closed = useRef(false);
-  useEffect(() => {
-    closed.current = false;
-    return () => {
-      closed.current = true;
-      const { runId: id, running: stillRunning, cancel: stop } = live.current;
-      if (id !== null && stillRunning) stop(id);
-    };
-  }, []);
-
-  async function begin() {
-    let started: OrganizeRun;
-    try {
-      started = await start.mutateAsync({
-        paths: entries.map((entry) => entry.path),
-        ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
-      });
-    } catch (error) {
-      toast.error(describeFsError(error, "Could not start organizing."));
-      return;
-    }
-    // The sheet may have closed while the request was on its way; stop the run it started.
-    if (closed.current) cancel.mutate(started.id);
-    else setRunId(started.id);
-  }
-
-  function restart() {
-    setRunId(null);
-    start.reset();
-  }
-
+function OrganizeSheetBody({ session, organize, provider, applying, onApply }: BodyProps) {
+  const { entries, instructions, runId } = session;
+  const { run, running } = organize;
+  const state = run?.state;
+  const runError = organize.runError;
   const title = `Organize ${itemCount(entries.length)}`;
-  const proposal = state === "done" ? run.data?.proposal : undefined;
+  const proposal = state === "done" ? run?.proposal : undefined;
 
   return (
     <>
@@ -185,10 +155,13 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
         <Review
           proposal={proposal}
           entries={entries}
+          edits={session.edits}
+          onEdit={organize.setEdits}
           applying={applying}
           onApply={onApply}
-          onClose={onClose}
-          onRestart={restart}
+          onDone={organize.discard}
+          onClose={organize.hide}
+          onRestart={organize.restart}
         />
       ) : (
         <>
@@ -203,7 +176,7 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
                     disabled={running}
                     maxLength={2000}
                     placeholder="Put invoices under Finance, photos by year"
-                    onChange={(event) => setInstructions(event.target.value)}
+                    onChange={(event) => organize.setInstructions(event.target.value)}
                   />
                   <FieldDescription>
                     Optional. The selected items' names, sizes, dates and indexed text, and the
@@ -218,20 +191,23 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
                     <LoaderCircle className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />
                     Looking for better places…
                   </p>
-                  {(run.data?.activity.length ?? 0) > 0 ? (
+                  {(run?.activity.length ?? 0) > 0 ? (
                     <ol aria-label="Progress" className="flex flex-col gap-1 pl-6">
-                      {recentSteps(run.data?.activity ?? []).map((step) => (
+                      {recentSteps(run?.activity ?? []).map((step) => (
                         <li key={step.key} className="text-xs text-muted-foreground">
                           {step.text}
                         </li>
                       ))}
                     </ol>
                   ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    You can close this and keep working. The suggestions wait for you.
+                  </p>
                 </div>
               ) : null}
               {state === "failed" ? (
                 <p role="alert" className="text-sm text-destructive">
-                  {run.data?.error ?? "Organizing failed."}
+                  {run?.error ?? "Organizing failed."}
                 </p>
               ) : null}
               {state === "cancelled" ? (
@@ -239,9 +215,9 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
                   Stopped. Nothing was moved.
                 </p>
               ) : null}
-              {run.isError ? (
+              {runError !== null && runError !== undefined ? (
                 <p role="alert" className="text-sm text-destructive">
-                  {describeFsError(run.error, "Lost track of this request.")}
+                  {describeFsError(runError, "Lost track of this request.")}
                 </p>
               ) : null}
             </div>
@@ -250,24 +226,26 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
             {running ? (
               <Button
                 variant="outline"
-                disabled={runId === null || cancel.isPending}
-                onClick={() => runId !== null && cancel.mutate(runId)}
+                disabled={runId === null || organize.stopping}
+                onClick={organize.stop}
               >
                 Stop
               </Button>
-            ) : state === "failed" || state === "cancelled" || run.isError ? (
+            ) : state === "failed" ||
+              state === "cancelled" ||
+              (runError !== null && runError !== undefined) ? (
               <>
-                <Button variant="outline" onClick={onClose}>
+                <Button variant="outline" onClick={organize.discard}>
                   Close
                 </Button>
-                <Button onClick={restart}>Try again</Button>
+                <Button onClick={organize.restart}>Try again</Button>
               </>
             ) : (
               <>
-                <Button variant="outline" onClick={onClose}>
+                <Button variant="outline" onClick={organize.discard}>
                   Cancel
                 </Button>
-                <Button onClick={() => void begin()}>Suggest moves</Button>
+                <Button onClick={() => void organize.start()}>Suggest moves</Button>
               </>
             )}
           </SheetFooter>
@@ -280,17 +258,33 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
 interface ReviewProps {
   proposal: OrganizeProposal;
   entries: readonly FsEntry[];
+  edits: ReviewEdits;
+  onEdit: (edits: ReviewEdits) => void;
   applying: boolean;
   onApply: (request: MoveManyRequest) => Promise<MoveOutcome | null>;
+  /** Everything moved: the session is finished. */
+  onDone: () => void;
+  /** Hides the sheet; the review stays available. */
   onClose: () => void;
   onRestart: () => void;
 }
 
-function Review({ proposal, entries, applying, onApply, onClose, onRestart }: ReviewProps) {
-  const [suggestions, setSuggestions] = useState(proposal.suggestions);
-  const [checked, setChecked] = useState(() => initiallyChecked(proposal));
-  const [failures, setFailures] = useState<ReadonlyMap<string, string>>(new Map());
+function Review({
+  proposal,
+  entries,
+  edits,
+  onEdit,
+  applying,
+  onApply,
+  onDone,
+  onClose,
+  onRestart,
+}: ReviewProps) {
+  const queryClient = useQueryClient();
   const [editing, setEditing] = useState<OrganizeSuggestion | null>(null);
+  const [naming, setNaming] = useState<string | null>(null);
+  const suggestions = useMemo(() => reviewSuggestions(proposal, edits), [proposal, edits]);
+  const checked = useMemo(() => reviewChecked(proposal, edits), [proposal, edits]);
   const groups = useMemo(() => groupSuggestions(suggestions), [suggestions]);
   const entriesByPath = useMemo(
     () => new Map(entries.map((entry) => [entry.path, entry])),
@@ -298,15 +292,17 @@ function Review({ proposal, entries, applying, onApply, onClose, onRestart }: Re
   );
   const request = movesFor(suggestions, checked);
 
+  function withChecked(paths: readonly string[], next: boolean): ReadonlySet<string> {
+    const updated = new Set(checked);
+    for (const path of paths) {
+      if (next) updated.add(path);
+      else updated.delete(path);
+    }
+    return updated;
+  }
+
   function toggle(paths: readonly string[], next: boolean) {
-    setChecked((previous) => {
-      const updated = new Set(previous);
-      for (const path of paths) {
-        if (next) updated.add(path);
-        else updated.delete(path);
-      }
-      return updated;
-    });
+    onEdit({ ...edits, checked: withChecked(paths, next) });
   }
 
   async function submit() {
@@ -314,13 +310,62 @@ function Review({ proposal, entries, applying, onApply, onClose, onRestart }: Re
     const outcome = await onApply(request);
     if (outcome === null) return;
     if (outcome.failed.length === 0) {
-      onClose();
+      onDone();
       return;
     }
-    const moved = new Set(outcome.moved.map((move) => move.path));
-    setSuggestions((previous) => previous.filter((suggestion) => !moved.has(suggestion.path)));
-    toggle([...moved], false);
-    setFailures(new Map(outcome.failed.map((failure) => [failure.path, failure.message])));
+    const moved = outcome.moved.map((move) => move.path);
+    onEdit({
+      ...edits,
+      checked: withChecked(moved, false),
+      moved: new Set([...edits.moved, ...moved]),
+      failures: new Map(outcome.failed.map((failure) => [failure.path, failure.message])),
+    });
+  }
+
+  function choose(suggestion: OrganizeSuggestion, destination: string) {
+    const failures = new Map(edits.failures);
+    failures.delete(suggestion.path);
+    const names = new Map(edits.names);
+    names.delete(suggestion.path);
+    onEdit({
+      ...edits,
+      checked: withChecked([suggestion.path], true),
+      destinations: new Map(edits.destinations).set(suggestion.path, destination),
+      names,
+      failures,
+    });
+  }
+
+  /** Renames the item so it can go next to whatever already has its name. */
+  async function keepBoth(suggestion: OrganizeSuggestion) {
+    setNaming(suggestion.path);
+    try {
+      const taken = new Set<string>();
+      if (!suggestion.newFolder) {
+        const listing = await queryClient.fetchQuery({
+          queryKey: queryKeys.fs.list(suggestion.destination),
+          queryFn: () => apiClient.list(suggestion.destination),
+        });
+        for (const entry of listing.entries) taken.add(entry.name);
+      }
+      // Other suggestions headed for the same folder claim their names too.
+      for (const other of suggestions)
+        if (other.path !== suggestion.path && parentPath(other.target) === suggestion.destination)
+          taken.add(baseName(other.target));
+      const name = uniqueNumberedName(baseName(suggestion.path), taken);
+      const failures = new Map(edits.failures);
+      failures.delete(suggestion.path);
+      onEdit({
+        ...edits,
+        checked: withChecked([suggestion.path], true),
+        names: new Map(edits.names).set(suggestion.path, name),
+        failures,
+      });
+    } catch (error) {
+      toast.error(describeFsError(error, "Could not look inside that folder."));
+    } finally {
+      setNaming(null);
+    }
   }
 
   return (
@@ -363,7 +408,10 @@ function Review({ proposal, entries, applying, onApply, onClose, onRestart }: Re
                       {group.suggestions.map((suggestion) => {
                         const entry = entriesByPath.get(suggestion.path);
                         const name = baseName(suggestion.path);
-                        const failure = failures.get(suggestion.path);
+                        const failure = edits.failures.get(suggestion.path);
+                        const renamed = edits.names.get(suggestion.path);
+                        const taken =
+                          (suggestion.conflict || failure !== undefined) && renamed === undefined;
                         return (
                           <li
                             key={suggestion.path}
@@ -402,6 +450,25 @@ function Review({ proposal, entries, applying, onApply, onClose, onRestart }: Re
                                 <p role="alert" className="text-xs text-destructive">
                                   {failure}
                                 </p>
+                              ) : null}
+                              {renamed !== undefined ? (
+                                <p className="text-xs text-muted-foreground">
+                                  Moves as <span className="font-mono">{renamed}</span>
+                                </p>
+                              ) : null}
+                              {taken ? (
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  className="mt-1"
+                                  disabled={applying || naming !== null}
+                                  onClick={() => void keepBoth(suggestion)}
+                                >
+                                  {naming === suggestion.path ? (
+                                    <LoaderCircle className="animate-spin motion-reduce:animate-none" />
+                                  ) : null}
+                                  Keep both
+                                </Button>
                               ) : null}
                             </div>
                             <Button
@@ -453,7 +520,7 @@ function Review({ proposal, entries, applying, onApply, onClose, onRestart }: Re
         </Button>
         <div className="flex gap-2">
           <Button variant="outline" disabled={applying} onClick={onClose}>
-            Cancel
+            Close
           </Button>
           <Button disabled={request === null || applying} onClick={() => void submit()}>
             {applying ? "Moving…" : `Move ${itemCount(request?.items.length ?? 0)}`}
@@ -470,19 +537,7 @@ function Review({ proposal, entries, applying, onApply, onClose, onRestart }: Re
         }}
         onConfirm={(destination) => {
           if (editing === null) return;
-          setSuggestions((previous) =>
-            previous.map((suggestion) =>
-              suggestion.path === editing.path
-                ? withDestination(suggestion, destination)
-                : suggestion,
-            ),
-          );
-          toggle([editing.path], true);
-          setFailures((previous) => {
-            const next = new Map(previous);
-            next.delete(editing.path);
-            return next;
-          });
+          choose(editing, destination);
           setEditing(null);
         }}
       />
