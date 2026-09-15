@@ -84,6 +84,34 @@ def done_keys(conn: psycopg.Connection, root_id: int) -> set[tuple[str, int, int
         return {(r[0], int(r[1]), int(r[2])) for r in cur.fetchall()}
 
 
+def is_done(conn: psycopg.Connection, root_id: int, path: str, size: int, mtime_ns: int) -> bool:
+    """Refresh a cache miss: a restore may have added this key during the pass."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT 1 FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s AND size = %s AND mtime_ns = %s',
+            (root_id, path, size, mtime_ns),
+        )
+        return cur.fetchone() is not None
+
+
+@contextmanager
+def ocr_file_lock(conn: psycopg.Connection, root_id: int, path: str) -> Iterator[None]:
+    """Serialize OCR/restore commits for one source across service connections.
+
+    Take this before the backup gate. The two-int key space is separate from
+    the backup gate's bigint keys; a hash collision only serializes extra files.
+    External storage writers do not take this lock, so callers also recheck stat.
+    """
+    key = f"{root_id}:{path}"
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(%s, hashtext(%s))", (736591207, key))
+    try:
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s, hashtext(%s))", (736591207, key))
+
+
 def record_ocr_log(
     conn: psycopg.Connection,
     root_id: int,

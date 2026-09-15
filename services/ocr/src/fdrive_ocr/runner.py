@@ -240,7 +240,7 @@ def process_file(
     st = os.stat(abs_path)
     size, mtime_ns = st.st_size, st.st_mtime_ns
 
-    if (rel_path, size, mtime_ns) in done:
+    if (rel_path, size, mtime_ns) in done or db.is_done(conn, target.root_id, rel_path, size, mtime_ns):
         return "skipped_done", False
     if is_excluded(target.name, rel_path, list(settings.exclude_globs), list(include_globs)):
         db.record_ocr_log(conn, target.root_id, rel_path, size, mtime_ns, "excluded", None)
@@ -257,7 +257,11 @@ def process_file(
         )
         decision = decide(exit_code, stderr, timed_out)
         if decision.rewrite:
-            with db.backup_checkpoint(conn):
+            with db.ocr_file_lock(conn, target.root_id, rel_path), db.backup_checkpoint(conn):
+                # OCR runs outside the file lock. A restore may have completed
+                # while the subprocess ran or while the backup gate was held.
+                if db.is_done(conn, target.root_id, rel_path, size, mtime_ns):
+                    return "skipped_done", False
                 current = os.stat(abs_path)
                 if (current.st_size, current.st_mtime_ns) != (size, mtime_ns):
                     raise RuntimeError("Source changed while OCR was running")
@@ -268,7 +272,10 @@ def process_file(
                 )
             log(f"[{target.name}] OCR'd: {rel_path}")
         else:
-            db.record_ocr_log(conn, target.root_id, rel_path, size, mtime_ns, decision.status, decision.detail)
+            with db.ocr_file_lock(conn, target.root_id, rel_path):
+                if db.is_done(conn, target.root_id, rel_path, size, mtime_ns):
+                    return "skipped_done", False
+                db.record_ocr_log(conn, target.root_id, rel_path, size, mtime_ns, decision.status, decision.detail)
             if decision.status in (STATUS_FAILED, STATUS_TIMEOUT):
                 log(f"[{target.name}] {decision.status}: {rel_path}: {decision.detail}")
         return decision.status, decision.rewrite

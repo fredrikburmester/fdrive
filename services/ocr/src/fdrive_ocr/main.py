@@ -76,7 +76,8 @@ def run_once(
                 on_file=run_lock.advance, on_stopped=run_lock.stop,
             )
             prune_originals(
-                state_dir, originals if originals is not None else OriginalsIndex(), settings.originals_retention_days, log_fn
+                conn, state_dir, originals if originals is not None else OriginalsIndex(),
+                settings.originals_retention_days, log_fn,
             )
         finally:
             conn.close()

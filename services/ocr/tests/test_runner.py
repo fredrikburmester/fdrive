@@ -320,6 +320,8 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
 
     monkeypatch.setattr(runner, "run_ocrmypdf", fake_run_ocrmypdf)
     monkeypatch.setattr(runner.db, "record_ocr_log", lambda *args: None)
+    monkeypatch.setattr(runner.db, "is_done", lambda *args: False)
+    monkeypatch.setattr(runner.db, "ocr_file_lock", lambda *args: nullcontext())
     monkeypatch.setattr(runner.db, "backup_checkpoint", lambda _conn: nullcontext())
     monkeypatch.setattr(runner.os, "replace", replace_across_mounts_fails)
 

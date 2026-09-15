@@ -439,20 +439,24 @@ def test_the_index_rescans_only_when_the_state_directory_changes(
     assert index.stats(state_dir) == (2, len(ORIGINAL_BODY) + 4)
 
 
-def test_deleting_an_original_removes_its_bytes_and_its_sidecar(root_dir: Path, state_dir: str) -> None:
+def test_deleting_an_original_removes_its_bytes_and_its_sidecar(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str
+) -> None:
     original_id = _keep(state_dir, root_dir, "docs/scan.pdf")
     index = restore.OriginalsIndex()
 
-    assert restore.delete_original(state_dir, index, original_id) is True
+    assert restore.delete_original(db_conn, state_dir, index, original_id) is True
     assert not Path(restore.originals_dir(state_dir), original_id).exists()
     assert not Path(restore.mappings_dir(state_dir), f"{original_id}.json").exists()
     assert index.stats(state_dir) == (0, 0)
 
-    assert restore.delete_original(state_dir, index, original_id) is False
-    assert restore.delete_original(state_dir, index, "../escape") is False
+    assert restore.delete_original(db_conn, state_dir, index, original_id) is False
+    assert restore.delete_original(db_conn, state_dir, index, "../escape") is False
 
 
-def test_prune_removes_only_originals_past_the_retention_window(root_dir: Path, state_dir: str) -> None:
+def test_prune_removes_only_originals_past_the_retention_window(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str
+) -> None:
     old_id = _keep(state_dir, root_dir, "docs/old.pdf")
     new_id = _keep(state_dir, root_dir, "docs/new.pdf", ORIGINAL_BODY + b"n")
     aged = time.time() - 86400 * 40
@@ -465,17 +469,17 @@ def test_prune_removes_only_originals_past_the_retention_window(root_dir: Path, 
     )
 
     index = restore.OriginalsIndex()
-    removed, reclaimed = restore.prune_originals(state_dir, index, 30, lambda _msg: None)
+    removed, reclaimed = restore.prune_originals(db_conn, state_dir, index, 30, lambda _msg: None)
     assert (removed, reclaimed) == (1, len(ORIGINAL_BODY))
     assert [entry.id for entry in restore.scan_originals(state_dir)] == [new_id]
 
 
-def test_prune_keeps_everything_while_retention_is_off(root_dir: Path, state_dir: str) -> None:
+def test_prune_keeps_everything_while_retention_is_off(db_conn: psycopg.Connection, root_dir: Path, state_dir: str) -> None:
     _keep(state_dir, root_dir, "docs/scan.pdf")
     aged = time.time() - 86400 * 4000
     os.utime(Path(restore.mappings_dir(state_dir), f"{_sole_original(state_dir).id}.json"), (aged, aged))
 
-    assert restore.prune_originals(state_dir, restore.OriginalsIndex(), 0, lambda _msg: None) == (0, 0)
+    assert restore.prune_originals(db_conn, state_dir, restore.OriginalsIndex(), 0, lambda _msg: None) == (0, 0)
     assert len(restore.scan_originals(state_dir)) == 1
 
 
@@ -490,7 +494,7 @@ def test_a_pass_prunes_aged_originals(
 
     logs: list[str] = []
     removed, _reclaimed = restore.prune_originals(
-        state_dir, restore.OriginalsIndex(), 30, logs.append, now=time.time
+        db_conn, state_dir, restore.OriginalsIndex(), 30, logs.append, now=time.time
     )
     assert removed == 1
     assert any("pruned 1 kept original" in line for line in logs)

@@ -143,15 +143,27 @@ replacement is staged in the destination directory, hashed while it is copied,
 fsynced, given the destination's ownership and the recorded mtime, and only
 then swapped in with `os.replace`, all inside the same `db.backup_checkpoint`
 advisory-lock gate a rewrite takes. Bytes that no longer hash to the sidecar's
-`sha256` are refused rather than written over the live file.
+`sha256` are refused rather than written over the live file. Restore checks
+the destination after acquiring its locks and rechecks its device, inode,
+size, nanosecond mtime/ctime and mode immediately before replacement. A change
+during the copy is refused even if the caller opted into overwriting the
+previously inspected version or recreating a missing file.
+
+OCR and restore commits also share a PostgreSQL lock per root/path. OCR runs
+its subprocess outside that lock, then refreshes the done-log while holding it
+before committing output. Cache misses also consult the current done-log, so
+a pass that started before a restore cannot undo it. Ordinary storage writes
+do not participate in this OCR lock; their concurrent edits are checked
+optimistically immediately before replacement. Lock waits and restore copies
+run off the HTTP event loop.
 
 The state of the file at a kept original's source path decides what a restore
-means. A rewrite keeps the source's mtime and only changes its size, so these
-do not overlap:
+means. A rewrite keeps the source's mtime; an OCR result with another mtime
+belongs to another revision and requires overwrite consent:
 
 | State | Meaning | Restoring |
 | --- | --- | --- |
-| `ocred` | the live file matches a done-log row recorded as `ocred` for that path | the ordinary case, no opt-in |
+| `ocred` | the live file matches an `ocred` row for that path and this original's mtime | the ordinary case, no opt-in |
 | `restored` | the live bytes already match the kept original | a no-op, no opt-in |
 | `changed` | the file matches neither: edited or replaced after OCR ran | needs `allow_overwrite_changed` |
 | `missing` | nothing is at that path any more | needs `allow_recreate` |
@@ -186,7 +198,8 @@ the end of each pass. It defaults to `0`, keeping them forever, so an
 installation that upgrades into this setting never loses bytes it was already
 holding. `OCR_ORIGINALS_RETENTION_DAYS` sets the default for an installation
 with no stored value. Individual originals can also be deleted from the admin
-sheet; that is the only way to reclaim their space.
+sheet. Both deletion paths hold the shared backup gate while removing the
+bytes and sidecar, so they wait for an active backup capture to finish.
 
 ## Compose
 

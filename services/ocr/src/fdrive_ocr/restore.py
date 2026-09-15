@@ -28,6 +28,10 @@ import psycopg
 
 from . import db
 from .originals import (
+    REFUSAL_TARGET_CHANGED,
+    REFUSAL_TARGET_MISSING,
+    STATE_CHANGED,
+    STATE_MISSING,
     STATUS_RESTORED,
     Mapping,
     TargetStat,
@@ -404,6 +408,20 @@ def _fsync_directory(path: str) -> None:
         os.close(directory_fd)
 
 
+def _live_stat(path: str) -> os.stat_result | None:
+    """Do not mistake unreadable files for absent ones, or follow leaf symlinks."""
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
+
+
+def _file_version(info: os.stat_result | None) -> tuple[int, ...] | None:
+    if info is None:
+        return None
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_mode)
+
+
 def restore_original(
     conn: psycopg.Connection,
     state_dir: str,
@@ -444,24 +462,25 @@ def restore_original(
     target = next((item for item in targets if item.name == mapping.root), None)
     if target is None:
         return RestoreOutcome(False, REASON_UNKNOWN_ROOT, root=mapping.root, path=mapping.path)
-    abs_path = resolve_target_path(target.abs_path, mapping.path)
-    if abs_path is None:
-        return RestoreOutcome(False, REASON_INVALID_PATH, root=mapping.root, path=mapping.path)
+    with db.ocr_file_lock(conn, target.root_id, mapping.path), db.backup_checkpoint(conn):
+        abs_path = resolve_target_path(target.abs_path, mapping.path)
+        if abs_path is None:
+            return RestoreOutcome(False, REASON_INVALID_PATH, root=mapping.root, path=mapping.path)
+        live = _live_stat(abs_path)
+        if live is not None and not stat_module.S_ISREG(live.st_mode):
+            return RestoreOutcome(False, REASON_INVALID_PATH, root=mapping.root, path=mapping.path)
+        current = None if live is None else TargetStat(live.st_size, live.st_mtime_ns)
+        version = _file_version(live)
+        ocred = db.ocred_keys_for_paths(conn, target.root_id, [mapping.path]).get(mapping.path, frozenset())
+        state = classify_state(current, mapping.size, mapping.mtime_ns, ocred)
+        refusal = restore_refusal(state, allow_recreate, allow_overwrite_changed)
+        if refusal is not None:
+            return RestoreOutcome(False, refusal, state=state, root=mapping.root, path=mapping.path)
 
-    current = _target_stat(abs_path)
-    ocred = db.ocred_keys_for_paths(conn, target.root_id, [mapping.path]).get(mapping.path, frozenset())
-    state = classify_state(current, mapping.size, mapping.mtime_ns, ocred)
-    refusal = restore_refusal(state, allow_recreate, allow_overwrite_changed)
-    if refusal is not None:
-        return RestoreOutcome(False, refusal, state=state, root=mapping.root, path=mapping.path)
-
-    parent = os.path.dirname(abs_path)
-    if not os.path.isdir(parent):
-        # Recreating the directory tree would invent ownership and permissions
-        # the kept original cannot describe. The bytes stay downloadable.
-        return RestoreOutcome(False, REASON_PARENT_MISSING, state=state, root=mapping.root, path=mapping.path)
-
-    with db.backup_checkpoint(conn):
+        parent = os.path.dirname(abs_path)
+        if not os.path.isdir(parent):
+            # Recreating the tree would invent ownership and permissions.
+            return RestoreOutcome(False, REASON_PARENT_MISSING, state=state, root=mapping.root, path=mapping.path)
         pending, digest = _copy_verified(kept_path, parent)
         try:
             if mapping.sha256 is not None and digest != mapping.sha256:
@@ -469,10 +488,6 @@ def restore_original(
             # Ownership and permissions come from the file being replaced. When
             # it is gone, the kept copy carries the source's mode (`apply_rewrite`
             # copied it) and the parent directory is the only owner evidence left.
-            try:
-                live = os.stat(abs_path)
-            except OSError:
-                live = None
             reference = live if live is not None else os.stat(parent)
             os.chmod(pending, stat_module.S_IMODE(reference.st_mode if live is not None else kept_stat.st_mode))
             try:
@@ -480,6 +495,17 @@ def restore_original(
             except (PermissionError, OSError):
                 pass  # not running as root, or the filesystem has no ownership; best effort
             os.utime(pending, ns=(mapping.mtime_ns, mapping.mtime_ns))
+            # Storage writers do not take the OCR lock. Opt-ins authorize the
+            # version inspected above, not edits/deletion/recreation during I/O.
+            if resolve_target_path(target.abs_path, mapping.path) != abs_path:
+                return RestoreOutcome(False, REASON_INVALID_PATH, root=mapping.root, path=mapping.path)
+            latest = _live_stat(abs_path)
+            if _file_version(latest) != version:
+                missing = latest is None
+                return RestoreOutcome(
+                    False, REFUSAL_TARGET_MISSING if missing else REFUSAL_TARGET_CHANGED,
+                    state=STATE_MISSING if missing else STATE_CHANGED, root=mapping.root, path=mapping.path,
+                )
             os.replace(pending, abs_path)
         finally:
             if os.path.exists(pending):
@@ -493,20 +519,21 @@ def restore_original(
     return RestoreOutcome(True, state=state, root=mapping.root, path=mapping.path)
 
 
-def delete_original(state_dir: str, index: OriginalsIndex, original_id: str) -> bool:
+def delete_original(conn: psycopg.Connection, state_dir: str, index: OriginalsIndex, original_id: str) -> bool:
     """Removes the kept bytes and their sidecar. Irreversible, and the only way
     to reclaim the space a kept original occupies."""
     if not is_valid_id(original_id):
         return False
-    kept_path = os.path.join(originals_dir(state_dir), original_id)
-    try:
-        os.remove(kept_path)
-    except OSError:
-        return False
-    try:
-        os.remove(_mapping_path(state_dir, original_id))
-    except OSError:
-        pass  # a legacy original has no sidecar, and a missing one is not a failure
+    with db.backup_checkpoint(conn):
+        kept_path = os.path.join(originals_dir(state_dir), original_id)
+        try:
+            os.remove(kept_path)
+        except OSError:
+            return False
+        try:
+            os.remove(_mapping_path(state_dir, original_id))
+        except OSError:
+            pass  # a legacy original has no sidecar, and a missing one is not a failure
     index.invalidate()
     return True
 
@@ -526,6 +553,7 @@ def open_original(state_dir: str, original_id: str) -> tuple[str, int] | None:
 
 
 def prune_originals(
+    conn: psycopg.Connection,
     state_dir: str,
     index: OriginalsIndex,
     retention_days: int,
@@ -542,7 +570,7 @@ def prune_originals(
     for entry in list(index.entries(state_dir)):
         if entry.kept_at >= cutoff:
             continue
-        if delete_original(state_dir, index, entry.id):
+        if delete_original(conn, state_dir, index, entry.id):
             removed += 1
             reclaimed += entry.size
     if removed:

@@ -54,6 +54,21 @@ not current instructions.
   work, `.claude/launch.json` and `.playwright-mcp/`. `npx biome check $(git ls-files)` is clean.
   Either gitignore them or add `!**/.playwright-mcp` to `biome.json`.
 
+### PR #33 review fixes
+
+- Restore checks the destination after lock acquisition and immediately before replacement,
+  refusing edits, deletion or recreation during copying even with prior overwrite consent.
+  OCR results from another mtime require consent to replace a later revision.
+- OCR/restore commits share a per-file PostgreSQL lock and refresh done-log keys, including
+  after the subprocess, so a running pass cannot undo a restore. Delete and retention pruning
+  hold the backup gate. Restore/delete waits run off the HTTP event loop.
+- Final `python ocr` passes 267 tests at 96.20% coverage (`step.rdFnEF`), including 18 new
+  regression cases. Integration ran 498 tests successfully (`step.pUdmw9`); one PostgreSQL
+  container port-binding timeout skipped three tests, all passing in isolation (`step.QvutOH`).
+- Workflow helper regressions and tracked-file lint pass. The full workflow gate still fails
+  lint only on pre-existing `.claude/launch.json` and `.playwright-mcp/rehearsal.json`
+  (`step.wyyCtc`); diff checks pass. Unrelated backup and planning WIP is preserved.
+
 ## Installation backups: implemented, final gates in progress
 
 - Worktree `/private/tmp/fdrive-backups`, branch `codex/backups`, everything uncommitted; main

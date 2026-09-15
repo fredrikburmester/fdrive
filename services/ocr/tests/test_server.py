@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -432,6 +434,35 @@ def test_delete_removes_a_kept_original(postgres_dsn: str, tmp_path: Path) -> No
     assert client.post("/originals/delete", json={"id": original_id}).status_code == 200
     assert client.get("/originals").json()["total"] == 0
     assert client.post("/originals/delete", json={"id": original_id}).status_code == 404
+
+
+@pytest.mark.parametrize("operation", ["restore", "delete"])
+def test_original_mutation_does_not_block_health(
+    postgres_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    state = _make_state(postgres_dsn, tmp_path)
+    original_id = _keep_original(state, tmp_path)
+    started, release = threading.Event(), threading.Event()
+    original = getattr(server, f"{operation}_original")
+
+    def paused(*args: object) -> object:
+        started.set()
+        assert release.wait(10)
+        return original(*args)
+
+    monkeypatch.setattr(server, f"{operation}_original", paused)
+    with TestClient(server.create_app(state)) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        mutation = pool.submit(
+            client.post, f"/originals/{operation}", json={"id": original_id, "allow_overwrite_changed": True},
+        )
+        try:
+            assert started.wait(5)
+            health = pool.submit(client.get, "/health").result(timeout=3)
+            assert health.status_code == 200
+            assert not mutation.done()
+        finally:
+            release.set()
+        assert mutation.result(timeout=5).status_code == 200
 
 
 def test_a_manual_run_prunes_aged_originals(postgres_dsn: str, tmp_path: Path) -> None:

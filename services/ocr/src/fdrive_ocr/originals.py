@@ -133,8 +133,8 @@ def classify_state(
     """What the live file at a kept original's source path currently is.
 
     `ocred_keys` are the `(size, mtime_ns)` pairs `idx.ocr_log` recorded as
-    `ocred` for that exact path. A rewrite preserves the source's mtime and only
-    changes its size, so these three cases do not overlap in practice:
+    `ocred` for that exact path. A rewrite preserves the source's mtime: an OCR
+    result with a different mtime belongs to another revision, not this original.
 
     - the live bytes already look like the kept original: `restored`
     - they match a recorded OCR result for the path: `ocred`, the ordinary case
@@ -144,7 +144,7 @@ def classify_state(
         return STATE_MISSING
     if (target.size, target.mtime_ns) == (original_size, original_mtime_ns):
         return STATE_RESTORED
-    if (target.size, target.mtime_ns) in ocred_keys:
+    if target.mtime_ns == original_mtime_ns and (target.size, target.mtime_ns) in ocred_keys:
         return STATE_OCRED
     return STATE_CHANGED
 

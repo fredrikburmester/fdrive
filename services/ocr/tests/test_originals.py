@@ -135,6 +135,12 @@ def test_file_matching_a_recorded_ocr_result_is_the_ocr_output() -> None:
     assert classify_state(target, MAPPING.size, MAPPING.mtime_ns, OCRED_KEYS) == STATE_OCRED
 
 
+def test_another_revisions_ocr_result_is_changed() -> None:
+    target = TargetStat(size=2048, mtime_ns=MAPPING.mtime_ns + 1)
+    keys = OCRED_KEYS | {(target.size, target.mtime_ns)}
+    assert classify_state(target, MAPPING.size, MAPPING.mtime_ns, keys) == STATE_CHANGED
+
+
 def test_file_matching_neither_has_changed_since_ocr() -> None:
     target = TargetStat(size=4096, mtime_ns=MAPPING.mtime_ns + 5)
     assert classify_state(target, MAPPING.size, MAPPING.mtime_ns, OCRED_KEYS) == STATE_CHANGED

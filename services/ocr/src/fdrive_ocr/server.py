@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import psycopg
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
@@ -30,6 +31,7 @@ from . import db
 from .features import FeatureConfiguration, resolve_features
 from .restore import (
     OriginalsIndex,
+    RestoreOutcome,
     delete_original,
     list_originals,
     open_original,
@@ -228,7 +230,7 @@ async def trigger_run(request: Request) -> JSONResponse:
                 is_enabled=lambda: state.features(db.read_settings(conn)).values.pdf_ocr,
                 on_file=state.run_lock.advance, on_stopped=state.run_lock.stop,
             )
-            prune_originals(state.state_dir, state.originals, settings.originals_retention_days, state.log)
+            prune_originals(conn, state.state_dir, state.originals, settings.originals_retention_days, state.log)
         except Exception as e:  # noqa: BLE001
             state.run_lock.fail()
             state.log(f"OCR pass crashed: {type(e).__name__}: {e}")
@@ -323,20 +325,18 @@ async def restore(request: Request) -> JSONResponse:
     original_id = body.get("id")
     if not isinstance(original_id, str):
         return JSONResponse({"error": "id is required"}, status_code=400)
-    conn = state.conn_factory()
-    try:
-        outcome = restore_original(
-            conn,
-            state.state_dir,
-            state.targets,
-            state.originals,
-            original_id,
-            body.get("allow_recreate") is True,
-            body.get("allow_overwrite_changed") is True,
-            state.log,
-        )
-    finally:
-        conn.close()
+    def perform_restore() -> RestoreOutcome:
+        conn = state.conn_factory()
+        try:
+            return restore_original(
+                conn, state.state_dir, state.targets, state.originals, original_id,
+                body.get("allow_recreate") is True, body.get("allow_overwrite_changed") is True, state.log,
+            )
+        finally:
+            conn.close()
+
+    # Copying and waiting for advisory locks must not block health/activity.
+    outcome = await run_in_threadpool(perform_restore)
     if not outcome.ok:
         reason = outcome.reason or "not_found"
         state.log(f"restore refused ({reason}): {original_id}")
@@ -353,7 +353,14 @@ async def delete(request: Request) -> JSONResponse:
     original_id = body.get("id")
     if not isinstance(original_id, str):
         return JSONResponse({"error": "id is required"}, status_code=400)
-    if not delete_original(state.state_dir, state.originals, original_id):
+    def perform_delete() -> bool:
+        conn = state.conn_factory()
+        try:
+            return delete_original(conn, state.state_dir, state.originals, original_id)
+        finally:
+            conn.close()
+
+    if not await run_in_threadpool(perform_delete):
         return JSONResponse({"error": "not found"}, status_code=404)
     state.log(f"deleted kept original: {original_id}")
     return JSONResponse({"deleted": True})
