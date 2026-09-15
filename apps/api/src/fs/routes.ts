@@ -28,6 +28,7 @@ import {
   type FileEntry,
   isInlinePreviewable,
   isStorageError,
+  isUnderPath,
   mimeFromExtension,
   normalizePath,
   parentPath,
@@ -527,17 +528,26 @@ export function registerFsRoutes(
     const created: string[] = [];
     const readyParents = new Set<string>();
 
+    /** Creates the target's missing parent folders, recording each one so every listing above them refreshes. */
     async function ensureParent(target: string): Promise<void> {
       const parent = parentPath(target);
-      if (readyParents.has(parent)) return;
-      try {
-        await principal.storage.stat(parent);
-      } catch (error) {
-        if (!isStorageError(error) || error.kind !== "not_found") throw error;
-        await principal.storage.mkdir(parent, { parents: true });
-        created.push(parent);
+      const missing: string[] = [];
+      for (let folder = parent; folder !== "/" && !readyParents.has(folder); ) {
+        try {
+          await principal.storage.stat(folder);
+          break;
+        } catch (error) {
+          if (!isStorageError(error) || error.kind !== "not_found") throw error;
+          missing.unshift(folder);
+          folder = parentPath(folder);
+        }
       }
-      readyParents.add(parent);
+      if (missing.length > 0) {
+        await principal.storage.mkdir(parent, { parents: true });
+        created.push(...missing);
+      }
+      for (let folder = parent; folder !== "/"; folder = parentPath(folder))
+        readyParents.add(folder);
     }
 
     try {
@@ -545,12 +555,14 @@ export function registerFsRoutes(
         try {
           const path = normalizeOrThrow(item.path);
           const target = normalizeOrThrow(item.target);
-          if (body.createParents === true) await runStorageCall(() => ensureParent(target));
+          // Check the source first, so a move that cannot happen leaves no new empty folder behind.
+          const source = await runStorageCall(() => principal.storage.stat(path));
+          if (body.createParents === true && path !== target && !isUnderPath(path, target))
+            await runStorageCall(() => ensureParent(target));
           await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
           moved.push({ path, target });
           try {
-            const entry = await statEntry(principal.storage, target);
-            await deps.metadata?.onMoved(principal.identityId, path, target, entry.kind === "dir");
+            await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
             results.push({ ok: true, path, target });
           } catch {
             results.push({
@@ -561,18 +573,13 @@ export function registerFsRoutes(
             });
           }
         } catch (error) {
-          const mapped =
-            error instanceof ApiHttpError
-              ? error
-              : isStorageError(error)
-                ? toApiHttpError(error)
-                : null;
-          if (mapped === null) throw error;
+          // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
+          if (!(error instanceof ApiHttpError)) throw error;
           results.push({
             ok: false,
             path: item.path,
             target: item.target,
-            error: { kind: mapped.kind, message: mapped.message },
+            error: { kind: error.kind, message: error.message },
           });
         }
       }

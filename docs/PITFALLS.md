@@ -54,6 +54,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
   file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
   first, list only after it reports `bad_request`.
+- Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
+  "o" plus a combining mark, while models (and most typing) produce one character. A model
+  that echoed Swedish file names matched none of them, so organize dropped every suggestion.
+  Resolve paths a model writes against storage (`ai/organize/stored-paths.ts`) before comparing
+  or creating anything.
 - Zod 4's `z.iso.datetime()` rejects `+00:00` offsets unless `{ offset: true }`; Python emits
   offsets.
 - Base UI: `DropdownMenuLabel` must sit inside a group; never nest a `ToggleGroup` in a menu; pass

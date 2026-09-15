@@ -13,6 +13,7 @@ import { resolveScopeContext, virtualPathFor } from "../../mcp/scope-context.js"
 import { createReadAuthorizer } from "../../scoping/read-authorizer.js";
 import { toIndexRelativePath } from "../../search/scopes.js";
 import type { AiToolSpec } from "../model.ts";
+import { createPathLocator } from "./stored-paths.ts";
 
 /** A tool the organizer can call. Every tool only reads; moving is the person's decision. */
 export interface OrganizeTool<T = unknown> {
@@ -89,6 +90,11 @@ function normalizeArg(path: string): string {
   }
 }
 
+/** The stored spelling of a path the model wrote, which may encode accents differently. */
+async function storedArg(deps: OrganizeToolsDeps, path: string): Promise<string> {
+  return (await createPathLocator(deps.principal.storage).locate(normalizeArg(path))).path;
+}
+
 /** True when `path` is a selected item or lies inside a selected folder. */
 export function isSelectedOrInside(selected: ReadonlySet<string>, path: string): boolean {
   if (selected.has(path)) return true;
@@ -135,7 +141,7 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
     {
       activity: (args) => `Looked through ${args.path}`,
       async run(args, signal) {
-        const root = normalizeArg(args.path);
+        const root = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
         if (inTrash(trashPath, root)) throw new OrganizeToolError("That folder is the Trash.");
         const listings = new Map<string, FileEntry[] | string>();
@@ -228,7 +234,7 @@ function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
     {
       activity: (args) => `Opened ${args.path}`,
       async run(args) {
-        const path = normalizeArg(args.path);
+        const path = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
         if (inTrash(trashPath, path)) throw new OrganizeToolError("That folder is the Trash.");
         const entries = (await deps.principal.storage.list(path))
@@ -288,6 +294,7 @@ function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
         const ctx = await scope;
         if (ctx === null) return "Extracted text is not available for this drive.";
         const authorizer = createReadAuthorizer({ storage: deps.principal.storage });
+        const locator = createPathLocator(deps.principal.storage);
         const sections = await mapLimit(args.paths, 6, async (raw) => {
           let path: string;
           try {
@@ -295,6 +302,7 @@ function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
           } catch {
             return `### ${raw}\n(Not a valid path.)`;
           }
+          path = (await locator.locate(path)).path;
           if (!isSelectedOrInside(deps.selected, path))
             return `### ${raw}\n(Not a selected item; only selected items can be read.)`;
           const resolved = toFsPath(ctx.scopes, path);
@@ -380,7 +388,7 @@ function similarTool(deps: OrganizeToolsDeps): OrganizeTool {
     {
       activity: (args) => `Compared ${baseName(args.path)} with similar files`,
       async run(args) {
-        const path = normalizeArg(args.path);
+        const path = await storedArg(deps, args.path);
         if (!isSelectedOrInside(deps.selected, path))
           throw new OrganizeToolError("Only selected items can be compared.");
         const response = await runSimilarFiles(deps.mcp, deps.principal, { path, limit: 20 });
