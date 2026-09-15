@@ -87,6 +87,16 @@ export interface StorageProvider {
     signal?: AbortSignal,
   ): Promise<T>;
 
+  /**
+   * Set when the deployment has accepted publication without a storage-enforced
+   * lease: fdrive serializes its own writers and re-verifies the destination
+   * immediately before an atomic server-side rename. It does not fence a client
+   * writing the storage directly, so a write landing inside that final window is
+   * lost. Requires the provider's `atomicMove` capability. See
+   * `docs/plans/STOCK-SFTPGO-WRITES.md` for the accepted residual.
+   */
+  readonly optimisticPublish?: boolean;
+
   list(path: string): Promise<FileEntry[]>;
 
   /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */

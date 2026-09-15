@@ -3,6 +3,7 @@ import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
   createDesktopEffectsRepo,
+  createDesktopPublishLock,
   createDesktopRepo,
   createIdentityLinksRepo,
   createIdentityOwnershipGuard,
@@ -378,6 +379,9 @@ export async function composeApp(
   // other client), so metadata survives renames from either source.
   const metadataService = createMetadataService(repos);
   const desktopRepo = createDesktopRepo(db);
+  // Serializes publication per identity across every fdrive writer. Storage
+  // without its own lease is read-only unless this is configured.
+  const desktopPublishLock = createDesktopPublishLock(pool);
   const desktopEffects = createDesktopEffectsRepo(db);
   const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
   const desktopRetention = createDesktopRetention({
@@ -718,6 +722,7 @@ export async function composeApp(
         recovery: desktopEffects,
         writes: createDesktopWrites({
           repo: desktopRepo,
+          publishLock: desktopPublishLock,
           clock,
           effectContext: createDesktopEffectContext(
             repos.identities,
@@ -736,6 +741,7 @@ export async function composeApp(
         providers: repos.providers,
         storageFactory,
         clock,
+        publishLock: desktopPublishLock,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);

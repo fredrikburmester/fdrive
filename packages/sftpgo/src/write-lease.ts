@@ -5,6 +5,13 @@ import { buildUrl, combineSignals, fetchChecked } from "./http.js";
 import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./storage-provider.js";
 
 export const SFTPGO_WRITE_PROTOCOL = "fdrive-local-v1";
+/**
+ * Publication without a storage lease, valid on unmodified SFTPGo. fdrive
+ * serializes the writers it mediates and rechecks the destination immediately
+ * before an atomic server-side rename; a direct SFTP/FTP/WebDAV write inside
+ * that window is silently lost.
+ */
+export const SFTPGO_OPTIMISTIC_MODE = "verified-optimistic";
 export const SFTPGO_LEASE_HEADER = "X-Fdrive-Write-Lease";
 export const SFTPGO_LEASE_ERROR_HEADER = "X-Fdrive-Write-Lease-Error";
 interface LeaseOptions {

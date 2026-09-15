@@ -5,7 +5,7 @@ import type {
   DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { ApiTokenRepo, IdentityRepo, ProviderRepo } from "@fdrive/db";
+import type { ApiTokenRepo, DesktopPublishLock, IdentityRepo, ProviderRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
@@ -45,6 +45,9 @@ export interface DesktopDeps {
   storageFactory: IdentityStorageFactory;
   clock: () => Date;
   trashPathForStorage: (storage: Principal["storage"]) => string | null;
+  /** Serializes publication for one identity across every fdrive writer.
+   * Absent means storage without a lease stays read-only. */
+  publishLock?: DesktopPublishLock;
 }
 
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.

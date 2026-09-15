@@ -6,6 +6,7 @@ import { sftpgoModule } from "./module.js";
 import {
   SFTPGO_LEASE_ERROR_HEADER,
   SFTPGO_LEASE_HEADER,
+  SFTPGO_OPTIMISTIC_MODE,
   SFTPGO_WRITE_PROTOCOL,
   withSftpgoWriteLease,
 } from "./write-lease.js";
@@ -261,4 +262,28 @@ it("cancels caller work without preventing release and never replays when releas
   await expect(
     withSftpgoWriteLease({ ...f.options, signal: controller.signal }, vi.fn()),
   ).rejects.toThrow("cancelled");
+});
+
+it("offers optimistic publication for stock SFTPGo without ever issuing a lease", async () => {
+  const f = await fixture();
+  const stock = sftpgoModule.createStorage(
+    { id: "p", baseUrl, config: { desktopWriteMode: SFTPGO_OPTIMISTIC_MODE } },
+    f.session,
+    { fetch: f.options.fetch },
+  );
+  expect(stock.withWriteLease).toBeUndefined();
+  expect(stock.optimisticPublish).toBe(true);
+  // A blank, unknown or near-miss mode stays read-only rather than degrading to it.
+  for (const mode of [undefined, "", "optimistic", "fdrive-local-v2"]) {
+    expect(
+      sftpgoModule.createStorage(
+        { id: "p", baseUrl, config: { desktopWriteMode: mode } },
+        f.session,
+        {
+          fetch: f.options.fetch,
+        },
+      ).optimisticPublish,
+    ).toBeUndefined();
+  }
+  expect(f.calls).toEqual([]);
 });

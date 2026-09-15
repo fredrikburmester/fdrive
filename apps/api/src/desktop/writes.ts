@@ -14,17 +14,19 @@ import type {
   DesktopWriteEntry,
 } from "@fdrive/contracts";
 import { isUnderPath, parentPath, StorageError, type StorageProvider } from "@fdrive/core";
-import type {
-  DesktopEffectContext,
-  DesktopItemRecord,
-  DesktopOperationRecord,
-  DesktopRepo,
+import {
+  type DesktopEffectContext,
+  type DesktopItemRecord,
+  type DesktopOperationRecord,
+  DesktopPublishBusyError,
+  type DesktopRepo,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import { createDesktopFiles, DESKTOP_INTERNAL_ROOT } from "./files.js";
 import type { DesktopDeps } from "./pairing.js";
+import { publishesSafely } from "./publish-gate.js";
 
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
 export const NO_WRITES: DesktopWriteCapabilities = {
@@ -39,7 +41,8 @@ type Request =
   | (DesktopUploadRequest & { kind: "upload" })
   | (DesktopFolderRequest & { kind: "folder" })
   | (DesktopMoveRequest & { kind: "move" });
-export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "trashPathForStorage"> {
+export interface DesktopWriteDeps
+  extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "publishLock"> {
   repo: DesktopRepo;
   stateDir?: string;
   effectContext?: (
@@ -81,9 +84,47 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   function capabilities(principal: Principal): DesktopWriteCapabilities {
     return deps.stateDir &&
       principal.tokenAccess?.mode === "full" &&
-      principal.storage.withWriteLease
+      publishesSafely(principal.storage, deps.publishLock !== undefined)
       ? { create: true, update: true, move: true, trash: true, restore: true }
       : NO_WRITES;
+  }
+  /**
+   * Publication always runs inside fdrive's per-identity serialization when one is
+   * configured, and additionally inside the storage lease when the provider enforces
+   * one. Lock before lease, always in that order, so the two never deadlock.
+   */
+  function publish<T>(
+    principal: Principal,
+    action: (storage: StorageProvider) => Promise<T>,
+  ): Promise<T> {
+    const storage = principal.storage;
+    // `authority()` is the single gate: it refuses everything `publishesSafely`
+    // rejects, so this composes the contracts rather than deciding again.
+    // Called as a member so the provider keeps its own `this` and the generic infers.
+    const run = (): Promise<T> =>
+      storage.withWriteLease ? storage.withWriteLease(action) : action(storage);
+    return deps.publishLock ? deps.publishLock(principal.identityId, run) : run();
+  }
+  /**
+   * Refuses publication when the destination's size or modification time no longer
+   * matches the observation the content verification was based on. On storage without
+   * a lease this is the only thing between a concurrent external write and a silent
+   * lost update. It is deliberately a stat rather than a re-digest, so it cannot see
+   * a same-size replacement inside one mtime tick, and it cannot close the final
+   * instant before the rename at all; see `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   */
+  async function unchanged(
+    storage: StorageProvider,
+    path: string,
+    witness: { size: number; modifiedAt: Date | null },
+  ) {
+    const live = await storage.statFile(path).catch(() => undefined);
+    if (
+      !live ||
+      live.size !== witness.size ||
+      (live.modifiedAt?.getTime() ?? null) !== (witness.modifiedAt?.getTime() ?? null)
+    )
+      fail("version_conflict", "This file changed remotely. Your pending copy is preserved.");
   }
   async function authority(principal: Principal) {
     if (!capabilities(principal).create)
@@ -554,7 +595,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       const request = op.request as Request;
       let publicationStarted = false;
       try {
-        const receipt = await principal.storage.withWriteLease?.(async (storage) => {
+        let witness: { size: number; modifiedAt: Date | null } | undefined;
+        const receipt = await publish(principal, async (storage) => {
           const scoped = { ...principal, storage };
           // Re-prove authorization immediately before the storage operation. The scoped
           // adapter intentionally has no reusable lease method of its own.
@@ -583,6 +625,9 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
                 );
           if (source && "base" in request && request.base)
             await checkBase(scoped, source, request.base, request.kind === "upload");
+          // Verification point for a move: the original was just proven against the
+          // client's base, so this is the observation publication must still match.
+          if (source?.kind === "file") witness = await storage.statFile(source.path);
           if (source && isUnderPath(source.path, target))
             throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
           const context: Omit<DesktopEffectContext, "office"> = {
@@ -651,8 +696,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               const backup = await digest(storage, `${internal}/previous`);
               if (backup.sha256 !== request.base?.content)
                 throw Error("Recovery copy failed validation");
+              // Last observation of the live original. The recheck before the rename
+              // closes the window between here and publication.
+              if (source.kind === "file") witness = await storage.statFile(source.path);
             }
             await authority(principal);
+            if (source && witness) await unchanged(storage, source.path, witness);
             // Publication is the only operation allowed to replace the original.
             // Apache evaluates the source/destination lease tokens atomically.
             publicationStarted = true;
@@ -669,6 +718,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             if (trashing) await internalDirectory(storage, trashRoot(principal));
             if (source.path !== target) {
               await authority(principal);
+              if (witness) await unchanged(storage, source.path, witness);
               publicationStarted = true;
               await storage.move(source.path, target, { overwrite: false });
             }
@@ -699,7 +749,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             throw Error("Could not persist commit receipt");
           return result;
         });
-        if (!receipt) throw Error("Write lease is unavailable");
         // The durable queue owns failures after the receipt commits.
         try {
           deps.effects?.kick();
@@ -721,6 +770,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           error.message === "Desktop metadata recovery capacity reached"
         )
           throw new ApiHttpError("rate_limited", error.message, { code: "quota_exceeded" });
+        // No details code: the Mac client already treats an unclassified 409 on a
+        // write as a retryable conflict that preserves the pending copy.
+        if (error instanceof DesktopPublishBusyError)
+          throw new ApiHttpError("conflict", "Another write is finishing for this account");
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }

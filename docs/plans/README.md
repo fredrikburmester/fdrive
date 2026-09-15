@@ -10,6 +10,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
 | [macOS writes](MACOS-WRITES.md) | Retention, recovery administration and native write beta qualification |
+| [Stock storage writes](STOCK-SFTPGO-WRITES.md) | Finder writes on unmodified SFTPGo via fdrive-side serialization |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
 
 These are a backlog, not a claim that an agent is working on every item. Current work and

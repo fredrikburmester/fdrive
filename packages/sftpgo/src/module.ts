@@ -16,7 +16,11 @@ import { SftpgoError } from "./errors.js";
 import { probeConnection } from "./probe.js";
 import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./storage-provider.js";
 import type { SftpgoClient } from "./types.js";
-import { SFTPGO_WRITE_PROTOCOL, withSftpgoWriteLease } from "./write-lease.js";
+import {
+  SFTPGO_OPTIMISTIC_MODE,
+  SFTPGO_WRITE_PROTOCOL,
+  withSftpgoWriteLease,
+} from "./write-lease.js";
 
 /** Default used by deployment setup; never inferred for an unmapped provider row. */
 export const DEFAULT_SFTPGO_HOME_TEMPLATE = "sftpgo:/{username}";
@@ -28,7 +32,7 @@ export const SFTPGO_CONFIG_FIELDS: readonly ProviderField[] = [
     kind: "text",
     required: false,
     maxLength: 64,
-    help: 'Use "fdrive-local-v1" only with the qualified fdrive SFTPGo image. Leave blank for read-only Finder access.',
+    help: 'Use "verified-optimistic" for stock SFTPGo: fdrive serializes its own writers and rechecks the file immediately before replacing it, but a direct SFTP/FTP write in that instant is lost. Use "fdrive-local-v1" only with the qualified fdrive SFTPGo image. Leave blank for read-only Finder access.',
   },
   {
     name: "homeTemplate",
@@ -181,6 +185,10 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
         client: clientFor(instance, ctx),
         withToken,
       });
+      if (instance.config.desktopWriteMode === SFTPGO_OPTIMISTIC_MODE)
+        // No lease: publication safety comes from fdrive-side serialization and
+        // the destination recheck in the desktop write path.
+        return { ...storage, optimisticPublish: true };
       if (instance.config.desktopWriteMode !== SFTPGO_WRITE_PROTOCOL) return storage;
       return {
         ...storage,

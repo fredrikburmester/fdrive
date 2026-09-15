@@ -22,6 +22,12 @@ export type {
   DesktopEffectStatus,
   DesktopEffectsRepo,
 } from "./repos/desktop-effects-types.js";
+export {
+  createDesktopPublishLock,
+  DesktopPublishBusyError,
+  type DesktopPublishLock,
+  type DesktopPublishLockOptions,
+} from "./repos/desktop-publish-lock.js";
 export { createRepos } from "./repos/drizzle.js";
 export { createIdentityLinksRepo, createIdentityOwnershipGuard } from "./repos/identity-links.js";
 export type {
