@@ -1017,7 +1017,7 @@ def test_scan_once_detects_race_with_watcher_as_unchanged(
     # force scan_once's snapshot of the manifest to look empty, as if this file
     # were brand new to the scan; process_file's own fresh read then finds it
     # already matches, simulating the watcher having indexed it moments earlier
-    monkeypatch.setattr(db, "get_manifest", lambda conn, root_id: {})
+    monkeypatch.setattr(db, "scan_manifest", lambda conn, root_id: {})
 
     result = indexer.scan_once(ctx)
     assert result["seen"] == 1
@@ -1035,6 +1035,320 @@ def test_scan_once_flushes_pending_queue_when_full(postgres_dsn: str, monkeypatc
     result = indexer.scan_once(ctx)
     assert result["seen"] == 20
     assert result["changed"] == 20
+
+
+def test_scan_keeps_other_workers_busy_behind_a_slow_file(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))  # 2 workers, 16 queued jobs
+    for i in range(20):
+        (tmp_path / f"f{i:02d}.txt").write_text("hello")
+    others_done = threading.Event()
+    finished: list[str] = []
+    lock = threading.Lock()
+
+    def process(_ctx: object, _abs: str, rel: str, _st: object) -> str:
+        if rel == "f00.txt":
+            # A long video or OCR job: the rest of the tree must not queue up behind it.
+            others_done.wait(timeout=5)
+        with lock:
+            finished.append(rel)
+            if len(finished) == 19:
+                others_done.set()
+        return "indexed"
+
+    monkeypatch.setattr(indexer, "safe_process", process)
+
+    result = indexer.scan_once(ctx)
+
+    assert result["changed"] == 20
+    assert finished[-1] == "f00.txt"
+
+
+def test_scan_reports_its_total_while_every_worker_is_busy(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))  # 2 workers
+    for i in range(40):
+        (tmp_path / f"f{i:02d}.txt").write_text("hello")
+
+    def text_total() -> object:
+        return next(op["total"] for op in ctx.activity.snapshot() if op["features"] == ["textSearch"])
+
+    totals: list[object] = []
+
+    def process(_ctx: object, _abs: str, rel: str, _st: object) -> str:
+        deadline = time.monotonic() + 5
+        while text_total() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        totals.append(text_total())
+        return "indexed"
+
+    monkeypatch.setattr(indexer, "safe_process", process)
+
+    assert indexer.scan_once(ctx)["changed"] == 40
+    assert totals[:2] == [40, 40]
+
+
+def test_scan_waits_for_workers_when_its_backlog_is_full(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "SCAN_BACKLOG_LIMIT", 2)
+    for i in range(40):
+        (tmp_path / f"f{i:02d}.txt").write_text("hello")
+    monkeypatch.setattr(indexer, "safe_process", lambda *_a: time.sleep(0.001) or "indexed")
+
+    assert indexer.scan_once(ctx)["changed"] == 40
+
+
+@pytest.mark.parametrize("status", ["disabled:search_ocr", "disabled:text"])
+def test_rescan_leaves_unchanged_disabled_rows_alone_until_their_feature_is_enabled(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str
+) -> None:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    path = tmp_path / "photo.jpg"
+    path.write_bytes(b"image")
+    st = path.stat()
+    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "photo.jpg", "photo.jpg", ".jpg", st.st_size, st.st_mtime_ns, "sha", None)
+    db.update_file_status(ctx.conn(), file_id, status, 0, None)
+    text_on = status == "disabled:search_ocr"
+    ctx.features = FeatureConfiguration(7, FeatureValues(False, text_on, False, False, False, False))
+    ctx.set_features(FeatureConfiguration(7, FeatureValues(False, text_on, False, False, False, False)))
+    admitted: list[str] = []
+    monkeypatch.setattr(indexer, "safe_process", lambda _ctx, _abs, rel, _st: admitted.append(rel) or "unchanged")
+
+    indexer.scan_once(ctx)
+    assert admitted == []
+
+    ctx.set_features(FeatureConfiguration(8, FeatureValues(False, True, True, False, False, False)))
+    indexer.scan_once(ctx)
+    assert admitted == ["photo.jpg"]
+
+
+def test_scan_classifies_unchanged_media_from_the_manifest(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    root = tmp_path / "root"
+    root.mkdir()
+    ctx = _make_context(cfg, "sftpgo", str(root))
+    for name, sha in (("embedded.jpg", "sha-embedded"), ("pending.jpg", "sha-pending")):
+        path = root / name
+        path.write_bytes(name.encode())
+        st = path.stat()
+        file_id = db.upsert_file(ctx.conn(), ctx.root_id, name, name, ".jpg", st.st_size, st.st_mtime_ns, sha, None)
+        db.update_file_status(ctx.conn(), file_id, "indexed", 0, None)
+        for size in (256, 1024):
+            thumb = Path(cfg.thumbs_dir) / thumb_storage_path(sha, size)
+            thumb.parent.mkdir(parents=True, exist_ok=True)
+            thumb.write_bytes(b"webp")
+    db.upsert_image_embedding(ctx.conn(), "sha-embedded", "model-a", [0.1] * 1024)
+    ctx.features = FeatureConfiguration(7, FeatureValues(True, False, False, False, True, False))
+    # A rescan visits every file; per-file lookups would cost a round trip each.
+    monkeypatch.setattr(db, "file_content_key", lambda *_a: pytest.fail("classification must use the manifest"))
+    monkeypatch.setattr(db, "image_embedding_model", lambda *_a: pytest.fail("classification must use the manifest"))
+    admitted: list[str] = []
+    monkeypatch.setattr(indexer, "backfill_media", lambda _ctx, _abs, rel, _st: admitted.append(rel) or True)
+
+    indexer.scan_once(ctx)
+
+    assert admitted == ["pending.jpg"]
+
+
+def _image_scan_context(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, names: tuple[str, ...]
+) -> indexer.RootContext:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    root = tmp_path / "root"
+    root.mkdir()
+    for name in names:
+        (root / name).write_bytes(name.encode())
+    ctx = _make_context(cfg, "sftpgo", str(root))
+    ctx.features = FeatureConfiguration(7, FeatureValues(True, False, False, False, True, False))
+    monkeypatch.setattr(indexer, "image_embed_health", lambda _url: _HEALTHY)
+    return ctx
+
+
+def _unresolved_failures(ctx: indexer.RootContext) -> set[tuple[str, str]]:
+    rows = ctx.conn().execute("SELECT path, feature FROM idx.processing_failures WHERE resolved_at IS NULL").fetchall()
+    return {(row[0], row[1]) for row in rows}
+
+
+def test_scan_thumbnails_do_not_wait_for_image_embeddings(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    names = ("a.jpg", "b.jpg", "c.jpg")
+    ctx = _image_scan_context(postgres_dsn, monkeypatch, tmp_path, names)  # 2 workers
+    thumbnailed: list[str] = []
+    all_thumbnailed = threading.Event()
+
+    def generate(abs_path: str, _ext: str, sha: str, *_a: object, **_k: object) -> list[tuple[int, str, int, int]]:
+        _write_thumbnail(ctx.cfg, sha)
+        thumbnailed.append(os.path.basename(abs_path))
+        if len(thumbnailed) == len(names):
+            all_thumbnailed.set()
+        return [(size, thumb_storage_path(sha, size), size, size) for size in (256, 1024)]
+
+    embedded_after_all_thumbnails: list[bool] = []
+
+    def embed(images: list[bytes], _url: str, _batch: int) -> tuple[list[list[float]], str]:
+        # A slow model: the third file must still be thumbnailed while this waits.
+        embedded_after_all_thumbnails.append(all_thumbnailed.wait(timeout=5))
+        return [[0.1] * 1024 for _ in images], "model-a"
+
+    monkeypatch.setattr(indexer, "generate_thumbnails", generate)
+    monkeypatch.setattr(indexer, "embed_images", embed)
+
+    result = indexer.scan_once(ctx)
+
+    assert embedded_after_all_thumbnails == [True, True, True]
+    assert result["errors"] == 0
+    assert db.image_embeddings_count(ctx.conn()) == 3
+    image_scan = next(op for op in ctx.activity.snapshot() if op["features"] == ["imageSearch"])
+    assert (image_scan["state"], image_scan["processed"], image_scan["total"]) == ("completed", 3, 3)
+
+
+def test_deferred_image_embedding_failures_count_once_per_file(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _image_scan_context(postgres_dsn, monkeypatch, tmp_path, ("broken.jpg", "rejected.jpg"))
+
+    def generate(abs_path: str, _ext: str, sha: str, *_a: object, on_error: object = None, **_k: object) -> list[object]:
+        if abs_path.endswith("broken.jpg"):
+            on_error("cannot decode")  # type: ignore[operator]
+            return []
+        _write_thumbnail(ctx.cfg, sha)
+        return [(size, thumb_storage_path(sha, size), size, size) for size in (256, 1024)]
+
+    def reject(*_a: object) -> object:
+        raise ValueError("sidecar rejected the image")
+
+    monkeypatch.setattr(indexer, "generate_thumbnails", generate)
+    monkeypatch.setattr(indexer, "embed_images", reject)
+
+    result = indexer.scan_once(ctx)
+
+    # broken.jpg fails both stages but is one failed file; rejected.jpg fails only embedding.
+    assert result["errors"] == 2
+    assert _unresolved_failures(ctx) == {
+        ("broken.jpg", "thumbnails"), ("broken.jpg", "imageSearch"), ("rejected.jpg", "imageSearch")
+    }
+    errors = {op["features"][0]: op["errors"] for op in ctx.activity.snapshot()}
+    assert errors == {"thumbnails": 1, "imageSearch": 2}
+
+
+def test_failed_deferred_image_embedding_keeps_media_backfill_pending(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _image_scan_context(postgres_dsn, monkeypatch, tmp_path, ("a.jpg",))
+    st = (Path(ctx.abs_path) / "a.jpg").stat()
+    file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.jpg", "a.jpg", ".jpg", st.st_size, st.st_mtime_ns, "sha", None)
+    db.update_file_status(ctx.conn(), file_id, "indexed", 0, None)
+    ctx.features = FeatureConfiguration(2, FeatureValues(False, False, False, False, False, False))
+    ctx.set_features(FeatureConfiguration(3, FeatureValues(True, False, False, False, True, False)))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda _a, _e, sha, *_r, **_k: _write_thumbnail(ctx.cfg, sha) or [
+        (size, thumb_storage_path(sha, size), size, size) for size in (256, 1024)
+    ])
+    monkeypatch.setattr(indexer, "embed_images", lambda *_a: (_ for _ in ()).throw(ValueError("rejected")))
+
+    indexer.scan_once(ctx)
+    assert ctx.needs_media_backfill() is True
+
+    monkeypatch.setattr(indexer, "embed_images", lambda *_a: ([[0.1] * 1024], "model-a"))
+    indexer.scan_once(ctx)
+    assert ctx.needs_media_backfill() is False
+
+
+def test_image_embedding_stage_survives_errors_and_drops_queued_work_when_abandoned(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fdrive_indexer.activity import Operation
+
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    operation = Operation("scan", ["imageSearch"], 1)
+    reported: list[tuple[bool, bool]] = []
+    release = threading.Event()
+    embedded: list[str] = []
+
+    def embed(_ctx: object, rel_path: str, _sha: str) -> bool:
+        embedded.append(rel_path)
+        if rel_path == "boom.jpg":
+            raise RuntimeError("unexpected")
+        release.wait(timeout=5)
+        return True
+
+    monkeypatch.setattr(indexer, "process_image_embedding", embed)
+    stage = indexer.ImageEmbeddingStage(ctx, operation, lambda already, media: reported.append((already, media)))
+    for name in ("boom.jpg", "slow.jpg"):
+        stage.submit(name, "sha", already_failed=False)
+    deadline = time.monotonic() + 5
+    while len(embedded) < 2 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    stage.submit("queued.jpg", "sha", already_failed=False)
+    closing = threading.Thread(target=stage.close, kwargs={"abandon": True})
+    closing.start()
+    while not stage._abandoned and time.monotonic() < deadline:
+        time.sleep(0.001)
+    release.set()
+    closing.join(timeout=5)
+
+    assert embedded == ["boom.jpg", "slow.jpg"]
+    assert reported == [(False, False)]
+    snapshot = operation.snapshot()
+    assert (snapshot["processed"], snapshot["errors"], snapshot["skipped"]) == (3, 1, 2)
+
+
+def test_image_embed_health_is_reused_across_images_until_it_expires(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    probes: list[str] = []
+    monkeypatch.setattr(indexer, "image_embed_health", lambda url: probes.append(url) or _HEALTHY)
+    monkeypatch.setattr(indexer, "embed_images", lambda *_a: ([[0.1] * 1024], "model-a"))
+    for sha in ("a", "b"):
+        _write_thumbnail(cfg, sha)
+        assert indexer.embed_thumbnail(ctx, sha) is True
+    assert len(probes) == 1
+
+    ctx.image_embed_health_seconds = 0
+    _write_thumbnail(cfg, "c")
+    assert indexer.embed_thumbnail(ctx, "c") is True
+    assert len(probes) == 2
+
+
+def test_unanswered_health_probe_keeps_a_healthy_answer_but_reported_problems_win(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid"), "sftpgo",
+                        str(tmp_path))
+    ctx.image_embed_health_seconds = 0
+    loading = ImageEmbedHealth(status="loading", model="model-a", dim=None, device="cpu")
+    # Not yet known, healthy, busy past the probe timeout, restarted, down.
+    answers = iter([None, _HEALTHY, None, loading, None])
+    monkeypatch.setattr(indexer, "image_embed_health", lambda _url: next(answers))
+
+    assert [ctx.image_embed_status() for _ in range(5)] == [None, _HEALTHY, _HEALTHY, loading, None]
+
+
+def test_busy_sidecar_probe_does_not_pause_image_embedding(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
+    cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx.image_embed_health_seconds = 0
+    answers = iter([_HEALTHY, None])
+    monkeypatch.setattr(indexer, "image_embed_health", lambda _url: next(answers))
+    monkeypatch.setattr(indexer, "embed_images", lambda *_a: ([[0.1] * 1024], "model-a"))
+    for sha in ("a", "b"):
+        _write_thumbnail(cfg, sha)
+        assert indexer.embed_thumbnail(ctx, sha) is True
+    assert not ctx.image_embed_backoff.waiting()
 
 
 def test_embed_missing_fills_partial_chunks(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

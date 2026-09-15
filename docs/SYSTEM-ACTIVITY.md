@@ -44,8 +44,10 @@ backend backoff appears as waiting. A ready runtime can still be processing file
 
 Normal scans currently mark every participating feature active for the entire root scan,
 including discovery and the final wait for other workers. A feature's counter can therefore
-pause while its spinner continues. Discovery interleaves traversal and bounded processing;
-"Discovering files" does not mean no files are being processed yet. Counts track handled
+pause while its spinner continues. Traversal runs ahead of processing into a backlog of up
+to 20,000 classified files, so most scans leave "Discovering files" within seconds; only a
+larger backlog makes traversal wait for workers. Scans embed images on a separate thread,
+so Image search can trail Thumbnails while the other features finish. Counts track handled
 file attempts, not newly stored thumbnails or embeddings. Each feature counts its own
 stage outcome: an image embedding failure does not increment thumbnail errors. Skipped
 formats and backend backoff do not count as failures. These are scan indicators, not proof

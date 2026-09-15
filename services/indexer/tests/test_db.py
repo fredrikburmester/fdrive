@@ -107,6 +107,25 @@ def test_upsert_file_and_get_manifest(db_conn: psycopg.Connection) -> None:
     assert manifest["a/b.txt"] == (10, 123, "pending", None)
 
 
+def test_scan_manifest_includes_content_key_and_image_embedding_presence(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    other_root = db.upsert_root(db_conn, "photos")
+    db.upsert_file(db_conn, root_id, "embedded.jpg", "embedded.jpg", ".jpg", 10, 1, "sha-embedded", None)
+    db.upsert_file(db_conn, root_id, "copy.jpg", "copy.jpg", ".jpg", 10, 2, "sha-embedded", None)
+    db.upsert_file(db_conn, root_id, "plain.jpg", "plain.jpg", ".jpg", 20, 3, "sha-plain", None)
+    db.upsert_file(db_conn, other_root, "elsewhere.jpg", "elsewhere.jpg", ".jpg", 30, 4, "sha-other", None)
+    db.upsert_image_embedding(db_conn, "sha-embedded", "model-a", [0.1] * 1024)
+
+    manifest = db.scan_manifest(db_conn, root_id)
+
+    # Identical content at two paths shares one embedding row without duplicating either path.
+    assert manifest == {
+        "embedded.jpg": (10, 1, "pending", None, "sha-embedded", True),
+        "copy.jpg": (10, 2, "pending", None, "sha-embedded", True),
+        "plain.jpg": (20, 3, "pending", None, "sha-plain", False),
+    }
+
+
 def test_upsert_file_conflict_updates_row(db_conn: psycopg.Connection) -> None:
     root_id = db.upsert_root(db_conn, "sftpgo")
     db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
