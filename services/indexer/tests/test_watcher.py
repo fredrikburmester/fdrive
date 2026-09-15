@@ -274,6 +274,111 @@ def test_flush_handles_stat_error(watcher_module: object, tmp_path: Path, monkey
     assert any("stat" in line for line in rec.logs)
 
 
+class BlockingRecorder(Recorder):
+    """Holds `index_file` for the named paths until `release` is set."""
+
+    def __init__(self, blocked: set[str]) -> None:
+        super().__init__()
+        import threading
+
+        self.blocked = blocked
+        self.release = threading.Event()
+        self.started: list[str] = []
+
+    def index_file(self, abs_path: str, rel_path: str, st: os.stat_result) -> str:
+        self.started.append(rel_path)
+        if rel_path in self.blocked:
+            assert self.release.wait(timeout=5)
+        return super().index_file(abs_path, rel_path, st)
+
+
+def test_flush_does_not_wait_for_a_slow_file(watcher_module: object, tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    for name in ("slow.pdf", "next.txt"):
+        (tmp_path / name).write_text(name)
+    rec = BlockingRecorder({"slow.pdf"})
+    w = watcher_module.Watcher(str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename, debounce=0.0)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        w._pending["slow.pdf"] = ("changed", False, 0.0)
+        w._flush(pool)
+        w._pending["next.txt"] = ("changed", False, 0.0)
+        w._flush(pool)
+        assert _wait_until(lambda: [rel for _abs, rel in rec.indexed] == ["next.txt"])
+        # Each batch reports once its own jobs are done; the slow batch has not finished.
+        assert _wait_until(lambda: sum("1 indexed" in line for line in rec.logs) == 1)
+        rec.release.set()
+    assert sorted(rel for _abs, rel in rec.indexed) == ["next.txt", "slow.pdf"]
+    assert _wait_until(lambda: sum("1 indexed" in line for line in rec.logs) == 2)
+
+
+def test_flush_submits_a_queued_path_once(watcher_module: object, tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    for name in ("busy.pdf", "a.txt"):
+        (tmp_path / name).write_text(name)
+    rec = BlockingRecorder({"busy.pdf"})
+    w = watcher_module.Watcher(str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename, debounce=0.0)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        w._pending["busy.pdf"] = ("changed", False, 0.0)
+        w._flush(pool)
+        assert _wait_until(lambda: rec.started == ["busy.pdf"])
+        for _ in range(3):
+            w._pending["a.txt"] = ("changed", False, 0.0)
+            w._flush(pool)
+        # A change while a job runs needs one more pass, since it may have read the old file.
+        w._pending["busy.pdf"] = ("changed", False, 0.0)
+        w._flush(pool)
+        rec.release.set()
+    assert [rel for _abs, rel in rec.indexed] == ["busy.pdf", "a.txt", "busy.pdf"]
+
+
+def test_stopping_ends_the_activity_of_jobs_that_never_started(watcher_module: object, tmp_path: Path) -> None:
+    rec = BlockingRecorder({"slow.pdf"})
+    finished: list[tuple[str, str]] = []
+
+    def on_queue(abs_path: str) -> object:
+        return lambda result: finished.append((os.path.relpath(abs_path, tmp_path), str(result)))
+
+    w = watcher_module.Watcher(
+        str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename, workers=1, debounce=0.0,
+        on_queue=on_queue,
+    )
+    w.start()
+    try:
+        (tmp_path / "slow.pdf").write_text("slow")
+        assert _wait_until(lambda: rec.started == ["slow.pdf"])
+        for name in ("a.txt", "b.txt"):
+            (tmp_path / name).write_text(name)
+        assert _wait_until(lambda: w._queued == {"a.txt", "b.txt"})
+    finally:
+        w.stop()
+        rec.release.set()
+    assert _wait_until(
+        lambda: sorted(finished) == [("a.txt", "cancelled"), ("b.txt", "cancelled"), ("slow.pdf", "indexed")]
+    )
+    assert [rel for _abs, rel in rec.indexed] == ["slow.pdf"]
+
+
+def test_rename_rechecks_the_new_path_of_a_file_still_being_indexed(watcher_module: object, tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "report.pdf").write_text("edited")
+    rec = BlockingRecorder({"docs/report.pdf"})
+    w = watcher_module.Watcher(str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename, debounce=0.0)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        w._pending["docs/report.pdf"] = ("changed", False, 0.0)
+        w._flush(pool)
+        assert _wait_until(lambda: rec.started == ["docs/report.pdf"])
+        (tmp_path / "docs").rename(tmp_path / "archive")
+        w._renames.append(("docs", "archive", True, 0.0))
+        w._flush(pool)
+        rec.release.set()
+    assert rec.renamed == [("docs", "archive", True)]
+    assert [rel for _abs, rel in rec.indexed] == ["docs/report.pdf", "archive/report.pdf"]
+
+
 def test_index_handles_missing_file(watcher_module: object, tmp_path: Path) -> None:
     rec = Recorder()
     w = watcher_module.Watcher(str(tmp_path), rec.log, rec.index_file, rec.mark_deleted, rec.rename)

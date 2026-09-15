@@ -81,6 +81,10 @@ class Watcher:
         self._pending: dict[str, tuple[str, bool, float]] = {}
         self._renames: list[tuple[str, str, bool, float]] = []
         self._move_from: dict[int, tuple[str, bool, float]] = {}
+        # Submitted index jobs by path: queued ones read the file when they start, so a
+        # newer event for the same path needs no second job until one is running.
+        self._queued: set[str] = set()
+        self._running: Counter[str] = Counter()
         self._rebuild = False
         self._stopped = threading.Event()
         self._reader_thread: threading.Thread | None = None
@@ -285,11 +289,17 @@ class Watcher:
         t0 = time.time()
         tally: Counter[str] = Counter()
         for old_rel, new_rel, is_dir, _ in renames:
+            # Jobs submitted for the old path may run from it after the move; recheck the
+            # new path so a change they missed is not left for the next scan. Only this
+            # thread submits, so nothing joins the list before the rename applies.
+            submitted = self._submitted_under(old_rel, is_dir)
             try:
                 moved = self.rename(old_rel, new_rel, is_dir)
                 tally["renamed"] += moved
                 if moved == 0:
                     due.setdefault(new_rel, ("changed", is_dir, 0.0))
+                for rel in submitted:
+                    due.setdefault(new_rel + rel[len(old_rel) :], ("changed", False, 0.0))
             except Exception as e:  # noqa: BLE001
                 tally["error"] += 1
                 self.log(f"watch: rename {old_rel} -> {new_rel} failed: {type(e).__name__}: {e}")
@@ -313,34 +323,91 @@ class Watcher:
                 self.log(f"watch: stat {rel}: {e}")
                 continue
             if stat.S_ISDIR(st.st_mode):
-                for found_path in self.add_tree(abs_path, collect_files=True):
-                    futures.append(self._submit(pool, found_path))
+                found = self.add_tree(abs_path, collect_files=True)
             elif stat.S_ISREG(st.st_mode):
-                futures.append(self._submit(pool, abs_path))
-        for future in futures:
-            tally[future.result()] += 1
-        self.log(
-            f"watch: {tally['renamed']} renamed, {tally['deleted']} deleted, {tally['indexed']} indexed, "
-            f"{tally['unchanged']} unchanged, {tally['error']} errors ({time.time() - t0:.1f}s)"
-        )
+                found = [abs_path]
+            else:
+                continue
+            for found_path in found:
+                if (future := self._submit(pool, found_path)) is not None:
+                    futures.append(future)
+        # Waiting for the batch here held every later event behind its slowest file.
+        self._report_when_done(tally, futures, t0)
 
-    def _submit(self, pool: ThreadPoolExecutor, abs_path: str) -> Future[str]:
+    def _report_when_done(self, tally: Counter[str], futures: list[Future[str]], started: float) -> None:
+        remaining = len(futures)
+        lock = threading.Lock()
+
+        def report() -> None:
+            self.log(
+                f"watch: {tally['renamed']} renamed, {tally['deleted']} deleted, {tally['indexed']} indexed, "
+                f"{tally['unchanged']} unchanged, {tally['error']} errors ({time.time() - started:.1f}s)"
+            )
+
+        def done(future: Future[str]) -> None:
+            nonlocal remaining
+            if future.cancelled():
+                result = "cancelled"
+            else:
+                result = "error" if future.exception() is not None else future.result()
+            with lock:
+                tally[result] += 1
+                remaining -= 1
+                finished = remaining == 0
+            if finished:
+                report()
+
+        if not futures:
+            report()
+        for future in futures:
+            future.add_done_callback(done)
+
+    def _submitted_under(self, rel: str, is_dir: bool) -> list[str]:
+        prefix = rel + "/"
+        with self._mu:
+            return [
+                path for path in self._queued | set(self._running)
+                if path == rel or (is_dir and path.startswith(prefix))
+            ]
+
+    def _submit(self, pool: ThreadPoolExecutor, abs_path: str) -> Future[str] | None:
+        rel = os.path.relpath(abs_path, self.root)
+        with self._mu:
+            if rel in self._queued:
+                return None
+            self._queued.add(rel)
         finish = self.on_queue(abs_path) if self.on_queue is not None else None
 
         def run() -> str:
+            with self._mu:
+                self._queued.discard(rel)
+                self._running[rel] += 1
             result = "error"
             try:
                 result = self._index(abs_path)
                 return result
             finally:
+                with self._mu:
+                    self._running[rel] -= 1
+                    if not self._running[rel]:
+                        del self._running[rel]
                 if finish is not None:
                     finish(result)
+        def cancelled(future: Future[str]) -> None:
+            # Stopping the watcher cancels jobs that never started; their activity still has to end.
+            if future.cancelled() and finish is not None:
+                finish("cancelled")
+
         try:
-            return pool.submit(run)
+            future = pool.submit(run)
         except Exception:
+            with self._mu:
+                self._queued.discard(rel)
             if finish is not None:
                 finish("error")
             raise
+        future.add_done_callback(cancelled)
+        return future
 
     def _index(self, abs_path: str) -> str:
         rel = os.path.relpath(abs_path, self.root)

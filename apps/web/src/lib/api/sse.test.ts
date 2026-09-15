@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import type { FsEvent, JobEvent, JobStatus, PingEvent } from "@fdrive/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { accountTransition } from "../account/transition";
 import {
   applyJobEvent,
-  invalidateForEvent,
+  createInvalidationBatch,
+  INVALIDATION_MAX_WAIT_MS,
+  INVALIDATION_QUIET_MS,
   type JobsStoreLike,
   keysToInvalidate,
   nextBackoffMs,
@@ -192,21 +194,142 @@ describe("parseSseMessage", () => {
   });
 });
 
-describe("invalidateForEvent", () => {
-  it("invalidates every key from keysToInvalidate", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-
-    invalidateForEvent(queryClient, fsEvent({ paths: ["/a/b.txt"] }));
-
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] });
+describe("createInvalidationBatch", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
   });
 
-  it("invalidates nothing for a ping event", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("invalidates each distinct key once for a burst of events", () => {
     const queryClient = new QueryClient();
     const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const batch = createInvalidationBatch(queryClient);
 
-    invalidateForEvent(queryClient, PING_EVENT);
+    for (const name of ["one", "two", "three"]) {
+      batch.add(keysToInvalidate(fsEvent({ paths: [`/a/${name}.txt`] })));
+      vi.advanceTimersByTime(INVALIDATION_QUIET_MS - 1);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    const lists = spy.mock.calls.filter(
+      ([filters]) => filters?.queryKey?.[0] === "fs" && filters.queryKey[1] === "list",
+    );
+    expect(lists).toEqual([[{ queryKey: ["fs", "list", "/a"] }, { cancelRefetch: false }]]);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "stat"] }, { cancelRefetch: false });
+    batch.dispose();
+  });
+
+  it("flushes a steady stream of events at the maximum wait", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const batch = createInvalidationBatch(queryClient);
+
+    const interval = INVALIDATION_QUIET_MS / 2;
+    for (let elapsed = 0; elapsed < INVALIDATION_MAX_WAIT_MS; elapsed += interval) {
+      batch.add([["fs", "list", "/a"]]);
+      vi.advanceTimersByTime(interval);
+    }
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    batch.dispose();
+  });
+
+  it("lets a refetch in progress finish, then invalidates it again", async () => {
+    vi.useRealTimers();
+    const queryClient = new QueryClient();
+    let fetches = 0;
+    const releases: Array<() => void> = [];
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ["fs", "list", "/slow"],
+      queryFn: () => {
+        const fetch = ++fetches;
+        return new Promise<string>((resolve) => releases.push(() => resolve(`listing ${fetch}`)));
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    const batch = createInvalidationBatch(queryClient);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, INVALIDATION_QUIET_MS + 50));
+    releases[0]?.();
+    await settle();
+    void observer.refetch();
+
+    // An event arrives while the listing already has data and is refetching.
+    batch.add([["fs", "list", "/slow"]]);
+    await settle();
+    expect(fetches).toBe(2);
+
+    releases[1]?.();
+    await settle();
+    expect(fetches).toBe(3);
+
+    releases[2]?.();
+    await settle();
+    expect(fetches).toBe(3);
+    expect(observer.getCurrentResult().data).toBe("listing 3");
+    batch.dispose();
+    unsubscribe();
+  });
+
+  it("refetches a query once when a broader key covers it in the same flush", async () => {
+    vi.useRealTimers();
+    const queryClient = new QueryClient();
+    let fetches = 0;
+    const releases: Array<() => void> = [];
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ["fs", "stat", "/a/b.txt"],
+      queryFn: () => {
+        const fetch = ++fetches;
+        return new Promise<string>((resolve) => releases.push(() => resolve(`stat ${fetch}`)));
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    const batch = createInvalidationBatch(queryClient);
+    const settle = () => new Promise((resolve) => setTimeout(resolve, INVALIDATION_QUIET_MS + 50));
+    releases[0]?.();
+    await settle();
+    void observer.refetch();
+
+    // The first flush finds the stat refetching and holds it back for another pass.
+    batch.add([["fs", "stat"]]);
+    await settle();
+    expect(fetches).toBe(2);
+
+    // The next event's prefix and that held-back entry now reach the same flush.
+    batch.add([["fs", "stat"]]);
+    releases[1]?.();
+    await settle();
+    expect(fetches).toBe(3);
+
+    releases[2]?.();
+    await settle();
+    expect(fetches).toBe(3);
+    batch.dispose();
+    unsubscribe();
+  });
+
+  it("drops pending invalidations when disposed", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const batch = createInvalidationBatch(queryClient);
+
+    batch.add([["fs", "list", "/a"]]);
+    batch.dispose();
+    vi.advanceTimersByTime(INVALIDATION_MAX_WAIT_MS);
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for events that invalidate nothing", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const batch = createInvalidationBatch(queryClient);
+
+    batch.add(keysToInvalidate(PING_EVENT));
+    vi.advanceTimersByTime(INVALIDATION_MAX_WAIT_MS);
 
     expect(spy).not.toHaveBeenCalled();
   });
@@ -305,8 +428,21 @@ describe("useFsEvents", () => {
     renderHook(() => useFsEvents(), { wrapper: createWrapper(queryClient) });
 
     FakeEventSource.instances[0]?.emitMessage(fsEvent({ paths: ["/a/b.txt"] }));
+    vi.advanceTimersByTime(INVALIDATION_QUIET_MS);
 
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] }, { cancelRefetch: false });
+  });
+
+  it("drops invalidations still pending when it unmounts", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const { unmount } = renderHook(() => useFsEvents(), { wrapper: createWrapper(queryClient) });
+
+    FakeEventSource.instances[0]?.emitMessage(fsEvent({ paths: ["/a/b.txt"] }));
+    unmount();
+    vi.advanceTimersByTime(INVALIDATION_MAX_WAIT_MS);
+
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("ignores a message that fails schema validation", () => {
@@ -341,9 +477,13 @@ describe("useFsEvents", () => {
     FakeEventSource.instances[0]?.emitMessage(
       jobEvent({ id: "1", state: "done", result: { path: "/a/docs.zip" } }),
     );
+    vi.advanceTimersByTime(INVALIDATION_QUIET_MS);
 
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] });
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a/docs.zip"] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["fs", "list", "/a"] }, { cancelRefetch: false });
+    expect(spy).toHaveBeenCalledWith(
+      { queryKey: ["fs", "list", "/a/docs.zip"] },
+      { cancelRefetch: false },
+    );
   });
 
   it("reconnects with backoff after an error, and closes the failed connection", () => {

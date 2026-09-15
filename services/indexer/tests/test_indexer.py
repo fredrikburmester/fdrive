@@ -1265,11 +1265,7 @@ def test_failed_deferred_image_embedding_keeps_media_backfill_pending(
 def test_image_embedding_stage_survives_errors_and_drops_queued_work_when_abandoned(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from fdrive_indexer.activity import Operation
-
     ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
-    operation = Operation("scan", ["imageSearch"], 1)
-    reported: list[tuple[bool, bool]] = []
     release = threading.Event()
     embedded: list[str] = []
 
@@ -1281,13 +1277,12 @@ def test_image_embedding_stage_survives_errors_and_drops_queued_work_when_abando
         return True
 
     monkeypatch.setattr(indexer, "process_image_embedding", embed)
-    stage = indexer.ImageEmbeddingStage(ctx, operation, lambda already, media: reported.append((already, media)))
-    for name in ("boom.jpg", "slow.jpg"):
-        stage.submit(name, "sha", already_failed=False)
+    stage = indexer.ImageEmbeddingStage(ctx, "image-embed-test")
+    outcomes = [stage.submit(name, "sha", "operation") for name in ("boom.jpg", "slow.jpg")]
     deadline = time.monotonic() + 5
     while len(embedded) < 2 and time.monotonic() < deadline:
         time.sleep(0.001)
-    stage.submit("queued.jpg", "sha", already_failed=False)
+    outcomes.append(stage.submit("queued.jpg", "sha", "operation"))
     closing = threading.Thread(target=stage.close, kwargs={"abandon": True})
     closing.start()
     while not stage._abandoned and time.monotonic() < deadline:
@@ -1296,9 +1291,61 @@ def test_image_embedding_stage_survives_errors_and_drops_queued_work_when_abando
     closing.join(timeout=5)
 
     assert embedded == ["boom.jpg", "slow.jpg"]
-    assert reported == [(False, False)]
-    snapshot = operation.snapshot()
-    assert (snapshot["processed"], snapshot["errors"], snapshot["skipped"]) == (3, 1, 2)
+    assert [outcome.result(timeout=0) for outcome in outcomes] == [(False, False), (True, True), (True, True)]
+
+
+def test_watcher_changes_do_not_wait_for_image_embeddings(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sys
+    import types
+
+    names = ("a.jpg", "b.jpg")
+    ctx = _image_scan_context(postgres_dsn, monkeypatch, tmp_path, names)
+    release = threading.Event()
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda _a, _e, sha, *_r, **_k: _write_thumbnail(ctx.cfg, sha) or [
+        (size, thumb_storage_path(sha, size), size, size) for size in (256, 1024)
+    ])
+
+    def embed(images: list[bytes], _url: str, _batch: int) -> tuple[list[list[float]], str]:
+        release.wait(timeout=5)
+        return [[0.1] * 1024 for _ in images], "model-a"
+
+    monkeypatch.setattr(indexer, "embed_images", embed)
+
+    class FakeWatcher:
+        def __init__(self, _root: str, _log: object, index_file: object, *_callbacks: object, **kw: object) -> None:
+            self.index_file, self.on_queue, self.dirs = index_file, kw["on_queue"], 0
+
+        def start(self) -> None:
+            pass
+
+    fake_module = types.ModuleType("fdrive_indexer.watcher")
+    fake_module.Watcher = FakeWatcher  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "fdrive_indexer.watcher", fake_module)
+    watcher = indexer.start_watcher(ctx, workers=2, debounce=0.1)
+    assert isinstance(watcher, FakeWatcher)
+
+    paths = [Path(ctx.abs_path) / name for name in names]
+    finishes = [watcher.on_queue(str(path)) for path in paths]  # type: ignore[operator]
+    for path, finish in zip(paths, finishes, strict=True):
+        # Each change returns while the model is still busy with the first image.
+        finish(watcher.index_file(str(path), path.name, path.stat()))  # type: ignore[operator]
+
+    def watch(feature: str) -> dict[str, object]:
+        return next(op for op in ctx.activity.snapshot() if op["kind"] == "watch" and op["features"] == [feature])
+
+    assert (watch("thumbnails")["state"], watch("thumbnails")["processed"]) == ("completed", 2)
+    assert (watch("imageSearch")["state"], watch("imageSearch")["processed"]) == ("running", 0)
+    assert db.image_embeddings_count(ctx.conn()) == 0
+
+    release.set()
+    deadline = time.monotonic() + 5
+    while watch("imageSearch")["state"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert (watch("imageSearch")["state"], watch("imageSearch")["processed"]) == ("completed", 2)
+    assert db.image_embeddings_count(ctx.conn()) == 2
+    assert ctx.watch_image_stage() is ctx.watch_image_stage()
 
 
 def test_image_embed_health_is_reused_across_images_until_it_expires(
@@ -1406,6 +1453,37 @@ def test_emit_event_failure_is_swallowed(postgres_dsn: str, monkeypatch: pytest.
     indexer.emit_event(ctx, "created", "a.txt")  # must not raise
 
 
+def test_only_a_new_or_changed_version_emits_an_event(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx.features = FeatureConfiguration(3, FeatureValues(False, True, False, False, False, False))
+    path = tmp_path / "a.txt"
+    path.write_text("first")
+
+    def events() -> list[str]:
+        rows = ctx.conn().execute('SELECT kind FROM "idx"."events" WHERE root_id = %s ORDER BY id', (ctx.root_id,))
+        return [row[0] for row in rows.fetchall()]
+
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is True
+    assert events() == ["created"]
+
+    # A reindex request re-extracts the same version.
+    db.mark_pending(ctx.conn(), ctx.root_id, None, None)
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is True
+    # So does enabling a feature for a row that was skipped while it was off.
+    ctx.conn().execute('UPDATE "idx"."files" SET text_status = %s WHERE root_id = %s', ("disabled:text", ctx.root_id))
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is True
+    assert events() == ["created"]
+
+    path.write_text("second version")
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is True
+    db.mark_deleted(ctx.conn(), ctx.root_id, "a.txt", False)
+    assert indexer.process_file(ctx, str(path), "a.txt", path.stat()) is True
+    assert events() == ["created", "changed", "changed"]
+
+
 def test_watch_mark_deleted_emits_event_only_when_rows_affected(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1488,6 +1566,34 @@ def test_scan_once_indexes_new_and_sweeps_vanished(postgres_dsn: str, monkeypatc
     manifest = db.get_manifest(ctx.conn(), ctx.root_id)
     assert manifest["a.txt"][2] == "indexed"
     assert manifest["gone.txt"][3] is not None
+
+
+def test_scan_sweeps_only_live_rows_its_walk_did_not_find(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _make_config(monkeypatch, postgres_dsn)
+    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
+    kept = tmp_path / "kept.txt"
+    kept.write_text("still here")
+    st = kept.stat()
+    db.update_file_status(
+        ctx.conn(),
+        db.upsert_file(ctx.conn(), ctx.root_id, "kept.txt", "kept.txt", ".txt", st.st_size, st.st_mtime_ns, "sha", None),
+        "indexed", 10, None,
+    )
+    db.upsert_file(ctx.conn(), ctx.root_id, "gone.txt", "gone.txt", ".txt", 1, 1, "shagone", None)
+    db.upsert_file(ctx.conn(), ctx.root_id, "deleted.txt", "deleted.txt", ".txt", 1, 1, "shadeleted", None)
+    db.mark_deleted(ctx.conn(), ctx.root_id, "deleted.txt", False)
+    swept: list[set[str]] = []
+    sweep = db.sweep_vanished
+    monkeypatch.setattr(indexer.db, "sweep_vanished", lambda *args: swept.append(set(args[2])) or sweep(*args))
+
+    assert indexer.scan_once(ctx)["deleted"] == 1
+    assert swept == [{"gone.txt"}]
+
+    assert indexer.scan_once(ctx)["deleted"] == 0
+    assert swept[-1] == set()
 
 
 def test_scan_once_skips_already_indexed_unchanged_file(

@@ -28,6 +28,10 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.
+- `NOT IN (SELECT ...)` stays linear only while Postgres can hash the subquery within
+  `work_mem`. The scan sweep sent every seen path and went quadratic between 120,000 and
+  150,000 files; at 200,000 it ran past ten minutes. Diff large sets in the worker, or use
+  `NOT EXISTS`, and never rewrite every row just to mark it seen.
 
 - Agents sometimes stash, edit outside their scope, or report gates they did not run; the review
   step exists for that. Scope-check with the review script and read the gate lines.

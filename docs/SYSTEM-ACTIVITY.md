@@ -87,7 +87,8 @@ Maintenance `/stats` records now include `outcome` (`completed`, `failed`, `stop
 An interrupted finite rebuild is never labelled completed in its settings summary.
 
 Scan totals remain unknown during traversal, then freeze at the scheduled count while
-remaining workers finish. Watcher arrivals belong to a separate open-ended operation.
+remaining workers finish. Watcher arrivals belong to a separate open-ended operation;
+their image embeddings also run on a thread of their own, so Image search can trail.
 Compatible simultaneous operations are weighted by their counts. Mixed kinds/units, zero
 or unknown totals omit the percentage. Features overview always omits an aggregate ratio.
 

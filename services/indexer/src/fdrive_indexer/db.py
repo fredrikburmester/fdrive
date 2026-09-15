@@ -6,7 +6,7 @@ and writes the `idx` and `app` schemas the migrations define.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -273,33 +273,37 @@ def finish_scan(conn: psycopg.Connection, scan_id: int, seen: int, changed: int,
         )
 
 
-def sweep_vanished(conn: psycopg.Connection, root_id: int, seen_paths: Sequence[str], started_at: datetime) -> int:
-    """Soft-delete rows for this root untouched since `started_at` that were not
-    seen in the walk that just finished. Returns how many rows were deleted."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute("CREATE TEMP TABLE seen_paths (path text PRIMARY KEY) ON COMMIT DROP")
-        with cur.copy("COPY seen_paths (path) FROM STDIN") as cp:
-            for p in seen_paths:
-                cp.write_row((p,))
-        cur.execute(
-            """
-            WITH gone AS (
-              UPDATE "idx"."files" SET deleted_at = now()
-              WHERE root_id = %s AND deleted_at IS NULL AND last_seen < %s
-                AND path NOT IN (SELECT path FROM seen_paths)
-              RETURNING id
+SWEEP_BATCH = 5_000
+
+
+def sweep_vanished(conn: psycopg.Connection, root_id: int, vanished_paths: Collection[str], started_at: datetime) -> int:
+    """Soft-delete live rows for paths a completed walk no longer found, unless a worker
+    or the watcher wrote them after `started_at`. Returns how many rows this deleted.
+
+    The scan passes its manifest snapshot minus the walk, so an unchanged tree costs no
+    statement. Sending every seen path instead made `NOT IN` quadratic once the list
+    outgrew `work_mem` (around 120,000 files), and refreshing `last_seen` on every seen
+    row rewrote the whole root on each scan.
+    """
+    paths = sorted(vanished_paths)
+    deleted = 0
+    for start in range(0, len(paths), SWEEP_BATCH):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH gone AS (
+                  UPDATE "idx"."files" SET deleted_at = now()
+                  WHERE root_id = %s AND deleted_at IS NULL AND last_seen < %s AND path = ANY(%s)
+                  RETURNING id
+                ), dropped AS (
+                  DELETE FROM "idx"."chunks" WHERE file_id IN (SELECT id FROM gone)
+                )
+                SELECT count(*) FROM gone
+                """,
+                (root_id, started_at, paths[start : start + SWEEP_BATCH]),
             )
-            DELETE FROM "idx"."chunks" WHERE file_id IN (SELECT id FROM gone)
-            """,
-            (root_id, started_at),
-        )
-        cur.execute('SELECT count(*) FROM "idx"."files" WHERE root_id = %s AND deleted_at >= %s', (root_id, started_at))
-        row = cur.fetchone()
-        deleted = int(row[0]) if row else 0
-        cur.execute(
-            'UPDATE "idx"."files" SET last_seen = now() WHERE root_id = %s AND path IN (SELECT path FROM seen_paths)',
-            (root_id,),
-        )
+            row = cur.fetchone()
+            deleted += int(row[0]) if row else 0
     return deleted
 
 
