@@ -2,6 +2,7 @@
 
 import type { TrashEntry } from "@fdrive/contracts";
 import { joinPath } from "@fdrive/core";
+import { Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DestinationPicker } from "@/components/files/destination-picker";
@@ -135,10 +136,12 @@ export function TrashPage() {
     );
   }
 
+  /** Restores the picked entry into `folder`. The picker stays open, showing
+   * its busy state, until the request settles; a conflict then closes it and
+   * offers the picker again from the toast. */
   function handleRestoreToConfirm(folder: string) {
     const entry = restoreTargetEntry;
-    setRestoreTargetEntry(null);
-    if (entry === null) {
+    if (entry === null || restore.isPending) {
       return;
     }
     restore.mutate(
@@ -152,6 +155,9 @@ export function TrashPage() {
           if (isRestoreConflict(error)) {
             offerRestoreElsewhere(entry);
           }
+        },
+        onSettled: () => {
+          setRestoreTargetEntry(null);
         },
       },
     );
@@ -185,6 +191,9 @@ export function TrashPage() {
     });
   }
 
+  // A restore started from the toolbar; a "Restore to" restore shows its
+  // busy state in the picker instead, while the toolbar is merely disabled.
+  const restoringSelection = restore.isPending && restoreTargetEntry === null;
   const note = retentionNote(status.data?.retentionHours ?? null);
   const helperText = `Files and folders moved to Trash from Files show up here until you restore or permanently delete them.${note ? ` ${note}` : ""}`;
 
@@ -203,9 +212,11 @@ export function TrashPage() {
             variant="outline"
             size="sm"
             disabled={selected.size === 0 || restore.isPending}
+            aria-busy={restoringSelection}
             onClick={handleRestoreSelected}
           >
-            Restore
+            {restoringSelection && <Loader2 className="animate-spin" aria-hidden="true" />}
+            {restoringSelection ? "Restoring…" : "Restore"}
           </Button>
           <Button
             type="button"
