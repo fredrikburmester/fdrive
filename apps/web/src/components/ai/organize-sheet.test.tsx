@@ -10,9 +10,11 @@ const mocks = vi.hoisted(() => ({
     organizeRun: vi.fn(),
     cancelOrganize: vi.fn(),
     moveMany: vi.fn(),
+    list: vi.fn(),
   },
   success: vi.fn(),
   error: vi.fn(),
+  info: vi.fn(),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -20,7 +22,9 @@ vi.mock("@/lib/api/client", () => ({
   snapshotTabApiClient: () => mocks.client,
   pinTabIdentity: vi.fn(),
 }));
-vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
+vi.mock("sonner", () => ({
+  toast: { success: mocks.success, error: mocks.error, info: mocks.info },
+}));
 vi.mock("@/components/files/destination-picker", () => ({
   DestinationPicker: (props: { open: boolean; onConfirm: (path: string) => void }) =>
     props.open ? (
@@ -31,6 +35,8 @@ vi.mock("@/components/files/destination-picker", () => ({
 }));
 
 const { OrganizeSheet } = await import("./organize-sheet");
+const { useOrganizeSessionStore } = await import("@/lib/ai/organize-session");
+const { useOrganize } = await import("@/lib/ai/use-organize");
 
 function entry(path: string): FsEntry {
   const name = path.slice(path.lastIndexOf("/") + 1);
@@ -46,6 +52,7 @@ function entry(path: string): FsEntry {
 }
 
 const entries = [entry("/inbox/receipt.pdf"), entry("/inbox/beach.jpg"), entry("/inbox/notes.txt")];
+const others = [entry("/inbox/other.txt")];
 
 function run(patch: Partial<OrganizeRun>): OrganizeRun {
   return {
@@ -87,29 +94,58 @@ const done = run({
   },
 });
 
-function renderSheet(props: { onClose?: () => void; onMoved?: () => void } = {}) {
+/** The file browser's side of the sheet: opens it for a selection and shows the closed-sheet status. */
+function Harness({ onMoved }: { onMoved?: () => void }) {
+  const organize = useOrganize();
+  return (
+    <>
+      <button type="button" onClick={() => organize.open(entries)}>
+        Open selection
+      </button>
+      <button type="button" onClick={() => organize.open(others)}>
+        Open others
+      </button>
+      <output data-testid="status">
+        {organize.status === null ? "" : `${organize.status.state}:${organize.status.count}`}
+      </output>
+      <OrganizeSheet organize={organize} provider="anthropic" {...(onMoved ? { onMoved } : {})} />
+    </>
+  );
+}
+
+function renderSheet(props: { onMoved?: () => void } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const onClose = props.onClose ?? vi.fn();
   const view = render(
     <QueryClientProvider client={queryClient}>
-      <OrganizeSheet
-        entries={entries}
-        provider="anthropic"
-        onClose={onClose}
-        {...(props.onMoved ? { onMoved: props.onMoved } : {})}
-      />
+      <Harness {...props} />
     </QueryClientProvider>,
   );
-  return { ...view, onClose, queryClient };
+  fireEvent.click(screen.getByRole("button", { name: "Open selection" }));
+  return { ...view, queryClient };
+}
+
+function sheet() {
+  return screen.getByRole("dialog");
+}
+
+/** The sheet's own close control, as the X button or Escape would. */
+function closeSheet() {
+  fireEvent.click(within(sheet()).getAllByRole("button", { name: "Close" })[0] as HTMLElement);
+}
+
+function status() {
+  return screen.getByTestId("status").textContent;
 }
 
 beforeEach(() => {
   for (const mock of Object.values(mocks.client)) mock.mockReset();
   mocks.success.mockReset();
   mocks.error.mockReset();
+  mocks.info.mockReset();
   mocks.client.startOrganize.mockResolvedValue(run({}));
+  useOrganizeSessionStore.getState().reset();
 });
 afterEach(cleanup);
 
@@ -143,7 +179,7 @@ it("explains what is sent, then reviews suggestions grouped by destination", asy
 
 it("moves the checked items, offers undo, and closes when everything moved", async () => {
   const onMoved = vi.fn();
-  const { onClose } = renderSheet({ onMoved });
+  renderSheet({ onMoved });
   await reachReview();
   mocks.client.moveMany.mockResolvedValueOnce({
     results: [{ ok: true, path: "/inbox/receipt.pdf", target: "/Finance/Receipts/receipt.pdf" }],
@@ -151,7 +187,8 @@ it("moves the checked items, offers undo, and closes when everything moved", asy
 
   fireEvent.click(screen.getByRole("button", { name: "Move 1 item" }));
 
-  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  await waitFor(() => expect(useOrganizeSessionStore.getState().session).toBeNull());
+  expect(status()).toBe("");
   expect(mocks.client.moveMany).toHaveBeenCalledWith({
     items: [{ path: "/inbox/receipt.pdf", target: "/Finance/Receipts/receipt.pdf" }],
     createParents: true,
@@ -174,7 +211,7 @@ it("moves the checked items, offers undo, and closes when everything moved", asy
 });
 
 it("keeps failed items on screen with their reason", async () => {
-  const { onClose } = renderSheet();
+  renderSheet();
   await reachReview();
   fireEvent.click(screen.getByRole("checkbox", { name: "Move all into /Photos" }));
   mocks.client.moveMany.mockResolvedValueOnce({
@@ -201,7 +238,7 @@ it("keeps failed items on screen with their reason", async () => {
     "something already exists at /Photos/beach.jpg",
   );
   expect(screen.queryByRole("region", { name: "/Finance/Receipts" })).toBeNull();
-  expect(onClose).not.toHaveBeenCalled();
+  expect(useOrganizeSessionStore.getState().session).not.toBeNull();
   expect(mocks.success.mock.calls[0]?.[1]).toMatchObject({
     description: "Tags or favorites of 1 item could not follow.",
   });
@@ -218,42 +255,115 @@ it("lets the person choose another folder for one suggestion", async () => {
   expect(screen.getByRole("button", { name: "Move 2 items" })).toBeTruthy();
 });
 
-it("shows progress, and stops the assistant from the button or by closing", async () => {
+it("shows progress, stops from the button, and keeps the run when closed", async () => {
   mocks.client.organizeRun.mockResolvedValue(
     run({ activity: ["Looked through /", "Read 2 files"] }),
   );
   mocks.client.cancelOrganize.mockResolvedValue(run({ state: "cancelled" }));
   renderSheet();
   fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
+  expect(await screen.findByText("Read 2 files")).toBeTruthy();
 
+  closeSheet();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(mocks.client.cancelOrganize).not.toHaveBeenCalled();
+  expect(status()).toBe("running:3");
+
+  fireEvent.click(screen.getByRole("button", { name: "Open selection" }));
   expect(await screen.findByText("Read 2 files")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await waitFor(() => expect(mocks.client.cancelOrganize).toHaveBeenCalledWith("run-1"));
   expect(await screen.findByText("Stopped. Nothing was moved.")).toBeTruthy();
-
-  cleanup();
-  mocks.client.cancelOrganize.mockClear();
-  const { unmount } = renderSheet();
-  fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
-  await screen.findByText("Read 2 files");
-  expect(mocks.client.cancelOrganize).not.toHaveBeenCalled();
-  unmount();
-  await waitFor(() => expect(mocks.client.cancelOrganize).toHaveBeenCalledWith("run-1"));
+  closeSheet();
+  await waitFor(() => expect(useOrganizeSessionStore.getState().session).toBeNull());
 });
 
-it("stops a run whose start only returns after the sheet closed", async () => {
+it("offers a way back to suggestions that arrived while the sheet was closed", async () => {
+  mocks.client.organizeRun.mockResolvedValue(run({ activity: ["Looked through /"] }));
+  renderSheet();
+  fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
+  expect(await screen.findByText("Looked through /")).toBeTruthy();
+  closeSheet();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  mocks.client.organizeRun.mockResolvedValue(done);
+  await waitFor(() => expect(status()).toBe("ready:3"));
+  await waitFor(() => expect(mocks.info).toHaveBeenCalledTimes(1));
+  const [message, options] = mocks.info.mock.calls[0] as [
+    string,
+    { action: { onClick: () => void } },
+  ];
+  expect(message).toBe("Suggestions ready");
+
+  options.action.onClick();
+  expect(await screen.findByText("Receipts go to Finance and photos to Photos.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Move all into /Photos" }));
+  expect(screen.getByRole("button", { name: "Move 2 items" })).toBeTruthy();
+
+  // Closing a review already seen keeps the edits and does not nag.
+  closeSheet();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(status()).toBe("ready:3");
+  fireEvent.click(screen.getByRole("button", { name: "Open selection" }));
+  expect(await screen.findByRole("button", { name: "Move 2 items" })).toBeTruthy();
+  expect(mocks.info).toHaveBeenCalledTimes(1);
+});
+
+it("stops a run when another selection replaces it, even one still starting", async () => {
   const started = Promise.withResolvers<OrganizeRun>();
   mocks.client.startOrganize.mockReturnValueOnce(started.promise);
   mocks.client.cancelOrganize.mockResolvedValue(run({ state: "cancelled" }));
-  const { unmount } = renderSheet();
+  renderSheet();
   fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
   await waitFor(() => expect(mocks.client.startOrganize).toHaveBeenCalled());
+  closeSheet();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(status()).toBe("running:3");
 
-  unmount();
+  fireEvent.click(screen.getByRole("button", { name: "Open others" }));
+  expect(await screen.findByText("Organize 1 item")).toBeTruthy();
   started.resolve(run({}));
-
   await waitFor(() => expect(mocks.client.cancelOrganize).toHaveBeenCalledWith("run-1"));
   expect(mocks.client.organizeRun).not.toHaveBeenCalled();
+
+  mocks.client.cancelOrganize.mockClear();
+  mocks.client.startOrganize.mockResolvedValue(run({ id: "run-2" }));
+  mocks.client.organizeRun.mockResolvedValue(run({ id: "run-2", activity: ["Looked through /"] }));
+  fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
+  expect(await screen.findByText("Looked through /")).toBeTruthy();
+  closeSheet();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Open selection" }));
+  await waitFor(() => expect(mocks.client.cancelOrganize).toHaveBeenCalledWith("run-2"));
+  expect(screen.getByText("Organize 3 items")).toBeTruthy();
+});
+
+it("keeps both by moving under a numbered name", async () => {
+  renderSheet();
+  await reachReview();
+  mocks.client.list.mockResolvedValueOnce({
+    path: "/Photos",
+    entries: [entry("/Photos/beach.jpg"), entry("/Photos/beach (2).jpg")],
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Keep both" }));
+
+  expect(await screen.findByText("beach (3).jpg")).toBeTruthy();
+  expect(mocks.client.list).toHaveBeenCalledWith("/Photos");
+  const photos = screen.getByRole("region", { name: "/Photos" });
+  expect(within(photos).queryByText("Something with this name is already there.")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Keep both" })).toBeNull();
+  mocks.client.moveMany.mockResolvedValueOnce({ results: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Move 2 items" }));
+  await waitFor(() =>
+    expect(mocks.client.moveMany).toHaveBeenCalledWith({
+      items: [
+        { path: "/inbox/receipt.pdf", target: "/Finance/Receipts/receipt.pdf" },
+        { path: "/inbox/beach.jpg", target: "/Photos/beach (3).jpg" },
+      ],
+      createParents: true,
+    }),
+  );
 });
 
 it("reports failures and starts over", async () => {

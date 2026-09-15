@@ -46,6 +46,21 @@ export function uniqueCopyName(name: string, existing: ReadonlySet<string>): str
   return candidate;
 }
 
+/**
+ * Builds a unique numbered name for `name` next to the sibling names in
+ * `existing`, the way a "keep both" choice names things: "report.pdf"
+ * becomes "report (2).pdf", then "report (3).pdf", and so on. A name that
+ * is already free is returned unchanged.
+ */
+export function uniqueNumberedName(name: string, existing: ReadonlySet<string>): string {
+  if (!existing.has(name)) return name;
+  const { base, ext } = splitNameAndExtension(name);
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base} (${n})${ext}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+}
+
 /** The file extension (including leading dot(s)) fdrive writes for `format`. */
 export function archiveExtensionFor(format: ArchiveFormat): string {
   switch (format) {

@@ -35,7 +35,10 @@ Search and similar-file tools report which folders hold matches, not other files
 1. `POST /api/v1/ai/organize` starts an in-memory run and returns `202`. A login has one running
    run: a new request replaces it, so a reload or closed tab never blocks the next one. Runs stop
    after 30 minutes, stay readable for an hour and are lost on restart. The browser polls
-   `GET /api/v1/ai/organize/:id`; closing the sheet cancels the request, even one still starting.
+   `GET /api/v1/ai/organize/:id`. Closing the sheet keeps the run and its review: the toolbar
+   shows "Organizing…" or "Suggestions ready" until the sheet is reopened, and a toast offers to
+   review suggestions that arrived while it was closed. Stop, Start over, applying every move or
+   organizing another selection ends a session; a reload loses it.
 2. The organizer runs a tool loop with **read-only** tools: `folder_tree`, `list_folder`, and,
    for indexed logins, `read_excerpts`, `search_drive` and `similar_files`. It ends by calling
    `submit_suggestions`. Runs stop after 40 turns, and the session's authority is re-checked
