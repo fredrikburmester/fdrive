@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { expect, it } from "vitest";
-import { createDb, createDesktopPublishLock, DesktopPublishBusyError } from "../../src/index.js";
+import {
+  createDb,
+  createDesktopPublishLock,
+  createPool,
+  DesktopPublishBusyError,
+} from "../../src/index.js";
 
 /** Resolves once the callback has entered, exposing a handle that lets it finish. */
 function hold(lock: ReturnType<typeof createDesktopPublishLock>, identityId: string) {
@@ -55,6 +60,24 @@ it("serializes one identity's publications across independent pools and frees it
     // A throwing callback still releases the identity for the next writer.
     await expect(a(identity, () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
     await expect(b(identity, async () => "reacquired")).resolves.toBe("reacquired");
+
+    // An exhausted pool is reported as busy too. Publication has not started, so
+    // this is retryable in exactly the same way as losing the race for the lock;
+    // without a bounded pool it would instead queue forever.
+    const bounded = createPool(container.getConnectionUri(), {
+      max: 1,
+      connectionTimeoutMillis: 150,
+    });
+    try {
+      const saturated = createDesktopPublishLock(bounded, { waitMs: 30_000, pollMs: 10 });
+      const busy = await hold(saturated, randomUUID());
+      await expect(saturated(randomUUID(), async () => "unreachable")).rejects.toBeInstanceOf(
+        DesktopPublishBusyError,
+      );
+      busy();
+    } finally {
+      await bounded.end();
+    }
   } finally {
     await first.close();
     await second.close();

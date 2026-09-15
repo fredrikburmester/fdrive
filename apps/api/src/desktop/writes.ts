@@ -37,6 +37,15 @@ export const NO_WRITES: DesktopWriteCapabilities = {
   restore: false,
 };
 export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
+/**
+ * Wraps the publication step — the recheck, the rename, and nothing slower. Kept
+ * to that span deliberately: the staged upload before it writes only to a path
+ * keyed by operation id and a per-attempt UUID, which no other operation can
+ * reach, so serializing it would hold a lock and its connection for the length of
+ * a transfer to no purpose. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+ */
+type Serialize = <T>(run: () => Promise<T>) => Promise<T>;
+const direct: Serialize = (run) => run();
 type Request =
   | (DesktopUploadRequest & { kind: "upload" })
   | (DesktopFolderRequest & { kind: "folder" })
@@ -89,21 +98,27 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       : NO_WRITES;
   }
   /**
-   * Publication always runs inside fdrive's per-identity serialization when one is
-   * configured, and additionally inside the storage lease when the provider enforces
-   * one. Lock before lease, always in that order, so the two never deadlock.
+   * Runs a write under whichever mutual exclusion the storage qualifies for, and
+   * hands the body a `serialize` to wrap the publication step in.
+   *
+   * A lease covers the whole action by contract — SFTPGo's is exclusive per user,
+   * WebDAV's is a `Depth: infinity` lock on the endpoint root, both renewed for as
+   * long as the body runs — so it already fences every fdrive writer and the
+   * publish lock would only add a database connection held across the transfer.
+   * Without a lease, fdrive's own lock is what makes publication safe, and
+   * `authority()` has already refused the write unless one is configured; the
+   * fallback below is unreachable rather than permissive.
+   *
+   * `withWriteLease` is called as a member so the provider keeps its own `this`.
    */
   function publish<T>(
     principal: Principal,
-    action: (storage: StorageProvider) => Promise<T>,
+    action: (storage: StorageProvider, serialize: Serialize) => Promise<T>,
   ): Promise<T> {
     const storage = principal.storage;
-    // `authority()` is the single gate: it refuses everything `publishesSafely`
-    // rejects, so this composes the contracts rather than deciding again.
-    // Called as a member so the provider keeps its own `this` and the generic infers.
-    const run = (): Promise<T> =>
-      storage.withWriteLease ? storage.withWriteLease(action) : action(storage);
-    return deps.publishLock ? deps.publishLock(principal.identityId, run) : run();
+    const lock = deps.publishLock;
+    if (storage.withWriteLease) return storage.withWriteLease((leased) => action(leased, direct));
+    return action(storage, lock ? (run) => lock(principal.identityId, run) : direct);
   }
   /**
    * Refuses publication when the destination's size or modification time no longer
@@ -596,7 +611,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       let publicationStarted = false;
       try {
         let witness: { size: number; modifiedAt: Date | null } | undefined;
-        const receipt = await publish(principal, async (storage) => {
+        const receipt = await publish(principal, async (storage, serialize) => {
           const scoped = { ...principal, storage };
           // Re-prove authorization immediately before the storage operation. The scoped
           // adapter intentionally has no reusable lease method of its own.
@@ -612,17 +627,21 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
           if (request.kind === "upload" && source && inTrash(principal, source.path))
             throw new ApiHttpError("forbidden", "Restore this item before editing it");
+          // Re-run inside the critical section before publishing. `unoccupied`
+          // refuses a taken name, and outside serialization two writers racing for
+          // the same new name would both pass it and the loser would fail its
+          // `overwrite: false` rename as an unclassified conflict instead.
+          const resolveTarget = () =>
+            unoccupied(
+              scoped,
+              parent,
+              source?.originalPath && request.name === trashName(source)
+                ? (source.originalPath.split("/").at(-1) as string)
+                : request.name,
+              source?.path,
+            );
           const target =
-            trashing && source
-              ? `${trashRoot(principal)}/${source.id}`
-              : await unoccupied(
-                  scoped,
-                  parent,
-                  source?.originalPath && request.name === trashName(source)
-                    ? (source.originalPath.split("/").at(-1) as string)
-                    : request.name,
-                  source?.path,
-                );
+            trashing && source ? `${trashRoot(principal)}/${source.id}` : await resolveTarget();
           if (source && "base" in request && request.base)
             await checkBase(scoped, source, request.base, request.kind === "upload");
           // The one observation publication must still match, taken the instant the
@@ -700,27 +719,38 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               if (backup.sha256 !== request.base?.content)
                 throw Error("Recovery copy failed validation");
             }
-            await authority(principal);
-            if (source && witness) await unchanged(storage, source.path, witness);
-            // Publication is the only operation allowed to replace the original.
-            // Apache evaluates the source/destination lease tokens atomically.
-            publicationStarted = true;
-            await storage.move(stage, target, { overwrite: source?.path === target });
-            // Combined save+rename keeps the old source recoverable until the new
-            // contents are published. Moving it to recovery never overwrites a peer.
-            if (source && source.path !== target)
-              await storage.move(source.path, `${internal}/renamed-original`, { overwrite: false });
+            await serialize(async () => {
+              await authority(principal);
+              await resolveTarget();
+              if (source && witness) await unchanged(storage, source.path, witness);
+              // Publication is the only operation allowed to replace the original.
+              // Apache evaluates the source/destination lease tokens atomically.
+              publicationStarted = true;
+              await storage.move(stage, target, { overwrite: source?.path === target });
+              // Combined save+rename keeps the old source recoverable until the new
+              // contents are published. Moving it to recovery never overwrites a peer.
+              if (source && source.path !== target)
+                await storage.move(source.path, `${internal}/renamed-original`, {
+                  overwrite: false,
+                });
+            });
           } else if (request.kind === "folder") {
-            await authority(principal);
-            publicationStarted = true;
-            await storage.mkdir(target);
+            await serialize(async () => {
+              await authority(principal);
+              await resolveTarget();
+              publicationStarted = true;
+              await storage.mkdir(target);
+            });
           } else if (source) {
             if (trashing) await internalDirectory(storage, trashRoot(principal));
             if (source.path !== target) {
-              await authority(principal);
-              if (witness) await unchanged(storage, source.path, witness);
-              publicationStarted = true;
-              await storage.move(source.path, target, { overwrite: false });
+              await serialize(async () => {
+                await authority(principal);
+                if (!trashing) await resolveTarget();
+                if (witness) await unchanged(storage, source.path, witness);
+                publicationStarted = true;
+                await storage.move(source.path, target, { overwrite: false });
+              });
             }
           }
           if (source) await repo.move(principal.identityId, source.path, target);

@@ -25,12 +25,12 @@ every fdrive writer is reachable, and leaves optimistic verification for genuine
 ## Delivered
 
 **1. fdrive's own writers are serialized.** `createDesktopPublishLock` in
-`packages/db/src/repos/desktop-publish-lock.ts` takes a *session* advisory lock on a dedicated
-pooled connection, keyed `["desktop-publish", identityId]`, held across the whole publication.
-A session lock rather than the registry's `pg_advisory_xact_lock` because publication spans
-several storage round trips and an open transaction would pin a backend for the length of a
-transfer; the backend releases it when the connection dies, so a crashed API process frees the
-identity without operator action. Acquisition is bounded (30s default) and reports
+`packages/db/src/repos/desktop-publish-lock.ts` takes a *session* advisory lock on a connection
+from its own pool, keyed `["desktop-publish", identityId]`, held across the publication step.
+A session lock rather than the registry's `pg_advisory_xact_lock` because the critical section
+is storage round trips rather than database work, and an open transaction would pin a backend
+for their duration; the backend releases it when the connection dies, so a crashed API process
+frees the identity without operator action. Acquisition is bounded (30s default) and reports
 `DesktopPublishBusyError`, which the commit path turns into `rate_limited`. Contention is not a
 conflict — nothing changed remotely and the same request succeeds once the holder finishes — so
 it must not reach the client as a 409, which `APIClient.check` turns into
@@ -55,6 +55,10 @@ deployment without the lock stays read-only instead of publishing unserialized.
 
 **4. Documentation.** `docs/MACOS.md#write-configuration-and-recovery` carries the three modes
 and what each actually guarantees.
+
+**5. The lock is isolated from the API's connection pool.** It runs on its own bounded pool and
+is taken for the publication step only, never for the transfer, and not at all when the storage
+enforces a lease. See [Connection pressure on the publish lock](#connection-pressure-on-the-publish-lock).
 
 ## Not delivered
 
@@ -97,7 +101,7 @@ describe the stock path as conflict-proof anywhere.
   no lock is configured, busy contention, and the recheck at both of its windows. Both recheck
   tests were confirmed by mutation: disabling `unchanged` fails the first, so it is not passing
   through `checkBase`, and re-stating the witness just before the rename fails the second.
-- Package suites all pass run individually: api coverage 99.01% over 2340 tests, db 257, core
+- Package suites all pass run individually: api coverage 99.01% over 2344 tests, db 257, core
   364, sftpgo 38, plus db and backup integration.
 
 Not yet done: the `application` and `integration` profiles have not passed as a whole. Each run
@@ -105,6 +109,99 @@ fails on a different timing-sensitive test that passes in isolation (`recycle-fo
 `wopi-locks`, `desktop-effects`, `backup/benchmark`), which is Docker and CPU contention rather
 than a regression. Re-run both profiles on an otherwise idle machine before treating this as
 green.
+
+## Connection pressure on the publish lock
+
+Serializing publication must not let desktop writes consume the database pool the rest of the
+API depends on. Three changes, with the behavior that motivated them.
+
+### What it used to do
+
+`createDesktopPublishLock(pool)` in `apps/api/src/composition.ts` uses the one pool
+`createDb` builds at `composition.ts:160`. That call passes no `max`, so node-postgres
+defaults to **10** connections, and no `connectionTimeoutMillis`, so a caller waiting for a
+connection waits forever. `drizzle(pool)` runs on the same pool, so every repo query in the API
+competes for those 10.
+
+The lock takes a dedicated connection and holds it for the entire `publish()` callback in
+`apps/api/src/desktop/writes.ts`. That callback contains the staged upload
+(`writes.ts:679`, capped at `DESKTOP_MAX_UPLOAD_BYTES` = 16 GiB), the staged digest, the
+recovery copy and the recovery digest. The critical section is therefore as long as the
+transfer, not the "several storage round trips" the doc comment on
+`packages/db/src/repos/desktop-publish-lock.ts` claims. Three consequences:
+
+- **Pool starvation.** Ten concurrent desktop uploads hold all ten connections for the length
+  of their transfers. Every unrelated query in the API blocks, with no timeout.
+- **Re-entrancy hazard.** The lock holder does its own database work *while holding a
+  connection*: `transition` at `writes.ts:672`, `repo.captureEffects`, `repo.move` and
+  `repo.complete`. Under exhaustion a holder needs a second connection to finish and cannot
+  get one, so it cannot release the first. Waiters do eventually give up on the 30s deadline
+  and free theirs, so this unwedges rather than hanging permanently — but sustained write load
+  keeps it wedged, and an exhaustion caused by other traffic has no such bound.
+- **Spurious contention.** Waiters also hold a connection for up to 30s while polling. With
+  the critical section spanning whole transfers, two concurrent large saves by one user can
+  exceed the deadline and report busy for no good reason.
+
+### What changed
+
+**Do not take the lock when the provider enforces a lease.** Both lease implementations
+already serialize every fdrive writer: `withSftpgoWriteLease` holds an exclusive per-user lease
+from the forked image, and `withWebdavWriteLease` holds a `Depth: infinity` exclusive `LOCK` on
+the endpoint root, both renewed every 20s for the length of the action. The fdrive lock adds
+nothing there but the connection cost. Making `publish()` take the lock only on the leaseless
+path removes the pool pressure from `fdrive-local-v1` and `apache-webdav-exclusive` entirely,
+and disposes of the lock-before-lease ordering constraint rather than merely documenting it.
+
+**Narrow the critical section to publication.** `publish()` no longer wraps the body; it hands
+it a `serialize` that each branch wraps around its own publication step — the recheck, the
+rename, and the recovery rename that follows it. Everything before that writes only to
+`${DESKTOP_INTERNAL_ROOT}/${identityId}/${id}/${remoteAttempt}`, a path keyed by operation id
+and a per-attempt UUID that no other operation can reach, so serializing the transfer bought
+nothing. The witness stat stays outside the lock: a write by another fdrive writer between the
+stat and the lock is exactly what the recheck inside the lock is for. The receipt commit stays
+outside it too — a concurrent publication between the rename and the receipt is refused by that
+writer's own recheck, so holding the identity across database work would only reintroduce the
+re-entrancy hazard.
+
+That moved name resolution out of the serialized region, which needed handling. `unoccupied()`
+(`writes.ts:258`) refuses a name that is already taken; run outside serialization, two writers
+creating the same new name both find it free, and the loser's `overwrite: false` rename fails as
+an unclassified storage conflict — which the Mac client forks into a conflict copy, the same
+wrong outcome as the busy mapping above. So publication re-runs `unoccupied` inside the critical
+section, one `list` call, and the loser gets `name_collision`, which `Writes.swift:140` resolves
+with a bounded numbered retry.
+
+**Bound what the lock can consume.** The lock now gets its own pool: `createPool` in
+`packages/db/src/index.ts`, wired in `composition.ts` with `max: 4` and a 5s
+`connectionTimeoutMillis`. A failure to check out a connection becomes `DesktopPublishBusyError`
+with the cause attached, because publication has not started and the caller can retry — the
+alternative, on an unbounded pool, is queueing forever. `CreateDbOptions` grew
+`connectionTimeoutMillis` alongside the existing `max`.
+
+The alternative considered and not taken: a `desktop_publish_lease` row per identity, taken and
+released in ordinary short transactions and expiring on a TTL, which holds no connection at all.
+It costs a migration and trades recovery-on-connection-death for recovery-on-TTL-expiry. Worth
+revisiting only if holding a connection for the narrowed critical section proves to matter.
+
+Still open, unrelated to the lock: `createDb` has no configurable `max` at the call site in
+`composition.ts:160`, so the main pool is still node-postgres' default of 10. That is a low
+ceiling for an API also serving web sessions. Proposal, not a requirement of this work.
+
+### Verified
+
+- `optimistic-publish.test.ts` covers all three: a leased provider never calls the lock, the
+  staged upload and the recovery copy both complete before the identity is taken, and a name
+  taken between resolution and publication is refused as `name_collision`. All three were
+  confirmed by mutation — restoring the old `publish()` fails the first two, dropping the
+  in-section recheck fails the third.
+- `desktop-publish-lock.test.ts` adds a saturated bounded pool and asserts it reports busy
+  rather than queueing, against real PostgreSQL.
+- Real-storage integration passes unchanged on stock SFTPGo and on both leased backends, so the
+  narrowed critical section publishes the same way it did.
+
+Not covered by a test: that concurrent uploads no longer delay unrelated queries. The isolated
+pool makes that structural rather than behavioral, and a load test asserting it would be timing
+dependent.
 
 ## Acceptance and verification
 

@@ -4,11 +4,16 @@ import type { Pool } from "pg";
  * Serializes the storage publication phase of desktop writes for one identity.
  *
  * This is a *session* advisory lock on a dedicated pooled connection, not the
- * transaction lock the registry uses in `desktop.ts`: publication spans several
- * storage round trips, and holding an open transaction across them would pin a
- * backend and block vacuum for the length of a transfer. A session lock is
- * released by the backend when the connection dies, so an API process that
- * crashes mid-publish frees the identity without operator action.
+ * transaction lock the registry uses in `desktop.ts`: the critical section is a
+ * handful of storage round trips rather than database work, and wrapping them in
+ * an open transaction would pin a backend and block vacuum for their duration. A
+ * session lock is released by the backend when the connection dies, so an API
+ * process that crashes mid-publish frees the identity without operator action.
+ *
+ * Give it a pool of its own. A connection is held for the whole critical section,
+ * which is longer than a query even though it is far shorter than a transfer, and
+ * the holder runs its own queries meanwhile — on a shared pool a saturated one
+ * would leave holders unable to finish and release.
  *
  * It fences every writer fdrive mediates — desktop commits, web mutations, the
  * retention job and the OCR pass. It cannot fence a client writing the storage
@@ -16,10 +21,10 @@ import type { Pool } from "pg";
  */
 export type DesktopPublishLock = <T>(identityId: string, run: () => Promise<T>) => Promise<T>;
 
-/** Raised when another writer held the identity for the whole wait. Retryable. */
+/** Raised when the identity could not be taken within the wait. Retryable. */
 export class DesktopPublishBusyError extends Error {
-  constructor(identityId: string) {
-    super(`Another write is publishing for identity ${identityId}`);
+  constructor(identityId: string, options?: { cause: unknown }) {
+    super(`Another write is publishing for identity ${identityId}`, options);
     this.name = "DesktopPublishBusyError";
   }
 }
@@ -50,7 +55,12 @@ export function createDesktopPublishLock(
   const sleep = options.sleep ?? defaultSleep;
   return async (identityId, run) => {
     const key = KEY(identityId);
-    const client = await pool.connect();
+    // Reaching the lock at all can fail: a bounded pool refuses once it is
+    // saturated. Publication has not started, so the caller can retry — report
+    // that rather than a server error, and keep the cause for the log.
+    const client = await pool.connect().catch((cause: unknown) => {
+      throw new DesktopPublishBusyError(identityId, { cause });
+    });
     let held = false;
     try {
       const deadline = now() + waitMs;

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StorageProvider } from "@fdrive/core";
-import { DesktopPublishBusyError } from "@fdrive/db";
+import { DesktopPublishBusyError, type DesktopPublishLock } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
@@ -22,6 +22,8 @@ afterEach(async () => {
 async function fixture(
   options: {
     lock?: boolean;
+    publishLock?: DesktopPublishLock;
+    lease?: boolean;
     onAuthority?: () => Promise<void>;
     onCopy?: (to: string) => Promise<void>;
   } = {},
@@ -30,15 +32,24 @@ async function fixture(
   temporary.push(stateDir);
   const memory = memoryRepo();
   const raw = createMemoryStorage({ "/old.txt": "old" });
-  const storage: StorageProvider = {
+  const uploaded: string[] = [];
+  const copied: string[] = [];
+  const base: StorageProvider = {
     ...raw,
-    optimisticPublish: true,
     copy: async (from, to, opts) => {
       const result = await raw.copy(from, to, opts);
+      copied.push(to);
       await options.onCopy?.(to);
       return result;
     },
+    upload: async (path, body, opts) => {
+      uploaded.push(path);
+      return raw.upload(path, body, opts);
+    },
   };
+  const storage: StorageProvider = options.lease
+    ? { ...base, withWriteLease: (action) => action(base) }
+    : { ...base, optimisticPublish: true };
   const principal: Principal = {
     accountId: randomUUID(),
     identityId: randomUUID(),
@@ -58,7 +69,10 @@ async function fixture(
     trashPathForStorage: () => null,
     ...(options.lock === false
       ? {}
-      : { publishLock: async <T>(_id: string, run: () => Promise<T>) => run() }),
+      : {
+          publishLock:
+            options.publishLock ?? (async <T>(_id: string, run: () => Promise<T>) => run()),
+        }),
   });
   const stage = async (bytes: string) => {
     const original = await service.stat(principal, "/old.txt");
@@ -77,7 +91,21 @@ async function fixture(
     return request;
   };
   const read = async (path: string) => new Response((await raw.download(path)).body).text();
-  return { ...memory, raw, principal, service, stage, read };
+  const create = async (name: string, bytes: string) => {
+    const request = {
+      kind: "upload" as const,
+      operationId: randomUUID(),
+      parentId: "root",
+      name,
+      base: null,
+      size: Buffer.byteLength(bytes),
+      sha256: sha(bytes),
+    };
+    await service.prepare(principal, request);
+    await service.upload(principal, request.operationId, body(bytes), new AbortController().signal);
+    return request;
+  };
+  return { ...memory, raw, principal, service, stage, create, read, uploaded, copied };
 }
 
 it("qualifies publication by lease, or by fdrive serialization, and never by neither", () => {
@@ -134,21 +162,16 @@ it("refuses to publish over a destination that changed after verification", asyn
 });
 
 it("reports a retryable failure, not a conflict, when another write holds the identity", async () => {
-  const f = await fixture();
-  const service = createDesktopWrites({
-    repo: f.repo,
-    stateDir: await mkdtemp(join(tmpdir(), "optimistic-busy-")),
-    clock: () => new Date(),
-    trashPathForStorage: () => null,
-    publishLock: async () => {
-      throw new DesktopPublishBusyError(f.principal.identityId);
+  const f = await fixture({
+    publishLock: async (identityId) => {
+      throw new DesktopPublishBusyError(identityId);
     },
   });
   const request = await f.stage("saved");
   // A `conflict` here would reach the Mac client as `DriveError.writeConflict`,
   // which forks the pending bytes into a conflict copy. Nothing changed remotely,
   // so the status has to be one the client retries instead.
-  await expect(service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
     kind: "rate_limited",
     details: undefined,
   });
@@ -173,4 +196,58 @@ it("refuses to publish over a write that landed while the recovery copy was veri
   );
   expect(fired).toBe(true);
   expect(await f.read("/old.txt")).toBe("changed by somebody else");
+});
+
+it("does not take the publish lock when the storage enforces a lease", async () => {
+  // The lease already fences every fdrive writer for the length of the action, so
+  // taking the lock as well would only pin a database connection to the transfer.
+  let taken = 0;
+  const f = await fixture({
+    lease: true,
+    publishLock: async (_id, run) => {
+      taken += 1;
+      return run();
+    },
+  });
+  const request = await f.stage("saved");
+  await f.service.commit(f.principal, request.operationId);
+  expect(taken).toBe(0);
+  expect(await f.read("/old.txt")).toBe("saved");
+});
+
+it("takes the lock for publication only, not for the staged upload", async () => {
+  let uploadsFirst = -1;
+  let copiesFirst = -1;
+  const f = await fixture({
+    publishLock: async (_id, run) => {
+      uploadsFirst = f.uploaded.length;
+      copiesFirst = f.copied.length;
+      return run();
+    },
+  });
+  const request = await f.stage("saved");
+  await f.service.commit(f.principal, request.operationId);
+  // Both the staged upload and the recovery copy are already done by the time the
+  // identity is taken, so the critical section is the rename rather than the write.
+  expect(uploadsFirst).toBe(1);
+  expect(copiesFirst).toBe(1);
+  expect(await f.read("/old.txt")).toBe("saved");
+});
+
+it("refuses a name taken between resolution and publication", async () => {
+  // Name resolution happens outside the critical section now, so two writers can
+  // both find the name free. The loser has to hear `name_collision`, which the Mac
+  // client retries under a numbered name, not a bare conflict that forks the file.
+  const f = await fixture({
+    publishLock: async (_id, run) => {
+      await f.raw.upload("/new.txt", body("theirs"), { overwrite: true });
+      return run();
+    },
+  });
+  const request = await f.create("new.txt", "mine");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "name_collision" },
+  });
+  expect(await f.read("/new.txt")).toBe("theirs");
 });

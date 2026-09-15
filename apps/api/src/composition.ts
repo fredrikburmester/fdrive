@@ -10,6 +10,7 @@ import {
   createIndexQueries,
   createOfficeFileRepo,
   createOfficeWriteScope,
+  createPool,
   createProcessingFailureReader,
   createRepos,
   createShareRepo,
@@ -381,7 +382,17 @@ export async function composeApp(
   const desktopRepo = createDesktopRepo(db);
   // Serializes publication per identity across every fdrive writer. Storage
   // without its own lease is read-only unless this is configured.
-  const desktopPublishLock = createDesktopPublishLock(pool);
+  //
+  // On its own pool: the lock holds a connection for the whole critical section
+  // and the holder queries the database while holding it, so sharing the main
+  // pool would let saturation leave holders unable to finish and release. The
+  // bounded wait turns exhaustion into a retryable busy rather than a stall.
+  const desktopPublishPool = createPool(config.databaseUrl, {
+    max: 4,
+    connectionTimeoutMillis: 5_000,
+    onError: (error) => logger.warn({ err: error }, "idle publish lock connection error"),
+  });
+  const desktopPublishLock = createDesktopPublishLock(desktopPublishPool);
   const desktopEffects = createDesktopEffectsRepo(db);
   const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
   const desktopRetention = createDesktopRetention({
@@ -952,6 +963,7 @@ export async function composeApp(
       if (indexerListener !== null) {
         await indexerListener.stop();
       }
+      await desktopPublishPool.end();
       await pool.end();
     },
   };
