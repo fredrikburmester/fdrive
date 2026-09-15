@@ -44,6 +44,9 @@ Search and similar-file tools report which folders hold matches, not other files
    destination outside Trash, outside the selection and outside the item's current folder. Each
    suggestion is marked when its folder is new or its target name is taken. Unusable
    suggestions, and ones storage could not check, are listed as unchanged with the reason.
+   Paths are matched by how names read, since macOS stores accents as separate marks and models
+   write them as single characters: `Husarö` finds the stored folder instead of becoming a
+   look-alike new one. The tools resolve paths the same way.
 4. The review groups suggestions by destination. Conflicts start unchecked, and any item can be
    pointed at another folder. **Move** calls `POST /api/v1/fs/move-many` with
    `createParents: true`. That endpoint moves items in order, continues past failures, never
