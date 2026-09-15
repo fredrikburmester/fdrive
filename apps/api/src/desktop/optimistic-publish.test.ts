@@ -19,12 +19,26 @@ afterEach(async () => {
 });
 
 /** Stock storage: no lease, publication qualified by fdrive-side serialization. */
-async function fixture(options: { lock?: boolean; onAuthority?: () => Promise<void> } = {}) {
+async function fixture(
+  options: {
+    lock?: boolean;
+    onAuthority?: () => Promise<void>;
+    onCopy?: (to: string) => Promise<void>;
+  } = {},
+) {
   const stateDir = await mkdtemp(join(tmpdir(), "optimistic-"));
   temporary.push(stateDir);
   const memory = memoryRepo();
   const raw = createMemoryStorage({ "/old.txt": "old" });
-  const storage: StorageProvider = { ...raw, optimisticPublish: true };
+  const storage: StorageProvider = {
+    ...raw,
+    optimisticPublish: true,
+    copy: async (from, to, opts) => {
+      const result = await raw.copy(from, to, opts);
+      await options.onCopy?.(to);
+      return result;
+    },
+  };
   const principal: Principal = {
     accountId: randomUUID(),
     identityId: randomUUID(),
@@ -119,7 +133,7 @@ it("refuses to publish over a destination that changed after verification", asyn
   expect(after.state).toBe("conflict");
 });
 
-it("reports a retryable conflict when another write holds the identity", async () => {
+it("reports a retryable failure, not a conflict, when another write holds the identity", async () => {
   const f = await fixture();
   const service = createDesktopWrites({
     repo: f.repo,
@@ -131,9 +145,32 @@ it("reports a retryable conflict when another write holds the identity", async (
     },
   });
   const request = await f.stage("saved");
+  // A `conflict` here would reach the Mac client as `DriveError.writeConflict`,
+  // which forks the pending bytes into a conflict copy. Nothing changed remotely,
+  // so the status has to be one the client retries instead.
   await expect(service.commit(f.principal, request.operationId)).rejects.toMatchObject({
-    kind: "conflict",
+    kind: "rate_limited",
+    details: undefined,
   });
   // The original is untouched and the operation stays retryable.
   expect(await f.read("/old.txt")).toBe("old");
+});
+
+it("refuses to publish over a write that landed while the recovery copy was verified", async () => {
+  // The recovery copy is a snapshot, so digesting it cannot see a write that lands
+  // after it is taken. Only the witness from before the copy covers that stretch.
+  let fired = false;
+  const f = await fixture({
+    onCopy: async (to) => {
+      if (fired || !to.endsWith("/previous")) return;
+      fired = true;
+      await f.raw.upload("/old.txt", body("changed by somebody else"), { overwrite: true });
+    },
+  });
+  const request = await f.stage("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow(
+    /changed remotely/,
+  );
+  expect(fired).toBe(true);
+  expect(await f.read("/old.txt")).toBe("changed by somebody else");
 });

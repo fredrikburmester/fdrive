@@ -625,8 +625,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
                 );
           if (source && "base" in request && request.base)
             await checkBase(scoped, source, request.base, request.kind === "upload");
-          // Verification point for a move: the original was just proven against the
-          // client's base, so this is the observation publication must still match.
+          // The one observation publication must still match, taken the instant the
+          // original was proven against the client's base. Everything after this —
+          // the staged upload, the recovery copy and its digest — is inside the
+          // window `unchanged` covers. Re-stating it later would narrow that window
+          // to nothing by adopting whatever an external writer had just written.
           if (source?.kind === "file") witness = await storage.statFile(source.path);
           if (source && isUnderPath(source.path, target))
             throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
@@ -696,9 +699,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               const backup = await digest(storage, `${internal}/previous`);
               if (backup.sha256 !== request.base?.content)
                 throw Error("Recovery copy failed validation");
-              // Last observation of the live original. The recheck before the rename
-              // closes the window between here and publication.
-              if (source.kind === "file") witness = await storage.statFile(source.path);
             }
             await authority(principal);
             if (source && witness) await unchanged(storage, source.path, witness);
@@ -770,10 +770,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           error.message === "Desktop metadata recovery capacity reached"
         )
           throw new ApiHttpError("rate_limited", error.message, { code: "quota_exceeded" });
-        // No details code: the Mac client already treats an unclassified 409 on a
-        // write as a retryable conflict that preserves the pending copy.
+        // Contention is not a conflict: nothing changed remotely and the same
+        // request will succeed once the holder finishes. A 409 would make the Mac
+        // client fork the pending bytes into a conflict copy; 429 without a details
+        // code reaches `DriveError.unavailable`, which File Provider retries.
         if (error instanceof DesktopPublishBusyError)
-          throw new ApiHttpError("conflict", "Another write is finishing for this account");
+          throw new ApiHttpError("rate_limited", "Another write is finishing for this account");
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }

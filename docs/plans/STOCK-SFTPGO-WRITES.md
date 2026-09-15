@@ -31,14 +31,22 @@ A session lock rather than the registry's `pg_advisory_xact_lock` because public
 several storage round trips and an open transaction would pin a backend for the length of a
 transfer; the backend releases it when the connection dies, so a crashed API process frees the
 identity without operator action. Acquisition is bounded (30s default) and reports
-`DesktopPublishBusyError`, which the commit path turns into an unclassified 409 — already
-handled by the Mac client as a retryable write conflict that preserves the pending copy.
+`DesktopPublishBusyError`, which the commit path turns into `rate_limited`. Contention is not a
+conflict — nothing changed remotely and the same request succeeds once the holder finishes — so
+it must not reach the client as a 409, which `APIClient.check` turns into
+`DriveError.writeConflict` and `Writes.swift` resolves by forking the pending bytes into a
+conflict copy. A 429 with no details code reaches `DriveError.unavailable`, which File Provider
+retries.
 
 **2. The destination is rechecked immediately before publication.** `unchanged` in
 `apps/api/src/desktop/writes.ts` compares the destination's size and modification time against
 the observation the content verification was based on, and fails `version_conflict` on any
-difference. It is a stat, not a re-digest, so it cannot see a same-size replacement inside one
-mtime tick.
+difference. That observation is taken once, immediately after the base check, so the staged
+upload, the recovery copy and the copy's digest all sit inside the covered window. Re-stating it
+closer to the rename would narrow the window to nothing, because the fresh stat would adopt
+whatever an external writer had just written; `optimistic-publish.test.ts` pins that with a
+regression test that fires a write the instant the recovery copy is taken. It is a stat, not a
+re-digest, so it cannot see a same-size replacement inside one mtime tick.
 
 **3. `verified-optimistic` is selectable on stock SFTPGo.** The capability gate moved off
 `storage.withWriteLease` onto `publishesSafely` in `apps/api/src/desktop/publish-gate.ts`, which
@@ -86,8 +94,9 @@ describe the stock path as conflict-proof anywhere.
   wait reporting `DesktopPublishBusyError`, independence between identities, and release on a
   throwing callback, against real PostgreSQL on independent pools.
 - `apps/api/src/desktop/optimistic-publish.test.ts` covers the gate, the read-only fallback when
-  no lock is configured, busy contention, and the recheck itself. The recheck test was confirmed
-  by mutation: disabling `unchanged` makes it fail, so it is not passing through `checkBase`.
+  no lock is configured, busy contention, and the recheck at both of its windows. Both recheck
+  tests were confirmed by mutation: disabling `unchanged` fails the first, so it is not passing
+  through `checkBase`, and re-stating the witness just before the rename fails the second.
 - Package suites all pass run individually: api coverage 99.01% over 2340 tests, db 257, core
   364, sftpgo 38, plus db and backup integration.
 
