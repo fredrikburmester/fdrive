@@ -84,6 +84,28 @@ async function moveToTrashSlowly(page: Page, name: string): Promise<void> {
   await page.unroute("**/api/v1/fs/delete");
 }
 
+/**
+ * Holds back every request matching `pattern` until the returned function is
+ * called, so a busy state that would otherwise flash by is observable. The
+ * returned function lets the held requests through, waits for them to be
+ * continued, and then removes the route.
+ */
+async function holdRequests(page: Page, pattern: string): Promise<() => Promise<void>> {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const continued: Promise<void>[] = [];
+  await page.route(pattern, (route) => {
+    continued.push(held.then(() => route.continue()));
+  });
+  return async () => {
+    release();
+    await Promise.all(continued);
+    await page.unroute(pattern);
+  };
+}
+
 test.describe("trash available", () => {
   test.describe.configure({ timeout: 300_000 });
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -135,10 +157,19 @@ test.describe("trash available", () => {
     await expect(row).toBeVisible({ timeout: 15_000 });
     await expect(row).toContainText("Home");
 
-    // Restore returns it to the listing.
+    // Restore returns it to the listing. The request is held back once so the
+    // toolbar's busy state is observable: Restore shows progressive copy and
+    // both restore buttons are disabled until it completes.
     await row.getByRole("checkbox", { name: `Select ${fileName}` }).check();
+    const releaseRestore = await holdRequests(page, "**/api/v1/trash/restore");
     await page.getByRole("button", { name: "Restore", exact: true }).click();
+    const restoring = page.getByRole("button", { name: "Restoring…" });
+    await expect(restoring).toBeVisible();
+    await expect(restoring).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Restore to", exact: true })).toBeDisabled();
+    await releaseRestore();
     await expect(page.getByText("Restored 1 item.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
     await expect(row).toBeHidden();
 
     await page.goto(`${webBaseUrl}/files`);
@@ -192,7 +223,17 @@ test.describe("trash available", () => {
     await folderDialog.getByLabel("Folder name").fill(restoreFolderName);
     await folderDialog.getByRole("button", { name: "Create", exact: true }).click();
     await expect(folderDialog).toBeHidden();
+    // The picker stays open with a busy confirm button, ignoring Escape, until
+    // the held-back restore completes.
+    const releaseRestoreTo = await holdRequests(page, "**/api/v1/trash/restore");
     await destination.getByRole("button", { name: "Restore here" }).click();
+    const restoringHere = destination.getByRole("button", { name: "Restoring…" });
+    await expect(restoringHere).toBeVisible();
+    await expect(restoringHere).toBeDisabled();
+    await expect(destination.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(restoringHere).toBeVisible();
+    await releaseRestoreTo();
     await expect(destination).toBeHidden();
     await expect(restoreRow).toBeHidden();
     await page.goto(`${webBaseUrl}/files/${restoreFolderName}`);

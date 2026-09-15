@@ -138,6 +138,49 @@ it("blocks navigation and dismissal while creating, then preserves the name for 
   expect(fs.mutate).toHaveBeenCalledTimes(2);
 });
 
+it("shows a busy indicator and blocks dismissal while the caller's request is pending", async () => {
+  const props = {
+    open: true,
+    mode: "restoreTo" as const,
+    onOpenChange: vi.fn(),
+    onConfirm: vi.fn(),
+  };
+  const view = render(<DestinationPicker {...props} />);
+  const dialog = await screen.findByRole("dialog", { name: "Restore to" });
+  expect(
+    within(dialog).getByRole("button", { name: "Restore here" }).getAttribute("aria-busy"),
+  ).not.toBe("true");
+  view.rerender(<DestinationPicker {...props} pending />);
+  const busy = within(dialog).getByRole("button", { name: "Restoring…" });
+  expect(busy.hasAttribute("disabled")).toBe(true);
+  expect(busy.getAttribute("aria-busy")).toBe("true");
+  expect(busy.querySelector("svg.animate-spin")).not.toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Restore here" })).toBeNull();
+  fireEvent.click(busy);
+  expect(props.onConfirm).not.toHaveBeenCalled();
+  expect(within(dialog).getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(
+    true,
+  );
+  expect(within(dialog).getByRole("button", { name: "photos" }).hasAttribute("disabled")).toBe(
+    true,
+  );
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(props.onOpenChange).not.toHaveBeenCalled();
+  view.rerender(<DestinationPicker {...props} />);
+  expect(
+    within(dialog).getByRole("button", { name: "Restore here" }).hasAttribute("disabled"),
+  ).toBe(false);
+});
+
+it("falls back to the resting label while pending in a mode without progressive copy", async () => {
+  render(
+    <DestinationPicker open mode="extractTo" onOpenChange={vi.fn()} onConfirm={vi.fn()} pending />,
+  );
+  const busy = await screen.findByRole("button", { name: "Extract here" });
+  expect(busy.getAttribute("aria-busy")).toBe("true");
+  expect(busy.querySelector("svg.animate-spin")).not.toBeNull();
+});
+
 it("starts a fresh session when a mounted caller closes and reopens", async () => {
   const props = { mode: "extractTo" as const, onOpenChange: vi.fn(), onConfirm: vi.fn() };
   const view = render(<DestinationPicker {...props} open />);
