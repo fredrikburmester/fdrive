@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiClientError, type BackupsResponse } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -221,6 +221,41 @@ it("reports destination test results and when each destination was last tested",
     }),
   );
   expect(screen.getByRole("alert").textContent).toContain("Access denied");
+});
+it("explains the destination schedule and saves a separate policy inside its card", async () => {
+  state.destinations = [
+    {
+      id: "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652",
+      name: "Bucket",
+      type: "s3",
+      location: "bucket/fdrive",
+      enabled: true,
+      testedAt: null,
+      schedule: null,
+      nextRunAt: null,
+      retainedProbe: null,
+    },
+  ];
+  render(<BackupsPage />);
+  expect(screen.getByText("Unlock owner access below to back up now")).toBeTruthy();
+  expect(screen.getByText("Installation schedule: Manual only")).toBeTruthy();
+  await unlock();
+  expect(screen.queryByText(/to back up now$/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+  const form = screen.getByRole("form", { name: "Schedule for Bucket" });
+  expect(form.textContent).toContain("Manual only, keeps 7 daily, 4 weekly and 12 monthly backups");
+  fireEvent.click(screen.getByRole("radio", { name: "A separate schedule for this destination" }));
+  expect(form.textContent).toContain("There is no monthly schedule");
+  fireEvent.change(within(form).getByLabelText("Monthly backups"), {
+    target: { value: "24" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save destination schedule" }));
+  await waitFor(() =>
+    expect(mocks.client.destinationSchedule).toHaveBeenCalledWith(
+      "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652",
+      { ...schedule, monthly: 24 },
+    ),
+  );
 });
 it("creates a private recovery kit and confirms the key without submitting it to backup settings", async () => {
   state.keyConfirmed = false;

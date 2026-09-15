@@ -18,8 +18,15 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+  Field as FormField,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -105,108 +112,217 @@ function size(value: string) {
   return formatBytes(Number(value));
 }
 type Act = (work: () => Promise<unknown>) => Promise<void>;
-function DestinationPolicy({
+const frequencyLabels: Record<BackupSchedule["frequency"], string> = {
+  manual: "Only when I click Back up now",
+  hourly: "Every hour",
+  daily: "Every day",
+  weekly: "Every week, on Sunday",
+};
+function describeSchedule(schedule: BackupSchedule): string {
+  const hour = `${String(schedule.hour).padStart(2, "0")}:00`;
+  switch (schedule.frequency) {
+    case "manual":
+      return "Manual only";
+    case "hourly":
+      return "Every hour";
+    case "daily":
+      return `Daily at ${hour} (${schedule.timezone})`;
+    case "weekly":
+      return `Sundays at ${hour} (${schedule.timezone})`;
+  }
+}
+function describeRetention(schedule: BackupSchedule): string {
+  return `keeps ${schedule.daily} daily, ${schedule.weekly} weekly and ${schedule.monthly} monthly backups`;
+}
+const retentionPeriods = [
+  ["daily", "Daily backups", "days", 1, 365],
+  ["weekly", "Weekly backups", "weeks", 0, 104],
+  ["monthly", "Monthly backups", "months", 0, 120],
+] as const;
+/** How often backups run is separate from which of them retention keeps, so the form says so. */
+function frequencyNote(frequency: BackupSchedule["frequency"]): string | null {
+  if (frequency === "hourly")
+    return "Hourly backups protect today. Older days are thinned to their newest backup.";
+  if (frequency === "weekly")
+    return "With one backup a week, each backup is also its day's newest, so the daily count keeps that many weekly backups too.";
+  if (frequency === "manual") return "These limits also apply to backups you start yourself.";
+  return null;
+}
+function ScheduleFields({
   value,
+  onChange,
+  retentionNote,
+}: {
+  value: BackupSchedule;
+  onChange: (value: BackupSchedule) => void;
+  retentionNote?: string;
+}) {
+  const id = useId();
+  const timed = value.frequency === "daily" || value.frequency === "weekly";
+  const note = frequencyNote(value.frequency);
+  return (
+    <div className="grid gap-6">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField>
+          <FieldLabel htmlFor={`${id}-frequency`}>How often to back up</FieldLabel>
+          <Select
+            value={value.frequency}
+            onValueChange={(frequency) => {
+              if (frequency)
+                onChange({ ...value, frequency: frequency as BackupSchedule["frequency"] });
+            }}
+          >
+            <SelectTrigger id={`${id}-frequency`}>
+              <SelectValue>{frequencyLabels[value.frequency]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {(["manual", "hourly", "daily", "weekly"] as const).map((frequency) => (
+                <SelectItem key={frequency} value={frequency}>
+                  {frequencyLabels[frequency]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </FormField>
+        <FormField>
+          <FieldLabel htmlFor={`${id}-timezone`}>Timezone</FieldLabel>
+          <Input
+            id={`${id}-timezone`}
+            value={value.timezone}
+            onChange={(event) => onChange({ ...value, timezone: event.target.value })}
+          />
+          <FieldDescription>
+            An IANA name, such as Europe/Stockholm. Also decides where days and months begin.
+          </FieldDescription>
+        </FormField>
+        {timed && (
+          <FormField>
+            <FieldLabel htmlFor={`${id}-hour`}>Hour of day (0–23)</FieldLabel>
+            <Input
+              id={`${id}-hour`}
+              type="number"
+              min={0}
+              max={23}
+              value={value.hour}
+              onChange={(event) => onChange({ ...value, hour: Number(event.target.value) })}
+            />
+            <FieldDescription>
+              Pick a quiet hour; uploads wait while a backup is captured.
+            </FieldDescription>
+          </FormField>
+        )}
+      </div>
+      <div className="grid gap-4">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">How many backups to keep</p>
+          <p className="text-sm text-muted-foreground">
+            This thins out old backups; it doesn't add backups. fdrive keeps the newest backup from
+            each of the most recent days, weeks and months that have one, plus the latest and any
+            pinned backup, and deletes the rest. There is no monthly schedule because a daily or
+            weekly backup already serves as its month's copy.
+          </p>
+          {note && <p className="text-sm text-muted-foreground">{note}</p>}
+          {retentionNote && <p className="text-sm text-muted-foreground">{retentionNote}</p>}
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {retentionPeriods.map(([period, label, unit, min, max]) => (
+            <FormField key={period}>
+              <FieldLabel htmlFor={`${id}-${period}`}>{label}</FieldLabel>
+              <Input
+                id={`${id}-${period}`}
+                type="number"
+                min={min}
+                max={max}
+                value={value[period]}
+                onChange={(event) => onChange({ ...value, [period]: Number(event.target.value) })}
+              />
+              <FieldDescription>
+                One from each of the last {value[period]} {unit}.
+              </FieldDescription>
+            </FormField>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+function DestinationPolicy({
+  name,
+  value,
+  installation,
   onSave,
+  onCancel,
   busy,
 }: {
+  name: string;
   value: BackupSchedule | null;
+  installation: BackupSchedule;
   onSave: (value: BackupSchedule | null) => Promise<void>;
+  onCancel: () => void;
   busy: boolean;
 }) {
+  const id = useId();
   const [inherit, setInherit] = useState(value === null);
-  const [policy, setPolicy] = useState<BackupSchedule>(
-    value ?? {
-      frequency: "daily",
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      hour: 3,
-      daily: 7,
-      weekly: 4,
-      monthly: 12,
-    },
-  );
+  const [policy, setPolicy] = useState<BackupSchedule>(value ?? installation);
   return (
     <form
-      className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2"
+      aria-label={`Schedule for ${name}`}
+      className="grid basis-full gap-4 border-t pt-4"
       onSubmit={(event) => {
         event.preventDefault();
         void onSave(inherit ? null : policy);
       }}
     >
-      <label className="flex items-center gap-2 text-sm sm:col-span-2">
-        <input
-          type="checkbox"
-          checked={inherit}
-          onChange={(event) => setInherit(event.target.checked)}
-        />
-        Use installation schedule and retention
-      </label>
+      <div className="space-y-1">
+        <p className="text-sm font-medium">Schedule for {name}</p>
+        <p className="text-sm text-muted-foreground">
+          When fdrive sends a new backup here, and how many old backups to keep here.
+        </p>
+      </div>
+      <RadioGroup
+        value={inherit ? "installation" : "custom"}
+        onValueChange={(choice) => setInherit(choice === "installation")}
+      >
+        <FormField orientation="horizontal">
+          <RadioGroupItem id={`${id}-installation`} value="installation" />
+          <FieldContent>
+            <FieldLabel htmlFor={`${id}-installation`}>
+              Same as the installation schedule
+            </FieldLabel>
+            <FieldDescription>
+              {describeSchedule(installation)}, {describeRetention(installation)}. Follows any
+              change you make under Schedule and retention.
+            </FieldDescription>
+          </FieldContent>
+        </FormField>
+        <FormField orientation="horizontal">
+          <RadioGroupItem id={`${id}-custom`} value="custom" />
+          <FieldContent>
+            <FieldLabel htmlFor={`${id}-custom`}>
+              A separate schedule for this destination
+            </FieldLabel>
+            <FieldDescription>
+              For destinations that need different timing, such as hourly to a nearby server and
+              weekly to cloud storage.
+            </FieldDescription>
+          </FieldContent>
+        </FormField>
+      </RadioGroup>
       {!inherit && (
-        <>
-          <Field label="Destination frequency">
-            {(id) => (
-              <Select
-                value={policy.frequency}
-                onValueChange={(value) => {
-                  if (value)
-                    setPolicy({ ...policy, frequency: value as BackupSchedule["frequency"] });
-                }}
-              >
-                <SelectTrigger id={id}>
-                  <SelectValue>{policy.frequency}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {["manual", "hourly", "daily", "weekly"].map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {value}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-          <Field label="Destination timezone">
-            {(id) => (
-              <Input
-                id={id}
-                value={policy.timezone}
-                onChange={(event) => setPolicy({ ...policy, timezone: event.target.value })}
-              />
-            )}
-          </Field>
-          <Field label="Destination hour">
-            {(id) => (
-              <Input
-                id={id}
-                type="number"
-                min={0}
-                max={23}
-                value={policy.hour}
-                onChange={(event) => setPolicy({ ...policy, hour: Number(event.target.value) })}
-              />
-            )}
-          </Field>
-          {(["daily", "weekly", "monthly"] as const).map((period) => (
-            <Field key={period} label={`Destination ${period} copies`}>
-              {(id) => (
-                <Input
-                  id={id}
-                  type="number"
-                  min={period === "daily" ? 1 : 0}
-                  max={period === "daily" ? 365 : period === "weekly" ? 104 : 120}
-                  value={policy[period]}
-                  onChange={(event) =>
-                    setPolicy({ ...policy, [period]: Number(event.target.value) })
-                  }
-                />
-              )}
-            </Field>
-          ))}
-        </>
+        <ScheduleFields
+          value={policy}
+          onChange={setPolicy}
+          retentionNote="A backup shared with another destination stays until neither needs it."
+        />
       )}
-      <Button type="submit" disabled={busy}>
-        Save destination schedule
-      </Button>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={busy}>
+          Save destination schedule
+        </Button>
+      </div>
     </form>
   );
 }
@@ -287,6 +403,13 @@ function Destinations({
                 ? `Last tested: ${new Date(item.testedAt).toLocaleString()}`
                 : "Not tested yet"}
             </p>
+            <p className="break-words text-xs text-muted-foreground">
+              {item.schedule
+                ? `Own schedule: ${describeSchedule(item.schedule)}`
+                : `Installation schedule: ${describeSchedule(data.schedule)}`}
+              {(item.schedule ? item.nextRunAt : data.nextRunAt) &&
+                ` · next ${new Date((item.schedule ? item.nextRunAt : data.nextRunAt) as string).toLocaleString()}`}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -317,9 +440,10 @@ function Destinations({
             <Button
               variant="outline"
               disabled={busy || !unlocked || !data.keyConfirmed}
+              aria-expanded={editing === item.id}
               onClick={() => setEditing(editing === item.id ? null : item.id)}
             >
-              Schedule
+              Edit schedule
             </Button>
             <Button
               variant="ghost"
@@ -329,21 +453,23 @@ function Destinations({
               Remove destination
             </Button>
           </div>
+          {editing === item.id && (
+            <DestinationPolicy
+              name={item.name}
+              value={item.schedule}
+              installation={data.schedule}
+              busy={busy}
+              onCancel={() => setEditing(null)}
+              onSave={async (value) => {
+                await act(async () => {
+                  await backupClient.destinationSchedule(item.id, value);
+                  setEditing(null);
+                });
+              }}
+            />
+          )}
         </div>
       ))}
-      {editing && (
-        <DestinationPolicy
-          key={editing}
-          value={data.destinations.find((item) => item.id === editing)?.schedule ?? null}
-          busy={busy}
-          onSave={async (value) => {
-            await act(async () => {
-              await backupClient.destinationSchedule(editing, value);
-              setEditing(null);
-            });
-          }}
-        />
-      )}
       {adding && (
         <form
           className="grid gap-4 rounded-lg border p-4 sm:grid-cols-2"
@@ -581,19 +707,29 @@ export function BackupsPage() {
       description="Protect configuration, activity and recovery files. Indexes and thumbnails can be rebuilt."
       lastUpdated={query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null}
       actions={
-        <Button
-          disabled={busy || !unlocked || !data?.keyConfirmed}
-          onClick={() =>
-            void act(() =>
-              backupClient.create({
-                destinationIds: data?.destinations.filter((d) => d.enabled).map((d) => d.id) ?? [],
-                metadataOnly: false,
-              }),
-            )
-          }
-        >
-          {busy ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}Back up now
-        </Button>
+        <>
+          {data && (!unlocked || !data.keyConfirmed) && (
+            <span className="text-xs text-muted-foreground">
+              {!unlocked
+                ? "Unlock owner access below to back up now"
+                : "Confirm your recovery key below to back up now"}
+            </span>
+          )}
+          <Button
+            disabled={busy || !unlocked || !data?.keyConfirmed}
+            onClick={() =>
+              void act(() =>
+                backupClient.create({
+                  destinationIds:
+                    data?.destinations.filter((d) => d.enabled).map((d) => d.id) ?? [],
+                  metadataOnly: false,
+                }),
+              )
+            }
+          >
+            {busy ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}Back up now
+          </Button>
+        </>
       }
     >
       <div className="contents max-sm:[&_button]:min-h-11 max-sm:[&_input]:min-h-11 max-sm:[&_a[data-slot=button]]:min-h-11">
@@ -880,81 +1016,23 @@ export function BackupsPage() {
                 title="Schedule and retention"
                 description={
                   data.nextRunAt
-                    ? `Next backup: ${new Date(data.nextRunAt).toLocaleString()}`
-                    : "Automatic backups are off."
+                    ? `The default for every destination unless you give it its own schedule. Next backup: ${new Date(data.nextRunAt).toLocaleString()}.`
+                    : "The default for every destination unless you give it its own schedule. Automatic backups are off."
                 }
               >
                 <form
-                  className="grid gap-4 sm:grid-cols-2"
+                  className="grid gap-6"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void act(() => backupClient.schedule(selected));
                   }}
                 >
-                  <Field label="Frequency">
-                    {(id) => (
-                      <Select
-                        value={selected.frequency}
-                        onValueChange={(value) =>
-                          setSchedule({
-                            ...selected,
-                            frequency: value as BackupSchedule["frequency"],
-                          })
-                        }
-                      >
-                        <SelectTrigger id={id}>
-                          <SelectValue>{selected.frequency}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {["manual", "hourly", "daily", "weekly"].map((value) => (
-                            <SelectItem key={value} value={value}>
-                              {value}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </Field>
-                  <Field label="Timezone">
-                    {(id) => (
-                      <Input
-                        id={id}
-                        value={selected.timezone}
-                        onChange={(e) => setSchedule({ ...selected, timezone: e.target.value })}
-                      />
-                    )}
-                  </Field>
-                  <Field label="Hour (0–23)">
-                    {(id) => (
-                      <Input
-                        id={id}
-                        type="number"
-                        min={0}
-                        max={23}
-                        value={selected.hour}
-                        onChange={(e) => setSchedule({ ...selected, hour: Number(e.target.value) })}
-                      />
-                    )}
-                  </Field>
-                  {(["daily", "weekly", "monthly"] as const).map((period) => (
-                    <Field key={period} label={`Keep ${period} backups`}>
-                      {(id) => (
-                        <Input
-                          id={id}
-                          type="number"
-                          min={period === "daily" ? 1 : 0}
-                          max={period === "daily" ? 365 : period === "weekly" ? 104 : 120}
-                          value={selected[period]}
-                          onChange={(e) =>
-                            setSchedule({ ...selected, [period]: Number(e.target.value) })
-                          }
-                        />
-                      )}
-                    </Field>
-                  ))}
-                  <Button type="submit" disabled={busy || !unlocked || !data.keyConfirmed}>
-                    Save schedule
-                  </Button>
+                  <ScheduleFields value={selected} onChange={setSchedule} />
+                  <div className="flex justify-end">
+                    <Button type="submit" disabled={busy || !unlocked || !data.keyConfirmed}>
+                      Save schedule
+                    </Button>
+                  </div>
                 </form>
               </SystemSection>
             )}

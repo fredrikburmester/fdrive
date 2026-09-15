@@ -10,6 +10,47 @@ import { SystemSection } from "./system-section";
 
 const date = (value: string) => new Date(value).toLocaleString();
 
+type Estimate = NonNullable<NonNullable<BackupsResponse["estimate"]>["result"]>;
+/** Plain-language rows; the stored-total row names the copy count the server multiplied by. */
+function estimateRows(estimate: Estimate): [string, string, string][] {
+  const one = BigInt(estimate.uncompressedBytes);
+  const copies = one > BigInt(0) ? BigInt(estimate.retainedBytes) / one : BigInt(0);
+  return [
+    [
+      "One backup, before compression",
+      estimate.uncompressedBytes,
+      "The database and recovery files below. The uploaded file is compressed, usually smaller.",
+    ],
+    [
+      "Database",
+      estimate.databaseBytes,
+      "Accounts, settings, tags, shares and activity. Postgres indexes count here but are not exported.",
+    ],
+    [
+      "Recovery files and configuration ZIPs",
+      estimate.recoveryBytes,
+      "Original copies kept by OCR, Office and the Mac app so changes can be recovered, plus logs and uploaded ZIPs.",
+    ],
+    [
+      "Stored at destinations, at most",
+      estimate.retainedBytes,
+      copies > BigInt(0)
+        ? `${copies} full backups kept in total by your retention settings, before compression. The newest backup counts as a daily, weekly and monthly copy at once, so fewer are usually stored.`
+        : "No enabled destination keeps remote copies.",
+    ],
+    [
+      "Transfer per backup run",
+      estimate.transferAndReadbackBytes,
+      "Each destination receives one upload, then fdrive downloads it again to verify it.",
+    ],
+    [
+      "Free space on this server",
+      estimate.availableSpoolBytes,
+      "Backups are built here before upload. Keep at least twice one backup free.",
+    ],
+  ];
+}
+
 export function BackupHealth({
   data,
   busy,
@@ -24,6 +65,7 @@ export function BackupHealth({
   const id = useId();
   const now = Date.now();
   const complete = data.runs.find((run) => run.state === "complete" && run.coverage.length === 0);
+  const rehearsed = data.runs.find((run) => run.id === data.rehearsal?.snapshotId);
   const latest = data.runs[0];
   const estimate = data.estimate?.result;
   const alerts: string[] = [];
@@ -43,11 +85,11 @@ export function BackupHealth({
     BigInt(estimate.availableSpoolBytes) < BigInt(estimate.uncompressedBytes) * BigInt(2)
   )
     alerts.push(
-      "Available spool space is below twice the estimated snapshot size. Free space before starting a backup.",
+      "Free space on this server is less than twice the size of one backup. Free up space before backing up.",
     );
   if (!data.rehearsal || now - Date.parse(data.rehearsal.completedAt) > 30 * 24 * 60 * 60_000)
     alerts.push(
-      "Restore rehearsal due: test a snapshot in an isolated installation and record the report here.",
+      "Restore rehearsal due: no backup has been test-restored in the last 30 days. See Restore rehearsal below.",
     );
   return (
     <>
@@ -118,7 +160,7 @@ export function BackupHealth({
       </SystemSection>
       <SystemSection
         title="Storage estimate"
-        description="Estimate before enabling a schedule. Scanning recovery sources may take a few minutes."
+        description="How big one backup is and how much room your retention settings could take. Only fdrive's own data is backed up, not the files on your fileservers."
       >
         <Button
           variant="outline"
@@ -130,26 +172,19 @@ export function BackupHealth({
         {data.estimate?.error && <p className="text-sm text-destructive">{data.estimate.error}</p>}
         {estimate && (
           <>
-            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-              {[
-                ["Database", estimate.databaseBytes],
-                ["Recovery files and ZIPs", estimate.recoveryBytes],
-                ["Uncompressed snapshot", estimate.uncompressedBytes],
-                ["Available spool space", estimate.availableSpoolBytes],
-                ["Remote retained snapshots", estimate.retainedBytes],
-                ["Upload and full readback per run", estimate.transferAndReadbackBytes],
-              ].map(([label, bytes]) => (
-                <div key={label}>
+            <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
+              {estimateRows(estimate).map(([label, bytes, hint]) => (
+                <div key={label} className="min-w-0">
                   <dt className="text-muted-foreground">{label}</dt>
-                  <dd>{formatBytes(Number(bytes))}</dd>
+                  <dd className="font-medium">{formatBytes(Number(bytes))}</dd>
+                  <dd className="text-xs text-muted-foreground">{hint}</dd>
                 </div>
               ))}
             </dl>
             <p className="text-xs text-muted-foreground">
-              Estimated {date(estimate.estimatedAt)}. Sizes vary with compression and database
-              export. Retention assumes distinct full copies for every slot; overlapping slots
-              reduce this, while pins, versioning and locked objects add storage. Network estimates
-              exclude retries and provider charges.
+              Estimated {date(estimate.estimatedAt)}. Every backup is a full copy, not just the
+              changes since the last one. Pinned backups, bucket versioning and object lock add to
+              the stored total; provider fees and retries are not included.
             </p>
             {estimate.coverage.map((gap) => (
               <p key={gap} className="break-words text-sm text-destructive">
@@ -161,18 +196,46 @@ export function BackupHealth({
       </SystemSection>
       <SystemSection
         title="Restore rehearsal"
-        description="Run the backup rehearse command against an empty isolated database. Upload its JSON report after reviewing the result."
+        description="A practice restore that proves a backup can actually be decrypted and imported. It runs on a separate machine, so this installation is never touched."
       >
         <p className="text-sm">
           {data.rehearsal
-            ? `Owner-recorded successful restore: ${date(data.rehearsal.completedAt)} · ${data.rehearsal.tableCount} tables · ${data.rehearsal.blobCount} recovery files`
-            : "No successful restore rehearsal recorded."}
+            ? `Last successful rehearsal: ${date(data.rehearsal.completedAt)} · ${data.rehearsal.tableCount} tables · ${data.rehearsal.blobCount} recovery files restored`
+            : "No backup has been test-restored yet. Until one is, you only know the backups were uploaded, not that they can be restored."}
         </p>
         {data.rehearsal && (
           <p className="break-all text-xs text-muted-foreground">
-            Snapshot {data.rehearsal.snapshotId}
+            Snapshot {rehearsed ? `from ${date(rehearsed.createdAt)} · ` : ""}
+            {data.rehearsal.snapshotId}
           </p>
         )}
+        <p className="text-sm text-muted-foreground">
+          Why separately: a restore needs an empty database and your private recovery key. This
+          server's database is in use, and it deliberately never holds the private key.
+        </p>
+        <ol className="list-decimal space-y-2 pl-5 text-sm">
+          <li>
+            On another machine, or a throwaway container with no access to your fileservers, set up
+            the same fdrive version with a new empty database.
+          </li>
+          <li>
+            Copy a backup there (download one from History, or fetch it from a destination) along
+            with your saved recovery key file. The command below is filled in for your latest
+            complete backup.
+          </li>
+          <li>
+            Run the rehearsal. It restores into the empty database under a new identity and never
+            contacts your fileservers or backup destinations.
+            <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+              {`node dist/main.js backup rehearse \\\n  --file BACKUP.fdrive.age \\\n  --key-file recovery-key.txt \\\n  --snapshot ${complete?.id ?? "SNAPSHOT_ID"} \\\n  --state-dir /tmp/fdrive-rehearsal`}
+            </pre>
+          </li>
+          <li>
+            If it prints a report ending in <code className="font-mono">"result": "passed"</code>,
+            save that output as a <code className="font-mono">.json</code> file and upload it below.
+            Then delete the test database and directory, since they contain your restored data.
+          </li>
+        </ol>
         <Label htmlFor={id}>Rehearsal report (.json)</Label>
         <Input
           id={id}
@@ -193,8 +256,9 @@ export function BackupHealth({
           }}
         />
         <p className="text-xs text-muted-foreground">
-          This records your report. Routine byte verification cannot decrypt or restore a backup
-          without your private recovery key.
+          fdrive checks that the report belongs to this installation and one of its backups, then
+          records your result. The monthly reminder above clears for 30 days. “Verify bytes” in
+          History only confirms the encrypted file is intact; it can't prove a restore works.
         </p>
       </SystemSection>
     </>
