@@ -103,10 +103,10 @@ reports `image_embeddings: 0`, matching how OCR degrades without its own
 sidecar.
 
 The pass follows thumbnail generation (`indexer.py`'s `embed_thumbnail`,
-called once a thumbnail is written). Watcher changes and retries embed inline;
-a scan hands embeddings to one thread per root, because the sidecar runs one
-inference at a time and waiting inline would pace every scan worker at the
-model's speed. Before writing anything, it checks the sidecar's `GET /health`
+called once a thumbnail is written). Retries embed inline. A scan hands
+embeddings to a thread of its own, and watcher changes share one long-lived
+thread per root, because the sidecar runs one inference at a time and waiting
+inline would pace every worker, and every later change, at the model's speed. Before writing anything, it checks the sidecar's `GET /health`
 against the column's fixed dimension (1024) and an `"ok"` status, reusing a
 passing answer for 30 seconds; on a
 mismatch it logs an error naming both numbers and skips embedding for that
@@ -176,6 +176,14 @@ After every applied change (create, change, delete, move), the indexer:
 1. `INSERT`s a row into `idx.events` (`root_id`, `kind`, `path`, `target_path`).
 2. `NOTIFY idx_events, '<json>'` with the same payload:
    `{ "kind": "created|changed|deleted|moved", "root": "<name>", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
+
+A reindex request or feature change that re-derives index data for a file whose
+size and mtime are unchanged is not a change and emits nothing: listeners check
+access and refresh listings for every event, and those passes cover every file.
+
+A scan soft-deletes live rows its completed walk did not find, compared against
+the manifest it read at the start, so a tree with no deletions writes nothing.
+Rows the watcher or a worker wrote after the scan started are left alone.
 
 `idx.events` rows older than 7 days (`EVENTS_RETENTION_DAYS`) are pruned once
 per scan. The API (`apps/api`) listens on `idx_events` for live updates and

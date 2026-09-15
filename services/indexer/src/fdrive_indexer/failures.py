@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -25,8 +26,8 @@ class Attempt:
     operation_ids: dict[str, str] = field(default_factory=dict)
     outcomes: dict[str, tuple[bool, bool]] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid4()))
-    # Features handed to another thread; they report their own outcome when done.
-    deferred: set[str] = field(default_factory=set)
+    # Features handed to another thread, each resolving to its (ok, skipped) outcome when done.
+    deferred: dict[str, Future[tuple[bool, bool]]] = field(default_factory=dict)
 
 
 _current: ContextVar[Attempt | None] = ContextVar("processing_attempt", default=None)
@@ -49,10 +50,15 @@ def attempt(operation_ids: dict[str, str] | None = None) -> Iterator[Attempt]:
 
 class FileResult(str):
     outcomes: dict[str, tuple[bool, bool]]
+    deferred: dict[str, Future[tuple[bool, bool]]]
 
-    def __new__(cls, value: str, outcomes: dict[str, tuple[bool, bool]]) -> FileResult:
+    def __new__(
+        cls, value: str, outcomes: dict[str, tuple[bool, bool]],
+        deferred: dict[str, Future[tuple[bool, bool]]] | None = None,
+    ) -> FileResult:
         result = super().__new__(cls, value)
         result.outcomes = dict(outcomes)
+        result.deferred = dict(deferred or {})
         return result
 
 
