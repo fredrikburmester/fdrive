@@ -4,7 +4,7 @@ Read only when a helper fails. Normal commands: [COMMANDS.md](COMMANDS.md).
 
 ## Runtime and dependencies
 
-- Requirements: Git, Bash 3.2+, Python 3.11+ for workflow/transfer, installed Node 24 and exact `packageManager` pnpm version.
+- Requirements: Git, Bash 3.2+, Python 3.11+ for the workflow profile, installed Node 24 and exact `packageManager` pnpm version.
   Helpers use the newest installed stable Node 24 from PATH/nvm and matching pnpm from local
   caches/PATH. Set `FDRIVE_NODE` / `FDRIVE_PNPM` to explicit installed binaries if necessary.
   A pnpm `.cjs` entry point is supported. Helpers never modify runtime installations.
@@ -33,23 +33,6 @@ Read only when a helper fails. Normal commands: [COMMANDS.md](COMMANDS.md).
   handoffs. Commands may print sensitive data even though wrappers never dump env/arguments.
 - Concurrent browser tests need distinct checkouts and free ports. The browser harness selects
   ports by default; `E2E_API_PORT` / `E2E_WEB_PORT` override them when needed.
-
-## Worktrees and integration
-
-- `prepare-worktree.sh` rejects existing destinations/branches. Setup failure retains both;
-  repair prerequisites and re-run setup there. Its stdout is only the new absolute checkout.
-- Use `--working-tree` when workers need current uncommitted prerequisites. Its baseline is
-  workflow state, not a commit. Do not edit/delete the baseline or mix it with commit merging.
-- Transfer preflights conflicts and keeps both copies on failure. Resolve overlapping edits
-  deliberately, review again, then retry. Never overwrite target edits just to make transfer pass.
-- `ALLOWED` is an allowed-path-prefix regex; root `pnpm-lock.yaml` is always permitted by review.
-  Inspect untracked contents too: `git diff HEAD` does not show them.
-- Commit merges require a clean explicit target on the intended branch. Only a sole lockfile
-  conflict is automatically regenerated; other conflicts stop. Resolve both intents, finish
-  the merge, and verify. Never bypass hooks or lower gates to finish an integration.
-- After an uncommitted transfer, retain the worker until target verification passes. Before
-  cleaning a disposable checkout, recheck transfer equality for every changed/new file.
-  Never use force removal merely to bypass dirty-worktree protection.
 
 ## Maintaining helpers
 

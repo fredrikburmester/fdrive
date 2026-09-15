@@ -5,6 +5,15 @@ Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evide
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
 
+## Agent orchestration removed: delegation left to the harness
+
+- Branch `chore/remove-agent-orchestration`, opened as a PR. Removed `ORCHESTRATION.md`, the
+  `explorer`/`implementer` agent roles, the Codex subagent model pin, and the worktree
+  handoff helpers (`prepare-worktree`, `transfer-checkout`, `review-chunk`, `merge-chunk`) with
+  their regression tests. Subagents and worktrees are now the runtime harness's own business.
+- Kept: `setup-checkout`, `verify`, `run-in-checkout`, `dev-app`, Python and macOS helpers
+  (CI uses them), the `fdrive-verify` skill, and the PreToolUse guard.
+
 ## About attribution removed: "Built on SFTPGo." dropped
 
 - Branch `refactor/remove-sftpgo-attribution` off `main`, opened as a PR; the OCR-originals and

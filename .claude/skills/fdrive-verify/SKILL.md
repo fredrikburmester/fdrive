@@ -8,7 +8,7 @@ Verification ran in the current checkout. Results follow.
 
 | Profile | Checks and prerequisites |
 | --- | --- |
-| `workflow` | Shell/Python syntax, agent definitions, helper regressions, lint, diff check |
+| `workflow` | Shell/Python syntax, helper regressions, lint, diff check |
 | `package @fdrive/<name>` | Repository lint, named package typecheck and coverage |
 | `application` | Repository lint, typecheck, coverage |
 | `integration` | Container integration tests; needs Docker |

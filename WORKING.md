@@ -4,10 +4,8 @@ Read relevant [architecture](docs/ARCHITECTURE.md), [plans](docs/plans/README.md
 [STATUS](docs/workflow/STATUS.md) before implementation. Commands:
 [COMMANDS](docs/workflow/COMMANDS.md); load only relevant
 recipes. Recovery: [TROUBLESHOOTING.md](docs/workflow/TROUBLESHOOTING.md). Product lessons:
-[PITFALLS.md](docs/workflow/PITFALLS.md). This document is runtime-neutral: everything here
-applies whether or not you can spawn subagents. Delegation, worker roles, model policy and
-worktree handoffs live in [ORCHESTRATION.md](docs/workflow/ORCHESTRATION.md) and apply only
-when you can spawn subagents.
+[PITFALLS.md](docs/workflow/PITFALLS.md). This document is runtime-neutral. Subagents and
+worktrees are the harness's business; whoever writes, the rules below still apply.
 
 ## Approach and boundaries
 

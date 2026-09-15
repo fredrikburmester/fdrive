@@ -6,10 +6,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 HELPERS_DIR=${FDRIVE_HELPERS_DIR:-$SCRIPT_DIR}
 RUN="$HELPERS_DIR/run-in-checkout.sh"
 SETUP="$HELPERS_DIR/setup-checkout.sh"
-PREPARE="$HELPERS_DIR/prepare-worktree.sh"
 VERIFY="$HELPERS_DIR/verify.sh"
 
-for HELPER in "$RUN" "$SETUP" "$PREPARE" "$VERIFY"; do
+for HELPER in "$RUN" "$SETUP" "$VERIFY"; do
   [[ -f $HELPER ]] || { printf 'missing helper: %s\n' "$HELPER" >&2; exit 1; }
 done
 
@@ -220,7 +219,7 @@ wait_for_file() {
 
 write_repo_files() {
   mkdir -p "$ROOT/packages/db" "$ROOT/packages/core" "$ROOT/apps/api" \
-    "$ROOT/tools/orchestration" "$ROOT/.claude/agents"
+    "$ROOT/tools/orchestration"
   cat > "$ROOT/package.json" <<'JSON'
 {
   "name": "fixture",
@@ -234,22 +233,14 @@ JSON
   cat > "$ROOT/packages/core/package.json" <<'JSON'
 {"name":"@fdrive/core","private":true,"scripts":{"typecheck":"fixture","test:coverage":"fixture"}}
 JSON
-  cat > "$ROOT/.claude/agents/implementer.md" <<'AGENT'
----
-name: implementer
-description: fixture
----
-
-Fixture instructions.
-AGENT
-  for NAME in command-lib run-in-checkout setup-checkout prepare-worktree verify; do
+  for NAME in command-lib run-in-checkout setup-checkout verify; do
     cat > "$ROOT/tools/orchestration/$NAME.sh" <<'STUB'
 #!/bin/bash
 set -euo pipefail
 STUB
     chmod +x "$ROOT/tools/orchestration/$NAME.sh"
   done
-  for NAME in test-orchestration test-command-helpers; do
+  for NAME in test-env-helpers test-command-helpers; do
     cat > "$ROOT/tools/orchestration/$NAME.sh" <<'STUB'
 #!/bin/bash
 set -euo pipefail
@@ -328,7 +319,7 @@ NODE_WRAPPER
 }
 
 # Help and usage validation must not select a runtime or mutate a checkout.
-for HELPER in "$RUN" "$SETUP" "$PREPARE" "$VERIFY"; do
+for HELPER in "$RUN" "$SETUP" "$VERIFY"; do
   expect_success env FDRIVE_NODE="$BAD_NODE" FDRIVE_PNPM=/missing bash "$HELPER" --help
 done
 expect_success bash "$VERIFY" --help
@@ -337,7 +328,6 @@ new_repo
 HEAD_BEFORE=$(git -C "$ROOT" rev-parse HEAD)
 expect_failure runtime_env bash "$RUN" "$ROOT"
 expect_failure runtime_env bash "$SETUP" "$ROOT" extra
-expect_failure runtime_env bash "$PREPARE" "$ROOT" 'Bad Chunk'
 expect_failure runtime_env bash "$VERIFY" "$ROOT" unknown
 assert_eq "$(git -C "$ROOT" rev-parse HEAD)" "$HEAD_BEFORE"
 assert_eq "$(git -C "$ROOT" status --porcelain)" ''
@@ -741,73 +731,7 @@ expect_success env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FAKE_STORE_PAT
 assert_contains "$PNPM_COMMAND_LOG" 'install --frozen-lockfile'
 pass 'setup accepts quoted and symlink-equivalent pnpm store paths'
 
-# Prepare creates claude/<chunk> from committed HEAD at a space-containing destination.
-new_repo
-printf 'dirty source\n' > "$ROOT/uncommitted-source.txt"
-SOURCE_HEAD=$(git -C "$ROOT" rev-parse HEAD)
-DESTINATION="$TEST_ROOT/prepared checkout with spaces"
-expect_success from_outside env FDRIVE_VERBOSE=1 FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
-  bash "$PREPARE" "$ROOT" helper_chunk "$DESTINATION"
-assert_eq "$(cat "$OUT")" "$(cd "$DESTINATION" && pwd -P)"
-assert_eq "$(git -C "$DESTINATION" branch --show-current)" 'claude/helper_chunk'
-assert_eq "$(git -C "$DESTINATION" rev-parse HEAD)" "$SOURCE_HEAD"
-assert_no_file "$DESTINATION/uncommitted-source.txt"
-assert_contains "$PNPM_LOG" "PWD=<$DESTINATION>"
-pass 'prepare uses committed HEAD, exact branch, explicit destination, and clean stdout'
-
-# Prepare validates before creation and retains a checkout after setup failure.
-new_repo
-REJECTED_DEST="$TEST_ROOT/rejected destination"
-expect_failure env FDRIVE_NODE="$BAD_NODE" FDRIVE_PNPM="$FAKE_PNPM" \
-  bash "$PREPARE" "$ROOT" runtime_check "$REJECTED_DEST"
-assert_no_file "$REJECTED_DEST"
-git -C "$ROOT" show-ref --verify --quiet refs/heads/claude/runtime_check && fail 'branch created before runtime validation'
-FAILED_DEST="$TEST_ROOT/retained failed checkout"
-expect_status 31 env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" \
-  FAKE_PNPM_FAIL='install --frozen-lockfile' FAKE_PNPM_FAIL_CODE=31 \
-  bash "$PREPARE" "$ROOT" retained_failure "$FAILED_DEST"
-assert_file "$FAILED_DEST/.git"
-git -C "$ROOT" show-ref --verify --quiet refs/heads/claude/retained_failure || fail 'failed branch was removed'
-assert_contains "$ERR" "$FAILED_DEST"
-pass 'prepare validates runtime first and retains failed setup for recovery'
-
-# Prepare forwards TERM through nested setup and retains the interrupted checkout.
-new_repo
-PREPARED_SIGNAL_DEST="$TEST_ROOT/prepare signal checkout"
-BLOCK_READY="$TEST_ROOT/prepare-signal-ready"
-BLOCK_SEEN="$TEST_ROOT/prepare-signal-seen"
-BLOCK_RELEASE="$TEST_ROOT/prepare-signal-release"
-BLOCK_PID_FILE="$TEST_ROOT/prepare-signal-pid"
-export BLOCK_READY BLOCK_SEEN BLOCK_RELEASE BLOCK_PID_FILE
-env FDRIVE_NODE="$NODE24" FDRIVE_PNPM="$FAKE_PNPM" FAKE_PNPM_BLOCK='install --frozen-lockfile' \
-  BLOCK_EXIT_CODE=53 bash "$PREPARE" "$ROOT" signal_setup "$PREPARED_SIGNAL_DEST" > "$OUT" 2> "$ERR" &
-PREPARE_PID=$!
-BACKGROUND_PIDS="$BACKGROUND_PIDS $PREPARE_PID"
-wait_for_file "$BLOCK_READY" || fail 'prepare nested setup did not reach blocking install'
-PREPARED_LOCK=$(lock_path "$PREPARED_SIGNAL_DEST")
-assert_file "$PREPARED_LOCK"
-kill -TERM "$PREPARE_PID"
-if ! wait_for_file "$BLOCK_SEEN"; then
-  : > "$BLOCK_RELEASE"
-  kill "$(cat "$BLOCK_PID_FILE")" 2>/dev/null || true
-  wait "$PREPARE_PID" 2>/dev/null || true
-  BACKGROUND_PIDS=''
-  fail 'prepare did not forward TERM through setup to install'
-fi
-assert_file "$PREPARED_LOCK"
-: > "$BLOCK_RELEASE"
-set +e
-wait "$PREPARE_PID"
-STATUS=$?
-set -e
-BACKGROUND_PIDS=''
-[[ $STATUS -eq 53 ]] || fail "prepare lost nested setup status: $STATUS"
-assert_no_file "$PREPARED_LOCK"
-assert_file "$PREPARED_SIGNAL_DEST/.git"
-assert_eq "$(git -C "$PREPARED_SIGNAL_DEST" branch --show-current)" 'claude/signal_setup'
-pass 'prepare forwards signals through setup and retains interrupted checkout'
-
-# Verify workflow runs syntax, agent definitions, Python syntax, every regression script, lint, and diff check without recursion.
+# Verify workflow runs syntax, Python syntax, every regression script, lint, and diff check without recursion.
 new_repo
 cat > "$ROOT/tools/orchestration/test-discovered.sh" <<'STUB'
 #!/bin/bash
@@ -818,7 +742,7 @@ chmod +x "$ROOT/tools/orchestration/test-discovered.sh"
 printf 'value = 1\n' > "$ROOT/tools/orchestration/helper.py"
 expect_success runtime_env bash "$VERIFY" "$ROOT" workflow
 assert_contains "$TOOL_LOG" 'python3 <-c>'
-assert_contains "$TOOL_LOG" "test-orchestration.sh PWD=<$ROOT>"
+assert_contains "$TOOL_LOG" "test-env-helpers.sh PWD=<$ROOT>"
 assert_contains "$TOOL_LOG" "test-command-helpers.sh PWD=<$ROOT>"
 assert_contains "$TOOL_LOG" "test-discovered.sh PWD=<$ROOT>"
 assert_no_file "$ROOT/tools/orchestration/__pycache__"
