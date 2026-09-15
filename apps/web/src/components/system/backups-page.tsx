@@ -551,28 +551,27 @@ export function BackupsPage() {
   const data = query.data;
   const selected = schedule ?? data?.schedule;
   return (
-    <div className="contents max-sm:[&_button]:min-h-11 max-sm:[&_input]:min-h-11 max-sm:[&_a[data-slot=button]]:min-h-11">
-      <SystemPage
-        title="Backups"
-        description="Protect configuration, activity and recovery files. Indexes and thumbnails can be rebuilt."
-        lastUpdated={query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null}
-        actions={
-          <Button
-            disabled={busy || !unlocked || !data?.keyConfirmed}
-            onClick={() =>
-              void act(() =>
-                backupClient.create({
-                  destinationIds:
-                    data?.destinations.filter((d) => d.enabled).map((d) => d.id) ?? [],
-                  metadataOnly: false,
-                }),
-              )
-            }
-          >
-            {busy ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}Back up now
-          </Button>
-        }
-      >
+    <SystemPage
+      title="Backups"
+      description="Protect configuration, activity and recovery files. Indexes and thumbnails can be rebuilt."
+      lastUpdated={query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null}
+      actions={
+        <Button
+          disabled={busy || !unlocked || !data?.keyConfirmed}
+          onClick={() =>
+            void act(() =>
+              backupClient.create({
+                destinationIds: data?.destinations.filter((d) => d.enabled).map((d) => d.id) ?? [],
+                metadataOnly: false,
+              }),
+            )
+          }
+        >
+          {busy ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}Back up now
+        </Button>
+      }
+    >
+      <div className="contents max-sm:[&_button]:min-h-11 max-sm:[&_input]:min-h-11 max-sm:[&_a[data-slot=button]]:min-h-11">
         {(error || query.error) && (
           <p
             role="alert"
@@ -1083,7 +1082,7 @@ export function BackupsPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-      </SystemPage>
-    </div>
+      </div>
+    </SystemPage>
   );
 }
