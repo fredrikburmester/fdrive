@@ -273,28 +273,51 @@ describe("buildProposal", () => {
     expect(proposal.unchanged[0]?.reason).toBe("u".repeat(300));
   });
 
-  it("rejects when storage fails for a reason other than a missing path", async () => {
+  it("sets aside only the suggestions storage could not check", async () => {
     const memory = drive();
-    const denied: StorageProvider = {
+    const flaky: StorageProvider = {
       ...memory,
       stat: async (path) => {
-        if (path === "/Finance") throw new StorageError("forbidden", "denied");
+        if (path === "/Private") throw new StorageError("forbidden", "denied");
+        if (path === "/Finance/Receipts/c.pdf") throw new StorageError("rate_limited", "slow down");
         return memory.stat(path);
       },
     };
+
+    const proposal = await build({
+      storage: flaky,
+      items: [file("/Inbox/a.pdf"), file("/Inbox/b.pdf"), file("/Inbox/c.pdf")],
+      submission: submission({
+        moves: [
+          move("/Inbox/a.pdf", "/Private"),
+          move("/Inbox/b.pdf", "/Old"),
+          move("/Inbox/c.pdf", "/Finance/Receipts"),
+        ],
+      }),
+    });
+
+    expect(proposal.suggestions.map((suggestion) => suggestion.path)).toEqual(["/Inbox/b.pdf"]);
+    expect(proposal.unchanged).toEqual([
+      { path: "/Inbox/a.pdf", reason: "fdrive could not check the suggested folder." },
+      { path: "/Inbox/c.pdf", reason: "fdrive could not check the suggested folder." },
+    ]);
+  });
+
+  it("rejects when checking storage fails with something other than a storage error", async () => {
     const broken: StorageProvider = {
-      ...memory,
+      ...drive(),
       stat: async () => {
         throw new Error("socket closed");
       },
     };
-    const input = {
-      items: [file("/Inbox/a.pdf")],
-      submission: submission({ moves: [move("/Inbox/a.pdf", "/Finance")] }),
-    };
 
-    await expect(build({ ...input, storage: denied })).rejects.toBeInstanceOf(StorageError);
-    await expect(build({ ...input, storage: broken })).rejects.toThrow("socket closed");
+    await expect(
+      build({
+        storage: broken,
+        items: [file("/Inbox/a.pdf")],
+        submission: submission({ moves: [move("/Inbox/a.pdf", "/Finance")] }),
+      }),
+    ).rejects.toThrow("socket closed");
   });
 
   it("checks each path in storage only once", async () => {

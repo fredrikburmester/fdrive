@@ -20,7 +20,13 @@ const client = {
 vi.mock("@/lib/api/client", () => ({
   apiClient: client,
   snapshotTabApiClient: () => client,
+  pinTabIdentity: vi.fn(),
 }));
+
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
+
+const { accountTransition } = await import("@/lib/account/transition");
 
 const {
   ORGANIZE_POLL_MS,
@@ -103,10 +109,10 @@ describe("AI status and organize runs", () => {
 });
 
 describe("useMoveMany", () => {
-  it("refreshes source folders, destinations and their parents after moves", async () => {
+  it("refreshes source folders and every folder above the moved targets", async () => {
     client.moveMany.mockResolvedValue({
       results: [
-        { ok: true, path: "/inbox/a.pdf", target: "/Finance/2024/a.pdf" },
+        { ok: true, path: "/inbox/a.pdf", target: "/Documents/Receipts/a.pdf" },
         {
           ok: false,
           path: "/inbox/b.pdf",
@@ -116,38 +122,52 @@ describe("useMoveMany", () => {
       ],
     });
     const { queryClient, wrapper } = setup();
-    for (const path of ["/inbox", "/Finance/2024", "/Finance", "/x"])
+    for (const path of ["/inbox", "/Documents/Receipts", "/Documents", "/", "/x"])
       queryClient.setQueryData(queryKeys.fs.list(path), { path, entries: [] });
     queryClient.setQueryData(queryKeys.folderViews.all(), {});
     const { result } = renderHook(() => useMoveMany(), { wrapper });
 
     await act(async () => {
       await result.current.mutateAsync({
-        items: [{ path: "/inbox/a.pdf", target: "/Finance/2024/a.pdf" }],
+        items: [{ path: "/inbox/a.pdf", target: "/Documents/Receipts/a.pdf" }],
+        createParents: true,
       });
     });
 
     await waitFor(() => {
-      for (const path of ["/inbox", "/Finance/2024", "/Finance"])
+      for (const path of ["/inbox", "/Documents/Receipts", "/Documents", "/"])
         expect(queryClient.getQueryState(queryKeys.fs.list(path))?.isInvalidated).toBe(true);
     });
     expect(queryClient.getQueryState(queryKeys.fs.list("/x"))?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(queryKeys.folderViews.all())?.isInvalidated).toBe(true);
   });
 
-  it("leaves folder views alone when nothing moved", async () => {
-    client.moveMany.mockResolvedValue({
-      results: [
-        { ok: false, path: "/a", target: "/b/a", error: { kind: "conflict", message: "taken" } },
-      ],
-    });
-    const { queryClient, wrapper } = setup();
-    queryClient.setQueryData(queryKeys.folderViews.all(), {});
+  it("leaves reporting a failure to the caller", async () => {
+    const failure = new Error("offline");
+    client.moveMany.mockRejectedValue(failure);
+    const { wrapper } = setup();
     const { result } = renderHook(() => useMoveMany(), { wrapper });
     await act(async () => {
-      await result.current.mutateAsync({ items: [{ path: "/a", target: "/b/a" }] });
+      await expect(
+        result.current.mutateAsync({ items: [{ path: "/a", target: "/b/a" }] }),
+      ).rejects.toBe(failure);
     });
-    expect(queryClient.getQueryState(queryKeys.folderViews.all())?.isInvalidated).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("refuses to move, or undo, once the tab has switched to another login", async () => {
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useMoveMany(), { wrapper });
+    act(() => {
+      accountTransition.begin();
+      accountTransition.finish(true);
+    });
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ items: [{ path: "/b/a", target: "/a" }] }),
+      ).rejects.toThrow("The active login changed.");
+    });
+    expect(client.moveMany).not.toHaveBeenCalled();
   });
 });
 

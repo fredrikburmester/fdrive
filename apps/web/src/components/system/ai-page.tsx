@@ -139,7 +139,11 @@ export function AiSystemPage() {
             description={`When someone organizes files, fdrive sends ${providerLabel(saved.provider)} only what it needs to suggest places.`}
           >
             <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-              <li>Paths, sizes and dates of the selected items, and the names of your folders.</li>
+              <li>Paths, sizes and dates of the selected items.</li>
+              <li>
+                Names of folders and files anywhere in the drive that the assistant browses or finds
+                by search, with sizes and dates for the folders it opens.
+              </li>
               <li>Up to 1,500 characters of already-extracted text for each selected file.</li>
               <li>
                 Files themselves are never uploaded, and nothing moves until the person approves.

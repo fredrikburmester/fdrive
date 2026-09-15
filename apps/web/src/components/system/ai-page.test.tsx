@@ -73,6 +73,7 @@ it("summarizes the saved provider and what leaves the server", () => {
   expect(screen.getByText("Anthropic (Claude)")).toBeTruthy();
   expect(screen.getByText("Saved")).toBeTruthy();
   expect(screen.getByText(/fdrive sends Claude \(Anthropic\) only what it needs/)).toBeTruthy();
+  expect(screen.getByText(/files anywhere in the drive that the assistant browses/)).toBeTruthy();
 });
 
 it("checks the connection and shows the answer", () => {

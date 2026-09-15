@@ -171,10 +171,15 @@ function useInvalidateAffected() {
   };
 }
 
-function useFsMutation<TVariables, TResult>(config: {
+/**
+ * A filesystem mutation bound to the login that mounted it: it refuses to run
+ * after a login change and then skips its refresh and toast. Without
+ * `errorFallback` the caller reports failures itself.
+ */
+export function useFsMutation<TVariables, TResult>(config: {
   mutationFn: (vars: TVariables, client: ApiClient) => Promise<TResult>;
   toAffected: (vars: TVariables, result: TResult) => AffectedListKeysInput;
-  errorFallback: string;
+  errorFallback?: string;
 }) {
   const invalidate = useInvalidateAffected();
   // A paused mutation keeps the login that owned the displayed file browser.
@@ -195,6 +200,7 @@ function useFsMutation<TVariables, TResult>(config: {
       invalidate(config.toAffected(vars, result));
     },
     onError: (error) => {
+      if (config.errorFallback === undefined) return;
       if (scope.generation !== accountTransition.getSnapshot().generation) return;
       toast.error(describeFsError(error, config.errorFallback));
     },

@@ -5,6 +5,7 @@ import type {
   FsEntry,
   MoveManyRequest,
   OrganizeProposal,
+  OrganizeRun,
   OrganizeSuggestion,
 } from "@fdrive/contracts";
 import { baseName, extensionOf } from "@fdrive/core";
@@ -136,25 +137,30 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
   // Closing the sheet mid-run stops the assistant rather than leaving it working unseen.
   const live = useRef({ runId, running: state === "running", cancel: cancel.mutate });
   live.current = { runId, running: state === "running", cancel: cancel.mutate };
-  useEffect(
-    () => () => {
+  const closed = useRef(false);
+  useEffect(() => {
+    closed.current = false;
+    return () => {
+      closed.current = true;
       const { runId: id, running: stillRunning, cancel: stop } = live.current;
       if (id !== null && stillRunning) stop(id);
-    },
-    [],
-  );
+    };
+  }, []);
 
-  function begin() {
-    start.mutate(
-      {
+  async function begin() {
+    let started: OrganizeRun;
+    try {
+      started = await start.mutateAsync({
         paths: entries.map((entry) => entry.path),
         ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
-      },
-      {
-        onSuccess: (started) => setRunId(started.id),
-        onError: (error) => toast.error(describeFsError(error, "Could not start organizing.")),
-      },
-    );
+      });
+    } catch (error) {
+      toast.error(describeFsError(error, "Could not start organizing."));
+      return;
+    }
+    // The sheet may have closed while the request was on its way; stop the run it started.
+    if (closed.current) cancel.mutate(started.id);
+    else setRunId(started.id);
   }
 
   function restart() {
@@ -200,7 +206,8 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
                     onChange={(event) => setInstructions(event.target.value)}
                   />
                   <FieldDescription>
-                    Optional. Names, sizes, dates and indexed text of the selected items are sent to{" "}
+                    Optional. The selected items' names, sizes, dates and indexed text, and the
+                    names of files the assistant looks through elsewhere in your drive, are sent to{" "}
                     {providerLabel(provider)}.
                   </FieldDescription>
                 </Field>
@@ -260,7 +267,7 @@ function OrganizeSheetBody({ entries, provider, applying, onApply, onClose }: Bo
                 <Button variant="outline" onClick={onClose}>
                   Cancel
                 </Button>
-                <Button onClick={begin}>Suggest moves</Button>
+                <Button onClick={() => void begin()}>Suggest moves</Button>
               </>
             )}
           </SheetFooter>

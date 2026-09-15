@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/api/client", () => ({
   apiClient: mocks.client,
   snapshotTabApiClient: () => mocks.client,
+  pinTabIdentity: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
 vi.mock("@/components/files/destination-picker", () => ({
@@ -238,6 +239,21 @@ it("shows progress, and stops the assistant from the button or by closing", asyn
   expect(mocks.client.cancelOrganize).not.toHaveBeenCalled();
   unmount();
   await waitFor(() => expect(mocks.client.cancelOrganize).toHaveBeenCalledWith("run-1"));
+});
+
+it("stops a run whose start only returns after the sheet closed", async () => {
+  const started = Promise.withResolvers<OrganizeRun>();
+  mocks.client.startOrganize.mockReturnValueOnce(started.promise);
+  mocks.client.cancelOrganize.mockResolvedValue(run({ state: "cancelled" }));
+  const { unmount } = renderSheet();
+  fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
+  await waitFor(() => expect(mocks.client.startOrganize).toHaveBeenCalled());
+
+  unmount();
+  started.resolve(run({}));
+
+  await waitFor(() => expect(mocks.client.cancelOrganize).toHaveBeenCalledWith("run-1"));
+  expect(mocks.client.organizeRun).not.toHaveBeenCalled();
 });
 
 it("reports failures and starts over", async () => {

@@ -28,7 +28,8 @@ function tryNormalize(path: string): string | null {
   }
 }
 
-type Occupancy = "free" | "file" | "dir";
+/** `unknown` when storage could not answer (no access, rate limited, unavailable). */
+type Occupancy = "free" | "file" | "dir" | "unknown";
 
 /**
  * Turns the model's submission into a proposal the person can trust: every
@@ -94,7 +95,8 @@ export async function buildProposal(input: {
       pending = input.storage.stat(path).then(
         (stat) => (stat.kind === "dir" ? "dir" : "file"),
         (error: unknown) => {
-          if (isStorageError(error) && error.kind === "not_found") return "free";
+          // One unanswerable check sets that suggestion aside instead of failing the whole run.
+          if (isStorageError(error)) return error.kind === "not_found" ? "free" : "unknown";
           throw error;
         },
       );
@@ -104,7 +106,7 @@ export async function buildProposal(input: {
   }
 
   const claimed = new Set<string>();
-  const suggestions: OrganizeSuggestion[] = new Array(planned.length);
+  const checked: (OrganizeSuggestion | null)[] = new Array(planned.length);
   let next = 0;
   async function worker() {
     while (next < planned.length) {
@@ -114,18 +116,27 @@ export async function buildProposal(input: {
         occupied(plan.destination),
         occupied(plan.target),
       ]);
-      suggestions[index] = {
-        path: plan.item.path,
-        kind: plan.item.kind,
-        destination: plan.destination,
-        target: plan.target,
-        reason: plan.reason,
-        newFolder: folder === "free",
-        conflict: folder === "file" || target !== "free",
-      };
+      checked[index] =
+        folder === "unknown" || target === "unknown"
+          ? null
+          : {
+              path: plan.item.path,
+              kind: plan.item.kind,
+              destination: plan.destination,
+              target: plan.target,
+              reason: plan.reason,
+              newFolder: folder === "free",
+              conflict: folder === "file" || target !== "free",
+            };
     }
   }
   await Promise.all(Array.from({ length: Math.min(STAT_CONCURRENCY, planned.length) }, worker));
+  const suggestions: OrganizeSuggestion[] = [];
+  planned.forEach((plan, index) => {
+    const suggestion = checked[index] as OrganizeSuggestion | null;
+    if (suggestion === null) keep(plan.item.path, "fdrive could not check the suggested folder.");
+    else suggestions.push(suggestion);
+  });
   // Two suggestions landing on one name would collide on apply: flag every one after the first.
   for (const suggestion of suggestions) {
     if (claimed.has(suggestion.target)) suggestion.conflict = true;

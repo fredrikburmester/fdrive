@@ -1063,7 +1063,7 @@ describe("POST /fs/move-many", () => {
         type: "fs",
         op: "mkdir",
         identityId: ALICE_IDENTITY_ID,
-        paths: ["/Finance/2024"],
+        paths: ["/Finance", "/Finance/2024"],
         at: CLOCK_ISO,
       },
       {
@@ -1115,9 +1115,41 @@ describe("POST /fs/move-many", () => {
     ]);
   });
 
+  it("checks the source before creating folders, so a move that cannot happen leaves none", async () => {
+    const storage = createMemoryStorage({ "/inbox/a.pdf": "a", "/inbox/sub/b.pdf": "b" });
+    const mkdir = vi.spyOn(storage, "mkdir");
+    const { app, events } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request(
+      "/api/v1/fs/move-many",
+      moveMany({
+        createParents: true,
+        items: [
+          { path: "/inbox/gone.pdf", target: "/New/gone.pdf" },
+          { path: "/inbox", target: "/inbox/Deeper/inbox" },
+          { path: "/inbox/a.pdf", target: "/inbox/a.pdf" },
+        ],
+      }),
+    );
+
+    const results = (await readJson<MoveManyResponse>(res)).results;
+    expect(results.map((result) => (result.ok ? "ok" : result.error.kind))).toEqual([
+      "not_found",
+      "bad_request",
+      "ok",
+    ]);
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(storage.dump()).toEqual({ "/inbox/a.pdf": "a", "/inbox/sub/b.pdf": "b" });
+    expect(events.map((event) => (event.type === "fs" ? event.op : event.type))).toEqual(["move"]);
+  });
+
   it("maps a storage failure while preparing a folder to that item's error", async () => {
     const storage = createMemoryStorage({ "/inbox/a.pdf": "a" });
-    vi.spyOn(storage, "stat").mockRejectedValueOnce(new StorageError("forbidden", "no access"));
+    const stat = storage.stat.bind(storage);
+    vi.spyOn(storage, "stat").mockImplementation(async (path) => {
+      if (path === "/Private") throw new StorageError("forbidden", "no access");
+      return stat(path);
+    });
     const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
