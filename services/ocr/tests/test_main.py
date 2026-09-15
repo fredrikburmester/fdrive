@@ -13,7 +13,9 @@ from fdrive_ocr.server import RunLock
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
-DEFAULT_SETTINGS = Settings(hour=3, langs="swe+eng", exclude_globs=(), max_mb=200, keep_originals=True)
+DEFAULT_SETTINGS = Settings(
+    hour=3, langs="swe+eng", exclude_globs=(), max_mb=200, keep_originals=True, originals_retention_days=0
+)
 
 
 def _set_pdf_ocr(postgres_dsn: str, enabled: bool = True) -> None:

@@ -134,6 +134,7 @@ describe("resolveOcrSettings", () => {
       excludeGlobs: ["Programs/**", "Photos/**", "Videos/**"],
       maxMb: OCR_SETTINGS_DEFAULTS.maxMb,
       keepOriginals: OCR_SETTINGS_DEFAULTS.keepOriginals,
+      originalsRetentionDays: OCR_SETTINGS_DEFAULTS.originalsRetentionDays,
     });
     expect(result.sources).toEqual({
       hour: "default",
@@ -141,6 +142,7 @@ describe("resolveOcrSettings", () => {
       excludeGlobs: "default",
       maxMb: "default",
       keepOriginals: "default",
+      originalsRetentionDays: "default",
     });
   });
 
@@ -151,6 +153,7 @@ describe("resolveOcrSettings", () => {
       [OCR_SETTINGS_KEYS.excludeGlobs]: ["**/private/**"],
       [OCR_SETTINGS_KEYS.maxMb]: 50,
       [OCR_SETTINGS_KEYS.keepOriginals]: true,
+      [OCR_SETTINGS_KEYS.originalsRetentionDays]: 180,
     });
 
     expect(result.values).toEqual({
@@ -159,6 +162,7 @@ describe("resolveOcrSettings", () => {
       excludeGlobs: ["**/private/**"],
       maxMb: 50,
       keepOriginals: true,
+      originalsRetentionDays: 180,
     });
     expect(result.sources).toEqual({
       hour: "settings",
@@ -166,6 +170,7 @@ describe("resolveOcrSettings", () => {
       excludeGlobs: "settings",
       maxMb: "settings",
       keepOriginals: "settings",
+      originalsRetentionDays: "settings",
     });
   });
 
@@ -173,6 +178,18 @@ describe("resolveOcrSettings", () => {
     const result = resolveOcrSettings({ [OCR_SETTINGS_KEYS.keepOriginals]: "yes" });
     expect(result.values.keepOriginals).toBe(OCR_SETTINGS_DEFAULTS.keepOriginals);
     expect(result.sources.keepOriginals).toBe("default");
+  });
+
+  it("keeps originals forever by default", () => {
+    const result = resolveOcrSettings({});
+    expect(result.values.originalsRetentionDays).toBe(0);
+    expect(result.sources.originalsRetentionDays).toBe("default");
+  });
+
+  it("reads a stored retention window", () => {
+    const result = resolveOcrSettings({ [OCR_SETTINGS_KEYS.originalsRetentionDays]: 90 });
+    expect(result.values.originalsRetentionDays).toBe(90);
+    expect(result.sources.originalsRetentionDays).toBe("settings");
   });
 });
 
@@ -184,6 +201,7 @@ describe("ocrSettingsEntries", () => {
       excludeGlobs: [],
       maxMb: 100,
       keepOriginals: true,
+      originalsRetentionDays: 30,
     });
 
     expect(entries).toEqual([
@@ -192,6 +210,7 @@ describe("ocrSettingsEntries", () => {
       [OCR_SETTINGS_KEYS.excludeGlobs, []],
       [OCR_SETTINGS_KEYS.maxMb, 100],
       [OCR_SETTINGS_KEYS.keepOriginals, true],
+      [OCR_SETTINGS_KEYS.originalsRetentionDays, 30],
     ]);
   });
 });

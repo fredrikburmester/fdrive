@@ -113,6 +113,11 @@ import {
   type IndexerSettingsUpdateRequest,
   type IndexerThumbnailsRebuildRequest,
   IndexerThumbnailsRebuildResponse,
+  type OcrOriginalDeleteRequest,
+  OcrOriginalDeleteResponse,
+  type OcrOriginalRestoreRequest,
+  OcrOriginalRestoreResponse,
+  OcrOriginalsResponse,
   OcrRunResponse,
   OcrSettingsResponse,
   type OcrSettingsUpdateRequest,
@@ -322,6 +327,14 @@ export interface ApiClient {
   systemOcr(): Promise<SystemOcrResponse>;
   systemUpdateOcrSettings(settings: OcrSettingsUpdateRequest): Promise<OcrSettingsResponse>;
   systemRunOcr(): Promise<OcrRunResponse>;
+  /** One page of the originals kept before an OCR rewrite. Admin only. */
+  systemOcrOriginals(query?: {
+    query?: string;
+    offset?: number;
+    limit?: number;
+  }): Promise<OcrOriginalsResponse>;
+  systemRestoreOcrOriginal(req: OcrOriginalRestoreRequest): Promise<OcrOriginalRestoreResponse>;
+  systemDeleteOcrOriginal(req: OcrOriginalDeleteRequest): Promise<OcrOriginalDeleteResponse>;
   systemThumbnails(): Promise<SystemThumbnailsResponse>;
   systemRebuildThumbnails(): Promise<IndexerThumbnailsRebuildResponse>;
   /** One subsystem's event log, newest first. Admin only. */
@@ -902,6 +915,24 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     systemRunOcr(): Promise<OcrRunResponse> {
       return post(ROUTES.system.ocrRun, OcrRunResponse);
+    },
+
+    systemOcrOriginals(query = {}) {
+      return get(ROUTES.system.ocrOriginals, OcrOriginalsResponse, {
+        query: {
+          query: query.query,
+          offset: query.offset === undefined ? undefined : String(query.offset),
+          limit: query.limit === undefined ? undefined : String(query.limit),
+        },
+      });
+    },
+
+    systemRestoreOcrOriginal(req: OcrOriginalRestoreRequest): Promise<OcrOriginalRestoreResponse> {
+      return post(ROUTES.system.ocrOriginalRestore, OcrOriginalRestoreResponse, { jsonBody: req });
+    },
+
+    systemDeleteOcrOriginal(req: OcrOriginalDeleteRequest): Promise<OcrOriginalDeleteResponse> {
+      return post(ROUTES.system.ocrOriginalDelete, OcrOriginalDeleteResponse, { jsonBody: req });
     },
 
     systemThumbnails(): Promise<SystemThumbnailsResponse> {

@@ -84,6 +84,34 @@ def done_keys(conn: psycopg.Connection, root_id: int) -> set[tuple[str, int, int
         return {(r[0], int(r[1]), int(r[2])) for r in cur.fetchall()}
 
 
+def is_done(conn: psycopg.Connection, root_id: int, path: str, size: int, mtime_ns: int) -> bool:
+    """Refresh a cache miss: a restore may have added this key during the pass."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT 1 FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s AND size = %s AND mtime_ns = %s',
+            (root_id, path, size, mtime_ns),
+        )
+        return cur.fetchone() is not None
+
+
+@contextmanager
+def ocr_file_lock(conn: psycopg.Connection, root_id: int, path: str) -> Iterator[None]:
+    """Serialize OCR/restore commits for one source across service connections.
+
+    Take this before the backup gate. The two-int key space is separate from
+    the backup gate's bigint keys; a hash collision only serializes extra files.
+    External storage writers do not take this lock, so callers also recheck stat.
+    """
+    key = f"{root_id}:{path}"
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(%s, hashtext(%s))", (736591207, key))
+    try:
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s, hashtext(%s))", (736591207, key))
+
+
 def record_ocr_log(
     conn: psycopg.Connection,
     root_id: int,
@@ -103,6 +131,46 @@ def record_ocr_log(
             """,
             (root_id, path, size, mtime_ns, status, detail),
         )
+
+
+def ocred_keys_for_paths(
+    conn: psycopg.Connection, root_id: int, paths: list[str]
+) -> dict[str, frozenset[tuple[int, int]]]:
+    """The `(size, mtime_ns)` pairs recorded as `ocred` for each of `paths`.
+
+    Lets the originals listing tell "this is still the OCR output" apart from
+    "someone edited this afterwards" without re-reading any file bytes.
+    """
+    if not paths:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT path, size, mtime_ns FROM "idx"."ocr_log" WHERE root_id = %s AND path = ANY(%s) AND status = %s',
+            (root_id, paths, "ocred"),
+        )
+        keys: dict[str, set[tuple[int, int]]] = {}
+        for row in cur.fetchall():
+            keys.setdefault(row[0], set()).add((int(row[1]), int(row[2])))
+    return {path: frozenset(pairs) for path, pairs in keys.items()}
+
+
+def legacy_candidates(conn: psycopg.Connection, mtime_ns: int, basename: str, limit: int) -> list[tuple[str, str, int]]:
+    """Done-log rows that could be the source of a kept original whose sidecar
+    predates this format: same mtime, same filename. The caller reverse-hashes
+    each one against the kept file's name and only accepts a unique match, the
+    same rule `packages/backup/src/ocr-mappings.ts` applies to archived bytes.
+
+    Returns `limit + 1` rows at most so the caller can tell a truncated
+    candidate set (never resolved, to avoid a wrong match) from a complete one.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT r.name, l.path, l.mtime_ns FROM \"idx\".\"ocr_log\" l "
+            'JOIN "idx"."roots" r ON r.id = l.root_id '
+            "WHERE l.mtime_ns = %s AND regexp_replace(l.path, '^.*/', '') = %s LIMIT %s",
+            (mtime_ns, basename, limit + 1),
+        )
+        return [(str(row[0]), str(row[1]), int(row[2])) for row in cur.fetchall()]
 
 
 def start_run(conn: psycopg.Connection) -> int:

@@ -23,10 +23,9 @@ async function kindOf(promise: Promise<unknown>): Promise<string | null> {
 }
 
 describe("sftpgoModule", () => {
-  it("declares its type, fields, capabilities and attribution", () => {
+  it("declares its type, fields and capabilities", () => {
     expect(sftpgoModule.type).toBe("sftpgo");
     expect(sftpgoModule.trash).toBe("native");
-    expect(sftpgoModule.attribution?.name).toBe("SFTPGo");
     expect(sftpgoModule.credentialFields.map((field) => field.name)).toEqual([
       "username",
       "password",

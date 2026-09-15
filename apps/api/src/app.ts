@@ -25,7 +25,6 @@ import {
   subsystemsStatus,
 } from "./config-keys.js";
 import { ApiHttpError, toApiError } from "./errors.js";
-import { moduleFor } from "./providers/registry.js";
 
 export type AppVariables = {
   requestId: string;
@@ -38,13 +37,10 @@ export type AuthedHono = Hono<{ Variables: AppVariables & PrincipalVariables }>;
 
 /**
  * Whether fdrive setup is still required, and the enabled providers to
- * show on the public `/about` route. Disabled providers contribute attribution
- * without appearing as available connections.
+ * show on the public `/about` route.
  */
 export interface ConnectionStatus {
   readonly required: boolean;
-  /** All configured types, including disabled providers; defaults to the enabled list in tests. */
-  readonly configuredProviderTypes?: readonly string[];
   readonly providers: readonly { readonly type: string; readonly host: string }[];
 }
 
@@ -219,15 +215,9 @@ export function createApp(deps: AppDeps): AppHono {
     // is complete, which the login page needs to decide whether to redirect
     // to `/setup`.
     const principal = status.providers.length === 0 ? null : await principalResolver(c);
-    const attributions = new Map<string, { name: string; sourceUrl: string }>();
-    for (const type of status.configuredProviderTypes ?? status.providers.map((p) => p.type)) {
-      const attribution = moduleFor(type)?.attribution;
-      if (attribution !== undefined) attributions.set(attribution.name, attribution);
-    }
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
       uptimeSeconds: Math.max(0, (clock().getTime() - deps.startedAt.getTime()) / 1000),
-      builtOn: [...attributions.values()],
       providers: status.providers.map((provider) => ({
         type: provider.type,
         label: principal === null ? null : provider.host,

@@ -26,6 +26,9 @@ const systemReembedMock = vi.fn();
 const systemOcrMock = vi.fn();
 const systemUpdateOcrSettingsMock = vi.fn();
 const systemRunOcrMock = vi.fn();
+const systemOcrOriginalsMock = vi.fn();
+const systemRestoreOcrOriginalMock = vi.fn();
+const systemDeleteOcrOriginalMock = vi.fn();
 const systemThumbnailsMock = vi.fn();
 const systemRebuildThumbnailsMock = vi.fn();
 const systemClearIndexMock = vi.fn();
@@ -56,6 +59,9 @@ vi.mock("./client.js", () => ({
     systemOcr: (...args: unknown[]) => systemOcrMock(...args),
     systemUpdateOcrSettings: (...args: unknown[]) => systemUpdateOcrSettingsMock(...args),
     systemRunOcr: (...args: unknown[]) => systemRunOcrMock(...args),
+    systemOcrOriginals: (...args: unknown[]) => systemOcrOriginalsMock(...args),
+    systemRestoreOcrOriginal: (...args: unknown[]) => systemRestoreOcrOriginalMock(...args),
+    systemDeleteOcrOriginal: (...args: unknown[]) => systemDeleteOcrOriginalMock(...args),
     systemThumbnails: (...args: unknown[]) => systemThumbnailsMock(...args),
     systemClearIndex: (...args: unknown[]) => systemClearIndexMock(...args),
     systemClearThumbnails: (...args: unknown[]) => systemClearThumbnailsMock(...args),
@@ -478,13 +484,21 @@ describe("useReembed", () => {
 });
 
 const OCR_SETTINGS = {
-  values: { hour: 3, langs: "swe+eng", excludeGlobs: [], maxMb: 200, keepOriginals: false },
+  values: {
+    hour: 3,
+    langs: "swe+eng",
+    excludeGlobs: [],
+    maxMb: 200,
+    keepOriginals: false,
+    originalsRetentionDays: 0,
+  },
   sources: {
     hour: "default",
     langs: "default",
     excludeGlobs: "default",
     maxMb: "default",
     keepOriginals: "default",
+    originalsRetentionDays: "default",
   },
 } as const;
 
@@ -540,6 +554,102 @@ describe("useRunOcr", () => {
     mutation.current.mutate();
 
     await waitFor(() => expect(mutation.current.data).toEqual({ started: true }));
+    expect(systemOcrMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+const OCR_ORIGINALS_PAGE = {
+  items: [
+    {
+      id: "0123456789abcdef_scan.pdf",
+      root: "sftpgo",
+      path: "docs/scan.pdf",
+      size: 1024,
+      keptAt: "2026-09-07T03:00:00+00:00",
+      sha256: "a".repeat(64),
+      legacy: false,
+      state: "ocred",
+    },
+  ],
+  total: 1,
+  offset: 0,
+  limit: 25,
+} as const;
+
+describe("useOcrOriginals", () => {
+  it("asks for the requested page and search", async () => {
+    systemOcrOriginalsMock.mockResolvedValue(OCR_ORIGINALS_PAGE);
+    const { useOcrOriginals, OCR_ORIGINALS_PAGE_SIZE } = await import("./system-queries.js");
+
+    const { result } = renderHook(() => useOcrOriginals("scan", 25, true), {
+      wrapper: createWrapper(new QueryClient()),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(systemOcrOriginalsMock).toHaveBeenCalledWith({
+      query: "scan",
+      offset: 25,
+      limit: OCR_ORIGINALS_PAGE_SIZE,
+    });
+  });
+
+  it("issues no request while disabled", async () => {
+    systemOcrOriginalsMock.mockResolvedValue(OCR_ORIGINALS_PAGE);
+    const { useOcrOriginals } = await import("./system-queries.js");
+
+    const { result } = renderHook(() => useOcrOriginals("", 0, false), {
+      wrapper: createWrapper(new QueryClient()),
+    });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(systemOcrOriginalsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useRestoreOcrOriginal", () => {
+  it("restores and refreshes the OCR status", async () => {
+    systemOcrMock.mockResolvedValue(SYSTEM_OCR_RESPONSE);
+    systemRestoreOcrOriginalMock.mockResolvedValue({
+      restored: true,
+      root: "sftpgo",
+      path: "docs/scan.pdf",
+      previousState: "ocred",
+    });
+    const { useSystemOcr, useRestoreOcrOriginal } = await import("./system-queries.js");
+    const wrapper = createWrapper(new QueryClient());
+
+    const { result: query } = renderHook(() => useSystemOcr(), { wrapper });
+    await waitFor(() => expect(query.current.isSuccess).toBe(true));
+
+    const { result: mutation } = renderHook(() => useRestoreOcrOriginal(), { wrapper });
+    mutation.current.mutate({ id: "0123456789abcdef_scan.pdf", allowOverwriteChanged: true });
+
+    await waitFor(() => expect(mutation.current.isSuccess).toBe(true));
+    expect(systemRestoreOcrOriginalMock).toHaveBeenCalledWith({
+      id: "0123456789abcdef_scan.pdf",
+      allowOverwriteChanged: true,
+    });
+    expect(systemOcrMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useDeleteOcrOriginal", () => {
+  it("deletes by id and refreshes the OCR status", async () => {
+    systemOcrMock.mockResolvedValue(SYSTEM_OCR_RESPONSE);
+    systemDeleteOcrOriginalMock.mockResolvedValue({ deleted: true });
+    const { useSystemOcr, useDeleteOcrOriginal } = await import("./system-queries.js");
+    const wrapper = createWrapper(new QueryClient());
+
+    const { result: query } = renderHook(() => useSystemOcr(), { wrapper });
+    await waitFor(() => expect(query.current.isSuccess).toBe(true));
+
+    const { result: mutation } = renderHook(() => useDeleteOcrOriginal(), { wrapper });
+    mutation.current.mutate("0123456789abcdef_scan.pdf");
+
+    await waitFor(() => expect(mutation.current.isSuccess).toBe(true));
+    expect(systemDeleteOcrOriginalMock).toHaveBeenCalledWith({
+      id: "0123456789abcdef_scan.pdf",
+    });
     expect(systemOcrMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -36,6 +36,7 @@ import {
 } from "@/lib/system/settings";
 import { sidecarStatus } from "@/lib/system/status";
 import { LogSheet } from "./log-sheet";
+import { OcrOriginalsSheet } from "./ocr-originals-sheet";
 import { GlobsField } from "./settings-form";
 import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
 import { StatGrid } from "./stat-grid";
@@ -50,6 +51,7 @@ interface SettingsDraft {
   excludeGlobs: string;
   maxMb: string;
   keepOriginals: boolean;
+  originalsRetentionDays: string;
 }
 
 function draftFromValues(values: OcrSettingsValue): SettingsDraft {
@@ -59,6 +61,7 @@ function draftFromValues(values: OcrSettingsValue): SettingsDraft {
     excludeGlobs: globsToTextarea(values.excludeGlobs),
     maxMb: String(values.maxMb),
     keepOriginals: values.keepOriginals,
+    originalsRetentionDays: String(values.originalsRetentionDays),
   };
 }
 
@@ -69,6 +72,7 @@ function valuesFromDraft(draft: SettingsDraft): OcrSettingsValue {
     excludeGlobs: globsFromTextarea(draft.excludeGlobs),
     maxMb: Number(draft.maxMb),
     keepOriginals: draft.keepOriginals,
+    originalsRetentionDays: Number(draft.originalsRetentionDays),
   };
 }
 
@@ -195,15 +199,25 @@ export function OcrPage() {
             />
           ) : null}
 
-          <StatGrid
-            stats={[
-              {
-                label: "Originals kept",
-                value: (data.stats?.originalsCount ?? 0).toLocaleString(),
-              },
-              { label: "Originals size", value: formatBytes(data.stats?.originalsBytes ?? 0) },
-            ]}
-          />
+          <SystemSection
+            title="Kept originals"
+            description={
+              data.settings.values.keepOriginals
+                ? "The file each rewrite replaced, kept so a rewrite can be undone."
+                : "Originals are not being kept, so rewrites from now on cannot be undone."
+            }
+            actions={<OcrOriginalsSheet disabled={!data.reachable} />}
+          >
+            <StatGrid
+              stats={[
+                {
+                  label: "Originals kept",
+                  value: (data.stats?.originalsCount ?? 0).toLocaleString(),
+                },
+                { label: "Originals size", value: formatBytes(data.stats?.originalsBytes ?? 0) },
+              ]}
+            />
+          </SystemSection>
         </>
       )}
 
@@ -277,9 +291,9 @@ export function OcrPage() {
               <FieldContent>
                 <FieldLabel htmlFor="ocr-keep-originals">Keep originals</FieldLabel>
                 <FieldDescription>
-                  When OCR rewrites a PDF to add a text layer, the original file is saved under the
-                  OCR state directory so it can be restored. Turning this off saves disk space but
-                  makes OCR irreversible.
+                  When OCR rewrites a PDF to add a text layer, the file it replaced is kept, and can
+                  be put back from Kept originals. Turning this off saves disk space but makes every
+                  later rewrite irreversible.
                 </FieldDescription>
               </FieldContent>
               <Switch
@@ -287,6 +301,21 @@ export function OcrPage() {
                 checked={draft.keepOriginals}
                 onCheckedChange={(checked) => setDraft({ ...draft, keepOriginals: checked })}
               />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="ocr-originals-retention">Keep originals for (days)</FieldLabel>
+              <Input
+                id="ocr-originals-retention"
+                type="number"
+                min={0}
+                value={draft.originalsRetentionDays}
+                onChange={(event) =>
+                  setDraft({ ...draft, originalsRetentionDays: event.target.value })
+                }
+              />
+              <FieldDescription>
+                Each pass deletes kept originals older than this. 0 keeps them forever.
+              </FieldDescription>
             </Field>
           </>
         ) : null}

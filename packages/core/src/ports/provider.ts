@@ -125,8 +125,6 @@ export interface StorageSession {
 export interface ProviderModule {
   readonly type: string;
   readonly label: string;
-  /** Shown on the About page; required by some upstream licences (SFTPGo's AGPL notice). */
-  readonly attribution?: { readonly name: string; readonly sourceUrl: string };
   readonly configFields: readonly ProviderField[];
   readonly credentialFields: readonly ProviderField[];
   readonly capabilities: ProviderCapabilities;

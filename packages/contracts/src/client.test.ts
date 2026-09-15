@@ -154,7 +154,6 @@ const VALID_ENTRY = {
 const VALID_LIST = { path: "/photos", entries: [VALID_ENTRY] };
 const VALID_ABOUT = {
   version: "1.0.0",
-  builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
   providers: [{ type: "sftpgo", label: "localhost:8080" }],
   setupRequired: false,
 };
@@ -902,13 +901,21 @@ describe("createApiClient: system", () => {
   };
 
   const OCR_SETTINGS = {
-    values: { hour: 3, langs: "swe+eng", excludeGlobs: [], maxMb: 200, keepOriginals: false },
+    values: {
+      hour: 3,
+      langs: "swe+eng",
+      excludeGlobs: [],
+      maxMb: 200,
+      keepOriginals: false,
+      originalsRetentionDays: 0,
+    },
     sources: {
       hour: "default",
       langs: "default",
       excludeGlobs: "default",
       maxMb: "default",
       keepOriginals: "default",
+      originalsRetentionDays: "default",
     },
   };
 
@@ -1070,11 +1077,39 @@ describe("createApiClient: system", () => {
       excludeGlobs: [],
       maxMb: 100,
       keepOriginals: true,
+      originalsRetentionDays: 30,
     };
 
     expect(await client.systemUpdateOcrSettings(patch)).toEqual(OCR_SETTINGS);
     expect(calls[0]?.init.method).toBe("PUT");
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual(patch);
+  });
+
+  it("lists kept OCR originals with paging and search", async () => {
+    const page = { items: [], total: 0, offset: 0, limit: 50 };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, page)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemOcrOriginals({ query: "scan", offset: 50, limit: 25 })).toEqual(page);
+    expect(calls[0]?.url).toBe("/api/v1/system/ocr/originals?query=scan&offset=50&limit=25");
+  });
+
+  it("posts a kept OCR original restore", async () => {
+    const body = { restored: true, root: "sftpgo", path: "docs/scan.pdf", previousState: "ocred" };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemRestoreOcrOriginal({ id: "abc_scan.pdf" })).toEqual(body);
+    expect(calls[0]?.url).toBe("/api/v1/system/ocr/originals/restore");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ id: "abc_scan.pdf" });
+  });
+
+  it("posts a kept OCR original delete", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { deleted: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.systemDeleteOcrOriginal({ id: "abc_scan.pdf" })).toEqual({ deleted: true });
+    expect(calls[0]?.url).toBe("/api/v1/system/ocr/originals/delete");
   });
 
   it("posts system/ocr/run", async () => {

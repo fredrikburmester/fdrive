@@ -12,6 +12,12 @@ vi.mock("@/lib/api/system-queries", () => ({
   useSystemOcr: () => useSystemOcrMock(),
   useUpdateOcrSettings: () => useUpdateOcrSettingsMock(),
   useRunOcr: () => useRunOcrMock(),
+  // The kept-originals sheet only queries once opened; these exist so its
+  // module-level imports resolve against this mock.
+  OCR_ORIGINALS_PAGE_SIZE: 25,
+  useOcrOriginals: () => ({ data: undefined, isPending: true, isError: false }),
+  useRestoreOcrOriginal: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeleteOcrOriginal: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 // See `indexer-page.test.tsx` for why `SystemPage` is stubbed rather than
@@ -60,18 +66,27 @@ const CONFIGURED_FIXTURE: SystemOcrResponse = {
     excludeGlobs: [],
     maxMb: 200,
     keepOriginals: false,
+    originalsRetentionDays: 0,
     originalsCount: 12,
     originalsBytes: 1024,
     running: false,
   },
   settings: {
-    values: { hour: 3, langs: "swe+eng", excludeGlobs: [], maxMb: 200, keepOriginals: false },
+    values: {
+      hour: 3,
+      langs: "swe+eng",
+      excludeGlobs: [],
+      maxMb: 200,
+      keepOriginals: false,
+      originalsRetentionDays: 0,
+    },
     sources: {
       hour: "default",
       langs: "default",
       excludeGlobs: "default",
       maxMb: "default",
       keepOriginals: "default",
+      originalsRetentionDays: "default",
     },
   },
 };
@@ -82,9 +97,9 @@ const NOT_CONFIGURED_FIXTURE: SystemOcrResponse = {
   settings: CONFIGURED_FIXTURE.settings,
 };
 
-function mockConfigured() {
+function mockConfigured(overrides: Partial<SystemOcrResponse> = {}) {
   useSystemOcrMock.mockReturnValue({
-    data: CONFIGURED_FIXTURE,
+    data: { ...CONFIGURED_FIXTURE, ...overrides },
     isLoading: false,
     error: null,
     dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
@@ -140,7 +155,43 @@ describe("OcrPage", () => {
 
     expect(
       await screen.findByText(
-        "When OCR rewrites a PDF to add a text layer, the original file is saved under the OCR state directory so it can be restored. Turning this off saves disk space but makes OCR irreversible.",
+        "When OCR rewrites a PDF to add a text layer, the file it replaced is kept, and can be put back from Kept originals. Turning this off saves disk space but makes every later rewrite irreversible.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("offers a retention window that keeps originals forever at zero", async () => {
+    mockConfigured();
+    render(<OcrPage />);
+    openSettings();
+
+    const field = await screen.findByLabelText("Keep originals for (days)");
+    expect((field as HTMLInputElement).value).toBe("0");
+    expect(
+      screen.getByText("Each pass deletes kept originals older than this. 0 keeps them forever."),
+    ).toBeTruthy();
+  });
+
+  it("offers managing kept originals alongside their totals", async () => {
+    mockConfigured();
+    render(<OcrPage />);
+
+    expect(await screen.findByText("Kept originals")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Manage" })).toBeTruthy();
+  });
+
+  it("says plainly when rewrites are no longer reversible", async () => {
+    mockConfigured({
+      settings: {
+        ...CONFIGURED_FIXTURE.settings,
+        values: { ...CONFIGURED_FIXTURE.settings.values, keepOriginals: false },
+      },
+    });
+    render(<OcrPage />);
+
+    expect(
+      await screen.findByText(
+        "Originals are not being kept, so rewrites from now on cannot be undone.",
       ),
     ).toBeTruthy();
   });

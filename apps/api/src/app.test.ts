@@ -234,24 +234,16 @@ describe("createApp about route", () => {
     expect(await (await app.request("/api/v1/about")).json()).toMatchObject({ uptimeSeconds: 0 });
   });
 
-  it("keeps configured attribution when no provider is enabled, without exposing endpoints", async () => {
+  it("exposes no endpoints when setup is complete but no provider is enabled", async () => {
     const { app } = buildApp({
-      connectionStatus: async () => ({
-        required: false,
-        providers: [],
-        configuredProviderTypes: ["sftpgo", "sftpgo", "unknown"],
-      }),
+      connectionStatus: async () => ({ required: false, providers: [] }),
     });
     const res = await app.request("/api/v1/about");
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({
-      setupRequired: false,
-      providers: [],
-      builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
-    });
+    expect(await res.json()).toMatchObject({ setupRequired: false, providers: [] });
   });
 
-  it("returns the version and SFTPGo attribution, redacting the host for an anonymous caller", async () => {
+  it("returns the version, redacting the host for an anonymous caller", async () => {
     const { app } = buildApp();
 
     const res = await app.request("/api/v1/about");
@@ -262,7 +254,6 @@ describe("createApp about route", () => {
     expect(body).toEqual({
       version: "1.2.3",
       uptimeSeconds: 5,
-      builtOn: [{ name: "SFTPGo", sourceUrl: "https://github.com/drakkan/sftpgo" }],
       providers: [{ type: "sftpgo", label: null }],
       setupRequired: false,
     });

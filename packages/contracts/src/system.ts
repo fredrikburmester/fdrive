@@ -358,6 +358,7 @@ export const OcrStats = z.object({
   excludeGlobs: z.array(z.string()),
   maxMb: z.number().int(),
   keepOriginals: z.boolean(),
+  originalsRetentionDays: z.number().int(),
   originalsCount: z.number().int(),
   originalsBytes: z.number().int(),
   running: z.boolean(),
@@ -365,13 +366,15 @@ export const OcrStats = z.object({
 
 export type OcrStats = z.infer<typeof OcrStats>;
 
-/** The five settings keys the OCR service reads from `app.settings`. */
+/** The six settings keys the OCR service reads from `app.settings`. */
 export const OcrSettingsValue = z.object({
   hour: z.number().int().min(0).max(23),
   langs: z.string(),
   excludeGlobs: z.array(z.string()),
   maxMb: z.number().int(),
   keepOriginals: z.boolean(),
+  /** Days to keep an original before the nightly pass prunes it. `0` keeps forever. */
+  originalsRetentionDays: z.number().int().min(0),
 });
 
 export type OcrSettingsValue = z.infer<typeof OcrSettingsValue>;
@@ -383,6 +386,7 @@ export const OcrSettingsSources = z.object({
   excludeGlobs: SettingSource,
   maxMb: SettingSource,
   keepOriginals: SettingSource,
+  originalsRetentionDays: SettingSource,
 });
 
 export type OcrSettingsSources = z.infer<typeof OcrSettingsSources>;
@@ -413,6 +417,7 @@ export const OcrSettingsUpdateRequest = z.object({
   excludeGlobs: z.array(z.string().min(1)),
   maxMb: z.number().int().min(1),
   keepOriginals: z.boolean(),
+  originalsRetentionDays: z.number().int().min(0).max(3650),
 });
 
 export type OcrSettingsUpdateRequest = z.infer<typeof OcrSettingsUpdateRequest>;
@@ -423,6 +428,86 @@ export const OcrRunResponse = z.object({
 });
 
 export type OcrRunResponse = z.infer<typeof OcrRunResponse>;
+
+/**
+ * What the file at a kept original's source path currently is. A rewrite keeps
+ * the source's mtime and only changes its size, so these do not overlap:
+ *
+ * - `ocred`: the OCR output is still in place, the ordinary case
+ * - `restored`: the live bytes already match this kept original
+ * - `changed`: edited or replaced since OCR ran; restoring discards that
+ * - `missing`: nothing at that path; restoring recreates the file
+ *
+ * `null` means the state is unknown, because the original's source path could
+ * not be resolved or its root is no longer configured on the OCR service.
+ */
+export const OcrOriginalState = z.enum(["ocred", "restored", "changed", "missing"]);
+
+export type OcrOriginalState = z.infer<typeof OcrOriginalState>;
+
+/** One original kept before an OCR rewrite, as `GET /api/v1/system/ocr/originals` lists it. */
+export const OcrOriginal = z.object({
+  /** Opaque identifier, the kept file's name in the OCR state directory. */
+  id: z.string(),
+  /** Index root and root-relative source path, or `null` when unresolved. */
+  root: z.string().nullable(),
+  path: z.string().nullable(),
+  /** Size of the kept bytes. */
+  size: z.number().int(),
+  /** When the bytes were kept, not the document's own mtime. */
+  keptAt: z.iso.datetime({ offset: true }),
+  sha256: z.string().nullable(),
+  /** Kept before sidecars existed, so its source was recovered from the done-log. */
+  legacy: z.boolean(),
+  state: OcrOriginalState.nullable(),
+});
+
+export type OcrOriginal = z.infer<typeof OcrOriginal>;
+
+/** Response for `GET /api/v1/system/ocr/originals`. */
+export const OcrOriginalsResponse = z.object({
+  items: z.array(OcrOriginal),
+  total: z.number().int(),
+  offset: z.number().int(),
+  limit: z.number().int(),
+});
+
+export type OcrOriginalsResponse = z.infer<typeof OcrOriginalsResponse>;
+
+/**
+ * Body for `POST /api/v1/system/ocr/originals/restore`. Restoring over the OCR
+ * output needs no opt-in; the two destructive cases each require the caller to
+ * have seen the state and asked for it explicitly.
+ */
+export const OcrOriginalRestoreRequest = z.object({
+  id: z.string().min(1),
+  /** Recreate the file when nothing is at the source path any more. */
+  allowRecreate: z.boolean().optional(),
+  /** Overwrite a file that was edited or replaced after OCR ran. */
+  allowOverwriteChanged: z.boolean().optional(),
+});
+
+export type OcrOriginalRestoreRequest = z.infer<typeof OcrOriginalRestoreRequest>;
+
+/** Response for a successful restore. `previousState` is what was overwritten. */
+export const OcrOriginalRestoreResponse = z.object({
+  restored: z.boolean(),
+  root: z.string().nullable(),
+  path: z.string().nullable(),
+  previousState: OcrOriginalState.nullable(),
+});
+
+export type OcrOriginalRestoreResponse = z.infer<typeof OcrOriginalRestoreResponse>;
+
+/** Body for `POST /api/v1/system/ocr/originals/delete`. */
+export const OcrOriginalDeleteRequest = z.object({ id: z.string().min(1) });
+
+export type OcrOriginalDeleteRequest = z.infer<typeof OcrOriginalDeleteRequest>;
+
+/** Response for `POST /api/v1/system/ocr/originals/delete`. */
+export const OcrOriginalDeleteResponse = z.object({ deleted: z.boolean() });
+
+export type OcrOriginalDeleteResponse = z.infer<typeof OcrOriginalDeleteResponse>;
 
 // ---------------------------------------------------------------------------
 // Thumbnails

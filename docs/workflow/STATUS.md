@@ -1,9 +1,73 @@
 # Current handoff
 
-Updated: 2026-09-14. Unfinished product work: [plans](../plans/README.md).
+Updated: 2026-09-15. Unfinished product work: [plans](../plans/README.md).
 Current implementation: [architecture](../ARCHITECTURE.md). Prior delivery evidence:
 [history](STATUS-history.md). Historical branch/commit and in-progress labels are snapshots,
 not current instructions.
+
+## About attribution removed: "Built on SFTPGo." dropped
+
+- Branch `refactor/remove-sftpgo-attribution` off `main`, opened as a PR; the OCR-originals and
+  backups WIP in the main checkout stays out of that commit.
+- With several data sources supported, the About page no longer credits any upstream project:
+  `attribution` is gone from `ProviderModule`, `builtOn` from `AboutResponse` and the `/about`
+  handler, and `ConnectionStatus.configuredProviderTypes` with it (it existed only to feed
+  attribution from disabled providers). The factual "Connected to <provider> at <host>." line
+  and the AGPL licence line stay.
+- Licence check: stock SFTPGo runs as an external service over REST, unmodified and not
+  distributed by fdrive, so the AGPL notice terms the old docstrings cited do not reach the web
+  UI. The optional `integrations/sftpgo` image does carry AGPL modifications; its notice and
+  source-offer duties stay where they are, in that image and its README.
+- Verified: `pnpm typecheck` clean; `pnpm test` 6574 passed with one unrelated timeout in
+  `apps/api/src/backups/recovery.test.ts` that passes on its own (known full-suite flake);
+  `integration` and `browser e2e/about.spec.ts` passed; `workflow` passed every gate but lint.
+- Lint blocker is not from this change: `pnpm lint` fails only on two untracked non-source
+  files, `.claude/launch.json` and `.playwright-mcp/rehearsal.json`. `biome check apps packages`
+  is clean. `.playwright-mcp/` looks like it wants a gitignore entry.
+
+## Restoring OCR originals: implemented in the primary checkout
+
+- Branch `feat/ocr-restore-originals` off `main` at `e303c12`. The pre-existing backup WIP in
+  `apps/web/e2e/backups.spec.ts` and `apps/web/src/components/system/backup-*` is untouched and
+  uncommitted.
+- Kept originals had no reader: `apply_rewrite` wrote them and their sidecars, and nothing ever
+  put one back. Recovery meant copying the file off the host by hand, and the next nightly pass
+  then OCR'd it straight back again, because a rewrite re-keys its done-log row to the new size
+  and the pre-OCR key was never recorded.
+- New `services/ocr` modules `originals.py` (pure) and `restore.py` (I/O), four `/originals`
+  endpoints, and a `restored` done-log row that stops the next pass from undoing a restore.
+  Restores are refused rather than half-applied for a changed or missing target without the
+  caller's opt-in, a checksum mismatch, an unresolvable sidecar, a path outside its root, an
+  unconfigured root, or a missing parent directory. Legacy originals resolve from the done-log
+  and backfill their sidecar. `ocr.originals_retention_days` prunes at the end of each pass,
+  defaulting to 0 (keep forever). Behaviour: [OCR](../OCR.md#kept-originals).
+- Admin UI is `System > Searchable PDFs > Kept originals`: search, per-row state, restore,
+  download and delete, with state-specific confirmations. Everything but `/run` works while the
+  `pdfOcr` feature is off, which is the state an operator is in when a pass has damaged a file.
+- Per-file restore from the file browser was deliberately not built; the authorization reason is
+  in [deferred](../plans/DEFERRED.md).
+- Gates: `python ocr` (ruff, mypy, 96% coverage), `integration`, `browser e2e/ocr-originals.spec.ts`
+  (screenshots inspected), and `application` typecheck plus `VITEST_MAX_WORKERS=1 pnpm test:coverage`
+  (10/10 tasks). At full turbo concurrency the pre-existing backup tests flake on timing; they
+  pass in isolation and under one worker.
+- `application`'s repo-wide lint gate fails on two untracked local artifacts that predate this
+  work, `.claude/launch.json` and `.playwright-mcp/`. `npx biome check $(git ls-files)` is clean.
+  Either gitignore them or add `!**/.playwright-mcp` to `biome.json`.
+
+### PR #33 review fixes
+
+- Restore checks the destination after lock acquisition and immediately before replacement,
+  refusing edits, deletion or recreation during copying even with prior overwrite consent.
+  OCR results from another mtime require consent to replace a later revision.
+- OCR/restore commits share a per-file PostgreSQL lock and refresh done-log keys, including
+  after the subprocess, so a running pass cannot undo a restore. Delete and retention pruning
+  hold the backup gate. Restore/delete waits run off the HTTP event loop.
+- Final `python ocr` passes 267 tests at 96.20% coverage (`step.rdFnEF`), including 18 new
+  regression cases. Integration ran 498 tests successfully (`step.pUdmw9`); one PostgreSQL
+  container port-binding timeout skipped three tests, all passing in isolation (`step.QvutOH`).
+- Workflow helper regressions and tracked-file lint pass. The full workflow gate still fails
+  lint only on pre-existing `.claude/launch.json` and `.playwright-mcp/rehearsal.json`
+  (`step.wyyCtc`); diff checks pass. Unrelated backup and planning WIP is preserved.
 
 ## Installation backups: implemented, final gates in progress
 
