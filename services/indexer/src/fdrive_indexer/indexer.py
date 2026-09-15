@@ -9,12 +9,15 @@ import errno
 import hashlib
 import mimetypes
 import os
+import queue
 import stat
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 
 import psycopg
@@ -28,7 +31,14 @@ from .embed_backoff import EmbedBackoff, is_backend_outage
 from .events import build_event
 from .extract import Extractor, embed_passages
 from .features import FeatureConfiguration, FeatureValues, disabled
-from .image_embed import dimension_guard, embed_images, image_embed_health, is_image_candidate, needs_embedding
+from .image_embed import (
+    ImageEmbedHealth,
+    dimension_guard,
+    embed_images,
+    image_embed_health,
+    is_image_candidate,
+    needs_embedding,
+)
 from .paths import ext_of
 from .rules import is_ocr_image_dir, is_text_excluded, should_index_name, should_walk_dir
 from .settings import Settings
@@ -41,6 +51,10 @@ mimetypes.add_type("application/vnd.apple.numbers", ".numbers")
 mimetypes.add_type("application/vnd.apple.keynote", ".key")
 
 _FILE_READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+
+# Classified files a scan holds before traversal waits for workers, about 1 KB each.
+# Large enough that most scans finish discovery, and report a total, early.
+SCAN_BACKLOG_LIMIT = 20_000
 
 
 def sha256_of(path: str) -> str:
@@ -180,6 +194,8 @@ class RootContext:
     path_locks: PathLocks = field(default_factory=PathLocks)
     embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
     image_embed_backoff: EmbedBackoff = field(default_factory=EmbedBackoff, repr=False)
+    image_embed_health_seconds: float = 30.0
+    _image_embed_health: tuple[float, ImageEmbedHealth] | None = field(default=None, repr=False)
     local: threading.local = field(default_factory=threading.local)
     activity: RootActivity = field(default_factory=RootActivity)
 
@@ -212,6 +228,28 @@ class RootContext:
     def finish_media_backfill(self) -> None:
         with self.feature_lock:
             self._backfill_media = False
+
+    def image_embed_status(self) -> ImageEmbedHealth | None:
+        """The sidecar's health, probed at most every ``image_embed_health_seconds``.
+
+        A sidecar embedding at full speed can miss the probe's short timeout, and
+        treating that as an outage paused embedding and skipped files mid-scan. Once
+        it has answered healthy, an unanswered probe keeps that answer and the
+        embedding request decides: a real outage fails it with a transport error,
+        which pauses embedding. A sidecar that answers with a problem is believed.
+        """
+        with self.feature_lock:
+            cached = self._image_embed_health
+        if cached is not None and time.monotonic() - cached[0] < self.image_embed_health_seconds:
+            return cached[1]
+        health = image_embed_health(self.cfg.image_embed_url)
+        if health is None and cached is not None:
+            health = cached[1]
+        with self.feature_lock:
+            self._image_embed_health = (
+                (time.monotonic(), health) if health is not None and dimension_guard(health) is None else None
+            )
+        return health
 
     def maybe_refresh_features(self) -> None:
         refresher = self.feature_refresher
@@ -396,9 +434,13 @@ def process_thumbnails(ctx: RootContext, abs_path: str, rel_path: str, ext: str,
         failures.report(ctx, rel_path, "thumbnails", log, skipped=True)
         return True, True
     errors: list[str] = []
+    nothing_to_render: list[str] = []
     try:
         thumbs = generate_thumbnails(abs_path, ext, sha, size, ctx.cfg.thumbs_dir, ctx.cfg.thumb_max_bytes,
-                                     force=force, log=log, on_error=errors.append)
+                                     force=force, log=log, on_error=errors.append, on_skip=nothing_to_render.append)
+        if nothing_to_render:
+            failures.report(ctx, rel_path, "thumbnails", log, skipped=True, resolves=True)
+            return True, True
         for out_size, rel_thumb_path, width, height in thumbs:
             db.upsert_thumbnail(ctx.conn(), sha, out_size, rel_thumb_path, width, height)
         if {thumb[0] for thumb in thumbs} != set(SIZES) and not errors:
@@ -411,6 +453,12 @@ def process_thumbnails(ctx: RootContext, abs_path: str, rel_path: str, ext: str,
 
 
 def process_image_embedding(ctx: RootContext, rel_path: str, sha: str) -> bool:
+    stage = _image_embedding_stage.get()
+    attempt = failures.current()
+    if stage is not None and attempt is not None:
+        attempt.deferred.add("imageSearch")
+        stage.submit(rel_path, sha, already_failed=any(not ok for ok, _skipped in attempt.outcomes.values()))
+        return True
     errors: list[str] = []
     try:
         ok = embed_thumbnail(ctx, sha, on_error=errors.append)
@@ -426,6 +474,62 @@ def process_image_embedding(ctx: RootContext, rel_path: str, sha: str) -> bool:
         return False
 
 
+class ImageEmbeddingStage:
+    """Embeds a scan's thumbnails on one thread of its own.
+
+    The sidecar runs one inference at a time, and a CPU model is far slower than
+    thumbnailing. Waiting for it inline leaves every scan worker idle, so thumbnails,
+    hashing and text for the rest of the tree trickle at the model's pace. Deferred
+    files advance image search when their embedding finishes; the scan closes the
+    stage before it completes.
+    """
+
+    def __init__(self, ctx: RootContext, operation: Operation | None, on_failure: Callable[[bool, bool], None]) -> None:
+        self._ctx = ctx
+        self._operation = operation
+        self._on_failure = on_failure
+        self._queue: queue.Queue[tuple[str, str, bool, bool] | None] = queue.Queue(maxsize=SCAN_BACKLOG_LIMIT)
+        self._abandoned = False
+        self._thread = threading.Thread(target=self._run, daemon=True, name=f"image-embed-{ctx.name}")
+        self._thread.start()
+
+    def submit(self, rel_path: str, sha: str, already_failed: bool) -> None:
+        self._queue.put((rel_path, sha, already_failed, _media_only_job.get()))
+
+    def close(self, abandon: bool = False) -> None:
+        self._abandoned = abandon
+        self._queue.put(None)
+        self._thread.join()
+
+    def __enter__(self) -> ImageEmbeddingStage:
+        return self
+
+    def __exit__(self, error: type[BaseException] | None, *_details: object) -> None:
+        # After a failed scan, queued files are dropped; the next scan finds them missing.
+        self.close(abandon=error is not None)
+
+    def _run(self) -> None:
+        while (item := self._queue.get()) is not None:
+            rel_path, sha, already_failed, media_only = item
+            ok, skipped = True, True
+            try:
+                if not self._abandoned and self._ctx.feature_configuration().values.image_search:
+                    with failures.attempt({"imageSearch": self._operation.id} if self._operation else {}) as observation:
+                        process_image_embedding(self._ctx, rel_path, sha)
+                    ok, skipped = observation.outcomes.get("imageSearch", (True, True))
+            except Exception as exc:  # noqa: BLE001 - a dead stage would block every worker waiting to submit
+                log(f"image embed: unexpected failure for {rel_path}: {failures.describe(exc)}")
+                ok, skipped = False, False
+            if self._operation is not None:
+                self._operation.advance(ok, skipped)
+            if not ok:
+                self._on_failure(already_failed, media_only)
+
+
+_image_embedding_stage: ContextVar[ImageEmbeddingStage | None] = ContextVar("image_embedding_stage", default=None)
+_media_only_job: ContextVar[bool] = ContextVar("media_only_job", default=False)
+
+
 def embed_thumbnail(ctx: RootContext, sha256: str, on_error: Callable[[str], None] | None = None) -> bool:
     """Embeds a file's 256px thumbnail through the image-embed sidecar and
     upserts the vector under `sha256`, unless it already has a row for the
@@ -436,7 +540,7 @@ def embed_thumbnail(ctx: RootContext, sha256: str, on_error: Callable[[str], Non
     embed_url = ctx.cfg.image_embed_url
     if not embed_url or ctx.image_embed_backoff.paused():
         return False
-    health = image_embed_health(embed_url)
+    health = ctx.image_embed_status()
     guard = dimension_guard(health)
     if guard is not None:
         if ctx.image_embed_backoff.note_failure():
@@ -499,34 +603,29 @@ def backfill_media(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_r
     return ok
 
 
-def media_derivatives_missing(ctx: RootContext, rel_path: str, size_bytes: int, include_existing: bool = False) -> bool:
+def media_derivatives_missing(
+    ctx: RootContext, rel_path: str, size_bytes: int, key: str | None, image_embedded: bool, include_existing: bool = False
+) -> bool:
     """Whether a live file needs enabled, durable media output rebuilt.
 
     This predicate makes work survive an indexer restart and a failed first
     attempt: derivative files and image-embedding rows are the durable state,
     while ``_backfill_media`` merely accelerates a feature transition. During
     that transition, ``include_existing`` refreshes manifest rows for eligible
-    thumbnail files already on disk.
+    thumbnail files already on disk. ``key`` and ``image_embedded`` come from the
+    scan's manifest snapshot; the job rechecks both before doing any work.
     """
     features = ctx.feature_configuration().values
-    if not features.internal_thumbnails:
+    if not features.internal_thumbnails or key is None:
         return False
     ext = ext_of(os.path.basename(rel_path))
     if kind_for_ext(ext) is None:
-        return False
-    key = db.file_content_key(ctx.conn(), ctx.root_id, rel_path)
-    if key is None:
         return False
     can_generate = within_size_budget(size_bytes, ctx.cfg.thumb_max_bytes)
     thumbnail_paths = [os.path.join(ctx.cfg.thumbs_dir, thumb_storage_path(key, size)) for size in SIZES]
     if can_generate and (include_existing or any(not os.path.exists(path) for path in thumbnail_paths)):
         return True
-    return (
-        features.image_search
-        and is_image_candidate(ext)
-        and os.path.exists(thumbnail_paths[0])
-        and db.image_embedding_model(ctx.conn(), key) is None
-    )
+    return features.image_search and is_image_candidate(ext) and not image_embedded and os.path.exists(thumbnail_paths[0])
 
 
 def embed_missing(ctx: RootContext, rel_path: str, *, expected_sha: str | None = None) -> bool:
@@ -696,7 +795,7 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
         return {"seen": 0, "changed": 0, "deleted": 0, "errors": 1}
     conn = ctx.conn()
     scan_id, started = db.start_scan(conn, ctx.root_id)
-    manifest = db.get_manifest(conn, ctx.root_id)
+    manifest = db.scan_manifest(conn, ctx.root_id)
 
     seen: list[str] = []
     counters = {"changed": 0, "errors": 0}
@@ -739,36 +838,68 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
                 counters["changed"] += 1
         return ok and media_ok
 
+    def image_failure(already_failed: bool, media_only: bool) -> None:
+        nonlocal media_backfill_errors
+        with lock:
+            counters["errors"] += int(not already_failed)
+            media_backfill_errors += int(media_only)
+
+    image_operation = operations.get("imageSearch")
+    stage = ImageEmbeddingStage(ctx, image_operation, image_failure) if image_operation and ctx.cfg.image_embed_url else None
+
     def tracked_job(
         abs_path: str, rel_path: str, st: os.stat_result, tracked: list[Operation], embed_only: bool, media_only: bool
     ) -> None:
         with failures.attempt({op.features[0]: op.id for op in tracked}) as observation:
+            stage_token = _image_embedding_stage.set(stage if any(op is image_operation for op in tracked) else None)
+            media_token = _media_only_job.set(media_only)
             job_ok = False
             try:
                 job_ok = job(abs_path, rel_path, st, embed_only, media_only)
             except Exception as exc:
                 for op in tracked:
                     feature = op.features[0]
-                    if feature not in observation.outcomes:
+                    if feature not in observation.outcomes and feature not in observation.deferred:
                         failures.report(ctx, rel_path, feature, log, failures.describe(exc))
                 raise
             finally:
+                _media_only_job.reset(media_token)
+                _image_embedding_stage.reset(stage_token)
                 if not job_ok or any(not ok for ok, _skipped in observation.outcomes.values()):
                     with lock:
                         counters["errors"] += 1
                 for operation in tracked:
-                    ok, skipped = observation.outcomes.get(operation.features[0], (True, True))
-                    operation.advance(ok, skipped)
+                    if operation.features[0] not in observation.deferred:
+                        ok, skipped = observation.outcomes.get(operation.features[0], (True, True))
+                        operation.advance(ok, skipped)
 
-    def submit(pool: ThreadPoolExecutor, abs_path: str, rel_path: str, st: os.stat_result,
-               embed_only: bool = False, media_only: bool = False) -> Future[None]:
+    # Traversal runs ahead of the workers so every feature's total is known long before
+    # the work is done. Classified files wait in a backlog (a queued future costs three
+    # times as much); only a bounded number are handed to the pool at once.
+    backlog: deque[tuple[str, str, os.stat_result, list[Operation], bool, bool]] = deque()
+    in_flight: set[Future[None]] = set()
+
+    def submit(abs_path: str, rel_path: str, st: os.stat_result, embed_only: bool = False, media_only: bool = False) -> None:
         features = work_features(ctx.feature_configuration().values, ext_of(rel_path), embed_only, media_only)
         if embed_only and media_only and ctx.feature_configuration().values.semantic_search:
             features.append("semanticSearch")
         tracked = [operations[feature] for feature in features if feature in operations]
         for operation in tracked:
             operation.enqueue()
-        return pool.submit(tracked_job, abs_path, rel_path, st, tracked, embed_only, media_only)
+        backlog.append((abs_path, rel_path, st, tracked, embed_only, media_only))
+
+    def dispatch(pool: ThreadPoolExecutor, block: bool) -> None:
+        # Wait for any job, not the oldest: one slow video or OCR page must not leave
+        # the other workers idle behind it.
+        if block and in_flight:
+            done = wait(in_flight, return_when=FIRST_COMPLETED).done
+        else:
+            done = {future for future in in_flight if future.done()}
+        in_flight.difference_update(done)
+        for future in done:
+            future.result()
+        while backlog and len(in_flight) < workers * 8:
+            in_flight.add(pool.submit(tracked_job, *backlog.popleft()))
 
     traversal_complete = True
 
@@ -776,9 +907,10 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
         nonlocal traversal_complete
         traversal_complete = False
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        pending = []
+    # The stage closes after the pool: jobs still running may hand it embeddings.
+    with stage or nullcontext(), ThreadPoolExecutor(max_workers=workers) as pool:
         for abs_path, rel_path, st in walk(ctx.abs_path, ctx.cfg.skip_names, ctx.cfg.skip_dirs, traversal_error):
+            dispatch(pool, block=len(backlog) >= SCAN_BACKLOG_LIMIT)
             n += 1
             seen.append(rel_path)
             prev = manifest.get(rel_path)
@@ -786,32 +918,36 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
             ctx.maybe_refresh_features()
             if not ctx.feature_configuration().values.indexer_enabled:
                 traversal_complete = False
+                backlog.clear()
                 break
             features = ctx.feature_configuration().values
-            media_needed = unchanged and media_derivatives_missing(
-                ctx, rel_path, st.st_size, include_existing=ctx.needs_media_backfill()
+            media_needed = (
+                unchanged
+                and prev is not None
+                and media_derivatives_missing(
+                    ctx, rel_path, st.st_size, prev[4], prev[5], include_existing=ctx.needs_media_backfill()
+                )
             )
             retry_unchanged = prev is not None and should_retry_unchanged(prev[2], ext_of(os.path.basename(rel_path)), features)
             if prev is not None and prev[2].startswith("excluded") and exclusion_still_applies(ctx, rel_path, st.st_size):
                 retry_unchanged = False
             if unchanged and prev is not None and prev[2] == "partial" and features.semantic_search:
-                pending.append(submit(pool, abs_path, rel_path, st, True, media_needed))
+                submit(abs_path, rel_path, st, True, media_needed)
             elif unchanged and retry_unchanged:
-                pending.append(submit(pool, abs_path, rel_path, st))
+                submit(abs_path, rel_path, st)
             elif media_needed:
-                pending.append(submit(pool, abs_path, rel_path, st, False, True))
-            elif unchanged and prev is not None and prev[2] not in ("pending", "disabled:text", "disabled:search_ocr"):
+                submit(abs_path, rel_path, st, False, True)
+            elif unchanged and prev is not None and prev[2] != "pending":
+                # Includes disabled:* rows: retry_unchanged already found nothing to do,
+                # and a job would only repeat that check for every image on every scan.
                 continue
             else:
-                pending.append(submit(pool, abs_path, rel_path, st))
-            if len(pending) >= workers * 8:
-                pending[0].result()
-                pending = [f for f in pending if not f.done()]
+                submit(abs_path, rel_path, st)
         if traversal_complete:
             for operation in operations.values():
                 operation.discovered()
-        for f in pending:
-            f.result()
+        while backlog or in_flight:
+            dispatch(pool, block=True)
 
     # A worker can observe disablement after traversal has already finished.
     traversal_complete = traversal_complete and ctx.feature_configuration().values.indexer_enabled

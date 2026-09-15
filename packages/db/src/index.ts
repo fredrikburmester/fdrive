@@ -22,6 +22,12 @@ export type {
   DesktopEffectStatus,
   DesktopEffectsRepo,
 } from "./repos/desktop-effects-types.js";
+export {
+  createDesktopPublishLock,
+  DesktopPublishBusyError,
+  type DesktopPublishLock,
+  type DesktopPublishLockOptions,
+} from "./repos/desktop-publish-lock.js";
 export { createRepos } from "./repos/drizzle.js";
 export { createIdentityLinksRepo, createIdentityOwnershipGuard } from "./repos/identity-links.js";
 export type {
@@ -166,6 +172,12 @@ export type Db = NodePgDatabase<Schema>;
 export interface CreateDbOptions {
   readonly max?: number;
   /**
+   * Bounds how long a caller waits for a free connection. Unset, `pg` queues
+   * forever, so a pool held by slow work stalls every other query indefinitely
+   * instead of failing something the caller can retry.
+   */
+  readonly connectionTimeoutMillis?: number;
+  /**
    * Receives the errors `pg` raises on behalf of idle pooled clients (a
    * backend restart, a dropped connection). Without a listener Node treats
    * them as uncaught exceptions and exits the process; the pool itself
@@ -181,16 +193,29 @@ export interface CreateDbResult {
 }
 
 /**
+ * Builds a `pg` pool with an error listener attached. Exported so a caller that
+ * needs connections isolated from the main pool — work that holds one for longer
+ * than a query — can size and bound its own.
+ */
+export function createPool(connectionString: string, opts: CreateDbOptions = {}): Pool {
+  const pool = new Pool({
+    connectionString,
+    ...(opts.max === undefined ? {} : { max: opts.max }),
+    ...(opts.connectionTimeoutMillis === undefined
+      ? {}
+      : { connectionTimeoutMillis: opts.connectionTimeoutMillis }),
+  });
+  pool.on("error", opts.onError ?? (() => {}));
+  return pool;
+}
+
+/**
  * Creates a connection pool and a typed Drizzle database over it. The
  * caller owns the returned pool's lifecycle and must call `close()` when
  * done, typically on process shutdown.
  */
 export function createDb(connectionString: string, opts: CreateDbOptions = {}): CreateDbResult {
-  const pool = new Pool({
-    connectionString,
-    ...(opts.max === undefined ? {} : { max: opts.max }),
-  });
-  pool.on("error", opts.onError ?? (() => {}));
+  const pool = createPool(connectionString, opts);
   const db = drizzle(pool, { schema });
 
   return {

@@ -124,8 +124,7 @@ Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_SFTPGO_HTTP_PORT`,
 `FDRIVE_DEV_IMAGE_EMBED_PORT` and `FDRIVE_DEV_TIKA_PORT` before generating a fresh
 environment. `pnpm dev:env` uses those same overrides for the API/web URLs and
 compose publishes. Existing environment assignments are preserved; update them
-when changing ports in an already configured checkout. The API override also
-selects the port used by `dev-app.sh`.
+when changing ports in an already configured checkout.
 
 The dev stack serves workers directly. `FDRIVE_TIKA_URL` points to its published
 Tika port. Production compose supplies `FDRIVE_EMBED_RUNTIME_URL`,

@@ -13,18 +13,27 @@ import type {
   DesktopWriteCapabilities,
   DesktopWriteEntry,
 } from "@fdrive/contracts";
-import { isUnderPath, parentPath, StorageError, type StorageProvider } from "@fdrive/core";
-import type {
-  DesktopEffectContext,
-  DesktopItemRecord,
-  DesktopOperationRecord,
-  DesktopRepo,
+import {
+  isStorageError,
+  isUnderPath,
+  parentPath,
+  StorageError,
+  type StorageProvider,
+} from "@fdrive/core";
+import {
+  type DesktopEffectContext,
+  type DesktopItemRecord,
+  type DesktopOperationRecord,
+  DesktopPublishBusyError,
+  type DesktopRepo,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
+import { withIdempotentMkdir } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import { createDesktopFiles, DESKTOP_INTERNAL_ROOT } from "./files.js";
 import type { DesktopDeps } from "./pairing.js";
+import { publishesSafely } from "./publish-gate.js";
 
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
 export const NO_WRITES: DesktopWriteCapabilities = {
@@ -35,11 +44,25 @@ export const NO_WRITES: DesktopWriteCapabilities = {
   restore: false,
 };
 export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
+/**
+ * Wraps the publication step: everything that proves the destination, and the
+ * rename. For a replace-upload that includes the recovery copy and its digest,
+ * which is the proof — a snapshot taken before the section would say what the
+ * destination held then, not at the rename.
+ *
+ * What stays outside is the transfer. The staged upload writes only to a path
+ * keyed by operation id and a per-attempt UUID, which no other operation can
+ * reach, so serializing it would hold a lock and its connection for the length of
+ * a transfer to no purpose. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+ */
+type Serialize = <T>(run: () => Promise<T>) => Promise<T>;
+const direct: Serialize = (run) => run();
 type Request =
   | (DesktopUploadRequest & { kind: "upload" })
   | (DesktopFolderRequest & { kind: "folder" })
   | (DesktopMoveRequest & { kind: "move" });
-export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "trashPathForStorage"> {
+export interface DesktopWriteDeps
+  extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "publishLock"> {
   repo: DesktopRepo;
   stateDir?: string;
   effectContext?: (
@@ -57,6 +80,8 @@ function fail(code: string, message: string): never {
   throw new ApiHttpError("conflict", message, { code });
 }
 const collisionName = (value: string) => value.normalize("NFC").toLowerCase();
+/** What the client is told whenever the destination no longer holds what it edited. */
+const CHANGED = "This file changed remotely. Your pending copy is preserved.";
 
 /** A database receipt is written before success. Committing without a receipt is
  * deliberately uncertain after restart: never infer ownership from matching bytes.
@@ -81,9 +106,63 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   function capabilities(principal: Principal): DesktopWriteCapabilities {
     return deps.stateDir &&
       principal.tokenAccess?.mode === "full" &&
-      principal.storage.withWriteLease
+      publishesSafely(principal.storage, deps.publishLock !== undefined)
       ? { create: true, update: true, move: true, trash: true, restore: true }
       : NO_WRITES;
+  }
+  /**
+   * Runs a write under whichever mutual exclusion the storage qualifies for, and
+   * hands the body a `serialize` to wrap the publication step in.
+   *
+   * A lease covers the whole action by contract — SFTPGo's is exclusive per user,
+   * WebDAV's is a `Depth: infinity` lock on the endpoint root, both renewed for as
+   * long as the body runs — so it already fences every fdrive writer and the
+   * publish lock would only add a database connection held across the transfer.
+   * Without a lease, fdrive's own lock is what makes publication safe, and
+   * `authority()` has already refused the write unless one is configured; the
+   * fallback below is unreachable rather than permissive.
+   *
+   * `withWriteLease` is called as a member so the provider keeps its own `this`.
+   */
+  function publish<T>(
+    principal: Principal,
+    action: (storage: StorageProvider, serialize: Serialize) => Promise<T>,
+  ): Promise<T> {
+    const storage = principal.storage;
+    const lock = deps.publishLock;
+    if (storage.withWriteLease) return storage.withWriteLease((leased) => action(leased, direct));
+    return action(storage, lock ? (run) => lock(principal.identityId, run) : direct);
+  }
+  /**
+   * Refuses publication when the destination's size or modification time no longer
+   * matches the observation the content verification was based on.
+   *
+   * A stat, not a re-digest, so it cannot see a same-size replacement inside one
+   * mtime tick and cannot close the final instant before the rename at all. That
+   * is why a replace-upload does not rely on it: the recovery copy's digest, taken
+   * inside the serialized section, is what proves the destination's content there.
+   * This remains the whole guard for moves, of files and directories alike, which
+   * have no content to digest. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   *
+   * Only a missing entry is a conflict. Any other storage failure propagates so
+   * the caller maps it to a retryable status; reporting it as a remote change
+   * would make the client fork a conflict copy of an untouched file.
+   */
+  async function unchanged(
+    storage: StorageProvider,
+    path: string,
+    witness: { size: number; modifiedAt: Date | null },
+  ) {
+    const live = await storage.stat(path).catch((error: unknown) => {
+      if (isStorageError(error) && error.kind === "not_found") return undefined;
+      throw error;
+    });
+    if (
+      !live ||
+      live.size !== witness.size ||
+      (live.modifiedAt?.getTime() ?? null) !== (witness.modifiedAt?.getTime() ?? null)
+    )
+      fail("version_conflict", CHANGED);
   }
   async function authority(principal: Principal) {
     if (!capabilities(principal).create)
@@ -146,14 +225,17 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       trashed,
     };
   }
+  /** The shared ancestors run outside the serialized section, so two commits for
+   * one identity may both find one missing; the loser's mkdir must not fail. */
   async function internalDirectory(storage: StorageProvider, path: string) {
+    const tolerant = withIdempotentMkdir(storage);
     let parent = "/";
     for (const name of path.slice(1).split("/")) {
       const next = `${parent === "/" ? "" : parent}/${name}`;
       const item = (await storage.list(parent)).find((item) => item.path === next);
       if (item && item.kind !== "dir")
         throw new ApiHttpError("forbidden", "Recovery path is not a regular directory");
-      if (!item) await storage.mkdir(next);
+      if (!item) await tolerant.mkdir(next);
       parent = next;
     }
   }
@@ -235,6 +317,16 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       collisionName(name) === collisionName(DESKTOP_INTERNAL_ROOT.slice(1))
     )
       throw new ApiHttpError("forbidden", "Reserved folder name");
+    await free(principal, parent, name, source);
+    return `${parent.path === "/" ? "" : parent.path}/${name}`;
+  }
+  /** The collision half of `unoccupied`: one listing of the parent, nothing else. */
+  async function free(
+    principal: Principal,
+    parent: DesktopItemRecord,
+    name: string,
+    source?: string,
+  ) {
     const candidates = await principal.storage.list(parent.path);
     if (
       candidates.some(
@@ -242,7 +334,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       )
     )
       fail("name_collision", "An item with this name already exists");
-    return `${parent.path === "/" ? "" : parent.path}/${name}`;
   }
   async function checkBase(
     principal: Principal,
@@ -269,7 +360,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       (contentRequired || /^[a-f0-9]{64}$/.test(base.content)) &&
       (await digest(principal.storage, item.path)).sha256 !== base.content
     )
-      fail("version_conflict", "This file changed remotely. Your pending copy is preserved.");
+      fail("version_conflict", CHANGED);
     return live;
   }
   async function operation(principal: Principal, id: string) {
@@ -554,7 +645,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       const request = op.request as Request;
       let publicationStarted = false;
       try {
-        const receipt = await principal.storage.withWriteLease?.(async (storage) => {
+        let witness: { size: number; modifiedAt: Date | null } | undefined;
+        const receipt = await publish(principal, async (storage, serialize) => {
           const scoped = { ...principal, storage };
           // Re-prove authorization immediately before the storage operation. The scoped
           // adapter intentionally has no reusable lease method of its own.
@@ -570,19 +662,30 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
           if (request.kind === "upload" && source && inTrash(principal, source.path))
             throw new ApiHttpError("forbidden", "Restore this item before editing it");
+          const name =
+            source?.originalPath && request.name === trashName(source)
+              ? (source.originalPath.split("/").at(-1) as string)
+              : request.name;
           const target =
             trashing && source
               ? `${trashRoot(principal)}/${source.id}`
-              : await unoccupied(
-                  scoped,
-                  parent,
-                  source?.originalPath && request.name === trashName(source)
-                    ? (source.originalPath.split("/").at(-1) as string)
-                    : request.name,
-                  source?.path,
-                );
+              : await unoccupied(scoped, parent, name, source?.path);
+          // Re-checked inside the critical section before publishing: outside
+          // serialization two writers racing for the same new name would both pass
+          // `unoccupied`, and the loser would fail its `overwrite: false` rename as
+          // an unclassified conflict instead. One listing of the parent is enough;
+          // the grants and the target were settled above. A lease already fenced
+          // the first check for the whole action, so there is nothing to re-check.
+          const stillFree = () =>
+            serialize === direct ? Promise.resolve() : free(scoped, parent, name, source?.path);
           if (source && "base" in request && request.base)
             await checkBase(scoped, source, request.base, request.kind === "upload");
+          // The one observation publication must still match, taken the instant the
+          // original was proven against the client's base. Everything after this —
+          // the staged upload, the recovery copy and its digest — is inside the
+          // window `unchanged` covers. Re-stating it later would narrow that window
+          // to nothing by adopting whatever an external writer had just written.
+          if (source) witness = await storage.stat(source.path);
           if (source && isUnderPath(source.path, target))
             throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
           const context: Omit<DesktopEffectContext, "office"> = {
@@ -639,38 +742,80 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             const verified = await digest(storage, stage);
             if (verified.size !== request.size || verified.sha256 !== request.sha256)
               throw Error("Staged content failed validation");
-            if (source) {
-              recoveryId = id;
-              const previous = (await storage.list(internal)).find(
-                (item) => item.path === `${internal}/previous`,
-              );
-              if (previous && previous.kind !== "file")
-                throw new ApiHttpError("forbidden", "Unsupported recovery entry");
-              if (!previous)
-                await storage.copy(source.path, `${internal}/previous`, { overwrite: false });
-              const backup = await digest(storage, `${internal}/previous`);
-              if (backup.sha256 !== request.base?.content)
-                throw Error("Recovery copy failed validation");
-            }
-            await authority(principal);
-            // Publication is the only operation allowed to replace the original.
-            // Apache evaluates the source/destination lease tokens atomically.
-            publicationStarted = true;
-            await storage.move(stage, target, { overwrite: source?.path === target });
-            // Combined save+rename keeps the old source recoverable until the new
-            // contents are published. Moving it to recovery never overwrites a peer.
-            if (source && source.path !== target)
-              await storage.move(source.path, `${internal}/renamed-original`, { overwrite: false });
+            if (source) recoveryId = id;
+            await serialize(async () => {
+              await stillFree();
+              if (source) {
+                // The recovery copy is taken here, inside the section, because
+                // digesting it is the only proof that the destination still holds
+                // what the client based its write on. `unchanged` below cannot be
+                // that proof: SFTPGo reports `Last-Modified` as an HTTP date, so the
+                // recheck's resolution is a whole second, and two fdrive writers
+                // replacing one file with equal-length content inside that second
+                // look identical to it. Taking the snapshot under the lock means no
+                // writer that honours the lock can have written between the proof and
+                // the rename. It costs no extra I/O — this digest already ran, just
+                // outside. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+                const previous = (await storage.list(internal)).find(
+                  (item) => item.path === `${internal}/previous`,
+                );
+                if (previous && previous.kind !== "file")
+                  throw new ApiHttpError("forbidden", "Unsupported recovery entry");
+                if (!previous)
+                  await storage.copy(source.path, `${internal}/previous`, { overwrite: false });
+                const backup = await digest(storage, `${internal}/previous`);
+                // Two reasons to look at the live file instead of trusting the copy. A
+                // copy retained from an earlier attempt records what the destination
+                // held *then*, so on a retry it proves nothing about now. And when the
+                // copy's digest disagrees with the base, the live file is what tells a
+                // writer that changed the destination apart from a copy that is merely
+                // damaged: the first is the client's conflict to resolve, the second is
+                // ours to retry, and reporting a conflict for it would fork the file.
+                // Only a vanished original is a conflict here. A failed or truncated
+                // read is a storage failure to retry, not a remote change.
+                if (previous || backup.sha256 !== request.base?.content) {
+                  const live = await digest(storage, source.path).catch((error: unknown) => {
+                    if (isStorageError(error) && error.kind === "not_found") return undefined;
+                    throw error;
+                  });
+                  if (live?.sha256 !== request.base?.content) fail("version_conflict", CHANGED);
+                }
+                if (backup.sha256 !== request.base?.content)
+                  throw Error("Recovery copy failed validation");
+              }
+              // Re-proved after the copy and its digests, so a pairing revoked during
+              // that transfer-length work still cannot publish; only the stat below
+              // separates it from the rename.
+              await authority(principal);
+              if (source && witness) await unchanged(storage, source.path, witness);
+              // Publication is the only operation allowed to replace the original.
+              // Apache evaluates the source/destination lease tokens atomically.
+              publicationStarted = true;
+              await storage.move(stage, target, { overwrite: source?.path === target });
+              // Combined save+rename keeps the old source recoverable until the new
+              // contents are published. Moving it to recovery never overwrites a peer.
+              if (source && source.path !== target)
+                await storage.move(source.path, `${internal}/renamed-original`, {
+                  overwrite: false,
+                });
+            });
           } else if (request.kind === "folder") {
-            await authority(principal);
-            publicationStarted = true;
-            await storage.mkdir(target);
+            await serialize(async () => {
+              await stillFree();
+              await authority(principal);
+              publicationStarted = true;
+              await storage.mkdir(target);
+            });
           } else if (source) {
             if (trashing) await internalDirectory(storage, trashRoot(principal));
             if (source.path !== target) {
-              await authority(principal);
-              publicationStarted = true;
-              await storage.move(source.path, target, { overwrite: false });
+              await serialize(async () => {
+                if (!trashing) await stillFree();
+                await authority(principal);
+                if (witness) await unchanged(storage, source.path, witness);
+                publicationStarted = true;
+                await storage.move(source.path, target, { overwrite: false });
+              });
             }
           }
           if (source) await repo.move(principal.identityId, source.path, target);
@@ -699,7 +844,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             throw Error("Could not persist commit receipt");
           return result;
         });
-        if (!receipt) throw Error("Write lease is unavailable");
         // The durable queue owns failures after the receipt commits.
         try {
           deps.effects?.kick();
@@ -721,6 +865,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           error.message === "Desktop metadata recovery capacity reached"
         )
           throw new ApiHttpError("rate_limited", error.message, { code: "quota_exceeded" });
+        // Contention is not a conflict: nothing changed remotely and the same
+        // request will succeed once the holder finishes. A 409 would make the Mac
+        // client fork the pending bytes into a conflict copy; 429 without a details
+        // code reaches `DriveError.unavailable`, which File Provider retries.
+        if (error instanceof DesktopPublishBusyError)
+          throw new ApiHttpError("rate_limited", "Publication is busy; retry shortly");
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }

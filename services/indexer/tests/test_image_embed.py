@@ -35,7 +35,7 @@ def test_parse_health_rejects_bool_dim() -> None:
 def test_image_embed_health_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     body = {"status": "ok", "model": "m", "dim": 1024, "device": "cpu"}
     monkeypatch.setattr(
-        image_embed.httpx,
+        image_embed._http,
         "get",
         lambda url, timeout=5: httpx.Response(200, json=body, request=httpx.Request("GET", url)),
     )
@@ -44,7 +44,7 @@ def test_image_embed_health_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_image_embed_health_none_on_bad_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(image_embed.httpx, "get", lambda url, timeout=5: httpx.Response(503))
+    monkeypatch.setattr(image_embed._http, "get", lambda url, timeout=5: httpx.Response(503))
     assert image_embed.image_embed_health("http://image-embed:8012") is None
 
 
@@ -52,7 +52,7 @@ def test_image_embed_health_none_on_exception(monkeypatch: pytest.MonkeyPatch) -
     def raise_connect_error(url: str, timeout: float = 5) -> httpx.Response:
         raise httpx.ConnectError("nope")
 
-    monkeypatch.setattr(image_embed.httpx, "get", raise_connect_error)
+    monkeypatch.setattr(image_embed._http, "get", raise_connect_error)
     assert image_embed.image_embed_health("http://image-embed:8012") is None
 
 
@@ -109,7 +109,7 @@ def test_embed_images_batches(monkeypatch: pytest.MonkeyPatch) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(image_embed.httpx, "post", fake_post)
+    monkeypatch.setattr(image_embed._http, "post", fake_post)
     embeddings, model = image_embed.embed_images([b"a", b"b", b"c"], "http://image-embed:8012", batch_size=2)
     assert len(embeddings) == 3
     assert model == "m"
@@ -127,7 +127,7 @@ def test_embed_images_caps_batch_at_sidecar_max(monkeypatch: pytest.MonkeyPatch)
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(image_embed.httpx, "post", fake_post)
+    monkeypatch.setattr(image_embed._http, "post", fake_post)
     data = [b"x"] * (image_embed.MAX_IMAGES_PER_REQUEST + 5)
     embeddings, _model = image_embed.embed_images(data, "http://image-embed:8012", batch_size=999)
     assert len(embeddings) == len(data)
@@ -138,7 +138,7 @@ def test_embed_images_empty_input_makes_no_requests(monkeypatch: pytest.MonkeyPa
     def boom(*a: object, **kw: object) -> httpx.Response:
         raise AssertionError("should not be called")
 
-    monkeypatch.setattr(image_embed.httpx, "post", boom)
+    monkeypatch.setattr(image_embed._http, "post", boom)
     embeddings, model = image_embed.embed_images([], "http://image-embed:8012", batch_size=8)
     assert embeddings == []
     assert model == ""
@@ -146,7 +146,7 @@ def test_embed_images_empty_input_makes_no_requests(monkeypatch: pytest.MonkeyPa
 
 def test_embed_images_raises_on_server_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        image_embed.httpx, "post", lambda url, files, **kw: httpx.Response(500, request=httpx.Request("POST", url))
+        image_embed._http, "post", lambda url, files, **kw: httpx.Response(500, request=httpx.Request("POST", url))
     )
     with pytest.raises(httpx.HTTPStatusError):
         image_embed.embed_images([b"a"], "http://image-embed:8012", batch_size=8)

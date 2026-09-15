@@ -7,8 +7,8 @@ UI paths work. WebDAV is the reference for a Basic-auth backend with basic file 
 fdrive-performed Trash: see [`packages/webdav`](../packages/webdav/src/module.ts) and
 [WEBDAV.md](WEBDAV.md) for its decisions and protocol mapping.
 
-For environment setup, see [Development](DEVELOPMENT.md). Follow [WORKING.md](../WORKING.md)
-for repository workflow and [verification commands](workflow/COMMANDS.md) for the required gates.
+For environment setup, see [Development](DEVELOPMENT.md). Follow [AGENTS.md](../AGENTS.md)
+for repository workflow and the required checks.
 
 ## Architecture and reference code
 
@@ -70,10 +70,10 @@ The module does not need database access, API imports, React or Zod.
 Provide the existing script names: `build`, `typecheck`, `test`, `test:coverage` and
 `test:integration`. Workspace discovery already includes `packages/*`. Add
 `"@fdrive/provider-example": "workspace:*"` to `apps/api/package.json`, then let pnpm update
-its lockfile through the workflow helper:
+its lockfile:
 
 ```bash
-bash tools/orchestration/run-in-checkout.sh "$PWD" --lock -- pnpm install
+pnpm install
 ```
 
 Do not hand-edit the lockfile. The API Dockerfile already copies the packages directory;
@@ -339,11 +339,11 @@ invalid credentials, revocation, disabled-provider recovery and unsupported cont
 From the checkout root (replace the example package and add the new backend's browser spec):
 
 ```bash
-bash tools/orchestration/verify.sh "$PWD" package @fdrive/provider-example
-bash tools/orchestration/verify.sh "$PWD" application
-bash tools/orchestration/verify.sh "$PWD" integration
-bash tools/orchestration/verify.sh "$PWD" browser e2e/login-providers.spec.ts e2e/system-storage.spec.ts --workers=1
-bash tools/orchestration/verify.sh "$PWD" workflow
+pnpm --filter @fdrive/provider-example typecheck
+pnpm --filter @fdrive/provider-example test:coverage
+pnpm lint && pnpm typecheck && pnpm test:coverage
+pnpm test:integration
+pnpm test:e2e e2e/login-providers.spec.ts e2e/system-storage.spec.ts --workers=1
 ```
 
 Also verify the affected flows in the real dev app. These commands retain the repository's

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -25,9 +25,15 @@ class Attempt:
     operation_ids: dict[str, str] = field(default_factory=dict)
     outcomes: dict[str, tuple[bool, bool]] = field(default_factory=dict)
     id: str = field(default_factory=lambda: str(uuid4()))
+    # Features handed to another thread; they report their own outcome when done.
+    deferred: set[str] = field(default_factory=set)
 
 
 _current: ContextVar[Attempt | None] = ContextVar("processing_attempt", default=None)
+
+
+def current() -> Attempt | None:
+    return _current.get()
 
 
 @contextmanager
@@ -60,17 +66,22 @@ def describe(error: BaseException) -> str:
 
 def report(
     root: Root, path: str, feature: str, log: Callable[[str], None],
-    error: str | None = None, *, code: str | None = None, skipped: bool = False,
+    error: str | None = None, *, code: str | None = None, skipped: bool = False, resolves: bool = False,
 ) -> None:
     current = _current.get()
     if current is not None:
         current.outcomes[feature] = (skipped or error is None, skipped)
-    if skipped:
+    if skipped and not resolves:
         return  # A dependency wait or skipped attempt is not evidence of recovery.
+    # A resolving skip read the file and found nothing to process, which settles earlier failures.
     operation_id = current.operation_ids.get(feature, current.id) if current else str(uuid4())
     try:
-        # Savepoint isolation also works when a caller owns a larger transaction.
-        with root.conn().transaction(), root.conn().cursor() as cur:
+        conn = root.conn()
+        # One autocommit statement is already atomic; this runs for every feature of
+        # every file, so skip BEGIN/COMMIT. Inside a caller's transaction a savepoint
+        # keeps a failed write from aborting that caller's work.
+        idle = conn.autocommit and conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        with nullcontext() if idle else conn.transaction(), conn.cursor() as cur:
             if error is None:
                 cur.execute(
                     'UPDATE idx.processing_failures SET resolved_at = now() '

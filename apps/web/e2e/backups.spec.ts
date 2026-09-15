@@ -134,7 +134,7 @@ test.describe("installation backups", () => {
         }),
       ),
     });
-    await expect(page.getByText(/Owner-recorded successful restore/)).toBeVisible();
+    await expect(page.getByText(/Last successful rehearsal/)).toBeVisible();
     await expect(page.getByText(/Restore rehearsal due/)).toHaveCount(0);
     for (const width of [320, 390, 768, 1280])
       for (const colorScheme of ["light", "dark"] as const) {

@@ -139,9 +139,11 @@ it("reports estimate capacity, missing sources and a validated owner rehearsal r
   state.rehearsal = report;
   const act = vi.fn(async (work) => work());
   const view = render(<BackupHealth data={state} busy={false} unlocked act={act} />);
-  expect(screen.getByText(/spool space is below/)).toBeTruthy();
+  expect(screen.getByText(/less than twice the size of one backup/)).toBeTruthy();
+  expect(screen.getByText(/^3 full backups kept in total/)).toBeTruthy();
   expect(screen.getByText("OCR source missing")).toBeTruthy();
-  expect(screen.getByText(/Owner-recorded successful restore:/)).toBeTruthy();
+  expect(screen.getByText(/Last successful rehearsal:/)).toBeTruthy();
+  expect(screen.getByText(/backup rehearse/).textContent).toContain("--snapshot SNAPSHOT_ID");
   const input = screen.getByLabelText("Rehearsal report (.json)");
   fireEvent.change(input, {
     target: { files: [{ size: 1000, text: async () => JSON.stringify(report) }] },
@@ -207,4 +209,8 @@ it("disables pending estimates and reminders stop after a recent rehearsal", () 
   );
   expect(screen.getByText("Estimate unavailable")).toBeTruthy();
   expect(screen.getByText(/Restore rehearsal due:/)).toBeTruthy();
+  state.runs = [run];
+  view.rerender(<BackupHealth data={state} busy unlocked={false} act={async () => {}} />);
+  expect(screen.getByText(/backup rehearse/).textContent).toContain(`--snapshot ${uuid}`);
+  expect(screen.getByText(/^Snapshot from/)).toBeTruthy();
 });

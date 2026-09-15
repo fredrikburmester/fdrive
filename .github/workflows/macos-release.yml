@@ -42,9 +42,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: bash tools/orchestration/setup-checkout.sh .
-      - run: bash tools/orchestration/verify.sh . workflow
-      - run: bash tools/orchestration/run-in-checkout.sh . --lock -- swift test --package-path apps/macos --scratch-path .fdrive-workflow/swift-build
+      - run: pnpm bootstrap
+      - run: python3 -m unittest discover -s tools/macos -p 'test_*.py'
+      - run: swift test --package-path apps/macos --scratch-path .fdrive-workflow/swift-build
       - name: Install signing credentials
         env:
           MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
@@ -59,7 +59,7 @@ jobs:
         env:
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
         run: |
-          bash tools/orchestration/release-macos.sh . release \
+          python3 tools/macos/release.py release \
             --version "$FDRIVE_RELEASE_VERSION" --build "$GITHUB_RUN_NUMBER" \
             --team "$MACOS_TEAM_ID" --keychain "$FDRIVE_SIGNING_KEYCHAIN" \
             --app-profile "$RUNNER_TEMP/fdrive-signing/app.provisionprofile" \

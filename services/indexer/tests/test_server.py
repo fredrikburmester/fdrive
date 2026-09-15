@@ -306,7 +306,7 @@ def test_descriptor_path_keeps_office_extraction_working(tmp_path: Path, monkeyp
             request=httpx.Request("PUT", url),
         )
 
-    monkeypatch.setattr(extract_module.httpx, "put", fake_put)
+    monkeypatch.setattr(extract_module._http, "put", fake_put)
     with server._open_extraction_file(str(root), "document.docx") as (opened_path, _size):
         text, status = extract_module.extract_tika(opened_path, "http://tika.invalid", normalize)
     assert status == "indexed"

@@ -17,6 +17,7 @@ def test_shape_stats_with_no_last_run() -> None:
         exclude_globs=["Photos/**"],
         max_mb=200,
         keep_originals=True,
+        originals_retention_days=0,
         originals_count=0,
         originals_bytes=0,
         running=False,
@@ -28,6 +29,7 @@ def test_shape_stats_with_no_last_run() -> None:
     assert body["exclude_globs"] == ["Photos/**"]
     assert body["max_mb"] == 200
     assert body["keep_originals"] is True
+    assert body["originals_retention_days"] == 0
     assert body["originals_count"] == 0
     assert body["originals_bytes"] == 0
     assert body["running"] is False
@@ -50,6 +52,7 @@ def test_shape_stats_with_last_run() -> None:
         exclude_globs=[],
         max_mb=100,
         keep_originals=False,
+        originals_retention_days=30,
         originals_count=5,
         originals_bytes=1024,
         running=True,
@@ -63,3 +66,4 @@ def test_shape_stats_with_last_run() -> None:
         "failed": 1,
     }
     assert body["running"] is True
+    assert body["originals_retention_days"] == 30

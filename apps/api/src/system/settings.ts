@@ -41,6 +41,7 @@ export const OCR_SETTINGS_KEYS = {
   excludeGlobs: "ocr.exclude_globs",
   maxMb: "ocr.max_mb",
   keepOriginals: "ocr.keep_originals",
+  originalsRetentionDays: "ocr.originals_retention_days",
 } as const;
 
 /**
@@ -53,6 +54,9 @@ export const OCR_SETTINGS_DEFAULTS = {
   excludeGlobs: ["Programs/**", "Photos/**", "Videos/**"] as readonly string[],
   maxMb: 200,
   keepOriginals: true,
+  // Zero keeps originals forever, so upgrading into this setting never deletes
+  // bytes an installation was already holding. Matches the service default.
+  originalsRetentionDays: 0,
 };
 
 /** One resolved value plus where it came from, for building a `*SettingsResponse`. */
@@ -162,6 +166,10 @@ export function resolveOcrSettings(raw: Record<string, unknown>): OcrSettingsRes
     raw[OCR_SETTINGS_KEYS.keepOriginals],
     OCR_SETTINGS_DEFAULTS.keepOriginals,
   );
+  const originalsRetentionDays = parseInt_(
+    raw[OCR_SETTINGS_KEYS.originalsRetentionDays],
+    OCR_SETTINGS_DEFAULTS.originalsRetentionDays,
+  );
 
   return {
     values: {
@@ -170,6 +178,7 @@ export function resolveOcrSettings(raw: Record<string, unknown>): OcrSettingsRes
       excludeGlobs: excludeGlobs.value,
       maxMb: maxMb.value,
       keepOriginals: keepOriginals.value,
+      originalsRetentionDays: originalsRetentionDays.value,
     },
     sources: {
       hour: hour.source,
@@ -177,6 +186,7 @@ export function resolveOcrSettings(raw: Record<string, unknown>): OcrSettingsRes
       excludeGlobs: excludeGlobs.source,
       maxMb: maxMb.source,
       keepOriginals: keepOriginals.source,
+      originalsRetentionDays: originalsRetentionDays.source,
     },
   };
 }
@@ -191,5 +201,6 @@ export function ocrSettingsEntries(
     [OCR_SETTINGS_KEYS.excludeGlobs, update.excludeGlobs],
     [OCR_SETTINGS_KEYS.maxMb, update.maxMb],
     [OCR_SETTINGS_KEYS.keepOriginals, update.keepOriginals],
+    [OCR_SETTINGS_KEYS.originalsRetentionDays, update.originalsRetentionDays],
   ];
 }

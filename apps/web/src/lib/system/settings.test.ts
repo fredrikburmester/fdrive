@@ -86,6 +86,7 @@ const SAVED_OCR = {
   excludeGlobs: ["a"],
   maxMb: 200,
   keepOriginals: false,
+  originalsRetentionDays: 0,
 };
 
 describe("ocrSettingsDirty", () => {

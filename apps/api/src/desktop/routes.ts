@@ -22,6 +22,7 @@ import { parseBody } from "../fs/routes.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing, type DesktopDeps } from "./pairing.js";
+import { publishesSafely } from "./publish-gate.js";
 import type { DesktopWrites } from "./writes.js";
 
 export function registerDesktopRoutes(
@@ -113,7 +114,7 @@ export function registerDesktopRoutes(
             fresh.accountId === resolved.accountId &&
             fresh.identityId === resolved.identityId &&
             JSON.stringify(fresh.tokenAccess) === JSON.stringify(resolved.tokenAccess) &&
-            (!writeProtocol || fresh.storage.withWriteLease !== undefined)
+            (!writeProtocol || publishesSafely(fresh.storage, deps.publishLock !== undefined))
           );
         },
       },

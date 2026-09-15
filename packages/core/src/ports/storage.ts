@@ -87,6 +87,17 @@ export interface StorageProvider {
     signal?: AbortSignal,
   ): Promise<T>;
 
+  /**
+   * Set when the deployment has accepted publication without a storage-enforced
+   * lease: fdrive serializes Mac desktop writes against each other and re-verifies
+   * the destination immediately before an atomic server-side rename. It fences no
+   * other writer — web, Collabora, OCR, or a client on the storage directly — so a
+   * write landing inside that final window is lost. Requires the provider's
+   * `atomicMove` capability. See
+   * `docs/plans/STOCK-SFTPGO-WRITES.md` for the accepted residual.
+   */
+  readonly optimisticPublish?: boolean;
+
   list(path: string): Promise<FileEntry[]>;
 
   /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */

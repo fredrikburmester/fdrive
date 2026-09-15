@@ -10,11 +10,18 @@ import type {
   IndexerSettingsUpdateRequest,
   IndexerStats,
   IndexerThumbnailsRebuildRequest,
+  OcrOriginalRestoreRequest,
   OcrSettingsUpdateRequest,
   SetupCompleteRequest,
   SystemActivityId,
 } from "@fdrive/contracts";
-import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { queryKeys } from "./keys";
 
@@ -234,6 +241,50 @@ export function useRunOcr() {
   return useMutation({
     meta: { systemActivity: ["pdfOcr"], systemActivityBackground: true },
     mutationFn: () => apiClient.systemRunOcr(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
+    },
+  });
+}
+
+/** Page size for the kept-originals sheet on `System > OCR`. */
+export const OCR_ORIGINALS_PAGE_SIZE = 25;
+
+/**
+ * One page of the originals kept before an OCR rewrite. Unlike the rest of the
+ * System page this does not poll: the list only changes when the operator acts
+ * on it or a pass runs, and each page stats files on the OCR host.
+ */
+export function useOcrOriginals(query: string, offset: number, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.system.ocrOriginals(query, offset),
+    queryFn: () => apiClient.systemOcrOriginals({ query, offset, limit: OCR_ORIGINALS_PAGE_SIZE }),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Puts one kept original back over its source path. Invalidates the whole OCR
+ * subtree: a restore changes both the listing and the originals tiles.
+ */
+export function useRestoreOcrOriginal() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (req: OcrOriginalRestoreRequest) => apiClient.systemRestoreOcrOriginal(req),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
+    },
+  });
+}
+
+/** Deletes one kept original's bytes. Irreversible. */
+export function useDeleteOcrOriginal() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => apiClient.systemDeleteOcrOriginal({ id }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.system.ocr() });
     },

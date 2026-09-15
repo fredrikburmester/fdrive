@@ -57,11 +57,11 @@ python3 tools/macos/publish.py --repo OWNER/REPOSITORY --cask-only 0.1.0
 
 ## Build and publish
 
-The ordinary [native verification helper](MACOS.md#build-and-verify) remains unsigned or
+The ordinary [native build](MACOS.md#build-and-verify) remains unsigned or
 Apple Development signed. Check the optimized Release archive without credentials:
 
 ```sh
-bash tools/orchestration/release-macos.sh "$PWD" check \
+python3 tools/macos/release.py check \
   --version 0.1.0 --build 1 --output .fdrive-workflow/release-check
 ```
 
@@ -77,7 +77,7 @@ git tag macos-v0.1.0 COMMIT_ON_MAIN
 git push origin macos-v0.1.0
 ```
 
-The release workflow runs workflow checks and Swift tests, archives/exports Release, verifies
+The release workflow runs release script tests and Swift tests, archives/exports Release, verifies
 the app and extension's Developer ID team, timestamp, hardened runtime and shared entitlements,
 notarizes/staples the app, creates a DMG, then signs/notarizes/staples and assesses the DMG.
 Only successful artifacts reach publication. Checksums are calculated after stapling.
@@ -94,7 +94,7 @@ For a local signed release, first save a notarization profile using Apple's secu
 Keychain (`xcrun notarytool store-credentials fdrive-notary`), then run:
 
 ```sh
-bash tools/orchestration/release-macos.sh "$PWD" release \
+python3 tools/macos/release.py release \
   --version 0.1.0 --build 1 --team YOUR_TEAM_ID \
   --app-profile /path/to/app.provisionprofile \
   --extension-profile /path/to/extension.provisionprofile \

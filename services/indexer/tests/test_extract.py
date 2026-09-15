@@ -74,6 +74,23 @@ def test_extract_image_ocr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert text == "recognised text from the scan"
 
 
+def test_extract_image_with_large_compressed_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image, ImageFile, PngImagePlugin
+
+    monkeypatch.setattr(PngImagePlugin, "MAX_TEXT_CHUNK", ImageFile.SAFEBLOCK)  # Pillow's default
+    img_path = tmp_path / "scan.png"
+    info = PngImagePlugin.PngInfo()
+    info.add_text("XML:com.adobe.xmp", "x" * (4 * 1024 * 1024), zip=True)
+    Image.new("RGB", (100, 50), color="white").save(img_path, pnginfo=info)
+
+    import pytesseract
+
+    monkeypatch.setattr(pytesseract, "image_to_string", lambda *a, **k: "recognised text from the scan")
+    text, status = extract.extract_image(str(img_path), langs="eng", normalize=normalize)
+    assert status == "indexed"
+    assert text == "recognised text from the scan"
+
+
 def test_extract_image_short_text_is_no_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from PIL import Image
 
@@ -143,7 +160,7 @@ def test_extract_tika_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             200, text="extracted document text long enough to pass the threshold", request=httpx.Request("PUT", url)
         )
 
-    monkeypatch.setattr(extract.httpx, "put", fake_put)
+    monkeypatch.setattr(extract._http, "put", fake_put)
     text, status = extract.extract_tika(str(p), tika_url="http://tika:9998", normalize=normalize)
     assert status == "indexed"
     assert text is not None
@@ -152,7 +169,7 @@ def test_extract_tika_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def test_extract_tika_unsupported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = tmp_path / "doc.docx"
     p.write_bytes(b"bytes")
-    monkeypatch.setattr(extract.httpx, "put", lambda url, **kw: httpx.Response(422, request=httpx.Request("PUT", url)))
+    monkeypatch.setattr(extract._http, "put", lambda url, **kw: httpx.Response(422, request=httpx.Request("PUT", url)))
     text, status = extract.extract_tika(str(p), tika_url="http://tika:9998", normalize=normalize)
     assert status == "error:unsupported"
     assert text is None
@@ -161,7 +178,7 @@ def test_extract_tika_unsupported(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_extract_tika_short_text_is_no_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = tmp_path / "doc.docx"
     p.write_bytes(b"bytes")
-    monkeypatch.setattr(extract.httpx, "put", lambda url, **kw: httpx.Response(200, text="hi", request=httpx.Request("PUT", url)))
+    monkeypatch.setattr(extract._http, "put", lambda url, **kw: httpx.Response(200, text="hi", request=httpx.Request("PUT", url)))
     text, status = extract.extract_tika(str(p), tika_url="http://tika:9998", normalize=normalize)
     assert status == "no_text"
     assert text is None
@@ -170,7 +187,7 @@ def test_extract_tika_short_text_is_no_text(tmp_path: Path, monkeypatch: pytest.
 def test_extract_tika_raises_for_server_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = tmp_path / "doc.docx"
     p.write_bytes(b"bytes")
-    monkeypatch.setattr(extract.httpx, "put", lambda url, **kw: httpx.Response(500, request=httpx.Request("PUT", url)))
+    monkeypatch.setattr(extract._http, "put", lambda url, **kw: httpx.Response(500, request=httpx.Request("PUT", url)))
     with pytest.raises(httpx.HTTPStatusError):
         extract.extract_tika(str(p), tika_url="http://tika:9998", normalize=normalize)
 
@@ -331,7 +348,7 @@ def test_extractor_tika_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     doc = tmp_path / "doc.docx"
     doc.write_bytes(b"fake docx bytes")
     monkeypatch.setattr(
-        extract.httpx,
+        extract._http,
         "put",
         lambda url, **kw: httpx.Response(
             200, text="tika text through the extractor class is long enough", request=httpx.Request("PUT", url)
@@ -374,7 +391,7 @@ def test_embed_passages_batches(monkeypatch: pytest.MonkeyPatch) -> None:
         calls.append(inputs)
         return httpx.Response(200, json=[[0.1, 0.2] for _ in inputs], request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(extract.httpx, "post", fake_post)
+    monkeypatch.setattr(extract._http, "post", fake_post)
     vecs = extract.embed_passages(["a", "b", "c"], embed_url="http://embed:80", batch_size=2)
     assert len(vecs) == 3
     assert len(calls) == 2  # batched 2 + 1
@@ -386,18 +403,18 @@ def test_embed_query_uses_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
         assert json["inputs"] == ["query: hello"]
         return httpx.Response(200, json=[[0.5]], request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(extract.httpx, "post", fake_post)
+    monkeypatch.setattr(extract._http, "post", fake_post)
     vec = extract.embed_query("hello", embed_url="http://embed:80", batch_size=16)
     assert vec == [0.5]
 
 
 def test_embed_health_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(extract.httpx, "get", lambda url, timeout=5: httpx.Response(200))
+    monkeypatch.setattr(extract._http, "get", lambda url, timeout=5: httpx.Response(200))
     assert extract.embed_health("http://embed:80") is True
 
 
 def test_embed_health_false_on_bad_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(extract.httpx, "get", lambda url, timeout=5: httpx.Response(503))
+    monkeypatch.setattr(extract._http, "get", lambda url, timeout=5: httpx.Response(503))
     assert extract.embed_health("http://embed:80") is False
 
 
@@ -405,7 +422,7 @@ def test_embed_health_false_on_exception(monkeypatch: pytest.MonkeyPatch) -> Non
     def raise_connect_error(url: str, timeout: int = 5) -> httpx.Response:
         raise httpx.ConnectError("nope")
 
-    monkeypatch.setattr(extract.httpx, "get", raise_connect_error)
+    monkeypatch.setattr(extract._http, "get", raise_connect_error)
     assert extract.embed_health("http://embed:80") is False
 
 

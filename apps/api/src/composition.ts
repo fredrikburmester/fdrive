@@ -3,12 +3,14 @@ import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
   createDesktopEffectsRepo,
+  createDesktopPublishLock,
   createDesktopRepo,
   createIdentityLinksRepo,
   createIdentityOwnershipGuard,
   createIndexQueries,
   createOfficeFileRepo,
   createOfficeWriteScope,
+  createPool,
   createProcessingFailureReader,
   createRepos,
   createShareRepo,
@@ -378,6 +380,24 @@ export async function composeApp(
   // other client), so metadata survives renames from either source.
   const metadataService = createMetadataService(repos);
   const desktopRepo = createDesktopRepo(db);
+  // Serializes Mac desktop commits per identity; no other fdrive writer takes
+  // it. Storage without its own lease is read-only unless this is configured.
+  //
+  // On its own pool: the lock holds a connection for the whole critical section,
+  // so on the main pool a few slow publications would starve every other query.
+  // The holder still runs its short authority queries on the main pool, so a
+  // saturated main pool lengthens a hold; it cannot deadlock, since nothing on
+  // the main pool waits for this lock. The bounded checkout turns exhaustion
+  // into a retryable busy rather than a stall.
+  const desktopPublishPool = createPool(config.databaseUrl, {
+    max: 4,
+    connectionTimeoutMillis: 5_000,
+    onError: (error) => logger.warn({ err: error }, "idle publish lock connection error"),
+  });
+  const desktopPublishLock = createDesktopPublishLock(desktopPublishPool, {
+    onConnectError: (cause) =>
+      logger.warn({ err: cause }, "publish lock connection unavailable; reported as busy"),
+  });
   const desktopEffects = createDesktopEffectsRepo(db);
   const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
   const desktopRetention = createDesktopRetention({
@@ -718,6 +738,7 @@ export async function composeApp(
         recovery: desktopEffects,
         writes: createDesktopWrites({
           repo: desktopRepo,
+          publishLock: desktopPublishLock,
           clock,
           effectContext: createDesktopEffectContext(
             repos.identities,
@@ -736,6 +757,7 @@ export async function composeApp(
         providers: repos.providers,
         storageFactory,
         clock,
+        publishLock: desktopPublishLock,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);
@@ -946,6 +968,7 @@ export async function composeApp(
       if (indexerListener !== null) {
         await indexerListener.stop();
       }
+      await desktopPublishPool.end();
       await pool.end();
     },
   };

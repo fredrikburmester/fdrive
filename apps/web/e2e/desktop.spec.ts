@@ -82,7 +82,7 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
           readOnly: true,
           capabilities: { create: false, update: false },
           writeUnavailableReason:
-            "SFTPGo cannot enforce safe conditional writes. This location remains read-only.",
+            'Set the provider\'s desktop write mode ("verified-optimistic" for stock SFTPGo) to enable writes. This location remains read-only.',
         },
       },
     ],

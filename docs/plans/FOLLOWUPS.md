@@ -11,10 +11,9 @@ completed work or claims of newly reproduced runtime failures.
 | Large-transfer memory verification | Historical requirement: 2 GiB transfer with RSS below 200 MiB; current harness measures 512 MiB throughput, not RSS | Measure API RSS and complete payload integrity on 2 GiB upload/download, preserve streaming/range/cancellation behavior; report environment and results |
 | System settings live dev verification | Historical P9 handoff records automated checks but no real dev-stack pass | Exercise General, feature settings, Office, Shared folders and event log against the running dev stack; record actual evidence |
 
-The provider-binding integration gap and Phase 5 strict performance gap are closed in
-[delivery history](../workflow/STATUS-history.md). Provider binding uses two HTTP servers
+The provider-binding integration gap and Phase 5 strict performance gap are closed. Provider binding uses two HTTP servers
 backed by SFTPGo fakes; do not describe that as two containerized upstream implementations.
 No new benchmark or browser run was performed during this documentation audit.
 
-Active security findings remain in [pentest findings](../workflow/SHANNON-PENTEST-FINDINGS.md);
+Active security findings remain in [pentest findings](PENTEST-FINDINGS.md);
 do not duplicate their changing status here.

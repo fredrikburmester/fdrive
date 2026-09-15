@@ -1,13 +1,6 @@
 # Implementation pitfalls
 
-Reference for affected code; shared workflow and commands live in [WORKING.md](../../WORKING.md).
-
-## pnpm launcher
-
-The system pnpm launcher may try to download/verify another manager version and fail in a
-restricted environment. Use the [command helpers](COMMANDS.md#setup-and-development): they select
-an already-installed pinned pnpm. Set `FDRIVE_NODE` / `FDRIVE_PNPM` to explicit matching
-binaries if discovery fails; never disable signature checks or use the wrong manager version.
+Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 ## Deployment resources
 
@@ -26,7 +19,15 @@ binaries if discovery fails; never disable signature checks or use the wrong man
   that reacts to "I could not reach the supervisor" the same way it reacts to "the supervisor
   said stop" will amplify any load spike.
 
+- CPU image embedding is compute-bound: the default SigLIP 2 model managed about 1.4 images per
+  second on four threads, and 4-, 8- and 16-image requests were no faster than single images.
+  Batching cannot shorten an image-search backfill; not blocking other work on it can.
+
 ## Code and integration
+
+- Worker state that tracks feature transitions must start from the persisted selection. A
+  disabled placeholder made every indexer restart look like enabling thumbnails and image
+  search, re-running the media backfill over the whole library.
 
 - Agents sometimes stash, edit outside their scope, or report gates they did not run; the review
   step exists for that. Scope-check with the review script and read the gate lines.

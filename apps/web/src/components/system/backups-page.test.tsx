@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiClientError, type BackupsResponse } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -29,7 +29,9 @@ const mocks = vi.hoisted(() => ({
     retry: vi.fn(),
     verify: vi.fn(),
   },
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
+vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("@/lib/api/backup-queries", () => ({
   useBackups: () => mocks.query(),
   backupClient: mocks.client,
@@ -182,6 +184,78 @@ it("shows a test object kept by bucket retention with its deadline", () => {
   ];
   render(<BackupsPage />);
   expect(screen.getByText(/Bucket retention keeps the test object probe-kept until/)).toBeTruthy();
+});
+it("reports destination test results and when each destination was last tested", async () => {
+  const destination = {
+    id: "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652",
+    name: "Bucket",
+    type: "s3",
+    location: "bucket/fdrive",
+    enabled: true,
+    testedAt: null,
+    schedule: null,
+    nextRunAt: null,
+    retainedProbe: null,
+  };
+  state.destinations = [
+    destination,
+    { ...destination, id: "other", name: "Tested", testedAt: "2026-09-14T08:00:00.000Z" },
+  ];
+  render(<BackupsPage />);
+  expect(screen.getByText("Not tested yet")).not.toBeNull();
+  expect(screen.getByText(/Last tested:/)).not.toBeNull();
+  await unlock();
+  const [test] = screen.getAllByRole("button", { name: "Test" });
+  if (!test) throw Error("Test button missing");
+  fireEvent.click(test);
+  await waitFor(() =>
+    expect(mocks.toast.success).toHaveBeenCalledWith("Bucket passed the test", expect.anything()),
+  );
+  expect(mocks.client.testDestination).toHaveBeenCalledWith(destination.id);
+  expect(mocks.invalidate).toHaveBeenCalledWith({ queryKey: ["backups"] });
+  mocks.client.testDestination.mockRejectedValueOnce(new Error("Access denied"));
+  fireEvent.click(test);
+  await waitFor(() =>
+    expect(mocks.toast.error).toHaveBeenCalledWith("Bucket failed the test", {
+      description: "Access denied",
+    }),
+  );
+  expect(screen.getByRole("alert").textContent).toContain("Access denied");
+});
+it("explains the destination schedule and saves a separate policy inside its card", async () => {
+  state.destinations = [
+    {
+      id: "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652",
+      name: "Bucket",
+      type: "s3",
+      location: "bucket/fdrive",
+      enabled: true,
+      testedAt: null,
+      schedule: null,
+      nextRunAt: null,
+      retainedProbe: null,
+    },
+  ];
+  render(<BackupsPage />);
+  expect(screen.getByText("Unlock owner access below to back up now")).toBeTruthy();
+  expect(screen.getByText("Installation schedule: Manual only")).toBeTruthy();
+  await unlock();
+  expect(screen.queryByText(/to back up now$/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+  const form = screen.getByRole("form", { name: "Schedule for Bucket" });
+  expect(form.textContent).toContain("Manual only, keeps 7 daily, 4 weekly and 12 monthly backups");
+  fireEvent.click(screen.getByRole("radio", { name: "A separate schedule for this destination" }));
+  expect(form.textContent).toContain("There is no monthly schedule");
+  fireEvent.change(within(form).getByLabelText("Monthly backups"), {
+    target: { value: "24" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save destination schedule" }));
+  await waitFor(() =>
+    expect(mocks.client.destinationSchedule).toHaveBeenCalledWith(
+      "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652",
+      { ...schedule, monthly: 24 },
+    ),
+  );
 });
 it("creates a private recovery kit and confirms the key without submitting it to backup settings", async () => {
   state.keyConfirmed = false;
