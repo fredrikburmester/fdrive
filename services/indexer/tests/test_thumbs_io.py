@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -206,3 +207,138 @@ def test_generate_video_frame_failure_is_logged(tmp_path: Path, monkeypatch: pyt
     )
     assert results == []
     assert any("failed" in line for line in logs)
+
+
+def _ffmpeg(*args: str) -> None:
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *args], check=True, capture_output=True)
+
+
+requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
+
+
+@requires_ffmpeg
+def test_generate_video_shorter_than_seek_point_uses_first_frame(tmp_path: Path) -> None:
+    video = tmp_path / "short.mp4"
+    _ffmpeg("-f", "lavfi", "-i", "testsrc=duration=0.5:size=320x240:rate=30", str(video))
+    errors: list[str] = []
+    results = thumbs_io.generate(
+        str(video), ".mp4", "shortsha", video.stat().st_size, str(tmp_path / "thumbs"), 10_000_000, on_error=errors.append
+    )
+    assert errors == []
+    assert {r[0] for r in results} == {256, 1024}
+
+
+@requires_ffmpeg
+def test_generate_audio_only_video_is_skipped_not_failed(tmp_path: Path) -> None:
+    video = tmp_path / "voice.mp4"
+    _ffmpeg("-f", "lavfi", "-i", "sine=duration=2", "-c:a", "aac", str(video))
+    errors: list[str] = []
+    skips: list[str] = []
+    logs: list[str] = []
+    results = thumbs_io.generate(
+        str(video), ".mp4", "voicesha", video.stat().st_size, str(tmp_path / "thumbs"), 10_000_000,
+        log=logs.append, on_error=errors.append, on_skip=skips.append,
+    )
+    assert (results, errors, skips) == ([], [], ["no video stream"])
+    assert logs == [f"thumb: skip {video}: no video stream"]
+
+
+@requires_ffmpeg
+def test_generate_truncated_video_is_still_a_failure(tmp_path: Path) -> None:
+    video = tmp_path / "truncated.mp4"
+    _ffmpeg("-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=30", str(video))
+    video.write_bytes(video.read_bytes()[:2048])
+    errors: list[str] = []
+    skips: list[str] = []
+    results = thumbs_io.generate(
+        str(video), ".mp4", "cutsha", video.stat().st_size, str(tmp_path / "thumbs"), 10_000_000,
+        on_error=errors.append, on_skip=skips.append,
+    )
+    assert (results, skips) == ([], [])
+    assert len(errors) == 1 and errors[0].startswith("CalledProcessError")
+
+
+def test_generate_video_without_any_frame_reports_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    video = tmp_path / "empty-track.mp4"
+    video.write_bytes(b"mocked")
+    seeks: list[str] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        seeks.append(cmd[cmd.index("-ss") + 1])
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(thumbs_io.subprocess, "run", fake_run)
+    errors: list[str] = []
+    results = thumbs_io.generate(
+        str(video), ".mp4", "sha", video.stat().st_size, str(tmp_path / "thumbs"), 10_000_000, on_error=errors.append
+    )
+    assert results == []
+    assert seeks == ["1.0", "0.0"]
+    assert errors == ["ValueError: ffmpeg wrote no video frame"]
+
+
+def test_generate_video_failure_with_picture_track_is_not_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"mocked")
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if cmd[0] == "ffprobe":
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"0\n")
+        raise subprocess.CalledProcessError(1, cmd, stderr=b"decoder failed")
+
+    monkeypatch.setattr(thumbs_io.subprocess, "run", fake_run)
+    errors: list[str] = []
+    skips: list[str] = []
+    thumbs_io.generate(
+        str(video), ".mp4", "sha", video.stat().st_size, str(tmp_path / "thumbs"), 10_000_000,
+        on_error=errors.append, on_skip=skips.append,
+    )
+    assert skips == []
+    assert errors == ["CalledProcessError: decoder failed"]
+
+
+def test_generate_jpeg_over_pillow_pixel_limit_decodes_reduced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image
+
+    src = tmp_path / "panorama.jpg"
+    Image.new("RGB", (4096, 2048), color="orange").save(src)
+    # 8.4 MP is over twice this limit; the JPEG drafted to 2048x1024 is not.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 2_000_000)
+    errors: list[str] = []
+    results = thumbs_io.generate(
+        str(src), ".jpg", "panosha", src.stat().st_size, str(tmp_path / "thumbs"), 10_000_000, on_error=errors.append
+    )
+    assert errors == []
+    assert sorted((size, w, h) for size, _rel, w, h in results) == [(256, 256, 128), (1024, 1024, 512)]
+
+
+def test_generate_image_still_over_pixel_limit_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image
+
+    jpeg = tmp_path / "huge.jpg"
+    Image.new("RGB", (4096, 2048)).save(jpeg)
+    png = tmp_path / "huge.png"
+    Image.new("RGB", (4096, 2048)).save(png)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 500_000)
+    for src, ext in ((jpeg, ".jpg"), (png, ".png")):
+        errors: list[str] = []
+        results = thumbs_io.generate(
+            str(src), ext, "bigsha", src.stat().st_size, str(tmp_path / "thumbs"), 10_000_000, on_error=errors.append
+        )
+        assert results == []
+        assert len(errors) == 1 and errors[0].startswith("DecompressionBombError"), src
+
+
+def test_generate_png_with_large_compressed_metadata(tmp_path: Path) -> None:
+    from PIL import Image, PngImagePlugin
+
+    src = tmp_path / "icon.png"
+    info = PngImagePlugin.PngInfo()
+    info.add_text("XML:com.adobe.xmp", "x" * (4 * 1024 * 1024), zip=True)
+    Image.new("RGB", (64, 64), color="yellow").save(src, pnginfo=info)
+    errors: list[str] = []
+    results = thumbs_io.generate(
+        str(src), ".png", "iconsha", src.stat().st_size, str(tmp_path / "thumbs"), 10_000_000, on_error=errors.append
+    )
+    assert errors == []
+    assert {r[0] for r in results} == {256, 1024}

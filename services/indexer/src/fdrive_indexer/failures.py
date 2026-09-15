@@ -60,13 +60,14 @@ def describe(error: BaseException) -> str:
 
 def report(
     root: Root, path: str, feature: str, log: Callable[[str], None],
-    error: str | None = None, *, code: str | None = None, skipped: bool = False,
+    error: str | None = None, *, code: str | None = None, skipped: bool = False, resolves: bool = False,
 ) -> None:
     current = _current.get()
     if current is not None:
         current.outcomes[feature] = (skipped or error is None, skipped)
-    if skipped:
+    if skipped and not resolves:
         return  # A dependency wait or skipped attempt is not evidence of recovery.
+    # A resolving skip read the file and found nothing to process, which settles earlier failures.
     operation_id = current.operation_ids.get(feature, current.id) if current else str(uuid4())
     try:
         # Savepoint isolation also works when a caller owns a larger transaction.
