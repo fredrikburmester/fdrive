@@ -60,6 +60,7 @@ import { itemCount } from "@/lib/ai/organize";
 import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { breadcrumbLayout } from "@/lib/files/breadcrumb-layout";
+import { LIST_DENSITIES, type ListDensity } from "@/lib/files/density";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { SortSpec } from "@/lib/files/sorting";
@@ -248,6 +249,11 @@ export interface FilesToolbarActionsProps {
   folderView?: FolderViewActions | undefined;
   sortSpec: SortSpec;
   onSortSpecChange: (spec: SortSpec) => void;
+  /** Per-folder sort pinning, in the same shape as `folderView`. Absent for virtual listings. */
+  folderSort?: FolderViewActions | undefined;
+  /** How tall list and tree rows are. */
+  density: ListDensity;
+  onDensityChange: (density: ListDensity) => void;
   onNewFolder: () => void;
   onNewFile: (kind: NewFileKind) => void;
   onUploadFiles: () => void;
@@ -288,9 +294,17 @@ interface ViewSortMenuItemsProps {
   folderView?: FolderViewActions | undefined;
   sortSpec: SortSpec;
   onSortSpecChange: (spec: SortSpec) => void;
+  folderSort?: FolderViewActions | undefined;
+  density: ListDensity;
+  onDensityChange: (density: ListDensity) => void;
   showThumbnails: boolean;
   onShowThumbnailsChange: (show: boolean) => void;
 }
+
+const DENSITY_LABELS: Record<ListDensity, string> = {
+  comfortable: "Comfortable",
+  compact: "Compact",
+};
 
 /** The view mode, sort key, and sort direction radio groups: the "View"
  * dropdown's content on desktop, and the "View" submenu's content inside
@@ -302,6 +316,9 @@ function ViewSortMenuItems({
   folderView,
   sortSpec,
   onSortSpecChange,
+  folderSort,
+  density,
+  onDensityChange,
   showThumbnails,
   onShowThumbnailsChange,
 }: ViewSortMenuItemsProps) {
@@ -387,13 +404,34 @@ function ViewSortMenuItems({
       )}
       <DropdownMenuSeparator />
       <DropdownMenuGroup>
-        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+        <DropdownMenuLabel>Density</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={density}
+          onValueChange={(next) => onDensityChange(next as ListDensity)}
+        >
+          {LIST_DENSITIES.map((value) => (
+            <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
+              {DENSITY_LABELS[value]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuGroup>
+      <DropdownMenuSeparator />
+      <DropdownMenuGroup>
+        <DropdownMenuLabel>
+          {folderSort?.pinned ? "Sort by · saved for this folder" : "Sort by"}
+        </DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={sortSpec.key}
           onValueChange={(key) => onSortSpecChange({ ...sortSpec, key: key as SortKey })}
         >
           {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
-            <DropdownMenuRadioItem key={key} value={key} className="whitespace-nowrap">
+            <DropdownMenuRadioItem
+              key={key}
+              disabled={folderSort?.disabled}
+              value={key}
+              className="whitespace-nowrap"
+            >
               {SORT_LABELS[key]}
             </DropdownMenuRadioItem>
           ))}
@@ -406,13 +444,35 @@ function ViewSortMenuItems({
           onSortSpecChange({ ...sortSpec, direction: direction as SortDirection })
         }
       >
-        <DropdownMenuRadioItem value="asc" className="whitespace-nowrap">
+        <DropdownMenuRadioItem
+          disabled={folderSort?.disabled}
+          value="asc"
+          className="whitespace-nowrap"
+        >
           Ascending
         </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem value="desc" className="whitespace-nowrap">
+        <DropdownMenuRadioItem
+          disabled={folderSort?.disabled}
+          value="desc"
+          className="whitespace-nowrap"
+        >
           Descending
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
+      {folderSort && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={folderSort.disabled} onClick={folderSort.makeDefault}>
+            Use as default sort for all folders
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={folderSort.disabled || !folderSort.pinned}
+            onClick={folderSort.useDefault}
+          >
+            Use default sort
+          </DropdownMenuItem>
+        </>
+      )}
     </>
   );
 }
@@ -479,6 +539,9 @@ export function FilesToolbarActions({
   folderView,
   sortSpec,
   onSortSpecChange,
+  folderSort,
+  density,
+  onDensityChange,
   onNewFolder,
   onNewFile,
   onNewOfficeDocument,
@@ -523,6 +586,9 @@ export function FilesToolbarActions({
               folderView={folderView}
               sortSpec={sortSpec}
               onSortSpecChange={onSortSpecChange}
+              folderSort={folderSort}
+              density={density}
+              onDensityChange={onDensityChange}
               showThumbnails={showThumbnails}
               onShowThumbnailsChange={onShowThumbnailsChange}
             />
@@ -727,6 +793,9 @@ export function FilesToolbarActions({
                   folderView={folderView}
                   sortSpec={sortSpec}
                   onSortSpecChange={onSortSpecChange}
+                  folderSort={folderSort}
+                  density={density}
+                  onDensityChange={onDensityChange}
                   showThumbnails={showThumbnails}
                   onShowThumbnailsChange={onShowThumbnailsChange}
                 />

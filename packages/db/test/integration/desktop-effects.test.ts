@@ -49,7 +49,7 @@ async function fixture() {
     await repos.fileTags.setTags(identity.id, path, [tag.id, tag2.id]);
     await repos.favorites.add(identity.id, path, "file");
     await repos.recents.touch(identity.id, path);
-    await repos.folderViews.set(identity.id, path, "grid");
+    await repos.folderViews.set(identity.id, path, { mode: "grid" });
   };
   const commit = async (context: Partial<DesktopEffectContext> = {}) => {
     const id = randomUUID();

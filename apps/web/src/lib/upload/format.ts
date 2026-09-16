@@ -1,4 +1,4 @@
-import { formatBytes } from "../format.ts";
+import { type FormatBytesOptions, formatBytes } from "../format.ts";
 
 /** One throughput sample: bytes transferred so far, as of `timestampMs`. */
 export interface ThroughputSample {
@@ -44,8 +44,8 @@ export function estimateSpeed(samples: readonly ThroughputSample[], windowMs = 5
 }
 
 /** Formats a throughput as "<bytes>/s", e.g. "1.5 MB/s". */
-export function formatSpeed(bytesPerSecond: number): string {
-  return `${formatBytes(bytesPerSecond)}/s`;
+export function formatSpeed(bytesPerSecond: number, opts: FormatBytesOptions = {}): string {
+  return `${formatBytes(bytesPerSecond, opts)}/s`;
 }
 
 /**

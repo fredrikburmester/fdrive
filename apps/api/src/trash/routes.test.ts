@@ -415,7 +415,7 @@ describe("POST /trash/restore", () => {
   it("moves a restored directory's retained metadata subtree", async () => {
     const { app, storage, metadata } = await buildHarness({ trashLayout: "move" });
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir/nested.txt", "file");
-    await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", "grid");
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", { mode: "grid" });
     await metadata.onTrashed(ALICE_IDENTITY_ID, "/dir", true);
     await storage.deleteDir("/dir");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));

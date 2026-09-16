@@ -1,6 +1,6 @@
 import type { FsEntry } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
-import { formatBytes } from "../format";
+import { type ClockFormat, type FormatBytesOptions, formatBytes, type SizeUnits } from "../format";
 import { previewKindFor } from "./kind";
 
 export interface DescribeRow {
@@ -23,6 +23,10 @@ export interface FolderSizeQueryState {
 export interface DescribeEntryOptions {
   readonly now: Date;
   readonly locale?: string;
+  /** How byte counts scale; defaults to binary. */
+  readonly units?: SizeUnits;
+  /** Whether the absolute timestamp uses a 12- or 24-hour clock; defaults to the locale's. */
+  readonly clock?: ClockFormat;
   /**
    * The folder size query's current state, for a directory entry only.
    * Ignored for a file. Ordinarily rendered as a "Files" row alongside the
@@ -100,7 +104,12 @@ export function relativeTimeFrom(date: Date, now: Date, locale?: string): string
   return "just now";
 }
 
-const localeOpts = (locale: string | undefined) => (locale === undefined ? {} : { locale });
+function bytesOpts(opts: Pick<DescribeEntryOptions, "locale" | "units">): FormatBytesOptions {
+  return {
+    ...(opts.locale === undefined ? {} : { locale: opts.locale }),
+    ...(opts.units === undefined ? {} : { units: opts.units }),
+  };
+}
 
 /**
  * Builds the "Size" and "Files" rows plus the note text for a directory
@@ -110,7 +119,7 @@ const localeOpts = (locale: string | undefined) => (locale === undefined ? {} : 
  */
 function folderSizeRows(
   folderSize: FolderSizeQueryState,
-  locale: string | undefined,
+  opts: Pick<DescribeEntryOptions, "locale" | "units">,
 ): { size: string; files: string; note: string | null } {
   if (folderSize.isPending) {
     return { size: "Calculating", files: "Calculating", note: null };
@@ -119,8 +128,8 @@ function folderSizeRows(
     return { size: "Not indexed", files: "Not indexed", note: null };
   }
   return {
-    size: formatBytes(folderSize.data.bytes, localeOpts(locale)),
-    files: folderSize.data.files.toLocaleString(locale),
+    size: formatBytes(folderSize.data.bytes, bytesOpts(opts)),
+    files: folderSize.data.files.toLocaleString(opts.locale),
     note: "From the index",
   };
 }
@@ -138,15 +147,16 @@ export function describeEntry(entry: FsEntry, opts: DescribeEntryOptions): Descr
   const absolute = modifiedDate.toLocaleString(opts.locale, {
     dateStyle: "medium",
     timeStyle: "short",
+    ...(opts.clock === undefined ? {} : { hour12: opts.clock === "12h" }),
   });
   const relative = relativeTimeFrom(modifiedDate, opts.now, opts.locale);
 
-  let sizeValue = formatBytes(entry.size, localeOpts(opts.locale));
+  let sizeValue = formatBytes(entry.size, bytesOpts(opts));
   let note: string | null = null;
   const extraRows: DescribeRow[] = [];
 
   if (entry.kind === "dir" && opts.folderSize !== undefined) {
-    const folder = folderSizeRows(opts.folderSize, opts.locale);
+    const folder = folderSizeRows(opts.folderSize, opts);
     sizeValue = folder.size;
     note = folder.note;
     extraRows.push({ label: "Files", value: folder.files });

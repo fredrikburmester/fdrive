@@ -34,3 +34,13 @@ it("observes other-tab storage changes and handles missing or corrupt values", (
   act(() => setDefaultView("tree"));
   expect(result.current[0]).toBe("tree");
 });
+
+it("renders the default on the server, where storage does not exist", async () => {
+  const { renderToString } = await import("react-dom/server");
+  const { createElement } = await import("react");
+  function Probe() {
+    const [value] = useDefaultView();
+    return createElement("span", null, value);
+  }
+  expect(renderToString(createElement(Probe))).toBe("<span>list</span>");
+});

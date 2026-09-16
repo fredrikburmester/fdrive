@@ -15,7 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { filterArchiveEntries, groupArchiveEntries } from "@/lib/archive/grouping";
-import { formatBytes, formatDate } from "@/lib/format";
+import { useFormatters } from "@/lib/use-format-preferences";
 
 export const ARCHIVE_FORMAT_LABELS: Readonly<Record<string, string>> = {
   zip: "ZIP archive",
@@ -71,6 +71,7 @@ export interface ArchiveEntriesViewProps {
  * an archive's own members are not individually downloadable from either view.
  */
 export function ArchiveEntriesView({ name, size, data, actions }: ArchiveEntriesViewProps) {
+  const { formatBytes, formatDate } = useFormatters();
   const [search, setSearch] = useState("");
   const filtered = filterArchiveEntries(data.entries, search);
   const groups = groupArchiveEntries(filtered);

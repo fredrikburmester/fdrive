@@ -1284,7 +1284,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.folderViews.remove(identity.id, "/photos");
         await repos.folderViews.movePrefix(identity.id, "/missing", "/new", true);
         await repos.folderViews.deletePrefix(identity.id, "/missing", true);
-        await repos.folderViews.set(identity.id, "/photos", "grid");
+        await repos.folderViews.set(identity.id, "/photos", { mode: "grid" });
         expect(await repos.folderViews.has(identity.id, "/photos")).toBe(true);
         expect(await repos.folderViews.has(identity.id, "/photos/child")).toBe(false);
         await repos.folderViews.remove(identity.id, "/photos");
@@ -1292,14 +1292,36 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.folderViews.get(identity.id, "/photos")).toBeNull();
       });
 
+      it("pins a sort alone, clears parts independently and drops an empty pin", async () => {
+        const identity = await seedIdentity();
+        await repos.folderViews.set(identity.id, "/photos", {});
+        expect(await repos.folderViews.has(identity.id, "/photos")).toBe(false);
+        await repos.folderViews.set(identity.id, "/photos", {
+          sort: { key: "size", direction: "desc" },
+        });
+        expect(await repos.folderViews.get(identity.id, "/photos")).toMatchObject({
+          mode: null,
+          sort: { key: "size", direction: "desc" },
+        });
+        await repos.folderViews.set(identity.id, "/photos", { mode: "grid" });
+        await repos.folderViews.set(identity.id, "/photos", { sort: null });
+        expect(await repos.folderViews.get(identity.id, "/photos")).toMatchObject({
+          mode: "grid",
+          sort: null,
+        });
+        await repos.folderViews.set(identity.id, "/photos", { mode: null });
+        expect(await repos.folderViews.get(identity.id, "/photos")).toBeNull();
+        expect(await repos.folderViews.has(identity.id, "/photos")).toBe(false);
+      });
+
       it("isolates pins by identity and preserves a stored sort on a mode-only update", async () => {
         const first = await seedIdentity();
         const second = await seedIdentity("nora-second");
-        await repos.folderViews.set(first.id, "/photos", "grid", {
-          key: "modifiedAt",
-          direction: "desc",
+        await repos.folderViews.set(first.id, "/photos", {
+          mode: "grid",
+          sort: { key: "modifiedAt", direction: "desc" },
         });
-        await repos.folderViews.set(first.id, "/photos", "list");
+        await repos.folderViews.set(first.id, "/photos", { mode: "list" });
 
         expect(await repos.folderViews.get(second.id, "/photos")).toBeNull();
         expect(await repos.folderViews.get(first.id, "/photos")).toMatchObject({
@@ -1310,10 +1332,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("moves a pinned directory subtree, replaces conflicts, and deletes by slash boundary", async () => {
         const identity = await seedIdentity();
-        await repos.folderViews.set(identity.id, "/dir", "grid");
-        await repos.folderViews.set(identity.id, "/dir/nested", "tree");
-        await repos.folderViews.set(identity.id, "/moved", "list");
-        await repos.folderViews.set(identity.id, "/dir-sibling", "list");
+        await repos.folderViews.set(identity.id, "/dir", { mode: "grid" });
+        await repos.folderViews.set(identity.id, "/dir/nested", { mode: "tree" });
+        await repos.folderViews.set(identity.id, "/moved", { mode: "list" });
+        await repos.folderViews.set(identity.id, "/dir-sibling", { mode: "list" });
 
         await repos.folderViews.movePrefix(identity.id, "/dir", "/moved", true);
         await repos.folderViews.movePrefix(identity.id, "/dir", "/moved", true);
@@ -1339,9 +1361,9 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const source = "/wild%_\\🙂";
         const target = "/target🙂";
         const unrelated = "/wildAX\\🙂/child";
-        await repos.folderViews.set(identity.id, `${source}/child`, "grid");
-        await repos.folderViews.set(identity.id, `${target}/child`, "list");
-        await repos.folderViews.set(identity.id, unrelated, "tree");
+        await repos.folderViews.set(identity.id, `${source}/child`, { mode: "grid" });
+        await repos.folderViews.set(identity.id, `${target}/child`, { mode: "list" });
+        await repos.folderViews.set(identity.id, unrelated, { mode: "tree" });
 
         await repos.folderViews.movePrefix(identity.id, source, target, true);
 
@@ -1357,8 +1379,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       it("clears one identity's pins and leaves others alone", async () => {
         const first = await seedIdentity();
         const second = await seedIdentity("nora-second");
-        await repos.folderViews.set(first.id, "/one", "grid");
-        await repos.folderViews.set(second.id, "/two", "tree");
+        await repos.folderViews.set(first.id, "/one", { mode: "grid" });
+        await repos.folderViews.set(second.id, "/two", { mode: "tree" });
         await repos.folderViews.clear(first.id);
 
         expect(await repos.folderViews.get(first.id, "/one")).toBeNull();

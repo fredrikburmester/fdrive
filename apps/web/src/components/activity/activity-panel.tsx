@@ -40,6 +40,7 @@ import { estimateSpeed, formatEta, formatSpeed, type ThroughputSample } from "@/
 import { summarize } from "@/lib/upload/queue";
 import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem, UploadStatus } from "@/lib/upload/types";
+import { useFormatters } from "@/lib/use-format-preferences";
 
 const SAMPLE_HISTORY_LIMIT = 50;
 /**
@@ -143,6 +144,7 @@ interface JobRowProps {
 }
 
 function JobRow({ job, request, onCancel, onRetry }: JobRowProps) {
+  const { prefs } = useFormatters();
   const isActive = job.state === "queued" || job.state === "running";
   const fraction = jobProgressFraction(job.progress);
   const openFolderPath =
@@ -175,7 +177,9 @@ function JobRow({ job, request, onCancel, onRetry }: JobRowProps) {
       </div>
       {isActive && <Progress value={fraction === null ? null : fraction * 100} />}
       {isActive && (
-        <p className="text-xs text-muted-foreground">{formatJobProgress(job.progress)}</p>
+        <p className="text-xs text-muted-foreground">
+          {formatJobProgress(job.progress, { units: prefs.sizes })}
+        </p>
       )}
       {(job.state === "failed" || job.state === "done") && job.error !== undefined && (
         <p
@@ -209,6 +213,7 @@ function JobRow({ job, request, onCancel, onRetry }: JobRowProps) {
  * covers both queues. Renders nothing while both are empty.
  */
 export function ActivityPanel() {
+  const { prefs } = useFormatters();
   const uploadState = useUploadStore((s) => s.state);
   const retryUpload = useUploadStore((s) => s.retry);
   const cancelUpload = useUploadStore((s) => s.cancel);
@@ -382,7 +387,7 @@ export function ActivityPanel() {
           <div className="flex shrink-0 flex-col gap-1">
             <Progress value={uploadSummary.overallProgress * 100} />
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{formatSpeed(speed)}</span>
+              <span>{formatSpeed(speed, { units: prefs.sizes })}</span>
               <span>{formatEta(bytesRemaining, speed)} left</span>
             </div>
           </div>

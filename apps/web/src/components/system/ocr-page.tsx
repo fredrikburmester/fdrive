@@ -26,7 +26,6 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { describeApiError } from "@/lib/api/errors";
 import { useRunOcr, useSystemOcr, useUpdateOcrSettings } from "@/lib/api/system-queries";
-import { formatBytes } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/system/format";
 import {
   globsFromTextarea,
@@ -35,6 +34,7 @@ import {
   validateOcrSettings,
 } from "@/lib/system/settings";
 import { sidecarStatus } from "@/lib/system/status";
+import { useFormatters } from "@/lib/use-format-preferences";
 import { LogSheet } from "./log-sheet";
 import { OcrOriginalsSheet } from "./ocr-originals-sheet";
 import { GlobsField } from "./settings-form";
@@ -83,6 +83,7 @@ const HOUR_ITEMS = Array.from({ length: 24 }, (_, hour) => ({
 
 /** Admin page: `System > OCR`. Schedule, last run, originals, settings, and run-now. */
 export function OcrPage() {
+  const { formatBytes } = useFormatters();
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemOcr();
   const updateSettings = useUpdateOcrSettings();
   const runNow = useRunOcr();

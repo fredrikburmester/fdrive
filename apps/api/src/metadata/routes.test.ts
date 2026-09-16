@@ -374,6 +374,36 @@ describe("folder views", () => {
     });
   });
 
+  it("pins a sort without a mode and removes only that part", async () => {
+    const { app } = await buildHarness();
+    const bySize = { key: "size", direction: "desc" };
+    const json = (method: string, body: object) =>
+      requestedWith({
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const put = await app.request(
+      "/api/v1/folder-views",
+      json("PUT", { path: "/dir", sort: bySize }),
+    );
+    expect(put.status).toBe(200);
+    expect(await (await app.request("/api/v1/folder-views?path=/dir")).json()).toEqual({
+      view: { path: "/dir", mode: null, sort: bySize },
+    });
+    const empty = await app.request("/api/v1/folder-views", json("PUT", { path: "/dir" }));
+    expect(empty.status).toBe(400);
+    await app.request("/api/v1/folder-views", json("PUT", { path: "/dir", mode: "tree" }));
+    const removeSort = await app.request(
+      "/api/v1/folder-views",
+      json("DELETE", { path: "/dir", part: "sort" }),
+    );
+    expect(await removeSort.json()).toEqual({ ok: true });
+    expect(await (await app.request("/api/v1/folder-views?path=/dir")).json()).toEqual({
+      view: { path: "/dir", mode: "tree", sort: null },
+    });
+  });
+
   it("rejects file pins and preserves a pin while its directory is missing", async () => {
     const { app, metadata } = await buildHarness();
     const file = await app.request(
@@ -395,7 +425,7 @@ describe("folder views", () => {
     );
     expect(invalidMode.status).toBe(400);
 
-    await metadata.setFolderView(ALICE_IDENTITY_ID, "/gone", "tree");
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/gone", { mode: "tree" });
     expect(await (await app.request("/api/v1/folder-views?path=/gone")).json()).toEqual({
       view: null,
     });
@@ -419,7 +449,7 @@ describe("folder views", () => {
 
   it("does not delete a persisted pin when the path is currently a file", async () => {
     const { app, metadata } = await buildHarness();
-    await metadata.setFolderView(ALICE_IDENTITY_ID, "/hello.txt", "grid");
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/hello.txt", { mode: "grid" });
 
     expect(await (await app.request("/api/v1/folder-views?path=/hello.txt")).json()).toEqual({
       view: null,
@@ -443,8 +473,8 @@ describe("folder views", () => {
       externalUsername: "alice-linked-2",
     });
     await Promise.all([
-      metadata.setFolderView(first.id, "/one", "grid"),
-      metadata.setFolderView(second.id, "/two", "tree"),
+      metadata.setFolderView(first.id, "/one", { mode: "grid" }),
+      metadata.setFolderView(second.id, "/two", { mode: "tree" }),
     ]);
 
     const reset = await app.request(
@@ -536,7 +566,7 @@ describe("tag CRUD: error mapping", () => {
   ] as const)("keeps a pin when a %s folder stat cannot be confirmed", async (kind, status) => {
     const repos = createMemoryRepos();
     const metadata = createMetadataService(repos);
-    await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", "grid");
+    await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", { mode: "grid" });
     const storage = {
       stat: async () => {
         throw new StorageError(kind, "unavailable");

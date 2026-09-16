@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import {
   accounts,
@@ -31,6 +31,7 @@ import type {
   FileTagRepo,
   FolderView,
   FolderViewMode,
+  FolderViewPatch,
   FolderViewRepo,
   FolderViewSort,
   Identity,
@@ -741,7 +742,7 @@ function toFolderView(row: typeof folderViews.$inferSelect): FolderView {
   return {
     identityId: row.identityId,
     path: row.path,
-    mode: row.mode as FolderViewMode,
+    mode: row.mode as FolderViewMode | null,
     sort: row.sort as FolderViewSort | null,
     updatedAt: row.updatedAt,
   };
@@ -799,20 +800,31 @@ function createFolderViewRepo(db: Db): FolderViewRepo {
         .where(and(eq(folderViews.identityId, identityId), eq(folderViews.path, path)));
       return row === undefined ? null : toFolderView(row);
     },
-    async set(identityId, path, mode, sort) {
+    async set(identityId, path, patch: FolderViewPatch) {
+      if (patch.mode === undefined && patch.sort === undefined) return;
       const updatedAt = new Date();
       await db
         .insert(folderViews)
-        .values({ identityId, path, mode, sort: sort ?? null, updatedAt })
+        .values({ identityId, path, mode: patch.mode ?? null, sort: patch.sort ?? null, updatedAt })
         .onConflictDoUpdate({
           target: [folderViews.identityId, folderViews.path],
           set: {
-            mode,
-            ...(sort === undefined ? {} : { sort }),
+            ...(patch.mode === undefined ? {} : { mode: patch.mode }),
+            ...(patch.sort === undefined ? {} : { sort: patch.sort }),
             updatedAt,
             revision: sql`gen_random_uuid()`,
           },
         });
+      await db
+        .delete(folderViews)
+        .where(
+          and(
+            eq(folderViews.identityId, identityId),
+            eq(folderViews.path, path),
+            isNull(folderViews.mode),
+            isNull(folderViews.sort),
+          ),
+        );
     },
     async remove(identityId, path) {
       await db

@@ -67,9 +67,17 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.
   Image similarity by perceptual hash is not the shipped text-to-image search feature.
-- Folder view mode is pinned per identity/path in `app.folder_views`, with no inheritance.
-  `fdrive.view` remains the browser default. Virtual listings use that default; moves/deletes
-  update pins. The schema reserves sort state, but per-folder sort is not exposed.
+- Folder view mode and sort are pinned per identity/path in `app.folder_views`, with no
+  inheritance and independently of each other (`mode` is null for a sort-only pin; a pin with
+  neither part is deleted). `fdrive.view` and `fdrive.sort` remain the browser defaults.
+  Virtual listings use those defaults; moves/deletes update pins.
+- Browser preferences live under `fdrive.*` localStorage keys, are read through
+  `useSyncExternalStore` hooks so every mounted consumer and other tabs update together, and
+  are set on the Account page or in the View menu: row click (`fdrive.list.rowClick`: select,
+  toggle selection or open; modified clicks, Enter and double-click keep their meaning), list
+  density (`fdrive.list.density`), size units (`fdrive.format.sizes`), date style
+  (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
+  through `useFormatters`, never the bare formatters, so a preference applies everywhere.
 - Use the existing UI tokens and components. Action labels omit ellipses; progress labels
   may use them. Keep transient failures from deleting persisted preferences.
 - HEIC/HEIF files are stored as uploaded. The web client decodes them natively where the

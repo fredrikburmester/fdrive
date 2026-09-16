@@ -154,7 +154,19 @@ describe("folder views", () => {
     expect(
       SetFolderViewRequest.safeParse({ path: "/photos", mode: "grid", sort: null }).success,
     ).toBe(false);
+    expect(SetFolderViewRequest.safeParse({ path: "/photos" }).success).toBe(false);
     expect(RemoveFolderViewRequest.safeParse({}).success).toBe(false);
+    expect(RemoveFolderViewRequest.safeParse({ path: "/photos", part: "all" }).success).toBe(false);
+  });
+
+  it("accepts a sort-only pin, a mode-only save and a partial remove", () => {
+    const bySize = { key: "size", direction: "desc" };
+    expect(FolderViewState.safeParse({ path: "/photos", mode: null, sort: bySize }).success).toBe(
+      true,
+    );
+    expect(SetFolderViewRequest.safeParse({ path: "/photos", sort: bySize }).success).toBe(true);
+    expect(SetFolderViewRequest.safeParse({ path: "/photos", mode: "list" }).success).toBe(true);
+    expect(RemoveFolderViewRequest.safeParse({ path: "/photos", part: "sort" }).success).toBe(true);
   });
 });
 

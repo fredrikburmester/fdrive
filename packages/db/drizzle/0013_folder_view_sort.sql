@@ -1,0 +1,1 @@
+ALTER TABLE "app"."folder_views" ALTER COLUMN "mode" DROP NOT NULL;

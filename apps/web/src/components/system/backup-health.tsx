@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { backupClient } from "@/lib/api/backup-queries";
-import { formatBytes } from "@/lib/format";
+import { useFormatters } from "@/lib/use-format-preferences";
 import { SystemSection } from "./system-section";
 
 const date = (value: string) => new Date(value).toLocaleString();
@@ -62,6 +62,7 @@ export function BackupHealth({
   unlocked: boolean;
   act: (work: () => Promise<unknown>) => Promise<void>;
 }) {
+  const { formatBytes } = useFormatters();
   const id = useId();
   const now = Date.now();
   const complete = data.runs.find((run) => run.state === "complete" && run.coverage.length === 0);
