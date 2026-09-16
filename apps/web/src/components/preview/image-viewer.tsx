@@ -5,19 +5,20 @@ import { ImageOff, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { fetchHeicAsJpeg, isHeicExt } from "@/lib/preview/heic";
+import { isRawExt, RAW_NO_THUMBNAIL } from "@/lib/preview/raw";
 import { Unsupported } from "./unsupported";
 
 export interface ImageViewerProps {
   readonly src: string;
-  /** The file name: rendered as the image's alt text and used to detect HEIC/HEIF. */
+  /** The file name: rendered as the image's alt text and used to detect HEIC/HEIF and camera raw. */
   readonly name: string;
-  /** A 1024px thumbnail, shown for HEIC in browsers that cannot decode it natively. */
+  /** A 1024px thumbnail: shown for HEIC in browsers that cannot decode it natively, and the only thing shown for camera raw. */
   readonly thumbUrl?: string | undefined;
-  /** Attachment URL for the download button when a HEIC cannot be shown at all. */
+  /** Attachment URL for the download button when a HEIC or raw cannot be shown at all. */
   readonly downloadUrl?: string | undefined;
   /** The file's size, when known: a HEIC over the decode cap is refused before download. */
   readonly size?: number | undefined;
-  /** Called when a non-HEIC image fails to load. */
+  /** Called when a plain (non-HEIC, non-raw) image fails to load. */
   readonly onError?: (() => void) | undefined;
 }
 
@@ -48,10 +49,17 @@ const CHECKERBOARD_STYLE: React.CSSProperties = {
  *   reason in a pill; only when nothing can be shown does the unsupported
  *   card with a download button take over.
  *
+ * For camera raw images (ARW, CR3, NEF, DNG, ...), which no browser decodes,
+ * the 1024px `thumbUrl` is the whole preview: the file itself is never
+ * fetched, zooming shows the thumbnail at its natural size, and a missing or
+ * failed thumbnail shows the unsupported card with a download button.
+ *
  * Callers key the viewer by file: state is per file, not reset on `src` changes.
  */
 export function ImageViewer({ src, name, thumbUrl, downloadUrl, size, onError }: ImageViewerProps) {
-  const isHeic = isHeicExt(extensionOf(name));
+  const ext = extensionOf(name);
+  const isHeic = isHeicExt(ext);
+  const isRaw = isRawExt(ext);
   const [zoomed, setZoomed] = useState(false);
   const [decoded, setDecoded] = useState<string | null>(null);
   const [decoding, setDecoding] = useState(false);
@@ -116,6 +124,10 @@ export function ImageViewer({ src, name, thumbUrl, downloadUrl, size, onError }:
   };
 
   const handleImgError = () => {
+    if (isRaw) {
+      setImgFailed(true);
+      return;
+    }
     if (!isHeic) {
       onError?.();
       return;
@@ -124,7 +136,19 @@ export function ImageViewer({ src, name, thumbUrl, downloadUrl, size, onError }:
     if (decoded === null) void startDecode();
   };
 
-  const displaySrc = isHeic ? (decoded ?? thumbUrl ?? src) : src;
+  if (isRaw && (thumbUrl === undefined || imgFailed)) {
+    return (
+      <Unsupported
+        name={name}
+        size={size}
+        kind="image"
+        reason={RAW_NO_THUMBNAIL}
+        downloadUrl={downloadUrl ?? src}
+      />
+    );
+  }
+
+  const displaySrc = isRaw ? thumbUrl : isHeic ? (decoded ?? thumbUrl ?? src) : src;
 
   if (isHeic && imgFailed && decoded === null && decodeError !== null) {
     return (

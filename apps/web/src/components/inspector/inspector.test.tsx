@@ -118,6 +118,22 @@ describe("Inspector: image preview", () => {
     );
   });
 
+  it("shows the indexer thumbnail for a camera raw, never the raw file", () => {
+    const rawEntry: FsEntry = {
+      ...heicEntry,
+      name: "DSC00001.ARW",
+      path: "/DSC00001.ARW",
+      ext: ".arw",
+      mime: "image/x-sony-arw",
+      size: 40_000_000,
+    };
+    render(<Inspector entries={[rawEntry]} onClose={() => {}} />);
+
+    expect(screen.getByRole("img", { name: "DSC00001.ARW" }).getAttribute("src")).toBe(
+      "https://example.test/thumb?path=/DSC00001.ARW&size=256",
+    );
+  });
+
   it("falls back to the kind icon when the image fails to load", () => {
     render(<Inspector entries={[heicEntry]} onClose={() => {}} />);
 

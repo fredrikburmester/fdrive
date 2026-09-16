@@ -103,11 +103,33 @@ export const ShareUploadPath = SharePath.refine(
 );
 
 /**
+ * Camera raw extensions the indexer thumbnails (from the camera's embedded JPEG preview).
+ * No browser decodes these, so every surface shows the thumbnail and offers the original as a
+ * download. Mirrors `RAW_EXTS` in the indexer's `chunking.py`.
+ */
+export const RAW_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".arw",
+  ".sr2",
+  ".srf",
+  ".cr2",
+  ".cr3",
+  ".crw",
+  ".nef",
+  ".nrw",
+  ".dng",
+  ".raf",
+  ".orf",
+  ".rw2",
+  ".pef",
+]);
+
+/**
  * Extensions the public gallery renders as image tiles for `auto` presentation. Shared by the
  * API (deciding what counts as "every shared file is an image") and the web app (the same check
  * client-side, without another round trip). SVG is excluded: the gallery treats SVG as
  * download-only. HEIC/HEIF files are included: the frontend handles thumbnails and client-side
- * WASM/picture viewing.
+ * WASM/picture viewing. Camera raw files are included: tiles and the lightbox show the
+ * indexer's thumbnail.
  */
 export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".avif",
@@ -119,6 +141,7 @@ export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".jpg",
   ".png",
   ".webp",
+  ...RAW_IMAGE_EXTENSIONS,
 ]);
 
 /** True when `name`'s extension (case-insensitive) is one the public gallery treats as an image. */

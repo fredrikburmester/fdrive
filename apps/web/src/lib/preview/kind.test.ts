@@ -11,6 +11,12 @@ describe("previewKindFor", () => {
     expect(previewKindFor(entry(".svg", null))).toBe("image");
   });
 
+  it("treats camera raw files as images, so they get thumbnails and the image viewer", () => {
+    expect(previewKindFor(entry(".arw", null))).toBe("image");
+    expect(previewKindFor(entry(".ARW", "image/x-sony-arw"))).toBe("image");
+    expect(previewKindFor(entry(".cr3", null))).toBe("image");
+  });
+
   it("detects images by mime when the extension is unknown", () => {
     expect(previewKindFor(entry(".weird", "image/png"))).toBe("image");
   });
