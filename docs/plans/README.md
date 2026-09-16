@@ -29,6 +29,7 @@ These are a backlog, not a claim that an agent is working on every item.
   second archive of obsolete implementation instructions.
 
 Current behavior: [architecture](../ARCHITECTURE.md), [provider development](../STORAGE-PROVIDERS.md),
+[S3](../S3.md),
 [scoping](../SCOPING.md), [authentication](../AUTH.md), [Office](../OFFICE-DEVELOPMENT.md)
 and [System activity](../SYSTEM-ACTIVITY.md).
 Workflow: [AGENTS](../../AGENTS.md).

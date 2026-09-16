@@ -2,6 +2,7 @@ import { type ApiError, MeResponse, ROUTES } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createFakeS3Server } from "@fdrive/s3";
 import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
 import { createFakeWebdavServer } from "@fdrive/webdav";
 import type { Logger } from "pino";
@@ -10,6 +11,7 @@ import { createApp } from "../app";
 import { loadConfig } from "../config";
 import {
   memoryProviderService,
+  seedS3Provider,
   seedSftpgoProvider,
   seedWebdavProvider,
 } from "../providers/test-fixtures/index.ts";
@@ -1015,6 +1017,89 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
     const denied = await login(app, {
       providerId: row.id,
       credential: { username: "alice", password: "nope" },
+    });
+    expect(denied.status).toBe(401);
+  });
+});
+
+describe("auth routes: POST /auth/login through an S3 provider", () => {
+  it("binds the login to the S3 row, reports its capabilities and never touches SFTPGo", async () => {
+    const clockCtl = createClock(Date.now());
+    const key = { accessKeyId: "alice-key", secretAccessKey: "alice-secret" };
+    const s3 = createFakeS3Server({ keys: [key], buckets: ["media"] });
+    const sftpgo = createFakeSftpgoServer({
+      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
+      now: clockCtl.clock,
+    });
+    const hosts: string[] = [];
+    const fetchImpl: typeof globalThis.fetch = async (url, init) => {
+      const host = new URL(url instanceof Request ? url.url : String(url)).host;
+      hosts.push(host);
+      return host === "s3.test" ? s3.fetch(url, init) : sftpgo.fetch(url, init);
+    };
+    const repos = createMemoryRepos();
+    const config = loadConfig(REQUIRED_ENV);
+    await seedSftpgoProvider(repos, "http://sftpgo.internal:8080", { managedByEnv: true });
+    const row = await seedS3Provider(repos, "http://s3.test/media/team", {
+      label: "Photos",
+      region: "eu-west-1",
+    });
+    const authModule = createAuthModule({
+      identityLinks: memoryIdentityOperations(repos),
+      repos,
+      providers: memoryProviderService(repos, {
+        fetch: fetchImpl,
+        clock: clockCtl.clock,
+        sftpgoUrl: config.sftpgoUrl,
+      }),
+      fetch: fetchImpl,
+      master: parseMasterKey(config.fdriveMasterKey),
+      clock: clockCtl.clock,
+      config,
+      storageFactory: async () => FAKE_STORAGE,
+    });
+    const app = createApp({
+      config,
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date(0),
+      clock: clockCtl.clock,
+      principalResolver: authModule.principalResolver,
+      registerRoutes: authModule.registerRoutes,
+    });
+
+    const res = await login(app, {
+      providerId: row.id,
+      credential: { username: key.accessKeyId, password: key.secretAccessKey },
+    });
+    expect(res.status).toBe(200);
+    const me = MeResponse.parse(await readJson(res));
+    expect(me.identities).toHaveLength(1);
+    expect(me.identities[0]).toMatchObject({
+      username: key.accessKeyId,
+      providerId: row.id,
+      providerType: "s3",
+      providerLabel: "Photos",
+      capabilities: {
+        zip: false,
+        setModifiedAt: false,
+        atomicMove: false,
+        trash: false,
+        shares: false,
+        office: false,
+        index: false,
+        scopeMapping: false,
+      },
+    });
+    expect(hosts.every((host) => host === "s3.test")).toBe(true);
+    const verified = s3.requests.at(-1);
+    expect(verified?.url).toBe("http://s3.test/media/?list-type=2&max-keys=1&prefix=team%2F");
+    expect(verified?.headers.authorization).toContain("Credential=alice-key/");
+    expect(verified?.headers.authorization).toContain("/eu-west-1/s3/aws4_request");
+
+    const denied = await login(app, {
+      providerId: row.id,
+      credential: { username: key.accessKeyId, password: "nope" },
     });
     expect(denied.status).toBe(401);
   });

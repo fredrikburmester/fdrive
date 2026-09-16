@@ -6,7 +6,7 @@ import { HttpUrl } from "./http-url.ts";
  * must have a module for each value; adding a provider adds one here and
  * one there.
  */
-export const ProviderType = z.enum(["sftpgo", "webdav"]);
+export const ProviderType = z.enum(["sftpgo", "webdav", "s3"]);
 export type ProviderType = z.infer<typeof ProviderType>;
 
 /**

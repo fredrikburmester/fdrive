@@ -1,11 +1,13 @@
 # Adding a storage provider
 
-This guide describes the implemented provider extension points. SFTPGo and WebDAV are the
-registered backends; S3 and fdrive-owned shares are not implemented. Start with a provider that
+This guide describes the implemented provider extension points. SFTPGo, WebDAV and S3 are the
+registered backends; fdrive-owned shares are not implemented. Start with a provider that
 supports ordinary file operations; enable additional features only after their complete API and
 UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations and
 fdrive-performed Trash: see [`packages/webdav`](../packages/webdav/src/module.ts) and
-[WEBDAV.md](WEBDAV.md) for its decisions and protocol mapping.
+[WEBDAV.md](WEBDAV.md) for its decisions and protocol mapping. S3 is the reference for a
+request-signing backend over an SDK and for directories emulated on a flat key space: see
+[`packages/s3`](../packages/s3/src/module.ts) and [S3.md](S3.md).
 
 For environment setup, see [Development](DEVELOPMENT.md). Follow [AGENTS.md](../AGENTS.md)
 for repository workflow and the required checks.
@@ -30,8 +32,8 @@ The request path is:
 | --- | --- |
 | Module, field metadata, instance and session types | [core provider port](../packages/core/src/ports/provider.ts) |
 | File operations, streams and optional methods | [core storage port](../packages/core/src/ports/storage.ts) |
-| Working module and injectable client factory | [SFTPGo module](../packages/sftpgo/src/module.ts), [WebDAV module](../packages/webdav/src/module.ts) |
-| Adapter and error translation | [SFTPGo storage adapter](../packages/sftpgo/src/storage-provider.ts), [WebDAV storage adapter](../packages/webdav/src/storage-provider.ts) |
+| Working module and injectable client factory | [SFTPGo module](../packages/sftpgo/src/module.ts), [WebDAV module](../packages/webdav/src/module.ts), [S3 module](../packages/s3/src/module.ts) |
+| Adapter and error translation | [SFTPGo storage adapter](../packages/sftpgo/src/storage-provider.ts), [WebDAV storage adapter](../packages/webdav/src/storage-provider.ts), [S3 storage adapter](../packages/s3/src/storage-provider.ts) |
 | Instance resolution, config validation and capabilities | [provider service](../apps/api/src/providers/service.ts) |
 | Per-request storage and Trash composition | [storage factory](../apps/api/src/auth/storage-factory.ts) |
 | Credential validation and post-login binding checks | [credential verification](../apps/api/src/accounts/credentials.ts) |

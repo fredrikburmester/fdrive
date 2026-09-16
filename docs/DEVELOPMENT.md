@@ -64,6 +64,18 @@ Restart the API server (`pnpm --filter @fdrive/api dev`) so it connects to the l
 
 ---
 
+## Trying the S3 Provider Locally (Optional)
+
+A local MinIO with one bucket and one read-write key:
+
+```bash
+docker compose -f deploy/compose.dev.yaml --profile s3 up -d
+```
+
+Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdrive` and sign in with the access key `fdrive-dev` and secret `fdrive-dev-password`. The MinIO console is on port `59001` (`minio-root` / `minio-root-password`). See [S3](S3.md).
+
+---
+
 ## Local Ports
 
 | Service | Port | Description |
@@ -73,6 +85,8 @@ Restart the API server (`pnpm --filter @fdrive/api dev`) so it connects to the l
 | Postgres | `55432` | Local development database |
 | SFTPGo WebAdmin | `58080` | SFTPGo admin interface (`admin` / `admin-dev-password`) |
 | SFTPGo SFTP | `52022` | SFTP service for external client testing |
+| MinIO S3 API | `59000` | Local S3 bucket `fdrive` (when `s3` profile is up) |
+| MinIO console | `59001` | MinIO web console (`minio-root` / `minio-root-password`) |
 | Indexer HTTP | `58010` | Python indexer (when `index` profile is up) |
 | Embedding Server | `58081` | TEI text embedding model |
 | Image Embedding | `58012` | SigLIP image embedding model |

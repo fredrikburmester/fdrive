@@ -1,3 +1,5 @@
+export type { MinioContainer, MinioKey, StartMinioOptions } from "./containers/minio.js";
+export { startMinio } from "./containers/minio.js";
 export type { PostgresContainer, StartPostgresOptions } from "./containers/postgres.js";
 export { startPostgres } from "./containers/postgres.js";
 export type { SftpgoContainer, StartSftpgoOptions } from "./containers/sftpgo.js";
