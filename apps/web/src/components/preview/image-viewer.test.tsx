@@ -114,6 +114,41 @@ it("aborts an in-flight decode on unmount and never creates an object URL for it
   expect(URL.createObjectURL).not.toHaveBeenCalled();
 });
 
+it("shows only the thumbnail for a camera raw and zooms without fetching the file", async () => {
+  render(
+    <ImageViewer src="/DSC00001.ARW" name="DSC00001.ARW" thumbUrl="/thumb" size={40_000_000} />,
+  );
+
+  const img = screen.getByRole("img");
+  expect(img.getAttribute("src")).toBe("/thumb");
+  expect(img.closest("picture")?.querySelector("source")).toBeNull();
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+  });
+
+  expect(screen.getByRole("img").getAttribute("src")).toBe("/thumb");
+  expect(screen.getByRole("button", { name: "Zoom out" })).toBeTruthy();
+  expect(fetchHeicAsJpeg).not.toHaveBeenCalled();
+});
+
+it("offers a download when a camera raw has no thumbnail or its thumbnail fails", () => {
+  const onError = vi.fn();
+  const { unmount } = render(
+    <ImageViewer src="/a.arw" name="a.arw" downloadUrl="/download/a.arw" onError={onError} />,
+  );
+  expect(screen.getByRole("button", { name: "Download" }).getAttribute("href")).toBe(
+    "/download/a.arw",
+  );
+  unmount();
+
+  render(<ImageViewer src="/b.cr3" name="b.cr3" thumbUrl="/thumb" onError={onError} />);
+  fireEvent.error(screen.getByRole("img"));
+  expect(screen.getByRole("button", { name: "Download" }).getAttribute("href")).toBe("/b.cr3");
+  expect(onError).not.toHaveBeenCalled();
+  expect(fetchHeicAsJpeg).not.toHaveBeenCalled();
+});
+
 it("passes a plain image straight through and reports its load errors", () => {
   const onError = vi.fn();
   render(<ImageViewer src="/photo.png" name="photo.png" thumbUrl="/thumb" onError={onError} />);

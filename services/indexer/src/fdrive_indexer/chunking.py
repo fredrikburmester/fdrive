@@ -99,6 +99,9 @@ SPREADSHEET_EXTS = frozenset({".xlsx", ".xlsm", ".xls", ".numbers", ".ods", ".cs
 # Thumbnail-relevant extension groups (used by thumbs.py, kept alongside the other
 # extension tables so one module owns "what kind of file is this").
 VIDEO_EXTS = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"})
+# Camera raw formats LibRaw reads. They earn image thumbnails from the JPEG preview the
+# camera embeds, but never enter text extraction or OCR: they are not in IMAGE_EXTS.
+RAW_EXTS = frozenset({".arw", ".sr2", ".srf", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".dng", ".raf", ".orf", ".rw2", ".pef"})
 
 _ws = re.compile(r"[ \t\f\v]+")
 _nl = re.compile(r"\n{3,}")

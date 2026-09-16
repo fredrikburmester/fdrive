@@ -1,7 +1,8 @@
-"""Thumbnail generation I/O: Pillow for images, pymupdf for PDF first pages, ffmpeg
-for a video frame. Decisions (which kind, target sizes, whether to skip) live in the
-pure `thumbs.py`; this module only touches disk and subprocesses. Failures are
-logged and never raised, per the plan: one bad file must never fail the scan.
+"""Thumbnail generation I/O: Pillow for images, LibRaw (`raw.py`) for camera raw previews,
+pymupdf for PDF first pages, ffmpeg for a video frame. Decisions (which kind, target sizes,
+whether to skip) live in the pure `thumbs.py`; this module only touches disk and
+subprocesses. Failures are logged and never raised, per the plan: one bad file must never
+fail the scan.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import tempfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from .chunking import RAW_EXTS
 from .thumbs import SIZES, kind_for_ext, resize_dimensions, should_regenerate, skip_reason, storage_path
 
 if TYPE_CHECKING:
@@ -86,6 +88,12 @@ def _open_image(abs_path: str, longest_side: int | None = None) -> object:
     if picture.mode not in ("RGB", "RGBA"):
         picture = picture.convert("RGB")
     return picture
+
+
+def _open_raw(abs_path: str, longest_side: int | None = None) -> object:
+    from .raw import open_raw
+
+    return open_raw(abs_path, longest_side)
 
 
 def _open_pdf_first_page(abs_path: str) -> object:
@@ -208,7 +216,9 @@ def generate(
                 remove(dest)
             if image is None:
                 assert largest is not None  # this size needs regenerating
-                if kind == "image":
+                if kind == "image" and ext in RAW_EXTS:
+                    source = _open_raw(abs_path, largest)
+                elif kind == "image":
                     source = _open_image(abs_path, largest)
                 elif kind == "pdf":
                     source = _open_pdf_first_page(abs_path)

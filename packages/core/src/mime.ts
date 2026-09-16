@@ -32,6 +32,22 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".heic": "image/heic",
   ".heif": "image/heif",
 
+  // Camera raw. Not inline-previewable: browsers cannot decode them, so the
+  // web app shows the indexer's thumbnail and serves the file as a download.
+  ".arw": "image/x-sony-arw",
+  ".sr2": "image/x-sony-sr2",
+  ".srf": "image/x-sony-srf",
+  ".cr2": "image/x-canon-cr2",
+  ".cr3": "image/x-canon-cr3",
+  ".crw": "image/x-canon-crw",
+  ".nef": "image/x-nikon-nef",
+  ".nrw": "image/x-nikon-nrw",
+  ".dng": "image/x-adobe-dng",
+  ".raf": "image/x-fuji-raf",
+  ".orf": "image/x-olympus-orf",
+  ".rw2": "image/x-panasonic-rw2",
+  ".pef": "image/x-pentax-pef",
+
   // Audio
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
