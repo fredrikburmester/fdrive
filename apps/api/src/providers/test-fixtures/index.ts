@@ -76,3 +76,20 @@ export function probeFetch(reachable = true): typeof globalThis.fetch {
       : new Response("unauthorized", { status: 401 });
   }) as unknown as typeof globalThis.fetch;
 }
+
+/** Ensures an enabled S3 provider row at `baseUrl` (bucket in the path), with an optional region. */
+export async function seedS3Provider(
+  repos: Pick<Repos, "providers">,
+  baseUrl: string,
+  options: { label?: string; region?: string; enabled?: boolean } = {},
+): Promise<Provider> {
+  const row = await repos.providers.ensure({ type: "s3", baseUrl });
+  const updated = await repos.providers.update(row.id, {
+    enabled: options.enabled ?? true,
+    managedByEnv: false,
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.region === undefined ? {} : { config: { ...row.config, region: options.region } }),
+  });
+  if (updated === null) throw new Error("provider vanished");
+  return updated;
+}

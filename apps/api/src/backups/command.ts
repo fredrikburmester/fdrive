@@ -13,6 +13,7 @@ import {
   restoreArchive,
   s3Destination,
 } from "@fdrive/backup";
+import { ProviderType } from "@fdrive/contracts";
 import { stripTransientFields } from "@fdrive/core";
 import { createDb, migrate } from "@fdrive/db";
 import { z } from "zod";
@@ -235,7 +236,7 @@ export async function runBackupCommand(
       .strict();
     const provider = z
       .object({
-        type: z.enum(["sftpgo", "webdav"]),
+        type: ProviderType,
         id: z.uuid(),
         baseUrl: z.url(),
         config: z.record(z.string(), z.unknown()),
@@ -244,21 +245,23 @@ export async function runBackupCommand(
         credential: z.record(z.string(), z.string()),
       })
       .strict();
-    const input = z.union([s3, provider]).parse(raw);
-    const providerModule = input.type === "s3" ? null : moduleFor(input.type);
-    if (input.type !== "s3" && !providerModule) throw Error("Unsupported destination provider");
-    const destination =
-      input.type === "s3"
-        ? s3Destination(input)
-        : providerDestination(
-            await rawBackupStorage(
-              providerModule as NonNullable<typeof providerModule>,
-              { id: input.id, baseUrl: input.baseUrl, config: input.config },
-              input.credential,
-              input.username,
-            ),
-            input.prefix,
-          );
+    // A bucket destination and a provider-row destination of the S3 type both say
+    // `type: "s3"`; only the row carries an `id`, so the shape decides.
+    const input =
+      typeof raw === "object" && raw !== null && "id" in raw ? provider.parse(raw) : s3.parse(raw);
+    const providerModule = "id" in input ? moduleFor(input.type) : null;
+    if ("id" in input && !providerModule) throw Error("Unsupported destination provider");
+    const destination = !("id" in input)
+      ? s3Destination(input)
+      : providerDestination(
+          await rawBackupStorage(
+            providerModule as NonNullable<typeof providerModule>,
+            { id: input.id, baseUrl: input.baseUrl, config: input.config },
+            input.credential,
+            input.username,
+          ),
+          input.prefix,
+        );
     if (command === "list") output(JSON.stringify(await discoverBackups(destination), null, 2));
     else {
       if (!values.snapshot || !values.output)

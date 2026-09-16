@@ -1,6 +1,6 @@
 # WebDAV provider
 
-`packages/webdav` (`@fdrive/webdav`) is the second registered storage backend: any RFC 4918
+`packages/webdav` (`@fdrive/webdav`) is a registered storage backend: any RFC 4918
 class 1 server behind Basic authentication. Administrators add one under **System > Storage**
 by endpoint URL; people log in with a username and password, link it beside an SFTPGo login,
 and browse, upload, download, rename, move, copy and delete through the ordinary file UI.

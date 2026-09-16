@@ -1,11 +1,12 @@
 import type { ProviderType } from "@fdrive/contracts";
-import { Globe, HardDrive, type LucideIcon, Server } from "lucide-react";
+import { Database, Globe, HardDrive, type LucideIcon, Server } from "lucide-react";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 import { cn } from "@/lib/utils";
 
 const ICONS: Readonly<Record<ProviderType, LucideIcon>> = {
   sftpgo: Server,
   webdav: Globe,
+  s3: Database,
 };
 
 export interface ProviderIconProps {

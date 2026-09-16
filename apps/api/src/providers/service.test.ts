@@ -75,7 +75,7 @@ describe("createProviderService: rows", () => {
       checkedAt: "2026-09-10T00:00:00.000Z",
       createdAt: expect.any(String),
     });
-    expect(h.service.types().map((type) => type.type)).toEqual(["sftpgo", "webdav"]);
+    expect(h.service.types().map((type) => type.type)).toEqual(["sftpgo", "webdav", "s3"]);
     expect(await h.service.capabilitiesFor(resolved)).toEqual({
       ...sftpgoModule.capabilities,
       trash: false,

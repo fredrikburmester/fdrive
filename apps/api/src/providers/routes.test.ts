@@ -1,5 +1,6 @@
 import { AdminProvider, AdminProvidersResponse, ProvidersResponse } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createFakeS3Server } from "@fdrive/s3";
 import { createFakeWebdavServer } from "@fdrive/webdav";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -11,6 +12,7 @@ import type { ProviderService } from "./service.js";
 import {
   memoryProviderService,
   probeFetch,
+  seedS3Provider,
   seedSftpgoProvider,
   seedWebdavProvider,
 } from "./test-fixtures/index.ts";
@@ -167,7 +169,7 @@ describe("/admin/providers", () => {
     const list = await h.call("/api/v1/admin/providers");
     const body = AdminProvidersResponse.parse(await list.json());
     expect(body.providers.map((provider) => provider.id)).toEqual([row.id]);
-    expect(body.types.map((type) => type.type)).toEqual(["sftpgo", "webdav"]);
+    expect(body.types.map((type) => type.type)).toEqual(["sftpgo", "webdav", "s3"]);
 
     const updated = await h.call(`/api/v1/admin/providers/${row.id}`, {
       method: "PATCH",
@@ -367,5 +369,112 @@ describe("/admin/providers with a WebDAV type", () => {
       "password",
     ]);
     expect(JSON.stringify(body)).not.toContain("dav.test");
+  });
+});
+
+describe("/admin/providers with an S3 type", () => {
+  const KEY = { accessKeyId: "alice-key", secretAccessKey: "alice-secret" };
+
+  function s3Harness(isAdmin: boolean) {
+    const s3 = createFakeS3Server({ keys: [KEY], buckets: ["media"] });
+    const repos = createMemoryRepos();
+    const service = memoryProviderService(repos, {
+      fetch: s3.fetch,
+      clock: () => new Date("2026-09-16T00:00:00Z"),
+    });
+    const built = buildApp({ isAdmin, service });
+    return { s3, repos, app: built.app, call: built.call };
+  }
+
+  it("probes the bucket unsigned, creates the row and advertises its form and capabilities", async () => {
+    const h = s3Harness(true);
+    const created = await h.call("/api/v1/admin/providers", {
+      method: "POST",
+      body: {
+        type: "s3",
+        label: "MinIO",
+        baseUrl: "http://s3.test/media/team",
+        config: { region: "garage" },
+      },
+    });
+    expect(created.status).toBe(200);
+    expect(AdminProvider.parse(await created.json())).toMatchObject({
+      type: "s3",
+      label: "MinIO",
+      config: { region: "garage" },
+      enabled: true,
+    });
+    expect(h.s3.requests[0]).toMatchObject({ method: "GET", url: "http://s3.test/media/" });
+    expect(h.s3.requests[0]?.headers.authorization).toBeUndefined();
+
+    const list = AdminProvidersResponse.parse(
+      await (await h.call("/api/v1/admin/providers")).json(),
+    );
+    expect(list.providers[0]).toMatchObject({ type: "s3", reachable: true });
+    const type = list.types.find((entry) => entry.type === "s3");
+    expect(type).toMatchObject({
+      label: "S3",
+      configFields: [{ name: "region", required: false }],
+      capabilities: {
+        zip: false,
+        setModifiedAt: false,
+        atomicMove: false,
+        trash: true,
+        shares: false,
+        office: false,
+        index: false,
+        scopeMapping: false,
+      },
+    });
+    expect(type?.credentialFields.map((field) => field.label)).toEqual([
+      "Access key ID",
+      "Secret key",
+    ]);
+
+    const missingBucket = await h.call("/api/v1/admin/providers/test", {
+      method: "POST",
+      body: { type: "s3", baseUrl: "http://s3.test/other" },
+    });
+    expect(await missingBucket.json()).toEqual({
+      ok: false,
+      detail: "bucket other was not found on this endpoint",
+    });
+    const noBucket = await h.call("/api/v1/admin/providers/test", {
+      method: "POST",
+      body: { type: "s3", baseUrl: "http://s3.test/" },
+    });
+    expect(((await noBucket.json()) as { detail: string }).detail).toContain(
+      "must name the bucket",
+    );
+  });
+
+  it("refuses configuration the type does not declare", async () => {
+    const h = s3Harness(true);
+    const created = await h.call("/api/v1/admin/providers", {
+      method: "POST",
+      body: {
+        type: "s3",
+        label: "x",
+        baseUrl: "http://s3.test/media",
+        config: { bucket: "media" },
+      },
+    });
+    expect(created.status).toBe(400);
+  });
+
+  it("lists an S3 row publicly without its endpoint or bucket", async () => {
+    const h = s3Harness(false);
+    await seedS3Provider(h.repos, "http://s3.test/media/team", { label: "Photos" });
+    const res = await h.call("/api/v1/providers");
+    const body = ProvidersResponse.parse(await res.json());
+    expect(body.providers).toHaveLength(1);
+    expect(body.providers[0]).toMatchObject({ type: "s3", label: "Photos" });
+    expect(body.providers[0]?.credentialFields.map((field) => field.name)).toEqual([
+      "username",
+      "password",
+    ]);
+    const text = JSON.stringify(body);
+    expect(text).not.toContain("s3.test");
+    expect(text).not.toContain("media");
   });
 });
