@@ -140,6 +140,35 @@ describe("initialMessage", () => {
   it("leaves out empty instructions", () => {
     expect(initialMessage(ITEMS, "", false)).not.toContain("instructions");
   });
+
+  it("tells the assistant what the person chose not to share", () => {
+    const noContents = initialMessage(ITEMS, undefined, true, {
+      contents: false,
+      otherFileNames: true,
+    });
+    expect(noContents).toContain(
+      "You can search the drive and find similar files, but the person chose not to share file contents",
+    );
+    expect(noContents).not.toContain("names of files outside the selection");
+
+    const noNames = initialMessage(ITEMS, "Group by year", true, {
+      contents: true,
+      otherFileNames: false,
+    });
+    expect(noNames).toContain("You can read indexed text of selected files");
+    expect(noNames).toContain(
+      "The person chose not to share the names of files outside the selection",
+    );
+    expect(noNames.endsWith("The person's instructions: Group by year")).toBe(true);
+
+    // An unindexed drive has no contents to withhold; only the names line is added.
+    const unindexed = initialMessage(ITEMS, undefined, false, {
+      contents: false,
+      otherFileNames: false,
+    });
+    expect(unindexed).toContain("Extracted text and search are not available");
+    expect(unindexed).toContain("names of files outside the selection");
+  });
 });
 
 describe("runOrganizeAgent", () => {

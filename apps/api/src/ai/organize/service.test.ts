@@ -333,6 +333,54 @@ describe("createOrganizeService", () => {
       expect(onUnexpectedError).not.toHaveBeenCalled();
     });
 
+    it("withholds excerpts and other file names when the person chose not to share them", async () => {
+      const { model, inputs, starts } = fakeModel([
+        toolTurn({ id: "tree", name: "folder_tree", input: { depth: 1 } }),
+        submitTurn([]),
+      ]);
+      const { service } = setup({
+        model,
+        mcp: {
+          trashPathForStorage: () => "/.Trash",
+          scopeResolver: {
+            verifiedIndexScopes: async () => ({
+              available: true,
+              scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+            }),
+          },
+        },
+      });
+      const principal = principalWith(drive());
+
+      const started = await service.start(principal, {
+        paths: ["/Inbox/a.pdf"],
+        share: { contents: false, otherFileNames: false },
+      });
+      const run = await finished(service, principal, started.id);
+
+      expect(run.state).toBe("done");
+      expect(starts[0]?.tools.map((tool) => tool.name)).toEqual([
+        "folder_tree",
+        "list_folder",
+        "search_drive",
+        "similar_files",
+        SUBMIT_TOOL,
+      ]);
+      const firstText = inputs[0]?.kind === "user" ? inputs[0].text : "";
+      expect(firstText).toContain("the person chose not to share file contents");
+      expect(firstText).toContain("names of files outside the selection");
+      expect(inputs[1]).toEqual({
+        kind: "tool_results",
+        results: [
+          {
+            id: "tree",
+            isError: false,
+            content: "/ 2 folders, 1 files\n  Finance/\n  Inbox/",
+          },
+        ],
+      });
+    });
+
     it("offers the index-backed tools when the identity's index scopes are verified", async () => {
       const { model, starts } = fakeModel([submitTurn([])]);
       const { service } = setup({

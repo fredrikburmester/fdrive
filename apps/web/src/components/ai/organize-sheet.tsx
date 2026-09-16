@@ -5,6 +5,7 @@ import type {
   FsEntry,
   MoveManyRequest,
   OrganizeProposal,
+  OrganizeSharing,
   OrganizeSuggestion,
 } from "@fdrive/contracts";
 import { baseName, extensionOf, parentPath, uniqueNumberedName } from "@fdrive/core";
@@ -18,8 +19,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -50,6 +58,45 @@ import type { OrganizeController } from "@/lib/ai/use-organize";
 import { apiClient } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
 import { describeFsError } from "@/lib/files/queries";
+
+/** What a run may share beyond the selection itself, as the multi-select offers it. */
+const SHARE_OPTIONS = [
+  {
+    value: "contents",
+    label: "File contents",
+    description: "Up to 1,500 characters of extracted text from each selected file.",
+  },
+  {
+    value: "otherFileNames",
+    label: "Names of other files",
+    description: "What it sees while browsing and searching. Folder names are always shared.",
+  },
+] as const satisfies readonly {
+  value: keyof OrganizeSharing;
+  label: string;
+  description: string;
+}[];
+
+type ShareKey = (typeof SHARE_OPTIONS)[number]["value"];
+
+function shareValue(share: OrganizeSharing): ShareKey[] {
+  return SHARE_OPTIONS.filter((option) => share[option.value]).map((option) => option.value);
+}
+
+function shareFrom(values: readonly ShareKey[]): OrganizeSharing {
+  return {
+    contents: values.includes("contents"),
+    otherFileNames: values.includes("otherFileNames"),
+  };
+}
+
+/** The closed trigger's text: every chosen option, or that nothing beyond the selection is shared. */
+export function shareLabel(values: readonly ShareKey[]): string {
+  const labels = SHARE_OPTIONS.filter((option) => values.includes(option.value)).map(
+    (option, index) => (index === 0 ? option.label : option.label.toLowerCase()),
+  );
+  return labels.length === 0 ? "Nothing extra" : labels.join(", ");
+}
 
 export interface OrganizeSheetProps {
   /** The session to show; the sheet is open while it has one that is open. */
@@ -134,7 +181,7 @@ interface BodyProps {
 }
 
 function OrganizeSheetBody({ session, organize, provider, applying, onApply }: BodyProps) {
-  const { entries, instructions, runId } = session;
+  const { entries, instructions, share, runId } = session;
   const { run, running } = organize;
   const state = run?.state;
   const runError = organize.runError;
@@ -168,22 +215,53 @@ function OrganizeSheetBody({ session, organize, provider, applying, onApply }: B
           <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col gap-4 p-4">
               {runId === null || state === undefined ? (
-                <Field>
-                  <FieldLabel htmlFor="organize-instructions">Instructions</FieldLabel>
-                  <Textarea
-                    id="organize-instructions"
-                    value={instructions}
-                    disabled={running}
-                    maxLength={2000}
-                    placeholder="Put invoices under Finance, photos by year"
-                    onChange={(event) => organize.setInstructions(event.target.value)}
-                  />
-                  <FieldDescription>
-                    Optional. The selected items' names, sizes, dates and indexed text, and the
-                    names of files the assistant looks through elsewhere in your drive, are sent to{" "}
-                    {providerLabel(provider)}.
-                  </FieldDescription>
-                </Field>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="organize-instructions">Instructions</FieldLabel>
+                    <Textarea
+                      id="organize-instructions"
+                      value={instructions}
+                      disabled={running}
+                      maxLength={2000}
+                      placeholder="Put invoices under Finance, photos by year"
+                      onChange={(event) => organize.setInstructions(event.target.value)}
+                    />
+                    <FieldDescription>Optional.</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="organize-share">Share with assistant</FieldLabel>
+                    <Select
+                      multiple
+                      value={shareValue(share)}
+                      disabled={running}
+                      onValueChange={(values) => organize.setShare(shareFrom(values))}
+                    >
+                      <SelectTrigger id="organize-share" className="w-full">
+                        <SelectValue>{shareLabel}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        {SHARE_OPTIONS.map((option) => (
+                          <SelectItem
+                            key={option.value}
+                            value={option.value}
+                            className="items-start"
+                          >
+                            <span className="flex flex-col whitespace-normal">
+                              <span>{option.label}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {option.description}
+                              </span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      The selected items' names, sizes and dates, and the names of folders the
+                      assistant looks through, are always sent to {providerLabel(provider)}.
+                    </FieldDescription>
+                  </Field>
+                </FieldGroup>
               ) : null}
               {running ? (
                 <div role="status" className="flex flex-col gap-3">

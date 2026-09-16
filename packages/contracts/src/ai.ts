@@ -85,10 +85,29 @@ export type AiStatusResponse = z.infer<typeof AiStatusResponse>;
 /** The most items one organize request may ask about. */
 export const MAX_ORGANIZE_ITEMS = 500;
 
+/**
+ * What one organize run may send to the model beyond the selected items'
+ * own paths, sizes and dates and the folder names the assistant browses,
+ * which every run needs. Chosen by the person for each run.
+ */
+export const OrganizeSharing = z.strictObject({
+  /** Short excerpts of the selected files' already-extracted text, read when the assistant asks. */
+  contents: z.boolean(),
+  /** Names of files outside the selection seen while browsing folders or searching. Folder names are always shared. */
+  otherFileNames: z.boolean(),
+});
+
+export type OrganizeSharing = z.infer<typeof OrganizeSharing>;
+
+/** What a run shares when the request does not say: everything the assistant can use. */
+export const DEFAULT_ORGANIZE_SHARING: OrganizeSharing = { contents: true, otherFileNames: true };
+
 export const OrganizeRequest = z.strictObject({
   paths: z.array(z.string().min(1).max(4096)).min(1).max(MAX_ORGANIZE_ITEMS),
   /** Optional guidance from the user, e.g. "photos by year". */
   instructions: z.string().trim().max(2000).optional(),
+  /** Omitted means `DEFAULT_ORGANIZE_SHARING`. */
+  share: OrganizeSharing.optional(),
 });
 
 export type OrganizeRequest = z.infer<typeof OrganizeRequest>;

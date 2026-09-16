@@ -1,4 +1,9 @@
-import type { AiStatusResponse, OrganizeRequest, OrganizeRun } from "@fdrive/contracts";
+import {
+  type AiStatusResponse,
+  DEFAULT_ORGANIZE_SHARING,
+  type OrganizeRequest,
+  type OrganizeRun,
+} from "@fdrive/contracts";
 import { isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
@@ -101,6 +106,7 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
         (path) => !paths.some((other) => other !== path && isUnderPath(other, path)),
       );
       const model = deps.modelFor(config);
+      const share = request.share ?? DEFAULT_ORGANIZE_SHARING;
 
       try {
         return deps.runs.start(
@@ -125,10 +131,12 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
                   principal,
                   selected: new Set(items.map((item) => item.path)),
                   indexed,
+                  share,
                 }),
                 items,
                 instructions: request.instructions || undefined,
                 indexed,
+                share,
                 signal,
                 activity,
                 checkAuthority,
