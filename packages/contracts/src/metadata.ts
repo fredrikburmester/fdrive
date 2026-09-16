@@ -76,17 +76,17 @@ export type FavoriteRequest = z.infer<typeof FavoriteRequest>;
 export const FolderViewMode = z.enum(["list", "grid", "tree"]);
 export type FolderViewMode = z.infer<typeof FolderViewMode>;
 
-/** Mirrors the browser's existing `SortSpec` shape for future folder-local sorting. */
+/** A folder-specific sort, persisted per identity; mirrors the browser's `SortSpec`. */
 export const FolderViewSort = z.strictObject({
   key: z.enum(["name", "size", "modifiedAt", "ext"]),
   direction: z.enum(["asc", "desc"]),
 });
 export type FolderViewSort = z.infer<typeof FolderViewSort>;
 
-/** A pinned display state for one real directory. `sort` is reserved for a later UI. */
+/** A pinned display state for one real directory. Either field is null when only the other is pinned. */
 export const FolderViewState = z.strictObject({
   path: z.string(),
-  mode: FolderViewMode,
+  mode: FolderViewMode.nullable(),
   sort: FolderViewSort.nullable().optional(),
 });
 export type FolderViewState = z.infer<typeof FolderViewState>;
@@ -94,15 +94,23 @@ export type FolderViewState = z.infer<typeof FolderViewState>;
 export const FolderViewResponse = z.strictObject({ view: FolderViewState.nullable() });
 export type FolderViewResponse = z.infer<typeof FolderViewResponse>;
 
-/** Saves a folder's mode. Sort is intentionally not set until sort UI ships. */
-export const SetFolderViewRequest = z.strictObject({
-  path: z.string(),
-  mode: FolderViewMode,
-});
+/** Saves a folder's mode and/or sort; an omitted field keeps its stored value. */
+export const SetFolderViewRequest = z
+  .strictObject({
+    path: z.string(),
+    mode: FolderViewMode.optional(),
+    sort: FolderViewSort.optional(),
+  })
+  .refine((req) => req.mode !== undefined || req.sort !== undefined, {
+    message: "mode or sort is required",
+  });
 export type SetFolderViewRequest = z.infer<typeof SetFolderViewRequest>;
 
-/** Removes one folder pin. */
-export const RemoveFolderViewRequest = z.strictObject({ path: z.string() });
+/** Removes one folder pin, or only its `part` (the other part stays pinned). */
+export const RemoveFolderViewRequest = z.strictObject({
+  path: z.string(),
+  part: z.enum(["mode", "sort"]).optional(),
+});
 export type RemoveFolderViewRequest = z.infer<typeof RemoveFolderViewRequest>;
 
 export const RecentItem = z.object({

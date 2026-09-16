@@ -1,6 +1,6 @@
 import type { JobKind, JobProgress, JobState } from "@fdrive/contracts";
 import { baseName, parentPath } from "@fdrive/core";
-import { formatBytes } from "../format";
+import { type FormatBytesOptions, formatBytes } from "../format";
 import type { JobRequest } from "./types";
 
 /** A human label for a job's lifecycle state, matching the badge shown per row. */
@@ -49,13 +49,13 @@ export function formatJobFileProgress(progress: JobProgress): string {
 }
 
 /** "1.2 GB read", from the job's cumulative byte count. */
-export function formatJobBytesRead(progress: JobProgress): string {
-  return `${formatBytes(progress.bytes)} read`;
+export function formatJobBytesRead(progress: JobProgress, opts: FormatBytesOptions = {}): string {
+  return `${formatBytes(progress.bytes, opts)} read`;
 }
 
 /** Combines `formatJobFileProgress` and `formatJobBytesRead` into one line. */
-export function formatJobProgress(progress: JobProgress): string {
-  return `${formatJobFileProgress(progress)} · ${formatJobBytesRead(progress)}`;
+export function formatJobProgress(progress: JobProgress, opts: FormatBytesOptions = {}): string {
+  return `${formatJobFileProgress(progress)} · ${formatJobBytesRead(progress, opts)}`;
 }
 
 /**

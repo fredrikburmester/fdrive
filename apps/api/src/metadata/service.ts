@@ -5,6 +5,7 @@ import type {
   FavoriteRepo,
   FileTagRepo,
   FolderViewMode,
+  FolderViewPatch,
   FolderViewRepo,
   FolderViewSort,
   IdentityRepo,
@@ -33,7 +34,8 @@ export interface MetadataRecentItem {
 
 export interface MetadataFolderView {
   readonly path: string;
-  readonly mode: FolderViewMode;
+  /** Null when only the sort is pinned. */
+  readonly mode: FolderViewMode | null;
   readonly sort: FolderViewSort | null;
 }
 
@@ -105,8 +107,10 @@ export interface MetadataService {
   addFavorite(identityId: string, path: string, kind: FavoriteKind): Promise<void>;
   removeFavorite(identityId: string, path: string): Promise<void>;
   getFolderView(identityId: string, path: string): Promise<MetadataFolderView | null>;
-  setFolderView(identityId: string, path: string, mode: FolderViewMode): Promise<void>;
-  removeFolderView(identityId: string, path: string): Promise<void>;
+  /** Pins `patch`'s fields on `path`; an omitted field keeps its stored value. */
+  setFolderView(identityId: string, path: string, patch: FolderViewPatch): Promise<void>;
+  /** Removes a folder's pin, or only its mode or sort when `part` is given. */
+  removeFolderView(identityId: string, path: string, part?: "mode" | "sort"): Promise<void>;
   /** Resets every folder pin owned through every identity linked to `accountId`. */
   resetFolderViews(accountId: string): Promise<void>;
   listRecents(identityId: string, limit?: number): Promise<MetadataRecentItem[]>;
@@ -223,12 +227,17 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       return view === null ? null : { path: view.path, mode: view.mode, sort: view.sort };
     },
 
-    setFolderView(identityId, path, mode) {
-      return deps.folderViews.set(identityId, path, mode);
+    setFolderView(identityId, path, patch) {
+      return deps.folderViews.set(identityId, path, patch);
     },
 
-    removeFolderView(identityId, path) {
-      return deps.folderViews.remove(identityId, path);
+    removeFolderView(identityId, path, part) {
+      if (part === undefined) return deps.folderViews.remove(identityId, path);
+      return deps.folderViews.set(
+        identityId,
+        path,
+        part === "mode" ? { mode: null } : { sort: null },
+      );
     },
 
     async resetFolderViews(accountId) {

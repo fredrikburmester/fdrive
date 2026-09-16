@@ -1,7 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
 import { cn } from "@/lib/utils";
 import { GRID_TILE_HEIGHT, GRID_TILE_WIDTH } from "./file-grid";
-import { FILE_ROW_HEIGHT } from "./file-list";
 
 const ROW_COUNT = 10;
 const ROW_KEYS = Array.from({ length: ROW_COUNT }, (_, index) => `skeleton-row-${index}`);
@@ -21,19 +21,24 @@ export type ListingSkeletonVariant = "list" | "grid";
 export interface ListingSkeletonProps {
   /** Which view's placeholder to render. Defaults to the list layout. */
   variant?: ListingSkeletonVariant;
+  /** Row height preset for the list layout, matching the real list. Defaults to "comfortable". */
+  density?: ListDensity;
 }
 
 /**
  * Placeholder shown while a folder's listing is loading. Mirrors the real
- * list's row layout and height (`FILE_ROW_HEIGHT`) or, in `"grid"`, the
+ * list's row layout and height (`ROW_HEIGHTS[density]`) or, in `"grid"`, the
  * grid's tile size, so the loading state fills the listing area exactly
  * like real content instead of a narrower, fixed-width block.
  */
-export function ListingSkeleton({ variant = "list" }: ListingSkeletonProps) {
-  return variant === "grid" ? <GridSkeleton /> : <ListSkeleton />;
+export function ListingSkeleton({
+  variant = "list",
+  density = DEFAULT_LIST_DENSITY,
+}: ListingSkeletonProps) {
+  return variant === "grid" ? <GridSkeleton /> : <ListSkeleton density={density} />;
 }
 
-function ListSkeleton() {
+function ListSkeleton({ density }: { density: ListDensity }) {
   return (
     <div data-slot="listing-skeleton-list" aria-hidden="true">
       {ROW_KEYS.map((key, index) => (
@@ -41,7 +46,7 @@ function ListSkeleton() {
           key={key}
           data-slot="skeleton-row"
           className="flex items-center gap-3 border-border/60 border-b px-3"
-          style={{ height: FILE_ROW_HEIGHT }}
+          style={{ height: ROW_HEIGHTS[density] }}
         >
           <Skeleton className="size-4 shrink-0 rounded-sm" />
           <Skeleton className="size-4 shrink-0 rounded-sm" />

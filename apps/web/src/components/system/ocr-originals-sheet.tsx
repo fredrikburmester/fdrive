@@ -39,7 +39,6 @@ import {
   useOcrOriginals,
   useRestoreOcrOriginal,
 } from "@/lib/api/system-queries";
-import { formatBytes } from "@/lib/format";
 import { formatRelativeTime } from "@/lib/system/format";
 import {
   isRestorable,
@@ -50,6 +49,7 @@ import {
   restoreConfirmation,
   restoreOptIns,
 } from "@/lib/system/ocr-originals";
+import { useFormatters } from "@/lib/use-format-preferences";
 
 function downloadHref(id: string): string {
   return buildRequestUrl("", ROUTES.system.ocrOriginalDownload, { id });
@@ -245,6 +245,7 @@ function OriginalRow({
   onRestore: () => void;
   onDelete: () => void;
 }) {
+  const { formatBytes } = useFormatters();
   return (
     <li className="flex items-start gap-2 rounded-md px-2 py-2 hover:bg-muted/50">
       <div className="min-w-0 flex-1">

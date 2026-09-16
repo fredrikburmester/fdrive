@@ -44,7 +44,10 @@ describe("memory metadata path transaction", () => {
     const source = "/source";
     await repos.fileTags.setTags(identityId, source, [tag.id]);
     await repos.favorites.add(identityId, source, "file");
-    await repos.folderViews.set(identityId, source, "grid", { key: "size", direction: "desc" });
+    await repos.folderViews.set(identityId, source, {
+      mode: "grid",
+      sort: { key: "size", direction: "desc" },
+    });
     await repos.recents.touch(identityId, source);
     return { repos, tag, identityId, source };
   }

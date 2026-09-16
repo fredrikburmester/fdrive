@@ -9,6 +9,7 @@ import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
+import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
 import {
   apiClient,
   INTERNAL_DND_TYPE,
@@ -19,15 +20,16 @@ import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries } from "@/lib/files/selection";
 import { wantsThumbnail } from "@/lib/files/thumbnail";
-import { formatBytes, formatDate } from "@/lib/format";
 import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
+import { useFormatters } from "@/lib/use-format-preferences";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 
-export const FILE_ROW_HEIGHT = 36;
+/** The row height at the default ("comfortable") density. */
+export const FILE_ROW_HEIGHT = ROW_HEIGHTS.comfortable;
 const FILE_LIST_HEADER_HEIGHT = 36;
 
 /** Indent, in pixels, added per tree depth level in tree view. */
@@ -131,6 +133,8 @@ export interface FileListProps {
   onScrollConsumed?: (token: number) => void;
   /** Whether to show image thumbnails in place of generic file icons. Defaults to false. */
   showThumbnails?: boolean;
+  /** Row height preset (see `ROW_HEIGHTS`). Defaults to "comfortable". */
+  density?: ListDensity;
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
@@ -178,7 +182,10 @@ export function FileList({
   scrollRequest = null,
   onScrollConsumed,
   showThumbnails = false,
+  density = DEFAULT_LIST_DENSITY,
 }: FileListProps) {
+  const rowHeight = ROW_HEIGHTS[density];
+  const { formatBytes, formatDate } = useFormatters();
   const parentRef = useRef<HTMLDivElement>(null);
   const lastConsumedTokenRef = useRef<number | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -189,11 +196,16 @@ export function FileList({
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => FILE_ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     scrollMargin: FILE_LIST_HEADER_HEIGHT,
     scrollPaddingStart: FILE_LIST_HEADER_HEIGHT,
     overscan: 10,
   });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure only when the density changes the estimate
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight]);
 
   useEffect(() => {
     if (!scrollRequest || lastConsumedTokenRef.current === scrollRequest.token) {

@@ -19,7 +19,6 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { formatBytes } from "@/lib/format";
 import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import { useFolderSize } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
@@ -28,6 +27,7 @@ import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
 import { isRawExt } from "@/lib/preview/raw";
 import { summarizeSelection } from "@/lib/preview/selection";
+import { useFormatters } from "@/lib/use-format-preferences";
 
 export interface InspectorProps {
   readonly entries: readonly FsEntry[];
@@ -91,10 +91,13 @@ function SingleEntryBody({
   entry: FsEntry;
   capabilities: ProviderCapabilities;
 }) {
+  const { prefs } = useFormatters();
   const isDir = entry.kind === "dir";
   const folderSizeQuery = useFolderSize(entry.path, { enabled: isDir && capabilities.index });
   const { rows, note } = describeEntry(entry, {
     now: new Date(),
+    units: prefs.sizes,
+    clock: prefs.clock,
     ...(isDir
       ? {
           folderSize: capabilities.index
@@ -153,6 +156,7 @@ function SingleEntryBody({
 }
 
 function MultiEntryBody({ entries }: { entries: readonly FsEntry[] }) {
+  const { formatBytes } = useFormatters();
   const summary = summarizeSelection(entries);
 
   return (

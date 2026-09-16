@@ -32,7 +32,6 @@ import {
 } from "@/components/ui/table";
 import { describeFsError } from "@/lib/files/queries";
 import { useDefaultView } from "@/lib/files/use-default-view";
-import { formatBytes, formatDate } from "@/lib/format";
 import {
   emptiedToastMessage,
   emptyTrashConfirmDescription,
@@ -51,6 +50,7 @@ import {
   useTrashRestore,
   useTrashStatus,
 } from "@/lib/trash/queries";
+import { useFormatters } from "@/lib/use-format-preferences";
 
 /** What the confirmation dialog is asking about: permanently deleting the
  * given selection, or emptying the whole trash. */
@@ -61,6 +61,7 @@ type ConfirmAction =
 /** The trash listing at `/trash`: restore, restore-to-a-different-folder,
  * permanent delete, and empty, plus loading/empty/error states. */
 export function TrashPage() {
+  const { formatBytes, formatDate } = useFormatters();
   const [viewMode] = useDefaultView();
   const status = useTrashStatus();
   const trash = useTrash();

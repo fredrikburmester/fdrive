@@ -135,3 +135,37 @@ it("deduplicates a tagged root entry repeated as an expanded child", () => {
   const props = fixtures.fileList.mock.calls.at(-1)?.[0] as { entries: readonly FsEntry[] };
   expect(props.entries.map((entry) => entry.path)).toEqual(["/folder", "/folder/child.txt"]);
 });
+
+it("opens on a plain click and ignores double-click when row click is set to open", () => {
+  fixtures.view = "list";
+  window.localStorage.setItem("fdrive.list.rowClick", '"open"');
+  const onOpen = vi.fn();
+  renderListing({ onOpen });
+  const props = fixtures.fileList.mock.calls.at(-1)?.[0] as {
+    onEntryClick: (entry: FsEntry, modifiers: { shift: boolean; meta: boolean }) => void;
+    onEntryDoubleClick: (entry: FsEntry) => void;
+  };
+  const entry = entries[0] as FsEntry;
+  props.onEntryClick(entry, { shift: false, meta: false });
+  expect(onOpen).toHaveBeenCalledTimes(1);
+  expect(onOpen).toHaveBeenCalledWith(entry);
+  props.onEntryDoubleClick(entry);
+  expect(onOpen).toHaveBeenCalledTimes(1);
+  props.onEntryClick(entry, { shift: false, meta: true });
+  expect(onOpen).toHaveBeenCalledTimes(1);
+});
+
+it("keeps double-click opening and click selecting by default", () => {
+  fixtures.view = "list";
+  const onOpen = vi.fn();
+  renderListing({ onOpen });
+  const props = fixtures.fileList.mock.calls.at(-1)?.[0] as {
+    onEntryClick: (entry: FsEntry, modifiers: { shift: boolean; meta: boolean }) => void;
+    onEntryDoubleClick: (entry: FsEntry) => void;
+  };
+  const entry = entries[0] as FsEntry;
+  props.onEntryClick(entry, { shift: false, meta: false });
+  expect(onOpen).not.toHaveBeenCalled();
+  props.onEntryDoubleClick(entry);
+  expect(onOpen).toHaveBeenCalledWith(entry);
+});

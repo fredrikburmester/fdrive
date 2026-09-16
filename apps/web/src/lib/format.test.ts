@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatDate } from "./format.ts";
+import { formatBytes, formatDate, formatTime } from "./format.ts";
 
 describe("formatBytes", () => {
   it("returns '0 B' for zero", () => {
@@ -89,5 +89,47 @@ describe("formatDate", () => {
     const newYearsEve = new Date(2024, 0, 1, 10, 0);
     const date = new Date(2023, 11, 31, 23, 45);
     expect(formatDate(date, { now: newYearsEve })).toBe("Yesterday 23:45");
+  });
+});
+
+describe("formatBytes with decimal units", () => {
+  it("steps by 1000 and labels the first unit kB", () => {
+    expect(formatBytes(999, { units: "decimal" })).toBe("999 B");
+    expect(formatBytes(1000, { units: "decimal" })).toBe("1.0 kB");
+    expect(formatBytes(1536, { units: "decimal" })).toBe("1.5 kB");
+    expect(formatBytes(2_500_000, { units: "decimal" })).toBe("2.5 MB");
+    expect(formatBytes(3_000_000_000_000_000, { units: "decimal" })).toBe("3,000.0 TB");
+  });
+
+  it("keeps binary as the explicit and implicit default", () => {
+    expect(formatBytes(1536, { units: "binary" })).toBe(formatBytes(1536));
+  });
+});
+
+describe("formatDate styles and clocks", () => {
+  const now = new Date(2024, 5, 15, 14, 30);
+
+  it("renders a 12-hour clock in the relative style", () => {
+    expect(formatDate(new Date(2024, 5, 15, 21, 5), { now, clock: "12h" })).toBe("Today 9:05 PM");
+    expect(formatDate(new Date(2024, 5, 14, 0, 12), { now, clock: "12h" })).toBe(
+      "Yesterday 12:12 AM",
+    );
+  });
+
+  it("always shows the date and time in the absolute style", () => {
+    expect(formatDate(new Date(2024, 5, 15, 9, 5), { now, style: "absolute" })).toBe(
+      "Jun 15 09:05",
+    );
+    expect(formatDate(new Date(2024, 5, 14, 9, 12), { now, style: "absolute" })).toBe(
+      "Jun 14 09:12",
+    );
+    expect(
+      formatDate(new Date(2022, 11, 25, 21, 0), { now, style: "absolute", clock: "12h" }),
+    ).toBe("Dec 25, 2022 9:00 PM");
+  });
+
+  it("exposes the time formatter on its own", () => {
+    expect(formatTime(new Date(2024, 5, 15, 7, 3))).toBe("07:03");
+    expect(formatTime(new Date(2024, 5, 15, 7, 3), "12h")).toBe("7:03 AM");
   });
 });

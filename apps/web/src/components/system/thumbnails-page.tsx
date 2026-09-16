@@ -28,9 +28,9 @@ import {
   useSystemMaintenanceBusy,
   useSystemThumbnails,
 } from "@/lib/api/system-queries";
-import { formatBytes } from "@/lib/format";
 import { describeMaintenanceError } from "@/lib/system/maintenance";
 import { sidecarStatus } from "@/lib/system/status";
+import { useFormatters } from "@/lib/use-format-preferences";
 import { LogSheet } from "./log-sheet";
 import { MaintenanceProgress } from "./maintenance-progress";
 import { StatGrid } from "./stat-grid";
@@ -43,6 +43,7 @@ const ALL_ROOTS = "__all__";
 
 /** Admin controls for preview cache maintenance, independent of text indexing. */
 export function ThumbnailsPage() {
+  const { formatBytes } = useFormatters();
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemThumbnails();
   const indexer = useSystemIndexer();
   const rebuild = useRebuildIndexerThumbnails();

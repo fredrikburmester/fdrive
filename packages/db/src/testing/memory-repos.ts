@@ -13,9 +13,8 @@ import type {
   FavoriteRepo,
   FileTagRepo,
   FolderView,
-  FolderViewMode,
+  FolderViewPatch,
   FolderViewRepo,
-  FolderViewSort,
   Identity,
   IdentityRepo,
   MetadataPathRepo,
@@ -663,15 +662,17 @@ function createMemoryFolderViewRepo(): MemoryFolderViewRepo {
     async get(identityId, path) {
       return byIdentity.get(identityId)?.get(path) ?? null;
     },
-    async set(identityId, path, mode: FolderViewMode, sort?: FolderViewSort | null) {
-      const existing = viewsFor(identityId).get(path);
-      viewsFor(identityId).set(path, {
-        identityId,
-        path,
-        mode,
-        sort: sort === undefined ? (existing?.sort ?? null) : sort,
-        updatedAt: new Date(),
-      });
+    async set(identityId, path, patch: FolderViewPatch) {
+      if (patch.mode === undefined && patch.sort === undefined) return;
+      const views = viewsFor(identityId);
+      const existing = views.get(path);
+      const mode = patch.mode === undefined ? (existing?.mode ?? null) : patch.mode;
+      const sort = patch.sort === undefined ? (existing?.sort ?? null) : patch.sort;
+      if (mode === null && sort === null) {
+        views.delete(path);
+        return;
+      }
+      views.set(path, { identityId, path, mode, sort, updatedAt: new Date() });
     },
     async remove(identityId, path) {
       byIdentity.get(identityId)?.delete(path);

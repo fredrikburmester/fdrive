@@ -17,7 +17,7 @@ export function FolderViewsCard() {
       <CardHeader>
         <CardTitle>Folder views</CardTitle>
         <CardDescription>
-          Changing View in a folder remembers its layout for that login across devices.
+          Changing View or Sort in a folder remembers it for that login across devices.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -42,7 +42,8 @@ export function FolderViewsCard() {
         </div>
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
-            Remove saved views for every linked login. All folders will follow the default.
+            Remove saved views and sorts for every linked login. All folders will follow the
+            defaults.
           </p>
           <Button variant="outline" disabled={reset.isPending} onClick={() => reset.mutate()}>
             {reset.isPending ? "Resetting…" : "Reset all folder views"}

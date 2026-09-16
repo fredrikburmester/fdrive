@@ -92,6 +92,13 @@
       "when": 1789400320715,
       "tag": "0012_known_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789564214894,
+      "tag": "0013_folder_view_sort",
+      "breakpoints": true
     }
   ]
 }

@@ -189,7 +189,10 @@ export function registerMetadataRoutes(
     const path = normalizeOrThrow(input.path);
     const entry = await statEntry(principal.storage, path);
     if (entry.kind !== "dir") throw new ApiHttpError("bad_request", "path must be a directory");
-    await metadata.setFolderView(principal.identityId, path, input.mode);
+    await metadata.setFolderView(principal.identityId, path, {
+      ...(input.mode === undefined ? {} : { mode: input.mode }),
+      ...(input.sort === undefined ? {} : { sort: input.sort }),
+    });
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -205,7 +208,7 @@ export function registerMetadataRoutes(
     const principal = c.get("principal");
     const input = await parseBody(RemoveFolderViewRequest, c);
     const path = normalizeOrThrow(input.path);
-    await metadata.removeFolderView(principal.identityId, path);
+    await metadata.removeFolderView(principal.identityId, path, input.part);
     const body: OkResponse = { ok: true };
     return c.json(body);
   });

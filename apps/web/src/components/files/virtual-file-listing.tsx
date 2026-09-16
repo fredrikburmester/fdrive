@@ -3,6 +3,7 @@
 import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useTreeChildren } from "@/lib/files/queries";
+import { resolveRowClick } from "@/lib/files/row-click";
 import {
   EMPTY_SELECTION,
   type SelectionAction,
@@ -19,6 +20,8 @@ import {
 } from "@/lib/files/tree";
 import { flattenTree } from "@/lib/files/tree-rows";
 import { useDefaultView } from "@/lib/files/use-default-view";
+import { useListDensity } from "@/lib/files/use-list-density";
+import { useRowClickAction } from "@/lib/files/use-row-click";
 import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import type { RowContextAction } from "./file-context-menu";
 import { FileGrid } from "./file-grid";
@@ -66,6 +69,8 @@ export function VirtualFileListing({
   capabilities = DEFAULT_CAPABILITIES,
 }: VirtualFileListingProps) {
   const [viewMode] = useDefaultView();
+  const [rowClickAction] = useRowClickAction();
+  const [density] = useListDensity();
   const [treeState, setTreeState] = useState<TreeState>(EMPTY_TREE_STATE);
 
   useEffect(() => {
@@ -121,7 +126,19 @@ export function VirtualFileListing({
   }
 
   function handleEntryClick(entry: FsEntry, modifiers: ClickModifierKeys) {
-    dispatchSelection({ type: "click", path: entry.path, modifiers });
+    const intent = resolveRowClick(rowClickAction, modifiers);
+    if (intent.kind === "open") {
+      onOpen(entry);
+      return;
+    }
+    dispatchSelection({ type: "click", path: entry.path, modifiers: intent.modifiers });
+  }
+
+  /** Double-click opens unless a plain click already does, so one open never fires three times. */
+  function handleEntryDoubleClick(entry: FsEntry) {
+    if (rowClickAction !== "open") {
+      onOpen(entry);
+    }
   }
 
   function handleToggleTag(paths: readonly string[], tagId: string, checked: boolean) {
@@ -145,7 +162,7 @@ export function VirtualFileListing({
     selected: selection.selected,
     focusedPath: selection.focus,
     onEntryClick: handleEntryClick,
-    onEntryDoubleClick: onOpen,
+    onEntryDoubleClick: handleEntryDoubleClick,
     officeStatus,
     onContextAction: handleContextAction,
     getDragPaths: (entry: FsEntry) => [entry.path],
@@ -168,6 +185,7 @@ export function VirtualFileListing({
   return (
     <FileList
       {...commonProps}
+      density={density}
       {...(viewMode === "tree"
         ? {
             treeDepths,
