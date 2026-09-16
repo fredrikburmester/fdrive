@@ -38,10 +38,8 @@ export interface RunningEnvironment {
   readonly sftpgoUrl: string;
   /** The same SFTPGo's WebDAV binding, for specs that add it as a second provider type. */
   readonly sftpgoWebdavUrl: string;
-  /** A MinIO bucket address (`http://host:port/bucket`), for specs that add an S3 provider. */
-  readonly s3Url: string;
-  /** A key pair with read-write access to that bucket. */
-  readonly s3Key: MinioKey;
+  /** A MinIO bucket (`url` is `http://host:port/bucket`) and a read-write key, when `options.s3` asked for one. */
+  readonly s3?: { readonly url: string; readonly key: MinioKey };
   /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
    * `getWebBaseUrl()` for the default, shared environment, but reflect
    * `options.apiPort`/`options.webPort` for a second, independent
@@ -55,6 +53,8 @@ export interface StartEnvironmentOptions {
   /** Dedicated test composition entrypoint. Defaults to the production entrypoint. */
   readonly apiEntrypoint?: string;
   readonly sftpgoOptions?: StartSftpgoOptions;
+  /** Also start a MinIO bucket, for a spec that adds an S3 provider. Off by default: most specs never need it. */
+  readonly s3?: boolean;
   /** Fixture-only configuration before API startup, using this disposable server. */
   readonly prepareSftpgo?: (baseUrl: string) => Promise<void>;
   /**
@@ -238,12 +238,9 @@ export async function startEnvironment(
     // The same container's WebDAV binding, for specs that add it as a
     // second provider type; workers inherit the setup process's env.
     process.env.E2E_SFTPGO_WEBDAV_URL = sftpgo.webdavUrl;
-    // A MinIO bucket, the real S3 target `s3-provider.spec.ts` adds.
-    const minio = await startMinio();
-    stopFns.push(() => minio.stop());
-    process.env.E2E_S3_URL = minio.baseUrl;
-    process.env.E2E_S3_ACCESS_KEY = minio.writer.accessKeyId;
-    process.env.E2E_S3_SECRET_KEY = minio.writer.secretAccessKey;
+    // A MinIO bucket only when asked: `s3-provider.spec.ts` starts its own.
+    const minio = options.s3 === true ? await startMinio() : undefined;
+    if (minio !== undefined) stopFns.push(() => minio.stop());
 
     const masterKey = randomBytes(32).toString("base64");
 
@@ -402,8 +399,7 @@ export async function startEnvironment(
       databaseUrl: postgres.connectionString,
       sftpgoUrl: sftpgo.baseUrl,
       sftpgoWebdavUrl: sftpgo.webdavUrl,
-      s3Url: minio.baseUrl,
-      s3Key: minio.writer,
+      ...(minio === undefined ? {} : { s3: { url: minio.baseUrl, key: minio.writer } }),
       apiBaseUrl,
       webBaseUrl,
       stop: stopAll,

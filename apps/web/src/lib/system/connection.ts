@@ -159,6 +159,33 @@ export function providerAddressLock(provider: AdminProvider): string | null {
   return null;
 }
 
+/**
+ * What the address field expects for a provider type: an example for the
+ * placeholder and a one-line description. The S3 address carries the bucket
+ * in its path, which people entering a bare endpoint would otherwise only
+ * learn from the probe's refusal.
+ */
+export function providerAddressHint(type: string): { example: string; description: string } {
+  switch (type) {
+    case "s3":
+      return {
+        example: "https://s3.example.com/bucket",
+        description:
+          "The endpoint with the bucket in its path, such as https://s3.us-west-004.backblazeb2.com/media.",
+      };
+    case "webdav":
+      return {
+        example: "https://dav.example.com/",
+        description: "The WebDAV URL people's files live under, such as https://dav.example.com/.",
+      };
+    default:
+      return {
+        example: "http://sftpgo:8080",
+        description: "Where fdrive reaches this server, such as http://sftpgo:8080.",
+      };
+  }
+}
+
 /** Why this provider cannot be removed, or `null` when it can. */
 export function providerRemoveBlock(provider: AdminProvider): string | null {
   if (provider.managedByEnv) {

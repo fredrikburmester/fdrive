@@ -1,5 +1,5 @@
 export type { CreateS3ClientOptions, S3Credential } from "./client.js";
-export { createS3Client, DEFAULT_REGION, regionFor } from "./client.js";
+export { createS3Client, DEFAULT_REGION, inferRegion, regionFor } from "./client.js";
 export type { S3Endpoint } from "./endpoint.js";
 export { candidateProblem, parseEndpoint } from "./endpoint.js";
 export { describeSdkError, kindForSdkError, toStorageError } from "./errors.js";

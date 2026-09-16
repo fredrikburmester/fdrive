@@ -24,7 +24,7 @@ export const S3_CONFIG_FIELDS: readonly ProviderField[] = [
     kind: "text",
     required: false,
     maxLength: 64,
-    help: "Signing region. MinIO accepts any value; use auto for Cloudflare R2, otherwise the bucket's region.",
+    help: "Signing region. Read from the address for AWS, B2, R2 and Hetzner; MinIO accepts any value; otherwise the bucket's region.",
   },
 ];
 
@@ -55,7 +55,7 @@ function defaultClientFor(
 ): S3Client {
   return createS3Client({
     endpoint: endpoint.endpoint,
-    region: regionFor(instance.config),
+    region: regionFor(instance.config, endpoint.endpoint),
     credential,
     fetch: ctx.fetch,
   });

@@ -1,4 +1,4 @@
-import { isSafeSegment } from "@fdrive/core";
+import { isProhibitedMetadataHost, isSafeSegment } from "@fdrive/core";
 
 /**
  * Where a provider row points: the S3 endpoint, the bucket and an optional
@@ -13,16 +13,6 @@ export interface S3Endpoint {
   /** Key prefix without leading or trailing slash; `""` for the bucket root. */
   readonly prefix: string;
 }
-
-const PROHIBITED_METADATA_HOSTS = new Set([
-  "169.254.169.254",
-  "169.254.170.2",
-  "169.254.169.253",
-  "100.100.100.200",
-  "fd00:ec2::254",
-  "metadata.google.internal",
-  "metadata.google",
-]);
 
 /** Bucket naming shared by AWS, MinIO and Garage: 3–63 lowercase letters, digits, dots and hyphens. */
 const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
@@ -54,8 +44,9 @@ export function candidateProblem(baseUrl: string): string | null {
     return "S3 address must not include credentials";
   }
   if (parsed.search || parsed.hash) return "S3 address must not include a query or fragment";
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (PROHIBITED_METADATA_HOSTS.has(host)) return "S3 address targets a prohibited metadata host";
+  if (isProhibitedMetadataHost(parsed.hostname)) {
+    return "S3 address targets a prohibited metadata host";
+  }
   const segments = parsed.pathname.split("/").filter((segment) => segment.length > 0);
   const bucket = segments[0];
   if (bucket === undefined) {

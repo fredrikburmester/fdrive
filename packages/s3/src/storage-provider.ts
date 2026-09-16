@@ -17,6 +17,7 @@ import {
   makeEntry,
   mimeFromExtension,
   normalizePath,
+  parentPath,
   StorageError,
   splitSegments,
 } from "@fdrive/core";
@@ -50,7 +51,13 @@ export const MAX_DIRECTORY_KEYS = 100_000;
 const DELETE_BATCH_SIZE = 1000;
 /** `CopyObject` refuses larger sources; a multipart copy is not implemented. */
 export const MAX_COPY_BYTES = 5 * 1024 * 1024 * 1024;
-const PART_SIZE = 16 * 1024 * 1024;
+/**
+ * Multipart part size and parts in flight. `Upload` buffers up to
+ * `PART_SIZE * UPLOAD_QUEUE_SIZE` (32 MiB) per streaming upload in the API
+ * process, and each part must reach the bucket within the request timeout;
+ * both match the backup destination. 10 000 parts bound a file at 80 GiB.
+ */
+const PART_SIZE = 8 * 1024 * 1024;
 const UPLOAD_QUEUE_SIZE = 4;
 const COPY_CONCURRENCY = 4;
 /** User metadata key rclone and others use for a client-supplied mtime (unix seconds). */
@@ -91,6 +98,13 @@ function tooManyKeys(path: string, bound: number): StorageError {
   return new StorageError(
     "internal",
     `folder ${path} has more than ${bound} objects; fdrive cannot move, copy or delete it as a whole`,
+  );
+}
+
+function tooManyEntries(path: string, bound: number): StorageError {
+  return new StorageError(
+    "internal",
+    `folder ${path} has more than ${bound} entries; fdrive cannot list it`,
   );
 }
 
@@ -301,8 +315,23 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
     const client = await deps.client();
     await run(async () => {
       const existing = await stat(client, source);
-      if (opts?.overwrite === false && (await statOrNull(client, destination)) !== null) {
+      const current = await statOrNull(client, destination);
+      if (current !== null && opts?.overwrite === false) {
         throw new StorageError("conflict", `already exists: ${destination}`);
+      }
+      const targetDir = dirKey(prefix, destination);
+      // An existing target is replaced, as the port promises and as a WebDAV
+      // server does: a folder's objects go first so none survive under the new
+      // one, and a file under a folder's name goes too. A file target is
+      // overwritten by the copy itself.
+      if (current?.kind === "dir") {
+        const stale = await collectKeys(client, targetDir, destination);
+        await deleteKeys(
+          client,
+          stale.map((item) => item.key),
+        );
+      } else if (current?.kind === "file" && existing.kind === "dir") {
+        await deleteKeys(client, [fileKey(prefix, destination)]);
       }
       if (existing.kind === "file") {
         const from = { key: fileKey(prefix, source), size: existing.size, modifiedAt: null };
@@ -311,7 +340,6 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
         return;
       }
       const sourceDir = dirKey(prefix, source);
-      const targetDir = dirKey(prefix, destination);
       const keys = await collectKeys(client, sourceDir, source);
       await mapLimit(keys, COPY_CONCURRENCY, (from) =>
         copyObject(client, from, `${targetDir}${from.key.slice(sourceDir.length)}`),
@@ -338,7 +366,7 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
           const result = await page(client, keyPrefix, { delimiter: true, token });
           files.push(...result.files);
           prefixes.push(...result.prefixes);
-          if (files.length + prefixes.length > maxKeys) throw tooManyKeys(normalized, maxKeys);
+          if (files.length + prefixes.length > maxKeys) throw tooManyEntries(normalized, maxKeys);
           token = result.next;
         } while (token !== undefined);
         if (normalized !== "/" && files.length === 0 && prefixes.length === 0) {
@@ -516,8 +544,9 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
       await run(async () => {
         // With parents, every missing ancestor gets its own marker, so a
         // folder created for a deeper one keeps existing after that one is
-        // removed; the Trash root relies on this. Without parents, an
-        // existing folder is a conflict, and a file at any level always is.
+        // removed; the Trash root relies on this. Without parents, the parent
+        // must already exist (`not_found` otherwise, as WebDAV answers) and an
+        // existing folder is a conflict. A file at any level always is.
         const targets =
           opts?.parents === true
             ? splitSegments(normalized).map(
@@ -530,8 +559,14 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
           }
         }
         const key = dirKey(prefix, normalized);
-        if (opts?.parents !== true && (await dirExists(client, key))) {
-          throw new StorageError("conflict", `already exists: ${normalized}`);
+        if (opts?.parents !== true) {
+          if (await dirExists(client, key)) {
+            throw new StorageError("conflict", `already exists: ${normalized}`);
+          }
+          const parent = parentPath(normalized);
+          if (parent !== "/" && !(await dirExists(client, dirKey(prefix, parent)))) {
+            throw await missingDirectory(client, parent);
+          }
         }
         for (const target of targets) {
           await client.send(
