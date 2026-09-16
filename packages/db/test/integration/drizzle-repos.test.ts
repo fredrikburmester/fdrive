@@ -66,7 +66,7 @@ async function seedMetadataPaths(identityId: string, accountId: string, paths: r
     await Promise.all([
       repos.fileTags.setTags(identityId, path, [tag.id]),
       repos.favorites.add(identityId, path, "file"),
-      repos.folderViews.set(identityId, path, "list"),
+      repos.folderViews.set(identityId, path, { mode: "list" }),
       repos.recents.touch(identityId, path),
     ]);
   }
@@ -179,8 +179,8 @@ describe("metadata prefix operations", () => {
     await repos.fileTags.setTags(identity.id, targetChild, [destinationTag.id]);
     await repos.favorites.add(identity.id, sourceChild, "file");
     await repos.favorites.add(identity.id, targetChild, "dir");
-    await repos.folderViews.set(identity.id, sourceChild, "grid");
-    await repos.folderViews.set(identity.id, targetChild, "list");
+    await repos.folderViews.set(identity.id, sourceChild, { mode: "grid" });
+    await repos.folderViews.set(identity.id, targetChild, { mode: "list" });
     await repos.recents.touch(identity.id, sourceChild);
     await repos.recents.touch(identity.id, targetChild);
     await db
@@ -263,7 +263,7 @@ describe("metadata prefix operations", () => {
       },
       {
         label: "folder-views",
-        seedSource: (path) => repos.folderViews.set(identity.id, path, "grid"),
+        seedSource: (path) => repos.folderViews.set(identity.id, path, { mode: "grid" }),
         insertDestination: (client, path) =>
           client.query(
             `insert into app.folder_views (identity_id, path, mode) values ($1, $2, 'list')`,
@@ -402,7 +402,7 @@ describe("metadata prefix operations", () => {
     const pinnedAt = new Date("2026-01-01T00:00:00.000Z");
     await repos.fileTags.setTags(identity.id, path, [tag.id]);
     await repos.favorites.add(identity.id, path, "file");
-    await repos.folderViews.set(identity.id, path, "grid");
+    await repos.folderViews.set(identity.id, path, { mode: "grid" });
     await repos.recents.touch(identity.id, path);
     await db
       .update(folderViews)

@@ -286,18 +286,23 @@ export interface FolderViewSort {
 export interface FolderView {
   readonly identityId: string;
   readonly path: string;
-  readonly mode: FolderViewMode;
+  /** Null when only the sort is pinned. */
+  readonly mode: FolderViewMode | null;
   readonly sort: FolderViewSort | null;
   readonly updatedAt: Date;
 }
+/** Fields to change on a pin: `undefined` keeps the stored value, `null` clears it. */
+export interface FolderViewPatch {
+  readonly mode?: FolderViewMode | null;
+  readonly sort?: FolderViewSort | null;
+}
 export interface FolderViewRepo {
   get(identityId: string, path: string): Promise<FolderView | null>;
-  set(
-    identityId: string,
-    path: string,
-    mode: FolderViewMode,
-    sort?: FolderViewSort | null,
-  ): Promise<void>;
+  /**
+   * Upserts the pin at `path`, merging `patch` over the stored fields. A pin
+   * left with neither a mode nor a sort is removed; an empty patch is a no-op.
+   */
+  set(identityId: string, path: string, patch: FolderViewPatch): Promise<void>;
   /** A no-op when `path` is not pinned. */
   remove(identityId: string, path: string): Promise<void>;
   /** Removes every pin for one identity. */

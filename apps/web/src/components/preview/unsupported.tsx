@@ -1,9 +1,11 @@
+"use client";
+
 import { Download, FileQuestion } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatBytes } from "@/lib/format";
 import type { PreviewKind } from "@/lib/preview/kind";
+import { useFormatters } from "@/lib/use-format-preferences";
 
 export interface UnsupportedProps {
   readonly name: string;
@@ -21,6 +23,7 @@ export interface UnsupportedProps {
  * icon, the file's size, an optional available viewer action, and download.
  */
 export function Unsupported({ name, size, kind, reason, downloadUrl, action }: UnsupportedProps) {
+  const { formatBytes } = useFormatters();
   const message =
     reason ??
     (kind === "office"

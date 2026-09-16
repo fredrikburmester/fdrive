@@ -78,6 +78,8 @@ it("adds Document, Spreadsheet and Presentation only when office creation is ava
   const props: FilesToolbarActionsProps = {
     viewMode: "list",
     onViewModeChange: vi.fn(),
+    density: "comfortable",
+    onDensityChange: vi.fn(),
     sortSpec: { key: "name", direction: "asc" },
     onSortSpecChange: vi.fn(),
     onNewFolder: vi.fn(),
@@ -113,6 +115,8 @@ it("renders download action in toolbar selection pill and calls onDownloadSelect
   const props: FilesToolbarActionsProps = {
     viewMode: "list",
     onViewModeChange: vi.fn(),
+    density: "comfortable",
+    onDensityChange: vi.fn(),
     sortSpec: { key: "name", direction: "asc" },
     onSortSpecChange: vi.fn(),
     onNewFolder: vi.fn(),
@@ -140,6 +144,8 @@ it("renders Show thumbnails option in View menu and toggles it", async () => {
   const props: FilesToolbarActionsProps = {
     viewMode: "list",
     onViewModeChange: vi.fn(),
+    density: "comfortable",
+    onDensityChange: vi.fn(),
     sortSpec: { key: "name", direction: "asc" },
     onSortSpecChange: vi.fn(),
     onNewFolder: vi.fn(),

@@ -77,6 +77,7 @@ import {
   type ScrollRequest,
   shouldPerformReveal,
 } from "@/lib/files/reveal";
+import { resolveRowClick } from "@/lib/files/row-click";
 import {
   contextEntries,
   EMPTY_SELECTION,
@@ -84,13 +85,7 @@ import {
   type SelectionState,
   selectionReducer,
 } from "@/lib/files/selection";
-import {
-  DEFAULT_SORT_SPEC,
-  readSortSpec,
-  type SortSpec,
-  sortListing,
-  writeSortSpec,
-} from "@/lib/files/sorting";
+import { sortListing } from "@/lib/files/sorting";
 import {
   collapse as collapseTree,
   EMPTY_TREE_STATE,
@@ -107,6 +102,8 @@ import {
   type TypeAheadBuffer,
   typeAheadMatch,
 } from "@/lib/files/type-ahead";
+import { useListDensity } from "@/lib/files/use-list-density";
+import { useRowClickAction } from "@/lib/files/use-row-click";
 import { capabilitiesFor, selectionOf } from "@/lib/identity/capabilities";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
@@ -136,7 +133,7 @@ import { type ClickModifierKeys, FileList } from "./file-list";
 import { ListingSkeleton } from "./listing-skeleton";
 import { NewFolderDialog } from "./new-folder-dialog";
 import { RenameDialog } from "./rename-dialog";
-import { FilesBreadcrumb, FilesToolbarActions } from "./toolbar";
+import { FilesBreadcrumb, FilesToolbarActions, type FolderViewActions } from "./toolbar";
 
 export interface FileBrowserProps {
   path: string;
@@ -195,10 +192,21 @@ export function FileBrowser({
     ? null
     : "This server cannot move a folder in one step: it copies the folder and then deletes the original, which can take a while for a large one.";
 
-  const [sortSpec, setSortSpecState] = useState<SortSpec>(DEFAULT_SORT_SPEC);
   const folderView = useFolderView(path, me?.activeIdentityId);
+  const [rowClickAction] = useRowClickAction();
+  const [density, setDensity] = useListDensity();
   const viewMode = folderView.mode;
   const setViewMode = folderView.setMode;
+  const sortSpec = folderView.sort;
+  const setSortSpec = folderView.setSort;
+  const folderSort: FolderViewActions = {
+    pinned: folderView.sortPinned,
+    disabled: folderView.disabled,
+    error: folderView.error,
+    retry: folderView.retry,
+    useDefault: folderView.useDefaultSort,
+    makeDefault: folderView.makeDefaultSort,
+  };
   const [showThumbnails, setShowThumbnailsState] = useState<boolean>(() =>
     typeof window === "undefined"
       ? DEFAULT_SHOW_THUMBNAILS
@@ -206,15 +214,9 @@ export function FileBrowser({
   );
   const [treeState, setTreeStateRaw] = useState<TreeState>(EMPTY_TREE_STATE);
   useEffect(() => {
-    setSortSpecState(readSortSpec(window.localStorage));
     setShowThumbnailsState(readShowThumbnails(window.localStorage));
     setTreeStateRaw(readTreeState(window.localStorage));
   }, []);
-
-  function setSortSpec(spec: SortSpec) {
-    setSortSpecState(spec);
-    writeSortSpec(window.localStorage, spec);
-  }
   function setShowThumbnails(show: boolean) {
     setShowThumbnailsState(show);
     writeShowThumbnails(window.localStorage, show);
@@ -460,7 +462,19 @@ export function FileBrowser({
   }
 
   function handleEntryClick(entry: FsEntry, modifiers: ClickModifierKeys) {
-    dispatchSelection({ type: "click", path: entry.path, modifiers });
+    const intent = resolveRowClick(rowClickAction, modifiers);
+    if (intent.kind === "open") {
+      void handleOpen(entry);
+      return;
+    }
+    dispatchSelection({ type: "click", path: entry.path, modifiers: intent.modifiers });
+  }
+
+  /** Double-click opens unless a plain click already does, so one open never fires three times. */
+  function handleEntryDoubleClick(entry: FsEntry) {
+    if (rowClickAction !== "open") {
+      void handleOpen(entry);
+    }
   }
 
   function handleInternalDrop(paths: string[], targetFolderPath: string, effect: "move" | "copy") {
@@ -866,6 +880,9 @@ export function FileBrowser({
             folderView={folderView}
             sortSpec={sortSpec}
             onSortSpecChange={setSortSpec}
+            folderSort={folderSort}
+            density={density}
+            onDensityChange={setDensity}
             onNewFolder={() => setNewFolderOpen(true)}
             onNewFile={setNewFileKind}
             onNewOfficeDocument={
@@ -931,7 +948,7 @@ export function FileBrowser({
             className="h-full outline-none"
           >
             {isLoading || folderView.loading ? (
-              <ListingSkeleton variant={viewMode === "grid" ? "grid" : "list"} />
+              <ListingSkeleton variant={viewMode === "grid" ? "grid" : "list"} density={density} />
             ) : isError ? (
               <ErrorState
                 message={describeFsError(error, "Something went wrong.")}
@@ -947,11 +964,12 @@ export function FileBrowser({
               />
             ) : viewMode === "list" ? (
               <FileList
+                density={density}
                 entries={sortedEntries}
                 selected={selection.selected}
                 focusedPath={selection.focus}
                 onEntryClick={handleEntryClick}
-                onEntryDoubleClick={handleOpen}
+                onEntryDoubleClick={handleEntryDoubleClick}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 showOrganize={organizeAvailable}
@@ -974,7 +992,7 @@ export function FileBrowser({
                 selected={selection.selected}
                 focusedPath={selection.focus}
                 onEntryClick={handleEntryClick}
-                onEntryDoubleClick={handleOpen}
+                onEntryDoubleClick={handleEntryDoubleClick}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 showOrganize={organizeAvailable}
@@ -993,11 +1011,12 @@ export function FileBrowser({
               />
             ) : (
               <FileList
+                density={density}
                 entries={displayEntries}
                 selected={selection.selected}
                 focusedPath={selection.focus}
                 onEntryClick={handleEntryClick}
-                onEntryDoubleClick={handleOpen}
+                onEntryDoubleClick={handleEntryDoubleClick}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 showOrganize={organizeAvailable}

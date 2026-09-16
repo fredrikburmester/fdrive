@@ -122,6 +122,7 @@ export type {
   FileTagRepo,
   FolderView,
   FolderViewMode,
+  FolderViewPatch,
   FolderViewRepo,
   FolderViewSort,
   FolderViewSortDirection,

@@ -103,6 +103,8 @@ function toolbarProps(overrides: Partial<FilesToolbarActionsProps> = {}): FilesT
   return {
     viewMode: "list",
     onViewModeChange: vi.fn(),
+    density: "comfortable",
+    onDensityChange: vi.fn(),
     sortSpec: { key: "name", direction: "asc" },
     onSortSpecChange: vi.fn(),
     onNewFolder: vi.fn(),

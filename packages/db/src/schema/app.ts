@@ -188,7 +188,8 @@ export const folderViews = appSchema.table(
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
-    mode: text("mode").notNull(),
+    /** Null when only the sort is pinned. */
+    mode: text("mode"),
     revision: uuid("revision").notNull().defaultRandom(),
     sort: jsonb("sort"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

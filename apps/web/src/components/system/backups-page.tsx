@@ -45,7 +45,8 @@ import {
   credentialComplete,
   credentialFieldsFor,
 } from "@/lib/auth/login-model";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, type SizeUnits } from "@/lib/format";
+import { useFormatters } from "@/lib/use-format-preferences";
 import { BackupHealth } from "./backup-health";
 import { SystemPage } from "./system-page";
 import { SystemSection } from "./system-section";
@@ -108,8 +109,8 @@ function saveText(text: string, filename: string) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function size(value: string) {
-  return formatBytes(Number(value));
+function size(value: string, units: SizeUnits) {
+  return formatBytes(Number(value), { units });
 }
 type Act = (work: () => Promise<unknown>) => Promise<void>;
 const frequencyLabels: Record<BackupSchedule["frequency"], string> = {
@@ -667,6 +668,7 @@ function Destinations({
   );
 }
 export function BackupsPage() {
+  const { prefs } = useFormatters();
   const query = useBackups();
   const cache = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -884,7 +886,7 @@ export function BackupsPage() {
                   <div className="min-w-0">
                     <p className="break-words font-medium">{item.label}</p>
                     <p className="break-all text-xs text-muted-foreground">
-                      {item.filename} · {size(item.bytes)} · Uploaded{" "}
+                      {item.filename} · {size(item.bytes, prefs.sizes)} · Uploaded{" "}
                       {new Date(item.uploadedAt).toLocaleDateString()}
                       {item.sourceDate
                         ? ` · Source ${new Date(item.sourceDate).toLocaleDateString()}`
@@ -1053,7 +1055,7 @@ export function BackupsPage() {
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {size(run.bytes)}
+                    {size(run.bytes, prefs.sizes)}
                     {run.verifiedAt
                       ? ` · Bytes verified ${new Date(run.verifiedAt).toLocaleString()}`
                       : ""}

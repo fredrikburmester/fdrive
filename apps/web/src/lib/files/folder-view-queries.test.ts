@@ -82,7 +82,9 @@ describe("folder view query", () => {
     expect(localStorage.getItem("fdrive.view")).toBe('"tree"');
     mocks.get.mockResolvedValue({ view: null });
     act(() => result.current.useDefault());
-    await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith({ path: "/photos" }));
+    await waitFor(() =>
+      expect(mocks.remove).toHaveBeenCalledWith({ path: "/photos", part: "mode" }),
+    );
     await waitFor(() => expect(result.current.pinned).toBe(false));
     expect(result.current.mode).toBe("tree");
   });
@@ -133,6 +135,56 @@ describe("folder view query", () => {
     expect(client.getQueryData(queryKeys.folderViews.path("bob", "/photos"))).toEqual({
       view: { path: "/photos", mode: "tree" },
     });
+  });
+});
+
+describe("folder sort", () => {
+  const bySize = { key: "size", direction: "desc" } as const;
+  it("follows the browser default until a sort is pinned, then pins only the sort", async () => {
+    localStorage.setItem("fdrive.sort", JSON.stringify({ key: "ext", direction: "asc" }));
+    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    await waitFor(() => expect(result.current.disabled).toBe(false));
+    expect(result.current.sort).toEqual({ key: "ext", direction: "asc" });
+    expect(result.current.sortPinned).toBe(false);
+    mocks.get.mockResolvedValue({ view: { path: "/photos", mode: null, sort: bySize } });
+    act(() => result.current.setSort(bySize));
+    await waitFor(() => expect(result.current.sort).toEqual(bySize));
+    expect(result.current.sortPinned).toBe(true);
+    expect(result.current.pinned).toBe(false);
+    expect(result.current.mode).toBe("list");
+    await waitFor(() => expect(mocks.set).toHaveBeenCalledWith({ path: "/photos", sort: bySize }));
+    expect(JSON.parse(localStorage.getItem("fdrive.sort") ?? "")).toEqual({
+      key: "ext",
+      direction: "asc",
+    });
+  });
+  it("uses a server sort pin beside a mode pin, makes it the default and unpins only the sort", async () => {
+    mocks.get.mockResolvedValue({ view: { path: "/photos", mode: "grid", sort: bySize } });
+    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    await waitFor(() => expect(result.current.sortPinned).toBe(true));
+    expect(result.current.sort).toEqual(bySize);
+    expect(result.current.mode).toBe("grid");
+    act(() => result.current.makeDefaultSort());
+    expect(JSON.parse(localStorage.getItem("fdrive.sort") ?? "")).toEqual(bySize);
+    mocks.get.mockResolvedValue({ view: { path: "/photos", mode: "grid", sort: null } });
+    act(() => result.current.useDefaultSort());
+    await waitFor(() =>
+      expect(mocks.remove).toHaveBeenCalledWith({ path: "/photos", part: "sort" }),
+    );
+    await waitFor(() => expect(result.current.sortPinned).toBe(false));
+    expect(result.current.pinned).toBe(true);
+    expect(result.current.sort).toEqual(bySize);
+  });
+  it("rolls back a failed sort save with its own message", async () => {
+    mocks.set.mockRejectedValue(new Error("offline"));
+    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    await waitFor(() => expect(result.current.disabled).toBe(false));
+    act(() => result.current.setSort(bySize));
+    await waitFor(() =>
+      expect(mocks.error).toHaveBeenCalledWith("Could not save the folder sort."),
+    );
+    await waitFor(() => expect(result.current.disabled).toBe(false));
+    expect(result.current.sort).toEqual({ key: "name", direction: "asc" });
   });
 });
 
