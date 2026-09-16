@@ -186,6 +186,4 @@ repository are licensed under the [GNU Affero General Public License, version 3 
 (`AGPL-3.0-only`), unless otherwise noted.
 
 Third-party dependencies and storage providers retain their own licenses. Stock
-[SFTPGo](https://github.com/drakkan/sftpgo) runs as an external service; the optional
-[SFTPGo native write integration](integrations/sftpgo/README.md) includes AGPL-licensed
-modifications and documents their source and notice requirements.
+[SFTPGo](https://github.com/drakkan/sftpgo) runs as an external service and is not modified.

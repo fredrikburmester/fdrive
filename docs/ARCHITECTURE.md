@@ -17,7 +17,7 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
   tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
 - SFTPGo, WebDAV and S3 storage adapters ship. SFTPGo stays independently administered;
-  fdrive does not need WebAdmin access or read its database. The bundled SFTPGo overlay is opt-in.
+  fdrive does not need WebAdmin access, read its database or modify it.
 
 ## Accounts and storage
 
