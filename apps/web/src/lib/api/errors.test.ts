@@ -1,6 +1,6 @@
 import { ApiClientError, type ApiErrorKind } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
-import { describeApiError, isReauthRequired } from "./errors.ts";
+import { describeApiError, describeCredentialError, isReauthRequired } from "./errors.ts";
 
 const ALL_KINDS: ApiErrorKind[] = [
   "bad_request",
@@ -36,6 +36,31 @@ describe("describeApiError", () => {
   it("falls back to a generic message for a non-Error value", () => {
     expect(describeApiError("nope")).toBe("Something went wrong. Please try again.");
     expect(describeApiError(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("describeCredentialError", () => {
+  it("shows the server's refusal as a sentence instead of the signed-out message", () => {
+    expect(
+      describeCredentialError(
+        new ApiClientError("unauthorized", "invalid username or password", 401),
+      ),
+    ).toBe("Invalid username or password.");
+    expect(
+      describeCredentialError(
+        new ApiClientError("unauthorized", "current password is incorrect.", 401),
+      ),
+    ).toBe("Current password is incorrect.");
+  });
+
+  it("falls back to the friendly message for an empty refusal and for other kinds", () => {
+    expect(describeCredentialError(new ApiClientError("unauthorized", "", 401))).toBe(
+      "You're signed out. Sign in to continue.",
+    );
+    expect(describeCredentialError(new ApiClientError("rate_limited", "slow down", 429))).toBe(
+      "Too many requests. Try again in a moment.",
+    );
+    expect(describeCredentialError(new Error("network dropped"))).toBe("network dropped");
   });
 });
 

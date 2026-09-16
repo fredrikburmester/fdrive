@@ -15,7 +15,7 @@ test("wrong password shows the error line", async ({ page }) => {
   // matches two elements. `field-error`'s own `data-slot` is unambiguous.
   const errorLine = page.locator('[data-slot="field-error"]');
   await expect(errorLine).toBeVisible();
-  await expect(errorLine).toHaveText("You're signed out. Sign in to continue.");
+  await expect(errorLine).toHaveText("Invalid username or password.");
   // The failed attempt must not have navigated away from /login.
   await expect(page).toHaveURL(/\/login$/);
 });

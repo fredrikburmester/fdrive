@@ -1,3 +1,4 @@
+import { isProhibitedMetadataHost } from "@fdrive/core";
 import { cancelBody } from "./http.js";
 
 /** Result of probing a candidate or active WebDAV endpoint. */
@@ -11,16 +12,6 @@ export interface ProbeConnectionDeps {
 }
 
 const PROBE_TIMEOUT_MS = 5_000;
-const PROHIBITED_METADATA_HOSTS = new Set([
-  "169.254.169.254",
-  "169.254.170.2",
-  "169.254.169.253",
-  "100.100.100.200",
-  "fd00:ec2::254",
-  "metadata.google.internal",
-  "metadata.google",
-]);
-
 function messageFor(err: unknown): string {
   return err instanceof Error ? err.message : "network error";
 }
@@ -40,8 +31,7 @@ export function candidateProblem(baseUrl: string): string | null {
     return "WebDAV URL must not include credentials";
   }
   if (parsed.search || parsed.hash) return "WebDAV URL must not include a query or fragment";
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return PROHIBITED_METADATA_HOSTS.has(host)
+  return isProhibitedMetadataHost(parsed.hostname)
     ? "WebDAV URL targets a prohibited metadata host"
     : null;
 }

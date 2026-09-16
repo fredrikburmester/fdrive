@@ -1,19 +1,30 @@
+import { type MinioContainer, startMinio } from "@fdrive/testkit";
 import { type APIRequestContext, expect, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 import { getAliceStorageStatePath, getWebBaseUrl } from "./support/paths.js";
 import { uploadFiles } from "./support/upload.js";
 
 /**
- * A MinIO bucket started by `global-setup.ts` is the real S3 target these
+ * A MinIO bucket this file starts for itself is the real S3 target these
  * specs add as a third provider type. People sign in to it with an access
- * key and secret rather than a username and password.
+ * key and secret rather than a username and password. The shared
+ * environment never starts one, so the other specs pay nothing for it.
  */
-function s3Env(name: string): string {
-  const value = process.env[name];
-  if (value === undefined || value === "") {
-    throw new Error(`fdrive e2e: ${name} is not set; global-setup exports it`);
-  }
-  return value;
+let minio: MinioContainer | undefined;
+
+test.beforeAll(async () => {
+  // The first run pulls the image, which the default hook timeout does not cover.
+  test.setTimeout(180_000);
+  minio = await startMinio();
+});
+
+test.afterAll(async () => {
+  await minio?.stop();
+});
+
+function bucket(): MinioContainer {
+  if (minio === undefined) throw new Error("fdrive e2e: MinIO did not start");
+  return minio;
 }
 
 /**
@@ -22,7 +33,7 @@ function s3Env(name: string): string {
  * IPv4 only, and the API probes a candidate before adding it.
  */
 function loopbackBucketUrl(): string {
-  const url = new URL(s3Env("E2E_S3_URL"));
+  const url = new URL(bucket().baseUrl);
   url.hostname = "127.0.0.1";
   return `${url.origin}${url.pathname}`;
 }
@@ -146,8 +157,8 @@ test.describe("signing in through S3", () => {
       await page.getByLabel("Server").click();
       await page.getByRole("option", { name: new RegExp(LOGIN_LABEL) }).click();
       // The credential form uses the type's own labels.
-      await page.getByLabel("Access key ID").fill(s3Env("E2E_S3_ACCESS_KEY"));
-      await page.getByLabel("Secret key").fill(s3Env("E2E_S3_SECRET_KEY"));
+      await page.getByLabel("Access key ID").fill(bucket().writer.accessKeyId);
+      await page.getByLabel("Secret key").fill(bucket().writer.secretAccessKey);
       const loginRequest = page.waitForRequest(
         (request) => request.url().endsWith("/api/v1/auth/login") && request.method() === "POST",
       );
@@ -158,7 +169,7 @@ test.describe("signing in through S3", () => {
 
       await expect(
         page.getByRole("button", {
-          name: new RegExp(`${s3Env("E2E_S3_ACCESS_KEY")} S3 ${LOGIN_LABEL}`),
+          name: new RegExp(`${bucket().writer.accessKeyId} S3 ${LOGIN_LABEL}`),
         }),
       ).toBeVisible();
       const me = (await (await page.request.get("/api/v1/auth/me")).json()) as {

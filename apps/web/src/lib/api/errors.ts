@@ -34,6 +34,21 @@ export function describeApiError(err: unknown): string {
 }
 
 /**
+ * The message for a form that sends credentials: login, add login, remove
+ * login. There an `unauthorized` answer is the server refusing what was
+ * typed ("invalid username or password", "current password is incorrect"),
+ * not a lost session, so the server's own sentence is shown. Everything
+ * else reads as `describeApiError`.
+ */
+export function describeCredentialError(err: unknown): string {
+  if (err instanceof ApiClientError && err.kind === "unauthorized" && err.message.length > 0) {
+    const sentence = err.message.charAt(0).toUpperCase() + err.message.slice(1);
+    return sentence.endsWith(".") ? sentence : `${sentence}.`;
+  }
+  return describeApiError(err);
+}
+
+/**
  * True when `err` means the caller's session is gone (`unauthorized`) or
  * needs to be renewed (`reauth_required`), the two kinds that should send
  * the user back to `/login`.

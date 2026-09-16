@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldError, FieldGroup } from "@/components/ui/field";
 import { useLogin } from "@/lib/api/auth-queries";
-import { describeApiError } from "@/lib/api/errors";
+import { describeCredentialError } from "@/lib/api/errors";
 import {
   buildCredential,
   credentialComplete,
@@ -90,7 +90,9 @@ export function LoginForm({ providers, destination }: LoginFormProps) {
                 onReveal={(name) => setRevealed((prev) => new Set(prev).add(name))}
                 disabled={login.isPending}
               />
-              {login.isError ? <FieldError>{describeApiError(login.error)}</FieldError> : null}
+              {login.isError ? (
+                <FieldError>{describeCredentialError(login.error)}</FieldError>
+              ) : null}
               <Field>
                 <Button type="submit" className="w-full" disabled={login.isPending}>
                   {login.isPending ? "Signing in…" : "Sign in"}

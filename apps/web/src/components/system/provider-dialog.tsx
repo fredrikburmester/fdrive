@@ -38,6 +38,7 @@ import {
 import {
   homeTemplatePreview,
   normalizeProviderConfig,
+  providerAddressHint,
   providerAddressLock,
   providerConfigDraft,
   providerFormError,
@@ -66,6 +67,7 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
     types.find((entry) => entry.type === candidate)?.configFields ?? [];
   const [type, setType] = useState<string>(initialType);
   const fields = configFieldsOf(type);
+  const addressHint = providerAddressHint(type);
   const [label, setLabel] = useState(provider?.label ?? "");
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? "");
   const [config, setConfig] = useState<Record<string, string>>(() =>
@@ -176,16 +178,14 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
               required
               readOnly={addressLock !== null}
               disabled={addressLock !== null}
-              placeholder="http://sftpgo:8080"
+              placeholder={addressHint.example}
               onChange={(event) => {
                 setBaseUrl(event.target.value);
                 setTouched(true);
                 test.reset();
               }}
             />
-            <FieldDescription>
-              {addressLock ?? "Where fdrive reaches this server, such as http://sftpgo:8080."}
-            </FieldDescription>
+            <FieldDescription>{addressLock ?? addressHint.description}</FieldDescription>
           </Field>
           <ProviderFieldInputs
             fields={fields}

@@ -118,7 +118,13 @@ export async function verifyCredentials(
       if (error.kind === "unauthorized") {
         deps.limiter.recordFailure(key, block);
         deps.limiter.recordFailure(ipKey);
-        throw new ApiHttpError("unauthorized", "invalid username or password");
+        // Named by the provider's own credential labels: "invalid username
+        // or password" for SFTPGo and WebDAV, "invalid access key ID or
+        // secret key" for S3, so the form can show what was refused.
+        const labels = fields
+          .filter((field) => field.required)
+          .map((field) => field.label.toLowerCase().replace(/ id$/, " ID"));
+        throw new ApiHttpError("unauthorized", `invalid ${labels.join(" or ")}`);
       }
       if (error.kind === "forbidden") {
         const detail = error.details?.detail;

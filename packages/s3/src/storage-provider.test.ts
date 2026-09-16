@@ -131,8 +131,12 @@ describe("directories as key prefixes", () => {
     );
     const error = await storage.list("/big").catch((cause: unknown) => cause);
     expect(error).toMatchObject({ kind: "internal" });
-    expect(String((error as Error).message)).toContain("more than 2500 objects");
-    expect(await kindOf(storage.deleteDir("/big"))).toBe("internal");
+    expect(String((error as Error).message)).toContain(
+      "more than 2500 entries; fdrive cannot list",
+    );
+    const removal = await storage.deleteDir("/big").catch((cause: unknown) => cause);
+    expect(removal).toMatchObject({ kind: "internal" });
+    expect(String((removal as Error).message)).toContain("more than 2500 objects");
     expect(MAX_DIRECTORY_KEYS).toBe(100_000);
   });
 
@@ -159,6 +163,19 @@ describe("directories as key prefixes", () => {
     await storage.deleteDir("/top/middle");
     expect(await storage.stat("/top")).toMatchObject({ kind: "dir" });
     expect(await kindOf(storage.mkdir("/file.txt/inner", { parents: true }))).toBe("conflict");
+  });
+
+  it("needs the parent to exist unless asked for parents", async () => {
+    const { server, storage } = harness();
+    expect(await kindOf(storage.mkdir("/nowhere/child"))).toBe("not_found");
+    server.put("bucket", "leaf.txt", "x");
+    expect(await kindOf(storage.mkdir("/leaf.txt/child"))).toBe("bad_request");
+    // A parent that exists only through its children counts.
+    server.put("bucket", "implicit/a.txt", "x");
+    await storage.mkdir("/implicit/child");
+    expect(server.objects("bucket").has("implicit/child/")).toBe(true);
+    await storage.mkdir("/nowhere/child", { parents: true });
+    expect(server.objects("bucket").has("nowhere/")).toBe(true);
   });
 
   it("guards deletes by kind and never deletes the root", async () => {
@@ -192,6 +209,28 @@ describe("moves and copies", () => {
     expect(await text((await storage.download("/dst.txt")).body)).toBe("a");
     await storage.move("/dst.txt", "/fresh.txt", { overwrite: false });
     expect(await text((await storage.download("/fresh.txt")).body)).toBe("a");
+  });
+
+  it("replaces whatever already sits at the target", async () => {
+    const { server, storage } = harness();
+    server.put("bucket", "src/a.txt", "a");
+    server.put("bucket", "dst/", "");
+    server.put("bucket", "dst/stale.txt", "stale");
+    server.put("bucket", "dst/deep/old.txt", "old");
+    await storage.move("/src", "/dst");
+    expect([...server.objects("bucket").keys()].sort()).toEqual(["dst/a.txt"]);
+    // A folder over a file: the file goes.
+    server.put("bucket", "plain.txt", "p");
+    await storage.copy("/dst", "/plain.txt");
+    expect(server.objects("bucket").has("plain.txt")).toBe(false);
+    expect(await text((await storage.download("/plain.txt/a.txt")).body)).toBe("a");
+    // A file over a folder: the folder and its marker go.
+    server.put("bucket", "folder/", "");
+    server.put("bucket", "folder/inner.txt", "i");
+    await storage.copy("/plain.txt/a.txt", "/folder");
+    expect(server.objects("bucket").has("folder/")).toBe(false);
+    expect(server.objects("bucket").has("folder/inner.txt")).toBe(false);
+    expect(await text((await storage.download("/folder")).body)).toBe("a");
   });
 
   it("passes a target check failure through instead of treating it as free", async () => {
@@ -352,7 +391,7 @@ describe("uploads", () => {
     await storage.upload("/big.bin", stream, { modifiedAt: new Date("2022-02-02T00:00:00Z") });
     const stored = server.objects("bucket").get("big.bin");
     expect(stored?.bytes.byteLength).toBe(big.byteLength);
-    expect(stored?.etag.endsWith('-2"')).toBe(true);
+    expect(stored?.etag.endsWith('-3"')).toBe(true);
     expect(stored?.metadata.mtime).toBe("1643760000");
     await storage.upload("/small.bin", new Blob([new Uint8Array(10)]).stream());
     expect(server.objects("bucket").get("small.bin")?.bytes.byteLength).toBe(10);

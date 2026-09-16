@@ -123,6 +123,7 @@ test.describe("trash available", () => {
       apiPort,
       webPort,
       skipStatePersist: true,
+      s3: true,
       sftpgoOptions: { users: SEED_USERS, files: SEED_FILES, trash: { path: TRASH_PATH } },
     });
     webBaseUrl = environment.webBaseUrl;
@@ -388,8 +389,8 @@ test.describe("trash available", () => {
     } finally {
       await db.end();
     }
-    if (environment === undefined) throw new Error("environment missing");
-    const url = new URL(environment.s3Url);
+    if (environment?.s3 === undefined) throw new Error("environment missing its S3 bucket");
+    const url = new URL(environment.s3.url);
     url.hostname = E2E_HOST;
     const created = await page.request.post(`${webBaseUrl}/api/v1/admin/providers`, {
       headers,
@@ -402,8 +403,8 @@ test.describe("trash available", () => {
       data: {
         providerId: row.id,
         credential: {
-          username: environment.s3Key.accessKeyId,
-          password: environment.s3Key.secretAccessKey,
+          username: environment.s3.key.accessKeyId,
+          password: environment.s3.key.secretAccessKey,
         },
         currentCredential: { password: "alice-password" },
       },
