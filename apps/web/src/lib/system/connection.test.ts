@@ -7,6 +7,7 @@ import {
   homeTemplatePreview,
   isPlausibleHomeTemplate,
   normalizeProviderConfig,
+  providerAddressHint,
   providerAddressLock,
   providerConfigDraft,
   providerFormError,
@@ -193,6 +194,20 @@ describe("providerAddressLock", () => {
 
   it("allows editing an unused, settings-managed address", () => {
     expect(providerAddressLock(PROVIDER)).toBeNull();
+  });
+});
+
+describe("providerAddressHint", () => {
+  it("tells an S3 address to carry the bucket in its path", () => {
+    const hint = providerAddressHint("s3");
+    expect(hint.example).toBe("https://s3.example.com/bucket");
+    expect(hint.description).toContain("bucket in its path");
+  });
+
+  it("describes a WebDAV URL and falls back to the SFTPGo example", () => {
+    expect(providerAddressHint("webdav").description).toContain("WebDAV");
+    expect(providerAddressHint("sftpgo").example).toBe("http://sftpgo:8080");
+    expect(providerAddressHint("").example).toBe("http://sftpgo:8080");
   });
 });
 

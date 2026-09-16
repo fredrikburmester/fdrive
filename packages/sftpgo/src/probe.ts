@@ -1,3 +1,5 @@
+import { isProhibitedMetadataHost } from "@fdrive/core";
+
 /** Result of probing a candidate or active SFTPGo base URL. */
 export interface ProbeResult {
   readonly ok: boolean;
@@ -10,16 +12,6 @@ export interface ProbeConnectionDeps {
 
 const PROBE_TIMEOUT_MS = 5_000;
 const MAX_HEALTH_RESPONSE_BYTES = 1024;
-const PROHIBITED_METADATA_HOSTS = new Set([
-  "169.254.169.254",
-  "169.254.170.2",
-  "169.254.169.253",
-  "100.100.100.200",
-  "fd00:ec2::254",
-  "metadata.google.internal",
-  "metadata.google",
-]);
-
 /** Strips a trailing slash from `baseUrl`, so joining a path never doubles it up. */
 function stripTrailingSlash(baseUrl: string): string {
   return baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
@@ -42,8 +34,7 @@ function candidateProblem(baseUrl: string): string | null {
   if (parsed.username.length > 0 || parsed.password.length > 0) {
     return "SFTPGo URL must not include credentials";
   }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return PROHIBITED_METADATA_HOSTS.has(host)
+  return isProhibitedMetadataHost(parsed.hostname)
     ? "SFTPGo URL targets a prohibited metadata host"
     : null;
 }

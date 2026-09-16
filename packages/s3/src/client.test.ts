@@ -1,6 +1,6 @@
 import { HeadBucketCommand } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
-import { createS3Client, DEFAULT_REGION, regionFor } from "./client.js";
+import { createS3Client, DEFAULT_REGION, inferRegion, regionFor } from "./client.js";
 
 describe("createS3Client", () => {
   it("sends path-style requests through the injected fetch, signed for the region", async () => {
@@ -46,5 +46,31 @@ describe("regionFor", () => {
     expect(regionFor({ region: "  " })).toBe(DEFAULT_REGION);
     expect(regionFor({})).toBe(DEFAULT_REGION);
     expect(regionFor({ region: 3 })).toBe(DEFAULT_REGION);
+  });
+
+  it("reads the region from a hosted endpoint when none is configured", () => {
+    expect(regionFor({}, "https://s3.us-west-004.backblazeb2.com")).toBe("us-west-004");
+    expect(regionFor({ region: "eu-central-003" }, "https://s3.us-west-004.backblazeb2.com")).toBe(
+      "eu-central-003",
+    );
+    expect(regionFor({}, "http://minio.local:9000")).toBe(DEFAULT_REGION);
+  });
+});
+
+describe("inferRegion", () => {
+  it("knows B2, AWS, R2 and Hetzner hostnames", () => {
+    expect(inferRegion("https://s3.us-west-004.backblazeb2.com")).toBe("us-west-004");
+    expect(inferRegion("https://s3.eu-central-1.amazonaws.com")).toBe("eu-central-1");
+    expect(inferRegion("https://S3.AP-SOUTHEAST-2.amazonaws.com")).toBe("ap-southeast-2");
+    expect(inferRegion("https://abc123.r2.cloudflarestorage.com")).toBe("auto");
+    expect(inferRegion("https://fsn1.your-objectstorage.com")).toBe("fsn1");
+  });
+
+  it("stays out of self-hosted and unrecognised addresses", () => {
+    expect(inferRegion("http://minio.local:9000")).toBeNull();
+    expect(inferRegion("https://s3.example.com")).toBeNull();
+    expect(inferRegion("https://s3.garage.example.com")).toBeNull();
+    expect(inferRegion("https://bucket.fsn1.your-objectstorage.com")).toBeNull();
+    expect(inferRegion("not a url")).toBeNull();
   });
 });

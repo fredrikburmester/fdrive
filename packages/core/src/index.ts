@@ -2,6 +2,7 @@ export * from "./archive-names.ts";
 export * from "./entries.ts";
 export * from "./errors.ts";
 export * from "./http-range.ts";
+export * from "./metadata-hosts.ts";
 export * from "./mime.ts";
 export * from "./paths.ts";
 export type * from "./ports/clock.ts";

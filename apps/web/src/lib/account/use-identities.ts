@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiClient } from "@/lib/api/client";
-import { describeApiError } from "@/lib/api/errors";
+import { describeCredentialError } from "@/lib/api/errors";
 import { useUploadStore } from "@/lib/upload/store";
 import { transitionAccount, useAccountTransition } from "./transition";
 
@@ -22,7 +22,7 @@ export function useIdentityActions() {
       await transitionAccount(queryClient, request, router.push, target);
       return true;
     } catch (cause) {
-      setError(describeApiError(cause));
+      setError(describeCredentialError(cause));
       return false;
     }
   }

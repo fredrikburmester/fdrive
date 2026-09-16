@@ -14,12 +14,17 @@ export interface CreateS3ClientOptions {
   readonly credential: S3Credential;
   /** The network the client uses; tests inject a fake. */
   readonly fetch: typeof globalThis.fetch;
-  /** Time to first response byte for one attempt. Bodies stream without a timeout. */
+  /**
+   * Bound on one attempt, from the first request byte to the response
+   * headers: a part upload must finish sending within it. Response bodies
+   * stream without a timeout.
+   */
   readonly requestTimeoutMs?: number;
 }
 
 export const DEFAULT_REGION = "us-east-1";
-const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** Matches the backup destination: an 8 MiB part over a slow uplink fits comfortably. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_ATTEMPTS = 3;
 
 /**
@@ -48,8 +53,39 @@ export function createS3Client(options: CreateS3ClientOptions): S3Client {
   });
 }
 
-/** The region a provider row's configuration names, else the S3 default. */
-export function regionFor(config: Readonly<Record<string, unknown>>): string {
+/** `us-west-004`, `eu-central-1`, `ap-southeast-2`: a region label as hosted endpoints spell it. */
+const REGION_LABEL = /^[a-z]{2}-[a-z]+-\d{1,3}$/;
+
+/**
+ * The signing region a hosted endpoint's hostname reveals, or `null` for a
+ * self-hosted one: `s3.<region>.backblazeb2.com` and
+ * `s3.<region>.amazonaws.com` name it, Cloudflare R2 wants `auto`, and a
+ * Hetzner location (`fsn1.your-objectstorage.com`) doubles as its region.
+ * B2 refuses a signature for the wrong region, so this saves the field.
+ */
+export function inferRegion(endpoint: string): string | null {
+  let host: string;
+  try {
+    host = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const labels = host.split(".");
+  if (host.endsWith(".r2.cloudflarestorage.com")) return "auto";
+  if (host.endsWith(".your-objectstorage.com") && labels.length === 3) return labels[0] as string;
+  const candidate = labels[1];
+  if (labels[0] === "s3" && candidate !== undefined && REGION_LABEL.test(candidate)) {
+    return candidate;
+  }
+  return null;
+}
+
+/**
+ * The region a provider row's configuration names, else the one its
+ * endpoint reveals, else the S3 default.
+ */
+export function regionFor(config: Readonly<Record<string, unknown>>, endpoint?: string): string {
   const value = config.region;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : DEFAULT_REGION;
+  if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  return (endpoint === undefined ? null : inferRegion(endpoint)) ?? DEFAULT_REGION;
 }
