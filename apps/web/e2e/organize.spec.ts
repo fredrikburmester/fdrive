@@ -76,6 +76,13 @@ test("Organize suggests other folders, keeps both on a clash, moves what is kept
 
     const organize = page.getByRole("dialog").filter({ hasText: "Organize 2 items" });
     await expect(organize.getByText(/sent to\s+your AI server/)).toBeVisible();
+    // What the assistant may see is the person's choice; file contents stay home for this run.
+    const share = organize.getByRole("combobox", { name: "Share with assistant" });
+    await expect(share).toContainText("File contents, names of other files");
+    await share.click();
+    await page.getByRole("option", { name: /File contents/ }).click();
+    await page.keyboard.press("Escape");
+    await expect(share).toContainText("Names of other files");
     await organize.getByRole("button", { name: "Suggest moves" }).click();
     await expect(
       organize.getByText("Invoices go to Finance and notes to a new Notes folder."),
@@ -91,6 +98,9 @@ test("Organize suggests other folders, keeps both on a clash, moves what is kept
     // The assistant looked at the drive before answering.
     expect(fakeAi.requests.length).toBe(2);
     expect(fakeAi.requests[1]?.messages.some((message) => message.role === "tool")).toBe(true);
+    const offered = fakeAi.requests[0]?.tools?.map((tool) => tool.function.name) ?? [];
+    expect(offered).toContain("folder_tree");
+    expect(offered).not.toContain("read_excerpts");
 
     // Keeping both files the invoice under a numbered name.
     await financeGroup.getByRole("button", { name: "Keep both" }).click();

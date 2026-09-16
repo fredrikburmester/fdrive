@@ -22,13 +22,20 @@ shows as missing.
 
 ## What is sent
 
-- Paths, sizes and dates of the selected items, and folder and file names the assistant lists
+- Paths, sizes and dates of the selected items, and the names of folders the assistant lists
   while exploring the drive.
-- Up to 1,500 characters of already-extracted index text per selected file, when the login has
-  verified index scopes ([scoping](SCOPING.md)). Files are never uploaded.
 - The person's optional instructions.
+- Optionally, chosen per run in the **Share with assistant** multi-select of the Organize sheet
+  and remembered by the browser:
+  - **File contents**: up to 1,500 characters of already-extracted index text per selected
+    file, when the login has verified index scopes ([scoping](SCOPING.md)). Off removes the
+    `read_excerpts` tool and tells the assistant to decide from names, types, sizes, dates and
+    the folder structure. Search and similar files still work; they never return text.
+  - **Names of other files**: file names outside the selection seen in `folder_tree`,
+    `list_folder`, `search_drive` and `similar_files`. Off leaves folder names and file counts.
 
-Search and similar-file tools report which folders hold matches, not other files' contents.
+Files are never uploaded. Search and similar-file tools report which folders hold matches, not
+other files' contents. The request carries the choice as `share`; an omitted `share` means both.
 
 ## How a run works
 

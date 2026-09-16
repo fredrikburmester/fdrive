@@ -1,3 +1,4 @@
+import { DEFAULT_ORGANIZE_SHARING, type OrganizeSharing } from "@fdrive/contracts";
 import { isStorageError, parentPath } from "@fdrive/core";
 import { z } from "zod";
 import { McpToolError } from "../../mcp/handlers.js";
@@ -67,10 +68,27 @@ function describeItem(item: OrganizeItem): string {
   return `- ${item.path} (${details})`;
 }
 
+/** What the assistant is told it can look at, given the index and what the person chose to share. */
+function availabilityText(indexed: boolean, share: OrganizeSharing): string[] {
+  const lines = [
+    !indexed
+      ? "Extracted text and search are not available for this drive, so decide from names, types, sizes, dates and the folder structure."
+      : share.contents
+        ? "You can read indexed text of selected files, search the drive and find similar files."
+        : "You can search the drive and find similar files, but the person chose not to share file contents, so decide from names, types, sizes, dates and the folder structure.",
+  ];
+  if (!share.otherFileNames)
+    lines.push(
+      "The person chose not to share the names of files outside the selection: you see folder names and file counts instead.",
+    );
+  return lines;
+}
+
 export function initialMessage(
   items: readonly OrganizeItem[],
   instructions: string | undefined,
   indexed: boolean,
+  share: OrganizeSharing = DEFAULT_ORGANIZE_SHARING,
 ): string {
   const parents = new Set(items.map((item) => parentPath(item.path)));
   const commonParent = parents.size === 1 ? ([...parents][0] as string) : null;
@@ -82,9 +100,7 @@ export function initialMessage(
     heading,
     ...items.map(describeItem),
     "",
-    indexed
-      ? "You can read indexed text of selected files, search the drive and find similar files."
-      : "Extracted text and search are not available for this drive, so decide from names, types, sizes, dates and the folder structure.",
+    ...availabilityText(indexed, share),
     ...(instructions ? ["", `The person's instructions: ${instructions}`] : []),
   ].join("\n");
 }
@@ -108,6 +124,8 @@ export interface RunOrganizeAgentOptions {
   readonly items: readonly OrganizeItem[];
   readonly instructions?: string | undefined;
   readonly indexed: boolean;
+  /** What the person chose to share; defaults to everything. */
+  readonly share?: OrganizeSharing | undefined;
   readonly signal: AbortSignal;
   readonly activity: (text: string) => void;
   /** Throws when the session that started the run may no longer act. Checked before every turn. */
@@ -172,7 +190,12 @@ export async function runOrganizeAgent(
 
   let input: AiInput = {
     kind: "user",
-    text: initialMessage(options.items, options.instructions, options.indexed),
+    text: initialMessage(
+      options.items,
+      options.instructions,
+      options.indexed,
+      options.share ?? DEFAULT_ORGANIZE_SHARING,
+    ),
   };
   let nudges = 0;
   for (let turn = 0; turn < (options.maxTurns ?? MAX_TURNS); turn++) {

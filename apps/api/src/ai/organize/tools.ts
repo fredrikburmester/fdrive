@@ -1,3 +1,4 @@
+import { DEFAULT_ORGANIZE_SHARING, type OrganizeSharing } from "@fdrive/contracts";
 import {
   baseName,
   type FileEntry,
@@ -34,6 +35,8 @@ export interface OrganizeToolsDeps {
   readonly selected: ReadonlySet<string>;
   /** Whether the identity has verified index scopes, so excerpts, search and similarity can work. */
   readonly indexed: boolean;
+  /** What the person chose to share with the model; defaults to everything. */
+  readonly share?: OrganizeSharing | undefined;
 }
 
 /** Listings a single `folder_tree` call may make. */
@@ -72,6 +75,10 @@ export function formatSize(bytes: number): string {
 
 function describeFile(entry: FileEntry): string {
   return `${entry.name} (${formatSize(entry.size)}, ${entry.modifiedAt.toISOString().slice(0, 10)})`;
+}
+
+function sharingOf(deps: OrganizeToolsDeps): OrganizeSharing {
+  return deps.share ?? DEFAULT_ORGANIZE_SHARING;
 }
 
 function trashPathOf(deps: OrganizeToolsDeps): string | null {
@@ -134,9 +141,12 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
       .default(2)
       .describe("How many folder levels to open, 1 to 4. The level below is shown by name."),
   });
+  const { otherFileNames } = sharingOf(deps);
   return defineTool(
     "folder_tree",
-    "Shows how the drive is organized: nested folders with their file counts and a few example file names. Selected items and Trash are not opened.",
+    otherFileNames
+      ? "Shows how the drive is organized: nested folders with their file counts and a few example file names. Selected items and Trash are not opened."
+      : "Shows how the drive is organized: nested folders with their file counts. File names outside the selection are not shared. Selected items and Trash are not opened.",
     schema,
     {
       activity: (args) => `Looked through ${args.path}`,
@@ -198,7 +208,10 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
             .filter((entry) => entry.kind === "dir" && !inTrash(trashPath, entry.path))
             .sort((a, b) => a.name.localeCompare(b.name));
           const files = entries.filter((entry) => entry.kind !== "dir");
-          const samples = files
+          // Without other file names, only selected files are named; the count still covers every file.
+          const samples = (
+            otherFileNames ? files : files.filter((entry) => deps.selected.has(entry.path))
+          )
             .slice(0, TREE_SAMPLE_FILES)
             .map((entry) =>
               deps.selected.has(entry.path) ? `${entry.name} (selected)` : entry.name,
@@ -227,9 +240,12 @@ function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
     path: z.string().describe("Folder to list."),
     offset: z.number().int().min(0).default(0).describe("Skip this many entries, for paging."),
   });
+  const { otherFileNames } = sharingOf(deps);
   return defineTool(
     "list_folder",
-    "Lists every folder and file directly inside one folder, with file sizes and modification dates.",
+    otherFileNames
+      ? "Lists every folder and file directly inside one folder, with file sizes and modification dates."
+      : "Lists every folder directly inside one folder, with selected files. Other files are counted, not named.",
     schema,
     {
       activity: (args) => `Opened ${args.path}`,
@@ -237,8 +253,16 @@ function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
         const path = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
         if (inTrash(trashPath, path)) throw new OrganizeToolError("That folder is the Trash.");
-        const entries = (await deps.principal.storage.list(path))
-          .filter((entry) => !inTrash(trashPath, entry.path))
+        const all = (await deps.principal.storage.list(path)).filter(
+          (entry) => !inTrash(trashPath, entry.path),
+        );
+        const withheld = otherFileNames
+          ? 0
+          : all.filter((entry) => entry.kind !== "dir" && !deps.selected.has(entry.path)).length;
+        const entries = all
+          .filter(
+            (entry) => otherFileNames || entry.kind === "dir" || deps.selected.has(entry.path),
+          )
           .sort((a, b) =>
             a.kind === "dir" && b.kind !== "dir"
               ? -1
@@ -251,7 +275,9 @@ function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
           const label = entry.kind === "dir" ? `${entry.name}/` : describeFile(entry);
           return deps.selected.has(entry.path) ? `${label} (selected)` : label;
         });
-        const header = `${path}: ${entries.length} entries`;
+        const header = `${path}: ${all.length} entries`;
+        if (withheld > 0)
+          lines.push(`(${withheld} other ${withheld === 1 ? "file" : "files"}, names not shared)`);
         const footer =
           args.offset + page.length < entries.length
             ? `\n(More: call again with offset ${args.offset + page.length}.)`
@@ -329,10 +355,11 @@ function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
   );
 }
 
-/** Groups hits by folder so the model sees where related things live, not other files' contents. */
+/** Groups hits by folder so the model sees where related things live, not other files' contents. Without `names`, only counts. */
 function groupByFolder(
   hits: readonly { path: string; name: string }[],
   selected: ReadonlySet<string>,
+  names: boolean,
 ): string {
   const folders = new Map<string, string[]>();
   for (const hit of hits) {
@@ -343,10 +370,10 @@ function groupByFolder(
   if (folders.size === 0) return "No related files outside the selection.";
   return [...folders.entries()]
     .sort((a, b) => b[1].length - a[1].length)
-    .map(
-      ([folder, names]) =>
-        `${folder}: ${names.length} ${names.length === 1 ? "match" : "matches"} (${names.slice(0, 5).join(", ")})`,
-    )
+    .map(([folder, matches]) => {
+      const count = `${folder}: ${matches.length} ${matches.length === 1 ? "match" : "matches"}`;
+      return names ? `${count} (${matches.slice(0, 5).join(", ")})` : count;
+    })
     .join("\n");
 }
 
@@ -371,7 +398,7 @@ function searchTool(deps: OrganizeToolsDeps): OrganizeTool {
         });
         if ("unavailable" in response && response.unavailable)
           return "Search is not available right now.";
-        return groupByFolder(response.results, deps.selected);
+        return groupByFolder(response.results, deps.selected, sharingOf(deps).otherFileNames);
       },
     },
   );
@@ -392,17 +419,26 @@ function similarTool(deps: OrganizeToolsDeps): OrganizeTool {
         if (!isSelectedOrInside(deps.selected, path))
           throw new OrganizeToolError("Only selected items can be compared.");
         const response = await runSimilarFiles(deps.mcp, deps.principal, { path, limit: 20 });
-        return groupByFolder(response.results, deps.selected);
+        return groupByFolder(response.results, deps.selected, sharingOf(deps).otherFileNames);
       },
     },
   );
 }
 
-/** The read-only tools for one organize run; index-backed tools only when the identity is indexed. */
+/**
+ * The read-only tools for one organize run: index-backed tools only when the
+ * identity is indexed, and excerpts only when the person shares contents.
+ */
 export function createOrganizeTools(deps: OrganizeToolsDeps): OrganizeTool[] {
   return [
     folderTreeTool(deps),
     listFolderTool(deps),
-    ...(deps.indexed ? [readExcerptsTool(deps), searchTool(deps), similarTool(deps)] : []),
+    ...(deps.indexed
+      ? [
+          ...(sharingOf(deps).contents ? [readExcerptsTool(deps)] : []),
+          searchTool(deps),
+          similarTool(deps),
+        ]
+      : []),
   ];
 }

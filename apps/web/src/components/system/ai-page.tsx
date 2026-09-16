@@ -144,9 +144,14 @@ export function AiSystemPage() {
                 Names of folders and files anywhere in the drive that the assistant browses or finds
                 by search, with sizes and dates for the folders it opens.
               </li>
-              <li>Up to 1,500 characters of already-extracted text for each selected file.</li>
               <li>
-                Files themselves are never uploaded, and nothing moves until the person approves.
+                Up to 1,500 characters of already-extracted text for each selected file, unless the
+                person turns off file contents for that run.
+              </li>
+              <li>
+                Each person chooses in the Organize sheet whether file contents and the names of
+                other files are shared. Files themselves are never uploaded, and nothing moves until
+                the person approves.
               </li>
             </ul>
           </SystemSection>

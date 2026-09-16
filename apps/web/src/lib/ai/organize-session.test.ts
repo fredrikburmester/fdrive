@@ -1,5 +1,5 @@
 import type { FsEntry, OrganizeProposal } from "@fdrive/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOrganizeSessionStore,
   NO_EDITS,
@@ -48,6 +48,30 @@ describe("organize session store", () => {
     expect(replaced?.key).not.toBe(first?.key);
     expect(replaced?.instructions).toBe("");
     expect(replaced?.entries).toBe(photos);
+  });
+
+  it("starts a session with the remembered sharing choice and remembers changes", () => {
+    const saveShare = vi.fn();
+    const remembered = createOrganizeSessionStore({
+      loadShare: () => ({ contents: false, otherFileNames: true }),
+      saveShare,
+    });
+    remembered.getState().open(receipts);
+    expect(remembered.getState().session?.share).toEqual({
+      contents: false,
+      otherFileNames: true,
+    });
+
+    remembered.getState().setShare({ otherFileNames: false });
+    expect(remembered.getState().session?.share).toEqual({
+      contents: false,
+      otherFileNames: false,
+    });
+    expect(saveShare).toHaveBeenCalledWith({ contents: false, otherFileNames: false });
+
+    // The default store shares everything when this browser remembers nothing.
+    store.getState().open(receipts);
+    expect(store.getState().session?.share).toEqual({ contents: true, otherFileNames: true });
   });
 
   it("attaches a run only to the session that started it", () => {
