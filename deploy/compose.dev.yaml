@@ -200,9 +200,48 @@ services:
       start_period: 30s
       retries: 3
 
+  # A local S3 target for the S3 provider: MinIO with one bucket and one
+  # read-write key, prepared by the `mc` client the image ships. Add it under
+  # System > Storage as http://localhost:59000/fdrive and sign in with the
+  # access key `fdrive-dev` and secret `fdrive-dev-password`.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: [s3]
+    ports:
+      - "${FDRIVE_DEV_MINIO_PORT:-59000}:9000"
+      - "${FDRIVE_DEV_MINIO_CONSOLE_PORT:-59001}:9001"
+    environment:
+      MINIO_ROOT_USER: minio-root
+      MINIO_ROOT_PASSWORD: minio-root-password
+    command: ["server", "/data", "--console-address", ":9001"]
+    volumes:
+      - fdrive-dev-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-seed:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    profiles: [s3]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        mc alias set local http://minio:9000 minio-root minio-root-password
+        mc mb --ignore-existing local/fdrive
+        mc admin user add local fdrive-dev fdrive-dev-password || true
+        mc admin policy attach local readwrite --user fdrive-dev || true
+    depends_on:
+      minio:
+        condition: service_healthy
+
 volumes:
   fdrive-dev-pgdata:
   fdrive-dev-sftpgo-data:
+  fdrive-dev-minio-data:
   fdrive-dev-embed-models:
   fdrive-dev-ocr-state:
   fdrive-dev-image-embed-models:

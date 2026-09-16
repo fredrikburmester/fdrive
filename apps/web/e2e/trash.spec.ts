@@ -363,6 +363,100 @@ test.describe("trash available", () => {
     );
     expect(await restored.text()).toBe("over dav");
   });
+
+  test("an S3 login gets a Trash that fdrive fills itself: enable, move, restore", async ({
+    page,
+  }) => {
+    // Same owner-wide grant as the WebDAV scenario: alice stays admin after
+    // switching to the S3 login.
+    await page.goto(`${webBaseUrl}/login`);
+    await page.getByLabel("Username").fill("alice");
+    await page.getByLabel("Password").fill("alice-password");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL("**/files");
+
+    const headers = { "x-requested-with": "fdrive" };
+    const meBefore = (await (await page.request.get(`${webBaseUrl}/api/v1/auth/me`)).json()) as {
+      account: { id: string };
+    };
+    const db = new Client({ connectionString: environment?.databaseUrl });
+    await db.connect();
+    try {
+      await db.query("update app.accounts set is_admin = true where id = $1", [
+        meBefore.account.id,
+      ]);
+    } finally {
+      await db.end();
+    }
+    if (environment === undefined) throw new Error("environment missing");
+    const url = new URL(environment.s3Url);
+    url.hostname = E2E_HOST;
+    const created = await page.request.post(`${webBaseUrl}/api/v1/admin/providers`, {
+      headers,
+      data: { type: "s3", label: "s3-trash", baseUrl: `${url.origin}${url.pathname}` },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const row = (await created.json()) as { id: string };
+    const linked = await page.request.post(`${webBaseUrl}/api/v1/account/identities`, {
+      headers,
+      data: {
+        providerId: row.id,
+        credential: {
+          username: environment.s3Key.accessKeyId,
+          password: environment.s3Key.secretAccessKey,
+        },
+        currentCredential: { password: "alice-password" },
+      },
+    });
+    expect(linked.ok(), await linked.text()).toBe(true);
+    const me = (await linked.json()) as { identities: { id: string; providerType: string }[] };
+    const s3 = me.identities.find((identity) => identity.providerType === "s3");
+    if (!s3) throw new Error("S3 identity missing after linking");
+    const switched = await page.request.post(`${webBaseUrl}/api/v1/account/active-identity`, {
+      headers,
+      data: { identityId: s3.id },
+    });
+    expect(switched.ok(), await switched.text()).toBe(true);
+
+    await page.goto(`${webBaseUrl}/system/general`);
+    await expect(
+      page.getByText("Restore deleted files that fdrive moved into a recycle folder."),
+    ).toBeVisible();
+    await page.getByRole("switch", { name: "Enable Trash" }).click();
+    await expect(page.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
+    await page.getByLabel("Trash folder").fill("/.trash-s3");
+    await page.getByRole("button", { name: "Save Trash settings" }).click();
+    await expect(
+      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
+    ).toBeVisible();
+
+    const fileName = `${uniqueName("s3-trash-me")}.txt`;
+    await page.goto(`${webBaseUrl}/files`);
+    await uploadFiles(page, [{ name: fileName, mimeType: "text/plain", contents: "over s3" }]);
+    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+    await moveToTrash(page, fileName);
+    await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
+    await expect(listing(page).getByText(".trash-s3", { exact: true })).toHaveCount(0);
+
+    await page.goto(`${webBaseUrl}/trash`);
+    const row2 = trashRow(page, fileName);
+    await expect(row2).toBeVisible({ timeout: 15_000 });
+    await row2.getByRole("checkbox", { name: `Select ${fileName}` }).check();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByText("Restored 1 item.")).toBeVisible();
+    await expect(row2).toBeHidden();
+
+    await page.goto(`${webBaseUrl}/files`);
+    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+    const restored = await page.request.get(
+      `${webBaseUrl}/api/v1/fs/download?path=${encodeURIComponent(`/${fileName}`)}`,
+    );
+    expect(await restored.text()).toBe("over s3");
+  });
 });
 
 test.describe("trash not configured", () => {

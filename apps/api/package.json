@@ -29,6 +29,7 @@
     "@fdrive/contracts": "workspace:*",
     "@fdrive/core": "workspace:*",
     "@fdrive/db": "workspace:*",
+    "@fdrive/s3": "workspace:*",
     "@fdrive/sftpgo": "workspace:*",
     "@fdrive/webdav": "workspace:*",
     "@hono/node-server": "^1.19.5",

@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type MinioKey,
   SEED_FILES,
   SEED_USERS,
   type StartSftpgoOptions,
+  startMinio,
   startPostgres,
   startSftpgo,
 } from "@fdrive/testkit";
@@ -36,6 +38,10 @@ export interface RunningEnvironment {
   readonly sftpgoUrl: string;
   /** The same SFTPGo's WebDAV binding, for specs that add it as a second provider type. */
   readonly sftpgoWebdavUrl: string;
+  /** A MinIO bucket address (`http://host:port/bucket`), for specs that add an S3 provider. */
+  readonly s3Url: string;
+  /** A key pair with read-write access to that bucket. */
+  readonly s3Key: MinioKey;
   /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
    * `getWebBaseUrl()` for the default, shared environment, but reflect
    * `options.apiPort`/`options.webPort` for a second, independent
@@ -232,6 +238,12 @@ export async function startEnvironment(
     // The same container's WebDAV binding, for specs that add it as a
     // second provider type; workers inherit the setup process's env.
     process.env.E2E_SFTPGO_WEBDAV_URL = sftpgo.webdavUrl;
+    // A MinIO bucket, the real S3 target `s3-provider.spec.ts` adds.
+    const minio = await startMinio();
+    stopFns.push(() => minio.stop());
+    process.env.E2E_S3_URL = minio.baseUrl;
+    process.env.E2E_S3_ACCESS_KEY = minio.writer.accessKeyId;
+    process.env.E2E_S3_SECRET_KEY = minio.writer.secretAccessKey;
 
     const masterKey = randomBytes(32).toString("base64");
 
@@ -390,6 +402,8 @@ export async function startEnvironment(
       databaseUrl: postgres.connectionString,
       sftpgoUrl: sftpgo.baseUrl,
       sftpgoWebdavUrl: sftpgo.webdavUrl,
+      s3Url: minio.baseUrl,
+      s3Key: minio.writer,
       apiBaseUrl,
       webBaseUrl,
       stop: stopAll,

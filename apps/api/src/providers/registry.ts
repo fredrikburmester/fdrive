@@ -1,5 +1,6 @@
 import { ProviderType } from "@fdrive/contracts";
 import type { ProviderModule } from "@fdrive/core";
+import { s3Module } from "@fdrive/s3";
 import { sftpgoModule } from "@fdrive/sftpgo";
 import { webdavModule } from "@fdrive/webdav";
 
@@ -12,6 +13,7 @@ import { webdavModule } from "@fdrive/webdav";
 export const PROVIDER_MODULES: Readonly<Record<ProviderType, ProviderModule>> = {
   sftpgo: sftpgoModule,
   webdav: webdavModule,
+  s3: s3Module,
 };
 
 /** True when `type` names a registered provider module. */
