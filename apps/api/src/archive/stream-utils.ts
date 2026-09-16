@@ -99,6 +99,15 @@ const PRECOMPRESSED_EXTENSIONS = new Set([
   ".ogg",
   ".heic",
   ".heif",
+  // Camera raw files are losslessly compressed by the camera; deflating them again gains nothing.
+  ".arw",
+  ".cr2",
+  ".cr3",
+  ".nef",
+  ".dng",
+  ".raf",
+  ".orf",
+  ".rw2",
 ]);
 
 /** True when `entryName`'s extension is already compressed and should be stored, not deflated. */

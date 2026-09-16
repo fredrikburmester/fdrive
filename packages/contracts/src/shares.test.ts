@@ -156,6 +156,9 @@ describe("share contracts", () => {
       "x.avif",
       "photo.heic",
       "PHOTO.HEIF",
+      "DSC00001.ARW",
+      "img.cr3",
+      "img.dng",
     ])
       expect(isImageFileName(name)).toBe(true);
     for (const name of ["photo.svg", "photo", "photo.", "photo.txt", "photo.pdf"])

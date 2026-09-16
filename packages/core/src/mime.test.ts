@@ -16,6 +16,13 @@ describe("mimeFromExtension", () => {
     );
   });
 
+  it("resolves camera raw extensions to image types that are not inline-previewable", () => {
+    expect(mimeFromExtension(".arw")).toBe("image/x-sony-arw");
+    expect(mimeFromExtension(".CR3")).toBe("image/x-canon-cr3");
+    expect(mimeFromExtension(".dng")).toBe("image/x-adobe-dng");
+    expect(isInlinePreviewable("image/x-sony-arw")).toBe(false);
+  });
+
   it("treats .ts, .mts, and .cts as TypeScript source, not MPEG transport stream video", () => {
     expect(mimeFromExtension(".ts")).toBe("text/typescript");
     expect(mimeFromExtension(".mts")).toBe("text/typescript");

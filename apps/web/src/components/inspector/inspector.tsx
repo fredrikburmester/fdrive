@@ -26,6 +26,7 @@ import { apiClient } from "@/lib/preview/deps";
 import { describeEntry } from "@/lib/preview/describe";
 import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
+import { isRawExt } from "@/lib/preview/raw";
 import { summarizeSelection } from "@/lib/preview/selection";
 
 export interface InspectorProps {
@@ -108,12 +109,14 @@ function SingleEntryBody({
   });
   const kind = previewKindFor(entry);
   const Icon = iconFor(entry);
-  // Browsers other than Safari cannot decode HEIC, so those show the indexer's
-  // thumbnail; any image that fails to load falls back to the kind icon.
+  // Browsers other than Safari cannot decode HEIC, and none decodes camera raw,
+  // so those show the indexer's thumbnail; any image that fails to load falls
+  // back to the kind icon.
   const [imageFailed, setImageFailed] = useState(false);
-  const imageSrc = isHeicExt(entry.ext)
-    ? apiClient.thumbUrl(entry.path, 256)
-    : apiClient.downloadUrl(entry.path, { inline: true });
+  const imageSrc =
+    isHeicExt(entry.ext) || isRawExt(entry.ext)
+      ? apiClient.thumbUrl(entry.path, 256)
+      : apiClient.downloadUrl(entry.path, { inline: true });
 
   return (
     <div className="flex flex-col gap-4 p-4">

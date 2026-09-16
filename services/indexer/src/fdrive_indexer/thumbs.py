@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-from .chunking import IMAGE_EXTS, PDF_EXTS, VIDEO_EXTS
+from .chunking import IMAGE_EXTS, PDF_EXTS, RAW_EXTS, VIDEO_EXTS
 
 ThumbKind = Literal["image", "pdf", "video"]
 SIZES: tuple[int, int] = (256, 1024)
@@ -18,7 +18,7 @@ MediaRow = tuple[str, str, str, int]
 
 
 def kind_for_ext(ext: str) -> ThumbKind | None:
-    if ext in IMAGE_EXTS:
+    if ext in IMAGE_EXTS or ext in RAW_EXTS:
         return "image"
     if ext in PDF_EXTS:
         return "pdf"

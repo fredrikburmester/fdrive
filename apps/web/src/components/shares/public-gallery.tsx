@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isHeicExt } from "@/lib/preview/heic";
+import { isRawExt } from "@/lib/preview/raw";
 import {
   galleryVisibleCount,
   hasMoreGalleryItems,
@@ -59,7 +60,8 @@ function LightboxAction({
 }
 
 /** A grid tile: a thumbnail by default, falling back per-tile to the full download URL when
- * the thumbnail 404s (the file is not indexed, or the deployment has no index profile). */
+ * the thumbnail 404s (the file is not indexed, or the deployment has no index profile). HEIC
+ * and camera raw files fall back to an icon instead: the browser cannot render the original. */
 function GalleryTile({
   image,
   thumbUrl,
@@ -72,7 +74,7 @@ function GalleryTile({
   onOpen: () => void;
 }) {
   const [thumbFailed, setThumbFailed] = useState(false);
-  const isHeic = isHeicExt(extensionOf(image.name));
+  const thumbnailOnly = isHeicExt(extensionOf(image.name)) || isRawExt(extensionOf(image.name));
 
   return (
     <button
@@ -81,7 +83,7 @@ function GalleryTile({
       className="group relative aspect-square overflow-hidden rounded-lg border bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       onClick={onOpen}
     >
-      {thumbFailed && isHeic ? (
+      {thumbFailed && thumbnailOnly ? (
         <span className="flex h-full w-full items-center justify-center">
           <ImageIcon className="size-8 text-muted-foreground" />
         </span>
@@ -130,12 +132,13 @@ function Lightbox({
   // stepping never shows an empty frame. Keyed by path so moving to another
   // image starts from its thumbnail again rather than holding the previous
   // full image. A share whose files are not indexed has no thumbnail: the
-  // `onError` there falls straight through to the full image.
+  // `onError` there falls straight through to the full image. HEIC and camera
+  // raw files never preload the original: `ImageViewer` owns those.
   const [fullLoaded, setFullLoaded] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
-  const isHeic = isHeicExt(extensionOf(image.name));
+  const thumbnailOnly = isHeicExt(extensionOf(image.name)) || isRawExt(extensionOf(image.name));
   useEffect(() => {
-    if (isHeic) return;
+    if (thumbnailOnly) return;
     setFullLoaded(false);
     setThumbFailed(false);
     const full = new Image();
@@ -145,7 +148,7 @@ function Lightbox({
     return () => {
       full.onload = null;
     };
-  }, [image.path, downloadUrl, isHeic]);
+  }, [image.path, downloadUrl, thumbnailOnly]);
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -166,7 +169,7 @@ function Lightbox({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, onStep]);
-  const activeSrc = isHeic
+  const activeSrc = thumbnailOnly
     ? downloadUrl(image.path)
     : fullLoaded || thumbFailed
       ? downloadUrl(image.path)
