@@ -1,3 +1,4 @@
+import type { OrganizeSharing } from "@fdrive/contracts";
 import { baseName, type Scope, StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
@@ -58,8 +59,11 @@ interface ToolsSetup {
   readonly storage?: StorageProvider;
   readonly selected?: readonly string[];
   readonly indexed?: boolean;
+  readonly share?: OrganizeSharing;
   readonly mcp?: Partial<McpToolDeps>;
 }
+
+const NAMES_WITHHELD: OrganizeSharing = { contents: true, otherFileNames: false };
 
 function toolsFor(setup: ToolsSetup = {}) {
   const storage = setup.storage ?? createMemoryStorage();
@@ -70,6 +74,7 @@ function toolsFor(setup: ToolsSetup = {}) {
     principal,
     selected: new Set(setup.selected ?? []),
     indexed: setup.indexed ?? true,
+    ...(setup.share === undefined ? {} : { share: setup.share }),
   });
   return {
     tools,
@@ -180,6 +185,27 @@ describe("createOrganizeTools", () => {
       expect(tool.spec.inputSchema).toMatchObject({ type: "object" });
     }
   });
+
+  it("leaves out excerpts when the person does not share contents, keeping search and similarity", () => {
+    const { tools } = toolsFor({ indexed: true, share: { contents: false, otherFileNames: true } });
+
+    expect(tools.map((tool) => tool.spec.name)).toEqual([
+      "folder_tree",
+      "list_folder",
+      "search_drive",
+      "similar_files",
+    ]);
+  });
+
+  it("says in the folder tools' descriptions when other file names are withheld", () => {
+    const { tool } = toolsFor({ share: NAMES_WITHHELD });
+
+    expect(tool("folder_tree").spec.description).toContain(
+      "File names outside the selection are not shared",
+    );
+    expect(tool("list_folder").spec.description).toContain("Other files are counted, not named");
+    expect(tool("read_excerpts")).toBeDefined();
+  });
 });
 
 describe("folder_tree", () => {
@@ -245,6 +271,31 @@ describe("folder_tree", () => {
 
     expect(await runTool(tool("folder_tree"), { path: "/Projects" })).toBe("/Projects/ (selected)");
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("names only selected files when other file names are withheld, keeping every count", async () => {
+    const storage = tree();
+    const { tool } = toolsFor({
+      storage,
+      selected: ["/Inbox/scan001.pdf", "/Projects"],
+      share: NAMES_WITHHELD,
+    });
+
+    const output = await runTool(tool("folder_tree"), {});
+
+    expect(output).toBe(
+      [
+        "/ 4 folders, 1 files",
+        "  Finance/ 1 folders, 1 files",
+        "    Receipts/",
+        "  Inbox/ 0 folders, 2 files: scan001.pdf (selected), … +1",
+        "  Photos/ 1 folders, 0 files",
+        "    2024/",
+        "  Projects/ (selected)",
+      ].join("\n"),
+    );
+    expect(output).not.toContain("notes.md");
+    expect(output).not.toContain("todo.txt");
   });
 
   it("shows at most six sample file names", async () => {
@@ -391,6 +442,38 @@ describe("list_folder", () => {
         "beta.txt (1 B, 1970-01-01)",
         "zeta.txt (5 B, 1970-01-01) (selected)",
       ].join("\n"),
+    );
+  });
+
+  it("counts other files instead of naming them when other file names are withheld", async () => {
+    const storage = createMemoryStorage({
+      "/Mixed/zeta.txt": "hello",
+      "/Mixed/Beta/x.txt": "x",
+      "/Mixed/alpha.pdf": "a".repeat(2048),
+      "/Mixed/Archive/y.txt": "y",
+      "/Mixed/beta.txt": "b",
+    });
+    const { tool } = toolsFor({
+      storage,
+      selected: ["/Mixed/Beta", "/Mixed/zeta.txt"],
+      share: NAMES_WITHHELD,
+    });
+
+    expect(await runTool(tool("list_folder"), { path: "/Mixed" })).toBe(
+      [
+        "/Mixed: 5 entries",
+        "Archive/",
+        "Beta/ (selected)",
+        "zeta.txt (5 B, 1970-01-01) (selected)",
+        "(2 other files, names not shared)",
+      ].join("\n"),
+    );
+    const { tool: single } = toolsFor({
+      storage: createMemoryStorage({ "/One/only.txt": "x" }),
+      share: NAMES_WITHHELD,
+    });
+    expect(await runTool(single("list_folder"), { path: "/One" })).toBe(
+      "/One: 1 entries\n(1 other file, names not shared)",
     );
   });
 
@@ -766,6 +849,22 @@ describe("search_drive", () => {
       ].join("\n"),
     );
     expect(runSearch).toHaveBeenCalledWith(mcp, principal, { query: "invoice", limit: 50 });
+  });
+
+  it("reports only counts per folder when other file names are withheld", async () => {
+    vi.mocked(runSearch).mockResolvedValue({
+      query: "invoice",
+      results: [
+        searchHit("/Finance/2023/a.pdf"),
+        searchHit("/Finance/2024/b.pdf"),
+        searchHit("/Finance/2024/c.pdf"),
+      ],
+    });
+    const { tool } = toolsFor({ share: NAMES_WITHHELD });
+
+    expect(await runTool(tool("search_drive"), { query: "invoice" })).toBe(
+      ["/Finance/2024: 2 matches", "/Finance/2023: 1 match"].join("\n"),
+    );
   });
 
   it("reports when every hit is part of the selection", async () => {

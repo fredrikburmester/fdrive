@@ -1,7 +1,13 @@
-import type { FsEntry, OrganizeProposal, OrganizeSuggestion } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  OrganizeProposal,
+  OrganizeSharing,
+  OrganizeSuggestion,
+} from "@fdrive/contracts";
 import { joinPath } from "@fdrive/core";
 import { create } from "zustand";
 import { initiallyChecked, withDestination } from "./organize";
+import { loadOrganizeSharing, saveOrganizeSharing } from "./organize-sharing";
 
 /**
  * What the person changed while reviewing a proposal, kept apart from the
@@ -40,6 +46,8 @@ export interface OrganizeSession {
   /** Whether the sheet shows the session right now. */
   readonly open: boolean;
   readonly instructions: string;
+  /** What the run may send to the model beyond the selection's own names and details. */
+  readonly share: OrganizeSharing;
   readonly runId: string | null;
   readonly edits: ReviewEdits;
   /** Whether the person was told that suggestions arrived while the sheet was closed. */
@@ -60,6 +68,8 @@ export interface OrganizeSessionStore {
   /** Forgets the session. */
   discard(): void;
   setInstructions(value: string): void;
+  /** Changes what the next run shares, and remembers the choice in this browser. */
+  setShare(patch: Partial<OrganizeSharing>): void;
   /** Attaches a started run to the session with `key`; ignored once that session is gone. */
   setRunId(key: number, id: string): void;
   /** Drops the run and review, keeping the selection and instructions. */
@@ -74,7 +84,15 @@ export function samePaths(a: readonly FsEntry[], b: readonly FsEntry[]): boolean
   return a.length === b.length && a.every((entry, index) => entry.path === b[index]?.path);
 }
 
-export function createOrganizeSessionStore() {
+export interface OrganizeSessionStoreOptions {
+  /** The sharing choice a new session starts with; defaults to what this browser remembers. */
+  readonly loadShare?: () => OrganizeSharing;
+  readonly saveShare?: (share: OrganizeSharing) => void;
+}
+
+export function createOrganizeSessionStore(options: OrganizeSessionStoreOptions = {}) {
+  const loadShare = options.loadShare ?? loadOrganizeSharing;
+  const saveShare = options.saveShare ?? saveOrganizeSharing;
   let nextKey = 1;
   return create<OrganizeSessionStore>((set) => {
     function update(change: (session: OrganizeSession) => OrganizeSession): void {
@@ -93,6 +111,7 @@ export function createOrganizeSessionStore() {
               entries,
               open: true,
               instructions: "",
+              share: loadShare(),
               runId: null,
               edits: NO_EDITS,
               notified: false,
@@ -104,6 +123,12 @@ export function createOrganizeSessionStore() {
       hide: () => update((session) => ({ ...session, open: false })),
       discard: () => set({ session: null }),
       setInstructions: (value) => update((session) => ({ ...session, instructions: value })),
+      setShare: (patch) =>
+        update((session) => {
+          const share = { ...session.share, ...patch };
+          saveShare(share);
+          return { ...session, share };
+        }),
       setRunId: (key, id) =>
         update((session) => (session.key === key ? { ...session, runId: id } : session)),
       restart: () =>

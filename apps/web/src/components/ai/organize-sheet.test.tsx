@@ -156,6 +156,36 @@ async function reachReview() {
   await screen.findByText("Receipts go to Finance and photos to Photos.");
 }
 
+it("lets the person keep file contents and other file names from the assistant", async () => {
+  window.localStorage.removeItem("fdrive.organize.share");
+  renderSheet();
+  const trigger = screen.getByRole("combobox", { name: "Share with assistant" });
+  const triggerText = () => trigger.querySelector('[data-slot="select-value"]')?.textContent;
+  expect(triggerText()).toBe("File contents, names of other files");
+
+  fireEvent.click(trigger);
+  const contents = await screen.findByRole("option", { name: /File contents/ });
+  expect(contents.getAttribute("aria-selected")).toBe("true");
+  expect(
+    screen.getByRole("option", { name: /Names of other files/ }).getAttribute("aria-selected"),
+  ).toBe("true");
+  fireEvent.keyDown(contents, { key: "Enter" });
+  await waitFor(() => expect(triggerText()).toBe("Names of other files"));
+  expect(window.localStorage.getItem("fdrive.organize.share")).toBe(
+    JSON.stringify({ contents: false, otherFileNames: true }),
+  );
+  fireEvent.keyDown(contents, { key: "Escape" });
+  mocks.client.organizeRun.mockResolvedValue(run({ activity: ["Looked through /"] }));
+  fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
+  await waitFor(() =>
+    expect(mocks.client.startOrganize).toHaveBeenCalledWith({
+      paths: ["/inbox/receipt.pdf", "/inbox/beach.jpg", "/inbox/notes.txt"],
+      share: { contents: false, otherFileNames: true },
+    }),
+  );
+  window.localStorage.removeItem("fdrive.organize.share");
+});
+
 it("explains what is sent, then reviews suggestions grouped by destination", async () => {
   renderSheet();
   expect(screen.getByText("Organize 3 items")).toBeTruthy();
@@ -165,6 +195,7 @@ it("explains what is sent, then reviews suggestions grouped by destination", asy
   expect(mocks.client.startOrganize).toHaveBeenCalledWith({
     paths: ["/inbox/receipt.pdf", "/inbox/beach.jpg", "/inbox/notes.txt"],
     instructions: "by type",
+    share: { contents: true, otherFileNames: true },
   });
   const finance = screen.getByRole("region", { name: "/Finance/Receipts" });
   expect(within(finance).getByText("New folder")).toBeTruthy();

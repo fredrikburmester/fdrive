@@ -23,11 +23,13 @@ export {
   AiSettingsUpdateRequest,
   AiStatusResponse,
   DEFAULT_AI_MODEL,
+  DEFAULT_ORGANIZE_SHARING,
   MAX_ORGANIZE_ITEMS,
   OrganizeProposal,
   OrganizeRequest,
   OrganizeRun,
   OrganizeRunState,
+  OrganizeSharing,
   OrganizeSuggestion,
   SystemAiResponse,
 } from "./ai.ts";

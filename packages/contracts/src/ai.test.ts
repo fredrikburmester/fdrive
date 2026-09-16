@@ -80,6 +80,20 @@ describe("OrganizeRequest", () => {
     expect(OrganizeRequest.safeParse({ paths: [] }).success).toBe(false);
     expect(OrganizeRequest.safeParse({ paths: ["/a"], scope: "/" }).success).toBe(false);
   });
+
+  it("carries an optional, exact sharing choice", () => {
+    expect(OrganizeRequest.parse({ paths: ["/a"] }).share).toBeUndefined();
+    expect(
+      OrganizeRequest.parse({ paths: ["/a"], share: { contents: false, otherFileNames: true } })
+        .share,
+    ).toEqual({ contents: false, otherFileNames: true });
+    for (const share of [
+      { contents: false },
+      { contents: "no", otherFileNames: true },
+      { contents: true, otherFileNames: true, instructions: true },
+    ])
+      expect(OrganizeRequest.safeParse({ paths: ["/a"], share }).success).toBe(false);
+  });
 });
 
 describe("OrganizeRun", () => {

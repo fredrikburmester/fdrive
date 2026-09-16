@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, OrganizeRun } from "@fdrive/contracts";
+import type { FsEntry, OrganizeRun, OrganizeSharing } from "@fdrive/contracts";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { describeFsError } from "@/lib/files/queries";
@@ -37,6 +37,7 @@ export interface OrganizeController {
   hide(): void;
   discard(): void;
   setInstructions(value: string): void;
+  setShare(patch: Partial<OrganizeSharing>): void;
   /** Starts a run for the session's selection. Failures are reported with a toast. */
   start(): Promise<void>;
   /** Stops the run in progress. */
@@ -111,6 +112,7 @@ export function useOrganize(): OrganizeController {
     },
     discard: actions.discard,
     setInstructions: actions.setInstructions,
+    setShare: actions.setShare,
     async start() {
       const current = useOrganizeSessionStore.getState().session;
       if (current === null) return;
@@ -119,6 +121,7 @@ export function useOrganize(): OrganizeController {
         started = await start.mutateAsync({
           paths: current.entries.map((entry) => entry.path),
           ...(current.instructions.trim() ? { instructions: current.instructions.trim() } : {}),
+          share: current.share,
         });
       } catch (error) {
         toast.error(describeFsError(error, "Could not start organizing."));
