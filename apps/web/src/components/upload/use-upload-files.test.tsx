@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useUploadStore } from "@/lib/upload/store";
 import { useUploadFiles } from "./use-upload-files";
 
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), info: vi.fn() } }));
 afterEach(() => {
   vi.restoreAllMocks();
   useUploadStore.getState().reset();
