@@ -3,6 +3,7 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import type { Route } from "next";
 import { type FormEvent, useState } from "react";
+import { FilesOnlyNote } from "@/components/identity/files-only-note";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { ProviderPicker } from "@/components/identity/provider-picker";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,9 @@ export function LoginForm({ providers, destination }: LoginFormProps) {
                   onChange={choose}
                   disabled={login.isPending}
                 />
+              )}
+              {providers.length > 1 ? null : (
+                <FilesOnlyNote capabilities={provider?.capabilities} />
               )}
               <ProviderFieldInputs
                 key={provider?.id ?? "default"}

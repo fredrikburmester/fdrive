@@ -1,5 +1,6 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
+import { allCapabilities } from "@/lib/identity/capabilities";
 import {
   buildCredential,
   confirmationFieldsFor,
@@ -20,6 +21,7 @@ const sftpgo: PublicProvider = {
     { name: "password", label: "Password", kind: "password", required: true },
     { name: "otp", label: "Code", kind: "otp", required: false, transient: true },
   ],
+  capabilities: allCapabilities(true),
 };
 const second: PublicProvider = { ...sftpgo, id: "00000000-0000-4000-8000-000000000002" };
 

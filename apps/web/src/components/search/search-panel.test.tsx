@@ -694,7 +694,11 @@ it("keeps permanent scope failures unavailable without startup wording", async (
     target: { value: "ready" },
   });
 
-  await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
+  await waitFor(() =>
+    expect(
+      screen.getByText("Search is not available for this login. It needs indexed SFTPGo storage."),
+    ).toBeDefined(),
+  );
   expect(screen.queryByText("Search is starting… Retrying automatically.")).toBeNull();
 });
 

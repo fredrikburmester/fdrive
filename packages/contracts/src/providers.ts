@@ -64,6 +64,12 @@ export const PublicProvider = z.object({
   type: ProviderType,
   label: z.string(),
   credentialFields: z.array(ProviderField),
+  /**
+   * What the provider's type can do at best, so the form can say before
+   * sign-in that a storage is files only. A constant of the type, never of
+   * this row: what a login really gets is `IdentitySummary.capabilities`.
+   */
+  capabilities: ProviderCapabilities,
 });
 export type PublicProvider = z.infer<typeof PublicProvider>;
 

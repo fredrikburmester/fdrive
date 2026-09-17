@@ -90,7 +90,7 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     await expect(dialog.getByLabel("Type")).toHaveText(/SFTPGo/);
     await expect(dialog.getByLabel("Type")).not.toContainText("sftpgo");
     await expect(dialog.getByLabel("Native write enforcement")).toHaveValue("");
-    await expect(dialog.getByText(/qualified fdrive SFTPGo image/)).toBeVisible();
+    await expect(dialog.getByText(/lets the Mac app write/)).toBeVisible();
     await dialog.getByLabel("Name").fill("Second");
     await dialog.getByLabel("Address").fill(address);
     await dialog.getByRole("button", { name: "Add", exact: true }).click();

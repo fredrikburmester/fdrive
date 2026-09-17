@@ -16,8 +16,11 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   See [indexer](INDEXER.md), [OCR](OCR.md) and [search](SEARCH-AND-AI.md).
 - Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
   tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
-- SFTPGo, WebDAV and S3 storage adapters ship. SFTPGo stays independently administered;
-  fdrive does not need WebAdmin access, read its database or modify it.
+- SFTPGo, WebDAV and S3 storage adapters ship. SFTPGo is the main storage: only its files
+  are on a disk the indexer reads, so search, thumbnails, folder sizes, shares and Office
+  exist for SFTPGo logins alone. WebDAV and S3 are files only, a second place to browse, and
+  the UI says so where a storage is added or picked. SFTPGo stays independently
+  administered; fdrive does not need WebAdmin access, read its database or modify it.
 
 ## Accounts and storage
 

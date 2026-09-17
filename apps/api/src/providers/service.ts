@@ -346,6 +346,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         type: module.type as PublicProvider["type"],
         label: provider.label,
         credentialFields: [...module.credentialFields],
+        capabilities: module.capabilities,
       };
     },
     async adminView(provider, probeResult) {

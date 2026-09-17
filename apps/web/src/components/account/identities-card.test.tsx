@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
+import { FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { IdentitiesCard } from "./identities-card";
 
@@ -67,7 +68,7 @@ it("names a key login by its storage and confirms removal with the key beneath",
         providerType: "s3",
         username: "0041234abcdef",
         providerLabel: "Backblaze",
-        capabilities: { scopeMapping: false },
+        capabilities: { scopeMapping: false, index: false, shares: false, office: false },
       }),
     ],
   });
@@ -77,6 +78,8 @@ it("names a key login by its storage and confirms removal with the key beneath",
     </QueryClientProvider>,
   );
   expect(screen.getByRole("img", { name: "S3" })).toBeDefined();
+  // Only the S3 login is files only; the SFTPGo one carries no note.
+  expect(screen.getAllByText(FILES_ONLY_NOTE)).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Remove Backblaze" }));
   expect(screen.getByRole("dialog", { name: "Remove Backblaze?" })).toBeDefined();
   expect(screen.getByText(/0041234abcdef. Files remain on the server/)).toBeDefined();

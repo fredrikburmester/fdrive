@@ -9,6 +9,7 @@ import {
   capabilitiesFor,
   DEFAULT_CAPABILITIES,
   downloadNeedsZip,
+  isFilesOnly,
   NO_SELECTION,
   selectionOf,
 } from "./capabilities";
@@ -96,4 +97,15 @@ it("labels every capability", () => {
     expect(CAPABILITY_LABELS[key].length).toBeGreaterThan(0);
   }
   expect(new Set(CAPABILITY_KEYS).size).toBe(Object.keys(DEFAULT_CAPABILITIES).length);
+});
+
+describe("isFilesOnly", () => {
+  it("is true only when search, shares and Office are all missing", () => {
+    expect(isFilesOnly({ ...allCapabilities(false), trash: true, atomicMove: true })).toBe(true);
+    expect(isFilesOnly(allCapabilities(true))).toBe(false);
+    // SFTPGo without an index root still shares and opens Office files.
+    expect(isFilesOnly({ ...allCapabilities(true), index: false, scopeMapping: false })).toBe(
+      false,
+    );
+  });
 });

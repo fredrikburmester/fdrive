@@ -2,6 +2,7 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
 import { ProviderPicker } from "./provider-picker";
 
 afterEach(cleanup);
@@ -19,12 +20,14 @@ const SEEDED: PublicProvider = {
   type: "sftpgo",
   label: "",
   credentialFields: [],
+  capabilities: allCapabilities(true),
 };
 const SECOND: PublicProvider = {
   id: "b9c9c18d-0000-4000-8000-000000000002",
   type: "sftpgo",
   label: "Archive server",
   credentialFields: [],
+  capabilities: allCapabilities(true),
 };
 
 it("shows the selected provider's name in the closed trigger, not its id", () => {
@@ -60,4 +63,21 @@ it("shows the placeholder until a provider is chosen and reports the chosen id",
     key: "Enter",
   });
   expect(onChange).toHaveBeenCalledWith(SECOND.id);
+});
+
+it("says files only under a files-only choice and nothing under full storage", () => {
+  const bucket: PublicProvider = {
+    ...SECOND,
+    type: "s3",
+    capabilities: { ...allCapabilities(false), trash: true },
+  };
+  const { rerender } = render(
+    <ProviderPicker id="p" providers={[SEEDED, bucket]} value={bucket.id} onChange={() => {}} />,
+  );
+  expect(screen.getByText(FILES_ONLY_NOTE)).toBeDefined();
+
+  rerender(
+    <ProviderPicker id="p" providers={[SEEDED, bucket]} value={SEEDED.id} onChange={() => {}} />,
+  );
+  expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
 });

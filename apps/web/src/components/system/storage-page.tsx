@@ -25,11 +25,12 @@ import {
   useAdminTestProvider,
   useAdminUpdateProvider,
 } from "@/lib/api/system-queries";
-import { CAPABILITY_LABELS } from "@/lib/identity/capabilities";
+import { CAPABILITY_LABELS, FILES_ONLY_NOTE, isFilesOnly } from "@/lib/identity/capabilities";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 import {
   connectionSourceLabel,
   enabledCapabilities,
+  missingCapabilities,
   providerRemoveBlock,
 } from "@/lib/system/connection";
 import { ProviderDialog } from "./provider-dialog";
@@ -58,6 +59,8 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
   const reachable = test.data?.ok ?? provider.reachable;
   const removeBlock = providerRemoveBlock(provider);
   const capabilities = type === undefined ? [] : enabledCapabilities(type.capabilities);
+  const missing = type === undefined ? [] : missingCapabilities(type.capabilities);
+  const filesOnly = type !== undefined && isFilesOnly(type.capabilities);
 
   return (
     <SystemSection
@@ -150,6 +153,17 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
           ))}
         </div>
       ) : null}
+      {missing.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5 text-sm">
+          <span className="text-muted-foreground">Not available</span>
+          {missing.map((key) => (
+            <Badge key={key} variant="outline">
+              {CAPABILITY_LABELS[key]}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+      {filesOnly ? <p className="text-xs text-muted-foreground">{FILES_ONLY_NOTE}</p> : null}
       {removeBlock === null ? null : <p className="text-xs text-muted-foreground">{removeBlock}</p>}
       {update.isError ? (
         <p className="text-sm text-destructive">{describeApiError(update.error)}</p>

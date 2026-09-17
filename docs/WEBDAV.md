@@ -6,7 +6,9 @@ by endpoint URL; people log in with a username and password, link it beside an S
 and browse, upload, download, rename, move, copy and delete through the ordinary file UI.
 Deleted files go to fdrive's own recycle folder when Trash is enabled for the row. Shares,
 Office, search, thumbnails and scope mapping stay unavailable for WebDAV logins; the UI hides
-those controls and the API refuses them through capability flags.
+those controls and the API refuses them through capability flags. WebDAV is files-only storage
+beside SFTPGo, and the UI states that where it is added or picked; see
+[Files-only storage](STORAGE-PROVIDERS.md#files-only-storage).
 
 Verified against a real server in CI (SFTPGo's own WebDAV binding, see
 `packages/webdav/test/integration`) and against an in-memory protocol fake in unit tests

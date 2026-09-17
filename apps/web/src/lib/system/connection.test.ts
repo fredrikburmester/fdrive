@@ -6,6 +6,7 @@ import {
   enabledCapabilities,
   homeTemplatePreview,
   isPlausibleHomeTemplate,
+  missingCapabilities,
   normalizeProviderConfig,
   providerAddressHint,
   providerAddressLock,
@@ -235,5 +236,18 @@ describe("enabledCapabilities", () => {
 
   it("is empty when the type can do none of them", () => {
     expect(enabledCapabilities(allCapabilities(false))).toEqual([]);
+  });
+});
+
+describe("missingCapabilities", () => {
+  it("keeps only the capabilities the type lacks, in a stable order", () => {
+    expect(missingCapabilities({ ...allCapabilities(true), index: false, shares: false })).toEqual([
+      "shares",
+      "index",
+    ]);
+  });
+
+  it("is empty when the type can do all of them", () => {
+    expect(missingCapabilities(allCapabilities(true))).toEqual([]);
   });
 });
