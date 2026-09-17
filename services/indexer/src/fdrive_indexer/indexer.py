@@ -199,7 +199,10 @@ class RootContext:
     _image_embed_health: tuple[float, ImageEmbedHealth] | None = field(default=None, repr=False)
     _watch_image_stage: ImageEmbeddingStage | None = field(default=None, repr=False)
     local: threading.local = field(default_factory=threading.local)
-    activity: RootActivity = field(default_factory=RootActivity)
+    activity: RootActivity = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.activity = RootActivity(self.name)
 
     def conn(self) -> psycopg.Connection:
         conn = getattr(self.local, "conn", None)

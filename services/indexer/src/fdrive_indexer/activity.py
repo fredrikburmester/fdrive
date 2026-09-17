@@ -18,6 +18,7 @@ class Operation:
     kind: str
     features: list[str]
     revision: int
+    root: str | None = None
     id: str = field(default_factory=lambda: str(uuid4()))
     phase: str = "discovering"
     state: str = "running"
@@ -53,7 +54,8 @@ class Operation:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
-                "id": self.id, "kind": self.kind, "features": list(self.features), "revision": self.revision,
+                "id": self.id, "kind": self.kind, "features": list(self.features), "root": self.root,
+                "revision": self.revision,
                 "state": self.state, "phase": self.phase, "processed": self.processed, "total": self.total,
                 "errors": self.errors, "skipped": self.skipped, "unit": "files",
                 "startedAt": self.started_at, "finishedAt": self.finished_at,
@@ -63,7 +65,8 @@ class Operation:
 class RootActivity:
     """One scan per root and one bounded aggregate of concurrent watcher work."""
 
-    def __init__(self) -> None:
+    def __init__(self, root: str | None = None) -> None:
+        self.root = root
         self._lock = threading.Lock()
         self._scan: dict[str, Operation] = {}
         self._watch: dict[str, Operation] = {}
@@ -72,7 +75,7 @@ class RootActivity:
     def queue_scan(self, features: list[str], revision: int) -> None:
         with self._lock:
             if self._queued is None:
-                self._queued = Operation("reindex", features, revision, phase="queued")
+                self._queued = Operation("reindex", features, revision, self.root, phase="queued")
 
     def stop_queued(self) -> None:
         with self._lock:
@@ -81,7 +84,7 @@ class RootActivity:
     def start_scan(self, features: list[str], revision: int) -> dict[str, Operation]:
         with self._lock:
             self._queued = None
-            self._scan = {feature: Operation("scan", [feature], revision) for feature in features}
+            self._scan = {feature: Operation("scan", [feature], revision, self.root) for feature in features}
             return dict(self._scan)
 
     def start_watch(self, features: list[str], revision: int) -> list[Operation]:
@@ -90,7 +93,8 @@ class RootActivity:
             for feature in features:
                 operation = self._watch.get(feature)
                 if operation is None or operation.state not in ("running", "waiting"):
-                    operation = self._watch[feature] = Operation("watch", [feature], revision, phase="processing")
+                    operation = self._watch[feature] = Operation(
+                        "watch", [feature], revision, self.root, phase="processing")
                 operation.enqueue()
                 result.append(operation)
             return result

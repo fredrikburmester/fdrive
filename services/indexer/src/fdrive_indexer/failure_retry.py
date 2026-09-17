@@ -14,7 +14,7 @@ from . import db, failures
 from .diagnostic_log import log
 from .indexer import RootContext, _process_file, embed_missing, process_image_embedding, process_thumbnails
 from .paths import ext_of
-from .thumb_rebuild import ThumbnailRebuildJob
+from .thumb_rebuild import ThumbnailRebuildJob, single_root
 
 
 def retry_file(ctx: RootContext, path: str, feature: str) -> tuple[bool, bool]:
@@ -53,7 +53,7 @@ def retry_file(ctx: RootContext, path: str, feature: str) -> tuple[bool, bool]:
 
 
 def start_retry(job: ThumbnailRebuildJob, contexts: Sequence[RootContext], feature: str, failure_id: int | None) -> bool:
-    if not job.try_start(0):
+    if not job.try_start(0, single_root(contexts)):
         return False
     job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
 

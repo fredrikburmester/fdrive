@@ -9,7 +9,9 @@ test("sidebar activity survives navigation and reload, supports keyboard details
   let percent = 63;
   let running = true;
   let offline = false;
-  await page.route("**/api/v1/system/activity", async (route) => {
+  await page.route("**/api/v1/system/activity**", async (route) => {
+    // The sidebar asks for the login being browsed, never the whole installation.
+    expect(new URL(route.request().url()).searchParams.get("scope")).toBe("identity");
     if (offline) return route.fulfill({ status: 503, json: { error: "unavailable" } });
     const items: SystemActivityItem[] = SystemActivityId.options.map((id) => ({
       id,
@@ -22,7 +24,9 @@ test("sidebar activity survives navigation and reload, supports keyboard details
           : `Rebuilding previews: ${percent} of 100 files processed`,
       operationIds: running ? ["worker:job"] : [],
     }));
-    return route.fulfill({ json: { observedAt: new Date().toISOString(), items } });
+    return route.fulfill({
+      json: { observedAt: new Date().toISOString(), scope: "identity", items },
+    });
   });
   await page.goto("/files");
   const thumbnails = page.getByRole("link", { name: "Thumbnails", exact: true });

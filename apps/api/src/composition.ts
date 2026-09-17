@@ -951,6 +951,8 @@ export async function composeApp(
         fetch: fetchImpl,
         features: () => featureService.status(),
         office: () => officeSettings.status(null),
+        identities: repos.identities,
+        resolver: scopeResolver,
       });
       registerProcessingFailureRoutes(groups, {
         read: createProcessingFailureReader(db),

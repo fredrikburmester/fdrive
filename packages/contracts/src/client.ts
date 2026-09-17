@@ -6,7 +6,7 @@ import {
   type LinkIdentityRequest,
   type UnlinkIdentityRequest,
 } from "./accounts.ts";
-import { SystemActivityResponse } from "./activity.ts";
+import { SystemActivityResponse, type SystemActivityScope } from "./activity.ts";
 import {
   AiConnectionTestResponse,
   type AiSettingsUpdateRequest,
@@ -323,7 +323,8 @@ export interface ApiClient {
   adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
-  systemActivity(): Promise<SystemActivityResponse>;
+  /** `scope: "identity"` keeps only work on roots the active identity may read. */
+  systemActivity(query?: { scope?: SystemActivityScope }): Promise<SystemActivityResponse>;
   processingFailures(
     feature: ProcessingFeature,
     query?: Partial<ProcessingFailuresQuery>,
@@ -896,8 +897,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
       return put(ROUTES.system.trash, TrashSettings, { jsonBody: input });
     },
-    systemActivity(): Promise<SystemActivityResponse> {
-      return get(ROUTES.system.activity, SystemActivityResponse);
+    systemActivity(query = {}): Promise<SystemActivityResponse> {
+      return get(ROUTES.system.activity, SystemActivityResponse, {
+        query: { scope: query.scope },
+      });
     },
     systemIndexer(): Promise<SystemIndexerResponse> {
       return get(ROUTES.system.indexer, SystemIndexerResponse);
