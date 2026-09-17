@@ -11,7 +11,11 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
-const empty = () => ({ observedAt: new Date().toISOString(), items: [] });
+const empty = () => ({
+  observedAt: new Date().toISOString(),
+  scope: "identity" as const,
+  items: [],
+});
 function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -25,9 +29,10 @@ function mount() {
 }
 
 it("shows a local save only while pending and ignores unrelated mutations", async () => {
-  vi.spyOn(apiClient, "systemActivity").mockImplementation(async () => empty());
+  const fetch = vi.spyOn(apiClient, "systemActivity").mockImplementation(async () => empty());
   const { client, result } = mount();
   await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(fetch).toHaveBeenCalledWith({ scope: "identity" });
   let finish = () => {};
   const mutation = client.getMutationCache().build(client, {
     meta: { systemActivity: ["storage"] },
@@ -67,6 +72,7 @@ it("bridges accepted jobs to server activity and drops optimistic state when pol
   await waitFor(() => expect(result.current.pending.has("thumbnails")).toBe(true));
   fetch.mockResolvedValue({
     observedAt: new Date().toISOString(),
+    scope: "identity",
     items: [
       {
         id: "thumbnails",

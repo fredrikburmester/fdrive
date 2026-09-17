@@ -25,7 +25,7 @@ from .image_embed import (
     select_image_embed_candidates,
 )
 from .indexer import RootContext, log
-from .thumb_rebuild import ThumbnailRebuildJob
+from .thumb_rebuild import ThumbnailRebuildJob, single_root
 from .thumbs import normalize_scope, storage_path
 
 
@@ -137,7 +137,7 @@ def start_image_embed_rebuild(
     Candidate discovery can take longer than the API timeout. The HTTP caller
     acknowledges with an unknown total; stats/activity expose it after discovery.
     """
-    if not job.try_start(0):
+    if not job.try_start(0, single_root(contexts)):
         return False
     job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
 

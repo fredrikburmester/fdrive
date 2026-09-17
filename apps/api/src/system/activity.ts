@@ -4,14 +4,19 @@ import {
   ROUTES,
   SystemActivityId,
   type SystemActivityItem,
+  SystemActivityQuery,
   type SystemActivityResponse,
+  type SystemActivityScope,
   type SystemFeaturesResponse,
   type SystemOfficeResponse,
   WorkerActivity,
 } from "@fdrive/contracts";
+import type { IdentityRepo } from "@fdrive/db";
 import type { AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
+import { ApiHttpError } from "../errors.js";
+import type { ScopeResolver } from "../scoping/resolver.js";
 import { createCachedProbe } from "./cached-probe.js";
 import { callSidecar, type SidecarResult } from "./sidecar-client.js";
 
@@ -89,20 +94,37 @@ export function activityPercent(operations: readonly ActivityOperation[]): numbe
 
 type Observation = SidecarResult<WorkerActivity> | null;
 
+/**
+ * Which operations one caller sees: every root, or only the named roots.
+ * Root-less operations are process-wide and always included.
+ */
+export type ActivityView =
+  | { readonly scope: "all" }
+  | { readonly scope: "identity"; readonly roots: ReadonlySet<string> };
+
+export const ALL_ROOTS: ActivityView = { scope: "all" };
+
+function visible(view: ActivityView, operation: ActivityOperation): boolean {
+  return view.scope === "all" || operation.root === null || view.roots.has(operation.root);
+}
+
 export function shapeSystemActivity(
   features: SystemFeaturesResponse | null,
   office: SystemOfficeResponse["status"] | null,
   indexer: Observation,
   ocr: Observation,
   now: string,
+  view: ActivityView = ALL_ROOTS,
 ): SystemActivityResponse {
   const observations = [indexer, ocr];
   const operations = observations.flatMap((source) =>
     source?.ok
-      ? source.data.operations.map((operation) => ({
-          ...operation,
-          id: `${source.data.instanceId}:${operation.id}`,
-        }))
+      ? source.data.operations
+          .filter((operation) => visible(view, operation))
+          .map((operation) => ({
+            ...operation,
+            id: `${source.data.instanceId}:${operation.id}`,
+          }))
       : [],
   );
   const items = SystemActivityId.options.map((id): SystemActivityItem => {
@@ -180,7 +202,7 @@ export function shapeSystemActivity(
       .map((item) => `${FEATURE_LABELS[item.id]}: ${item.detail}`)
       .join("\n");
   }
-  return { observedAt: now, items };
+  return { observedAt: now, scope: view.scope, items };
 }
 
 export function registerActivityRoutes(
@@ -191,12 +213,16 @@ export function registerActivityRoutes(
     fetch: typeof globalThis.fetch;
     features: () => Promise<SystemFeaturesResponse>;
     office: () => Promise<SystemOfficeResponse>;
+    identities: Pick<IdentityRepo, "get">;
+    /** The same verified scopes that gate thumbnail reads decide which roots' work an identity sees. */
+    resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   },
 ) {
   const observe = (url: string | undefined) =>
     url === undefined
       ? Promise.resolve(null)
       : callSidecar(url, "/activity", WorkerActivity, {}, { fetch: deps.fetch });
+  // The worker probes are shared by every caller; only the view differs.
   const read = createCachedProbe(
     async () => {
       const observedAt = new Date().toISOString();
@@ -209,12 +235,34 @@ export function registerActivityRoutes(
         observe(deps.indexerUrl),
         observe(deps.ocrUrl),
       ]);
-      return shapeSystemActivity(features, office, indexer, ocr, observedAt);
+      return { features, office, indexer, ocr, observedAt };
     },
     { ttlMs: 2000 },
   );
+  async function viewFor(scope: SystemActivityScope, identityId: string): Promise<ActivityView> {
+    if (scope === "all") return ALL_ROOTS;
+    const identity = await deps.identities.get(identityId);
+    const verified = identity === null ? null : await deps.resolver.verifiedIndexScopes(identity);
+    const roots = verified?.available ? verified.scopes.map((entry) => entry.rootName) : [];
+    return { scope, roots: new Set(roots) };
+  }
   groups.authed.get(withoutApiV1Prefix(ROUTES.system.activity), createRequireAdmin(), async (c) => {
+    const query = SystemActivityQuery.safeParse(c.req.query());
+    if (!query.success) throw new ApiHttpError("bad_request", "invalid activity query");
+    const [view, observed] = await Promise.all([
+      viewFor(query.data.scope, c.get("principal").identityId),
+      read(),
+    ]);
     c.header("Cache-Control", "no-store");
-    return c.json(await read());
+    return c.json(
+      shapeSystemActivity(
+        observed.features,
+        observed.office,
+        observed.indexer,
+        observed.ocr,
+        observed.observedAt,
+        view,
+      ),
+    );
   });
 }

@@ -15,16 +15,25 @@ page reveals its navigation item.
 ## Data flow
 
 `GET /api/v1/system/activity` requires admin authorization before probing dependencies.
-The response contains `observedAt` and one item per System section: state, optional percent,
-detail, warning and operation IDs. It exposes no settings, paths or filenames.
+The response contains `observedAt`, the `scope` served and one item per System section:
+state, optional percent, detail, warning and operation IDs. It exposes no settings, paths,
+root names or filenames.
+
+`scope=all` (the default) covers every indexed root. `scope=identity` keeps only operations
+on roots the caller's active identity may read, using the same verified index scopes that
+gate thumbnail reads, plus process-wide work that names no root. An identity with no indexed
+roots, such as an S3 login, therefore sees a quiet sidebar while another root scans. Feature
+and Office transitions are installation-wide and appear in both scopes.
 
 The API combines the indexer/OCR `/activity` snapshots with the existing feature and Office
-runtime state. Activity requests share in-flight reads and a two-second cache. Feature and
-Office probes also share short caches; Office caller-specific identity data stays outside
-the probe cache. No activity request calls `/stats` or walks manifests or preview caches.
+runtime state. Activity requests share in-flight worker reads and a two-second cache; only
+the per-caller view is computed per request. Feature and Office probes also share short
+caches; Office caller-specific identity data stays outside the probe cache. No activity
+request calls `/stats` or walks manifests or preview caches.
 
-One admin-only React Query polls every five seconds, pauses interval polling in hidden tabs
-and refetches on focus. Failed fetches remove stale percentages and show unknown status.
+One admin-only React Query polls `scope=identity` every five seconds, pauses interval
+polling in hidden tabs and refetches on focus; switching logins clears it with the rest of
+the cache. Failed fetches remove stale percentages and show unknown status.
 Mutation metadata connects local saves/tests/jobs to their section. Accepted background
 requests bridge briefly to a fresh server observation; routine status fetches do not spin.
 General, Storage and Shared folders reflect this browser's pending mutations. Office reflects
@@ -38,9 +47,12 @@ existing run lock. Snapshots are bounded, thread-safe in-memory records; reads d
 storage. Each process has a fresh instance ID and each run has an operation ID. Counters
 reset on restart; they are observations, not a durable job queue.
 
-Operations include kind, feature IDs, revision, phase, state, processed count, nullable total,
-errors, skips, unit and timestamps. Finally blocks finish failed or stopped work. Semantic
-backend backoff appears as waiting. A ready runtime can still be processing files.
+Operations include kind, feature IDs, root, revision, phase, state, processed count, nullable
+total, errors, skips, unit and timestamps. Scans, watcher work and queued reindexes carry
+their root. A rebuild, clear or retry carries a root only when confined to one; spanning
+several roots, like OCR, it reports null and counts as process-wide. Finally blocks finish
+failed or stopped work. Semantic backend backoff appears as waiting. A ready runtime can
+still be processing files.
 
 Normal scans currently mark every participating feature active for the entire root scan,
 including discovery and the final wait for other workers. A feature's counter can therefore

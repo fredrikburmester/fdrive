@@ -921,12 +921,17 @@ describe("createApiClient: system", () => {
 
   const VALID_OCR = { configured: false, reachable: false, settings: OCR_SETTINGS };
 
-  it("gets and validates system activity", async () => {
-    const activity = { observedAt: "2026-09-12T12:00:00Z", items: [] };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, activity)]);
+  it("gets and validates system activity, sending the scope only when asked", async () => {
+    const activity = { observedAt: "2026-09-12T12:00:00Z", scope: "all", items: [] };
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, activity),
+      jsonResponse(200, { ...activity, scope: "identity" }),
+    ]);
     const client = createApiClient({ fetch: fetchStub });
     expect(await client.systemActivity()).toEqual(activity);
     expect(calls[0]?.url).toBe("/api/v1/system/activity");
+    expect((await client.systemActivity({ scope: "identity" })).scope).toBe("identity");
+    expect(calls[1]?.url).toBe("/api/v1/system/activity?scope=identity");
   });
 
   it("gets system/indexer", async () => {
