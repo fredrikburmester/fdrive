@@ -91,6 +91,7 @@ describe("office contracts", () => {
         product: "onlyoffice",
         status: "starting",
         activeProviderId: providerId,
+        activeProviderLabel: "Primary",
       }).status,
     ).toBe("starting");
     expect(OfficeSettings.safeParse({ ...settings, editingProviderId: null }).success).toBe(false);

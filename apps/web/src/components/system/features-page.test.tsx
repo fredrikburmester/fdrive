@@ -35,12 +35,33 @@ vi.mock("./public-url-card", () => ({
   PublicUrlReview: () => <span>Address review</span>,
 }));
 vi.mock("./trash-settings-card", () => ({
-  TrashSettingsCard: ({ onContinue }: { onContinue?: () => void }) => (
-    <button type="button" onClick={onContinue}>
-      Trash settings
-    </button>
+  TrashSettingsCard: ({
+    onContinue,
+    provider,
+  }: {
+    onContinue?: () => void;
+    provider: { label: string };
+  }) => (
+    <>
+      <span>Trash for {provider.label}</span>
+      <button type="button" onClick={onContinue}>
+        Trash settings
+      </button>
+    </>
   ),
-  TrashReview: () => <span>Trash review</span>,
+  TrashReview: ({ provider }: { provider: { label: string } }) => (
+    <span>Trash review for {provider.label}</span>
+  ),
+}));
+vi.mock("@/lib/api/auth-queries", () => ({
+  useMe: () => ({
+    data: {
+      account: { id: "a", displayName: null },
+      activeIdentityId: "i",
+      isAdmin: true,
+      identities: [{ id: "i", providerId: "p", providerLabel: "Primary", providerType: "sftpgo" }],
+    },
+  }),
 }));
 vi.mock("./system-page", () => ({
   SystemPage: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -173,6 +194,7 @@ describe("feature walkthrough", () => {
   it("includes Trash before review without changing processing settings", () => {
     mount(6);
     expect(screen.getByText("Step 10 of 13 · Trash")).toBeTruthy();
+    expect(screen.getByText("Trash for Primary")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Trash settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 7, values: off }),

@@ -73,7 +73,7 @@ describe("SystemPage feature admission", () => {
     );
     expect(screen.queryByText("Sidecar content")).toBeNull();
     expect(screen.queryByRole("button", { name: "Page action" })).toBeNull();
-    expect(screen.getByText(/Applies to the whole server/)).toBeTruthy();
+    expect(screen.getByText(/^Installation-wide\./)).toBeTruthy();
   });
 
   it("keeps a processing page visible when one of its managed features is enabled", () => {
@@ -95,9 +95,17 @@ describe("SystemPage feature admission", () => {
     expect(screen.queryByText("General is off")).toBeNull();
     expect(
       screen.getByText(
-        "Applies to the whole server, not just the storage you are browsing. Admins only.",
+        "Installation-wide. Applies to every storage server and login, not just the one you are browsing.",
       ),
     ).toBeTruthy();
+  });
+
+  it("states per-server scope for a page that edits one server at a time", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    mount({ title: "Storage", scope: "storage" });
+
+    expect(screen.getByText(/^Per storage server\./)).toBeTruthy();
+    expect(screen.queryByText(/^Installation-wide\./)).toBeNull();
   });
 
   it("turns a page off through `enabled` for a subsystem that is not a feature", () => {

@@ -57,7 +57,7 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
       registerOfficeSettingsRoutes(groups, {
         service,
         workerToken,
-        activeProviderId: async () => PROVIDER_ID,
+        activeProvider: async () => ({ id: PROVIDER_ID, label: "Primary" }),
       }),
   });
 }
@@ -73,6 +73,7 @@ describe("Office settings routes", () => {
       product: "onlyoffice",
       status: "off",
       activeProviderId: PROVIDER_ID,
+      activeProviderLabel: "Primary",
     });
     const response = await app.request(ROUTES.system.office, {
       method: "PUT",

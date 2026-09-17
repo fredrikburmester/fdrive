@@ -78,6 +78,7 @@ describe("Office settings client", () => {
       product: "onlyoffice" as const,
       status: "off" as const,
       activeProviderId: "123e4567-e89b-42d3-a456-426614174000",
+      activeProviderLabel: "Primary",
     };
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(response));
     const client = createApiClient({ fetch: fetchMock });
@@ -105,11 +106,11 @@ describe("Trash settings client", () => {
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(settings));
     const client = createApiClient({ fetch: fetchMock });
 
-    expect(await client.systemTrash()).toEqual(settings);
+    expect(await client.systemTrash(settings.providerId)).toEqual(settings);
     expect(await client.systemUpdateTrash(settings)).toEqual(settings);
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "PUT"]);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      "/api/v1/system/trash",
+      `/api/v1/system/trash?providerId=${settings.providerId}`,
       "/api/v1/system/trash",
     ]);
   });

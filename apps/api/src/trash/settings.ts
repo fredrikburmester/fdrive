@@ -13,7 +13,8 @@ export interface TrashSettingsService {
   configuration(providerId: string): Promise<TrashSettings>;
   forIdentity(identityId: string): Promise<TrashSettings>;
   pathForIdentity(identityId: string): Promise<string | null>;
-  update(activeProviderId: string, input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
+  /** Writes `input` for `providerId`; the body's own `providerId` must name the same server. */
+  update(providerId: string, input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
 }
 
 export function createTrashSettingsService(deps: {
@@ -78,13 +79,13 @@ export function createTrashSettingsService(deps: {
       const value = await forIdentity(identityId);
       return value.enabled ? value.path : null;
     },
-    async update(activeProviderId, input) {
-      if (input.providerId !== activeProviderId)
+    async update(providerId, input) {
+      if (input.providerId !== providerId)
         throw new ApiHttpError(
           "conflict",
-          "The active storage provider changed. Reload Trash settings and try again.",
+          "These Trash settings belong to another storage server. Reload and try again.",
         );
-      const current = await read(activeProviderId);
+      const current = await read(providerId);
       if (input.strategy !== current.value.strategy)
         throw new ApiHttpError(
           "conflict",
@@ -103,7 +104,7 @@ export function createTrashSettingsService(deps: {
       const { strategy, ...stored } = next.data;
       if (
         !(await deps.settings.compareAndSet(
-          trashSettingsKey(activeProviderId),
+          trashSettingsKey(providerId),
           current.raw,
           TrashConfiguration.parse(stored),
         ))

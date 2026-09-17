@@ -66,6 +66,9 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
 
 - Feature activation is persisted through onboarding/System settings. Optional processing
   begins disabled; runtime controllers expose starting, ready and failed states.
+- System pages are installation-wide and independent of the active login; Storage is the one
+  page with per-server settings (each provider row carries its own Trash), and every page header
+  states its scope.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.

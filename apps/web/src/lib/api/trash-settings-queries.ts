@@ -5,10 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { queryKeys } from "./keys";
 
-export function useSystemTrash(enabled = true) {
+/** The Trash settings of one storage server. */
+export function useSystemTrash(providerId: string, enabled = true) {
   return useQuery({
-    queryKey: queryKeys.system.trash(),
-    queryFn: () => apiClient.systemTrash(),
+    queryKey: queryKeys.system.trash(providerId),
+    queryFn: () => apiClient.systemTrash(providerId),
     enabled,
   });
 }
@@ -16,10 +17,10 @@ export function useSystemTrash(enabled = true) {
 export function useUpdateTrashSettings() {
   const client = useQueryClient();
   return useMutation({
-    meta: { systemActivity: ["general"], systemActivityBackground: false },
+    meta: { systemActivity: ["storage"], systemActivityBackground: false },
     mutationFn: (input: TrashSettingsUpdateRequest) => apiClient.systemUpdateTrash(input),
     onSuccess: async (data) => {
-      client.setQueryData(queryKeys.system.trash(), data);
+      client.setQueryData(queryKeys.system.trash(data.providerId), data);
       await Promise.all([
         client.invalidateQueries({ queryKey: ["trash"] }),
         // Each login's `capabilities.trash` (sidebar Trash, "Move to Trash") follows this setting.
