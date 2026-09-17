@@ -56,6 +56,7 @@ const office: SystemOfficeResponse = {
   product: "onlyoffice",
   status: "off",
   activeProviderId: null,
+  activeProviderLabel: null,
 };
 const snapshot = (operations: ActivityOperation[] = [operation]) => ({
   instanceId: "worker",

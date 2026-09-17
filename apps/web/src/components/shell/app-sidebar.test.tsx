@@ -182,7 +182,7 @@ it("nests feature pages beneath Features and keeps other System pages separate",
     }
   }
   expect(screen.queryByRole("link", { name: "Connection" })).toBeNull();
-  expect(screen.getByText("Whole server · admins only")).toBeTruthy();
+  expect(screen.getByText("Admins only")).toBeTruthy();
 });
 
 it("hides the System group from a non-admin", async () => {
@@ -191,5 +191,5 @@ it("hides the System group from a non-admin", async () => {
 
   expect(screen.queryByRole("link", { name: "Features" })).toBeNull();
   expect(screen.queryByRole("link", { name: "General" })).toBeNull();
-  expect(screen.queryByText("Whole server · admins only")).toBeNull();
+  expect(screen.queryByText("Admins only")).toBeNull();
 });

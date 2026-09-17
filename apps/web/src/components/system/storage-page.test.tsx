@@ -75,15 +75,22 @@ vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
     description: string;
+    scope?: string;
     actions?: ReactNode;
     children: ReactNode;
   }) => (
     <div>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
+      <p>scope: {props.scope ?? "server"}</p>
       <div>{props.actions}</div>
       <div>{props.children}</div>
     </div>
+  ),
+}));
+vi.mock("./trash-settings-card", () => ({
+  TrashSettingsForm: ({ provider }: { provider: { label: string } }) => (
+    <p>Trash form for {provider.label}</p>
   ),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
@@ -191,6 +198,20 @@ it("warns in the add dialog as soon as a files-only type is chosen", () => {
   fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
 
   expect(within(screen.getByRole("dialog")).getByText(FILES_ONLY_NOTE)).toBeTruthy();
+});
+
+it("keeps each server's Trash settings on its own row, and none for a type without Trash", () => {
+  const trashless: AdminProviderType = {
+    ...SFTPGO_TYPE,
+    type: "webdav",
+    label: "WebDAV",
+    capabilities: { ...allCapabilities(true), trash: false },
+  };
+  renderPage([PRIMARY, { ...SPARE, type: "webdav" }], [SFTPGO_TYPE, trashless]);
+
+  expect(screen.getByText("Trash form for Primary")).toBeTruthy();
+  expect(screen.queryByText("Trash form for Spare")).toBeNull();
+  expect(screen.getByText("scope: storage")).toBeTruthy();
 });
 
 it("re-probes one provider and shows what the probe said", () => {

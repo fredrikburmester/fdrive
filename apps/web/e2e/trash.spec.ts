@@ -16,6 +16,11 @@ function trashRow(page: Page, name: string): Locator {
   return page.locator("table tbody tr").filter({ hasText: name });
 }
 
+/** The Trash settings block of one storage server's row on System > Storage. */
+function trashSettings(page: Page, providerType: "sftpgo" | "webdav" | "s3"): Locator {
+  return page.locator(`[data-testid="provider-trash"][data-provider-type="${providerType}"]`);
+}
+
 async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
   await page.goto(`${webBaseUrl}/login`);
   await page.getByLabel("Username").fill("alice");
@@ -260,14 +265,16 @@ test.describe("trash available", () => {
     await expect(secondRow).toBeHidden();
 
     // Settings apply live: disabling removes Trash without restarting the API.
-    await page.goto(`${webBaseUrl}/system/general`);
-    await page.getByRole("switch", { name: "Enable Trash" }).click();
-    await page.getByRole("button", { name: "Save Trash settings" }).click();
+    // Each storage server's Trash lives on its own row under System > Storage.
+    await page.goto(`${webBaseUrl}/system/storage`);
+    const sftpgoTrash = trashSettings(page, "sftpgo");
+    await sftpgoTrash.getByRole("switch", { name: "Enable Trash" }).click();
+    await sftpgoTrash.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeHidden();
     await page.reload();
-    await expect(page.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
+    await expect(sftpgoTrash.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
   });
 
   test("a WebDAV login gets a Trash that fdrive fills itself: enable, move, restore", async ({
@@ -322,15 +329,19 @@ test.describe("trash available", () => {
     });
     expect(switched.ok(), await switched.text()).toBe(true);
 
-    // The card knows this provider moves deleted files itself: no SFTPGo rule to confirm.
-    await page.goto(`${webBaseUrl}/system/general`);
+    // The form knows this provider moves deleted files itself: no SFTPGo rule to confirm.
+    // It sits on the WebDAV server's own row, whichever login the tab browses as.
+    await page.goto(`${webBaseUrl}/system/storage`);
+    const davTrash = trashSettings(page, "webdav");
     await expect(
-      page.getByText("Restore deleted files that fdrive moved into a recycle folder."),
+      davTrash.getByText("Restore deleted files that fdrive moved into a recycle folder."),
     ).toBeVisible();
-    await page.getByRole("switch", { name: "Enable Trash" }).click();
-    await expect(page.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
-    await page.getByLabel("Trash folder").fill("/.trash-webdav");
-    await page.getByRole("button", { name: "Save Trash settings" }).click();
+    await davTrash.getByRole("switch", { name: "Enable Trash" }).click();
+    await expect(davTrash.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(
+      0,
+    );
+    await davTrash.getByLabel("Trash folder").fill("/.trash-webdav");
+    await davTrash.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();
@@ -419,14 +430,15 @@ test.describe("trash available", () => {
     });
     expect(switched.ok(), await switched.text()).toBe(true);
 
-    await page.goto(`${webBaseUrl}/system/general`);
+    await page.goto(`${webBaseUrl}/system/storage`);
+    const s3Trash = trashSettings(page, "s3");
     await expect(
-      page.getByText("Restore deleted files that fdrive moved into a recycle folder."),
+      s3Trash.getByText("Restore deleted files that fdrive moved into a recycle folder."),
     ).toBeVisible();
-    await page.getByRole("switch", { name: "Enable Trash" }).click();
-    await expect(page.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
-    await page.getByLabel("Trash folder").fill("/.trash-s3");
-    await page.getByRole("button", { name: "Save Trash settings" }).click();
+    await s3Trash.getByRole("switch", { name: "Enable Trash" }).click();
+    await expect(s3Trash.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
+    await s3Trash.getByLabel("Trash folder").fill("/.trash-s3");
+    await s3Trash.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();

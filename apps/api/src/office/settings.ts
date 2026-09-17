@@ -33,6 +33,12 @@ export async function probeOnlyOfficeRuntime(
   return "starting";
 }
 
+/** The storage server whose logins editor grants name. */
+export interface OfficeProviderRef {
+  readonly id: string;
+  readonly label: string;
+}
+
 export interface OfficeSettingsService {
   configuration(): Promise<OfficeSettings>;
   update(
@@ -40,7 +46,7 @@ export interface OfficeSettingsService {
     input: OfficeSettingsUpdateRequest,
   ): Promise<OfficeSettings>;
   runtimeConfiguration(): Promise<OfficeRuntimeConfiguration>;
-  status(activeProviderId: string | null): Promise<SystemOfficeResponse>;
+  status(activeProvider: OfficeProviderRef | null): Promise<SystemOfficeResponse>;
 }
 
 export function createOfficeSettingsService(deps: {
@@ -123,7 +129,7 @@ export function createOfficeSettingsService(deps: {
         enabled: value.enabled && deps.product === "onlyoffice",
       });
     },
-    async status(activeProviderId) {
+    async status(activeProvider) {
       const configuration = (await read()).value;
       let status: SystemOfficeResponse["status"] = "off";
       if (configuration.enabled) {
@@ -133,7 +139,13 @@ export function createOfficeSettingsService(deps: {
           status = "unavailable";
         }
       }
-      return { configuration, product: deps.product, status, activeProviderId };
+      return {
+        configuration,
+        product: deps.product,
+        status,
+        activeProviderId: activeProvider?.id ?? null,
+        activeProviderLabel: activeProvider?.label ?? null,
+      };
     },
   };
 }

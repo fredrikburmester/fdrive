@@ -1,8 +1,10 @@
 # Trash setup
 
 Trash is the seventh optional choice in fdrive onboarding, after the six processing
-features. It can also be changed in **System > General > Trash**. No environment
-variables, worker, local storage mount, or restart are required.
+features, where it configures the storage server the administrator signed in to. It is a
+per-server setting: every storage server keeps its own under **System > Storage**, on that
+server's row, whichever login the tab is browsing as. No environment variables, worker,
+local storage mount, or restart are required.
 
 How deleted files reach the recycle folder depends on the storage provider. For SFTPGo,
 fdrive uses SFTPGo's Event Manager recycle-bin rule (sections 1–3 below). For WebDAV,
@@ -63,12 +65,13 @@ rule and permissions before enabling the fdrive integration. Check SFTPGo's logs
 5. Finish setup. Delete a disposable file using **Move to Trash**, open **Trash**,
    and test **Restore**. **Delete permanently** and **Empty Trash** permanently purge items.
 
-The setting takes effect immediately for this SFTPGo connection. It applies to its
-users; they do not repeat onboarding. Each user's own permissions still apply.
-Switching to a different SFTPGo provider requires configuring and confirming Trash
-for that provider; confirmation is not carried across connections.
+The setting takes effect immediately for this SFTPGo server. It applies to its users;
+they do not repeat onboarding. Each user's own permissions still apply. Another SFTPGo
+server needs its own Trash configured and confirmed on its row under **System > Storage**;
+confirmation is not carried across servers.
 
-You may **Skip Trash** and enable it later in **System > General**. Disabling the
+You may **Skip Trash** and enable it later on the server's row under **System > Storage**.
+Disabling the
 integration hides fdrive's Trash controls; it does not remove existing items or
 change SFTPGo rules. A configured SFTPGo rule can still recycle subsequent deletions.
 
@@ -78,9 +81,9 @@ A WebDAV server has no recycle bin, so fdrive's API moves each deleted file or f
 the Trash folder on that server (`/.trash` by default, relative to each user's home) and
 lists, restores and purges it from there. Nothing is configured on the server:
 
-1. Sign in through the WebDAV login as an administrator and open **System > General >
-   Trash** (or the onboarding **Trash** step). The card says that fdrive moves deleted files
-   itself and shows no rule-confirmation checkbox.
+1. As an administrator, open **System > Storage** and find the WebDAV server's row (or, when
+   signed in through the WebDAV login, the onboarding **Trash** step). Its Trash form says that
+   fdrive moves deleted files itself and shows no rule-confirmation checkbox.
 2. Turn on **Enable Trash**, keep or change the folder, optionally note a retention period,
    and save. The folder is created on the first delete.
 3. Delete a disposable file with **Move to Trash**, open **Trash** and test **Restore**.
@@ -91,10 +94,10 @@ SFTPGo recycle rule also writes to. Deleting inside the Trash folder is permanen
 how **Delete permanently** and **Empty Trash** work. Retention is informational here too:
 fdrive never removes old items on its own.
 
-Trash settings belong to the active login's storage row, so the administrator opens them
-with the WebDAV login active. That takes an account-wide administrator (the owner account
-from the setup claim); an environment administrator (`FDRIVE_ADMIN_USERS`) is one only
-while their SFTPGo login is active and cannot configure a WebDAV row's Trash. Where one home is
+Trash settings belong to the storage row, and System > Storage edits any row from any login.
+Reaching System at all takes an account-wide administrator (the owner account from the setup
+claim) or an environment administrator (`FDRIVE_ADMIN_USERS`) browsing as their SFTPGo
+login; the latter loses the section while a WebDAV login is active. Where one home is
 served by both an SFTPGo login and a WebDAV login, give the WebDAV row its own folder (for
 example `/.trash-webdav`) so the two layouts never share a root, and add that folder to the
 SFTPGo rule's inverse path filter (`/.trash-webdav/**`); otherwise the rule recycles the

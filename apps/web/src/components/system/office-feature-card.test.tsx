@@ -30,7 +30,13 @@ const configuration = {
 beforeEach(() => {
   mocks.address.mockReturnValue({ data: { revision: 1, url: "https://files.example" } });
   mocks.query.mockReturnValue({
-    data: { configuration, product: "onlyoffice", activeProviderId: providerId, status: "off" },
+    data: {
+      configuration,
+      product: "onlyoffice",
+      activeProviderId: providerId,
+      activeProviderLabel: "Primary",
+      status: "off",
+    },
     refetch: mocks.refetch,
   });
   mocks.update.mockReturnValue({
@@ -77,6 +83,7 @@ it("turns Office off without touching the saved editor grants", () => {
       configuration: enabled,
       product: "onlyoffice",
       activeProviderId: providerId,
+      activeProviderLabel: "Primary",
       status: "ready",
     },
     refetch: mocks.refetch,

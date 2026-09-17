@@ -186,6 +186,9 @@ export function OfficeSettingsFields({
           <FieldDescription>
             When off, all documents open for viewing. When on, only the users you list below can
             edit.
+            {draft.query.data?.activeProviderLabel
+              ? ` Editing is granted on ${draft.query.data.activeProviderLabel} only; other storage servers stay view-only.`
+              : ""}
           </FieldDescription>
           {values.editingEnabled && draft.editingMatchesProvider ? (
             <Field>

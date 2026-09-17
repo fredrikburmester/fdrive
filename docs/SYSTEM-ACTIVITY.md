@@ -6,10 +6,11 @@ Idle services are quiet. Hover or keyboard focus exposes the phase and counts; r
 motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
 warning. Background job state survives navigation and reload.
 
-The section is server-wide. Activity, counts and actions cover every indexed root whatever
-login is being browsed, and the group label ("Whole server · admins only") and every System
-page header say so with shared copy from `lib/system/pages`. Scoping the sidebar to the
-active login made it disagree with the pages and was reverted.
+The section never follows the login being browsed. Activity, counts and actions cover every
+indexed root; only Storage edits per-server settings (the servers and their Trash). The group
+label carries an "Admins only" caption and every System page header states its scope with
+shared copy from `lib/system/pages`. Scoping the sidebar to the active login made it disagree
+with the pages and was reverted.
 
 Features sits below Storage, with a separate expand/collapse button nesting Shared folders,
 Thumbnails, Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label

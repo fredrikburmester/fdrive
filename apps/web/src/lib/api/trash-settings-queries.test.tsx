@@ -29,14 +29,15 @@ it("loads settings and refreshes affected views after a live change", async () =
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const query = renderHook(() => useSystemTrash(), { wrapper });
+  const query = renderHook(() => useSystemTrash("provider"), { wrapper });
   await waitFor(() => expect(query.result.current.data).toEqual(data));
+  expect(mocks.get).toHaveBeenCalledWith("provider");
   const mutation = renderHook(() => useUpdateTrashSettings(), { wrapper });
   await act(async () => {
     await mutation.result.current.mutateAsync(updated);
   });
   expect(mocks.put).toHaveBeenCalledWith(updated);
-  expect(client.getQueryData(["system", "trash"])).toEqual(updated);
+  expect(client.getQueryData(["system", "trash", "provider"])).toEqual(updated);
   for (const key of ["trash", "fs", "search"])
     expect(invalidate).toHaveBeenCalledWith({ queryKey: [key] });
   client.clear();

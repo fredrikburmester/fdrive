@@ -72,11 +72,12 @@ describe("Office settings service", () => {
       revision: 0,
       enabled: false,
     });
-    expect(await service.status(PROVIDER_A)).toMatchObject({
+    expect(await service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({
       configuration: initial,
       product: "onlyoffice",
       status: "off",
       activeProviderId: PROVIDER_A,
+      activeProviderLabel: "A",
     });
     expect(probeStatus).not.toHaveBeenCalled();
 
@@ -93,7 +94,7 @@ describe("Office settings service", () => {
       revision: 1,
       enabled: true,
     });
-    expect(await service.status(PROVIDER_A)).toMatchObject({ status: "ready" });
+    expect(await service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({ status: "ready" });
   });
 
   it("binds editing to the active provider and protects revisions", async () => {
@@ -144,6 +145,7 @@ describe("Office settings service", () => {
       product: "collabora",
       status: "unavailable",
       activeProviderId: null,
+      activeProviderLabel: null,
     });
   });
 
@@ -154,7 +156,9 @@ describe("Office settings service", () => {
       ...initial,
       enabled: true,
     });
-    expect(await service.status(PROVIDER_A)).toMatchObject({ status: "starting" });
+    expect(await service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({
+      status: "starting",
+    });
   });
 
   it("fails closed for corrupt storage, racing writes and private probe failures", async () => {
@@ -175,7 +179,9 @@ describe("Office settings service", () => {
       ...disabled,
       enabled: true,
     });
-    expect(await failing.service.status(PROVIDER_A)).toMatchObject({ status: "unavailable" });
+    expect(await failing.service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({
+      status: "unavailable",
+    });
   });
 });
 

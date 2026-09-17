@@ -51,14 +51,31 @@ const COPY: Record<
   },
 };
 
-export function TrashSettingsCard({
-  onContinue,
-  disabled = false,
-}: {
+/** The storage server a Trash form edits. */
+export interface TrashProviderRef {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface TrashSettingsFormProps {
+  provider: TrashProviderRef;
+  /** Walkthrough only: advance after saving, or skip without enabling. */
   onContinue?: () => void;
   disabled?: boolean;
-}) {
-  const query = useSystemTrash();
+}
+
+/**
+ * The Trash controls of one storage server: the settings live per provider
+ * row, so the form is rendered once per server on System > Storage and once
+ * for the login being set up in the walkthrough. Field ids carry the
+ * provider id so several forms can share a page.
+ */
+export function TrashSettingsForm({
+  provider,
+  onContinue,
+  disabled = false,
+}: TrashSettingsFormProps) {
+  const query = useSystemTrash(provider.id);
   const update = useUpdateTrashSettings();
   const [draft, setDraft] = useState<TrashSettings | null>(null);
   const [retention, setRetention] = useState<string | null>(null);
@@ -90,8 +107,10 @@ export function TrashSettingsCard({
       },
     });
   }
+  const field = (name: string) => `${name}-${provider.id}`;
   return (
-    <SystemSection title="Trash" description={copy.description} contentClassName="gap-4">
+    <>
+      <p className="text-sm text-muted-foreground">{copy.description}</p>
       {query.isError ? (
         <>
           <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
@@ -104,9 +123,9 @@ export function TrashSettingsCard({
       ) : values ? (
         <>
           <Field orientation="horizontal">
-            <FieldLabel htmlFor="enable-trash">Enable Trash</FieldLabel>
+            <FieldLabel htmlFor={field("enable-trash")}>Enable Trash</FieldLabel>
             <Switch
-              id="enable-trash"
+              id={field("enable-trash")}
               checked={values.enabled}
               disabled={busy || values.strategy === "none"}
               onCheckedChange={(enabled) => {
@@ -138,9 +157,9 @@ export function TrashSettingsCard({
                 </>
               ) : null}
               <Field>
-                <FieldLabel htmlFor="trash-path">Trash folder</FieldLabel>
+                <FieldLabel htmlFor={field("trash-path")}>Trash folder</FieldLabel>
                 <Input
-                  id="trash-path"
+                  id={field("trash-path")}
                   value={values.path}
                   disabled={busy}
                   onChange={(event) => change({ path: event.target.value, rulesConfirmed: false })}
@@ -148,9 +167,11 @@ export function TrashSettingsCard({
                 <FieldDescription>{copy.folder}</FieldDescription>
               </Field>
               <Field>
-                <FieldLabel htmlFor="trash-retention">Retention in hours (optional)</FieldLabel>
+                <FieldLabel htmlFor={field("trash-retention")}>
+                  Retention in hours (optional)
+                </FieldLabel>
                 <Input
-                  id="trash-retention"
+                  id={field("trash-retention")}
                   type="number"
                   min={1}
                   step={1}
@@ -166,12 +187,12 @@ export function TrashSettingsCard({
               {values.strategy === "native" ? (
                 <Field orientation="horizontal">
                   <Checkbox
-                    id="trash-rules"
+                    id={field("trash-rules")}
                     checked={values.rulesConfirmed}
                     disabled={busy}
                     onCheckedChange={(rulesConfirmed) => change({ rulesConfirmed })}
                   />
-                  <FieldLabel htmlFor="trash-rules">
+                  <FieldLabel htmlFor={field("trash-rules")}>
                     I configured and tested SFTPGo's recycle-bin rule for this folder.
                   </FieldLabel>
                 </Field>
@@ -215,15 +236,28 @@ export function TrashSettingsCard({
       ) : (
         <p role="status">Loading Trash settings…</p>
       )}
+    </>
+  );
+}
+
+/** The walkthrough's Trash step: one server's form inside a titled card. */
+export function TrashSettingsCard(props: TrashSettingsFormProps) {
+  return (
+    <SystemSection
+      title="Trash"
+      description={`For ${props.provider.label}. Every storage server keeps its own Trash settings under System > Storage.`}
+      contentClassName="gap-4"
+    >
+      <TrashSettingsForm {...props} />
     </SystemSection>
   );
 }
 
-export function TrashReview() {
-  const query = useSystemTrash();
+export function TrashReview({ provider }: { provider: TrashProviderRef }) {
+  const query = useSystemTrash(provider.id);
   return (
     <div className="flex justify-between gap-3 text-sm">
-      <span>Trash</span>
+      <span>Trash · {provider.label}</span>
       <span>
         {query.data
           ? query.data.enabled
