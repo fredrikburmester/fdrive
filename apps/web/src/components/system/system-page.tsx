@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { useSystemFeatures } from "@/lib/api/system-queries";
 import { formatRelativeTime } from "@/lib/system/format";
+import { SYSTEM_SCOPE_NOTE } from "@/lib/system/pages";
 import { FAILURE_FEATURES, ProcessingFailures } from "./processing-failures";
 
 export interface SystemPageProps {
@@ -32,7 +33,7 @@ export interface SystemPageProps {
 
 /**
  * Shared layout for every System sidecar page: the shell's page header, a
- * title and description, a "Last updated" caption (the pages themselves
+ * title and description, the server-wide scope note, a "Last updated" caption (the pages themselves
  * poll every 5 seconds via `refetchInterval` in `lib/api/system-queries`),
  * and a content area.
  */
@@ -63,6 +64,7 @@ export function SystemPage({
           <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
             <p className="text-sm text-muted-foreground">{description}</p>
+            <p className="mt-1 text-xs text-muted-foreground/80">{SYSTEM_SCOPE_NOTE}</p>
           </div>
           <div className="flex min-w-0 max-w-full flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             {lastUpdated !== null ? (

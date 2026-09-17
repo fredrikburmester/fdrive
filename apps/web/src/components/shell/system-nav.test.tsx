@@ -44,7 +44,6 @@ function mount(items: SystemActivityItem[]) {
 it("keeps labels/icons and exposes progress as an accessible description", async () => {
   vi.spyOn(apiClient, "systemActivity").mockResolvedValue({
     observedAt: new Date().toISOString(),
-    scope: "identity",
     items: [activity],
   });
   mount([activity]);

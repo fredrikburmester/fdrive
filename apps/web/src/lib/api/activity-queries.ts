@@ -25,8 +25,7 @@ export function useSystemActivity() {
     queryKey: queryKeys.system.activity(),
     queryFn: async () => {
       const requestedAt = Date.now();
-      // The sidebar follows the login being browsed; System pages show every root.
-      return { ...(await apiClient.systemActivity({ scope: "identity" })), requestedAt };
+      return { ...(await apiClient.systemActivity()), requestedAt };
     },
     refetchInterval: 5000,
     refetchIntervalInBackground: false,

@@ -30,11 +30,6 @@ export const ActivityOperation = z.object({
     "ocr",
   ]),
   features: z.array(FeatureId),
-  /**
-   * The index root the work belongs to, or null for process-wide work (a
-   * whole-installation clear, OCR) that concerns every identity.
-   */
-  root: z.string().nullable().default(null),
   revision: z.number().int().nonnegative(),
   state: z.enum(["running", "waiting", "completed", "failed", "stopped"]),
   phase: z.enum(["discovering", "processing", "queued", "waiting"]),
@@ -55,18 +50,6 @@ export const WorkerActivity = z.object({
 });
 export type WorkerActivity = z.infer<typeof WorkerActivity>;
 
-/**
- * `all` is every root the workers know about; `identity` keeps only work on
- * roots the caller's active identity may read, plus process-wide work.
- */
-export const SystemActivityScope = z.enum(["identity", "all"]);
-export type SystemActivityScope = z.infer<typeof SystemActivityScope>;
-
-export const SystemActivityQuery = z.object({
-  scope: SystemActivityScope.default("all"),
-});
-export type SystemActivityQuery = z.infer<typeof SystemActivityQuery>;
-
 export const SystemActivityItem = z.object({
   id: SystemActivityId,
   state: z.enum(["idle", "working", "waiting", "unavailable", "failed"]),
@@ -79,7 +62,6 @@ export type SystemActivityItem = z.infer<typeof SystemActivityItem>;
 
 export const SystemActivityResponse = z.object({
   observedAt: z.iso.datetime({ offset: true }),
-  scope: SystemActivityScope,
   items: z.array(SystemActivityItem),
 });
 export type SystemActivityResponse = z.infer<typeof SystemActivityResponse>;
