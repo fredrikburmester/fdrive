@@ -8,7 +8,7 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 
 ![fdrive file browser in dark mode, with folders, favorites, tags, and file details](docs/screenshots/files-list-only-overview.png)
 
-[Explore the screenshots](#screenshots) · [Get started](#quickstart-home-server--lan)
+[Explore the screenshots](#screenshots) · [Get started](#quickstart-home-server--lan) · [FDrive for Mac](#fdrive-for-mac)
 
 ---
 
@@ -136,6 +136,34 @@ From your Mac, phone, or another device on the same network, open **`http://<ser
 Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Trash follows as a separate optional choice; [configure its SFTPGo recycle-bin rule](docs/TRASH.md) before enabling it. ONLYOFFICE follows as another optional choice, with browser viewing and an explicit editor-user list; see [Office setup](docs/OFFICE.md). Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
 
 Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers during deployment. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts and remote access.
+
+---
+
+## FDrive for Mac
+
+**FDrive for Mac** puts your fdrive storage in Finder. Folders appear right away and files
+download when you open them, so your Mac does not need a full copy of your drive. Locations are
+read-only unless your server [enables desktop writes](docs/MACOS.md#write-configuration-and-recovery).
+It is an early release and needs macOS 26 or later on Apple silicon and an fdrive server
+reachable over HTTPS.
+
+```sh
+brew trust --tap https://github.com/fredrikburmester/fdrive-web.git
+brew tap fredrikburmester/fdrive-web https://github.com/fredrikburmester/fdrive-web.git
+brew install --cask fredrikburmester/fdrive-web/fdrive
+```
+
+Open FDrive, enter your fdrive web address, sign in and pick the storage logins you want in
+Finder. The signed download is **free for 7 days**, then a **one-time €19 license** keeps it
+running on up to three Macs. No subscription.
+
+**[Buy a license](https://buy.polar.sh/polar_cl_E2fCqfGdal7FYvVQmjRh38wz4KoT1oMui1quj4R2WJ6)** ·
+[Mac guide](docs/MACOS.md) · [Releases and Homebrew](docs/MACOS-RELEASE.md)
+
+Paste the key from your purchase email under **Enter License…**. When the trial ends your
+locations pause; downloaded files, pending changes and connections are kept and resume once you
+activate. The app is open source like the rest of fdrive, and a build compiled from source has
+no trial. The license pays for the signed, notarized build and its development.
 
 ---
 
