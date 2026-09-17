@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
+import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
 import { LinkLoginDialog } from "./link-login-dialog";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -87,4 +88,29 @@ it("disables repeated submission while pending and closes on success", async () 
     });
   });
   expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+
+it("says a files-only storage is files only before the login is added", async () => {
+  vi.spyOn(apiClient, "providers").mockResolvedValue({
+    providers: [
+      {
+        id: "00000000-0000-4000-8000-000000000003",
+        type: "s3",
+        label: "Media bucket",
+        credentialFields: [
+          { name: "username", label: "Access key ID", kind: "text", required: true },
+          { name: "password", label: "Secret key", kind: "password", required: true },
+        ],
+        capabilities: { ...allCapabilities(false), trash: true },
+      },
+    ],
+  });
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <LinkLoginDialog open onOpenChange={vi.fn()} />
+    </QueryClientProvider>,
+  );
+
+  expect(await screen.findByLabelText("Access key ID")).toBeDefined();
+  expect(screen.getByText(FILES_ONLY_NOTE)).toBeDefined();
 });

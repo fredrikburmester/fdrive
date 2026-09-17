@@ -248,6 +248,24 @@ permission checks; the capability is not proof that an Office server is configur
 | `index` | Also requires `indexRootName(instance)` to name a configured root. The scope resolver currently admits SFTPGo only, so a new remote backend needs more than this callback. |
 | `scopeMapping` | Same root restriction; keep false until the scope resolver can safely map that backend. |
 
+### Files-only storage
+
+SFTPGo is the main storage. A type with `index`, `shares` and `office` all false is
+**files only** (`isFilesOnly` in
+[capabilities.ts](../apps/web/src/lib/identity/capabilities.ts)), which today is WebDAV and
+S3. Hidden controls are not enough: people must read the limit before they miss a feature.
+The same one-line note (`FILES_ONLY_NOTE`) therefore appears on the login form and the Add
+login dialog once such a storage is chosen, under its login on the Account page, in the Add
+provider dialog, and on its System > Storage row, where a **Not available** chip row lists
+every capability the type lacks beside **Supports**. Search says "not available for this
+login" with what it needs, rather than a generic failure, when the scope reason is
+`no_roots`. All of it is driven by flags, never by a type name, so a new backend gets the
+copy by keeping its flags honest.
+
+The public provider list carries the type's flags (`PublicProvider.capabilities`) so the
+note can show before sign-in. They are constants of the type and reveal nothing about the
+row; what a login really gets stays `IdentitySummary.capabilities`.
+
 The web reads flags through [capabilitiesFor/anyLoginCan](../apps/web/src/lib/identity/capabilities.ts)
 and uses [planDownload](../apps/web/src/lib/files/download.ts) for downloads. There is no
 `browserActions` helper. Shares and Trash sidebar visibility is the union across linked logins.
@@ -311,8 +329,8 @@ Preserve these behaviours when integrating a provider:
   account/admin routes, logout and identity switching remain available. `setup.initialized.v1`
   records initialization independently of provider availability; pending owner claims retain
   precedence. Disabling the last provider must not reopen setup.
-- The public provider list exposes the administrator's label or an empty string, never the
-  endpoint host. Keep endpoint details and config out of anonymous discovery and error messages.
+- The public provider list exposes the administrator's label or an empty string and the
+  type's constant capability flags, never the endpoint host. Keep endpoint details and config out of anonymous discovery and error messages.
 
 Use [provider-binding integration tests](../apps/api/test/integration/provider-binding.test.ts)
 and [identity-link repository tests](../packages/db/test/integration/identity-links.test.ts)

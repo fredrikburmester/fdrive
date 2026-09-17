@@ -61,6 +61,9 @@ const UI_LABEL = "e2e-s3-ui";
 /** Bound by a login, so it cannot be removed; it is disabled again after the spec. */
 const LOGIN_LABEL = "e2e-s3-login";
 const MUTATION_HEADERS = { "x-requested-with": "fdrive" };
+/** The one line fdrive shows wherever files-only storage is added or picked. */
+const FILES_ONLY_NOTE =
+  "Files only. Search, thumbnails, folder sizes, shares and Office work with SFTPGo storage, not here.";
 
 async function listProviders(admin: APIRequestContext): Promise<ProviderRow[]> {
   const response = await admin.get("/api/v1/admin/providers");
@@ -106,6 +109,8 @@ test("alice (admin) adds a MinIO bucket as an S3 provider, tests it and removes 
     await dialog.getByLabel("Address").fill(uiAddress());
     // The type's own configuration field renders with its one-line help.
     await expect(dialog.getByLabel("Region")).toBeVisible();
+    // Said before the row exists, not discovered from a missing button later.
+    await expect(dialog.getByText(FILES_ONLY_NOTE)).toBeVisible();
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(cards).toHaveCount(initial + 1);
@@ -113,6 +118,10 @@ test("alice (admin) adds a MinIO bucket as an S3 provider, tests it and removes 
     const card = cards.filter({ hasText: UI_LABEL });
     await expect(card.getByRole("img", { name: "S3" })).toBeVisible();
     await expect(card.getByText(uiAddress())).toBeVisible();
+    // The row names what the type lacks beside what it supports.
+    await expect(card.getByText("Not available", { exact: true })).toBeVisible();
+    await expect(card.getByText("Search and thumbnails", { exact: true })).toBeVisible();
+    await expect(card.getByText(FILES_ONLY_NOTE)).toBeVisible();
     await dismissActivityPanel(page);
     await card.getByRole("button", { name: `Test ${UI_LABEL}` }).dispatchEvent("click");
     await expect(card.getByText("Reachable", { exact: true })).toBeVisible();
@@ -156,6 +165,7 @@ test.describe("signing in through S3", () => {
       await expect(page.getByText("Choose a server and sign in")).toBeVisible();
       await page.getByLabel("Server").click();
       await page.getByRole("option", { name: new RegExp(LOGIN_LABEL) }).click();
+      await expect(page.getByText(FILES_ONLY_NOTE)).toBeVisible();
       // The credential form uses the type's own labels.
       await page.getByLabel("Access key ID").fill(bucket().writer.accessKeyId);
       await page.getByLabel("Secret key").fill(bucket().writer.secretAccessKey);
@@ -209,6 +219,13 @@ test.describe("signing in through S3", () => {
         data: { items: [{ path: folder, kind: "dir" }] },
       });
       expect(removed.ok()).toBe(true);
+
+      // Search opens and says why it has nothing, instead of a generic failure.
+      await page.getByRole("button", { name: "Search", exact: true }).click();
+      await page.getByPlaceholder("Search files, content, and images...").fill("hello");
+      await expect(
+        page.getByText("Search is not available for this login. It needs indexed SFTPGo storage."),
+      ).toBeVisible();
     } finally {
       // The login above binds an identity to the row, so it cannot be
       // removed; disabling it keeps the public provider list to the seeded

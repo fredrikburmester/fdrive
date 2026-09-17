@@ -84,6 +84,7 @@ describe("GET /providers", () => {
       "password",
       "otp",
     ]);
+    expect(body.providers[0]?.capabilities).toMatchObject({ index: true, shares: true });
     expect(JSON.stringify(body)).not.toContain("a:8080");
   });
 });

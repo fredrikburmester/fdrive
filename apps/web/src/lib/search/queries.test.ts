@@ -141,11 +141,35 @@ describe("search startup retry decisions", () => {
       }),
     ).toBe("Search is starting… Retrying automatically.");
     expect(
-      searchUnavailableMessage({ available: false, semantic: false, reason: "no_roots" }),
+      searchUnavailableMessage({ available: false, semantic: false, reason: "mismatch" }),
     ).toBe("Search is not available.");
     expect(searchUnavailableMessage({ available: false, semantic: false })).toBe(
       "Search is not available.",
     );
+  });
+
+  it("says what search needs when the login's storage is not indexed", async () => {
+    const {
+      isSearchStarting,
+      isSearchUnsupported,
+      searchUnavailableHint,
+      searchUnavailableMessage,
+    } = await import("./queries.js");
+    const status: SearchStatusResponse = { available: false, semantic: false, reason: "no_roots" };
+
+    expect(isSearchUnsupported(status)).toBe(true);
+    expect(isSearchStarting(status)).toBe(false);
+    expect(searchUnavailableMessage(status)).toBe(
+      "Search is not available for this login. It needs indexed SFTPGo storage.",
+    );
+    // Across all linked logins the panel names each one itself, so no "this login" here.
+    expect(searchUnavailableMessage(status, true)).toBe("Search is not available.");
+    expect(searchUnavailableHint(status)).toBe("Search is not available for this login");
+    expect(searchUnavailableHint({ available: false, semantic: false, reason: "mismatch" })).toBe(
+      "Search index is unavailable",
+    );
+    expect(isSearchUnsupported({ available: true, semantic: false })).toBe(false);
+    expect(isSearchUnsupported(undefined)).toBe(false);
   });
 
   it("retries unavailable results after a healthy status but not a permanent status", async () => {

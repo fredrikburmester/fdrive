@@ -65,6 +65,8 @@ describe("createProviderService: rows", () => {
       type: "sftpgo",
       label: "Home",
       credentialFields: sftpgoModule.credentialFields,
+      // The type's flags, not this row's: no index root is configured here.
+      capabilities: sftpgoModule.capabilities,
     });
     expect(await h.service.adminView(created)).toMatchObject({
       id: created.id,
