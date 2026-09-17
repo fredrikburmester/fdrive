@@ -114,10 +114,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * Runs a write under whichever mutual exclusion the storage qualifies for, and
    * hands the body a `serialize` to wrap the publication step in.
    *
-   * A lease covers the whole action by contract — SFTPGo's is exclusive per user,
-   * WebDAV's is a `Depth: infinity` lock on the endpoint root, both renewed for as
-   * long as the body runs — so it already fences every fdrive writer and the
-   * publish lock would only add a database connection held across the transfer.
+   * A lease covers the whole action by contract — WebDAV's is a `Depth: infinity`
+   * lock on the endpoint root, renewed for as long as the body runs — so it
+   * already fences every fdrive writer and the publish lock would only add a
+   * database connection held across the transfer.
    * Without a lease, fdrive's own lock is what makes publication safe, and
    * `authority()` has already refused the write unless one is configured; the
    * fallback below is unreachable rather than permissive.

@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import type { Content } from "testcontainers";
 import { GenericContainer, Wait } from "testcontainers";
 import { seedFileLayout } from "../file-layout.js";
@@ -30,8 +29,6 @@ function toArchiveTarget(absolutePath: string): string {
 
 export interface StartSftpgoOptions {
   readonly image?: string;
-  /** Builds the pinned integration image and explicitly qualifies these fixture users. */
-  readonly enforcedWriteUsers?: readonly string[];
   readonly users?: readonly SeedUser[];
   readonly folders?: readonly SeedFolder[];
   readonly files?: Readonly<Record<string, Record<string, string>>>;
@@ -97,19 +94,7 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
     })),
   ];
 
-  const image =
-    options.image ??
-    (options.enforcedWriteUsers ? process.env.FDRIVE_TEST_SFTPGO_WRITE_IMAGE : undefined);
-  const container =
-    options.enforcedWriteUsers && !image
-      ? await GenericContainer.fromDockerfile(
-          fileURLToPath(new URL("../../../../integrations/sftpgo/", import.meta.url)),
-        )
-          .withBuildkit()
-          .withCache(true)
-          .build()
-      : new GenericContainer(image ?? DEFAULT_IMAGE);
-  const started = await container
+  const started = await new GenericContainer(options.image ?? DEFAULT_IMAGE)
     .withExposedPorts(HTTP_PORT, WEBDAV_PORT, SFTP_PORT, FTP_PORT)
     .withCopyContentToContainer(contentsToCopy)
     .withEnvironment({
@@ -119,12 +104,6 @@ export async function startSftpgo(options: StartSftpgoOptions = {}): Promise<Sft
       SFTPGO_WEBDAVD__BINDINGS__0__ADDRESS: "",
       SFTPGO_SFTPD__BINDINGS__0__PORT: String(SFTP_PORT),
       SFTPGO_FTPD__BINDINGS__0__PORT: String(FTP_PORT),
-      ...(options.enforcedWriteUsers
-        ? {
-            FDRIVE_SFTPGO_WRITE_ENFORCEMENT: "fdrive-local-v1",
-            FDRIVE_SFTPGO_WRITE_USERS: options.enforcedWriteUsers.join(","),
-          }
-        : {}),
       SFTPGO_LOADDATA_FROM: SEED_DUMP_CONTAINER_PATH,
       SFTPGO_LOADDATA_MODE: "0",
       SFTPGO_DEFAULT_ADMIN_USERNAME: ADMIN_USERNAME,

@@ -13,15 +13,10 @@ import type {
 import { parseHomeTemplate, StorageError } from "@fdrive/core";
 import { createSftpgoClient } from "./client.js";
 import { SftpgoError } from "./errors.js";
+import { SFTPGO_OPTIMISTIC_MODE, withOverwriteGuard } from "./optimistic-publish.js";
 import { probeConnection } from "./probe.js";
 import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./storage-provider.js";
 import type { SftpgoClient } from "./types.js";
-import {
-  SFTPGO_OPTIMISTIC_MODE,
-  SFTPGO_WRITE_PROTOCOL,
-  withOverwriteGuard,
-  withSftpgoWriteLease,
-} from "./write-lease.js";
 
 /** Default used by deployment setup; never inferred for an unmapped provider row. */
 export const DEFAULT_SFTPGO_HOME_TEMPLATE = "sftpgo:/{username}";
@@ -33,7 +28,7 @@ export const SFTPGO_CONFIG_FIELDS: readonly ProviderField[] = [
     kind: "text",
     required: false,
     maxLength: 64,
-    help: '"fdrive-local-v1" with the qualified fdrive image, "verified-optimistic" for stock SFTPGo (only Mac writes are serialized; any other writer in the final instant is lost), or blank for read-only Finder access.',
+    help: '"verified-optimistic" lets the Mac app write (only Mac writes are serialized; any other writer in the final instant is lost); blank keeps Finder read-only.',
   },
   {
     name: "homeTemplate",
@@ -186,26 +181,12 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
         client: clientFor(instance, ctx),
         withToken,
       });
-      if (instance.config.desktopWriteMode === SFTPGO_OPTIMISTIC_MODE)
-        // No lease: publication safety comes from fdrive-side serialization and
-        // the destination recheck in the desktop write path. The overwrite guard
-        // makes `overwrite: false` mean something on stock REST, which otherwise
-        // renames over an existing target and reports success.
-        return { ...withOverwriteGuard(storage), optimisticPublish: true };
-      if (instance.config.desktopWriteMode !== SFTPGO_WRITE_PROTOCOL) return storage;
-      return {
-        ...storage,
-        withWriteLease: (action, signal) =>
-          withSftpgoWriteLease(
-            {
-              baseUrl: instance.baseUrl,
-              fetch: ctx.fetch,
-              withToken,
-              ...(signal ? { signal } : {}),
-            },
-            action,
-          ),
-      };
+      if (instance.config.desktopWriteMode !== SFTPGO_OPTIMISTIC_MODE) return storage;
+      // SFTPGo offers no storage lease: publication safety comes from fdrive-side
+      // serialization and the destination recheck in the desktop write path. The
+      // overwrite guard makes `overwrite: false` mean something on stock REST,
+      // which otherwise renames over an existing target and reports success.
+      return { ...withOverwriteGuard(storage), optimisticPublish: true };
     },
   };
 }

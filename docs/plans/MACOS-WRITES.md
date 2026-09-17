@@ -1,21 +1,18 @@
 # macOS write beta: remaining work
 
-Updated 2026-09-14. Apache DAV native writes merged in PR #21. The optional pinned
-SFTPGo integration merged in PR #22; full beta
-qualification remains open. Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
-Storage requirements: [SFTPGo enforcement](../../integrations/sftpgo/README.md).
+Updated 2026-09-16. Apache DAV native writes merged in PR #21. The pinned SFTPGo
+integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode:
+stock SFTPGo writes use `verified-optimistic` instead. Full beta qualification remains open.
+Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
 Search remains excluded.
 
 ## Safety boundary
 
-The user chose **storage-side enforcement** for the two leased modes, and later accepted a
-separate, weaker `verified-optimistic` contract for stock SFTPGo; see
+The user chose **storage-side enforcement** for the leased Apache DAV mode, and later accepted
+a separate, weaker `verified-optimistic` contract for stock SFTPGo; see
 [STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md). Qualified Apache DAV requires every writer
-to obey its exclusive locks.
-The optional SFTPGo image fences local filesystem mutations across REST, SFTP, FTP and
-WebDAV in one process. Direct host writers, writable service mounts and multiple SFTPGo
-processes invalidate that qualification. Native virtual-folder identities and non-local
-SFTPGo storage remain unsupported.
+to obey its exclusive locks. Native virtual-folder identities and non-local SFTPGo storage
+remain unsupported.
 
 Keep explicit v2 write grants, staged uploads, retained originals, durable server receipts
 and native pending copies. Publication followed by a crash before the receipt remains
@@ -29,9 +26,9 @@ external delete/recreate, particularly with identical bytes.
   inspect/export/reconcile uncertain operations, and reclaim only unreferenced acknowledged
   data. Protect active uploads and expired-operation retries. The current 64 GiB reservation
   ceiling refuses new writes; acknowledgements free incoming bytes but do not purge originals.
-- **Deployment qualification.** Inventory every writer before enabling the optional SFTPGo
-  image. Keep configuration, logs, databases, backups and temporary directories outside user
-  homes. Qualify restart, upgrade and rollback against disposable data before production use.
+- **Deployment qualification.** Inventory every writer before enabling native writes. Keep
+  configuration, logs, databases, backups and temporary directories outside user homes.
+  Qualify restart, upgrade and rollback against disposable data before production use.
   Server spool must be persistent and shared or durably routed in multi-process API setups.
 
 ## Product and release qualification
