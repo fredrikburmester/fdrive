@@ -42,17 +42,14 @@ class ThumbnailRebuildJob:
     outcome: str | None = None
     revision: int = 0
     run_id: str = ""
-    # The one root a run is confined to; None when it spans several roots.
-    root: str | None = None
 
-    def try_start(self, total: int, root: str | None = None) -> bool:
+    def try_start(self, total: int) -> bool:
         """Claim the job for a new run. Returns False (and changes nothing) if a
         run is already in progress."""
         if not self.admission.acquire(blocking=False):
             return False
         with self._lock:
             self.running = True
-            self.root = root
             self.processed = 0
             self.total = total
             self.errors = 0
@@ -113,7 +110,7 @@ class ThumbnailRebuildJob:
             if self.started_at is None:
                 return None
             return {
-                "id": self.run_id, "kind": kind, "features": features, "root": self.root, "revision": self.revision,
+                "id": self.run_id, "kind": kind, "features": features, "revision": self.revision,
                 "state": "running" if self.running else self.outcome or "completed",
                 "phase": "processing" if self.total_known or self.processed else "discovering",
                 "processed": self.processed, "total": self.total if self.total_known else None,
@@ -199,11 +196,6 @@ def count_candidates(contexts: Sequence[RootContext], path: str | None) -> int:
     return sum(len(select_candidates(db.media_files(ctx.conn(), ctx.root_id), scope)) for ctx in contexts)
 
 
-def single_root(contexts: Sequence[RootContext]) -> str | None:
-    """The root a job is confined to, or None when it touches several."""
-    return contexts[0].name if len(contexts) == 1 else None
-
-
 def start_rebuild(
     job: ThumbnailRebuildJob,
     contexts: Sequence[RootContext],
@@ -215,7 +207,7 @@ def start_rebuild(
     Candidate discovery can take longer than the API timeout. The HTTP caller
     acknowledges with an unknown total; stats/activity expose it after discovery.
     """
-    if not job.try_start(0, single_root(contexts)):
+    if not job.try_start(0):
         return False
     job.revision = max((ctx.feature_configuration().revision for ctx in contexts), default=0)
 
