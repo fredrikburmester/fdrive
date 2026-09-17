@@ -31,6 +31,14 @@ it("shows the stored action on mount", () => {
   expect(screen.getByText(/adds or removes the item/)).toBeDefined();
 });
 
+it("offers highlight as a row-click action", () => {
+  render(<BrowsingCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+  expect(pressed("Highlight")).toBe("true");
+  expect(screen.getByText(/outlines the item without selecting it/)).toBeDefined();
+  expect(localStorage.getItem("fdrive.list.rowClick")).toBe('"highlight"');
+});
+
 it("persists size, date and clock choices under their own keys", () => {
   render(<BrowsingCard />);
   expect(pressed("Binary")).toBe("true");

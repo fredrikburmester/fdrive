@@ -467,6 +467,10 @@ export function FileBrowser({
       void handleOpen(entry);
       return;
     }
+    if (intent.kind === "focus") {
+      dispatchSelection({ type: "focus", path: entry.path });
+      return;
+    }
     dispatchSelection({ type: "click", path: entry.path, modifiers: intent.modifiers });
   }
 
