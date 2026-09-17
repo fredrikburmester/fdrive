@@ -7,6 +7,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     init(domain: NSFileProviderDomain) { self.domain = domain; super.init() }
     func invalidate() {}
     private func connection() throws -> (Catalog, APIClient) {
+        // Finder runs this extension without the app, so the trial is enforced here too.
+        guard NativeEnvironment.licenseState().allowsAccess else { throw DriveError.unlicensed }
         let store = try NativeEnvironment.store()
         guard let location = try store.load().first(where: { $0.id == domain.identifier.rawValue }) else { throw DriveError.authentication }
         return (try store.catalog(location), try store.client(location))

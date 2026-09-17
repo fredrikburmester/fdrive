@@ -27,6 +27,29 @@ enum NativeEnvironment {
         return try ConnectionStore(directory: directory.appendingPathComponent("Library/Application Support/fdrive"),
                                    keychainGroup: Bundle.main.object(forInfoDictionaryKey: "FdriveKeychainGroup") as? String)
     }
+    /// nil when the build names no seller, such as one compiled from source: nothing is gated.
+    static func licenseManager() -> LicenseManager? {
+        guard let organization = Bundle.main.object(forInfoDictionaryKey: "FdriveLicenseOrganization") as? String,
+              UUID(uuidString: organization) != nil else { return nil }
+        let group = Bundle.main.object(forInfoDictionaryKey: "FdriveKeychainGroup") as? String
+        var policy = LicensePolicy.standard
+        #if DEBUG
+        // Rehearsals only: Release builds never compile this, so no shipped app can shorten or stretch a trial.
+        if let seconds = (Bundle.main.object(forInfoDictionaryKey: "FdriveLicenseTrialSeconds") as? String).flatMap(TimeInterval.init) { policy.trial = seconds }
+        #endif
+        return LicenseManager(store: LicenseStore(storage: KeychainLicenseStorage(keychainGroup: group)),
+                              provider: PolarLicenseProvider(organizationId: organization,
+                                  sandbox: Bundle.main.object(forInfoDictionaryKey: "FdriveLicenseSandbox") as? String == "YES"),
+                              policy: policy)
+    }
+    /// An unreadable Keychain never locks out a paying customer.
+    static func licenseState() -> LicenseState {
+        guard let manager = licenseManager() else { return .unrestricted }
+        return (try? manager.state(now: Date())) ?? .unrestricted
+    }
+    static var purchaseURL: URL? {
+        (Bundle.main.object(forInfoDictionaryKey: "FdrivePurchaseURL") as? String).flatMap { URL(string: $0) }.flatMap { $0.scheme == "https" ? $0 : nil }
+    }
     static func id(_ id: NSFileProviderItemIdentifier) -> String { id == .rootContainer ? "root" : id == .trashContainer ? "trash" : id.rawValue }
     static func id(_ id: String) -> NSFileProviderItemIdentifier { id == "root" ? .rootContainer : id == "trash" ? .trashContainer : .init(id) }
     static func error(_ error: Error) -> NSError {
@@ -36,7 +59,8 @@ enum NativeEnvironment {
         let native = error as NSError
         if native.domain == NSCocoaErrorDomain || native.domain == NSFileProviderErrorDomain { return native }
         switch error as? DriveError {
-        case .authentication: return NSFileProviderError(.notAuthenticated) as NSError
+        // Resolvable: macOS keeps pending edits and retries after signalErrorResolved.
+        case .authentication, .unlicensed: return NSFileProviderError(.notAuthenticated) as NSError
         case .missing: return NSFileProviderError(.noSuchItem) as NSError
         case .expiredSnapshot: return NSFileProviderError(.syncAnchorExpired) as NSError
         case .changedContent: return NSFileProviderError(.versionNoLongerAvailable) as NSError

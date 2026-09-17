@@ -53,6 +53,11 @@ private struct MenuContents: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
     var body: some View {
+        if let summary = model.license.summary {
+            Text(summary)
+            if let url = NativeEnvironment.purchaseURL { Button("Buy FDrive…") { NSWorkspace.shared.open(url) } }
+            Divider()
+        }
         Button("Locations and Settings") { openWindow(id: "locations"); NSApp.activate() }
         ForEach(model.locations) { location in
             Button(location.title) { Task { await model.reveal(location) } }
@@ -68,6 +73,8 @@ private struct LocationsView: View {
     @State private var address = ""
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var trashLocation: SavedLocation?
+    @State private var enteringLicense = false
+    @State private var confirmingDeactivation = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
@@ -79,6 +86,9 @@ private struct LocationsView: View {
                 }
                 Spacer()
                 if model.refreshing { ProgressView().controlSize(.small) }
+            }
+            if model.license != .unrestricted, model.license != .licensed {
+                LicenseBanner(model: model) { enteringLicense = true }
             }
             HStack {
                 TextField("https://drive.example.com", text: $address)
@@ -136,10 +146,85 @@ private struct LocationsView: View {
                     catch { model.error = error.localizedDescription; launchAtLogin = SMAppService.mainApp.status == .enabled }
                 }
                 Spacer()
+                if model.license == .licensed {
+                    if model.licensing { ProgressView().controlSize(.mini) }
+                    Text("Licensed").font(.caption).foregroundStyle(.secondary)
+                    Button("Deactivate This Mac…") { confirmingDeactivation = true }.buttonStyle(.link).font(.caption).disabled(model.licensing)
+                }
                 Text("macOS 26+").font(.caption).foregroundStyle(.secondary)
             }
         }.padding(24)
             .sheet(item: $trashLocation) { TrashRecoveryView(location: $0) }
+            .sheet(isPresented: $enteringLicense) { LicenseEntryView(model: model) }
+            .confirmationDialog("Deactivate FDrive on this Mac?", isPresented: $confirmingDeactivation) {
+                Button("Deactivate") { Task { await model.deactivateLicense() } }
+            } message: { Text("This frees the license for another Mac. Your locations and files are kept.") }
+    }
+}
+
+private extension LicenseState {
+    /// nil when there is nothing to tell the user.
+    var summary: String? {
+        switch self {
+        case .unrestricted, .licensed: nil
+        case .trial(let daysLeft): daysLeft == 1 ? "Trial: 1 day left" : "Trial: \(daysLeft) days left"
+        case .trialEnded: "Trial ended"
+        case .validationOverdue: "License needs checking"
+        }
+    }
+}
+
+private struct LicenseBanner: View {
+    @ObservedObject var model: AppModel
+    let enterLicense: () -> Void
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.license.summary ?? "").font(.headline)
+                Text(detail).font(.caption).foregroundStyle(model.license.allowsAccess ? Color.secondary : Color.orange)
+                if let error = model.licenseError { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+            }
+            Spacer()
+            if model.license == .validationOverdue {
+                Button("Check Now") { Task { await model.checkLicense(force: true) } }.disabled(model.licensing)
+            } else {
+                if let url = NativeEnvironment.purchaseURL { Button("Buy FDrive") { NSWorkspace.shared.open(url) } }
+                Button("Enter License…", action: enterLicense)
+            }
+        }.padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    }
+    private var detail: String {
+        switch model.license {
+        case .trialEnded: "Finder locations are paused. Your files and pending changes are kept."
+        case .validationOverdue: "FDrive could not confirm your license for 30 days. Connect to the internet and check again."
+        default: "Everything works during the trial. Buy once to keep using FDrive."
+        }
+    }
+}
+
+private struct LicenseEntryView: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var key = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Enter License").font(.title2.bold())
+            Text("Paste the license key from your purchase email.").foregroundStyle(.secondary)
+            TextField("License key", text: $key).textFieldStyle(.roundedBorder).onSubmit(activate)
+            if let error = model.licenseError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            HStack {
+                if model.licensing { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.licensing)
+                Button("Activate", action: activate).keyboardShortcut(.defaultAction)
+                    .disabled(model.licensing || key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }.padding(24).frame(width: 440)
+            .interactiveDismissDisabled(model.licensing)
+            .onAppear { model.licenseError = nil }
+    }
+    private func activate() {
+        Task { if await model.activateLicense(key) { dismiss() } }
     }
 }
 
@@ -218,8 +303,12 @@ final class AppModel: ObservableObject {
     @Published var health: [String: LocationHealth] = [:]
     /// Finder stopped answering signalled enumerators; the server itself is reachable.
     @Published var warnings: [String: String] = [:]
+    @Published var license: LicenseState = NativeEnvironment.licenseState()
+    @Published var licenseError: String?
+    @Published var licensing = false
     private var signalledAt: [String: Date] = [:]
     private var pairingTask: Task<Void, Never>?
+    private var licenseWork: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshOperation: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
@@ -232,6 +321,7 @@ final class AppModel: ObservableObject {
         refreshTask = Task { [weak self] in
             await self?.resumePairing()
             while !Task.isCancelled {
+                await self?.checkLicense()
                 await self?.refresh(automatic: true)
                 try? await Task.sleep(for: .seconds(60))
             }
@@ -242,6 +332,69 @@ final class AppModel: ObservableObject {
                 await self?.refresh()
             }
         }
+    }
+    /// Revalidates a purchase when due and notices the trial ending while the app runs.
+    func checkLicense(force: Bool = false) async {
+        guard let manager = NativeEnvironment.licenseManager(), !(force && licensing) else { return }
+        if force { licensing = true; licenseError = nil }
+        defer { if force { licensing = false } }
+        await serializedLicenseWork {
+            // A due check that cannot reach the seller leaves the state as it was.
+            let state = (try? await manager.revalidateIfDue(now: Date())) ?? NativeEnvironment.licenseState()
+            if force, !state.allowsAccess { self.licenseError = LicenseError.unavailable.localizedDescription }
+            await self.applyLicense(state)
+        }
+    }
+    func activateLicense(_ key: String) async -> Bool {
+        guard !licensing, let manager = NativeEnvironment.licenseManager() else { return false }
+        licensing = true; licenseError = nil
+        defer { licensing = false }
+        var activated = false
+        await serializedLicenseWork {
+            do {
+                await self.applyLicense(try await manager.activate(key: key, label: Host.current().localizedName ?? "Mac", now: Date()))
+                activated = true
+            } catch { self.licenseError = error.localizedDescription }
+        }
+        return activated
+    }
+    func deactivateLicense() async {
+        guard !licensing, let manager = NativeEnvironment.licenseManager() else { return }
+        licensing = true; licenseError = nil
+        defer { licensing = false }
+        await serializedLicenseWork {
+            do { await self.applyLicense(try await manager.deactivate(now: Date())) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    /// The periodic check and the user's own action each read, await the seller and write the
+    /// record. Run them one after another so a slow check cannot restore a deactivated key.
+    private func serializedLicenseWork(_ work: @escaping @MainActor () async -> Void) async {
+        let previous = licenseWork
+        let task = Task { await previous?.value; await work() }
+        licenseWork = task
+        await task.value
+    }
+    private func applyLicense(_ state: LicenseState) async {
+        let changed = license.allowsAccess != state.allowsAccess
+        license = state
+        guard changed else { return }
+        guard state.allowsAccess else {
+            // A refresh already under way must not report "Connected" over a paused location.
+            refreshOperation?.cancel()
+            pauseLocations()
+            return
+        }
+        // macOS held reads and pending edits behind notAuthenticated; let it retry them.
+        for location in locations {
+            let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
+            try? await NSFileProviderManager(for: domain)?.signalErrorResolved(NSFileProviderError(.notAuthenticated))
+        }
+        // Never hold the license sheet open for a full server refresh.
+        Task { await refresh() }
+    }
+    private func pauseLocations() {
+        for saved in locations where !saved.disconnecting { status[saved.id] = "Paused · \(license.summary ?? "License required")" }
     }
     func connect(_ address: String) async {
         guard !pairing else { return }
@@ -388,6 +541,7 @@ final class AppModel: ObservableObject {
         refreshOperation = nil; refreshing = false
     }
     private func refreshLocations(automatic: Bool) async {
+        guard license.allowsAccess else { pauseLocations(); return }
         for saved in locations where !saved.disconnecting {
             if Task.isCancelled { return }
             if automatic, let retry = retryAfter[saved.id], retry > Date() { continue }

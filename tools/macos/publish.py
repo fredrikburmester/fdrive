@@ -80,6 +80,7 @@ def render_cask(repo, version, digest, asset_id):
   app "FDrive.app"
 
   caveats <<~EOS
+    FDrive is free to try for 7 days; afterwards it needs a one-time license.
     Connect using your fdrive HTTPS web address, then enable the Finder location.
     Quit FDrive before upgrading. Disconnect locations in FDrive before uninstalling.
   EOS

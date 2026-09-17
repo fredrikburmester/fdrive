@@ -55,6 +55,32 @@ read-only. An owner can also create the cask PR with:
 python3 tools/macos/publish.py --repo OWNER/REPOSITORY --cask-only 0.1.0
 ```
 
+## License seller
+
+Releases are trialware: [MACOS.md](MACOS.md#trial-and-license) describes the behavior. Payments,
+EU VAT and key delivery are handled by [Polar](https://polar.sh) as merchant of record.
+
+1. Create the organization, then a one-time product with a **License keys** benefit. Set an
+   activation limit (three Macs is a reasonable default) and no expiry.
+2. Copy the organization ID (a UUID in the organization settings). It is public: the license
+   endpoints need no secret, and none may ever be placed in the app or this repository.
+3. Publish a product page with the download and the checkout link; that address is the
+   purchase URL the app opens.
+
+Every release must name both, or `release.py` refuses to build; it also verifies that the app
+and the extension carry the same organization. For hosted builds set them as variables:
+
+```sh
+gh variable set MACOS_LICENSE_ORGANIZATION --repo fredrikburmester/fdrive-web --body ORGANIZATION_UUID
+gh variable set MACOS_PURCHASE_URL --repo fredrikburmester/fdrive-web --body https://example.com/fdrive
+```
+
+Rehearse purchases in [Polar's sandbox](https://polar.sh/docs/integrate/sandbox), a separate
+server with its own organizations and test cards. A development-signed build accepts its keys
+when built with `FDRIVE_LICENSE_ORGANIZATION=SANDBOX_ORGANIZATION_UUID FDRIVE_LICENSE_SANDBOX=YES`
+appended to the [development build command](MACOS.md#build-and-verify). Releases always clear
+the sandbox setting, so a sandbox key can never unlock a published build.
+
 ## Build and publish
 
 The ordinary [native build](MACOS.md#build-and-verify) remains unsigned or
@@ -98,6 +124,7 @@ python3 tools/macos/release.py release \
   --version 0.1.0 --build 1 --team YOUR_TEAM_ID \
   --app-profile /path/to/app.provisionprofile \
   --extension-profile /path/to/extension.provisionprofile \
+  --license-organization ORGANIZATION_UUID --purchase-url https://example.com/fdrive \
   --output .fdrive-workflow/release-0.1.0
 ```
 

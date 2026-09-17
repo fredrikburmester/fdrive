@@ -29,6 +29,17 @@ def version_value(value):
     return value
 
 
+def license_settings(organization, purchase_url):
+    """A release without a seller would ship with no trial or purchase gate at all."""
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", organization or ""):
+        raise ValueError("Release requires --license-organization with the lowercase Polar organization UUID")
+    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?", purchase_url or ""):
+        raise ValueError("Release requires --purchase-url with a plain https:// address")
+    # Sandbox keys cost nothing; a release must only ever accept production ones.
+    return {"FdriveLicenseOrganization": organization, "FdrivePurchaseURL": purchase_url,
+            "FdriveLicenseSandbox": ""}
+
+
 def validate_entitlements(entitlements, team):
     expected = {
         "com.apple.security.app-sandbox": True,
@@ -43,7 +54,7 @@ def validate_entitlements(entitlements, team):
         raise ValueError("Release must not allow debugger attachment")
 
 
-def validate_bundle(app, version, build, team=None):
+def validate_bundle(app, version, build, team=None, licensing=None):
     extension = app / "Contents/PlugIns/FdriveFileProvider.appex"
     for bundle, identifier in ((app, APP_ID), (extension, EXTENSION_ID)):
         with (bundle / "Contents/Info.plist").open("rb") as file:
@@ -56,6 +67,10 @@ def validate_bundle(app, version, build, team=None):
         }.items():
             if info.get(key) != expected:
                 raise ValueError(f"Unexpected {key} in {bundle.name}")
+        # The extension enforces the trial on its own; it must name the same seller.
+        for key, expected in (licensing or {}).items():
+            if (bundle == app or key == "FdriveLicenseOrganization") and info.get(key, "") != expected:
+                raise ValueError(f"{bundle.name} was built without the expected {key}")
         executable = bundle / "Contents/MacOS" / info["CFBundleExecutable"]
         if run("lipo", "-archs", executable, capture=True).decode().strip() != "arm64":
             raise ValueError("Release must contain the supported arm64 architecture")
@@ -95,6 +110,7 @@ def release(args):
         raise ValueError("Release requires --team with your ten-character Apple Team ID")
     if args.mode == "release" and (not args.app_profile or not args.extension_profile):
         raise ValueError("Release requires --app-profile and --extension-profile Developer ID profile paths")
+    licensing = license_settings(args.license_organization, args.purchase_url) if args.mode == "release" else None
     output = args.output.resolve()
     if output.exists():
         raise ValueError("Output directory already exists; choose a fresh directory")
@@ -127,7 +143,9 @@ def release(args):
             flags += " --keychain " + shlex.quote(str(args.keychain))
         command += ["CODE_SIGN_STYLE=Manual", f"DEVELOPMENT_TEAM={args.team}",
                     f"CODE_SIGN_IDENTITY={identity}", f"OTHER_CODE_SIGN_FLAGS={flags}",
-                    f"FDRIVE_APP_PROFILE={app_profile}", f"FDRIVE_EXTENSION_PROFILE={extension_profile}"]
+                    f"FDRIVE_APP_PROFILE={app_profile}", f"FDRIVE_EXTENSION_PROFILE={extension_profile}",
+                    f"FDRIVE_LICENSE_ORGANIZATION={args.license_organization}",
+                    f"FDRIVE_PURCHASE_URL={args.purchase_url}", "FDRIVE_LICENSE_SANDBOX="]
     run(*command, "archive")
     if args.mode == "check":
         validate_bundle(archive / "Products/Applications/FDrive.app", args.version, args.build)
@@ -144,7 +162,7 @@ def release(args):
     run("xcodebuild", "-exportArchive", "-archivePath", archive,
         "-exportOptionsPlist", export_options, "-exportPath", output / "export")
     app = output / "export/FDrive.app"
-    validate_bundle(app, args.version, args.build, args.team)
+    validate_bundle(app, args.version, args.build, args.team, licensing)
     zip_path = output / "fdrive-notarization.zip"
     run("ditto", "-c", "-k", "--keepParent", app, zip_path)
     notarize(zip_path, args.notary_profile, args.keychain, output / "app-notary.json")
@@ -190,6 +208,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--keychain", type=Path)
     parser.add_argument("--notary-profile", default="fdrive-notary")
+    parser.add_argument("--license-organization")
+    parser.add_argument("--purchase-url")
     args = parser.parse_args()
     try:
         release(args)
