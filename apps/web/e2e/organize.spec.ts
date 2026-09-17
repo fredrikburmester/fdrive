@@ -107,7 +107,7 @@ test("Organize suggests other folders, keeps both on a clash, moves what is kept
     await expect(financeGroup.getByText("invoice-2024 (2).txt")).toBeVisible();
     await expect(organize.getByRole("button", { name: "Move 2 items" })).toBeVisible();
 
-    // Closing the sheet keeps the review; the toolbar leads back to it.
+    // Closing the sheet keeps the review; the pill at the bottom right leads back to it.
     await organize.getByRole("button", { name: "Close" }).last().click();
     await expect(organize).toBeHidden();
     await page.getByRole("button", { name: "Suggestions ready" }).click();

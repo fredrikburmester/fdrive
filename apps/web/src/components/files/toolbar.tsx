@@ -15,7 +15,6 @@ import {
   LayoutGridIcon,
   ListIcon,
   ListTreeIcon,
-  LoaderCircle,
   MoreHorizontalIcon,
   PanelRightIcon,
   PlusIcon,
@@ -56,7 +55,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { itemCount } from "@/lib/ai/organize";
 import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { breadcrumbLayout } from "@/lib/files/breadcrumb-layout";
@@ -276,8 +274,6 @@ export interface FilesToolbarActionsProps {
   onCompressSelection: () => void;
   /** Asks the assistant where the selection belongs. Hidden when AI is not set up. */
   onOrganizeSelection?: (() => void) | undefined;
-  /** An Organize session whose sheet is closed: a run in progress, or suggestions waiting. */
-  organizeStatus?: OrganizeToolbarStatus | undefined;
   /** Downloads the currently selected entries (single direct download or zip). */
   onDownloadSelection: () => void;
   /** Whether image thumbnails are shown in list view. */
@@ -504,28 +500,6 @@ function UploadMenuItems({ onUploadFiles, onUploadFolder }: UploadMenuItemsProps
  * affecting the desktop layout. */
 const MOBILE_TAP_TARGET = "max-md:size-11 max-md:justify-center max-md:px-0";
 
-export interface OrganizeToolbarStatus {
-  readonly state: "running" | "ready";
-  /** How many items the session is about. */
-  readonly count: number;
-  /** Reopens the Organize sheet. */
-  readonly onOpen: () => void;
-}
-
-function organizeStatusLabel(status: OrganizeToolbarStatus): string {
-  return status.state === "running"
-    ? `Organizing ${itemCount(status.count)}…`
-    : "Suggestions ready";
-}
-
-function OrganizeStatusIcon({ state }: { state: OrganizeToolbarStatus["state"] }) {
-  return state === "running" ? (
-    <LoaderCircle className="animate-spin motion-reduce:animate-none" />
-  ) : (
-    <SparklesIcon />
-  );
-}
-
 /**
  * View toggle, sort menu, new folder, upload menu, selection actions, and
  * the inspector toggle. Below `md` (see `toolbarVisibility`), only New
@@ -555,7 +529,6 @@ export function FilesToolbarActions({
   onDuplicateSelection,
   onCompressSelection,
   onOrganizeSelection,
-  organizeStatus,
   onDownloadSelection,
   showThumbnails,
   onShowThumbnailsChange,
@@ -644,18 +617,6 @@ export function FilesToolbarActions({
             <UploadMenuItems onUploadFiles={onUploadFiles} onUploadFolder={onUploadFolder} />
           </DropdownMenuContent>
         </DropdownMenu>
-      )}
-
-      {!inOverflow && organizeStatus !== undefined && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-muted-foreground"
-          onClick={organizeStatus.onOpen}
-        >
-          <OrganizeStatusIcon state={organizeStatus.state} />
-          {organizeStatusLabel(organizeStatus)}
-        </Button>
       )}
 
       {!inOverflow && selectedCount > 0 && (
@@ -823,12 +784,6 @@ export function FilesToolbarActions({
               <DropdownMenuItem disabled={selectedCount === 0} onClick={onOrganizeSelection}>
                 <SparklesIcon />
                 Organize
-              </DropdownMenuItem>
-            )}
-            {organizeStatus !== undefined && (
-              <DropdownMenuItem onClick={organizeStatus.onOpen}>
-                <OrganizeStatusIcon state={organizeStatus.state} />
-                {organizeStatusLabel(organizeStatus)}
               </DropdownMenuItem>
             )}
             {overflow.includes("download") && downloadAvailable && (

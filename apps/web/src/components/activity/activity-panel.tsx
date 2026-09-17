@@ -41,6 +41,8 @@ import { summarize } from "@/lib/upload/queue";
 import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem, UploadStatus } from "@/lib/upload/types";
 import { useFormatters } from "@/lib/use-format-preferences";
+import { ActivityPill } from "./activity-pill";
+import { LiveActivity } from "./live-activity-dock";
 
 const SAMPLE_HISTORY_LIMIT = 50;
 /**
@@ -204,7 +206,7 @@ function JobRow({ job, request, onCancel, onRetry }: JobRowProps) {
 }
 
 /**
- * Bottom-right floating panel combining the upload queue (`UploadRow`,
+ * Floating panel in the `LiveActivityDock` at the bottom right combining the upload queue (`UploadRow`,
  * unchanged from the old dedicated upload panel) with the compress/extract
  * job queue (`JobRow`): per-item progress, state badges, cancel while
  * active, retry for a failed job whose original request is still
@@ -344,76 +346,76 @@ export function ActivityPanel() {
 
   if (collapsed) {
     return (
-      <Button
-        variant="outline"
-        onClick={() => setCollapsed(false)}
-        className="fixed right-4 bottom-4 z-50 h-auto rounded-full bg-popover px-4 py-2 text-popover-foreground shadow-sm ring-1 ring-foreground/10"
-      >
-        <UploadCloud />
-        {title}
-      </Button>
+      <LiveActivity>
+        <ActivityPill className="order-last" onClick={() => setCollapsed(false)}>
+          <UploadCloud />
+          {title}
+        </ActivityPill>
+      </LiveActivity>
     );
   }
 
   const finished = activeCount === 0;
 
   return (
-    <Card
-      data-slot="activity-panel"
-      className="fixed right-4 bottom-4 z-50 flex max-h-[70vh] w-80 flex-col gap-3 shadow-lg max-md:inset-x-3 max-md:right-3 max-md:w-auto max-md:max-h-[50vh]"
-    >
-      {/* The card header is a grid by default; `flex` keeps the title and actions on one row. */}
-      <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle>{title}</CardTitle>
-        <div className="flex shrink-0 items-center gap-1">
-          {finished && (
-            <Button variant="ghost" size="sm" onClick={handleClearFinished}>
-              Clear
+    <LiveActivity>
+      <Card
+        data-slot="activity-panel"
+        className="order-last flex max-h-[70vh] w-80 flex-col gap-3 shadow-lg max-md:w-full max-md:max-h-[50vh]"
+      >
+        {/* The card header is a grid by default; `flex` keeps the title and actions on one row. */}
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <CardTitle>{title}</CardTitle>
+          <div className="flex shrink-0 items-center gap-1">
+            {finished && (
+              <Button variant="ghost" size="sm" onClick={handleClearFinished}>
+                Clear
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setCollapsed(true)}
+              aria-label="Collapse activity panel"
+            >
+              <ChevronDown />
             </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => setCollapsed(true)}
-            aria-label="Collapse activity panel"
-          >
-            <ChevronDown />
-          </Button>
-        </div>
-      </CardHeader>
-      <Separator />
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
-        {!finished && activeUploads.length > 0 && (
-          <div className="flex shrink-0 flex-col gap-1">
-            <Progress value={uploadSummary.overallProgress * 100} />
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{formatSpeed(speed, { units: prefs.sizes })}</span>
-              <span>{formatEta(bytesRemaining, speed)} left</span>
-            </div>
           </div>
-        )}
-        <div className="max-h-72 min-h-0 overflow-y-auto" data-slot="activity-panel-list">
-          <ul className="divide-y divide-border">
-            {uploadItems.map((item) => (
-              <UploadRow
-                key={item.id}
-                item={item}
-                onRetry={() => retryUpload(item.id)}
-                onCancel={() => cancelUpload(item.id)}
-              />
-            ))}
-            {[...activeJobList, ...finishedJobList].map((j) => (
-              <JobRow
-                key={j.id}
-                job={j}
-                request={jobsState.requests[j.id]}
-                onCancel={() => handleCancelJob(j.id)}
-                onRetry={() => handleRetryJob(j.id)}
-              />
-            ))}
-          </ul>
-        </div>
-      </CardContent>
-    </Card>
+        </CardHeader>
+        <Separator />
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
+          {!finished && activeUploads.length > 0 && (
+            <div className="flex shrink-0 flex-col gap-1">
+              <Progress value={uploadSummary.overallProgress * 100} />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{formatSpeed(speed, { units: prefs.sizes })}</span>
+                <span>{formatEta(bytesRemaining, speed)} left</span>
+              </div>
+            </div>
+          )}
+          <div className="max-h-72 min-h-0 overflow-y-auto" data-slot="activity-panel-list">
+            <ul className="divide-y divide-border">
+              {uploadItems.map((item) => (
+                <UploadRow
+                  key={item.id}
+                  item={item}
+                  onRetry={() => retryUpload(item.id)}
+                  onCancel={() => cancelUpload(item.id)}
+                />
+              ))}
+              {[...activeJobList, ...finishedJobList].map((j) => (
+                <JobRow
+                  key={j.id}
+                  job={j}
+                  request={jobsState.requests[j.id]}
+                  onCancel={() => handleCancelJob(j.id)}
+                  onRetry={() => handleRetryJob(j.id)}
+                />
+              ))}
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+    </LiveActivity>
   );
 }
