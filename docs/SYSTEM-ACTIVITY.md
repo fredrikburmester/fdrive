@@ -6,6 +6,11 @@ Idle services are quiet. Hover or keyboard focus exposes the phase and counts; r
 motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
 warning. Background job state survives navigation and reload.
 
+The section is server-wide. Activity, counts and actions cover every indexed root whatever
+login is being browsed, and the group label ("Whole server · admins only") and every System
+page header say so with shared copy from `lib/system/pages`. Scoping the sidebar to the
+active login made it disagree with the pages and was reverted.
+
 Features sits below Storage, with a separate expand/collapse button nesting Shared folders,
 Thumbnails, Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label
 still opens the overview, whose activity remains visible when collapsed. General and Storage

@@ -73,6 +73,7 @@ describe("SystemPage feature admission", () => {
     );
     expect(screen.queryByText("Sidecar content")).toBeNull();
     expect(screen.queryByRole("button", { name: "Page action" })).toBeNull();
+    expect(screen.getByText(/Applies to the whole server/)).toBeTruthy();
   });
 
   it("keeps a processing page visible when one of its managed features is enabled", () => {
@@ -92,6 +93,11 @@ describe("SystemPage feature admission", () => {
 
     expect(screen.getByText("Sidecar content")).toBeTruthy();
     expect(screen.queryByText("General is off")).toBeNull();
+    expect(
+      screen.getByText(
+        "Applies to the whole server, not just the storage you are browsing. Admins only.",
+      ),
+    ).toBeTruthy();
   });
 
   it("turns a page off through `enabled` for a subsystem that is not a feature", () => {
