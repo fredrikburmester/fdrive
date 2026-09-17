@@ -10,6 +10,9 @@
     <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>FdriveAppGroup</key><string>$(FDRIVE_APP_GROUP)</string>
     <key>FdriveKeychainGroup</key><string>$(FDRIVE_KEYCHAIN_GROUP)</string>
+    <key>FdriveLicenseOrganization</key><string>$(FDRIVE_LICENSE_ORGANIZATION)</string>
+    <key>FdriveLicenseSandbox</key><string>$(FDRIVE_LICENSE_SANDBOX)</string>
+    <key>FdriveLicenseTrialSeconds</key><string>$(FDRIVE_LICENSE_TRIAL_SECONDS)</string>
     <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
     <key>NSExtension</key><dict>
         <key>NSExtensionPointIdentifier</key><string>com.apple.fileprovider-nonui</string>

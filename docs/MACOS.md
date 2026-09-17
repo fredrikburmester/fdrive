@@ -77,6 +77,28 @@ Finder controls the visible sidebar name: with one domain it may display the app
 rehearsal and is also reported in [Apple's developer forum](https://developer.apple.com/forums/thread/737617).
 No unsupported Finder preference changes or extra placeholder domains are used to override it.
 
+## Trial and license
+
+Released builds are free for 7 days, then need a one-time license key. The trial starts the
+first time the app or its extension runs on a Mac. **Enter License…** activates a key for this
+Mac; **Deactivate This Mac…** frees its seat for another one. Builds compiled without a seller
+(`FDRIVE_LICENSE_ORGANIZATION` unset, the default from source) are not gated at all.
+
+The record (trial start, key, activation ID, last validation) is one item in the shared Data
+Protection Keychain, so reinstalling or `brew uninstall` does not restart the trial. The app
+revalidates a license weekly against [Polar's public license endpoints](https://polar.sh/docs/api-reference/customer-portal/license-keys/validate),
+which take no credential; nothing but the key, the organization ID and the Mac's name is sent.
+Only a definitive answer (revoked, disabled, expired or unknown key) removes a license. An
+unreachable seller never does until 30 days have passed without a successful check, and an
+unreadable Keychain leaves the app usable.
+
+The File Provider extension enforces the same state, because Finder runs it without the app.
+When the trial has ended or validation is overdue, every callback returns File Provider's
+resolvable `notAuthenticated` error: macOS keeps downloaded files, local edits and pending
+uploads, and retries them after the app signals that the error is resolved on activation.
+Domains, catalogs, credentials and recovery files are never removed by licensing, and the app
+stops its server refresh while paused.
+
 ## Write configuration and recovery
 
 Writes require all three: an explicit **Read and write** pairing grant, persistent server

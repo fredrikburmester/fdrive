@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from publish import read_manifest, release_asset_id, render_cask, repository_value
-from release import APP_ID, notarize, validate_entitlements, version_value
+from release import APP_ID, license_settings, notarize, validate_entitlements, version_value
 from profiles import validate_profile
 
 
@@ -44,6 +44,18 @@ class ReleaseSafetyTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 repository_value(value)
         self.assertEqual(version_value("0.1.0"), "0.1.0")
+
+    def test_release_cannot_ship_without_a_seller_or_with_injected_settings(self):
+        organization = "0b8f4a52-6f0e-4a63-9f2b-2f3b1f6f7a11"
+        self.assertEqual(license_settings(organization, "https://fdrive.se/mac"), {
+            "FdriveLicenseOrganization": organization, "FdrivePurchaseURL": "https://fdrive.se/mac",
+            "FdriveLicenseSandbox": ""})
+        for bad in (None, "", organization.upper(), organization + "\n", "not-a-uuid"):
+            with self.subTest(organization=bad), self.assertRaises(ValueError):
+                license_settings(bad, "https://fdrive.se/mac")
+        for bad in (None, "", "http://fdrive.se", "https://fdrive.se/$(HOME)", "https://fdrive.se/a b", "https://fdrive.se\n"):
+            with self.subTest(url=bad), self.assertRaises(ValueError):
+                license_settings(organization, bad)
 
     def test_rejects_wrong_team_or_debugger_entitlements(self):
         team = "ABCDEFGHIJ"

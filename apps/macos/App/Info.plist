@@ -13,5 +13,9 @@
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>FdriveAppGroup</key><string>$(FDRIVE_APP_GROUP)</string>
     <key>FdriveKeychainGroup</key><string>$(FDRIVE_KEYCHAIN_GROUP)</string>
+    <key>FdriveLicenseOrganization</key><string>$(FDRIVE_LICENSE_ORGANIZATION)</string>
+    <key>FdriveLicenseSandbox</key><string>$(FDRIVE_LICENSE_SANDBOX)</string>
+    <key>FdriveLicenseTrialSeconds</key><string>$(FDRIVE_LICENSE_TRIAL_SECONDS)</string>
+    <key>FdrivePurchaseURL</key><string>$(FDRIVE_PURCHASE_URL)</string>
     <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
