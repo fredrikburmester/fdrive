@@ -147,6 +147,9 @@ read-only unless your server [enables desktop writes](docs/MACOS.md#write-config
 It is an early release and needs macOS 26 or later on Apple silicon and an fdrive server
 reachable over HTTPS.
 
+> The first public build, 0.2.0, is not published yet. The Homebrew install below works once
+> it appears under [Releases](https://github.com/fredrikburmester/fdrive-web/releases).
+
 ```sh
 brew trust --tap https://github.com/fredrikburmester/fdrive-web.git
 brew tap fredrikburmester/fdrive-web https://github.com/fredrikburmester/fdrive-web.git
