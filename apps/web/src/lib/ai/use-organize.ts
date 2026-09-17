@@ -50,7 +50,7 @@ export interface OrganizeController {
 /**
  * Drives one Organize session. The session lives in a store, so closing the
  * sheet or moving between folders neither stops the assistant nor loses a
- * review in progress; a toast and a toolbar status lead back to it.
+ * review in progress; a toast and a pill at the bottom right lead back to it.
  */
 export function useOrganize(): OrganizeController {
   const session = useOrganizeSessionStore((store) => store.session);
