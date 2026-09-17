@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
 import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
@@ -88,6 +89,11 @@ function FeatureCard({
 function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const router = useRouter();
   const update = useUpdateFeatures();
+  // Trash is a per-server setting; the walkthrough configures it for the
+  // server being set up, which is the one the administrator signed in to.
+  const me = useMe();
+  const login = me.data?.identities.find((identity) => identity.id === me.data?.activeIdentityId);
+  const setupProvider = login ? { id: login.providerId, label: login.providerLabel } : null;
   const [draft, setDraft] = useState<{ values: FeatureValues; revision: number } | null>(null);
   const [localStep, setLocalStep] = useState<number | null>(null);
   const configuration = data.configuration;
@@ -154,10 +160,21 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
       ))}
       {walkthrough ? null : <OfficeFeatureCard disabled={update.isPending} />}
       {walkthrough && current?.kind === "trash" ? (
-        <TrashSettingsCard
-          disabled={update.isPending}
-          onContinue={() => save({ walkthroughStep: 7 })}
-        />
+        setupProvider ? (
+          <TrashSettingsCard
+            provider={setupProvider}
+            disabled={update.isPending}
+            onContinue={() => save({ walkthroughStep: 7 })}
+          />
+        ) : (
+          <Button
+            variant="outline"
+            disabled={update.isPending}
+            onClick={() => save({ walkthroughStep: 7 })}
+          >
+            Continue without changing Trash
+          </Button>
+        )
       ) : null}
       {walkthrough && current?.kind === "publicUrl" ? (
         <PublicUrlCard
@@ -176,8 +193,8 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
           <CardHeader>
             <CardTitle>Ready to use fdrive</CardTitle>
             <CardDescription>
-              You can finish while optional features prepare. You can change your choices later in
-              System → Features and System → General.
+              You can finish while optional features prepare. You can change your choices later
+              under System: Features, General and, for each storage server's Trash, Storage.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -191,7 +208,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
                 </span>
               </div>
             ))}
-            <TrashReview />
+            {setupProvider ? <TrashReview provider={setupProvider} /> : null}
             <PublicUrlReview />
             <OfficeReview />
           </CardContent>

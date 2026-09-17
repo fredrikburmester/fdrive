@@ -62,6 +62,10 @@ export type TrashSettings = z.infer<typeof TrashSettings>;
 export const TrashSettingsUpdateRequest = TrashSettings;
 export type TrashSettingsUpdateRequest = z.infer<typeof TrashSettingsUpdateRequest>;
 
+/** `GET /api/v1/system/trash` names the storage server whose Trash it reads. */
+export const SystemTrashQuery = z.object({ providerId: z.uuid() });
+export type SystemTrashQuery = z.infer<typeof SystemTrashQuery>;
+
 /** Whether the active identity's storage provider exposes a trash, and its configuration. */
 export const TrashStatusResponse = z.object({
   available: z.boolean(),

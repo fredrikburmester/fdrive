@@ -33,11 +33,17 @@ export const OFFICE_PAGE: SystemPageLink = { href: "/system/office" as Route, la
 export const AI_PAGE: SystemPageLink = { href: "/system/ai" as Route, label: "AI" };
 
 /**
- * The System section describes the whole server: its counts, activity and
- * actions cover every storage and login, never just the one being browsed.
- * The sidebar caption and every page header say so with the same words, so
- * the two can never disagree about what they show.
+ * What a System page's settings apply to. Everything under System is
+ * installation-wide except the per-server settings on Storage (the servers
+ * themselves and their Trash). Each page header states its scope with these
+ * words, and the sidebar caption says the section is for administrators, so
+ * the label being browsed never suggests a page follows the active login.
  */
-export const SYSTEM_SCOPE_CAPTION = "Whole server · admins only";
-export const SYSTEM_SCOPE_NOTE =
-  "Applies to the whole server, not just the storage you are browsing. Admins only.";
+export type SystemScope = "server" | "storage";
+export const SYSTEM_SCOPE_CAPTION = "Admins only";
+export const SYSTEM_SCOPE_NOTES: Record<SystemScope, string> = {
+  server:
+    "Installation-wide. Applies to every storage server and login, not just the one you are browsing.",
+  storage:
+    "Per storage server. Each server keeps its own settings, including Trash, whichever login you are browsing as.",
+};

@@ -36,6 +36,7 @@ import {
 import { ProviderDialog } from "./provider-dialog";
 import { SystemPage } from "./system-page";
 import { SystemSection } from "./system-section";
+import { TrashSettingsForm } from "./trash-settings-card";
 
 /** A destructive action waiting for the administrator to confirm it. */
 type Confirmation =
@@ -168,14 +169,26 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
       {update.isError ? (
         <p className="text-sm text-destructive">{describeApiError(update.error)}</p>
       ) : null}
+      {type?.capabilities.trash ? (
+        <div
+          className="flex flex-col gap-3 border-t pt-4"
+          data-testid="provider-trash"
+          data-provider-type={provider.type}
+        >
+          <p className="text-sm font-medium">Trash</p>
+          <TrashSettingsForm provider={{ id: provider.id, label: provider.label }} />
+        </div>
+      ) : null}
     </SystemSection>
   );
 }
 
 /**
  * Admin page: `System > Storage`. Every storage server people can sign in
- * to, with the reachability probe, the capabilities its type brings, and the
- * add, test, edit, enable and remove actions. The API refuses to move a
+ * to, with the reachability probe, the capabilities its type brings, its own
+ * Trash settings, and the add, test, edit, enable and remove actions. The
+ * settings here are the per-server ones; everything else under System is
+ * installation-wide. The API refuses to move a
  * server's address once logins are bound to it and to remove a server that
  * still has any, so those controls are locked here with the reason.
  */
@@ -208,7 +221,8 @@ export function StoragePage() {
   return (
     <SystemPage
       title="Storage"
-      description="The storage servers people sign in to."
+      description="The storage servers people sign in to, each with its own Trash."
+      scope="storage"
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       actions={
         <Button

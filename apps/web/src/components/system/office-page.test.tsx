@@ -55,6 +55,7 @@ function response(overrides: Record<string, unknown> = {}) {
       configuration: enabled,
       product: "onlyoffice",
       activeProviderId: providerId,
+      activeProviderLabel: "Primary",
       status: "ready",
       ...overrides,
     },

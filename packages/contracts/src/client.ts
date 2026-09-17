@@ -239,7 +239,8 @@ export interface ApiClient {
   startOrganize(req: OrganizeRequest): Promise<OrganizeRun>;
   organizeRun(id: string): Promise<OrganizeRun>;
   cancelOrganize(id: string): Promise<OrganizeRun>;
-  systemTrash(): Promise<TrashSettings>;
+  /** The Trash settings of one storage server; every server keeps its own. */
+  systemTrash(providerId: string): Promise<TrashSettings>;
   systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
   listShares(): Promise<SharesResponse>;
   createShare(input: CreateShareRequest): Promise<ManagedShare>;
@@ -890,8 +891,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     cancelOrganize(id: string): Promise<OrganizeRun> {
       return post(organizeRunCancelRoute(id), OrganizeRun);
     },
-    systemTrash(): Promise<TrashSettings> {
-      return get(ROUTES.system.trash, TrashSettings);
+    systemTrash(providerId: string): Promise<TrashSettings> {
+      return get(ROUTES.system.trash, TrashSettings, { query: { providerId } });
     },
     systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
       return put(ROUTES.system.trash, TrashSettings, { jsonBody: input });

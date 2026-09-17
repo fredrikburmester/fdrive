@@ -92,7 +92,9 @@ export const SystemOfficeResponse = z.object({
   configuration: OfficeSettings,
   product: z.enum(["onlyoffice", "collabora"]),
   status: z.enum(["off", "starting", "ready", "unavailable"]),
+  /** The storage server editor grants apply to: the installation's default provider. */
   activeProviderId: z.uuid().nullable(),
+  activeProviderLabel: z.string().nullable(),
 });
 export type SystemOfficeResponse = z.infer<typeof SystemOfficeResponse>;
 

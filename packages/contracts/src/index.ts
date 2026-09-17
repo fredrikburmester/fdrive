@@ -292,6 +292,7 @@ export {
 } from "./tokens.ts";
 export {
   isValidPath,
+  SystemTrashQuery,
   TrashConfiguration,
   TrashEntry,
   TrashListResponse,

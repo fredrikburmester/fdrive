@@ -10,7 +10,7 @@ import type { AppHono, AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
 import { ApiHttpError } from "../errors.js";
-import type { OfficeSettingsService } from "./settings.js";
+import type { OfficeProviderRef, OfficeSettingsService } from "./settings.js";
 
 function requireWorkerToken(expectedToken: string | undefined, suppliedToken: string | undefined) {
   const expected = Buffer.from(expectedToken ?? "");
@@ -28,14 +28,14 @@ export function registerOfficeSettingsRoutes(
   deps: {
     service: OfficeSettingsService;
     workerToken: string | undefined;
-    activeProviderId: () => Promise<string | null>;
+    activeProvider: () => Promise<OfficeProviderRef | null>;
   },
 ): void {
   const path = withoutApiV1Prefix(ROUTES.system.office);
   const requireAdmin = createRequireAdmin();
 
   groups.authed.get(path, requireAdmin, async (c) =>
-    c.json(SystemOfficeResponse.parse(await deps.service.status(await deps.activeProviderId()))),
+    c.json(SystemOfficeResponse.parse(await deps.service.status(await deps.activeProvider()))),
   );
   groups.authed.put(path, requireAdmin, async (c) => {
     const parsed = OfficeSettingsUpdateRequest.safeParse(await c.req.json().catch(() => null));
@@ -43,9 +43,9 @@ export function registerOfficeSettingsRoutes(
       throw new ApiHttpError("bad_request", "Invalid Office settings.", {
         issues: parsed.error.issues,
       });
-    const providerId = await deps.activeProviderId();
-    await deps.service.update(providerId, parsed.data);
-    return c.json(SystemOfficeResponse.parse(await deps.service.status(providerId)));
+    const provider = await deps.activeProvider();
+    await deps.service.update(provider?.id ?? null, parsed.data);
+    return c.json(SystemOfficeResponse.parse(await deps.service.status(provider)));
   });
 
   groups.public.get("/internal/office", async (c) => {

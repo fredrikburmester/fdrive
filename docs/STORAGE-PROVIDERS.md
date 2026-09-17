@@ -296,10 +296,11 @@ Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
 the trash permanently deletes so purge/empty work. The native option is not an arbitrary
 upstream recycle-bin API hook.
 
-The Trash settings response (`TrashSettings` in contracts) carries the active provider
-module's strategy next to the stored configuration, and the
-[Trash settings card](../apps/web/src/components/system/trash-settings-card.tsx) keys its copy
-on it: `native` asks operators to configure and confirm the SFTPGo rule, `move` explains that
+`GET /api/v1/system/trash?providerId=` and the PUT body name the row explicitly; the routes
+never follow the caller's login. The response (`TrashSettings` in contracts) carries that
+provider module's strategy next to the stored configuration, and the
+[Trash settings form](../apps/web/src/components/system/trash-settings-card.tsx), rendered on
+each server's row under System > Storage, keys its copy on it: `native` asks operators to configure and confirm the SFTPGo rule, `move` explains that
 fdrive performs the move and needs no confirmation, `none` cannot be enabled. The strategy is
 never stored; the service reads it from the module on every request, refuses an update whose
 strategy no longer matches, and reads a stored row as disabled when the module's current

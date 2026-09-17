@@ -25,10 +25,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 ## Code and integration
 
-- The System section is one server-wide view. Filtering its sidebar activity by the browsing
-  login while the pages and their actions stayed installation-wide made the two disagree about
-  the same feature; it was reverted in favour of saying the scope in the copy. Keep sidebar
-  and page reading from the same data and state their scope, rather than scoping one of them.
+- System never follows the login being browsed. Filtering the sidebar activity by the active
+  login while the pages stayed installation-wide made the two disagree, and resolving Trash
+  settings from the active login hid a per-server setting behind a login switch. Per-server
+  settings name their provider explicitly and sit on that server's row under Storage; every
+  other page is installation-wide, and each page header says which.
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.

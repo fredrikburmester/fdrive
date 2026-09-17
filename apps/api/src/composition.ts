@@ -483,9 +483,11 @@ export async function composeApp(
       ? { providerId: configured.providerId, scopes: configured.scopes }
       : null;
   };
-  /** The default (oldest enabled) provider's id, independent of any identity; used for Office settings. */
-  const currentOfficeProviderId = async (): Promise<string | null> =>
-    (await providerService.defaultProvider())?.id ?? null;
+  /** The default (oldest enabled) provider, independent of any identity; editor grants bind to it. */
+  const currentOfficeProvider = async (): Promise<{ id: string; label: string } | null> => {
+    const provider = await providerService.defaultProvider();
+    return provider === null ? null : { id: provider.id, label: provider.label };
+  };
   const officeService = createOfficeService({
     canEdit: async (actor, path) => {
       const settings = await officeSettings.configuration();
@@ -907,13 +909,13 @@ export async function composeApp(
       });
       registerTrashSettingsRoutes(groups, {
         service: trashSettings,
-        identities: repos.identities,
+        providers: repos.providers,
       });
       registerPublicUrlRoutes(groups, { service: publicUrl });
       registerOfficeSettingsRoutes(groups, {
         service: officeSettings,
         workerToken: config.fdriveWorkerToken,
-        activeProviderId: currentOfficeProviderId,
+        activeProvider: currentOfficeProvider,
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, { metadata: metadataService });
