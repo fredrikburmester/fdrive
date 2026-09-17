@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { OrganizeActivity } from "@/components/ai/organize-activity";
 import { OrganizeSheet } from "@/components/ai/organize-sheet";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
 import { useUploadReveal } from "@/components/files/use-upload-reveal";
@@ -911,9 +912,6 @@ export function FileBrowser({
                 ? () => organize.open(selectedEntries)
                 : undefined
             }
-            organizeStatus={
-              organize.status === null ? undefined : { ...organize.status, onOpen: organize.show }
-            }
             onDownloadSelection={handleDownloadSelection}
             showThumbnails={showThumbnails && capabilities.index}
             onShowThumbnailsChange={setShowThumbnails}
@@ -1071,6 +1069,7 @@ export function FileBrowser({
         provider={aiStatus?.provider ?? null}
         onMoved={() => dispatchSelection({ type: "clear" })}
       />
+      <OrganizeActivity status={organize.status} onOpen={organize.show} />
       <NewFolderDialog
         open={newFolderOpen}
         onOpenChange={setNewFolderOpen}
