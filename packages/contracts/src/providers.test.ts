@@ -45,8 +45,16 @@ describe("provider contracts", () => {
       maxLength: 3,
     });
     expect(ProviderField.safeParse({ ...FIELD, kind: "checkbox" }).success).toBe(false);
-    const provider = { id: ID, type: "sftpgo", label: "Home", credentialFields: [FIELD] };
+    const provider = {
+      id: ID,
+      type: "sftpgo",
+      label: "Home",
+      credentialFields: [FIELD],
+      capabilities: CAPABILITIES,
+    };
     expect(PublicProvider.parse(provider)).toEqual(provider);
+    // The login form relies on the flags to say "files only" before sign-in.
+    expect(PublicProvider.safeParse({ ...provider, capabilities: undefined }).success).toBe(false);
     expect(ProvidersResponse.parse({ providers: [provider] }).providers).toHaveLength(1);
   });
 

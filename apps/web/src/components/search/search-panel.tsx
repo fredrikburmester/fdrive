@@ -61,6 +61,7 @@ import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
 import { searchPanelLayout } from "@/lib/search/panel-layout";
 import {
   isPermanentSearchStatus,
+  isSearchStarting,
   searchUnavailableMessage,
   useImageSearchResults,
   useSearchResults,
@@ -536,8 +537,8 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     (Boolean(imageError) || imageResponse?.unavailable === true);
   const showVisualUnavailableNotice =
     visualUnavailable && !(unavailable && !hasVisualResults && !waitingForImages);
-  const unavailableMessage = searchUnavailableMessage(searchStatus);
-  const searchIsStarting = unavailableMessage !== "Search is not available.";
+  const unavailableMessage = searchUnavailableMessage(searchStatus, allLogins);
+  const searchIsStarting = isSearchStarting(searchStatus);
   const textUnavailableMessage = searchIsStarting
     ? unavailableMessage
     : "Text search is unavailable.";

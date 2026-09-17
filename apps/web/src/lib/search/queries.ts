@@ -27,11 +27,42 @@ export function shouldRetrySearchStatus(status: SearchStatusResponse | undefined
   return status?.available === false && !isPermanentSearchStatus(status);
 }
 
-/** User-facing wording for unavailable text or visual search. */
-export function searchUnavailableMessage(status: SearchStatusResponse | undefined): string {
-  return status?.available === false && status.reason === "indexer_unreachable"
-    ? "Search is starting… Retrying automatically."
-    : "Search is not available.";
+/** True while the indexer is still coming online: the one unavailable state that fixes itself. */
+export function isSearchStarting(status: SearchStatusResponse | undefined): boolean {
+  return status?.available === false && status.reason === "indexer_unreachable";
+}
+
+/**
+ * True when the active login's storage is not indexed at all: files-only
+ * storage (S3, WebDAV), or SFTPGo without an index root. No waiting or
+ * remapping changes that, so the copy says what search needs instead.
+ */
+export function isSearchUnsupported(status: SearchStatusResponse | undefined): boolean {
+  return status?.available === false && status.reason === "no_roots";
+}
+
+/** The search button's tooltip for a permanent failure: short, and about the login when that is the cause. */
+export function searchUnavailableHint(status: SearchStatusResponse | undefined): string {
+  return isSearchUnsupported(status)
+    ? "Search is not available for this login"
+    : "Search index is unavailable";
+}
+
+/**
+ * User-facing wording for unavailable text or visual search. `status` is the
+ * active login's, so the sentence about "this login" only fits a search of
+ * that login; across all linked logins the panel already names each
+ * unavailable one above the results.
+ */
+export function searchUnavailableMessage(
+  status: SearchStatusResponse | undefined,
+  allLogins = false,
+): string {
+  if (isSearchStarting(status)) return "Search is starting… Retrying automatically.";
+  if (isSearchUnsupported(status) && !allLogins) {
+    return "Search is not available for this login. It needs indexed SFTPGo storage.";
+  }
+  return "Search is not available.";
 }
 
 /**

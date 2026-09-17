@@ -6,7 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMe } from "@/lib/api/auth-queries";
-import { isPermanentSearchStatus, useSearchStatus } from "@/lib/search/queries";
+import {
+  isPermanentSearchStatus,
+  searchUnavailableHint,
+  useSearchStatus,
+} from "@/lib/search/queries";
 import { useSearchShortcut } from "@/lib/search/shortcut";
 
 /**
@@ -22,7 +26,8 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
  * opens the panel, which already shows "Search is not available" once a
  * query against an unavailable index comes back empty. The tooltip only
  * appears for a known permanent scope failure, so a startup outage does not
- * look like an unconfigured server. Below `md` the button keeps its regular
+ * look like an unconfigured server, and it names the login when its storage
+ * is simply not indexed (files-only storage such as S3). Below `md` the button keeps its regular
  * size on every viewport.
  */
 export function SearchButton() {
@@ -46,7 +51,7 @@ export function SearchButton() {
       {indexUnavailable ? (
         <Tooltip>
           <TooltipTrigger render={button} />
-          <TooltipContent>Search index is unavailable</TooltipContent>
+          <TooltipContent>{searchUnavailableHint(status)}</TooltipContent>
         </Tooltip>
       ) : (
         button

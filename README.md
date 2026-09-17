@@ -15,7 +15,7 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 ## Highlights
 
 - **Your files stay yours**: Files remain plain files on your disk, managed by SFTPGo. fdrive never moves, hides, or locks them into a proprietary format.
-- **Other storage too**: Add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside SFTPGo for plain browsing, uploads and Trash.
+- **Other storage too**: Add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside SFTPGo as a second place to browse. These are files only: browsing, uploads and Trash work; search, thumbnails, folder sizes, shares and Office need SFTPGo storage, and fdrive says so wherever you add or pick one.
 - **Lightning fast & clean**: Minimalist, distraction-free interface with dark mode, keyboard navigation, and mobile support.
 - **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
 - **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file over SFTP or directly on disk.

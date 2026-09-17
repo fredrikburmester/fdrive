@@ -799,6 +799,16 @@ describe("createApiClient: setup", () => {
 
 describe("createApiClient: providers", () => {
   const FIELD = { name: "username", label: "Username", kind: "text", required: true };
+  const CAPABILITIES = {
+    zip: true,
+    setModifiedAt: true,
+    atomicMove: true,
+    trash: true,
+    shares: true,
+    office: true,
+    index: true,
+    scopeMapping: true,
+  };
   const PROVIDER = {
     id: VALID_UUID,
     type: "sftpgo",
@@ -815,7 +825,15 @@ describe("createApiClient: providers", () => {
 
   it("gets the public provider list", async () => {
     const body = {
-      providers: [{ id: VALID_UUID, type: "sftpgo", label: "Home", credentialFields: [FIELD] }],
+      providers: [
+        {
+          id: VALID_UUID,
+          type: "sftpgo",
+          label: "Home",
+          credentialFields: [FIELD],
+          capabilities: CAPABILITIES,
+        },
+      ],
     };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
     const client = createApiClient({ fetch: fetchStub });

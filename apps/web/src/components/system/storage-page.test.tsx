@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { type AdminProvider, type AdminProviderType, ApiClientError } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
+import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
 
 const PRIMARY: AdminProvider = {
   id: "00000000-0000-4000-8000-000000000009",
@@ -43,6 +43,14 @@ const SFTPGO_TYPE: AdminProviderType = {
   ],
   credentialFields: [],
   capabilities: { ...allCapabilities(true), setModifiedAt: false },
+};
+
+const S3_TYPE: AdminProviderType = {
+  type: "s3",
+  label: "S3",
+  configFields: [],
+  credentialFields: [],
+  capabilities: { ...allCapabilities(false), trash: true },
 };
 
 const mocks = vi.hoisted(() => ({
@@ -154,9 +162,35 @@ it("lists each provider with its type, address, source, logins, and capabilities
   expect(screen.getByText("Reachable")).toBeTruthy();
   expect(screen.getByText("Environment (locked)")).toBeTruthy();
   expect(screen.getByText("2")).toBeTruthy();
-  expect(screen.getByText("Trash")).toBeTruthy();
-  // `setModifiedAt` is false for this type, so its chip stays off the row.
-  expect(screen.queryByText("Keeps modification times")).toBeNull();
+  const supports = screen.getByText("Supports").parentElement as HTMLElement;
+  expect(within(supports).getByText("Trash")).toBeTruthy();
+  // `setModifiedAt` is false for this type, so the row says so instead of staying silent.
+  expect(within(supports).queryByText("Keeps modification times")).toBeNull();
+  const missing = screen.getByText("Not available").parentElement as HTMLElement;
+  expect(within(missing).getByText("Keeps modification times")).toBeTruthy();
+  // SFTPGo is the main storage: no files-only note.
+  expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
+});
+
+it("says plainly what files-only storage cannot do", () => {
+  renderPage(
+    [{ ...SPARE, type: "s3", baseUrl: "http://minio:9000/media" }],
+    [SFTPGO_TYPE, S3_TYPE],
+  );
+
+  const missing = screen.getByText("Not available").parentElement as HTMLElement;
+  for (const label of ["Search and thumbnails", "Shares", "Office", "Virtual folders"]) {
+    expect(within(missing).getByText(label)).toBeTruthy();
+  }
+  expect(screen.getByText(FILES_ONLY_NOTE)).toBeTruthy();
+});
+
+it("warns in the add dialog as soon as a files-only type is chosen", () => {
+  renderPage([PRIMARY], [S3_TYPE]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
+
+  expect(within(screen.getByRole("dialog")).getByText(FILES_ONLY_NOTE)).toBeTruthy();
 });
 
 it("re-probes one provider and shows what the probe said", () => {

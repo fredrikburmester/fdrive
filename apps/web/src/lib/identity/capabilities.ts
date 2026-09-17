@@ -16,6 +16,19 @@ export const CAPABILITY_LABELS: Readonly<Record<CapabilityKey, string>> = {
 
 export const CAPABILITY_KEYS = Object.keys(CAPABILITY_LABELS) as readonly CapabilityKey[];
 
+/**
+ * True for storage that only moves files: no search or thumbnails, no
+ * shares and no Office. Today that is every provider type except SFTPGo,
+ * which is the main storage; the others are a second place to browse.
+ */
+export function isFilesOnly(capabilities: ProviderCapabilities): boolean {
+  return !capabilities.index && !capabilities.shares && !capabilities.office;
+}
+
+/** Said wherever someone picks or adds files-only storage, before they miss a feature. */
+export const FILES_ONLY_NOTE =
+  "Files only. Search, thumbnails, folder sizes, shares and Office work with SFTPGo storage, not here.";
+
 /** Every capability set to `value`; for tests and for "this provider type can do nothing here". */
 export const allCapabilities = (value: boolean): ProviderCapabilities =>
   Object.fromEntries(CAPABILITY_KEYS.map((k) => [k, value])) as unknown as ProviderCapabilities;

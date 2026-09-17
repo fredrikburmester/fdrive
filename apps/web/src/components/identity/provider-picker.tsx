@@ -1,6 +1,7 @@
 "use client";
 
 import type { PublicProvider } from "@fdrive/contracts";
+import { FilesOnlyNote } from "@/components/identity/files-only-note";
 import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -23,7 +24,8 @@ export interface ProviderPickerProps {
 /**
  * Chooses which storage server a credential form is for. Callers render
  * it only when more than one provider is enabled; with a single one the
- * form names it in its subtitle instead.
+ * form names it in its subtitle instead, and shows the files-only note
+ * itself, which otherwise sits here under the choice it is about.
  */
 export function ProviderPicker({ providers, value, onChange, id, disabled }: ProviderPickerProps) {
   const items = providers.map((provider) => ({
@@ -57,6 +59,9 @@ export function ProviderPicker({ providers, value, onChange, id, disabled }: Pro
           ))}
         </SelectContent>
       </Select>
+      <FilesOnlyNote
+        capabilities={providers.find((provider) => provider.id === value)?.capabilities}
+      />
     </Field>
   );
 }

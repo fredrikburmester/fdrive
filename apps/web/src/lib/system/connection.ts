@@ -201,3 +201,8 @@ export function providerRemoveBlock(provider: AdminProvider): string | null {
 export function enabledCapabilities(capabilities: ProviderCapabilities): readonly CapabilityKey[] {
   return CAPABILITY_KEYS.filter((key) => capabilities[key]);
 }
+
+/** The capabilities this provider type lacks, in the same order, for the "Not available" chips. */
+export function missingCapabilities(capabilities: ProviderCapabilities): readonly CapabilityKey[] {
+  return CAPABILITY_KEYS.filter((key) => !capabilities[key]);
+}

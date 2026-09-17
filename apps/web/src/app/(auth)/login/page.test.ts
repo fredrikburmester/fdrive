@@ -1,5 +1,6 @@
 import type { ApiClient, PublicProvider } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { allCapabilities } from "@/lib/identity/capabilities";
 import { resolveLoginProviders, shouldRedirectToSetup } from "./page";
 
 const sftpgo: PublicProvider = {
@@ -10,6 +11,7 @@ const sftpgo: PublicProvider = {
     { name: "username", label: "Username", kind: "text", required: true },
     { name: "password", label: "Password", kind: "password", required: true },
   ],
+  capabilities: allCapabilities(true),
 };
 
 describe("resolveLoginProviders", () => {

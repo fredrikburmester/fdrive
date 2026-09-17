@@ -2,6 +2,7 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
 
 const login = vi.hoisted(() => ({
   mutate: vi.fn(),
@@ -22,6 +23,7 @@ const sftpgo: PublicProvider = {
     { name: "password", label: "Password", kind: "password", required: true },
     { name: "otp", label: "One-time code", kind: "otp", required: false, transient: true },
   ],
+  capabilities: allCapabilities(true),
 };
 const other: PublicProvider = {
   id: "00000000-0000-4000-8000-000000000002",
@@ -31,6 +33,7 @@ const other: PublicProvider = {
     { name: "username", label: "Archive user", kind: "text", required: true },
     { name: "password", label: "Archive password", kind: "password", required: true },
   ],
+  capabilities: allCapabilities(true),
 };
 
 afterEach(() => {
@@ -98,4 +101,19 @@ it("does not submit while a required field is blank", () => {
   fireEvent.submit(screen.getByRole("button", { name: "Sign in" }).closest("form") as Element);
 
   expect(login.mutate).not.toHaveBeenCalled();
+});
+
+it("says a files-only storage is files only, and says nothing for full storage", () => {
+  const bucket: PublicProvider = {
+    ...other,
+    type: "s3",
+    label: "Media bucket",
+    capabilities: { ...allCapabilities(false), trash: true },
+  };
+  const { unmount } = render(<LoginForm providers={[bucket]} />);
+  expect(screen.getByText(FILES_ONLY_NOTE)).toBeTruthy();
+  unmount();
+
+  render(<LoginForm providers={[sftpgo]} />);
+  expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
 });
