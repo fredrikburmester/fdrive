@@ -659,6 +659,7 @@ def test_activity_reports_rebuild_without_reading_storage() -> None:
     assert operation["processed"] == 63
     assert operation["total"] == 100
     assert operation["state"] == "running"
+    assert operation["root"] is None
     job.finish()
     assert client.get("/activity").json()["operations"][0]["state"] == "stopped"
     newer = server.ServerState(contexts={}, watchers={}, wake_events={}, conn_factory=forbidden, schema_version=forbidden)
@@ -698,7 +699,9 @@ def test_rebuild_acknowledges_before_discovery(
         assert response.status_code == 202
         assert response.json() == {"started": True, "total": None}
         assert entered.wait(2)
-        assert job.activity_snapshot("thumbnailRebuild", ["thumbnails"])["total"] is None
+        snapshot = job.activity_snapshot("thumbnailRebuild", ["thumbnails"])
+        assert snapshot["total"] is None
+        assert snapshot["root"] == "sftpgo"
         assert client.post(endpoint, json={"root": "sftpgo"}).status_code == 409
     finally:
         release.set()

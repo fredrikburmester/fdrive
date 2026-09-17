@@ -36,7 +36,7 @@ from .image_embed_rebuild import start_image_embed_rebuild
 from .indexer import RootContext, work_features
 from .paths import ext_of, reindex_scope
 from .stats import shape_health, shape_stats
-from .thumb_rebuild import ThumbnailRebuildJob, start_rebuild
+from .thumb_rebuild import ThumbnailRebuildJob, single_root, start_rebuild
 
 
 @dataclass
@@ -400,7 +400,7 @@ async def clear(request: Request) -> JSONResponse:
             clear_index(contexts, scope, job)
 
     try:
-        started = start_clear(job, operation)
+        started = start_clear(job, operation, single_root(contexts))
     except Exception:
         return JSONResponse({"error": "could not start clear job"}, status_code=500)
     if not started:

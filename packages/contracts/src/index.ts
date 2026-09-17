@@ -12,7 +12,9 @@ export {
   ActivityOperation,
   SystemActivityId,
   SystemActivityItem,
+  SystemActivityQuery,
   SystemActivityResponse,
+  SystemActivityScope,
   WorkerActivity,
 } from "./activity.ts";
 export {
