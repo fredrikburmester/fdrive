@@ -17,7 +17,6 @@ def test_discovery_has_no_ratio_and_watcher_jobs_do_not_change_scan_totals() -> 
     activity.queue_scan(["thumbnails"], 1)
     assert len(activity.snapshot()) == 1
     assert activity.snapshot()[0]["phase"] == "queued"
-    assert activity.snapshot()[0]["root"] is None
     activity.stop_queued()
     assert activity.snapshot() == []
     scan = activity.start_scan(["thumbnails"], 1)["thumbnails"]
@@ -53,7 +52,7 @@ def test_concurrent_completions_are_not_lost() -> None:
 
 
 def test_activity_read_is_storage_free_and_exposes_embedding_waits() -> None:
-    activity = RootActivity("private-root")
+    activity = RootActivity()
     backoff = EmbedBackoff(pause_seconds=0)
     configuration = FeatureConfiguration(2, FeatureValues(False, True, False, True, False, False))
     activity.start_scan(["textSearch", "semanticSearch"], 2)
@@ -67,7 +66,7 @@ def test_activity_read_is_storage_free_and_exposes_embedding_waits() -> None:
     backoff.note_failure()
     assert backoff.waiting() is True
     data = client.get("/activity").json()
-    assert {operation["root"] for operation in data["operations"]} == {"private-root"}
+    assert "private-root" not in str(data)
     assert data["operations"][0]["state"] == "running"
     assert data["operations"][1]["state"] == "waiting"
     assert data["operations"][1]["total"] is None

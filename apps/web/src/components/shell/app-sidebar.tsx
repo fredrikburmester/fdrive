@@ -54,6 +54,7 @@ import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
 import { anyLoginCan } from "@/lib/identity/capabilities";
 import { loginDisplay } from "@/lib/identity/login-display";
+import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light", Icon: Sun },
@@ -144,7 +145,12 @@ export function AppSidebar() {
         </SidebarGroup>
         {me?.isAdmin ? (
           <SidebarGroup>
-            <SidebarGroupLabel>System</SidebarGroupLabel>
+            <SidebarGroupLabel>
+              System
+              <span className="ml-auto truncate font-normal text-sidebar-foreground/50">
+                {SYSTEM_SCOPE_CAPTION}
+              </span>
+            </SidebarGroupLabel>
             <SidebarGroupContent>
               <SystemNav />
             </SidebarGroupContent>

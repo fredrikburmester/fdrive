@@ -39,10 +39,8 @@ test("image search header fits phones and keeps every action usable", async ({ p
     embeddedModel: "siglip2-base",
   };
   await page.route("**/api/v1/system/image-search", (route) => route.fulfill({ json: status }));
-  await page.route("**/api/v1/system/activity**", (route) =>
-    route.fulfill({
-      json: { observedAt: new Date().toISOString(), scope: "identity", items: [] },
-    }),
+  await page.route("**/api/v1/system/activity", (route) =>
+    route.fulfill({ json: { observedAt: new Date().toISOString(), items: [] } }),
   );
   await page.goto("/system/image-search");
   for (const width of [320, 375, 402, 640, 768, 1280]) {

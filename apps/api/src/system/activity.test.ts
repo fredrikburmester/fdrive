@@ -6,26 +6,19 @@ import {
   type SystemOfficeResponse,
   WorkerActivity,
 } from "@fdrive/contracts";
-import type { Identity } from "@fdrive/db";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { DISABLED_FEATURES } from "../features/service.js";
-import {
-  type ActivityView,
-  activityPercent,
-  registerActivityRoutes,
-  shapeSystemActivity,
-} from "./activity.js";
+import { activityPercent, registerActivityRoutes, shapeSystemActivity } from "./activity.js";
 
 const at = "2026-09-12T12:00:00Z";
 const operation: ActivityOperation = {
   id: "job",
   kind: "thumbnailRebuild",
   features: ["thumbnails"],
-  root: null,
   revision: 1,
   state: "running",
   phase: "processing",
@@ -73,22 +66,10 @@ const source = (operations: ActivityOperation[] = [operation]) => ({
   ok: true as const,
   data: snapshot(operations),
 });
-const item = (operations: ActivityOperation[], id = "thumbnails", view?: ActivityView) =>
-  shapeSystemActivity(features, "off", source(operations), null, at, view).items.find(
+const item = (operations: ActivityOperation[], id = "thumbnails") =>
+  shapeSystemActivity(features, "off", source(operations), null, at).items.find(
     (entry) => entry.id === id,
   );
-const scan = (root: string | null, processed: number): ActivityOperation => ({
-  ...operation,
-  id: `scan:${root}`,
-  kind: "scan",
-  root,
-  processed,
-  total: 100,
-});
-const identityView = (...roots: string[]): ActivityView => ({
-  scope: "identity",
-  roots: new Set(roots),
-});
 
 describe("activity percentages", () => {
   it("weights matching finite jobs and caps running work below 100", () => {
@@ -106,46 +87,6 @@ describe("activity percentages", () => {
     [operation, { ...operation, unit: "entries" as const }],
   ])("omits an untrustworthy or mixed ratio: %j", (...operations) => {
     expect(activityPercent(operations as ActivityOperation[])).toBeNull();
-  });
-});
-
-describe("activity view", () => {
-  const operations = [scan("home", 10), scan("archive", 90), { ...operation, id: "clear" }];
-  it("shows every root by default and tags the response with the scope", () => {
-    const body = shapeSystemActivity(features, "off", source(operations), null, at);
-    expect(body.scope).toBe("all");
-    expect(body.items.find((entry) => entry.id === "thumbnails")?.operationIds).toEqual([
-      "worker:scan:home",
-      "worker:scan:archive",
-      "worker:clear",
-    ]);
-  });
-  it("keeps only the identity's roots plus process-wide work", () => {
-    const home = item([scan("home", 10), scan("archive", 90)], "thumbnails", identityView("home"));
-    expect(home).toMatchObject({
-      state: "working",
-      percent: 10,
-      operationIds: ["worker:scan:home"],
-    });
-    expect(item(operations, "thumbnails", identityView("home"))?.operationIds).toEqual([
-      "worker:scan:home",
-      "worker:clear",
-    ]);
-    expect(item([scan("home", 10)], "thumbnails", identityView())).toMatchObject({
-      state: "idle",
-      percent: null,
-      operationIds: [],
-    });
-    expect(item([{ ...operation, id: "clear" }], "thumbnails", identityView())?.state).toBe(
-      "working",
-    );
-  });
-  it("treats a snapshot without roots as process-wide work", () => {
-    const legacy = WorkerActivity.parse({
-      ...snapshot(),
-      operations: [{ ...operation, root: undefined }],
-    });
-    expect(legacy.operations[0]?.root).toBeNull();
   });
 });
 
@@ -209,21 +150,12 @@ describe("activity state", () => {
   });
 });
 
-function fixture(admin = true, operations: ActivityOperation[] = [operation]) {
+function fixture(admin = true) {
   const fetch = vi
     .fn<typeof globalThis.fetch>()
-    .mockImplementation(async () => Response.json(snapshot(operations)));
+    .mockImplementation(async () => Response.json(snapshot()));
   const readFeatures = vi.fn(async () => features);
   const readOffice = vi.fn(async () => office);
-  const identities = {
-    get: vi.fn(async (id: string) => (id === "i" ? ({ id } as Identity) : null)),
-  };
-  const resolver = {
-    verifiedIndexScopes: vi.fn(async () => ({
-      available: true as const,
-      scopes: [{ rootName: "home", fsPrefix: "/", virtualPrefix: "/" }],
-    })),
-  };
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
@@ -251,37 +183,11 @@ function fixture(admin = true, operations: ActivityOperation[] = [operation]) {
         fetch,
         features: readFeatures,
         office: readOffice,
-        identities,
-        resolver,
       });
     },
   });
-  return { app, fetch, readFeatures, readOffice, identities, resolver };
+  return { app, fetch, readFeatures, readOffice };
 }
-
-it("scopes the sidebar view to the identity's verified roots without re-probing workers", async () => {
-  const { app, fetch, resolver } = fixture(true, [scan("home", 10), scan("archive", 90)]);
-  const thumbnails = async (query: string) =>
-    SystemActivityResponse.parse(
-      await (await app.request(`/api/v1/system/activity${query}`)).json(),
-    );
-  const everything = await thumbnails("");
-  expect(everything.scope).toBe("all");
-  expect(everything.items.find((entry) => entry.id === "thumbnails")?.percent).toBe(50);
-  expect(resolver.verifiedIndexScopes).not.toHaveBeenCalled();
-  const mine = await thumbnails("?scope=identity");
-  expect(mine.scope).toBe("identity");
-  expect(mine.items.find((entry) => entry.id === "thumbnails")).toMatchObject({
-    percent: 10,
-    operationIds: ["worker:scan:home"],
-  });
-  expect(fetch).toHaveBeenCalledTimes(1);
-  resolver.verifiedIndexScopes.mockResolvedValue({ available: false, reason: "no_roots" } as never);
-  expect(
-    (await thumbnails("?scope=identity")).items.find((entry) => entry.id === "thumbnails")?.state,
-  ).toBe("idle");
-  expect((await app.request("/api/v1/system/activity?scope=everything")).status).toBe(400);
-});
 
 it("isolates runtime status failures while another worker keeps processing", async () => {
   const { app, readFeatures, readOffice } = fixture();

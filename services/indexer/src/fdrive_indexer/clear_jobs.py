@@ -204,8 +204,8 @@ def clear_image_embeddings(contexts: Sequence[RootContext], job: ThumbnailRebuil
                 job.advance(True)
 
 
-def start_clear(job: ThumbnailRebuildJob, operation: Callable[[], None], root: str | None = None) -> bool:
-    if not job.try_start(0, root):
+def start_clear(job: ThumbnailRebuildJob, operation: Callable[[], None]) -> bool:
+    if not job.try_start(0):
         return False
 
     def run() -> None:

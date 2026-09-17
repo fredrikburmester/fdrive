@@ -31,3 +31,13 @@ export const OFFICE_PAGE: SystemPageLink = { href: "/system/office" as Route, la
 
 /** AI keeps its own settings record too, and lives in the same group. */
 export const AI_PAGE: SystemPageLink = { href: "/system/ai" as Route, label: "AI" };
+
+/**
+ * The System section describes the whole server: its counts, activity and
+ * actions cover every storage and login, never just the one being browsed.
+ * The sidebar caption and every page header say so with the same words, so
+ * the two can never disagree about what they show.
+ */
+export const SYSTEM_SCOPE_CAPTION = "Whole server · admins only";
+export const SYSTEM_SCOPE_NOTE =
+  "Applies to the whole server, not just the storage you are browsing. Admins only.";
