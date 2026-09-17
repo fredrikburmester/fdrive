@@ -56,6 +56,32 @@ it("confirms the exact login, explains retained files, and reports unlink confli
   expect(screen.getByRole("dialog", { name: "Add login" })).toBeDefined();
 });
 
+it("names a key login by its storage and confirms removal with the key beneath", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], {
+    ...me,
+    identities: [
+      makeIdentity(),
+      makeIdentity({
+        id: "b2",
+        providerType: "s3",
+        username: "0041234abcdef",
+        providerLabel: "Backblaze",
+        capabilities: { scopeMapping: false },
+      }),
+    ],
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <IdentitiesCard />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("img", { name: "S3" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Remove Backblaze" }));
+  expect(screen.getByRole("dialog", { name: "Remove Backblaze?" })).toBeDefined();
+  expect(screen.getByText(/0041234abcdef. Files remain on the server/)).toBeDefined();
+});
+
 it("shows the index status only for logins whose provider maps virtual folders", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   const [ada, bob] = me.identities;

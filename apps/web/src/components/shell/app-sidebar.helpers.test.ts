@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { avatarInitials, isFilesRoute, isSystemRoute, isTrashRoute } from "./app-sidebar.tsx";
 
 describe("avatarInitials", () => {
-  it("upper-cases the first two letters of the username", () => {
+  it("upper-cases the first two letters of the login title", () => {
     expect(avatarInitials("ada")).toBe("AD");
   });
 
-  it("handles a single-character username", () => {
+  it("handles a single-character title", () => {
     expect(avatarInitials("a")).toBe("A");
   });
 });

@@ -23,6 +23,7 @@ import {
   credentialComplete,
   credentialFieldsFor,
 } from "@/lib/auth/login-model";
+import { loginDisplay } from "@/lib/identity/login-display";
 
 const EMPTY_VALUES: Readonly<Record<string, string>> = {};
 
@@ -41,6 +42,7 @@ export function UnlinkLoginDialog({
   const { data: providerList } = useProviders();
   const actions = useIdentityActions();
   const [current, setCurrent] = useState(EMPTY_VALUES);
+  const display = identity ? loginDisplay(identity) : undefined;
 
   const activeIdentity = me?.identities.find((candidate) => candidate.id === me.activeIdentityId);
   const activeProvider = providerList?.providers.find(
@@ -77,10 +79,10 @@ export function UnlinkLoginDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Remove {identity?.username}?</DialogTitle>
+            <DialogTitle>Remove {display?.title}?</DialogTitle>
             <DialogDescription>
-              {identity?.providerLabel}. Files remain on the server. This login becomes a separate
-              account and its sessions are signed out.
+              {display?.detail}. Files remain on the server. This login becomes a separate account
+              and its sessions are signed out.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
