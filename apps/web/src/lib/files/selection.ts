@@ -69,6 +69,19 @@ export function click(
 }
 
 /**
+ * Moves the focus (and the range anchor) to `path` without touching the
+ * selection, for a "highlight" row click: the row gets the focus ring so
+ * Enter opens it and a later shift-click ranges from it, but toolbar and
+ * context actions keep targeting whatever was selected before.
+ */
+export function focus(state: SelectionState, path: string): SelectionState {
+  if (state.anchor === path && state.focus === path) {
+    return state;
+  }
+  return { anchor: path, focus: path, selected: state.selected };
+}
+
+/**
  * Moves the keyboard focus one step `direction` through `order`. Plain
  * arrow replaces the selection with the new focus; shift-arrow extends the
  * range from the anchor (falling back to the previous focus when there is
@@ -168,6 +181,7 @@ export function reconcile(state: SelectionState, currentPaths: readonly string[]
  */
 export type SelectionAction =
   | { readonly type: "click"; readonly path: string; readonly modifiers?: ClickModifiers }
+  | { readonly type: "focus"; readonly path: string }
   | {
       readonly type: "arrow";
       readonly direction: ArrowDirection;
@@ -188,6 +202,8 @@ export function selectionReducer(
   switch (action.type) {
     case "click":
       return click(state, order, action.path, action.modifiers);
+    case "focus":
+      return focus(state, action.path);
     case "arrow":
       return arrow(state, order, action.direction, action.modifiers);
     case "selectAll":

@@ -74,7 +74,8 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
 - Browser preferences live under `fdrive.*` localStorage keys, are read through
   `useSyncExternalStore` hooks so every mounted consumer and other tabs update together, and
   are set on the Account page or in the View menu: row click (`fdrive.list.rowClick`: select,
-  toggle selection or open; modified clicks, Enter and double-click keep their meaning), list
+  toggle selection, highlight or open; highlight moves the focus ring and range anchor without
+  changing the selection; modified clicks, Enter and double-click keep their meaning), list
   density (`fdrive.list.density`), size units (`fdrive.format.sizes`), date style
   (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.

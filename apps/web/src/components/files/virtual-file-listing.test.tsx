@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { VirtualFileListing } from "./virtual-file-listing";
@@ -153,6 +153,30 @@ it("opens on a plain click and ignores double-click when row click is set to ope
   expect(onOpen).toHaveBeenCalledTimes(1);
   props.onEntryClick(entry, { shift: false, meta: true });
   expect(onOpen).toHaveBeenCalledTimes(1);
+});
+
+it("moves the focus without selecting when row click is set to highlight", () => {
+  fixtures.view = "list";
+  window.localStorage.setItem("fdrive.list.rowClick", '"highlight"');
+  const onOpen = vi.fn();
+  renderListing({ onOpen });
+  type ListProps = {
+    selected: ReadonlySet<string>;
+    focusedPath: string | null;
+    onEntryClick: (entry: FsEntry, modifiers: { shift: boolean; meta: boolean }) => void;
+    onEntryDoubleClick: (entry: FsEntry) => void;
+  };
+  const entry = entries[0] as FsEntry;
+  const initial = fixtures.fileList.mock.calls.at(-1)?.[0] as ListProps;
+  act(() => {
+    initial.onEntryClick(entry, { shift: false, meta: false });
+  });
+  const props = fixtures.fileList.mock.calls.at(-1)?.[0] as ListProps;
+  expect(props.focusedPath).toBe("/folder");
+  expect(props.selected.size).toBe(0);
+  expect(onOpen).not.toHaveBeenCalled();
+  props.onEntryDoubleClick(entry);
+  expect(onOpen).toHaveBeenCalledWith(entry);
 });
 
 it("keeps double-click opening and click selecting by default", () => {
