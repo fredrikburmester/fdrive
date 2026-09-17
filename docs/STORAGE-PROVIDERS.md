@@ -47,6 +47,13 @@ deployment-controlled. The existing `label` is shared by all logins on that prov
 are trimmed and must contain 1–120 characters; labels render as plain text. Equal names never
 combine provider or identity IDs. Usernames remain visible beside or beneath the name.
 
+Logins list the username first and the storage name beneath it. Provider types whose
+`username` credential is an access key rather than a person's name (S3) are listed the other
+way round, storage name first and key beneath, so the switcher, Logins card and unlink
+confirmation never headline an opaque key ID. The web side decides this per provider type in
+[`login-display.ts`](../apps/web/src/lib/identity/login-display.ts); add a new key-based
+type to `KEY_LOGIN_TYPES` there.
+
 Older setup clients may omit `label`. Unnamed instances retain their existing fallback labels
 and can be named later; environment initialization preserves saved nonempty labels.
 A label-only update changes no endpoint, credentials, identity binding or token grants.

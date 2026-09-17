@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AccountIdentity } from "@/lib/account/identities";
 import { useAccountTransition } from "@/lib/account/transition";
+import { loginDisplay } from "@/lib/identity/login-display";
 import { IdentityScope } from "./identity-scope";
 import { LinkLoginDialog } from "./link-login-dialog";
 import { UnlinkLoginDialog } from "./unlink-login-dialog";
@@ -30,39 +31,42 @@ export function IdentitiesCard() {
         {isLoading || !me ? (
           <Skeleton className="h-16 w-full" />
         ) : (
-          me.identities.map((identity) => (
-            <div
-              key={identity.id}
-              className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2 text-sm"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex flex-col">
-                  <span className="font-medium">{identity.username}</span>
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <ProviderIcon type={identity.providerType} />
-                    {identity.providerLabel}
-                  </span>
+          me.identities.map((identity) => {
+            const display = loginDisplay(identity);
+            return (
+              <div
+                key={identity.id}
+                className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2 text-sm"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="font-medium">{display.title}</span>
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <ProviderIcon type={identity.providerType} />
+                      {display.detail}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {identity.id === me.activeIdentityId ? (
+                      <Badge variant="secondary">Active</Badge>
+                    ) : null}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={pending || me.identities.length < 2}
+                      onClick={() => setUnlink(identity)}
+                      aria-label={`Remove ${display.title}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {identity.id === me.activeIdentityId ? (
-                    <Badge variant="secondary">Active</Badge>
-                  ) : null}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={pending || me.identities.length < 2}
-                    onClick={() => setUnlink(identity)}
-                    aria-label={`Remove ${identity.username}`}
-                  >
-                    Remove
-                  </Button>
-                </div>
+                {identity.capabilities.scopeMapping && (
+                  <IdentityScope identityId={identity.id} username={identity.username} />
+                )}
               </div>
-              {identity.capabilities.scopeMapping && (
-                <IdentityScope identityId={identity.id} username={identity.username} />
-              )}
-            </div>
-          ))
+            );
+          })
         )}
         <p className="text-xs text-muted-foreground">Keep at least one login on this account.</p>
         <Button

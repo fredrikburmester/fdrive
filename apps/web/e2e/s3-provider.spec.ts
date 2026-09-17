@@ -169,7 +169,7 @@ test.describe("signing in through S3", () => {
 
       await expect(
         page.getByRole("button", {
-          name: new RegExp(`${bucket().writer.accessKeyId} S3 ${LOGIN_LABEL}`),
+          name: new RegExp(`${LOGIN_LABEL} S3 ${bucket().writer.accessKeyId}`),
         }),
       ).toBeVisible();
       const me = (await (await page.request.get("/api/v1/auth/me")).json()) as {
