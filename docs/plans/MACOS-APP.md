@@ -17,6 +17,17 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
   and its clearance; quit the app between pairing redemption and confirmation to exercise
   the resumed pairing at next launch.
 
+- Licensing rehearsal on a development-signed build against Polar's sandbox passed for
+  activation, deactivation, a read refused with `notAuthenticated` after the trial and the
+  same read succeeding after activation. Still open: end the trial (a Debug build accepts
+  `FDRIVE_LICENSE_TRIAL_SECONDS=60`; Release ignores it) while a writable location has a
+  pending edit and verify it uploads untouched after activation; reinstall through Homebrew
+  and confirm the trial does not restart; activate on further Macs up to the limit.
+  macOS elects the extension in `/Applications` over a newer build elsewhere: unregister it
+  with `pluginkit -r` for the rehearsal. Delete any `release.py check` output first; its
+  unsigned, higher-versioned archive registers with Launch Services and every File Provider
+  call then fails with "The application cannot be used right now."
+
 ## Reliability and scale gate
 
 - Improve/characterize first-open latency for large folders. Real Finder enumeration of

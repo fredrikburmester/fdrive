@@ -58,12 +58,15 @@ jobs:
       - name: Archive, sign, notarize and package
         env:
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+          MACOS_LICENSE_ORGANIZATION: ${{ vars.MACOS_LICENSE_ORGANIZATION }}
+          MACOS_PURCHASE_URL: ${{ vars.MACOS_PURCHASE_URL }}
         run: |
           python3 tools/macos/release.py release \
             --version "$FDRIVE_RELEASE_VERSION" --build "$GITHUB_RUN_NUMBER" \
             --team "$MACOS_TEAM_ID" --keychain "$FDRIVE_SIGNING_KEYCHAIN" \
             --app-profile "$RUNNER_TEMP/fdrive-signing/app.provisionprofile" \
             --extension-profile "$RUNNER_TEMP/fdrive-signing/extension.provisionprofile" \
+            --license-organization "$MACOS_LICENSE_ORGANIZATION" --purchase-url "$MACOS_PURCHASE_URL" \
             --output .fdrive-workflow/macos-release
       - uses: actions/upload-artifact@v4
         with:

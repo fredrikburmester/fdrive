@@ -5,6 +5,7 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
     case server(String), database(String)
     case writeConflict(String), writeUncertain, permission, quota, forbidden, diskFull
     case nameCollision(String)
+    case unlicensed
     public var errorDescription: String? {
         switch self {
         case .invalidServer: "Enter an HTTPS fdrive address. HTTP is supported only on loopback for development."
@@ -22,6 +23,7 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
         case .forbidden: "This connection does not have access to this item."
         case .diskFull: "Not enough free disk space on this Mac for this file."
         case .server(let message), .database(let message): message
+        case .unlicensed: "The FDrive trial has ended. Open FDrive to buy or enter a license. Your files and pending changes are kept."
         }
     }
 }
