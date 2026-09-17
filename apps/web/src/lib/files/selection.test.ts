@@ -6,6 +6,7 @@ import {
   contextEntries,
   contextSelectionCount,
   EMPTY_SELECTION,
+  focus,
   reconcile,
   type SelectionState,
   selectAll,
@@ -15,6 +16,40 @@ import {
 } from "./selection";
 
 const order = ["/a", "/b", "/c", "/d"];
+
+describe("focus", () => {
+  it("moves the focus and anchor without changing the selection", () => {
+    const state = click(click(EMPTY_SELECTION, order, "/a"), order, "/b", { meta: true });
+    const next = focus(state, "/d");
+    expect(next).toEqual({ anchor: "/d", focus: "/d", selected: new Set(["/a", "/b"]) });
+  });
+
+  it("keeps the selection empty when nothing was selected", () => {
+    expect(focus(EMPTY_SELECTION, "/c")).toEqual({
+      anchor: "/c",
+      focus: "/c",
+      selected: new Set(),
+    });
+  });
+
+  it("ranges from the highlighted path on a later shift-click", () => {
+    const state = click(focus(EMPTY_SELECTION, "/b"), order, "/d", { shift: true });
+    expect(state.selected).toEqual(new Set(["/b", "/c", "/d"]));
+  });
+
+  it("returns the same state when the path is already focused", () => {
+    const state = focus(EMPTY_SELECTION, "/a");
+    expect(focus(state, "/a")).toBe(state);
+  });
+
+  it("is reachable through the reducer", () => {
+    expect(selectionReducer(EMPTY_SELECTION, { type: "focus", path: "/b" }, order)).toEqual({
+      anchor: "/b",
+      focus: "/b",
+      selected: new Set(),
+    });
+  });
+});
 
 describe("click", () => {
   it("selects only the clicked path with a plain click", () => {

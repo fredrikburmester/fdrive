@@ -131,6 +131,10 @@ export function VirtualFileListing({
       onOpen(entry);
       return;
     }
+    if (intent.kind === "focus") {
+      dispatchSelection({ type: "focus", path: entry.path });
+      return;
+    }
     dispatchSelection({ type: "click", path: entry.path, modifiers: intent.modifiers });
   }
 

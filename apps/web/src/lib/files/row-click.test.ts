@@ -28,7 +28,7 @@ describe("readRowClickAction", () => {
   });
 
   it("reads each valid stored action", () => {
-    for (const action of ["select", "toggle", "open"] as const) {
+    for (const action of ["select", "toggle", "highlight", "open"] as const) {
       const storage = memoryStorage({ [ROW_CLICK_STORAGE_KEY]: JSON.stringify(action) });
       expect(readRowClickAction(storage)).toBe(action);
     }
@@ -67,6 +67,10 @@ describe("resolveRowClick", () => {
     });
   });
 
+  it("only moves the focus on a plain click in highlight mode", () => {
+    expect(resolveRowClick("highlight", plain)).toEqual({ kind: "focus" });
+  });
+
   it("opens on a plain click in open mode", () => {
     expect(resolveRowClick("open", plain)).toEqual({ kind: "open" });
   });
@@ -74,7 +78,7 @@ describe("resolveRowClick", () => {
   it("passes modified clicks through unchanged in every mode", () => {
     const shift = { shift: true, meta: false };
     const meta = { shift: false, meta: true };
-    for (const action of ["select", "toggle", "open"] as const) {
+    for (const action of ["select", "toggle", "highlight", "open"] as const) {
       expect(resolveRowClick(action, shift)).toEqual({ kind: "select", modifiers: shift });
       expect(resolveRowClick(action, meta)).toEqual({ kind: "select", modifiers: meta });
     }

@@ -11,12 +11,15 @@ import { useFormatPreferences } from "@/lib/use-format-preferences";
 const ROW_CLICK_LABELS: Record<RowClickAction, string> = {
   select: "Select",
   toggle: "Toggle selection",
+  highlight: "Highlight",
   open: "Open",
 };
 
 const ROW_CLICK_HINTS: Record<RowClickAction, string> = {
   select: "A click selects just that item; double-click or Enter opens it.",
   toggle: "A click adds or removes the item from the selection, like its checkbox.",
+  highlight:
+    "A click outlines the item without selecting it; Enter or double-click opens it, and the checkbox or Cmd/Ctrl-click selects.",
   open: "A click opens the item; use the checkbox or Cmd/Ctrl-click to select.",
 };
 
