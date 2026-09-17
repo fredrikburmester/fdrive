@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { toast } from "sonner";
 import { planUploads } from "@/lib/upload/plan";
 import { useUploadStore } from "@/lib/upload/store";
 import type { DroppedFile } from "@/lib/upload/traverse";
@@ -29,9 +28,10 @@ export interface ConflictDialogState {
 export interface UseUploadFilesResult {
   /**
    * Plans `files` against `destination`, opening the conflict dialog when
-   * needed, enqueuing the result on the upload store, and showing a toast
-   * summary. The single entry point the browser (drop zone, file picker,
-   * paste) calls to start an upload.
+   * needed and enqueuing the result on the upload store. The activity panel
+   * is the only feedback: a toast would sit in the same bottom-right corner
+   * and cover it. The single entry point the browser (drop zone, file
+   * picker, paste) calls to start an upload.
    */
   uploadFiles(
     files: readonly DroppedFile[],
@@ -40,20 +40,6 @@ export interface UseUploadFilesResult {
   ): void;
   /** Wire this directly into `<ConflictDialog {...conflictDialog} />`. */
   readonly conflictDialog: ConflictDialogState;
-}
-
-function summaryToast(destination: string, queued: number, skipped: number): void {
-  if (queued > 0) {
-    const description = skipped > 0 ? `${skipped} skipped: already exists` : undefined;
-    toast.success(
-      `Uploading ${queued} item${queued === 1 ? "" : "s"} to ${destination}`,
-      description !== undefined ? { description } : undefined,
-    );
-    return;
-  }
-  if (skipped > 0) {
-    toast.info(`Skipped ${skipped} item${skipped === 1 ? "" : "s"}: already exists`);
-  }
 }
 
 export function useUploadFiles(): UseUploadFilesResult {
@@ -78,8 +64,6 @@ export function useUploadFiles(): UseUploadFilesResult {
       enqueue(
         result.items.map((item) => (identityId === undefined ? item : { ...item, identityId })),
       );
-      const skipped = result.items.filter((item) => item.status === "skipped").length;
-      summaryToast(destination, result.items.length - skipped, skipped);
     },
     [enqueue],
   );

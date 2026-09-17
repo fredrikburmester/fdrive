@@ -19,16 +19,15 @@ function fileListRow(page: Page, name: string) {
 }
 
 /**
- * Matches the upload panel in any of its states: the expanded card while
- * uploading ("Uploading N items"), the expanded card once finished
- * ("Uploaded N"), or the collapsed pill it becomes almost immediately after
- * finishing for tiny local files ("N uploaded"). Kept loose on purpose: the
- * exact wording/phase visible at assertion time is inherently racy for
- * uploads this small, so this only confirms the panel showed up at all. The
- * file's own row appearing in the listing is the reliable completion
- * signal used everywhere else in this file.
+ * Matches the activity panel in any of its states: the expanded card while
+ * uploading ("Working on N items"), or the card/collapsed pill it becomes
+ * almost immediately after finishing for tiny local files ("N uploaded").
+ * Kept loose on purpose: the exact wording/phase visible at assertion time
+ * is inherently racy for uploads this small, so this only confirms the
+ * panel showed up at all. The file's own row appearing in the listing is
+ * the reliable completion signal used everywhere else in this file.
  */
-const UPLOAD_PANEL_TEXT = /uploading \d+ item|uploaded/i;
+const UPLOAD_PANEL_TEXT = /working on \d+ item|uploaded/i;
 
 test.describe("uploads and downloads", () => {
   test.beforeEach(async ({ page }) => {
