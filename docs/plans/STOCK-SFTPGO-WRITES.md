@@ -1,7 +1,8 @@
 # Native writes on stock storage
 
-Updated 2026-09-15. Outcome: Finder create/update/move/trash/restore works against
-**unmodified** SFTPGo, without the forked image. Current behavior: delivered as the
+Updated 2026-09-16. Outcome: Finder create/update/move/trash/restore works against
+**unmodified** SFTPGo. The forked image and its `fdrive-local-v1` mode were removed on
+2026-09-16, so this is now the only SFTPGo write contract. Current behavior: delivered as the
 `verified-optimistic` mode (`packages/sftpgo/src/module.ts` sets `optimisticPublish`, and
 `capabilities()` in `apps/api/src/desktop/writes.ts` grants writes once the publish lock is
 configured); blank or unknown modes still yield `NO_WRITES`. Related:
@@ -12,14 +13,15 @@ configured); blank or unknown modes still yield `NO_WRITES`. Related:
 
 The user accepts a bounded lost-update window for writers fdrive does not mediate, in exchange
 for writes on the storage users actually run. This supersedes the "storage-side enforcement,
-with no optimistic fallback" clause in [macOS writes](MACOS-WRITES.md) **for the stock path
-only**. `fdrive-local-v1` and `apache-webdav-exclusive` keep their existing stronger guarantee
-and their existing behavior; nothing about those modes changes.
+with no optimistic fallback" clause in [macOS writes](MACOS-WRITES.md) **for SFTPGo**.
+`apache-webdav-exclusive` keeps its existing stronger guarantee and its existing behavior;
+nothing about that mode changes.
 
 What motivated it: `deploy/compose.yaml:312` mounts the storage root into OCR read-write (the
 indexer at `:264` is `:ro`), and `services/ocr/src/fdrive_ocr/restore.py:483` replaces files in
-place at user paths. The lease hooks `internal/vfs/osfs.go`, beneath SFTPGo's protocols, so it
-cannot observe a process writing the volume directly. The strict guarantee is therefore already
+place at user paths. The forked image's lease hooked `internal/vfs/osfs.go`, beneath SFTPGo's
+protocols, so it could not observe a process writing the volume directly. The strict guarantee was
+therefore already
 void in the default deployment, which is what moves coordination to the fdrive layer, where
 every fdrive writer is reachable, and leaves optimistic verification for genuinely external ones.
 
@@ -103,15 +105,16 @@ rather than the lost version. That window is the few storage round trips inside 
 section, and it is open to every writer that does not take the publish lock: a direct SFTP, FTP
 or WebDAV client, but also fdrive's own web uploads, Collabora saves and the OCR pass, which are
 listed in item 1 as deliberately outside it. Items 1, 2 and the detection proposal shrink and
-surface it; only the VFS hook in the forked image eliminates it. Document this in the mode's help text and in MACOS.md; do not
-describe the stock path as conflict-proof anywhere.
+surface it; only a VFS hook inside SFTPGo, which the removed forked image provided, eliminates
+it. Document this in the mode's help text and in MACOS.md; do not describe the stock path as
+conflict-proof anywhere.
 
 ## Verified
 
 - `apps/api/test/integration/desktop-writes-stock.test.ts` drives real unmodified SFTPGo
   end to end on one instance: create, replace, and refusal of an out-of-band WebDAV write with
-  the external content left intact. The existing lease test still passes on both qualified
-  backends, so nothing about `fdrive-local-v1` or `apache-webdav-exclusive` changed.
+  the external content left intact. The existing lease test still passes on Apache DAV, so
+  nothing about `apache-webdav-exclusive` changed.
 - `packages/db/test/integration/desktop-publish-lock.test.ts` proves mutual exclusion, a bounded
   wait reporting `DesktopPublishBusyError`, independence between identities, and release on a
   throwing callback, against real PostgreSQL on independent pools.
@@ -162,13 +165,13 @@ transfer, not the "several storage round trips" the doc comment on
 
 ### What changed
 
-**Do not take the lock when the provider enforces a lease.** Both lease implementations
-already serialize every fdrive writer: `withSftpgoWriteLease` holds an exclusive per-user lease
-from the forked image, and `withWebdavWriteLease` holds a `Depth: infinity` exclusive `LOCK` on
-the endpoint root, both renewed every 20s for the length of the action. The fdrive lock adds
-nothing there but the connection cost. Making `publish()` take the lock only on the leaseless
-path removes the pool pressure from `fdrive-local-v1` and `apache-webdav-exclusive` entirely,
-and disposes of the lock-before-lease ordering constraint rather than merely documenting it.
+**Do not take the lock when the provider enforces a lease.** A lease implementation already
+serializes every fdrive writer: `withWebdavWriteLease` holds a `Depth: infinity` exclusive
+`LOCK` on the endpoint root, renewed every 20s for the length of the action (the removed
+`withSftpgoWriteLease` held an exclusive per-user lease from the forked image the same way). The
+fdrive lock adds nothing there but the connection cost. Making `publish()` take the lock only on
+the leaseless path removes the pool pressure from `apache-webdav-exclusive` entirely, and
+disposes of the lock-before-lease ordering constraint rather than merely documenting it.
 
 **Narrow the critical section to publication.** `publish()` no longer wraps the body; it hands
 it a `serialize` that each branch wraps around its own publication step — the recheck, the
@@ -284,9 +287,9 @@ without that.
 Extend the existing matrix in [macOS writes](MACOS-WRITES.md) rather than restating it.
 Specific to this work:
 
-- `apps/api/test/integration/desktop-writes.test.ts` runs a `qualified` matrix of
-  `fdrive-local-v1` and `apache-webdav-exclusive`; add stock SFTPGo with no lease as a third
-  backend and hold every existing assertion.
+- `apps/api/test/integration/desktop-writes.test.ts` covers `apache-webdav-exclusive`; stock
+  SFTPGo with no lease is covered by `desktop-writes-stock.test.ts` and holds every existing
+  assertion.
 - Concurrency, against real disposable SFTPGo: two fdrive writers to one path serialize; an OCR
   restore racing a desktop commit serializes; an external write landing before the final stat is
   refused with `version_conflict` and the pending copy survives.

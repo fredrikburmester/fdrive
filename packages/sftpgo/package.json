@@ -20,9 +20,7 @@
   "devDependencies": {
     "@fdrive/config": "workspace:*",
     "@fdrive/testkit": "workspace:*",
-    "@types/ssh2": "^1.15.6",
     "@vitest/coverage-v8": "^5.0.0",
-    "ssh2": "^1.17.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.0"
   },

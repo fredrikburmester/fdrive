@@ -1,8 +1,7 @@
 # FDrive for Mac
 
 The native companion provides Finder locations on macOS 26+ (Apple silicon), with optional
-writes on qualified Apache WebDAV or the optional fdrive SFTPGo integration.
-Stock SFTPGo remains read-only.
+writes on qualified Apache WebDAV or, under a weaker contract, stock SFTPGo.
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
 the first hosted release, Homebrew installation and tests on another Mac.
 
@@ -86,18 +85,15 @@ Compose file mounts the
 `fdrive-desktop` volume at `/var/lib/fdrive/desktop`. Multiple API processes must share this
 filesystem and the same PostgreSQL database.
 
-`desktopWriteMode` selects one of three contracts, and they do not offer the same guarantee:
+`desktopWriteMode` selects one of two contracts, and they do not offer the same guarantee:
 
 | Mode | Storage | Guarantee |
 | --- | --- | --- |
 | `apache-webdav-exclusive` | Apache mod_dav | Storage-enforced DAV locks; every writer must use that same endpoint |
-| `fdrive-local-v1` | The [optional pinned SFTPGo image](../integrations/sftpgo/README.md) | Leases enforced in the local filesystem across SFTP, REST, WebDAV and FTP |
 | `verified-optimistic` | Stock SFTPGo, unmodified | fdrive serializes its own Mac writes and proves the destination's content before replacing it; another writer landing in that instant is lost |
 
 Only enable the Apache mode for mod_dav when **every writer uses the same lock-enforcing
-DAV endpoint**. Direct filesystem/SFTP access invalidates the guarantee. The pinned image
-requires a single process, exclusive ownership of storage mutations, qualified local homes
-and disabled external hooks/plugins; see its qualification boundary.
+DAV endpoint**. Direct filesystem/SFTP access invalidates the guarantee.
 
 `verified-optimistic` asks for none of that, and gives less in return. SFTPGo 2.7.5 ignores
 conditional upload headers and its REST API bypasses WebDAV locks, so nothing in stock SFTPGo
@@ -114,7 +110,7 @@ catches them the same way it catches a writer outside fdrive entirely — and, t
 write of theirs landing between that proof and the rename is silently lost, with the retained
 backup holding the pre-fdrive content rather than the lost version. OCR's own size and mtime
 checks mean a collision there is refused on both sides rather than silently applied. Choose this
-mode knowing all of that; it is the only one that works on storage you have not modified.
+mode knowing all of that; it is the only one SFTPGo offers.
 
 Publication is refused entirely, and the location stays read-only, when a mode needs
 serialization that is not configured. Unsupported locations retain read access and show an
@@ -128,8 +124,8 @@ operation ledger. UUID handles and operation IDs never replace current account/p
 
 The server hashes and fsyncs the incoming body before commit. It checks the source base and
 destination, stages and validates new bytes, backs up an existing file, then publishes with an
-atomic MOVE — fenced by the storage lease under the two leased modes, and by the per-identity
-lock plus the pre-publication recheck under `verified-optimistic`. Original backups remain
+atomic MOVE — fenced by the storage lease under `apache-webdav-exclusive`, and by the
+per-identity lock plus the pre-publication recheck under `verified-optimistic`. Original backups remain
 under the reserved `/.fdrive-desktop` namespace, hidden from native ordinary reads. Failed
 staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
 uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
