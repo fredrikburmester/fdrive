@@ -6,7 +6,7 @@ welcome and taken seriously.
 ## Reporting a vulnerability
 
 Report privately through
-[GitHub's vulnerability reporting](https://github.com/fredrikburmester/fdrive-web/security/advisories/new).
+[GitHub's vulnerability reporting](https://github.com/fredrikburmester/fdrive/security/advisories/new).
 Please do not open a public issue, pull request or discussion for a suspected vulnerability.
 
 Include what you can of:

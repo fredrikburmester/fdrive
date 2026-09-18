@@ -111,7 +111,7 @@ If you already have Docker and SFTPGo running on your home server:
 Repository access and a GitHub SSH key are required while the repository is private.
 
 ```bash
-git clone git@github.com:fredrikburmester/fdrive-web.git /path/to/fdrive
+git clone git@github.com:fredrikburmester/fdrive.git /path/to/fdrive
 cd /path/to/fdrive/deploy
 ./init-env.sh
 ```
@@ -148,12 +148,12 @@ It is an early release and needs macOS 26 or later on Apple silicon and an fdriv
 reachable over HTTPS.
 
 > The first public build, 0.2.0, is not published yet. The Homebrew install below works once
-> it appears under [Releases](https://github.com/fredrikburmester/fdrive-web/releases).
+> it appears under [Releases](https://github.com/fredrikburmester/fdrive/releases).
 
 ```sh
-brew trust --tap https://github.com/fredrikburmester/fdrive-web.git
-brew tap fredrikburmester/fdrive-web https://github.com/fredrikburmester/fdrive-web.git
-brew install --cask fredrikburmester/fdrive-web/fdrive
+brew trust --tap https://github.com/fredrikburmester/fdrive.git
+brew tap fredrikburmester/fdrive https://github.com/fredrikburmester/fdrive.git
+brew install --cask fredrikburmester/fdrive/fdrive
 ```
 
 Open FDrive, enter your fdrive web address, sign in and pick the storage logins you want in

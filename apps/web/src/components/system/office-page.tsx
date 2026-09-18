@@ -78,7 +78,7 @@ export function OfficeSystemPage() {
             </p>
             <a
               className="block text-sm underline"
-              href="https://github.com/fredrikburmester/fdrive-web/blob/main/docs/OFFICE.md"
+              href="https://github.com/fredrikburmester/fdrive/blob/main/docs/OFFICE.md"
               target="_blank"
               rel="noreferrer"
             >

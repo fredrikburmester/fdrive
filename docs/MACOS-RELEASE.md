@@ -30,7 +30,7 @@ is maintained with **Fredrik Burmester**, team **MWD5K362T8**, and GitHub accoun
    directly to GitHub Secrets; it never writes them into repository files or prints them:
 
    ```sh
-   python3 tools/macos/configure-ci.py --repo fredrikburmester/fdrive-web --team MWD5K362T8
+   python3 tools/macos/configure-ci.py --repo fredrikburmester/fdrive --team MWD5K362T8
    ```
 
 The resulting GitHub configuration is:
@@ -71,8 +71,8 @@ Every release must name both, or `release.py` refuses to build; it also verifies
 and the extension carry the same organization. For hosted builds set them as variables:
 
 ```sh
-gh variable set MACOS_LICENSE_ORGANIZATION --repo fredrikburmester/fdrive-web --body ORGANIZATION_UUID
-gh variable set MACOS_PURCHASE_URL --repo fredrikburmester/fdrive-web --body https://example.com/fdrive
+gh variable set MACOS_LICENSE_ORGANIZATION --repo fredrikburmester/fdrive --body ORGANIZATION_UUID
+gh variable set MACOS_PURCHASE_URL --repo fredrikburmester/fdrive --body https://example.com/fdrive
 ```
 
 Rehearse purchases in [Polar's sandbox](https://polar.sh/docs/integrate/sandbox), a separate
@@ -137,23 +137,23 @@ While Actions is disabled, publish a local build the same way: push the `macos-v
 for the commit you built, then run the publisher on its artifacts and merge the cask PR:
 
 ```sh
-python3 tools/macos/publish.py --repo fredrikburmester/fdrive-web \
+python3 tools/macos/publish.py --repo fredrikburmester/fdrive \
   --artifacts .fdrive-workflow/release-0.1.0/artifacts
 ```
 
 ## Install or upgrade with Homebrew
 
 After the first release and cask PR are merged, use the source repository as the tap. The
-explicit URL is required because the repository isn't named `homebrew-fdrive-web`. Homebrew 7
+explicit URL is required because the repository isn't named `homebrew-fdrive`. Homebrew 7
 refuses to load casks from untrusted third-party taps and aborts the tap, so trust it first.
-A tap on a custom remote is trusted by that URL; trusting `fredrikburmester/fdrive-web` has no effect:
+A tap on a custom remote is trusted by that URL; trusting `fredrikburmester/fdrive` has no effect:
 
 ```sh
 gh auth login
 gh auth setup-git
-brew trust --tap https://github.com/fredrikburmester/fdrive-web.git
-brew tap fredrikburmester/fdrive-web https://github.com/fredrikburmester/fdrive-web.git
-HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" brew install --cask fredrikburmester/fdrive-web/fdrive
+brew trust --tap https://github.com/fredrikburmester/fdrive.git
+brew tap fredrikburmester/fdrive https://github.com/fredrikburmester/fdrive.git
+HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" brew install --cask fredrikburmester/fdrive/fdrive
 ```
 
 The token must have read access to the private repository. It is supplied only to the install
