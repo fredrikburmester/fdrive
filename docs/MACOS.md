@@ -105,43 +105,37 @@ stops its server refresh while paused.
 
 ## Write configuration and recovery
 
-Writes require all three: an explicit **Read and write** pairing grant, persistent server
-recovery storage (`FDRIVE_DESKTOP_STATE_DIR`), and a qualified storage provider. The deployment
-Compose file mounts the
-`fdrive-desktop` volume at `/var/lib/fdrive/desktop`. Multiple API processes must share this
-filesystem and the same PostgreSQL database.
+Writes need an explicit **Read and write** pairing grant and persistent server recovery storage
+(`FDRIVE_DESKTOP_STATE_DIR`). The deployment Compose file mounts the `fdrive-desktop` volume at
+`/var/lib/fdrive/desktop`. Multiple API processes must share this filesystem and the same
+PostgreSQL database. Nothing is set per storage server: every storage type, including stock
+SFTPGo and S3, accepts Mac writes under the default contract below.
 
-`desktopWriteMode` selects one of two contracts, and they do not offer the same guarantee:
-
-| Mode | Storage | Guarantee |
-| --- | --- | --- |
-| `apache-webdav-exclusive` | Apache mod_dav | Storage-enforced DAV locks; every writer must use that same endpoint |
-| `verified-optimistic` | Stock SFTPGo, unmodified | fdrive serializes its own Mac writes and proves the destination's content before replacing it; another writer landing in that instant is lost |
-
-Only enable the Apache mode for mod_dav when **every writer uses the same lock-enforcing
-DAV endpoint**. Direct filesystem/SFTP access invalidates the guarantee.
-
-`verified-optimistic` asks for none of that, and gives less in return. SFTPGo 2.7.5 ignores
-conditional upload headers and its REST API bypasses WebDAV locks, so nothing in stock SFTPGo
-can fence a concurrent writer. Instead fdrive serializes Mac writes against each other through
-a per-identity PostgreSQL lock and, holding it, snapshots the destination and digests that
-snapshot against the version the Mac edited, immediately before the atomic rename that
-publishes. A change made at any earlier point is refused as a conflict with the pending copy
-preserved.
+**Default contract, every storage.** fdrive serializes Mac writes against each other through a
+per-identity PostgreSQL lock and, holding it, snapshots the destination, digests that snapshot
+against the version the Mac edited, and only then replaces the file. A change made at any
+earlier point is refused as a conflict with the pending copy preserved, and the replaced version
+is kept as a backup under `/.fdrive-desktop`. No stock storage can fence a concurrent writer
+itself: SFTPGo 2.7.5 ignores conditional upload headers and its REST API bypasses WebDAV locks,
+and S3 has no rename at all, so on S3 the publishing step is a server-side copy that replaces the
+target object atomically before the staged copy is removed.
 
 That lock covers Mac writes only. The web app, Collabora and the OCR service write the volume
 directly and do not take it: for each of them publication *is* the transfer, and holding an
-identity for the length of an upload is the cost this mode exists to avoid. The content proof
+identity for the length of an upload is the cost this contract exists to avoid. The content proof
 catches them the same way it catches a writer outside fdrive entirely — and, the same way, a
-write of theirs landing between that proof and the rename is silently lost, with the retained
+write of theirs landing between that proof and the replacement is silently lost, with the retained
 backup holding the pre-fdrive content rather than the lost version. OCR's own size and mtime
-checks mean a collision there is refused on both sides rather than silently applied. Choose this
-mode knowing all of that; it is the only one SFTPGo offers.
+checks mean a collision there is refused on both sides rather than silently applied.
 
-Publication is refused entirely, and the location stays read-only, when a mode needs
-serialization that is not configured. Unsupported locations retain read access and show an
-explanation in the Mac app. Existing credentials stay read-only; Reconnect grants access
-without changing the domain.
+**Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
+`apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
+writer that uses that same endpoint. Enable it only when **every writer uses the same
+lock-enforcing DAV endpoint**; direct filesystem or SFTP access to the same files voids it.
+
+Publication is refused, and every location stays read-only, only when the server has no recovery
+storage or no publish lock; the Mac app shows that reason on each card. Credentials issued as
+read-only stay read-only; Reconnect grants access without changing the domain.
 
 Protocol 2 uses `/api/v2/desktop`; protocol 1 is unchanged. New apps fall back to read-only
 protocol 1 when an older server returns 404. Uploads have separate prepare, file-body upload,
@@ -150,8 +144,8 @@ operation ledger. UUID handles and operation IDs never replace current account/p
 
 The server hashes and fsyncs the incoming body before commit. It checks the source base and
 destination, stages and validates new bytes, backs up an existing file, then publishes with an
-atomic MOVE — fenced by the storage lease under `apache-webdav-exclusive`, and by the
-per-identity lock plus the pre-publication recheck under `verified-optimistic`. Original backups remain
+atomic MOVE — fenced by the storage lease under `apache-webdav-exclusive`, and otherwise by the
+per-identity lock plus the pre-publication recheck. Original backups remain
 under the reserved `/.fdrive-desktop` namespace, hidden from native ordinary reads. Failed
 staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
 uncertain and cannot automatically replay as a new write. The completed receipt and a metadata

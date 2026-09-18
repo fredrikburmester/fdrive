@@ -13,7 +13,7 @@ import type {
 import { parseHomeTemplate, StorageError } from "@fdrive/core";
 import { createSftpgoClient } from "./client.js";
 import { SftpgoError } from "./errors.js";
-import { SFTPGO_OPTIMISTIC_MODE, withOverwriteGuard } from "./optimistic-publish.js";
+import { withOverwriteGuard } from "./optimistic-publish.js";
 import { probeConnection } from "./probe.js";
 import { createSftpgoStorageProvider, toStorageError, type WithToken } from "./storage-provider.js";
 import type { SftpgoClient } from "./types.js";
@@ -22,14 +22,6 @@ import type { SftpgoClient } from "./types.js";
 export const DEFAULT_SFTPGO_HOME_TEMPLATE = "sftpgo:/{username}";
 
 export const SFTPGO_CONFIG_FIELDS: readonly ProviderField[] = [
-  {
-    name: "desktopWriteMode",
-    label: "Native write enforcement",
-    kind: "text",
-    required: false,
-    maxLength: 64,
-    help: '"verified-optimistic" lets the Mac app write (only Mac writes are serialized; any other writer in the final instant is lost); blank keeps Finder read-only.',
-  },
   {
     name: "homeTemplate",
     label: "Home template",
@@ -129,7 +121,6 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
     type: "sftpgo",
     label: "SFTPGo",
     configFields: SFTPGO_CONFIG_FIELDS,
-    desktopWrites: { field: "desktopWriteMode", mode: SFTPGO_OPTIMISTIC_MODE },
     credentialFields: SFTPGO_CREDENTIAL_FIELDS,
     capabilities: {
       zip: true,
@@ -185,12 +176,11 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
         client: clientFor(instance, ctx),
         withToken,
       });
-      if (instance.config.desktopWriteMode !== SFTPGO_OPTIMISTIC_MODE) return storage;
       // SFTPGo offers no storage lease: publication safety comes from fdrive-side
       // serialization and the destination recheck in the desktop write path. The
       // overwrite guard makes `overwrite: false` mean something on stock REST,
       // which otherwise renames over an existing target and reports success.
-      return { ...withOverwriteGuard(storage), optimisticPublish: true };
+      return withOverwriteGuard(storage);
     },
   };
 }

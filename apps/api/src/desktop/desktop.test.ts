@@ -928,14 +928,8 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   }
 });
 
-it("explains a read-only full grant by every unmet gate, in the provider's own terms", async () => {
+it("explains a read-only full grant by every unmet gate", async () => {
   const f = await fixture();
-  const bucket = await f.repos.providers.ensure({ type: "s3", baseUrl: "https://s3.invalid" });
-  const third = await f.repos.identities.create({
-    accountId: f.account.id,
-    providerId: bucket.id,
-    externalUsername: "alice",
-  });
   async function reason(
     identityId: string,
     missing: readonly DesktopWriteGate[] | null,
@@ -955,28 +949,20 @@ it("explains a read-only full grant by every unmet gate, in the provider's own t
       ? location.writeUnavailableReason
       : undefined;
   }
-  // Both gates unmet: naming only the provider setting would promise writes it cannot deliver.
-  expect(await reason(f.identity.id, ["state_dir", "storage"])).toBe(
-    'Read-only until an administrator sets "Native write enforcement" to verified-optimistic on this SFTPGo server (System › Storage) and sets FDRIVE_DESKTOP_STATE_DIR on this server.',
-  );
   expect(await reason(f.identity.id, ["state_dir"])).toBe(
     "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
   );
   expect(await reason(f.identity.id, ["publish_lock"])).toBe(
     "Read-only until an administrator configures the desktop publish lock on this server.",
   );
-  // The WebDAV mode carries the condition its lease guarantee depends on.
-  expect(await reason(f.second.id, ["storage"])).toBe(
-    'Read-only until an administrator sets "Mac write support" to apache-webdav-exclusive on this WebDAV server (System › Storage; Apache mod_dav only, where every writer obeys WebDAV locks).',
-  );
-  // Storage that can never qualify gets no instructions at all.
-  expect(await reason(third.id, ["storage", "state_dir"])).toBe(
-    "Finder writes are not supported for this storage type. Files stay read-only.",
+  // Both gates unmet: naming only one would promise writes it cannot deliver.
+  expect(await reason(f.second.id, ["state_dir", "publish_lock"])).toBe(
+    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server and configures the desktop publish lock on this server.",
   );
   // A deployment without desktop writes wired says so without guessing at a cause.
   expect(await reason(f.identity.id, null)).toBe(
     "Finder writes are turned off on this server. Files stay read-only.",
   );
   // A read grant is read-only by choice and carries no reason.
-  expect(await reason(f.identity.id, ["storage"], "read")).toBeUndefined();
+  expect(await reason(f.identity.id, ["state_dir"], "read")).toBeUndefined();
 });

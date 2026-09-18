@@ -76,19 +76,14 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
     configFields: [
       {
         name: "desktopWriteMode",
-        label: "Mac write support",
+        label: "Write locking",
         kind: "text",
         required: false,
         maxLength: 32,
-        help: `Use ${WEBDAV_EXCLUSIVE_MODE} only for Apache storage where every writer obeys WebDAV locks.`,
+        help: `Blank: fdrive serializes Mac writes itself and keeps a backup of each replaced file. "${WEBDAV_EXCLUSIVE_MODE}": Apache mod_dav locks fence every writer on this endpoint.`,
       },
     ],
     credentialFields: WEBDAV_CREDENTIAL_FIELDS,
-    desktopWrites: {
-      field: "desktopWriteMode",
-      mode: WEBDAV_EXCLUSIVE_MODE,
-      caveat: "Apache mod_dav only, where every writer obeys WebDAV locks",
-    },
     capabilities: {
       zip: false,
       setModifiedAt: false,

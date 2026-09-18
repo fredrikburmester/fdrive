@@ -1542,22 +1542,21 @@ it("rejects metadata capacity before staging or publishing, and retries the same
 it("reports every precondition a full grant is missing, and none for a read grant", async () => {
   const f = await fixture();
   const raw = createMemoryStorage({});
-  const optimistic: StorageProvider = { ...raw, optimisticPublish: true };
   const withStorage = (storage: StorageProvider): Principal => ({ ...f.principal, storage });
   expect(f.service.availability(f.principal)).toEqual({ capabilities: ALL_WRITES, missing: [] });
   expect(
     f.service.availability({ ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } }),
   ).toEqual({ capabilities: NO_WRITES, missing: [] });
+  // Storage without a lease waits only for fdrive's own serialization.
   expect(f.service.availability(withStorage(raw))).toEqual({
     capabilities: NO_WRITES,
-    missing: ["storage"],
+    missing: ["publish_lock"],
   });
-  expect(f.service.availability(withStorage(optimistic)).missing).toEqual(["publish_lock"]);
   const serialized = createDesktopWrites({
     ...f.deps,
     publishLock: async (_identityId, run) => run(),
   });
-  expect(serialized.availability(withStorage(optimistic))).toEqual({
+  expect(serialized.availability(withStorage(raw))).toEqual({
     capabilities: ALL_WRITES,
     missing: [],
   });
@@ -1568,6 +1567,9 @@ it("reports every precondition a full grant is missing, and none for a read gran
     capabilities: NO_WRITES,
     missing: ["state_dir"],
   });
-  expect(unrecoverable.availability(withStorage(raw)).missing).toEqual(["state_dir", "storage"]);
+  expect(unrecoverable.availability(withStorage(raw)).missing).toEqual([
+    "state_dir",
+    "publish_lock",
+  ]);
   expect(unrecoverable.capabilities(f.principal)).toEqual(NO_WRITES);
 });
