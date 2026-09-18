@@ -17,11 +17,11 @@ interface SearchShortcutState {
 }
 const SearchShortcutContext = createContext<SearchShortcutState | undefined>(undefined);
 
-/** Cmd+K on Apple platforms, Ctrl+K elsewhere. */
+/** Cmd+K on Apple platforms, Ctrl+K elsewhere; Shift+K next to it belongs to chat. */
 export function isSearchShortcut(
-  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey">,
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey">,
 ): boolean {
-  return event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
+  return event.key.toLowerCase() === "k" && !event.shiftKey && (event.metaKey || event.ctrlKey);
 }
 
 /** Global shortcuts hydrate above Activity, whose visible children hydrate later. */

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { Chat } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 // The sticky conversation scroller measures itself; jsdom has no ResizeObserver.
