@@ -222,10 +222,16 @@ public struct WriteRequest: Codable, Sendable {
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 }
+/// How far a publication that runs long enough to be worth watching has got, in
+/// bytes. Only a publication that copies object by object reports it.
+public struct WriteProgress: Codable, Sendable {
+    public let completed: Int64, total: Int64
+}
 public struct WriteResult: Codable, Sendable {
     public let operationId: String, state: String
     public let item: RemoteEntry?
     public let recoveryId: String?
+    public var progress: WriteProgress? = nil
 }
 public struct PendingWrite: Codable, Sendable, Identifiable {
     public let id: String, key: String, localId: String, route: String

@@ -13,6 +13,7 @@ import { createDesktopRetention, removeRecoveryTree } from "./retention.js";
 import {
   createDesktopWrites,
   DESKTOP_COMMIT_STALL_MS,
+  DESKTOP_PROGRESS_INTERVAL_MS,
   DESKTOP_TRASH,
   NO_WRITES,
 } from "./writes.js";
@@ -1632,4 +1633,496 @@ it("leaves a publication the storage refused discardable rather than uncertain",
   expect(state).not.toBe("uncertain");
   // The Mac app clears it on its own; an uncertain commit would need an administrator.
   expect((await f.service.cancel(f.principal, request.operationId)).state).toBe("cancelled");
+});
+
+/** A storage with no rename, like S3: moving a folder copies every object. */
+function copyingStorage(seed: Record<string, string>) {
+  const raw = createMemoryStorage(seed);
+  const moves: { path: string; resume: boolean | undefined; overwrite: boolean | undefined }[] = [];
+  let fail: string | undefined;
+  const storage: StorageProvider = {
+    ...raw,
+    movesDirectoriesByCopy: true,
+    move: async (path, target, opts) => {
+      moves.push({ path, resume: opts?.resume, overwrite: opts?.overwrite });
+      if (fail !== undefined) {
+        const message = fail;
+        fail = undefined;
+        // The port copies every object before removing any, so an interruption
+        // leaves the source whole — nothing is mutated here.
+        throw new StorageError("upstream_unavailable", message);
+      }
+      return raw.move(path, target, opts);
+    },
+  };
+  return { raw, storage, moves, interrupt: (message: string) => (fail = message) };
+}
+
+it("copies a folder move outside the publication lock, and keeps a file move inside it", async () => {
+  const f = await fixture();
+  const { storage, raw } = copyingStorage({ "/folder/child": "child", "/note.txt": "note" });
+  let held = 0;
+  const heldDuring: Record<string, boolean> = {};
+  const watched: StorageProvider = {
+    ...storage,
+    move: async (path, target, opts) => {
+      heldDuring[path] = held > 0;
+      return storage.move(path, target, opts);
+    },
+  };
+  const principal: Principal = { ...f.principal, storage: watched };
+  const service = createDesktopWrites({
+    ...f.deps,
+    publishLock: async (_identityId, run) => {
+      held += 1;
+      try {
+        return await run();
+      } finally {
+        held -= 1;
+      }
+    },
+  });
+  const move = async (path: string, name: string) => {
+    const item = await service.stat(principal, path);
+    const operationId = randomUUID();
+    await service.prepare(principal, {
+      kind: "move" as const,
+      operationId,
+      itemId: item.id,
+      parentId: "root",
+      name,
+      base: item.version,
+    });
+    return service.commit(principal, operationId);
+  };
+  expect((await move("/folder", "folder-moved")).state).toBe("completed");
+  expect((await move("/note.txt", "note-moved.txt")).state).toBe("completed");
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
+  // The folder copy is proportional to the tree and the lock is per identity
+  // with a 30s wait, so holding it would refuse every other Mac write meanwhile.
+  expect(heldDuring["/folder"]).toBe(false);
+  // A file move is one operation; it stays inside, where the checks are.
+  expect(heldDuring["/note.txt"]).toBe(true);
+});
+
+it("resumes an interrupted folder move on its own destination instead of starting a second", async () => {
+  const f = await fixture();
+  const { storage, raw, moves, interrupt } = copyingStorage({ "/folder/child": "child" });
+  const principal: Principal = { ...f.principal, storage };
+  const service = createDesktopWrites({
+    ...f.deps,
+    publishLock: async (_identityId, run) => run(),
+  });
+  const item = await service.stat(principal, "/folder");
+  const operationId = randomUUID();
+  await service.prepare(principal, {
+    kind: "move" as const,
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  interrupt("connection reset");
+  await expect(service.commit(principal, operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  // Resumable, so never an outcome only an administrator can clear.
+  const failed = await service.status(principal, operationId);
+  expect(failed.state).not.toBe("uncertain");
+  // The retry finishes the reserved destination rather than moving beside it.
+  expect((await service.commit(principal, operationId)).state).toBe("completed");
+  expect(moves.map((entry) => entry.resume)).toEqual([false, true]);
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
+  await expect(raw.stat("/folder-moved 2")).rejects.toMatchObject({ kind: "not_found" });
+});
+
+it("completes a folder move whose last object landed before its receipt was written", async () => {
+  const f = await fixture();
+  const { storage, raw, moves } = copyingStorage({ "/folder/child": "child" });
+  // The move itself succeeds; the receipt after it does not, which is the window
+  // a crash between the last copied object and the commit record leaves behind.
+  let breakReceipt = true;
+  const principal: Principal = { ...f.principal, storage };
+  const service = createDesktopWrites({
+    ...f.deps,
+    repo: {
+      ...f.repo,
+      complete: async (...args: Parameters<typeof f.repo.complete>) => {
+        if (breakReceipt) {
+          breakReceipt = false;
+          throw new StorageError("upstream_unavailable", "database went away");
+        }
+        return f.repo.complete(...args);
+      },
+    },
+    publishLock: async (_identityId, run) => run(),
+  });
+  const item = await service.stat(principal, "/folder");
+  const operationId = randomUUID();
+  await service.prepare(principal, {
+    kind: "move" as const,
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(service.commit(principal, operationId)).rejects.toBeTruthy();
+  // Storage is already done: the source is gone and everything is at the target.
+  await expect(raw.stat("/folder")).rejects.toMatchObject({ kind: "not_found" });
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
+  // The retry must finish the receipt rather than fail forever on the source it
+  // has itself just moved away.
+  expect((await service.commit(principal, operationId)).state).toBe("completed");
+  expect(moves).toHaveLength(1);
+  expect((await service.stat(principal, "/folder-moved")).id).toBe(item.id);
+});
+
+it("copies nothing when the destination it needs to reserve cannot be recorded", async () => {
+  const f = await fixture();
+  const { storage, moves } = copyingStorage({ "/folder/child": "child" });
+  const principal: Principal = { ...f.principal, storage };
+  const service = createDesktopWrites({
+    ...f.deps,
+    repo: {
+      ...f.repo,
+      transition: async (...args: Parameters<typeof f.repo.transition>) =>
+        // Reserving is the one transition this move makes from committing to
+        // itself; losing it would leave a copy no retry could ever find again.
+        args[3] === "committing" && args[4] === "committing" ? false : f.repo.transition(...args),
+    },
+    publishLock: async (_identityId, run) => run(),
+  });
+  const item = await service.stat(principal, "/folder");
+  const operationId = randomUUID();
+  await service.prepare(principal, {
+    kind: "move" as const,
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(service.commit(principal, operationId)).rejects.toBeTruthy();
+  expect(moves).toEqual([]);
+  expect((await service.stat(principal, "/folder/child")).id).toBeTruthy();
+});
+
+it("finishes a folder move whose item record had not yet followed the copy", async () => {
+  const f = await fixture();
+  const { storage, raw, moves } = copyingStorage({ "/folder/child": "child" });
+  // Stopping between the storage move and the record that follows it leaves the
+  // source gone from storage while the item still points at where it used to be.
+  let breakRecord = true;
+  const principal: Principal = { ...f.principal, storage };
+  const service = createDesktopWrites({
+    ...f.deps,
+    repo: {
+      ...f.repo,
+      move: async (...args: Parameters<typeof f.repo.move>) => {
+        if (breakRecord) {
+          breakRecord = false;
+          throw Error("record store went away");
+        }
+        return f.repo.move(...args);
+      },
+    },
+    publishLock: async (_identityId, run) => run(),
+  });
+  const item = await service.stat(principal, "/folder");
+  const operationId = randomUUID();
+  await service.prepare(principal, {
+    kind: "move" as const,
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(service.commit(principal, operationId)).rejects.toBeTruthy();
+  await expect(raw.stat("/folder")).rejects.toMatchObject({ kind: "not_found" });
+  expect((await service.commit(principal, operationId)).state).toBe("completed");
+  // The retry writes the record rather than copying the tree a second time.
+  expect(moves).toHaveLength(1);
+  expect((await service.stat(principal, "/folder-moved")).id).toBe(item.id);
+});
+
+it("records how far a folder copy has got, often enough to watch and no oftener", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  let now = new Date("2026-09-18T12:00:00.000Z");
+  const seen: (unknown | undefined)[] = [];
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        // The tick records out of band so it never holds up the copy; let it land.
+        const look = async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          seen.push((await held.service?.status(principal, held.operationId as string))?.progress);
+        };
+        opts?.onProgress?.(0, 1_000);
+        await look();
+        now = new Date(now.getTime() + 2 * DESKTOP_PROGRESS_INTERVAL_MS);
+        opts?.onProgress?.(600, 1_000);
+        await look();
+        // Inside the interval: a tree of any size costs a handful of writes.
+        opts?.onProgress?.(700, 1_000);
+        await look();
+        // The last one lands whatever the interval says, so the bar finishes.
+        opts?.onProgress?.(1_000, 1_000);
+        await look();
+        return raw.move(path, target, opts);
+      },
+    },
+  };
+  held.service = createDesktopWrites({
+    ...f.deps,
+    clock: () => now,
+    publishLock: async (_identityId, run) => run(),
+  });
+  const item = await held.service.stat(principal, "/folder");
+  held.operationId = randomUUID();
+  await held.service.prepare(principal, {
+    kind: "move" as const,
+    operationId: held.operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  expect((await held.service.commit(principal, held.operationId)).state).toBe("completed");
+  expect(seen).toEqual([
+    { completed: 0, total: 1_000 },
+    { completed: 600, total: 1_000 },
+    { completed: 600, total: 1_000 },
+    { completed: 1_000, total: 1_000 },
+  ]);
+  // The receipt replaces it: a finished operation reports its item, not a bar.
+  expect((await held.service.status(principal, held.operationId)).progress).toBeUndefined();
+});
+
+it("stops a folder copy asked to cancel, and takes back what it had copied", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child", "/folder/other": "other" });
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  let copied = false;
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        // What a copying backend does: it writes the destination as it goes and
+        // takes nothing from the source until every entry is across.
+        await raw.copy(path, target, { overwrite: true });
+        copied = true;
+        // The cancel arrives mid-copy, from a request this one cannot see.
+        await held.service?.cancel(principal, held.operationId as string);
+        opts?.onProgress?.(1, 2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (opts?.signal?.aborted)
+          throw new StorageError("upstream_unavailable", "the transfer was cancelled");
+        return raw.move(path, target, opts);
+      },
+    },
+  };
+  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
+  const item = await held.service.stat(principal, "/folder");
+  held.operationId = randomUUID();
+  await held.service.prepare(principal, {
+    kind: "move" as const,
+    operationId: held.operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(held.service.commit(principal, held.operationId)).rejects.toMatchObject({
+    details: { code: "operation_cancelled" },
+  });
+  expect(copied).toBe(true);
+  // The half-written destination is taken back, and the source is untouched.
+  await expect(raw.stat("/folder-moved")).rejects.toMatchObject({ kind: "not_found" });
+  expect(await new Response((await raw.download("/folder/child")).body).text()).toBe("child");
+  // Cancelled is a settled end: no administrator, and no retry of what was asked to stop.
+  expect((await held.service.status(principal, held.operationId)).state).toBe("cancelled");
+});
+
+it("never takes back a copy whose source has already gone", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        // The cancel loses its race: the move completed, so the destination now
+        // holds the only copy and taking it back would destroy the item.
+        await raw.move(path, target, opts);
+        await held.service?.cancel(principal, held.operationId as string);
+        opts?.onProgress?.(1, 2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (opts?.signal?.aborted)
+          throw new StorageError("upstream_unavailable", "the transfer was cancelled");
+      },
+    },
+  };
+  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
+  const item = await held.service.stat(principal, "/folder");
+  held.operationId = randomUUID();
+  await held.service.prepare(principal, {
+    kind: "move" as const,
+    operationId: held.operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(held.service.commit(principal, held.operationId)).rejects.toMatchObject({
+    details: { code: "operation_cancelled" },
+  });
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
+});
+
+/** A copying storage that asks for its own cancellation part-way through. */
+function cancellingFixture(
+  f: Awaited<ReturnType<typeof fixture>>,
+  raw: StorageProvider,
+  overrides: (
+    base: StorageProvider,
+    cancelled: () => boolean,
+  ) => Partial<StorageProvider> = () => ({}),
+) {
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  let cancelled = false;
+  const storage: StorageProvider = {
+    ...raw,
+    movesDirectoriesByCopy: true,
+    move: async (path, target, opts) => {
+      // Half across: the destination is written, the source still whole.
+      await raw.copy(path, target, { overwrite: true });
+      await held.service?.cancel(principal, held.operationId as string);
+      cancelled = true;
+      opts?.onProgress?.(1, 2);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (opts?.signal?.aborted)
+        throw new StorageError("upstream_unavailable", "the transfer was cancelled");
+    },
+    ...overrides(raw, () => cancelled),
+  };
+  const principal: Principal = { ...f.principal, storage };
+  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
+  const service = held.service;
+  const run = async () => {
+    const item = await service.stat(principal, "/folder");
+    held.operationId = randomUUID();
+    await service.prepare(principal, {
+      kind: "move" as const,
+      operationId: held.operationId,
+      itemId: item.id,
+      parentId: "root",
+      name: "folder-moved",
+      base: item.version,
+    });
+    return service.commit(principal, held.operationId);
+  };
+  return { held, principal, service, run };
+}
+
+it("counts a destination already gone as taken back, and still settles as cancelled", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  // Something else removed the half-copy first; there is nothing left to undo.
+  const { held, principal, service, run } = cancellingFixture(f, raw, (base, cancelled) => ({
+    deleteDir: async (path: string) => {
+      if (!cancelled()) return base.deleteDir(path);
+      await base.deleteDir(path);
+      throw new StorageError("not_found", "already gone");
+    },
+  }));
+  await expect(run()).rejects.toMatchObject({ details: { code: "operation_cancelled" } });
+  expect((await service.status(principal, held.operationId as string)).state).toBe("cancelled");
+});
+
+it("surfaces a failure to take back a cancelled copy instead of claiming it was", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  const refusing = cancellingFixture(f, raw, (base, cancelled) => ({
+    deleteDir: async (path: string) => {
+      if (!cancelled()) return base.deleteDir(path);
+      throw new StorageError("forbidden", "the destination cannot be removed");
+    },
+  }));
+  // Not reported as cancelled: the half-copy is still there and someone must see it.
+  await expect(refusing.run()).rejects.toMatchObject({ kind: "forbidden" });
+  expect(
+    (await refusing.service.status(refusing.principal, refusing.held.operationId as string)).state,
+  ).not.toBe("cancelled");
+
+  const other = await fixture();
+  // Proving the source is still there is the guard that makes undoing safe, so a
+  // storage that cannot answer has to stop rather than guess.
+  const unreadable = cancellingFixture(
+    other,
+    createMemoryStorage({ "/folder/child": "child" }),
+    (base, cancelled) => ({
+      stat: async (path: string) => {
+        if (!cancelled()) return base.stat(path);
+        throw new StorageError("upstream_unavailable", "the source cannot be read");
+      },
+    }),
+  );
+  await expect(unreadable.run()).rejects.toMatchObject({ kind: "upstream_unavailable" });
+});
+
+it("keeps copying when the operation cannot be read back mid-move", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  let copying = false;
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        copying = true;
+        opts?.onProgress?.(1, 2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        copying = false;
+        return raw.move(path, target, opts);
+      },
+    },
+  };
+  // The tick is advisory: an unreadable ledger costs a progress update and a
+  // chance to notice a cancellation, never the move itself.
+  const service = createDesktopWrites({
+    ...f.deps,
+    repo: {
+      ...f.repo,
+      operation: async (...args: Parameters<typeof f.repo.operation>) => {
+        if (copying) throw Error("ledger unreachable");
+        return f.repo.operation(...args);
+      },
+    },
+    publishLock: async (_id, run) => run(),
+  });
+  const item = await service.stat(principal, "/folder");
+  const operationId = randomUUID();
+  await service.prepare(principal, {
+    kind: "move" as const,
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  expect((await service.commit(principal, operationId)).state).toBe("completed");
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
 });

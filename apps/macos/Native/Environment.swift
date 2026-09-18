@@ -65,7 +65,10 @@ enum NativeEnvironment {
     static func id(_ id: NSFileProviderItemIdentifier) -> String { id == .rootContainer ? "root" : id == .trashContainer ? "trash" : id.rawValue }
     static func id(_ id: String) -> NSFileProviderItemIdentifier { id == "root" ? .rootContainer : id == "trash" ? .trashContainer : .init(id) }
     static func error(_ error: Error) -> NSError {
-        if error is CancellationError || (error as? URLError)?.code == .cancelled {
+        // `.cancelled` is the same outcome reached from the server's side: the
+        // publication was stopped on request, not a failure to report.
+        if error is CancellationError || (error as? URLError)?.code == .cancelled
+            || (error as? DriveError) == .cancelled {
             return NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
         }
         let native = error as NSError

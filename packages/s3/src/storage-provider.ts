@@ -9,7 +9,7 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import type { EntryStat, FileEntry, StorageProvider } from "@fdrive/core";
+import type { EntryStat, FileEntry, StorageProvider, TransferOptions } from "@fdrive/core";
 import {
   baseName,
   extensionOf,
@@ -92,13 +92,6 @@ async function run<T>(fn: () => Promise<T>, path?: string): Promise<T> {
 
 function isNotFound(error: unknown): boolean {
   return kindForSdkError(error) === "not_found";
-}
-
-function tooManyKeys(path: string, bound: number): StorageError {
-  return new StorageError(
-    "internal",
-    `folder ${path} has more than ${bound} objects; fdrive cannot move, copy or delete it as a whole`,
-  );
 }
 
 function tooManyEntries(path: string, bound: number): StorageError {
@@ -209,21 +202,34 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
     return { files, prefixes, next };
   }
 
-  /** Every key under `keyPrefix`, the marker included, bounded by `MAX_DIRECTORY_KEYS`. */
-  async function collectKeys(
-    client: S3Client,
-    keyPrefix: string,
-    path: string,
-  ): Promise<ListedKey[]> {
-    const keys: ListedKey[] = [];
+  /**
+   * Every key under `keyPrefix`, one page at a time. A tree fdrive moves as a
+   * whole costs a page of memory rather than its entire key list, so the size
+   * it can move is bounded by time and not by `MAX_DIRECTORY_KEYS`.
+   */
+  async function* keyPages(client: S3Client, keyPrefix: string): AsyncGenerator<ListedKey[]> {
     let token: string | undefined;
     do {
       const result = await page(client, keyPrefix, { token });
-      keys.push(...result.files);
-      if (keys.length > maxKeys) throw tooManyKeys(path, maxKeys);
+      if (result.files.length > 0) yield result.files;
       token = result.next;
     } while (token !== undefined);
-    return keys;
+  }
+
+  /**
+   * Deletes every key under `keyPrefix`, re-listing from the start each round
+   * rather than walking a continuation token: the token describes a listing the
+   * deletions are themselves changing.
+   */
+  async function deleteTree(client: S3Client, keyPrefix: string): Promise<void> {
+    for (;;) {
+      const result = await page(client, keyPrefix, {});
+      if (result.files.length === 0) return;
+      await deleteKeys(
+        client,
+        result.files.map((item) => item.key),
+      );
+    }
   }
 
   async function dirExists(client: S3Client, keyPrefix: string): Promise<boolean> {
@@ -298,7 +304,7 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
   async function transfer(
     path: string,
     target: string,
-    opts: { overwrite?: boolean } | undefined,
+    opts: TransferOptions | undefined,
     removeSource: boolean,
   ): Promise<void> {
     const source = normalizePath(path);
@@ -324,12 +330,10 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
       // server does: a folder's objects go first so none survive under the new
       // one, and a file under a folder's name goes too. A file target is
       // overwritten by the copy itself.
-      if (current?.kind === "dir") {
-        const stale = await collectKeys(client, targetDir, destination);
-        await deleteKeys(
-          client,
-          stale.map((item) => item.key),
-        );
+      // `resume` continues a transfer that was interrupted, so what already sits
+      // at the destination is its own earlier progress, not a target to replace.
+      if (current?.kind === "dir" && opts?.resume !== true) {
+        await deleteTree(client, targetDir);
       } else if (current?.kind === "file" && existing.kind === "dir") {
         await deleteKeys(client, [fileKey(prefix, destination)]);
       }
@@ -340,16 +344,48 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
         return;
       }
       const sourceDir = dirKey(prefix, source);
-      const keys = await collectKeys(client, sourceDir, source);
-      await mapLimit(keys, COPY_CONCURRENCY, (from) =>
-        copyObject(client, from, `${targetDir}${from.key.slice(sourceDir.length)}`),
-      );
-      if (removeSource) {
-        await deleteKeys(
-          client,
-          keys.map((item) => item.key),
-        );
+      // Only while copying. Past that the source is being removed, and stopping
+      // there would abandon the move with the destination holding the only copy.
+      const stopIfCancelled = () => {
+        if (opts?.signal?.aborted === true)
+          throw new StorageError("upstream_unavailable", `the transfer of ${source} was cancelled`);
+      };
+      const report = opts?.onProgress;
+      // Costing the tree is a listing pass, a thousandth of the copies that
+      // follow it, and it buys a real proportion to show rather than a spinner.
+      // Only when someone is watching: an ordinary move should not pay for it.
+      let total = 0;
+      if (report) {
+        for await (const batch of keyPages(client, sourceDir)) {
+          stopIfCancelled();
+          for (const item of batch) total += item.size;
+        }
+        report(0, total);
       }
+      let completed = 0;
+      for await (const batch of keyPages(client, sourceDir)) {
+        await mapLimit(batch, COPY_CONCURRENCY, async (from) => {
+          stopIfCancelled();
+          const to = `${targetDir}${from.key.slice(sourceDir.length)}`;
+          // Resuming skips what a previous attempt already copied, so an
+          // interrupted move of a large tree continues instead of starting over.
+          // Skipped bytes still count: they are at the destination either way.
+          if (opts?.resume === true) {
+            const done = await head(client, to);
+            if (done !== null && done.size === from.size) {
+              completed += from.size;
+              report?.(completed, total);
+              return;
+            }
+          }
+          await copyObject(client, from, to);
+          completed += from.size;
+          report?.(completed, total);
+        });
+      }
+      // Only after every object is at the destination, so an interrupted move
+      // always leaves the whole source recoverable.
+      if (removeSource) await deleteTree(client, sourceDir);
     }, source);
   }
 
@@ -358,6 +394,8 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
     // bytes arrived: multipart uploads a 16 GiB object happily and then no
     // copy can move it into place.
     maxPublishBytes: MAX_COPY_BYTES,
+    // No rename: moving a folder copies every object under it.
+    movesDirectoriesByCopy: true,
 
     async list(path: string): Promise<FileEntry[]> {
       const normalized = normalizePath(path);
@@ -613,12 +651,9 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
       }
       const client = await deps.client();
       await run(async () => {
-        const keys = await collectKeys(client, dirKey(prefix, normalized), normalized);
-        if (keys.length === 0) throw await missingDirectory(client, normalized);
-        await deleteKeys(
-          client,
-          keys.map((item) => item.key),
-        );
+        const keyPrefix = dirKey(prefix, normalized);
+        if (!(await dirExists(client, keyPrefix))) throw await missingDirectory(client, normalized);
+        await deleteTree(client, keyPrefix);
       }, normalized);
     },
   };

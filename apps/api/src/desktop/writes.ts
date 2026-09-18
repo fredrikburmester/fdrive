@@ -8,6 +8,7 @@ import type {
   DesktopEntry,
   DesktopFolderRequest,
   DesktopMoveRequest,
+  DesktopOperationProgress,
   DesktopOperationResult,
   DesktopUploadRequest,
   DesktopWriteCapabilities,
@@ -36,6 +37,8 @@ import type { DesktopDeps } from "./pairing.js";
 import { missingPublishGates, type PublishGate } from "./publish-gate.js";
 
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
+/** How often a running publication records how far it has got. */
+export const DESKTOP_PROGRESS_INTERVAL_MS = 1_000;
 const gib = (bytes: number) => `${Number((bytes / 1024 ** 3).toFixed(1))} GiB`;
 /**
  * The largest file this storage can take: fdrive's own ceiling, or the
@@ -102,6 +105,16 @@ function fail(code: string, message: string): never {
   throw new ApiHttpError("conflict", message, { code });
 }
 const collisionName = (value: string) => value.normalize("NFC").toLowerCase();
+/** A recorded publication progress, as it comes back out of the operation ledger. */
+function isProgress(value: unknown): value is DesktopOperationProgress {
+  if (typeof value !== "object" || value === null) return false;
+  const { completed, total } = value as Record<string, unknown>;
+  return typeof completed === "number" && typeof total === "number";
+}
+/** Whether a failure means the path is not there, whichever layer reported it. */
+const gone = (error: unknown) =>
+  (isStorageError(error) && error.kind === "not_found") ||
+  (error instanceof ApiHttpError && error.kind === "not_found");
 /** What the client is told whenever the destination no longer holds what it edited. */
 const CHANGED = "This file changed remotely. Your pending copy is preserved.";
 
@@ -196,6 +209,26 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     )
       fail("version_conflict", CHANGED);
   }
+  /**
+   * Removes what a cancelled copy had written. Safe only because copying never
+   * takes anything from the source: the destination holds this operation's own
+   * partial copy and nothing else. Proved again here rather than assumed — a
+   * cancellation that lost its race with the last object would otherwise delete
+   * the only copy that was left.
+   */
+  async function undoCancelledCopy(storage: StorageProvider, from: string, to: string) {
+    const intact = await storage.stat(from).then(
+      () => true,
+      (error: unknown) => {
+        if (gone(error)) return false;
+        throw error;
+      },
+    );
+    if (!intact) return;
+    await storage.deleteDir(to).catch((error: unknown) => {
+      if (!gone(error)) throw error;
+    });
+  }
   async function authority(principal: Principal) {
     if (!capabilities(principal).create)
       throw new ApiHttpError("forbidden", "This location cannot enforce safe writes", {
@@ -204,15 +237,26 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     if (principal.verifyAuthority && !(await principal.verifyAuthority()))
       throw new ApiHttpError("unauthorized", "Connection was revoked");
   }
-  async function record(principal: Principal, id: string) {
+  /**
+   * `mayHaveMoved` is for the source of a bulk move that reserved its
+   * destination: its own success is what removes this path, so a retry between
+   * the last object landing and the receipt being written would otherwise fail
+   * forever on the item it had just finished moving.
+   */
+  async function record(principal: Principal, id: string, mayHaveMoved = false) {
     if (id === "trash") return repo.ensure(principal.identityId, trashRoot(principal), "dir");
     const result =
       id === "root"
         ? await repo.ensure(principal.identityId, "/", "dir")
         : await repo.item(principal.identityId, id);
     if (!result) throw new ApiHttpError("not_found", "Item no longer exists");
-    if (inTrash(principal, result.path)) await trashEntry(principal, result.path);
-    else await files.stat(principal, result.path);
+    const live = inTrash(principal, result.path)
+      ? trashEntry(principal, result.path)
+      : files.stat(principal, result.path);
+    await live.catch((error: unknown) => {
+      if (mayHaveMoved && gone(error)) return undefined;
+      throw error;
+    });
     return result;
   }
   async function decorate(
@@ -403,11 +447,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   function status(op: DesktopOperationRecord): DesktopOperationResult {
     if (op.state === "completed" || op.state === "acknowledged")
       return op.result as unknown as DesktopOperationResult;
+    const progress = op.result?.bulkProgress;
     return {
       operationId: op.id,
       state: op.state as DesktopOperationResult["state"],
       item: null,
       recoveryId: null,
+      ...(isProgress(progress) ? { progress } : {}),
     };
   }
   function transition(
@@ -692,10 +738,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           // adapter intentionally has no reusable lease method of its own.
           await authority(principal);
           await deps.effects?.beforeWrite(principal.identityId);
+          // A bulk move reserves its destination before it starts, because its
+          // own partial result would otherwise make `unoccupied` pick the next
+          // free name on the retry that should be finishing the first one.
+          const reserved =
+            typeof op.result?.bulkTarget === "string" ? op.result.bulkTarget : undefined;
           const parent = await record(scoped, request.parentId);
           const source =
             "itemId" in request && request.itemId
-              ? await record(scoped, request.itemId)
+              ? await record(scoped, request.itemId, reserved !== undefined)
               : undefined;
           const trashing = request.parentId === "trash";
           if (trashing && (request.kind !== "move" || !source || inTrash(principal, source.path)))
@@ -707,9 +758,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               ? (source.originalPath.split("/").at(-1) as string)
               : request.name;
           const target =
-            trashing && source
+            reserved ??
+            (trashing && source
               ? `${trashRoot(principal)}/${source.id}`
-              : await unoccupied(scoped, parent, name, source?.path);
+              : await unoccupied(scoped, parent, name, source?.path));
           // Re-checked inside the critical section before publishing: outside
           // serialization two writers racing for the same new name would both pass
           // `unoccupied`, and the loser would fail its `overwrite: false` rename as
@@ -717,15 +769,35 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           // the grants and the target were settled above. A lease already fenced
           // the first check for the whole action, so there is nothing to re-check.
           const stillFree = () =>
-            serialize === direct ? Promise.resolve() : free(scoped, parent, name, source?.path);
-          if (source && "base" in request && request.base)
+            serialize === direct || reserved !== undefined
+              ? Promise.resolve()
+              : free(scoped, parent, name, source?.path);
+          // A reserved bulk move that already copied every object has only its
+          // receipt left, whether the item record has caught up with the move
+          // (its path is the destination) or the process stopped between the
+          // two (the source is gone from storage). Either way there is nothing
+          // left to prove against the client's base, to observe, or to copy,
+          // and insisting would fail forever on the move this very operation
+          // had finished.
+          const alreadyMoved =
+            reserved !== undefined &&
+            source !== undefined &&
+            (source.path === reserved ||
+              (await storage.stat(source.path).then(
+                () => false,
+                (error: unknown) => {
+                  if (gone(error)) return true;
+                  throw error;
+                },
+              )));
+          if (source && "base" in request && request.base && !alreadyMoved)
             await checkBase(scoped, source, request.base, request.kind === "upload");
           // The one observation publication must still match, taken the instant the
           // original was proven against the client's base. Everything after this —
           // the staged upload, the recovery copy and its digest — is inside the
           // window `unchanged` covers. Re-stating it later would narrow that window
           // to nothing by adopting whatever an external writer had just written.
-          if (source) witness = await storage.stat(source.path);
+          if (source && !alreadyMoved) witness = await storage.stat(source.path);
           if (source && isUnderPath(source.path, target))
             throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
           const context: Omit<DesktopEffectContext, "office"> = {
@@ -849,13 +921,90 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           } else if (source) {
             if (trashing) await internalDirectory(storage, trashRoot(principal));
             if (source.path !== target) {
+              // A backend without a rename moves a directory by copying every
+              // object under it, which is proportional to the tree and can run
+              // for minutes. That cannot happen inside the publication lock: the
+              // lock is held per identity, its waiters give up after 30s, and a
+              // large folder would refuse every other Mac write for as long as
+              // the copy ran. So the lock covers the decision only — the
+              // destination is free, the source is what was observed, the
+              // destination is reserved — and the copy runs outside it, the way
+              // any other client of that storage performs the same move.
+              const bulk = source.kind === "dir" && storage.movesDirectoriesByCopy === true;
               await serialize(async () => {
                 if (!trashing) await stillFree();
                 await authority(principal);
                 if (witness) await unchanged(storage, source.path, witness);
+                if (bulk) {
+                  // Reserved before the copy starts, so the retry that resumes it
+                  // finishes this move instead of starting a second one beside it.
+                  if (
+                    reserved === undefined &&
+                    !(await transition(principal, id, "committing", "committing", {
+                      ...op.result,
+                      bulkTarget: target,
+                    }))
+                  )
+                    throw Error("Could not reserve the move destination");
+                  return;
+                }
                 publicationStarted = true;
                 await storage.move(source.path, target, { overwrite: false });
               });
+              if (bulk) {
+                // Outside the lock, and deliberately not marked as a started
+                // publication. Every object is copied before any is removed, so
+                // an interruption leaves the source whole and the destination
+                // holding part of its own copy: the same operation id resumes
+                // and converges, whether it stopped while copying or while
+                // removing. That is retryable, not an outcome nobody can name,
+                // so it must not land in `uncertain`, which no one but an
+                // administrator can clear.
+                if (!alreadyMoved) {
+                  // One tick does both jobs. It records how far the copy has got
+                  // so the Mac app can show a real proportion, and it reads the
+                  // operation back, which is how a cancel reaches a copy already
+                  // under way — from another request, or another API process,
+                  // neither of which can touch this one's storage call directly.
+                  // Throttled: a tree of any size costs a handful of round
+                  // trips. Advisory, so a failed write is dropped rather than
+                  // failing the move.
+                  const cancelling = new AbortController();
+                  let ticked = 0;
+                  const tick = (completed: number, total: number) => {
+                    const now = deps.clock().getTime();
+                    if (completed < total && now - ticked < DESKTOP_PROGRESS_INTERVAL_MS) return;
+                    ticked = now;
+                    void (async () => {
+                      const current = await repo
+                        .operation(principal.identityId, principal.accountId, id)
+                        .catch(() => null);
+                      if (current?.result?.bulkCancelled === true) cancelling.abort();
+                      // Merged onto what is stored rather than onto this
+                      // attempt's snapshot, or recording progress would erase
+                      // the cancellation it has just read.
+                      await transition(principal, id, "committing", "committing", {
+                        ...(current?.result ?? op.result),
+                        bulkTarget: target,
+                        bulkProgress: { completed, total },
+                      }).catch(() => {});
+                    })();
+                  };
+                  try {
+                    await storage.move(source.path, target, {
+                      overwrite: reserved !== undefined,
+                      resume: reserved !== undefined,
+                      onProgress: tick,
+                      signal: cancelling.signal,
+                    });
+                  } catch (error) {
+                    if (!cancelling.signal.aborted) throw error;
+                    await undoCancelledCopy(storage, source.path, target);
+                    await transition(principal, id, "committing", "cancelled");
+                    fail("operation_cancelled", "The move was cancelled.");
+                  }
+                }
+              }
             }
           }
           if (source) await repo.move(principal.identityId, source.path, target);
@@ -1068,6 +1217,18 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     async cancel(principal: Principal, id: string) {
       const op = await operation(principal, id);
       if (op.state === "cancelled") return status(op);
+      // A folder copy is the one publication that runs long enough to be worth
+      // stopping. While it copies, the source is untouched and everything at the
+      // destination is its own, so it can be stopped and undone. The ask goes
+      // through the operation because the request may reach any API process; the
+      // one doing the copying reads it on its next tick.
+      if (op.state === "committing" && typeof op.result?.bulkTarget === "string") {
+        await transition(principal, id, "committing", "committing", {
+          ...op.result,
+          bulkCancelled: true,
+        });
+        return status(await operation(principal, id));
+      }
       if (!["receiving", "ready", "conflict"].includes(op.state))
         throw new ApiHttpError("conflict", "An active or uncertain commit cannot be discarded");
       if (await transition(principal, id, op.state, "cancelled"))
