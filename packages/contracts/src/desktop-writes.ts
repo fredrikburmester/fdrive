@@ -102,12 +102,23 @@ export const DesktopOperationState = z.enum([
   "cancelled",
   "acknowledged",
 ]);
+/**
+ * How far a publication that runs for long enough to be worth watching has got,
+ * in bytes so a folder of uneven files advances evenly. Only a publication that
+ * copies object by object reports it; everything else publishes in one step and
+ * has nothing to show. `total` is settled before the first byte moves.
+ */
+export const DesktopOperationProgress = z.object({
+  completed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
 export const DesktopOperationResult = z.object({
   operationId: OperationId,
   state: DesktopOperationState,
   item: DesktopWriteEntry.nullable(),
   /** A post-commit recovery copy, if one was retained. Never an upstream path. */
   recoveryId: CanonicalUuid.nullable(),
+  progress: DesktopOperationProgress.optional(),
 });
 export const DesktopWriteErrorCode = z.enum([
   "version_conflict",
@@ -127,6 +138,7 @@ export type DesktopUploadRequest = z.infer<typeof DesktopUploadRequest>;
 export type DesktopFolderRequest = z.infer<typeof DesktopFolderRequest>;
 export type DesktopMoveRequest = z.infer<typeof DesktopMoveRequest>;
 export type DesktopTrashRequest = z.infer<typeof DesktopTrashRequest>;
+export type DesktopOperationProgress = z.infer<typeof DesktopOperationProgress>;
 export type DesktopOperationResult = z.infer<typeof DesktopOperationResult>;
 export type DesktopBaseVersion = z.infer<typeof DesktopBaseVersion>;
 export type DesktopAccessMode = z.infer<typeof DesktopAccessMode>;

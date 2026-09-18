@@ -9,7 +9,7 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import type { EntryStat, FileEntry, StorageProvider } from "@fdrive/core";
+import type { EntryStat, FileEntry, StorageProvider, TransferOptions } from "@fdrive/core";
 import {
   baseName,
   extensionOf,
@@ -328,7 +328,7 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
   async function transfer(
     path: string,
     target: string,
-    opts: { overwrite?: boolean; resume?: boolean } | undefined,
+    opts: TransferOptions | undefined,
     removeSource: boolean,
   ): Promise<void> {
     const source = normalizePath(path);
@@ -368,16 +368,34 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
         return;
       }
       const sourceDir = dirKey(prefix, source);
+      const report = opts?.onProgress;
+      // Costing the tree is a listing pass, a thousandth of the copies that
+      // follow it, and it buys a real proportion to show rather than a spinner.
+      // Only when someone is watching: an ordinary move should not pay for it.
+      let total = 0;
+      if (report) {
+        for await (const batch of keyPages(client, sourceDir))
+          for (const item of batch) total += item.size;
+        report(0, total);
+      }
+      let completed = 0;
       for await (const batch of keyPages(client, sourceDir)) {
         await mapLimit(batch, COPY_CONCURRENCY, async (from) => {
           const to = `${targetDir}${from.key.slice(sourceDir.length)}`;
           // Resuming skips what a previous attempt already copied, so an
           // interrupted move of a large tree continues instead of starting over.
+          // Skipped bytes still count: they are at the destination either way.
           if (opts?.resume === true) {
             const done = await head(client, to);
-            if (done !== null && done.size === from.size) return;
+            if (done !== null && done.size === from.size) {
+              completed += from.size;
+              report?.(completed, total);
+              return;
+            }
           }
           await copyObject(client, from, to);
+          completed += from.size;
+          report?.(completed, total);
         });
       }
       // Only after every object is at the destination, so an interrupted move

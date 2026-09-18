@@ -170,6 +170,9 @@ public struct APIClient: Sendable {
     public func commitWrite(_ id: String) async throws -> WriteResult {
         try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true)
     }
+    public func writeStatus(_ id: String) async throws -> WriteResult {
+        try await send("operations/\(id)")
+    }
     public func acknowledgeWrite(_ id: String) async throws {
         let _: WriteResult = try await send("operations/\(id)/acknowledge", body: Data("{}".utf8), writing: true)
     }

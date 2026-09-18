@@ -279,6 +279,45 @@ describe("moves and copies", () => {
     expect(copied).toEqual(["again/a.txt"]);
   });
 
+  it("reports byte progress against a settled total, and costs a listing only then", async () => {
+    let listings = 0;
+    const { server, storage } = harness({
+      intercept: (_request, parsed) => {
+        if (parsed.method === "GET" && parsed.query.has("list-type")) listings += 1;
+        return null;
+      },
+    });
+    server.put("bucket", "src/a.txt", "aaaa");
+    server.put("bucket", "src/b.txt", "bb");
+    const reports: [number, number][] = [];
+    await storage.move("/src", "/dst", {
+      onProgress: (done, total) => reports.push([done, total]),
+    });
+    // The total is settled before the first byte, so the bar is never a guess.
+    expect(reports[0]).toEqual([0, 6]);
+    expect(reports.at(-1)).toEqual([6, 6]);
+    const watched = listings;
+
+    // Resuming counts what an earlier attempt left at the destination as done,
+    // so the bar reflects the whole tree rather than only this attempt's share.
+    server.put("bucket", "again/a.txt", "aaaa");
+    server.put("bucket", "more/a.txt", "aaaa");
+    server.put("bucket", "more/b.txt", "bb");
+    const resumed: [number, number][] = [];
+    await storage.move("/more", "/again", {
+      overwrite: true,
+      resume: true,
+      onProgress: (done, total) => resumed.push([done, total]),
+    });
+    expect(resumed.at(-1)).toEqual([6, 6]);
+
+    // A move nobody is watching does not pay for the costing pass.
+    listings = 0;
+    server.put("bucket", "quiet/a.txt", "aaaa");
+    await storage.move("/quiet", "/quieter");
+    expect(listings).toBeLessThan(watched);
+  });
+
   it("passes a target check failure through instead of treating it as free", async () => {
     const { server, storage } = harness({ keys: [{ ...ALICE, denyPrefixes: ["locked/"] }] });
     server.put("bucket", "src.txt", "a");

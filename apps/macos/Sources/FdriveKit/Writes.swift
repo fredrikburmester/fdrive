@@ -7,7 +7,11 @@ import Foundation
 public struct WriteCoordinator: Sendable {
     public let catalog: Catalog
     public let client: APIClient
-    public init(catalog: Catalog, client: APIClient) { self.catalog = catalog; self.client = client }
+    /// How often a running commit is asked how far it has got.
+    public let progressPoll: Duration
+    public init(catalog: Catalog, client: APIClient, progressPoll: Duration = .seconds(1)) {
+        self.catalog = catalog; self.client = client; self.progressPoll = progressPoll
+    }
 
     public func perform(route: String, localId: String?, templateKey: String, parentId: String,
                         name: String, base: WriteVersion?, contents: URL?, progress: Progress, keepBoth: Bool = true,
@@ -90,6 +94,29 @@ public struct WriteCoordinator: Sendable {
         guard remote == local.digest else { return nil }
         return try await catalog.downloaded(existing.id, hash: local.digest, size: local.size, expectedVersion: existing.contentVersion)
     }
+    /// Commits, following the server's own account of how far it has got.
+    ///
+    /// Publishing is usually a rename and returns at once. On storage without one
+    /// — object storage — publishing a folder copies every object under it and can
+    /// run for minutes, and the server records its progress while it does. Follow
+    /// that so Finder shows a proportion instead of an indeterminate bar for the
+    /// whole copy. It is advisory: a commit that returns before the first poll
+    /// never asks, and a poll that fails or finds nothing recorded leaves the bar
+    /// as it was rather than disturbing the write.
+    private func commit(_ id: String, progress: Progress) async throws -> WriteResult {
+        let watcher = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: progressPoll)
+                guard !Task.isCancelled, let reported = try? await client.writeStatus(id).progress,
+                      reported.total > 0 else { continue }
+                progress.totalUnitCount = reported.total
+                progress.completedUnitCount = min(reported.completed, reported.total)
+            }
+        }
+        defer { watcher.cancel() }
+        return try await client.commitWrite(id)
+    }
+
     public func resume(_ pending: PendingWrite, progress: Progress = Progress(totalUnitCount: -1)) async throws -> CatalogItem {
         if let result = pending.result { return result }
         do {
@@ -100,7 +127,9 @@ public struct WriteCoordinator: Sendable {
                 remote = try await client.uploadWrite(pending.request.operationId, file: payload, progress: progress)
             }
             try Task.checkCancellation()
-            if remote.state == "ready" { remote = try await client.commitWrite(pending.request.operationId) }
+            if remote.state == "ready" {
+                remote = try await commit(pending.request.operationId, progress: progress)
+            }
             switch remote.state {
             case "completed", "acknowledged": break
             case "conflict": throw DriveError.writeConflict("This item changed remotely. Your pending copy is preserved in Recovery.")

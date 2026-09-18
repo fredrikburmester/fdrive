@@ -144,6 +144,12 @@ before any is removed, so an interruption leaves the source whole; the same oper
 and skips what the previous attempt already copied, rather than starting again or stranding the
 work where only an administrator could clear it.
 
+Finder shows a real proportion for that copy rather than an indeterminate bar. The server
+settles the total size before the first object moves and records how far it has got as it runs,
+at most once a second whatever the tree's size; the Mac app follows that while the commit is in
+flight. It is advisory — a move that finishes before the first poll never asks, and a poll that
+fails leaves the bar where it was rather than disturbing the write.
+
 **Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
 `apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
 writer that uses that same endpoint. Enable it only when **every writer uses the same

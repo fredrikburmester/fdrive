@@ -75,6 +75,27 @@ export interface EntryStat {
  * - Optional methods are absent, not throwing, when the backend cannot
  *   offer them; `ProviderCapabilities` says which.
  */
+/** Options shared by `move` and `copy`. */
+export interface TransferOptions {
+  /** Replace an existing target rather than refusing it. */
+  readonly overwrite?: boolean;
+  /**
+   * Continue a transfer an earlier attempt left unfinished: what is already at
+   * the target is that attempt's own progress, so the target is not cleared
+   * first and an entry already copied is left in place. Only a backend that
+   * copies a directory has anything to resume; the rest may ignore it, since
+   * their move is one operation that either happened or did not.
+   */
+  readonly resume?: boolean;
+  /**
+   * Called as a transfer proceeds, in bytes, with `total` settled before the
+   * first byte moves. Only a backend that copies object by object can report
+   * anything; supplying it may cost that backend an extra listing pass, so
+   * callers pass it only when something is waiting to watch.
+   */
+  readonly onProgress?: (completed: number, total: number) => void;
+}
+
 export interface StorageProvider {
   /**
    * Runs under a storage-enforced exclusive namespace lease. Only provided for
@@ -159,24 +180,9 @@ export interface StorageProvider {
 
   mkdir(path: string, opts?: { parents?: boolean }): Promise<void>;
 
-  /**
-   * `resume` continues a transfer an earlier attempt left unfinished: what is
-   * already at the target is that attempt's own progress, so the target is not
-   * cleared first and an entry already copied is left in place. Only backends
-   * that copy a directory have anything to resume; the rest may ignore it,
-   * since their move is one operation that either happened or did not.
-   */
-  move(
-    path: string,
-    target: string,
-    opts?: { overwrite?: boolean; resume?: boolean },
-  ): Promise<void>;
+  move(path: string, target: string, opts?: TransferOptions): Promise<void>;
 
-  copy(
-    path: string,
-    target: string,
-    opts?: { overwrite?: boolean; resume?: boolean },
-  ): Promise<void>;
+  copy(path: string, target: string, opts?: TransferOptions): Promise<void>;
 
   deleteFile(path: string): Promise<void>;
 

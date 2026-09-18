@@ -13,6 +13,7 @@ import { createDesktopRetention, removeRecoveryTree } from "./retention.js";
 import {
   createDesktopWrites,
   DESKTOP_COMMIT_STALL_MS,
+  DESKTOP_PROGRESS_INTERVAL_MS,
   DESKTOP_TRASH,
   NO_WRITES,
 } from "./writes.js";
@@ -1845,4 +1846,59 @@ it("finishes a folder move whose item record had not yet followed the copy", asy
   // The retry writes the record rather than copying the tree a second time.
   expect(moves).toHaveLength(1);
   expect((await service.stat(principal, "/folder-moved")).id).toBe(item.id);
+});
+
+it("records how far a folder copy has got, often enough to watch and no oftener", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  let now = new Date("2026-09-18T12:00:00.000Z");
+  const seen: (unknown | undefined)[] = [];
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        const look = async () =>
+          seen.push((await held.service?.status(principal, held.operationId as string))?.progress);
+        opts?.onProgress?.(0, 1_000);
+        await look();
+        now = new Date(now.getTime() + 2 * DESKTOP_PROGRESS_INTERVAL_MS);
+        opts?.onProgress?.(600, 1_000);
+        await look();
+        // Inside the interval: a tree of any size costs a handful of writes.
+        opts?.onProgress?.(700, 1_000);
+        await look();
+        // The last one lands whatever the interval says, so the bar finishes.
+        opts?.onProgress?.(1_000, 1_000);
+        await look();
+        return raw.move(path, target, opts);
+      },
+    },
+  };
+  held.service = createDesktopWrites({
+    ...f.deps,
+    clock: () => now,
+    publishLock: async (_identityId, run) => run(),
+  });
+  const item = await held.service.stat(principal, "/folder");
+  held.operationId = randomUUID();
+  await held.service.prepare(principal, {
+    kind: "move" as const,
+    operationId: held.operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  expect((await held.service.commit(principal, held.operationId)).state).toBe("completed");
+  expect(seen).toEqual([
+    { completed: 0, total: 1_000 },
+    { completed: 600, total: 1_000 },
+    { completed: 600, total: 1_000 },
+    { completed: 1_000, total: 1_000 },
+  ]);
+  // The receipt replaces it: a finished operation reports its item, not a bar.
+  expect((await held.service.status(principal, held.operationId)).progress).toBeUndefined();
 });

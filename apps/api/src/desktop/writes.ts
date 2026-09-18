@@ -8,6 +8,7 @@ import type {
   DesktopEntry,
   DesktopFolderRequest,
   DesktopMoveRequest,
+  DesktopOperationProgress,
   DesktopOperationResult,
   DesktopUploadRequest,
   DesktopWriteCapabilities,
@@ -36,6 +37,8 @@ import type { DesktopDeps } from "./pairing.js";
 import { missingPublishGates, type PublishGate } from "./publish-gate.js";
 
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
+/** How often a running publication records how far it has got. */
+export const DESKTOP_PROGRESS_INTERVAL_MS = 1_000;
 const gib = (bytes: number) => `${Number((bytes / 1024 ** 3).toFixed(1))} GiB`;
 /**
  * The largest file this storage can take: fdrive's own ceiling, or the
@@ -102,6 +105,12 @@ function fail(code: string, message: string): never {
   throw new ApiHttpError("conflict", message, { code });
 }
 const collisionName = (value: string) => value.normalize("NFC").toLowerCase();
+/** A recorded publication progress, as it comes back out of the operation ledger. */
+function isProgress(value: unknown): value is DesktopOperationProgress {
+  if (typeof value !== "object" || value === null) return false;
+  const { completed, total } = value as Record<string, unknown>;
+  return typeof completed === "number" && typeof total === "number";
+}
 /** Whether a failure means the path is not there, whichever layer reported it. */
 const gone = (error: unknown) =>
   (isStorageError(error) && error.kind === "not_found") ||
@@ -418,11 +427,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   function status(op: DesktopOperationRecord): DesktopOperationResult {
     if (op.state === "completed" || op.state === "acknowledged")
       return op.result as unknown as DesktopOperationResult;
+    const progress = op.result?.bulkProgress;
     return {
       operationId: op.id,
       state: op.state as DesktopOperationResult["state"],
       item: null,
       recoveryId: null,
+      ...(isProgress(progress) ? { progress } : {}),
     };
   }
   function transition(
@@ -929,11 +940,30 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
                 // removing. That is retryable, not an outcome nobody can name,
                 // so it must not land in `uncertain`, which no one but an
                 // administrator can clear.
-                if (!alreadyMoved)
+                if (!alreadyMoved) {
+                  // Recorded as the copy runs so the Mac app can show a real
+                  // proportion for a move that lasts minutes. Throttled: a tree
+                  // of any size costs a handful of writes, and each is a
+                  // compare-and-swap on a still-committing operation, so one
+                  // arriving after the receipt simply loses. Advisory, so a
+                  // failed write is dropped rather than failing the move.
+                  let recorded = 0;
+                  const record = (completed: number, total: number) => {
+                    const now = deps.clock().getTime();
+                    if (completed < total && now - recorded < DESKTOP_PROGRESS_INTERVAL_MS) return;
+                    recorded = now;
+                    void transition(principal, id, "committing", "committing", {
+                      ...op.result,
+                      bulkTarget: target,
+                      bulkProgress: { completed, total },
+                    }).catch(() => {});
+                  };
                   await storage.move(source.path, target, {
                     overwrite: reserved !== undefined,
                     resume: reserved !== undefined,
+                    onProgress: record,
                   });
+                }
               }
             }
           }
