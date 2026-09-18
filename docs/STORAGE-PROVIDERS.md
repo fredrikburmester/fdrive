@@ -302,7 +302,10 @@ visitors (SFTPGo). `"none"` means no share links: the management routes refuse w
 fdrive keeps the share in `app.shares` and serves the link through the module's storage, is
 the planned path for files-only backends ([Owned shares](plans/OWNED-SHARES.md)) and is
 refused like `"none"` until that store exists. The share code reads the strategy, never the
-provider type.
+provider type: the public routes are handed a `PublicShareAccess` (`list`, `download`, `zip`,
+`upload` and a neutral view of the share, in
+[access.ts](../apps/api/src/shares/access.ts)) whose implementation maps its backend's
+failures to API errors, and the adapter over SFTPGo's public share API is the only one today.
 
 Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
 `provider.config.trash`. They default to disabled with path `/.trash`. The native layout is
