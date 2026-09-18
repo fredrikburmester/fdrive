@@ -2,14 +2,15 @@
 
 Updated 2026-09-16. Apache DAV native writes merged in PR #21. The pinned SFTPGo
 integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode:
-stock SFTPGo writes use `verified-optimistic` instead. Full beta qualification remains open.
+stock SFTPGo, WebDAV and S3 write under fdrive's default optimistic contract, with Apache DAV
+locks as an opt-in. Full beta qualification remains open.
 Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
 Search remains excluded.
 
 ## Safety boundary
 
 The user chose **storage-side enforcement** for the leased Apache DAV mode, and later accepted
-a separate, weaker `verified-optimistic` contract for stock SFTPGo; see
+the weaker optimistic contract, since 2026-09-18 the default for every storage; see
 [STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md). Qualified Apache DAV requires every writer
 to obey its exclusive locks. Native virtual-folder identities and non-local SFTPGo storage
 remain unsupported.

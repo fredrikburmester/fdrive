@@ -3,7 +3,6 @@ import { expect, it } from "vitest";
 import { createSftpgoClient } from "./client.js";
 import { createFakeSftpgoServer } from "./fake/server.js";
 import { sftpgoModule } from "./module.js";
-import { SFTPGO_OPTIMISTIC_MODE } from "./optimistic-publish.js";
 
 const baseUrl = "http://sftpgo.test/prefix";
 
@@ -31,48 +30,31 @@ async function fixture() {
   return { fetch, calls, session };
 }
 
-it("never exposes a storage lease, whatever the configured mode", async () => {
+it("never exposes a storage lease, whatever a stored row still says", async () => {
   const f = await fixture();
-  for (const mode of [
-    undefined,
-    "",
-    "optimistic",
-    "apache-webdav-exclusive",
-    "fdrive-local-v1",
-    SFTPGO_OPTIMISTIC_MODE,
+  // Rows saved before the write-mode selector was retired still carry its value.
+  for (const config of [
+    {},
+    { desktopWriteMode: "" },
+    { desktopWriteMode: "verified-optimistic" },
+    { desktopWriteMode: "apache-webdav-exclusive" },
+    { desktopWriteMode: "fdrive-local-v1" },
   ]) {
     expect(
-      sftpgoModule.createStorage(
-        { id: "p", baseUrl, config: { desktopWriteMode: mode } },
-        f.session,
-        { fetch: f.fetch },
-      ).withWriteLease,
+      sftpgoModule.createStorage({ id: "p", baseUrl, config }, f.session, { fetch: f.fetch })
+        .withWriteLease,
     ).toBeUndefined();
   }
   expect(f.calls).toEqual([]);
 });
 
-it("offers optimistic publication for stock SFTPGo and stays read-only otherwise", async () => {
+it("emulates overwrite refusal on stock REST without any configuration", async () => {
   const f = await fixture();
-  const stock = sftpgoModule.createStorage(
-    { id: "p", baseUrl, config: { desktopWriteMode: SFTPGO_OPTIMISTIC_MODE } },
-    f.session,
-    { fetch: f.fetch },
-  );
-  expect(stock.optimisticPublish).toBe(true);
-  // A blank, unknown, near-miss or retired mode stays read-only rather than degrading to it.
-  for (const mode of [undefined, "", "optimistic", "fdrive-local-v1", "fdrive-local-v2"]) {
-    expect(
-      sftpgoModule.createStorage(
-        { id: "p", baseUrl, config: { desktopWriteMode: mode } },
-        f.session,
-        { fetch: f.fetch },
-      ).optimisticPublish,
-    ).toBeUndefined();
-  }
-  expect(f.calls).toEqual([]);
+  const stock = sftpgoModule.createStorage({ id: "p", baseUrl, config: {} }, f.session, {
+    fetch: f.fetch,
+  });
   // Stock REST renames over an existing target, so `overwrite: false` has to be
-  // emulated here too or the publish path's guards are no-ops on this storage.
+  // emulated here or the publish path's guards are no-ops on this storage.
   await expect(
     stock.upload("/original.txt", new Blob(["mine"]).stream(), { overwrite: false }),
   ).rejects.toMatchObject({ kind: "conflict" });

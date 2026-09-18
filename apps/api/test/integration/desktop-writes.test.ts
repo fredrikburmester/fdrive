@@ -86,7 +86,9 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     const writable = pair.credentials.find((c) => c.location.providerId === provider.id);
     if (!writable) throw Error("Missing write credential");
     expect(writable.location.capabilities.create).toBe(true);
-    expect(pair.credentials.find((c) => c !== writable)?.location.readOnly).toBe(true);
+    // The deployment's stock SFTPGo login in the same pairing writes too, under the
+    // default contract, with nothing configured on its row.
+    expect(pair.credentials.find((c) => c !== writable)?.location.readOnly).toBe(false);
     cookie = "";
     bearer = `Bearer ${writable.token}`;
     const upload = async (

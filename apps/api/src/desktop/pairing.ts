@@ -9,7 +9,6 @@ import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
-import { moduleFor } from "../providers/registry.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
@@ -56,22 +55,11 @@ export interface DesktopDeps {
  * Why a full-access grant still lands read-only, phrased for whoever paired the
  * Mac: an administrator can act on it and anyone else can pass it on. Every unmet
  * gate is named, so fixing one never promises writes that the next still blocks.
+ * Every storage publishes once the server serializes Mac writes, so nothing here
+ * depends on the provider.
  */
-function writeUnavailableReason(
-  providerType: string,
-  missing: readonly DesktopWriteGate[],
-): string {
-  const module = moduleFor(providerType);
-  const setup = module?.desktopWrites;
-  if (missing.includes("storage") && !setup)
-    return "Finder writes are not supported for this storage type. Files stay read-only.";
+function writeUnavailableReason(missing: readonly DesktopWriteGate[]): string {
   const steps: string[] = [];
-  if (missing.includes("storage") && module && setup) {
-    const label =
-      module.configFields.find((field) => field.name === setup.field)?.label ?? setup.field;
-    const where = ["System › Storage", ...(setup.caveat ? [setup.caveat] : [])].join("; ");
-    steps.push(`sets "${label}" to ${setup.mode} on this ${module.label} server (${where})`);
-  }
   if (missing.includes("state_dir")) steps.push("sets FDRIVE_DESKTOP_STATE_DIR on this server");
   if (missing.includes("publish_lock"))
     steps.push("configures the desktop publish lock on this server");
@@ -159,9 +147,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       readOnly,
       capabilities,
       maxUploadBytes: deps.maxUploadBytes ?? 16 * 1024 ** 3,
-      ...(granted && readOnly
-        ? { writeUnavailableReason: writeUnavailableReason(provider.type, missing) }
-        : {}),
+      ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
     };
   }
   async function issue(pair: Pair): Promise<IssuedCredential[]> {
