@@ -81,7 +81,7 @@ export function registerDesktopRoutes(
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
-      ? { writeCapabilities: async (principal: Principal) => writes.capabilities(principal) }
+      ? { writeAvailability: async (principal: Principal) => writes.availability(principal) }
       : {}),
   });
   const files = createDesktopFiles(deps);

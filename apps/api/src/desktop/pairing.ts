@@ -2,19 +2,19 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type {
   DesktopAccessMode,
   DesktopCredential,
-  DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { StorageProvider } from "@fdrive/core";
 import type { ApiTokenRepo, DesktopPublishLock, IdentityRepo, ProviderRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
+import { moduleFor } from "../providers/registry.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
+import type { DesktopWriteAvailability, DesktopWriteGate } from "./writes.js";
 
 type IssuedCredential = Omit<DesktopCredential, "location"> & {
   location: DesktopCredential["location"] | DesktopWriteCredential["location"];
@@ -38,7 +38,8 @@ interface Pair {
   result?: Promise<IssuedCredential[]>;
 }
 export interface DesktopDeps {
-  writeCapabilities?: (principal: Principal) => Promise<DesktopWriteCapabilities>;
+  /** How the deployment answers a full grant; absent when desktop writes are not wired. */
+  writeAvailability?: (principal: Principal) => Promise<DesktopWriteAvailability>;
   maxUploadBytes?: number;
   apiTokens: ApiTokenRepo;
   identities: IdentityRepo;
@@ -51,26 +52,40 @@ export interface DesktopDeps {
   publishLock?: DesktopPublishLock;
 }
 
+/**
+ * Why a full-access grant still lands read-only, phrased for whoever paired the
+ * Mac: an administrator can act on it and anyone else can pass it on. Every unmet
+ * gate is named, so fixing one never promises writes that the next still blocks.
+ */
+function writeUnavailableReason(
+  providerType: string,
+  missing: readonly DesktopWriteGate[],
+): string {
+  const module = moduleFor(providerType);
+  const setup = module?.desktopWrites;
+  if (missing.includes("storage") && !setup)
+    return "Finder writes are not supported for this storage type. Files stay read-only.";
+  const steps: string[] = [];
+  if (missing.includes("storage") && module && setup) {
+    const label =
+      module.configFields.find((field) => field.name === setup.field)?.label ?? setup.field;
+    const where = ["System › Storage", ...(setup.caveat ? [setup.caveat] : [])].join("; ");
+    steps.push(`sets "${label}" to ${setup.mode} on this ${module.label} server (${where})`);
+  }
+  if (missing.includes("state_dir")) steps.push("sets FDRIVE_DESKTOP_STATE_DIR on this server");
+  if (missing.includes("publish_lock"))
+    steps.push("configures the desktop publish lock on this server");
+  if (steps.length === 0)
+    return "Finder writes are turned off on this server. Files stay read-only.";
+  return `Read-only until an administrator ${steps.join(" and ")}.`;
+}
+
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
  * One promise issues credentials once; retries with the app's secret retrieve the same bundle.
  * Secrets are retained only for the five-minute pairing window, never in browser responses.
  * A bundle the app never confirms (crash between poll and Keychain) is revoked when the
  * window closes, so an orphaned credential lives at most five minutes.
  */
-/** Why a full-access grant still lands read-only, in terms the person can act on. */
-function writeUnavailableReason(providerType: string, storage: StorageProvider): string {
-  if (storage.withWriteLease !== undefined || storage.optimisticPublish === true)
-    return "Finder writes are turned off on this server: FDRIVE_DESKTOP_STATE_DIR is not set. Files stay read-only.";
-  switch (providerType) {
-    case "sftpgo":
-      return 'Read-only until "Native write enforcement" on this SFTPGo server (System › Storage) is set to verified-optimistic.';
-    case "webdav":
-      return 'Read-only until "Mac write support" on this WebDAV server (System › Storage) is set to apache-webdav-exclusive.';
-    default:
-      return "Finder writes are not supported for this storage type. Files stay read-only.";
-  }
-}
-
 export function createDesktopPairing(deps: DesktopDeps) {
   const pairs = new Map<string, Pair>();
   const tokens = createTokenService({ ...deps, generateToken: generateDesktopToken });
@@ -123,18 +138,29 @@ export function createDesktopPairing(deps: DesktopDeps) {
     };
     if (protocolVersion === 1)
       return { ...common, protocolVersion: 1 as const, readOnly: true as const };
-    const capabilities =
-      principal.tokenAccess?.mode === "full" && deps.writeCapabilities
-        ? await deps.writeCapabilities(principal)
-        : { create: false, update: false, move: false, trash: false, restore: false };
+    const granted = principal.tokenAccess?.mode === "full";
+    const { capabilities, missing } =
+      granted && deps.writeAvailability
+        ? await deps.writeAvailability(principal)
+        : {
+            capabilities: {
+              create: false,
+              update: false,
+              move: false,
+              trash: false,
+              restore: false,
+            },
+            missing: [] as readonly DesktopWriteGate[],
+          };
+    const readOnly = !Object.values(capabilities).some(Boolean);
     return {
       ...common,
       protocolVersion: 2 as const,
-      readOnly: !Object.values(capabilities).some(Boolean),
+      readOnly,
       capabilities,
       maxUploadBytes: deps.maxUploadBytes ?? 16 * 1024 ** 3,
-      ...(principal.tokenAccess?.mode === "full" && !Object.values(capabilities).some(Boolean)
-        ? { writeUnavailableReason: writeUnavailableReason(provider.type, principal.storage) }
+      ...(granted && readOnly
+        ? { writeUnavailableReason: writeUnavailableReason(provider.type, missing) }
         : {}),
     };
   }
