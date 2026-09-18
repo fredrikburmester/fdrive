@@ -9,7 +9,7 @@ import { formatUptime } from "@/lib/system/format";
 
 export const metadata: Metadata = { title: "About - fdrive" };
 
-const GITHUB = "https://github.com/fredrikburmester/fdrive-web";
+const GITHUB = "https://github.com/fredrikburmester/fdrive";
 const docs = (path: string) => `${GITHUB}/blob/main/${path}`;
 const guides = [
   ["Files, previews & sharing", "README.md#highlights"],

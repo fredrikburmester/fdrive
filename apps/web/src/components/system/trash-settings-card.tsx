@@ -148,7 +148,7 @@ export function TrashSettingsForm({
                   </p>
                   <a
                     className="text-sm underline"
-                    href="https://github.com/fredrikburmester/fdrive-web/blob/main/docs/TRASH.md"
+                    href="https://github.com/fredrikburmester/fdrive/blob/main/docs/TRASH.md"
                     target="_blank"
                     rel="noreferrer"
                   >

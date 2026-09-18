@@ -5,15 +5,15 @@ cask "fdrive" do
   # Private releases use GitHub's authenticated asset endpoint. The ordinary URL
   # works without a token after the source repository becomes public.
   if ENV["HOMEBREW_GITHUB_API_TOKEN"].to_s.empty?
-    url "https://github.com/fredrikburmester/fdrive-web/releases/download/macos-v#{version}/fdrive-#{version}-arm64.dmg"
+    url "https://github.com/fredrikburmester/fdrive/releases/download/macos-v#{version}/fdrive-#{version}-arm64.dmg"
   else
-    url "https://api.github.com/repos/fredrikburmester/fdrive-web/releases/assets/564160815",
+    url "https://api.github.com/repos/fredrikburmester/fdrive/releases/assets/564160815",
         header: ["Accept: application/octet-stream",
                  "Authorization: Bearer #{ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")}"]
   end
   name "FDrive"
   desc "Browse remote storage in Finder with downloads on demand"
-  homepage "https://github.com/fredrikburmester/fdrive-web"
+  homepage "https://github.com/fredrikburmester/fdrive"
 
   depends_on arch: :arm64
   depends_on macos: :tahoe

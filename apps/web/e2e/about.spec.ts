@@ -50,7 +50,7 @@ test("/about identifies the running API and links to the project and feature gui
   expect(about.uptimeSeconds).toBeGreaterThanOrEqual(0);
   await page.goto("/about");
   const info = page.getByRole("region", { name: "About fdrive" });
-  const github = "https://github.com/fredrikburmester/fdrive-web";
+  const github = "https://github.com/fredrikburmester/fdrive";
   await expect(info.getByRole("link", { name: "GitHub", exact: true })).toHaveAttribute(
     "href",
     github,
