@@ -5,8 +5,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
-import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
+import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 import { LinkLoginDialog } from "./link-login-dialog";
+
+/** The note for storage with none of the features fdrive builds on SFTPGo. */
+const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 afterEach(() => {

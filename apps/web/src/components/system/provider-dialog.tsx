@@ -9,8 +9,8 @@ import type {
 import { isHttpUrl } from "@fdrive/contracts";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
-import { FilesOnlyNote } from "@/components/identity/files-only-note";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
+import { StorageNote } from "@/components/identity/storage-note";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -156,9 +156,7 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
                 A provider's type cannot change after it is added.
               </FieldDescription>
             ) : null}
-            <FilesOnlyNote
-              capabilities={types.find((entry) => entry.type === type)?.capabilities}
-            />
+            <StorageNote capabilities={types.find((entry) => entry.type === type)?.capabilities} />
           </Field>
           <Field>
             <FieldLabel htmlFor="provider-label">Name</FieldLabel>

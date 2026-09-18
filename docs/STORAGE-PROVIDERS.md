@@ -1,9 +1,10 @@
 # Adding a storage provider
 
-This guide describes the implemented provider extension points. SFTPGo, WebDAV and S3 are the
-registered backends; fdrive-owned shares are not implemented. Start with a provider that
-supports ordinary file operations; enable additional features only after their complete API and
-UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations and
+This guide describes the implemented provider extension points. fdrive is an SFTPGo client
+first: SFTPGo, WebDAV and S3 are the registered backends, and the features fdrive builds on
+SFTPGo reach another backend one capability flag at a time. fdrive-owned shares are not
+implemented. Start with a provider that supports ordinary file operations; enable additional
+features only after their complete API and UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations and
 fdrive-performed Trash: see [`packages/webdav`](../packages/webdav/src/module.ts) and
 [WEBDAV.md](WEBDAV.md) for its decisions and protocol mapping. S3 is the reference for a
 request-signing backend over an SDK and for directories emulated on a flat key space: see
@@ -254,16 +255,20 @@ Both are absent for a backend that renames.
 | `index` | Also requires `indexRootName(instance)` to name a configured root. The scope resolver currently admits SFTPGo only, so a new remote backend needs more than this callback. |
 | `scopeMapping` | Same root restriction; keep false until the scope resolver can safely map that backend. |
 
-### Files-only storage
+### Storage beside SFTPGo
 
-SFTPGo is the main storage. A type with `index`, `shares` and `office` all false is
-**files only** (`isFilesOnly` in
-[capabilities.ts](../apps/web/src/lib/identity/capabilities.ts)), which today is WebDAV and
-S3. Hidden controls are not enough: people must read the limit before they miss a feature.
-The same one-line note (`FILES_ONLY_NOTE`) therefore appears on the login form and the Add
-login dialog once such a storage is chosen, under its login on the Account page, in the Add
-provider dialog, and on its System > Storage row, where a **Not available** chip row lists
-every capability the type lacks beside **Supports**. Search says "not available for this
+fdrive is an SFTPGo client first. Search and thumbnails (`index`), `shares` and `office` are
+the features fdrive builds on SFTPGo (`SFTPGO_FEATURE_KEYS` in
+[capabilities.ts](../apps/web/src/lib/identity/capabilities.ts)). A type with none of them is
+**files only** (`isFilesOnly`), which today is WebDAV and S3. Hidden controls are not enough:
+people must read the limit before they miss a feature. `storageNote` derives one line from
+the flags that names only the features the type lacks, leads with "Files only." when it
+lacks all three, and is null when it lacks none, so a feature added to a backend drops out
+of the note by flipping its flag, with no copy to chase. That line (`StorageNote`) appears
+on the login form and the Add login dialog once such a storage is chosen, under its login on
+the Account page, in the Add provider dialog, and on its System > Storage row, where a
+**Not available** chip row lists every capability the type lacks beside **Supports**. Search
+says "not available for this
 login" with what it needs, rather than a generic failure, when the scope reason is
 `no_roots`. The Shares page does the same: with a login whose storage cannot share it names
 the login, says which storage can, and never asks the API for the list, since the sidebar
