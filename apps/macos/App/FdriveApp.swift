@@ -112,6 +112,9 @@ private struct LocationsView: View {
             if let error = model.error {
                 Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).textSelection(.enabled)
             }
+            if let notice = model.notice {
+                Label(notice, systemImage: "info.circle").foregroundStyle(.secondary).textSelection(.enabled)
+            }
             locations
             footer
         }
@@ -411,6 +414,8 @@ final class AppModel: ObservableObject {
     @Published var locations: [SavedLocation] = []
     @Published var status: [String: String] = [:]
     @Published var error: String?
+    /// Something worth knowing after a step that succeeded; cleared by the next connect or disconnect.
+    @Published var notice: String?
     @Published var pairing = false
     @Published var pairCode: String?
     @Published var refreshing = false
@@ -518,7 +523,7 @@ final class AppModel: ObservableObject {
     func connect(_ address: String) async {
         guard !pairing else { return }
         if let notice = installationNotice { error = notice; return }
-        error = nil; pairing = true
+        error = nil; notice = nil; pairing = true
         pairingTask = Task {
             defer { pairing = false; pairCode = nil }
             var pending: (APIClient, Pairing)?
@@ -564,7 +569,9 @@ final class AppModel: ObservableObject {
                     do { try await install(credential, server: client.server) }
                     catch {
                         self.report(error)
-                        try? await APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion).disconnect()
+                        if let issued = try? APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion) {
+                            _ = await issued.revokeAccess()
+                        }
                     }
                 }
                 // Confirmation after the Keychain write; an unconfirmed bundle is revoked
@@ -627,7 +634,7 @@ final class AppModel: ObservableObject {
             throw error
         }
         // A resumed pairing re-installs the same bundle; never revoke the token just stored.
-        if let previous, previousToken != credential.token { try? await previous.disconnect() }
+        if let previous, previousToken != credential.token { _ = await previous.revokeAccess() }
         status[saved.id] = "Connected"
     }
     func reveal(_ location: SavedLocation) async {
@@ -735,23 +742,39 @@ final class AppModel: ObservableObject {
         guard !pairing, disconnecting.insert(location.id).inserted else { return }
         defer { disconnecting.remove(location.id) }
         refreshOperation?.cancel(); await refreshOperation?.value
+        error = nil; notice = nil
         do {
             let store = try NativeEnvironment.store()
             let catalog = try store.catalog(location)
             guard try await catalog.pendingWrites().allSatisfy({ $0.result != nil }) else {
                 throw DriveError.server("This location has pending changes. Recover or finish them before disconnecting.")
             }
-            let client = try APIClient(server: location.server, token: store.token(location.id), protocolVersion: location.location.protocolVersion)
             // Keep enough state to retry cleanup after network or framework failures.
             if let index = locations.firstIndex(where: { $0.id == location.id }) { locations[index].disconnecting = true }
             try store.save(locations)
-            do { try await client.disconnect() } catch DriveError.authentication {} catch DriveError.missing {}
+            // A courtesy, not a precondition: neither a server that cannot be reached nor a
+            // token already gone from the Keychain may strand a location in the list.
+            let revoked = await revokeAccess(location, store: store)
             let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
             let preserved = try await NSFileProviderManager.remove(domain, mode: .preserveDirtyUserData)
             if let preserved { NSWorkspace.shared.open(preserved) }
             try store.removeToken(location.id); try store.removeMetadata(location.id)
             locations.removeAll { $0.id == location.id }; try store.save(locations)
             status.removeValue(forKey: location.id)
+            // Say so rather than implying the credential is gone from the server too.
+            if !revoked { notice = Self.unrevokedNotice }
         } catch { self.report(error); status[location.id] = "Disconnect incomplete — retry" }
+    }
+    /// Shown after a removal the server did not confirm. Not an error: the location is
+    /// gone from this Mac, and the web account can still revoke the credential today.
+    static let unrevokedNotice = "Removed this location. The server did not confirm revoking its access, "
+        + "so that access remains until it expires or you revoke it from Account → API tokens on the web."
+    /// Best effort: a token missing from the Keychain and a server that cannot be reached
+    /// both leave the credential unconfirmed, and neither is a reason to keep the location.
+    private func revokeAccess(_ location: SavedLocation, store: ConnectionStore) async -> Bool {
+        guard let token = try? store.token(location.id),
+              let client = try? APIClient(server: location.server, token: token, protocolVersion: location.location.protocolVersion)
+        else { return false }
+        return await client.revokeAccess()
     }
 }
