@@ -50,6 +50,18 @@ enum NativeEnvironment {
     static var purchaseURL: URL? {
         (Bundle.main.object(forInfoDictionaryKey: "FdrivePurchaseURL") as? String).flatMap { URL(string: $0) }.flatMap { $0.scheme == "https" ? $0 : nil }
     }
+    /// What the framework says about this copy of FDrive, or nil when the error is about a location.
+    static func installationProblem(_ error: Error) -> String? {
+        let native = error as NSError
+        guard native.domain == NSFileProviderErrorDomain else { return nil }
+        switch NSFileProviderError.Code(rawValue: native.code) {
+        case .newerExtensionVersionFound: return "A newer FDrive is installed on this Mac. Finder uses that copy; open it instead of this one."
+        case .olderExtensionVersionRunning: return "An older copy of FDrive is still running. Quit it, then open this one again."
+        case .providerTranslocated: return "Move FDrive to the Applications folder, then open it again."
+        case .providerNotFound, .applicationExtensionNotFound: return "FDrive's Finder extension is missing. Reinstall FDrive."
+        default: return nil
+        }
+    }
     static func id(_ id: NSFileProviderItemIdentifier) -> String { id == .rootContainer ? "root" : id == .trashContainer ? "trash" : id.rawValue }
     static func id(_ id: String) -> NSFileProviderItemIdentifier { id == "root" ? .rootContainer : id == "trash" ? .trashContainer : .init(id) }
     static func error(_ error: Error) -> NSError {

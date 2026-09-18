@@ -9,6 +9,8 @@ the first hosted release, Homebrew installation and tests on another Mac.
 
 1. Build and launch the signed app using the instructions below.
 2. Enter the fdrive web address. HTTPS is required; HTTP loopback works for development.
+   The address field shows until a location exists; **Add Server** brings it back to allow
+   more logins.
 3. Sign in in the browser, compare the connection code and select storage logins and access.
 4. Open a location from the app. Click **Enable** in Finder if macOS requests it.
 
@@ -33,7 +35,9 @@ See [write configuration and recovery](#write-configuration-and-recovery) before
 
 The app appears in the Dock and Command-Tab while its locations window is open, including
 when minimized or behind another app. Closing the window returns it to the menu bar; choose
-**Locations and Settings** from the FD menu to reopen it.
+**Locations and Settings** from the FD menu to reopen it. A copy of FDrive that Finder does
+not use (older than the installed app, run from a disk image, or missing its extension) says so
+in the window footer and disables Add Server, Reconnect and Disconnect.
 
 The app refreshes browsed folders and materialized files every 60 seconds, on wake,
 after pairing and on manual Refresh. The extension records a heartbeat in the shared
@@ -61,7 +65,7 @@ tokens can revoke access independently. Revocation cannot erase previously expor
 
 ### Display-name refresh
 
-The app shows the provider name with its username beneath. Refresh reads current display
+The app shows the provider name with the username and fdrive host beneath. Refresh reads current display
 metadata from the existing fdrive server and first verifies account, identity and provider IDs.
 It applies only the name and username, preserving the saved server, grants, expiry, domain ID,
 Keychain token and SQLite catalog. A failed or offline refresh retains the last saved name.

@@ -8,11 +8,15 @@ struct FdriveApp: App {
     @StateObject private var model = AppModel()
     var body: some Scene {
         Window("FDrive", id: "locations") {
-            LocationsView(model: model).frame(minWidth: 520, minHeight: 400)
+            LocationsView(model: model).frame(minWidth: 560, minHeight: 460)
                 .background(WindowActivation())
-        }.defaultSize(width: 600, height: 460)
+                // A translucent panel: Liquid Glass controls float over the blurred desktop.
+                .containerBackground(.thinMaterial, for: .window)
+        }.defaultSize(width: 640, height: 520)
             .defaultLaunchBehavior(.presented)
             .restorationBehavior(.disabled)
+            .windowStyle(.hiddenTitleBar)
+            .windowBackgroundDragBehavior(.enabled)
         MenuBarExtra("FDrive", image: "MenuBarIcon") {
             MenuContents(model: model)
         }
@@ -49,6 +53,19 @@ private struct WindowActivation: NSViewRepresentable {
     }
 }
 
+/// A menu item's action runs while its menu is still closing. Switching from accessory to
+/// regular and activating in that same pass left the window behind the app the user came from.
+/// Switch now, then present and activate on the next pass and order the window front explicitly.
+@MainActor
+private func presentLocations(_ openWindow: OpenWindowAction) {
+    NSApp.setActivationPolicy(.regular)
+    Task { @MainActor in
+        openWindow(id: "locations")
+        NSApp.activate()
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("locations") == true }?.makeKeyAndOrderFront(nil)
+    }
+}
+
 private struct MenuContents: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
@@ -58,7 +75,7 @@ private struct MenuContents: View {
             if let url = NativeEnvironment.purchaseURL { Button("Buy FDrive…") { NSWorkspace.shared.open(url) } }
             Divider()
         }
-        Button("Locations and Settings") { openWindow(id: "locations"); NSApp.activate() }
+        Button("Locations and Settings") { presentLocations(openWindow) }
         ForEach(model.locations) { location in
             Button(location.title) { Task { await model.reveal(location) } }
         }
@@ -75,90 +92,183 @@ private struct LocationsView: View {
     @State private var trashLocation: SavedLocation?
     @State private var enteringLicense = false
     @State private var confirmingDeactivation = false
+    @State private var addingServer = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
-                    .resizable().frame(width: 48, height: 48).accessibilityHidden(true)
-                VStack(alignment: .leading) {
-                    Text("FDrive").font(.title.bold())
-                    Text("Your files in Finder, downloaded when needed.").foregroundStyle(.secondary)
-                }
-                Spacer()
-                if model.refreshing { ProgressView().controlSize(.small) }
-            }
+        VStack(alignment: .leading, spacing: 16) {
+            header
             if model.license != .unrestricted, model.license != .licensed {
                 LicenseBanner(model: model) { enteringLicense = true }
             }
-            HStack {
-                TextField("https://drive.example.com", text: $address)
-                    .textFieldStyle(.roundedBorder).accessibilityLabel("Server address")
-                Button(model.pairing ? "Connecting…" : "Connect") {
-                    Task { await model.connect(address) }
-                }.disabled(model.pairing || address.isEmpty)
-            }
+            if !model.locations.isEmpty { sectionHeader }
+            // The address field is for adding a server; once one is connected it stays out of the way.
+            if model.locations.isEmpty || addingServer { connectBar }
             if let code = model.pairCode {
                 HStack {
-                    Text("Approve this code in your browser: \(code)").textSelection(.enabled)
+                    Label("Approve this code in your browser: \(code)", systemImage: "checkmark.shield").textSelection(.enabled)
                     Spacer()
-                    Button("Cancel") { model.cancelPairing() }
+                    Button("Cancel") { model.cancelPairing() }.buttonStyle(.glass)
+                }.padding(12).background(.fill.quaternary, in: .rect(cornerRadius: 14))
+            }
+            if let error = model.error {
+                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).textSelection(.enabled)
+            }
+            locations
+            footer
+        }
+        // The title bar is hidden; the top inset keeps the header clear of the window controls.
+        .padding(.top, 34).padding(.horizontal, 24).padding(.bottom, 20)
+        // Larger than the 13-point default: the window is read at a glance on big displays.
+        .font(.title3).controlSize(.large)
+        .sheet(item: $trashLocation) { TrashRecoveryView(location: $0) }
+        .sheet(isPresented: $enteringLicense) { LicenseEntryView(model: model) }
+        .confirmationDialog("Deactivate FDrive on this Mac?", isPresented: $confirmingDeactivation) {
+            Button("Deactivate") { Task { await model.deactivateLicense() } }
+        } message: { Text("This frees the license for another Mac. Your locations and files are kept.") }
+    }
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                .resizable().frame(width: 56, height: 56).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("FDrive").font(.title.weight(.semibold))
+                Text("Your files in Finder, downloaded when needed.").foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { Task { await model.refresh() } } label: {
+                Image(systemName: "arrow.clockwise").opacity(model.refreshing ? 0 : 1)
+                    .overlay { if model.refreshing { ProgressView().controlSize(.small) } }
+            }.buttonStyle(.glass).buttonBorderShape(.circle).disabled(model.refreshing).accessibilityLabel("Refresh")
+        }
+    }
+    private var sectionHeader: some View {
+        HStack {
+            Text("Locations").font(.title3.weight(.semibold))
+            Spacer()
+            if !model.pairing {
+                if addingServer {
+                    Button("Cancel") { addingServer = false }.buttonStyle(.glass)
+                } else {
+                    Button("Add Server", systemImage: "plus") { addingServer = true }.buttonStyle(.glass)
+                        .disabled(model.installationNotice != nil)
                 }
             }
-            if let error = model.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-            if model.locations.isEmpty {
-                ContentUnavailableView("Connect your storage", systemImage: "folder", description: Text("Choose your linked logins in the browser. Each gets its own Finder location."))
-            } else {
-                List(model.locations) { location in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(location.location.displayName).font(.headline)
-                            Text(location.location.username).foregroundStyle(.secondary)
-                            Text(model.status[location.id] ?? "Connected").font(.caption).foregroundStyle(.secondary)
-                            if let guidance = model.health[location.id]?.guidance {
-                                Text(guidance).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
-                                if model.health[location.id]?.needsSystemSettings == true {
-                                    Button("Open System Settings") { model.openExtensionSettings() }.buttonStyle(.link).font(.caption)
-                                }
-                            }
-                            if let warning = model.warnings[location.id] {
-                                Text(warning).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
-                            }
-                            if let expires = location.expiresAt { Text("Connection expires \(expires.prefix(10))").font(.caption).foregroundStyle(.secondary) }
-                        }
-                        Spacer()
-                        Button("Open") { Task { await model.reveal(location) } }.buttonStyle(.borderless).accessibilityLabel("Open in Finder")
-                        Menu {
-                            Button("Refresh") { Task { await model.refresh() } }
-                            Button("Reconnect") { address = location.server.absoluteString; Task { await model.connect(address) } }
-                            Button("Show recovery files") { Task { await model.revealRecovery(location) } }
-                            if location.location.capabilities?.restore == true {
-                                Button("Restore from Trash…") { trashLocation = location }
-                            }
-                            Button("Disconnect") { Task { await model.disconnect(location) } }
-                        } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 24).disabled(model.pairing)
-                    }.padding(.vertical, 6)
-                }.listStyle(.inset)
-                Text("If Finder asks, click Enable to activate the location.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var connectBar: some View {
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "link").foregroundStyle(.secondary)
+                    TextField("https://drive.example.com", text: $address)
+                        .textFieldStyle(.plain).accessibilityLabel("Server address").onSubmit(connect)
+                }.padding(.horizontal, 14).frame(height: 40).glassEffect(.regular, in: .capsule)
+                Button(model.pairing ? "Connecting…" : "Connect", action: connect)
+                    .buttonStyle(.glassProminent).controlSize(.large).disabled(model.pairing || address.isEmpty)
             }
-            HStack {
-                Toggle("Launch at login", isOn: $launchAtLogin).onChange(of: launchAtLogin) { _, value in
-                    do { if value { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
-                    catch { model.error = error.localizedDescription; launchAtLogin = SMAppService.mainApp.status == .enabled }
+        }
+    }
+    private func connect() {
+        guard !address.isEmpty, !model.pairing else { return }
+        Task {
+            await model.connect(address)
+            if model.error == nil, !model.locations.isEmpty { addingServer = false; address = "" }
+        }
+    }
+    @ViewBuilder private var locations: some View {
+        if model.locations.isEmpty {
+            ContentUnavailableView("Connect your storage", systemImage: "folder",
+                description: Text("Enter your fdrive web address above and sign in. Every storage login you allow becomes its own Finder location."))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(model.locations) { location in
+                        LocationCard(model: model, location: location,
+                            reconnect: { Task { await model.connect(location.server.absoluteString) } },
+                            restore: { trashLocation = location })
+                    }
                 }
+            }.frame(maxHeight: .infinity)
+            Text("Each location is a storage login you allowed in the browser. Use Add Server to allow more; if Finder asks, click Enable.")
+                .font(.body).foregroundStyle(.secondary)
+        }
+    }
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let notice = model.installationNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill").font(.body).foregroundStyle(.orange).textSelection(.enabled)
+            }
+            HStack(spacing: 12) {
+                Toggle("Launch at login", isOn: $launchAtLogin).toggleStyle(.switch)
+                    .onChange(of: launchAtLogin) { _, value in
+                        do { if value { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } }
+                        catch { model.error = error.localizedDescription; launchAtLogin = SMAppService.mainApp.status == .enabled }
+                    }
                 Spacer()
                 if model.license == .licensed {
                     if model.licensing { ProgressView().controlSize(.mini) }
-                    Text("Licensed").font(.caption).foregroundStyle(.secondary)
-                    Button("Deactivate This Mac…") { confirmingDeactivation = true }.buttonStyle(.link).font(.caption).disabled(model.licensing)
+                    Text("Licensed").font(.body).foregroundStyle(.secondary)
+                    Button("Deactivate This Mac…") { confirmingDeactivation = true }.buttonStyle(.link).font(.body).disabled(model.licensing)
                 }
-                Text("macOS 26+").font(.caption).foregroundStyle(.secondary)
+                Text("macOS 26+").font(.body).foregroundStyle(.secondary)
             }
-        }.padding(24)
-            .sheet(item: $trashLocation) { TrashRecoveryView(location: $0) }
-            .sheet(isPresented: $enteringLicense) { LicenseEntryView(model: model) }
-            .confirmationDialog("Deactivate FDrive on this Mac?", isPresented: $confirmingDeactivation) {
-                Button("Deactivate") { Task { await model.deactivateLicense() } }
-            } message: { Text("This frees the license for another Mac. Your locations and files are kept.") }
+        }
+    }
+}
+
+private struct LocationCard: View {
+    @ObservedObject var model: AppModel
+    let location: SavedLocation
+    let reconnect: () -> Void
+    let restore: () -> Void
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "folder.fill").font(.system(size: 17, weight: .medium)).foregroundStyle(Color.accentColor)
+                .frame(width: 36, height: 36).background(Color.accentColor.opacity(0.14), in: .rect(cornerRadius: 10))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(location.location.displayName).font(.title3.weight(.semibold))
+                Text("\(location.location.username) · \(location.server.host() ?? location.server.absoluteString)").foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Circle().fill(tone).frame(width: 7, height: 7)
+                    Text(status).font(.body).foregroundStyle(.secondary)
+                }.padding(.top, 1)
+                if let guidance = model.health[location.id]?.guidance {
+                    Text(guidance).font(.body).foregroundStyle(.orange).textSelection(.enabled)
+                    if model.health[location.id]?.needsSystemSettings == true {
+                        Button("Open System Settings") { model.openExtensionSettings() }.buttonStyle(.link).font(.body)
+                    }
+                }
+                if let warning = model.warnings[location.id] {
+                    Text(warning).font(.body).foregroundStyle(.orange).textSelection(.enabled)
+                }
+                if let expires = location.expiresAt { Text("Connection expires \(expires.prefix(10))").font(.body).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 12)
+            HStack(spacing: 8) {
+                Button("Open", systemImage: "folder") { Task { await model.reveal(location) } }
+                    .buttonStyle(.glass).accessibilityLabel("Open in Finder")
+                Menu {
+                    Button("Refresh") { Task { await model.refresh() } }
+                    Button("Reconnect", action: reconnect)
+                    Button("Show recovery files") { Task { await model.revealRecovery(location) } }
+                    if location.location.capabilities?.restore == true { Button("Restore from Trash…", action: restore) }
+                    Divider()
+                    Button("Disconnect", role: .destructive) { Task { await model.disconnect(location) } }
+                } label: { Image(systemName: "ellipsis") }
+                    .menuStyle(.button).buttonStyle(.glass).buttonBorderShape(.circle).menuIndicator(.hidden)
+                    .disabled(model.pairing || model.installationNotice != nil).accessibilityLabel("More actions")
+            }
+        }.padding(14).background(.fill.quaternary, in: .rect(cornerRadius: 16))
+    }
+    private var status: String { model.status[location.id] ?? "Connected" }
+    /// Decorative only: the text beside the dot always says what needs attention.
+    private var tone: Color {
+        if model.health[location.id]?.guidance != nil || model.warnings[location.id] != nil { return .orange }
+        if status.hasPrefix("Connected") { return .green }
+        if status == "Refreshing" { return .secondary }
+        if status.hasPrefix("Paused") || status.hasPrefix("Not available") || status.contains("pending") || status.contains("incomplete") { return .orange }
+        return .red
     }
 }
 
@@ -178,20 +288,22 @@ private struct LicenseBanner: View {
     @ObservedObject var model: AppModel
     let enterLicense: () -> Void
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: model.license.allowsAccess ? "clock" : "lock.fill")
+                .foregroundStyle(model.license.allowsAccess ? Color.secondary : Color.orange).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(model.license.summary ?? "").font(.headline)
-                Text(detail).font(.caption).foregroundStyle(model.license.allowsAccess ? Color.secondary : Color.orange)
-                if let error = model.licenseError { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+                Text(model.license.summary ?? "").font(.title3.weight(.semibold))
+                Text(detail).font(.body).foregroundStyle(model.license.allowsAccess ? Color.secondary : Color.orange)
+                if let error = model.licenseError { Text(error).font(.body).foregroundStyle(.red).textSelection(.enabled) }
             }
             Spacer()
             if model.license == .validationOverdue {
-                Button("Check Now") { Task { await model.checkLicense(force: true) } }.disabled(model.licensing)
+                Button("Check Now") { Task { await model.checkLicense(force: true) } }.buttonStyle(.glassProminent).disabled(model.licensing)
             } else {
-                if let url = NativeEnvironment.purchaseURL { Button("Buy FDrive") { NSWorkspace.shared.open(url) } }
-                Button("Enter License…", action: enterLicense)
+                if let url = NativeEnvironment.purchaseURL { Button("Buy FDrive") { NSWorkspace.shared.open(url) }.buttonStyle(.glassProminent) }
+                Button("Enter License…", action: enterLicense).buttonStyle(.glass)
             }
-        }.padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        }.padding(14).background(.fill.quaternary, in: .rect(cornerRadius: 16))
     }
     private var detail: String {
         switch model.license {
@@ -208,18 +320,18 @@ private struct LicenseEntryView: View {
     @State private var key = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Enter License").font(.title2.bold())
+            Text("Enter License").font(.title2.weight(.semibold))
             Text("Paste the license key from your purchase email.").foregroundStyle(.secondary)
             TextField("License key", text: $key).textFieldStyle(.roundedBorder).onSubmit(activate)
             if let error = model.licenseError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 if model.licensing { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.licensing)
-                Button("Activate", action: activate).keyboardShortcut(.defaultAction)
+                Button("Cancel") { dismiss() }.buttonStyle(.glass).keyboardShortcut(.cancelAction).disabled(model.licensing)
+                Button("Activate", action: activate).buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
                     .disabled(model.licensing || key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-        }.padding(24).frame(width: 440)
+        }.padding(24).frame(width: 480).font(.title3).controlSize(.large)
             .interactiveDismissDisabled(model.licensing)
             .onAppear { model.licenseError = nil }
     }
@@ -236,7 +348,7 @@ private struct TrashRecoveryView: View {
     @State private var error: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Restore from Trash").font(.title2.bold())
+            Text("Restore from Trash").font(.title2.weight(.semibold))
             Text("Items return to the top level of \(location.title). Existing files are preserved.")
                 .foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
@@ -246,17 +358,17 @@ private struct TrashRecoveryView: View {
                     Image(systemName: item.entry.kind == "dir" ? "folder" : "doc")
                     Text(item.entry.name).lineLimit(2)
                     Spacer()
-                    Button("Restore") { Task { await restore(item) } }.disabled(busy)
+                    Button("Restore") { Task { await restore(item) } }.buttonStyle(.glass).disabled(busy)
                 }.padding(.vertical, 4)
             }.overlay {
                 if items.isEmpty && !busy && error == nil { Text("Trash is empty").foregroundStyle(.secondary) }
             }
             HStack {
-                Button("Refresh") { Task { await load() } }.disabled(busy)
+                Button("Refresh") { Task { await load() } }.buttonStyle(.glass).disabled(busy)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
+                Button("Done") { dismiss() }.buttonStyle(.glassProminent).keyboardShortcut(.cancelAction).disabled(busy)
             }
-        }.padding(24).frame(width: 560, height: 380)
+        }.padding(24).frame(width: 600, height: 420).font(.title3).controlSize(.large)
             .interactiveDismissDisabled(busy)
             .task { await load() }
     }
@@ -306,6 +418,8 @@ final class AppModel: ObservableObject {
     @Published var license: LicenseState = NativeEnvironment.licenseState()
     @Published var licenseError: String?
     @Published var licensing = false
+    /// A problem with this copy of FDrive rather than with any one location.
+    @Published var installationNotice: String?
     private var signalledAt: [String: Date] = [:]
     private var pairingTask: Task<Void, Never>?
     private var licenseWork: Task<Void, Never>?
@@ -316,7 +430,7 @@ final class AppModel: ObservableObject {
     private var retryAfter: [String: Date] = [:]
     private var failures: [String: Int] = [:]
     init() {
-        do { locations = try NativeEnvironment.store().load() } catch { self.error = error.localizedDescription }
+        do { locations = try NativeEnvironment.store().load() } catch { self.report(error) }
         for location in locations where location.disconnecting { status[location.id] = "Disconnect incomplete — retry" }
         refreshTask = Task { [weak self] in
             await self?.resumePairing()
@@ -364,7 +478,7 @@ final class AppModel: ObservableObject {
         defer { licensing = false }
         await serializedLicenseWork {
             do { await self.applyLicense(try await manager.deactivate(now: Date())) }
-            catch { self.error = error.localizedDescription }
+            catch { self.report(error) }
         }
     }
     /// The periodic check and the user's own action each read, await the seller and write the
@@ -396,8 +510,11 @@ final class AppModel: ObservableObject {
     private func pauseLocations() {
         for saved in locations where !saved.disconnecting { status[saved.id] = "Paused · \(license.summary ?? "License required")" }
     }
+    /// Framework errors about this copy of FDrive get the same wording as the footer notice.
+    private func report(_ error: Error) { self.error = NativeEnvironment.installationProblem(error) ?? error.localizedDescription }
     func connect(_ address: String) async {
         guard !pairing else { return }
+        if let notice = installationNotice { error = notice; return }
         error = nil; pairing = true
         pairingTask = Task {
             defer { pairing = false; pairCode = nil }
@@ -420,7 +537,7 @@ final class AppModel: ObservableObject {
                 guard NSWorkspace.shared.open(approvalURL.url!) else { throw DriveError.server("Could not open the browser.") }
                 if try await redeem(client: client, request: request) { pending = nil; await refresh(); return }
                 throw DriveError.server("The connection request expired. Connect again.")
-            } catch is CancellationError {} catch { self.error = error.localizedDescription }
+            } catch is CancellationError {} catch { self.report(error) }
             if let (client, request) = pending {
                 try? NativeEnvironment.store().clearPendingPairing()
                 await Task.detached { try? await client.cancel(request) }.value
@@ -443,7 +560,7 @@ final class AppModel: ObservableObject {
                 for credential in credentials {
                     do { try await install(credential, server: client.server) }
                     catch {
-                        self.error = error.localizedDescription
+                        self.report(error)
                         try? await APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion).disconnect()
                     }
                 }
@@ -470,7 +587,7 @@ final class AppModel: ObservableObject {
             if try await redeem(client: client, request: pending.pairing) { await refresh() }
             else { try store.clearPendingPairing() }
         } catch DriveError.missing { try? store.clearPendingPairing() }
-        catch { self.error = error.localizedDescription }
+        catch { self.report(error) }
     }
     func openExtensionSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
@@ -518,7 +635,7 @@ final class AppModel: ObservableObject {
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             _ = try await NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
-        } catch { self.error = error.localizedDescription }
+        } catch { self.report(error) }
     }
     func revealRecovery(_ location: SavedLocation) async {
         do {
@@ -530,7 +647,7 @@ final class AppModel: ObservableObject {
             let details = pending.map { "\($0.id): \($0.request.name)\n\($0.error ?? "Waiting to upload")\n" }.joined(separator: "\n")
             try details.write(to: catalog.recoveryDirectory.appendingPathComponent("Pending saves.txt"), atomically: true, encoding: .utf8)
             NSWorkspace.shared.open(catalog.recoveryDirectory)
-        } catch { self.error = error.localizedDescription }
+        } catch { self.report(error) }
     }
     func refresh(automatic: Bool = false) async {
         guard !refreshing, !(automatic && pairing) else { return }
@@ -542,6 +659,15 @@ final class AppModel: ObservableObject {
     }
     private func refreshLocations(automatic: Bool) async {
         guard license.allowsAccess else { pauseLocations(); return }
+        // Ask the framework once, before any location: a stale or misplaced copy fails for all alike,
+        // including while there is nothing connected yet.
+        do { _ = try await NSFileProviderManager.domains(); installationNotice = nil }
+        catch {
+            guard let notice = NativeEnvironment.installationProblem(error) else { return }
+            installationNotice = notice
+            for saved in locations where !saved.disconnecting { status[saved.id] = "Not available in Finder" }
+            return
+        }
         for saved in locations where !saved.disconnecting {
             if Task.isCancelled { return }
             if automatic, let retry = retryAfter[saved.id], retry > Date() { continue }
@@ -602,6 +728,7 @@ final class AppModel: ObservableObject {
         }
     }
     func disconnect(_ location: SavedLocation) async {
+        if let notice = installationNotice { error = notice; return }
         guard !pairing, disconnecting.insert(location.id).inserted else { return }
         defer { disconnecting.remove(location.id) }
         refreshOperation?.cancel(); await refreshOperation?.value
@@ -622,6 +749,6 @@ final class AppModel: ObservableObject {
             try store.removeToken(location.id); try store.removeMetadata(location.id)
             locations.removeAll { $0.id == location.id }; try store.save(locations)
             status.removeValue(forKey: location.id)
-        } catch { self.error = error.localizedDescription; status[location.id] = "Disconnect incomplete — retry" }
+        } catch { self.report(error); status[location.id] = "Disconnect incomplete — retry" }
     }
 }
