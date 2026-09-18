@@ -188,9 +188,9 @@ operation ledger. UUID handles and operation IDs never replace current account/p
 The server hashes and fsyncs the incoming body before commit. It checks the source base and
 destination, stages and validates new bytes, backs up an existing file, then publishes with an
 atomic MOVE — fenced by the storage lease under `apache-webdav-exclusive`, and otherwise by the
-per-identity lock plus the pre-publication recheck. Original backups remain
-under the reserved `/.fdrive-desktop` namespace, hidden from native ordinary reads. Failed
-staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
+per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
+`/.fdrive-desktop` namespace, hidden from native ordinary reads and from the web file tree.
+Failed staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
 uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
 recovery job commit in one PostgreSQL transaction after publication. A failure before that
 transaction commits remains uncertain; an effect failure after it commits leaves the receipt

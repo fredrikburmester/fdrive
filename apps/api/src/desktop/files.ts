@@ -4,6 +4,7 @@ import { isUnderPath, normalizePath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
+import { DESKTOP_INTERNAL_ROOT } from "./internal-root.js";
 import type { DesktopDeps } from "./pairing.js";
 
 const contains = (root: string, path: string) => root === path || isUnderPath(root, path);
@@ -14,7 +15,8 @@ interface Snapshot {
   expires: number;
   entries: DesktopEntry[];
 }
-export const DESKTOP_INTERNAL_ROOT = "/.fdrive-desktop";
+
+export { DESKTOP_INTERNAL_ROOT };
 export function createDesktopFiles(
   deps: Pick<DesktopDeps, "clock" | "trashPathForStorage">,
   writeProtocol = false,
