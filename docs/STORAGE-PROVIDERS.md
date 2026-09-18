@@ -298,14 +298,17 @@ and generic move layouts. Native providers reserve no original filename for the 
 `shares: "native"` means the backend keeps its own public share objects and API: the share
 service creates and edits them with the owner's token and proxies the public share API to
 visitors (SFTPGo). `"none"` means no share links: the management routes refuse with
-`unsupported` and `capability: "shares"`, and the web states the limit. `"owned"`, where
-fdrive keeps the share in `app.shares` and serves the link through the module's storage, is
-the planned path for files-only backends ([Owned shares](plans/OWNED-SHARES.md)) and is
-refused like `"none"` until that store exists. The share code reads the strategy, never the
-provider type: the public routes are handed a `PublicShareAccess` (`list`, `download`, `zip`,
-`upload` and a neutral view of the share, in
-[access.ts](../apps/api/src/shares/access.ts)) whose implementation maps its backend's
-failures to API errors, and the adapter over SFTPGo's public share API is the only one today.
+`unsupported` and `capability: "shares"`, and the web states the limit. `"owned"` means fdrive
+keeps the share in `app.shares` (a row without an upstream id) and serves the link through
+the module's `StorageProvider`, checking the password, expiry and download limit itself
+([owned.ts](../apps/api/src/shares/owned.ts)); no module declares it yet, see
+[Owned shares](plans/OWNED-SHARES.md). The share code reads the strategy, never the provider
+type: the public routes are handed a `PublicShareAccess` (`list`, `download`, `zip`, `upload`
+and a neutral view of the share, in [access.ts](../apps/api/src/shares/access.ts)) whose
+implementation maps its backend's failures to API errors. The native adapter wraps SFTPGo's
+public share API; the owned one wraps the owner's storage confined to the shared path, and
+turns every storage failure into "unavailable" so a visitor never sees the owner's key
+refused as a wrong password.
 
 Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
 `provider.config.trash`. They default to disabled with path `/.trash`. The native layout is
