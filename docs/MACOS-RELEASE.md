@@ -141,6 +141,16 @@ python3 tools/macos/publish.py --repo fredrikburmester/fdrive \
   --artifacts .fdrive-workflow/release-0.1.0/artifacts
 ```
 
+`tools/macos/cut-release.sh` runs those three steps as one command from a checkout of the
+merged commit. It reads the team, license organization and purchase URL from the repository
+variables, finds the two Developer ID profiles Xcode has installed by name, refuses a dirty
+tree, a commit that is not on `main`, an existing tag or a build number at or below the last
+published release's, and tags only after the signed build succeeded:
+
+```sh
+tools/macos/cut-release.sh 0.1.0 1            # add --dry-run to see the commands first
+```
+
 ## Install or upgrade with Homebrew
 
 After the first release and cask PR are merged, use the source repository as the tap. The
