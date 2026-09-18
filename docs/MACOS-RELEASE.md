@@ -172,8 +172,8 @@ Homebrew then uses the ordinary GitHub release URL with the same pinned checksum
 locations inside the app before uninstalling; the cask deliberately does not remove File
 Provider databases or files under `~/Library/CloudStorage`.
 
-Launch FDrive from Applications, enter `https://files.fdrive.se` (or your own fdrive HTTPS
-web address), sign in and select storage identities. The server must include the desktop API from the native app change. No server
+Launch FDrive from Applications, enter your fdrive HTTPS web address (for example
+`https://drive.example.com`), sign in and select storage identities. The server must include the desktop API from the native app change. No server
 address or credentials are embedded in a distributable app.
 
 References: [Apple Developer ID](https://developer.apple.com/help/account/certificates/create-developer-id-certificates),
