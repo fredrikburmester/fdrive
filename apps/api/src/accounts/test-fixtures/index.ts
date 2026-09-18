@@ -1,4 +1,5 @@
 import { MeResponse, type SearchResponse } from "@fdrive/contracts";
+import type { ProviderModule } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient, createSftpgoModule } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
@@ -21,6 +22,8 @@ export function accountsHarness(
   options: {
     principalResolver?: PrincipalResolver;
     wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
+    /** Modules registered beside the fake-backed SFTPGo one, by provider type. */
+    modules?: Readonly<Record<string, ProviderModule>>;
   } = {},
 ) {
   const now = { value: new Date("2026-09-07T00:00:00Z") };
@@ -57,7 +60,7 @@ export function accountsHarness(
     fetch: fetchImpl,
     clock,
     sftpgoUrl: HARNESS_BASE_URL,
-    modules: { sftpgo: createSftpgoModule({ clientFor: () => client }) },
+    modules: { sftpgo: createSftpgoModule({ clientFor: () => client }), ...options.modules },
   });
   const seeded = seedSftpgoProvider(repos, HARNESS_BASE_URL, { managedByEnv: true });
   const tokenSource = createTokenSource({ repos, providers, master, clock, fetch: fetchImpl });
