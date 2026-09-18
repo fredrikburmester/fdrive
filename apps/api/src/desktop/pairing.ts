@@ -13,7 +13,12 @@ import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
-import type { DesktopWriteAvailability, DesktopWriteGate } from "./writes.js";
+import {
+  DESKTOP_MAX_UPLOAD_BYTES,
+  type DesktopWriteAvailability,
+  type DesktopWriteGate,
+  maxWritableBytes,
+} from "./writes.js";
 
 type IssuedCredential = Omit<DesktopCredential, "location"> & {
   location: DesktopCredential["location"] | DesktopWriteCredential["location"];
@@ -146,7 +151,10 @@ export function createDesktopPairing(deps: DesktopDeps) {
       protocolVersion: 2 as const,
       readOnly,
       capabilities,
-      maxUploadBytes: deps.maxUploadBytes ?? 16 * 1024 ** 3,
+      maxUploadBytes: maxWritableBytes(
+        principal.storage,
+        deps.maxUploadBytes ?? DESKTOP_MAX_UPLOAD_BYTES,
+      ),
       ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
     };
   }

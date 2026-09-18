@@ -2,7 +2,7 @@ import { isStorageError, type StorageProvider } from "@fdrive/core";
 import { describe, expect, it } from "vitest";
 import { createS3Client } from "./client.js";
 import { createFakeS3Server, type FakeS3Options, type FakeS3Server } from "./fake/server.js";
-import { createS3StorageProvider, MAX_DIRECTORY_KEYS } from "./storage-provider.js";
+import { createS3StorageProvider, MAX_COPY_BYTES, MAX_DIRECTORY_KEYS } from "./storage-provider.js";
 
 const ALICE = { accessKeyId: "alice-key", secretAccessKey: "alice-secret" };
 
@@ -443,4 +443,10 @@ describe("uploads", () => {
     });
     expect(await kindOf(dead.stat("/x"))).toBe("upstream_unavailable");
   });
+});
+
+it("declares the size its publication copy refuses, so callers bound a write up front", () => {
+  // A multipart upload takes far more than CopyObject will move into place, and
+  // a caller that stages before publishing has to know that before the transfer.
+  expect(harness().storage.maxPublishBytes).toBe(MAX_COPY_BYTES);
 });

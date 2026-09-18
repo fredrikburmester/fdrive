@@ -966,3 +966,21 @@ it("explains a read-only full grant by every unmet gate", async () => {
   // A read grant is read-only by choice and carries no reason.
   expect(await reason(f.identity.id, ["state_dir"], "read")).toBeUndefined();
 });
+
+it("advertises the smaller of fdrive's upload ceiling and what the storage can publish", async () => {
+  const f = await fixture();
+  async function advertised(maxPublishBytes?: number) {
+    const bounded = maxPublishBytes === undefined ? f.storage : { ...f.storage, maxPublishBytes };
+    const pairing = createDesktopPairing({ ...f.deps, storageFactory: vi.fn(async () => bounded) });
+    const pair = pairing.create("Mac", "limits", 2);
+    await pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
+    const result = await pairing.poll(pair.id, pair.secret);
+    if (result.status !== "connected") throw new Error("Expected credentials");
+    const location = result.credentials[0]?.location;
+    return location && "maxUploadBytes" in location ? location.maxUploadBytes : undefined;
+  }
+  expect(await advertised()).toBe(16 * 1024 ** 3);
+  // S3's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
+  // before publication refused it and left the commit needing an administrator.
+  expect(await advertised(5 * 1024 ** 3)).toBe(5 * 1024 ** 3);
+});
