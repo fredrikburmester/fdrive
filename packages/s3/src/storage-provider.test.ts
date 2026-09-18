@@ -117,7 +117,7 @@ describe("directories as key prefixes", () => {
     expect((await storage.list("/a")).map((entry) => entry.name)).toEqual(["ok.txt"]);
   });
 
-  it("refuses a folder with too many objects instead of walking it forever", async () => {
+  it("refuses to list a folder with too many entries instead of walking it forever", async () => {
     // Every page claims more follow; a small bound keeps the test quick and
     // the production bound is a constant the adapter reports in its message.
     const page = Array.from({ length: 1000 }, (_, index) => `big/${index}.txt`);
@@ -134,10 +134,17 @@ describe("directories as key prefixes", () => {
     expect(String((error as Error).message)).toContain(
       "more than 2500 entries; fdrive cannot list",
     );
-    const removal = await storage.deleteDir("/big").catch((cause: unknown) => cause);
-    expect(removal).toMatchObject({ kind: "internal" });
-    expect(String((removal as Error).message)).toContain("more than 2500 objects");
     expect(MAX_DIRECTORY_KEYS).toBe(100_000);
+  });
+
+  it("deletes a folder with more objects than one listing may return", async () => {
+    // The bound holds a listing's answer together in memory; deleting streams it
+    // a page at a time, so undoing a cancelled move has no ceiling of its own.
+    const { server, storage } = harness({}, "", 3);
+    for (let index = 0; index < 12; index += 1) server.put("bucket", `big/${index}.txt`, "x");
+    await storage.deleteDir("/big");
+    expect([...server.objects("bucket").keys()]).toEqual([]);
+    expect(await kindOf(storage.deleteDir("/big"))).toBe("not_found");
   });
 
   it("creates markers and refuses to create over a file or an existing folder", async () => {
@@ -316,6 +323,36 @@ describe("moves and copies", () => {
     server.put("bucket", "quiet/a.txt", "aaaa");
     await storage.move("/quiet", "/quieter");
     expect(listings).toBeLessThan(watched);
+  });
+
+  it("stops a cancelled copy with the source whole, and ignores it once removing", async () => {
+    const { server, storage } = harness();
+    for (const name of ["a", "b", "c"]) server.put("bucket", `src/${name}.txt`, name);
+    const copying = new AbortController();
+    // Cancelled the moment the total is known, before any object is copied.
+    const stopped = await kindOf(
+      storage.move("/src", "/dst", { onProgress: () => copying.abort(), signal: copying.signal }),
+    );
+    expect(stopped).toBe("upstream_unavailable");
+    // The source is whole, because copying never removes anything from it. That
+    // is what makes undoing a cancelled move safe: the destination holds only
+    // this transfer's own partial copy.
+    expect(await text((await storage.download("/src/a.txt")).body)).toBe("a");
+
+    // A signal that only trips once every object is at the destination is past
+    // the point of no return: the move finishes rather than stranding the tree.
+    const removing = new AbortController();
+    let copied = 0;
+    await storage.move("/src", "/late", {
+      onProgress: (done, total) => {
+        copied = done;
+        if (done === total) removing.abort();
+      },
+      signal: removing.signal,
+    });
+    expect(copied).toBeGreaterThan(0);
+    expect(await kindOf(storage.stat("/src"))).toBe("not_found");
+    expect(await text((await storage.download("/late/c.txt")).body)).toBe("c");
   });
 
   it("passes a target check failure through instead of treating it as free", async () => {

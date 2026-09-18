@@ -114,7 +114,16 @@ public struct WriteCoordinator: Sendable {
             }
         }
         defer { watcher.cancel() }
-        return try await client.commitWrite(id)
+        do { return try await client.commitWrite(id) } catch {
+            guard error is CancellationError || (error as? URLError)?.code == .cancelled
+            else { throw error }
+            // Dropping the request only stops this side of it. Tell the server,
+            // or it finishes a copy nobody is waiting for and leaves what it had
+            // written behind. Detached, so cancelling this task does not cancel
+            // the one message that ends the work.
+            await Task.detached { [client] in try? await client.cancelWrite(id) }.value
+            throw DriveError.cancelled
+        }
     }
 
     public func resume(_ pending: PendingWrite, progress: Progress = Progress(totalUnitCount: -1)) async throws -> CatalogItem {
@@ -158,6 +167,14 @@ public struct WriteCoordinator: Sendable {
         } catch {
             let collision: Bool
             switch error {
+            case DriveError.cancelled:
+                // Asked for, and the server has taken back what it copied. Finished
+                // rather than pending: leaving it would offer to retry what the
+                // person deliberately stopped.
+                try? await catalog.writeCancelled(pending)
+                try? FileManager.default.removeItem(
+                    at: catalog.recoveryDirectory.appendingPathComponent(pending.id))
+                throw error
             case DriveError.writeConflict: collision = false
             case DriveError.nameCollision: collision = true
             default:

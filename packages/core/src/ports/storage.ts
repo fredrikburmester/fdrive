@@ -94,6 +94,13 @@ export interface TransferOptions {
    * callers pass it only when something is waiting to watch.
    */
   readonly onProgress?: (completed: number, total: number) => void;
+  /**
+   * Stops a transfer that copies entry by entry. Honoured only while it is
+   * still copying: a backend that copies removes the source only once every
+   * entry is at the destination, so abandoning it before that leaves the source
+   * whole, and abandoning it after would be the one way to lose the only copy.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface StorageProvider {

@@ -94,13 +94,6 @@ function isNotFound(error: unknown): boolean {
   return kindForSdkError(error) === "not_found";
 }
 
-function tooManyKeys(path: string, bound: number): StorageError {
-  return new StorageError(
-    "internal",
-    `folder ${path} has more than ${bound} objects; fdrive cannot move, copy or delete it as a whole`,
-  );
-}
-
 function tooManyEntries(path: string, bound: number): StorageError {
   return new StorageError(
     "internal",
@@ -207,23 +200,6 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
     }
     const next = out.IsTruncated === true ? out.NextContinuationToken : undefined;
     return { files, prefixes, next };
-  }
-
-  /** Every key under `keyPrefix`, the marker included, bounded by `MAX_DIRECTORY_KEYS`. */
-  async function collectKeys(
-    client: S3Client,
-    keyPrefix: string,
-    path: string,
-  ): Promise<ListedKey[]> {
-    const keys: ListedKey[] = [];
-    let token: string | undefined;
-    do {
-      const result = await page(client, keyPrefix, { token });
-      keys.push(...result.files);
-      if (keys.length > maxKeys) throw tooManyKeys(path, maxKeys);
-      token = result.next;
-    } while (token !== undefined);
-    return keys;
   }
 
   /**
@@ -368,19 +344,28 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
         return;
       }
       const sourceDir = dirKey(prefix, source);
+      // Only while copying. Past that the source is being removed, and stopping
+      // there would abandon the move with the destination holding the only copy.
+      const stopIfCancelled = () => {
+        if (opts?.signal?.aborted === true)
+          throw new StorageError("upstream_unavailable", `the transfer of ${source} was cancelled`);
+      };
       const report = opts?.onProgress;
       // Costing the tree is a listing pass, a thousandth of the copies that
       // follow it, and it buys a real proportion to show rather than a spinner.
       // Only when someone is watching: an ordinary move should not pay for it.
       let total = 0;
       if (report) {
-        for await (const batch of keyPages(client, sourceDir))
+        for await (const batch of keyPages(client, sourceDir)) {
+          stopIfCancelled();
           for (const item of batch) total += item.size;
+        }
         report(0, total);
       }
       let completed = 0;
       for await (const batch of keyPages(client, sourceDir)) {
         await mapLimit(batch, COPY_CONCURRENCY, async (from) => {
+          stopIfCancelled();
           const to = `${targetDir}${from.key.slice(sourceDir.length)}`;
           // Resuming skips what a previous attempt already copied, so an
           // interrupted move of a large tree continues instead of starting over.
@@ -666,12 +651,9 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
       }
       const client = await deps.client();
       await run(async () => {
-        const keys = await collectKeys(client, dirKey(prefix, normalized), normalized);
-        if (keys.length === 0) throw await missingDirectory(client, normalized);
-        await deleteKeys(
-          client,
-          keys.map((item) => item.key),
-        );
+        const keyPrefix = dirKey(prefix, normalized);
+        if (!(await dirExists(client, keyPrefix))) throw await missingDirectory(client, normalized);
+        await deleteTree(client, keyPrefix);
       }, normalized);
     },
   };

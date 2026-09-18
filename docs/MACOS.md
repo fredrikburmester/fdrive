@@ -150,6 +150,15 @@ at most once a second whatever the tree's size; the Mac app follows that while t
 flight. It is advisory — a move that finishes before the first poll never asks, and a poll that
 fails leaves the bar where it was rather than disturbing the write.
 
+Stopping that move in Finder stops it on the server too, and takes back what it had copied.
+Dropping the request would only end the Mac's side of it, so the app asks the server, and the
+copy reads that ask on its next tick — which is why it works from any API process, not only the
+one doing the copying. The destination is removed and the source left where it was. That is safe
+only while copying, because copying takes nothing from the source until every object is across:
+once removal starts the move has effectively happened, the cancellation is ignored, and it
+finishes. The server proves the source is still there before removing anything, so a cancellation
+that loses its race with the last object can never delete the only copy.
+
 **Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
 `apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
 writer that uses that same endpoint. Enable it only when **every writer uses the same

@@ -113,3 +113,70 @@ private final class Samples: @unchecked Sendable {
     // And it advanced while the copy ran, rather than jumping only at the end.
     #expect(samples.all.contains { $0 > 0 && $0 < 4_000 })
 }
+
+/// A server whose folder move never finishes on its own, so only a cancellation
+/// ends it — the shape a person meets when they stop a long move in Finder.
+private final class EndlessMoveServer: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cancels: [String] = []
+    static func reset() { lock.withLock { cancels = [] } }
+    static var cancelled: [String] { lock.withLock { cancels } }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    private func deliver(_ body: String) {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                                              headerFields: ["Content-Type": "application/json"])!,
+                            cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let parts = path.split(separator: "/")
+        let id = parts.firstIndex(of: "operations").map { String(parts[$0 + 1]) } ?? ""
+        if path.hasSuffix("/cancel") {
+            Self.lock.withLock { Self.cancels.append(id) }
+            deliver("{\"operationId\":\"\(id)\",\"state\":\"cancelled\",\"item\":null,\"recoveryId\":null}")
+            return
+        }
+        if path.hasSuffix("/commit") { return }  // Answers only when cancelled.
+        if path.hasSuffix("/moves") {
+            let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let made = body?["operationId"] as? String ?? ""
+            deliver("{\"operationId\":\"\(made)\",\"state\":\"ready\",\"item\":null,\"recoveryId\":null}")
+            return
+        }
+        deliver("{\"operationId\":\"\(id)\",\"state\":\"committing\",\"item\":null,\"recoveryId\":null}")
+    }
+    override func stopLoading() {}
+}
+
+// Stopping a long folder move in Finder has to reach the server: dropping the
+// request only ends this side of it.
+@Test func cancellingALongMoveTellsTheServerAndSettlesThePendingWrite() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let catalog = try Catalog(url: directory.appendingPathComponent("catalog.sqlite"), title: "Cancel")
+    EndlessMoveServer.reset()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [EndlessMoveServer.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let client = try APIClient(server: URL(string: "https://drive.invalid")!, token: "fdd_test",
+                               session: session, protocolVersion: 2)
+    let coordinator = WriteCoordinator(catalog: catalog, client: client, progressPoll: .milliseconds(20))
+    let task = Task {
+        try await coordinator.perform(route: "moves", localId: nil, templateKey: "folder", parentId: "root",
+                                      name: "moved", base: nil, contents: nil,
+                                      progress: Progress(totalUnitCount: -1))
+    }
+    // Let the commit get under way, the way Finder's cancel arrives mid-copy.
+    try await Task.sleep(for: .milliseconds(120))
+    task.cancel()
+    let outcome = await task.result
+    #expect(throws: Error.self) { try outcome.get() }
+    #expect(EndlessMoveServer.cancelled.count == 1)
+    // Nothing outstanding: the app counts a write with no result as still in
+    // flight, so a cancelled one must leave no record rather than a failed one.
+    #expect(try await catalog.pendingWrites().isEmpty)
+}

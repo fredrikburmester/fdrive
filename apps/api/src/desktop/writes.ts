@@ -209,6 +209,26 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     )
       fail("version_conflict", CHANGED);
   }
+  /**
+   * Removes what a cancelled copy had written. Safe only because copying never
+   * takes anything from the source: the destination holds this operation's own
+   * partial copy and nothing else. Proved again here rather than assumed — a
+   * cancellation that lost its race with the last object would otherwise delete
+   * the only copy that was left.
+   */
+  async function undoCancelledCopy(storage: StorageProvider, from: string, to: string) {
+    const intact = await storage.stat(from).then(
+      () => true,
+      (error: unknown) => {
+        if (gone(error)) return false;
+        throw error;
+      },
+    );
+    if (!intact) return;
+    await storage.deleteDir(to).catch((error: unknown) => {
+      if (!gone(error)) throw error;
+    });
+  }
   async function authority(principal: Principal) {
     if (!capabilities(principal).create)
       throw new ApiHttpError("forbidden", "This location cannot enforce safe writes", {
@@ -941,28 +961,48 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
                 // so it must not land in `uncertain`, which no one but an
                 // administrator can clear.
                 if (!alreadyMoved) {
-                  // Recorded as the copy runs so the Mac app can show a real
-                  // proportion for a move that lasts minutes. Throttled: a tree
-                  // of any size costs a handful of writes, and each is a
-                  // compare-and-swap on a still-committing operation, so one
-                  // arriving after the receipt simply loses. Advisory, so a
-                  // failed write is dropped rather than failing the move.
-                  let recorded = 0;
-                  const record = (completed: number, total: number) => {
+                  // One tick does both jobs. It records how far the copy has got
+                  // so the Mac app can show a real proportion, and it reads the
+                  // operation back, which is how a cancel reaches a copy already
+                  // under way — from another request, or another API process,
+                  // neither of which can touch this one's storage call directly.
+                  // Throttled: a tree of any size costs a handful of round
+                  // trips. Advisory, so a failed write is dropped rather than
+                  // failing the move.
+                  const cancelling = new AbortController();
+                  let ticked = 0;
+                  const tick = (completed: number, total: number) => {
                     const now = deps.clock().getTime();
-                    if (completed < total && now - recorded < DESKTOP_PROGRESS_INTERVAL_MS) return;
-                    recorded = now;
-                    void transition(principal, id, "committing", "committing", {
-                      ...op.result,
-                      bulkTarget: target,
-                      bulkProgress: { completed, total },
-                    }).catch(() => {});
+                    if (completed < total && now - ticked < DESKTOP_PROGRESS_INTERVAL_MS) return;
+                    ticked = now;
+                    void (async () => {
+                      const current = await repo
+                        .operation(principal.identityId, principal.accountId, id)
+                        .catch(() => null);
+                      if (current?.result?.bulkCancelled === true) cancelling.abort();
+                      // Merged onto what is stored rather than onto this
+                      // attempt's snapshot, or recording progress would erase
+                      // the cancellation it has just read.
+                      await transition(principal, id, "committing", "committing", {
+                        ...(current?.result ?? op.result),
+                        bulkTarget: target,
+                        bulkProgress: { completed, total },
+                      }).catch(() => {});
+                    })();
                   };
-                  await storage.move(source.path, target, {
-                    overwrite: reserved !== undefined,
-                    resume: reserved !== undefined,
-                    onProgress: record,
-                  });
+                  try {
+                    await storage.move(source.path, target, {
+                      overwrite: reserved !== undefined,
+                      resume: reserved !== undefined,
+                      onProgress: tick,
+                      signal: cancelling.signal,
+                    });
+                  } catch (error) {
+                    if (!cancelling.signal.aborted) throw error;
+                    await undoCancelledCopy(storage, source.path, target);
+                    await transition(principal, id, "committing", "cancelled");
+                    fail("operation_cancelled", "The move was cancelled.");
+                  }
                 }
               }
             }
@@ -1177,6 +1217,18 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     async cancel(principal: Principal, id: string) {
       const op = await operation(principal, id);
       if (op.state === "cancelled") return status(op);
+      // A folder copy is the one publication that runs long enough to be worth
+      // stopping. While it copies, the source is untouched and everything at the
+      // destination is its own, so it can be stopped and undone. The ask goes
+      // through the operation because the request may reach any API process; the
+      // one doing the copying reads it on its next tick.
+      if (op.state === "committing" && typeof op.result?.bulkTarget === "string") {
+        await transition(principal, id, "committing", "committing", {
+          ...op.result,
+          bulkCancelled: true,
+        });
+        return status(await operation(principal, id));
+      }
       if (!["receiving", "ready", "conflict"].includes(op.state))
         throw new ApiHttpError("conflict", "An active or uncertain commit cannot be discarded");
       if (await transition(principal, id, op.state, "cancelled"))

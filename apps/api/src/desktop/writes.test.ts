@@ -1860,8 +1860,11 @@ it("records how far a folder copy has got, often enough to watch and no oftener"
       ...raw,
       movesDirectoriesByCopy: true,
       move: async (path, target, opts) => {
-        const look = async () =>
+        // The tick records out of band so it never holds up the copy; let it land.
+        const look = async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
           seen.push((await held.service?.status(principal, held.operationId as string))?.progress);
+        };
         opts?.onProgress?.(0, 1_000);
         await look();
         now = new Date(now.getTime() + 2 * DESKTOP_PROGRESS_INTERVAL_MS);
@@ -1901,4 +1904,225 @@ it("records how far a folder copy has got, often enough to watch and no oftener"
   ]);
   // The receipt replaces it: a finished operation reports its item, not a bar.
   expect((await held.service.status(principal, held.operationId)).progress).toBeUndefined();
+});
+
+it("stops a folder copy asked to cancel, and takes back what it had copied", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child", "/folder/other": "other" });
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  let copied = false;
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        // What a copying backend does: it writes the destination as it goes and
+        // takes nothing from the source until every entry is across.
+        await raw.copy(path, target, { overwrite: true });
+        copied = true;
+        // The cancel arrives mid-copy, from a request this one cannot see.
+        await held.service?.cancel(principal, held.operationId as string);
+        opts?.onProgress?.(1, 2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (opts?.signal?.aborted)
+          throw new StorageError("upstream_unavailable", "the transfer was cancelled");
+        return raw.move(path, target, opts);
+      },
+    },
+  };
+  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
+  const item = await held.service.stat(principal, "/folder");
+  held.operationId = randomUUID();
+  await held.service.prepare(principal, {
+    kind: "move" as const,
+    operationId: held.operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(held.service.commit(principal, held.operationId)).rejects.toMatchObject({
+    details: { code: "operation_cancelled" },
+  });
+  expect(copied).toBe(true);
+  // The half-written destination is taken back, and the source is untouched.
+  await expect(raw.stat("/folder-moved")).rejects.toMatchObject({ kind: "not_found" });
+  expect(await new Response((await raw.download("/folder/child")).body).text()).toBe("child");
+  // Cancelled is a settled end: no administrator, and no retry of what was asked to stop.
+  expect((await held.service.status(principal, held.operationId)).state).toBe("cancelled");
+});
+
+it("never takes back a copy whose source has already gone", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        // The cancel loses its race: the move completed, so the destination now
+        // holds the only copy and taking it back would destroy the item.
+        await raw.move(path, target, opts);
+        await held.service?.cancel(principal, held.operationId as string);
+        opts?.onProgress?.(1, 2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (opts?.signal?.aborted)
+          throw new StorageError("upstream_unavailable", "the transfer was cancelled");
+      },
+    },
+  };
+  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
+  const item = await held.service.stat(principal, "/folder");
+  held.operationId = randomUUID();
+  await held.service.prepare(principal, {
+    kind: "move" as const,
+    operationId: held.operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  await expect(held.service.commit(principal, held.operationId)).rejects.toMatchObject({
+    details: { code: "operation_cancelled" },
+  });
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
+});
+
+/** A copying storage that asks for its own cancellation part-way through. */
+function cancellingFixture(
+  f: Awaited<ReturnType<typeof fixture>>,
+  raw: StorageProvider,
+  overrides: (
+    base: StorageProvider,
+    cancelled: () => boolean,
+  ) => Partial<StorageProvider> = () => ({}),
+) {
+  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
+  let cancelled = false;
+  const storage: StorageProvider = {
+    ...raw,
+    movesDirectoriesByCopy: true,
+    move: async (path, target, opts) => {
+      // Half across: the destination is written, the source still whole.
+      await raw.copy(path, target, { overwrite: true });
+      await held.service?.cancel(principal, held.operationId as string);
+      cancelled = true;
+      opts?.onProgress?.(1, 2);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (opts?.signal?.aborted)
+        throw new StorageError("upstream_unavailable", "the transfer was cancelled");
+    },
+    ...overrides(raw, () => cancelled),
+  };
+  const principal: Principal = { ...f.principal, storage };
+  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
+  const service = held.service;
+  const run = async () => {
+    const item = await service.stat(principal, "/folder");
+    held.operationId = randomUUID();
+    await service.prepare(principal, {
+      kind: "move" as const,
+      operationId: held.operationId,
+      itemId: item.id,
+      parentId: "root",
+      name: "folder-moved",
+      base: item.version,
+    });
+    return service.commit(principal, held.operationId);
+  };
+  return { held, principal, service, run };
+}
+
+it("counts a destination already gone as taken back, and still settles as cancelled", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  // Something else removed the half-copy first; there is nothing left to undo.
+  const { held, principal, service, run } = cancellingFixture(f, raw, (base, cancelled) => ({
+    deleteDir: async (path: string) => {
+      if (!cancelled()) return base.deleteDir(path);
+      await base.deleteDir(path);
+      throw new StorageError("not_found", "already gone");
+    },
+  }));
+  await expect(run()).rejects.toMatchObject({ details: { code: "operation_cancelled" } });
+  expect((await service.status(principal, held.operationId as string)).state).toBe("cancelled");
+});
+
+it("surfaces a failure to take back a cancelled copy instead of claiming it was", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  const refusing = cancellingFixture(f, raw, (base, cancelled) => ({
+    deleteDir: async (path: string) => {
+      if (!cancelled()) return base.deleteDir(path);
+      throw new StorageError("forbidden", "the destination cannot be removed");
+    },
+  }));
+  // Not reported as cancelled: the half-copy is still there and someone must see it.
+  await expect(refusing.run()).rejects.toMatchObject({ kind: "forbidden" });
+  expect(
+    (await refusing.service.status(refusing.principal, refusing.held.operationId as string)).state,
+  ).not.toBe("cancelled");
+
+  const other = await fixture();
+  // Proving the source is still there is the guard that makes undoing safe, so a
+  // storage that cannot answer has to stop rather than guess.
+  const unreadable = cancellingFixture(
+    other,
+    createMemoryStorage({ "/folder/child": "child" }),
+    (base, cancelled) => ({
+      stat: async (path: string) => {
+        if (!cancelled()) return base.stat(path);
+        throw new StorageError("upstream_unavailable", "the source cannot be read");
+      },
+    }),
+  );
+  await expect(unreadable.run()).rejects.toMatchObject({ kind: "upstream_unavailable" });
+});
+
+it("keeps copying when the operation cannot be read back mid-move", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  let copying = false;
+  const principal: Principal = {
+    ...f.principal,
+    storage: {
+      ...raw,
+      movesDirectoriesByCopy: true,
+      move: async (path, target, opts) => {
+        copying = true;
+        opts?.onProgress?.(1, 2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        copying = false;
+        return raw.move(path, target, opts);
+      },
+    },
+  };
+  // The tick is advisory: an unreadable ledger costs a progress update and a
+  // chance to notice a cancellation, never the move itself.
+  const service = createDesktopWrites({
+    ...f.deps,
+    repo: {
+      ...f.repo,
+      operation: async (...args: Parameters<typeof f.repo.operation>) => {
+        if (copying) throw Error("ledger unreachable");
+        return f.repo.operation(...args);
+      },
+    },
+    publishLock: async (_id, run) => run(),
+  });
+  const item = await service.stat(principal, "/folder");
+  const operationId = randomUUID();
+  await service.prepare(principal, {
+    kind: "move" as const,
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "folder-moved",
+    base: item.version,
+  });
+  expect((await service.commit(principal, operationId)).state).toBe("completed");
+  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
 });

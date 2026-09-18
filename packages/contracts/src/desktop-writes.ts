@@ -126,6 +126,7 @@ export const DesktopWriteErrorCode = z.enum([
   "permission_denied",
   "quota_exceeded",
   "operation_uncertain",
+  "operation_cancelled",
   "operation_expired",
   "unsupported",
   "invalid_upload",
