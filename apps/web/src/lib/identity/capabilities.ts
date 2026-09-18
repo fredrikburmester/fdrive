@@ -60,8 +60,11 @@ export function capabilitiesFor(
 
 /**
  * Whether any login linked to the account has `key`: the sidebar shows
- * Shares and Trash when at least one login can use them, since either page
- * can switch logins on its own. Before `me` loads, the default applies.
+ * Shares and Trash when at least one login can use them, since the login
+ * switcher in the sidebar footer works from either page. A page reached
+ * with a login that lacks the capability states that limit itself
+ * (`capabilitiesFor`) rather than asking the API for a refusal. Before
+ * `me` loads, the default applies.
  */
 export function anyLoginCan(me: MeResponse | undefined, key: CapabilityKey): boolean {
   if (me === undefined) return DEFAULT_CAPABILITIES[key];

@@ -81,8 +81,9 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
           protocolVersion: 2,
           readOnly: true,
           capabilities: { create: false, update: false },
+          // Stock SFTPGo without FDRIVE_DESKTOP_STATE_DIR: both unmet gates are named.
           writeUnavailableReason:
-            'Set the provider\'s desktop write mode ("verified-optimistic" for stock SFTPGo) to enable writes. This location remains read-only.',
+            'Read-only until an administrator sets "Native write enforcement" to verified-optimistic on this SFTPGo server (System › Storage) and sets FDRIVE_DESKTOP_STATE_DIR on this server.',
         },
       },
     ],
