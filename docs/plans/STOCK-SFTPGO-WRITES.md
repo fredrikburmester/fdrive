@@ -2,10 +2,11 @@
 
 Updated 2026-09-16. Outcome: Finder create/update/move/trash/restore works against
 **unmodified** SFTPGo. The forked image and its `fdrive-local-v1` mode were removed on
-2026-09-16, so this is now the only SFTPGo write contract. Current behavior: delivered as the
-`verified-optimistic` mode (`packages/sftpgo/src/module.ts` sets `optimisticPublish`, and
-`capabilities()` in `apps/api/src/desktop/writes.ts` grants writes once the publish lock is
-configured); blank or unknown modes still yield `NO_WRITES`. Related:
+2026-09-16, so this is now the only SFTPGo write contract. Current behavior: since 2026-09-18 this
+is the default contract for every storage (`publishesSafely` in
+`apps/api/src/desktop/publish-gate.ts` accepts any storage once the publish lock is configured);
+the `verified-optimistic` selector was removed, S3 publishes the same way, and a stale value in a
+stored row is ignored. Related:
 [macOS writes](MACOS-WRITES.md), [macOS behavior](../MACOS.md#write-configuration-and-recovery),
 [provider development](../STORAGE-PROVIDERS.md).
 
@@ -65,7 +66,7 @@ Re-stating the observation closer to the rename would narrow its window to nothi
 fresh stat would adopt whatever another writer had just written; `optimistic-publish.test.ts`
 pins that with a regression test firing a write the instant the recovery copy is taken.
 
-**3. `verified-optimistic` is selectable on stock SFTPGo.** The capability gate moved off
+**3. `verified-optimistic` is selectable on stock SFTPGo** (superseded 2026-09-18: it is the default for every storage and no longer selectable). The capability gate moved off
 `storage.withWriteLease` onto `publishesSafely` in `apps/api/src/desktop/publish-gate.ts`, which
 accepts either a lease or `optimisticPublish` **together with** a configured publish lock — a
 deployment without the lock stays read-only instead of publishing unserialized.

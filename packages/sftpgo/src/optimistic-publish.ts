@@ -1,15 +1,6 @@
 import { isStorageError, StorageError, type StorageProvider } from "@fdrive/core";
 
 /**
- * Publication without a storage lease, the only native write contract for
- * SFTPGo. fdrive serializes Mac desktop writes against each other and rechecks
- * the destination immediately before an atomic server-side rename; any other
- * writer — the web app, Collabora, OCR, or a direct SFTP/FTP/WebDAV client —
- * landing inside that window is silently lost.
- */
-export const SFTPGO_OPTIMISTIC_MODE = "verified-optimistic";
-
-/**
  * Stock REST ignores `overwrite: false` on upload, move and copy, so the refusal
  * is emulated with a stat before the mutation. It is only as strong as the
  * fdrive-side lock that serializes the callers: a writer outside that lock can

@@ -5,7 +5,6 @@ import type {
   DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { StorageProvider } from "@fdrive/core";
 import type { ApiTokenRepo, DesktopPublishLock, IdentityRepo, ProviderRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
@@ -57,19 +56,9 @@ export interface DesktopDeps {
  * A bundle the app never confirms (crash between poll and Keychain) is revoked when the
  * window closes, so an orphaned credential lives at most five minutes.
  */
-/** Why a full-access grant still lands read-only, in terms the person can act on. */
-function writeUnavailableReason(providerType: string, storage: StorageProvider): string {
-  if (storage.withWriteLease !== undefined || storage.optimisticPublish === true)
-    return "Finder writes are turned off on this server: FDRIVE_DESKTOP_STATE_DIR is not set. Files stay read-only.";
-  switch (providerType) {
-    case "sftpgo":
-      return 'Read-only until "Native write enforcement" on this SFTPGo server (System › Storage) is set to verified-optimistic.';
-    case "webdav":
-      return 'Read-only until "Mac write support" on this WebDAV server (System › Storage) is set to apache-webdav-exclusive.';
-    default:
-      return "Finder writes are not supported for this storage type. Files stay read-only.";
-  }
-}
+/** The one way a full-access grant still lands read-only now that every storage publishes. */
+const WRITES_OFF =
+  "Finder writes are turned off on this server (FDRIVE_DESKTOP_STATE_DIR is not set). Files stay read-only.";
 
 export function createDesktopPairing(deps: DesktopDeps) {
   const pairs = new Map<string, Pair>();
@@ -134,7 +123,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       capabilities,
       maxUploadBytes: deps.maxUploadBytes ?? 16 * 1024 ** 3,
       ...(principal.tokenAccess?.mode === "full" && !Object.values(capabilities).some(Boolean)
-        ? { writeUnavailableReason: writeUnavailableReason(provider.type, principal.storage) }
+        ? { writeUnavailableReason: WRITES_OFF }
         : {}),
     };
   }

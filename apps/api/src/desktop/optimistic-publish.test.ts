@@ -59,7 +59,7 @@ async function fixture(
   };
   const storage: StorageProvider = options.lease
     ? { ...base, withWriteLease: (action) => action(base) }
-    : { ...base, optimisticPublish: true };
+    : base;
   const principal: Principal = {
     accountId: randomUUID(),
     identityId: randomUUID(),
@@ -151,12 +151,10 @@ async function fixture(
 it("qualifies publication by lease, or by fdrive serialization, and never by neither", () => {
   const plain = createMemoryStorage({}) as StorageProvider;
   const leased: StorageProvider = { ...plain, withWriteLease: async (action) => action(plain) };
-  const optimistic: StorageProvider = { ...plain, optimisticPublish: true };
   expect(publishesSafely(leased, false)).toBe(true);
-  expect(publishesSafely(optimistic, true)).toBe(true);
-  // Optimistic publication without the serialization it depends on stays read-only.
-  expect(publishesSafely(optimistic, false)).toBe(false);
-  expect(publishesSafely(plain, true)).toBe(false);
+  // Any storage publishes once fdrive serializes its own writers; without that it stays read-only.
+  expect(publishesSafely(plain, true)).toBe(true);
+  expect(publishesSafely(plain, false)).toBe(false);
 });
 
 it("publishes on stock storage once fdrive serializes its own writers", async () => {

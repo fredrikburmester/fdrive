@@ -82,7 +82,7 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
           readOnly: true,
           capabilities: { create: false, update: false },
           writeUnavailableReason:
-            'Set the provider\'s desktop write mode ("verified-optimistic" for stock SFTPGo) to enable writes. This location remains read-only.',
+            "Finder writes are turned off on this server (FDRIVE_DESKTOP_STATE_DIR is not set). Files stay read-only.",
         },
       },
     ],

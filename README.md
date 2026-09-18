@@ -142,8 +142,9 @@ Browsing needs only a reachable SFTPGo server. Processing also needs its files m
 ## FDrive for Mac
 
 **FDrive for Mac** puts your fdrive storage in Finder. Folders appear right away and files
-download when you open them, so your Mac does not need a full copy of your drive. Locations are
-read-only unless your server [enables desktop writes](docs/MACOS.md#write-configuration-and-recovery).
+download when you open them, so your Mac does not need a full copy of your drive. Locations you
+allow as read and write accept saves on every storage type; see
+[how writes are kept safe](docs/MACOS.md#write-configuration-and-recovery).
 It is an early release and needs macOS 26 or later on Apple silicon and an fdrive server
 reachable over HTTPS.
 

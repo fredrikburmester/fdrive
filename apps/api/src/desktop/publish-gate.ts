@@ -3,14 +3,14 @@ import type { StorageProvider } from "@fdrive/core";
 /**
  * Whether this storage may be published to at all.
  *
- * Two contracts qualify. A storage-enforced lease fences every writer the
- * storage itself sees. Failing that, `optimisticPublish` accepts fdrive-side
- * serialization plus the destination recheck performed immediately before the
- * rename — which requires that serialization to actually be configured, so a
- * deployment without the publish lock stays read-only rather than silently
- * dropping to an unserialized write.
+ * Every storage qualifies once fdrive can serialize its own Mac writers: the
+ * per-identity publish lock plus the destination recheck performed immediately
+ * before the rename is the default contract, and no storage offers a primitive
+ * that would make it optional (see docs/MACOS.md). A storage-enforced lease
+ * (`withWriteLease`) is the stronger contract and fences every writer the
+ * storage sees, so it needs no lock of its own. With neither, a deployment
+ * stays read-only rather than publishing unserialized.
  */
 export function publishesSafely(storage: StorageProvider, serialized: boolean): boolean {
-  if (storage.withWriteLease !== undefined) return true;
-  return storage.optimisticPublish === true && serialized;
+  return storage.withWriteLease !== undefined || serialized;
 }
