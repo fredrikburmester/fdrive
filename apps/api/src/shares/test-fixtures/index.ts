@@ -1,3 +1,4 @@
+import type { ProviderModule } from "@fdrive/core";
 import { createMemoryShareRepo } from "@fdrive/db";
 import { accountsHarness, cookieFrom } from "../../accounts/test-fixtures/index.ts";
 import { createApp } from "../../app.ts";
@@ -5,8 +6,17 @@ import { createShareCredentialCodec } from "../credentials.ts";
 import { createShareLimiter } from "../limiter.ts";
 import { registerSharesRoutes } from "../routes.ts";
 import { createSharesService } from "../service.ts";
-export function sharesHarness(options: { limiterCapacity?: number } = {}) {
-  const h = accountsHarness();
+export function sharesHarness(
+  options: {
+    limiterCapacity?: number;
+    modules?: Readonly<Record<string, ProviderModule>>;
+    wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
+  } = {},
+) {
+  const h = accountsHarness({
+    ...(options.modules === undefined ? {} : { modules: options.modules }),
+    ...(options.wrapFetch === undefined ? {} : { wrapFetch: options.wrapFetch }),
+  });
   const shares = createMemoryShareRepo();
   const deps = {
     ...h.deps,
@@ -69,11 +79,19 @@ export function sharesHarness(options: { limiterCapacity?: number } = {}) {
         : { body: JSON.stringify(options.body) }),
     });
   }
-  async function login(username = "alice") {
+  /** Signs in as a fake SFTPGo user, or as `username` on `providerId` with `password`. */
+  async function login(
+    username = "alice",
+    options: { providerId?: string; password?: string } = {},
+  ) {
     const res = await request("/api/v1/auth/login", {
       method: "POST",
-      body: { credential: { username, password: `${username}-pass` } },
+      body: {
+        ...(options.providerId === undefined ? {} : { providerId: options.providerId }),
+        credential: { username, password: options.password ?? `${username}-pass` },
+      },
     });
+    if (res.status !== 200) throw new Error(`login failed: ${res.status} ${await res.text()}`);
     return cookieFrom(res);
   }
   async function create(cookie: string, patch: Record<string, unknown> = {}) {
