@@ -36,12 +36,12 @@ The repository is private, so an anonymous clone fails. Arrange access first —
 an SSH key on an account with access, or a deploy key on this machine — then:
 
 ```sh
-git clone git@github.com:fredrikburmester/fdrive-web.git /path/to/fdrive
+git clone git@github.com:fredrikburmester/fdrive.git /path/to/fdrive
 cd /path/to/fdrive/deploy
 ./init-env.sh
 ```
 
-The HTTPS form (`https://github.com/fredrikburmester/fdrive-web.git`) works only
+The HTTPS form (`https://github.com/fredrikburmester/fdrive.git`) works only
 with a personal access token that carries that access.
 
 Replace `/path/to/fdrive` with the chosen checkout path. All subsequent commands in
