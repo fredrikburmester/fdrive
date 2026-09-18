@@ -90,7 +90,9 @@ The explicit table registry is in `packages/backup/src/registry.ts`. A capture f
 unclassified application/index table, including tables introduced by a future migration.
 
 - Accounts, identities, providers, credentials, settings, tags, favorites, folder views,
-  recents, share metadata, activity, stable Office/native file IDs and native recovery receipts.
+  recents, share metadata (an owned share's password hash included, so it restores fully; a
+  native row only names the share SFTPGo keeps), activity, stable Office/native file IDs and
+  native recovery receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
 - Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
   native local/remote recovery material, retained logs and configured external source mounts.

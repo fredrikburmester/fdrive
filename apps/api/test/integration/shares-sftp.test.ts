@@ -262,7 +262,7 @@ describe("public share proxy against real SFTPGo and PostgreSQL", () => {
     await res.arrayBuffer();
     const revoked = await create(alice);
     const row = await createShareRepo(db.db).get(revoked.id);
-    if (!row) throw new Error("missing share");
+    if (!row?.sftpgoShareId) throw new Error("missing share");
     const client = createSftpgoClient({ baseUrl: sftp.baseUrl });
     const user = client.user(
       (await client.login({ username: "alice", password: "alice-pass" })).accessToken,

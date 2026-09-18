@@ -99,6 +99,13 @@
       "when": 1789564214894,
       "tag": "0013_folder_view_sort",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789717630830,
+      "tag": "0014_owned_shares",
+      "breakpoints": true
     }
   ]
 }

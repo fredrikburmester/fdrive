@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigserial,
   boolean,
+  check,
   customType,
   foreignKey,
   index,
@@ -256,6 +257,13 @@ export const wopiLocks = appSchema.table(
   (table) => [index("wopi_locks_expires_at_idx").on(table.expiresAt)],
 );
 
+/**
+ * Public share links. A native row mirrors a share the backend keeps
+ * (`sftpgo_share_id`); an owned row (`sftpgo_share_id` null) is one fdrive
+ * serves itself, so its name, paths, expiry, limit and password hash are
+ * authoritative here. The check constraint keeps the hash to owned rows and
+ * `has_password` honest for them.
+ */
 export const shares = appSchema.table(
   "shares",
   {
@@ -263,20 +271,30 @@ export const shares = appSchema.table(
     identityId: uuid("identity_id")
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
-    sftpgoShareId: text("sftpgo_share_id").notNull(),
+    sftpgoShareId: text("sftpgo_share_id"),
     name: text("name").notNull(),
+    description: text("description").notNull().default(""),
     scope: text("scope").notNull(),
     paths: text("paths").array().notNull(),
     hasPassword: boolean("has_password").notNull().default(false),
+    /** An owned share's password, hashed; never selected into a share record. */
+    passwordHash: text("password_hash"),
     /** Operator-chosen public page rendering: "auto" | "list" | "gallery" | "download". */
     presentation: text("presentation").notNull().default("auto"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** 0 is unlimited. Mirrored `max_tokens` for a native row. */
+    maxDownloads: integer("max_downloads").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    /** Legacy name: cached SFTPGo used_tokens (transfers), exposed as usedDownloads. */
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Legacy name: cached SFTPGo used_tokens for a native row, fdrive's own count for an owned one. */
     views: integer("views").notNull().default(0),
   },
   (table) => [
     unique("shares_identity_id_sftpgo_share_id_unique").on(table.identityId, table.sftpgoShareId),
+    check(
+      "shares_password_hash_kind",
+      sql`(${table.sftpgoShareId} is null and ${table.hasPassword} = (${table.passwordHash} is not null)) or (${table.sftpgoShareId} is not null and ${table.passwordHash} is null)`,
+    ),
   ],
 );
 
