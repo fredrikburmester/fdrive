@@ -169,9 +169,15 @@ public struct APIClient: Sendable {
         }
         return result.items
     }
+    /// How long the revocation call waits for a server before giving up on it.
+    ///
+    /// Nothing depends on the answer: the local teardown runs either way. A host that
+    /// drops packets instead of refusing would otherwise hold Disconnect for the
+    /// session's full sixty seconds with nothing to show for it.
+    static let revokeTimeout: TimeInterval = 10
     public func disconnect() async throws {
         struct Result: Decodable, Sendable { let ok: Bool }
-        let _: Result = try await send("disconnect", body: Data("{}".utf8))
+        let _: Result = try await send("disconnect", body: Data("{}".utf8), timeout: Self.revokeTimeout)
     }
     /// Tells the server this device is done with it, and says whether it heard.
     ///
@@ -181,12 +187,13 @@ public struct APIClient: Sendable {
     /// throws. A server that is down, moved, or never coming back would otherwise
     /// strand a location in the list with no way to remove it.
     ///
-    /// A refused or forgotten credential counts as revoked: there is nothing left
-    /// to revoke either way.
+    /// Only a refused credential counts as revoked: the server answers an unknown
+    /// or already revoked token with 401, so nothing is left to revoke. Anything
+    /// else leaves the credential live — an unreachable host, a server error, or a
+    /// 404 from a host that no longer serves fdrive at all — and the caller says so.
     public func revokeAccess() async -> Bool {
         do { try await disconnect(); return true }
         catch DriveError.authentication { return true }
-        catch DriveError.missing { return true }
         catch { return false }
     }
     public func prepareWrite(_ operation: WriteRequest, route: String) async throws -> WriteResult {
