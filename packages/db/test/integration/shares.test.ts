@@ -7,6 +7,8 @@ import {
   createIdentityLinksRepo,
   createShareRepo,
   migrate,
+  type ShareInsertInput,
+  type ShareOwnedUpdate,
   type ShareRepo,
   type ShareUpsertInput,
 } from "../../src/index.js";
@@ -23,18 +25,47 @@ const input: ShareUpsertInput = {
   identityId,
   sftpgoShareId: "s1",
   name: "Shared",
+  description: "",
   scope: "read",
   paths: ["/folder"],
   hasPassword: false,
   expiresAt: null,
+  maxDownloads: 0,
   views: 0,
   presentation: "auto",
+  updatedAt: at,
   at,
+};
+const owned: ShareInsertInput = {
+  identityId,
+  name: "Owned",
+  description: "",
+  scope: "read",
+  paths: ["/folder"],
+  expiresAt: null,
+  maxDownloads: 0,
+  presentation: "auto",
+  passwordHash: null,
+  at,
+};
+const ownedUpdate: ShareOwnedUpdate = {
+  name: "Owned",
+  description: "",
+  scope: "read",
+  paths: ["/folder"],
+  expiresAt: null,
+  maxDownloads: 0,
+  presentation: "auto",
+  at: later,
 };
 let container: StartedPostgreSqlContainer | undefined;
 let first: CreateDbResult;
 let second: CreateDbResult;
 const disconnected: Promise<void>[] = [];
+type Sortable = { readonly id: string; readonly createdAt: Date };
+function byNewestThenId(x: Sortable, y: Sortable): number {
+  return y.createdAt.getTime() - x.createdAt.getTime() || x.id.localeCompare(y.id);
+}
 let a: ShareRepo;
 let b: ShareRepo;
 beforeAll(async () => {
@@ -88,23 +119,29 @@ describe("PostgreSQL share metadata", () => {
     const updated = await b.upsert({
       ...input,
       name: "Updated",
+      description: "With notes",
       scope: "write",
       paths: ["/upload", "/other"],
       hasPassword: true,
       expiresAt: later,
+      maxDownloads: 5,
       views: 2147483647,
       presentation: "gallery",
+      updatedAt: later,
       at: later,
     });
     expect(updated).toEqual({
       ...original,
       name: "Updated",
+      description: "With notes",
       scope: "write",
       paths: ["/upload", "/other"],
       hasPassword: true,
       expiresAt: later,
+      maxDownloads: 5,
       views: 2147483647,
       presentation: "gallery",
+      updatedAt: later,
     });
     expect(await a.get(original.id)).toEqual(updated);
     expect(await a.getOwned(identityId, original.id)).toEqual(updated);
@@ -183,17 +220,97 @@ describe("PostgreSQL share metadata", () => {
     );
     expect(columns.rows.map((r) => r.column_name)).toEqual([
       "created_at",
+      "description",
       "expires_at",
       "has_password",
       "id",
       "identity_id",
+      "max_downloads",
       "name",
+      "password_hash",
       "paths",
       "presentation",
       "scope",
       "sftpgo_share_id",
+      "updated_at",
       "views",
     ]);
+    // The one secret-bearing column is read by one method and never rides on a record.
+    const locked = await a.insert({ ...owned, passwordHash: "hash-1" });
+    expect(locked).not.toHaveProperty("passwordHash");
+    expect(await a.get(locked.id)).not.toHaveProperty("passwordHash");
+    expect(await a.getOwned(identityId, locked.id)).not.toHaveProperty("passwordHash");
+    expect((await a.listOwned(identityId))[0]).not.toHaveProperty("passwordHash");
+    expect(await a.passwordHash(locked.id)).toBe("hash-1");
+    expect(await a.passwordHash(share.id)).toBeNull();
+  });
+  it("keeps several owned rows per identity and updates only them", async () => {
+    const open = await a.insert(owned);
+    const locked = await b.insert({ ...owned, name: "Locked", passwordHash: "hash-1", at: later });
+    expect(open).toMatchObject({ sftpgoShareId: null, hasPassword: false, views: 0 });
+    expect(locked).toMatchObject({ sftpgoShareId: null, hasPassword: true, updatedAt: later });
+    const native = await a.upsert(input);
+    expect(await a.listOwned(identityId)).toEqual([locked, native, open].sort(byNewestThenId));
+    const renamed = await b.updateOwned(identityId, locked.id, {
+      ...ownedUpdate,
+      name: "Renamed",
+      maxDownloads: 3,
+      at: new Date(later.getTime() + 1000),
+    });
+    expect(renamed).toEqual({
+      ...locked,
+      name: "Renamed",
+      maxDownloads: 3,
+      updatedAt: new Date(later.getTime() + 1000),
+    });
+    expect(await a.passwordHash(locked.id)).toBe("hash-1");
+    expect(
+      (await a.updateOwned(identityId, locked.id, { ...ownedUpdate, passwordHash: "hash-2" }))
+        ?.hasPassword,
+    ).toBe(true);
+    expect(await a.passwordHash(locked.id)).toBe("hash-2");
+    expect(
+      (await a.updateOwned(identityId, locked.id, { ...ownedUpdate, passwordHash: null }))
+        ?.hasPassword,
+    ).toBe(false);
+    expect(await a.passwordHash(locked.id)).toBeNull();
+    expect(await a.updateOwned(otherIdentity, open.id, ownedUpdate)).toBeNull();
+    expect(await a.updateOwned(identityId, native.id, ownedUpdate)).toBeNull();
+    expect(await a.get(native.id)).toEqual(native);
+    expect(await a.removeOwned(identityId, locked.id)).toBe(true);
+    expect(await a.passwordHash(locked.id)).toBeNull();
+  });
+  it("consumes downloads concurrently up to the limit and never past expiry or on a native row", async () => {
+    const limited = await a.insert({ ...owned, maxDownloads: 10 });
+    const outcomes = await Promise.all(
+      Array.from({ length: 30 }, (_, i) => (i % 2 ? a : b).consume(limited.id, at)),
+    );
+    expect(outcomes.filter((row) => row !== null)).toHaveLength(10);
+    expect((await a.get(limited.id))?.views).toBe(10);
+    expect(await a.consume(limited.id, at)).toBeNull();
+    const unlimited = await a.insert(owned);
+    expect((await a.consume(unlimited.id, at))?.views).toBe(1);
+    const expiring = await a.insert({ ...owned, expiresAt: later });
+    expect((await a.consume(expiring.id, at))?.views).toBe(1);
+    expect(await a.consume(expiring.id, later)).toBeNull();
+    const native = await a.upsert(input);
+    expect(await a.consume(native.id, at)).toBeNull();
+    expect((await a.get(native.id))?.views).toBe(0);
+  });
+  it("refuses a hash on a native row and a password flag the hash contradicts", async () => {
+    await expect(
+      first.db.execute(sql`
+        insert into app.shares(identity_id, sftpgo_share_id, name, scope, paths, has_password, password_hash)
+        values (${identityId}::uuid, 'native', 'x', 'read', array['/'], true, 'hash')
+      `),
+    ).rejects.toMatchObject({ cause: { constraint: "shares_password_hash_kind" } });
+    await expect(
+      first.db.execute(sql`
+        insert into app.shares(identity_id, sftpgo_share_id, name, scope, paths, has_password, password_hash)
+        values (${identityId}::uuid, null, 'x', 'read', array['/'], true, null)
+      `),
+    ).rejects.toMatchObject({ cause: { constraint: "shares_password_hash_kind" } });
+    expect(await first.db.select().from(shares)).toHaveLength(0);
   });
   it("rejects invalid updates atomically and validates all methods before IO", async () => {
     const share = await a.upsert(input);
@@ -203,6 +320,10 @@ describe("PostgreSQL share metadata", () => {
     await closed.close();
     const repo = createShareRepo(closed.db);
     await expect(repo.upsert({ ...input, paths: [] })).rejects.toThrow(TypeError);
+    await expect(repo.insert({ ...owned, passwordHash: "" })).rejects.toThrow(TypeError);
+    await expect(repo.updateOwned(identityId, "bad", ownedUpdate)).rejects.toThrow(TypeError);
+    await expect(repo.passwordHash("bad")).rejects.toThrow(TypeError);
+    await expect(repo.consume("bad", at)).rejects.toThrow(TypeError);
     await expect(repo.get("bad")).rejects.toThrow(TypeError);
     await expect(repo.getOwned(identityId, "bad")).rejects.toThrow(TypeError);
     await expect(repo.listOwned(identityId, { limit: 0 })).rejects.toThrow(TypeError);

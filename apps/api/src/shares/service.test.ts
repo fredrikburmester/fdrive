@@ -198,7 +198,7 @@ it("preserves upstream IP restrictions and refuses unsupported scope before PATC
   const cookie = await h.login();
   const { id } = await h.create(cookie);
   const row = await h.shares.get(id);
-  if (!row) throw new Error("missing");
+  if (!row?.sftpgoShareId) throw new Error("missing");
   const upstream = h.server.state.shares.get(row.sftpgoShareId);
   if (!upstream) throw new Error("missing upstream");
   upstream.allowFrom = ["127.0.0.0/8"];
@@ -354,7 +354,7 @@ it("lists through one upstream read and writes only the mirrors that actually ch
   expect(probe.calls).toEqual({ list: 1, get: 0 });
 
   const secondRow = await h.shares.get(second.id);
-  if (!secondRow) throw new Error("missing row");
+  if (!secondRow?.sftpgoShareId) throw new Error("missing row");
   const upstream = h.server.state.shares.get(secondRow.sftpgoShareId);
   if (!upstream) throw new Error("missing upstream");
   upstream.name = "Renamed upstream";
@@ -386,7 +386,7 @@ it("prunes shares deleted upstream but keeps rows beyond the upstream page", asy
   const kept = await h.create(cookie, { name: "Kept" });
   const gone = await h.create(cookie, { name: "Gone" });
   const goneRow = await h.shares.get(gone.id);
-  if (!goneRow) throw new Error("missing row");
+  if (!goneRow?.sftpgoShareId) throw new Error("missing row");
   const auth = await h.client.login({ username: "alice", password: "alice-pass" });
   await h.client.user(auth.accessToken).shares.remove(goneRow.sftpgoShareId);
 

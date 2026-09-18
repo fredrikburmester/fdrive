@@ -91,7 +91,9 @@ export { createOfficeWriteScope } from "./repos/office-write-scope.js";
 export { createShareRepo } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
+  ShareInsertInput,
   ShareListOptions,
+  ShareOwnedUpdate,
   SharePresentation,
   ShareRecord,
   ShareRepo,
@@ -102,8 +104,11 @@ export {
   createMemoryShareRepo,
   parseSharePresentation,
   parseShareScope,
+  shareAdmitsDownload,
   shareListLimit,
   validateShareId,
+  validateShareInsert,
+  validateShareOwnedUpdate,
   validateShareOwnership,
   validateSharePath,
   validateShareUpsert,

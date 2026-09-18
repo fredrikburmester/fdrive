@@ -5,10 +5,15 @@ import {
   createMemoryShareRepo,
   parseSharePresentation,
   parseShareScope,
+  type ShareInsertInput,
+  type ShareOwnedUpdate,
   type ShareUpsertInput,
+  shareAdmitsDownload,
   shareListLimit,
   shareStoredValues,
   validateShareId,
+  validateShareInsert,
+  validateShareOwnedUpdate,
   validateSharePath,
   validateShareUpsert,
 } from "./shares-state.js";
@@ -21,13 +26,38 @@ const input: ShareUpsertInput = {
   identityId,
   sftpgoShareId: "s1",
   name: "Shared",
+  description: "",
   scope: "read",
   paths: ["/folder"],
   hasPassword: false,
   expiresAt: null,
+  maxDownloads: 0,
   views: 0,
   presentation: "auto",
+  updatedAt: at,
   at,
+};
+const owned: ShareInsertInput = {
+  identityId,
+  name: "Owned",
+  description: "",
+  scope: "read",
+  paths: ["/folder"],
+  expiresAt: null,
+  maxDownloads: 0,
+  presentation: "auto",
+  passwordHash: null,
+  at,
+};
+const ownedUpdate: ShareOwnedUpdate = {
+  name: "Owned",
+  description: "",
+  scope: "read",
+  paths: ["/folder"],
+  expiresAt: null,
+  maxDownloads: 0,
+  presentation: "auto",
+  at: later,
 };
 
 describe("share validation", () => {
@@ -37,8 +67,10 @@ describe("share validation", () => {
       validateShareUpsert({
         ...input,
         name: "é".repeat(255),
+        description: "line one\nline two".repeat(2048),
         sftpgoShareId: "_-aZ19".repeat(42),
         scope: "write",
+        maxDownloads: 2147483647,
         paths: Array.from({ length: 1000 }, () => "/"),
         views: 2147483647,
         hasPassword: true,
@@ -114,6 +146,102 @@ describe("share validation", () => {
     ).toThrow(TypeError);
     for (const limit of [0, -1, 1001, 0.5, Number.NaN])
       expect(() => shareListLimit({ limit })).toThrow(TypeError);
+  });
+  it("rejects invalid descriptions, limits, update times and password hashes", () => {
+    for (const description of [1, null, "x".repeat(65537)])
+      expect(() =>
+        validateShareUpsert({ ...input, description } as unknown as ShareUpsertInput),
+      ).toThrow(TypeError);
+    for (const maxDownloads of [-1, 2147483648, 1.5, Number.NaN])
+      expect(() => validateShareUpsert({ ...input, maxDownloads })).toThrow(TypeError);
+    expect(() => validateShareUpsert({ ...input, updatedAt: new Date(Number.NaN) })).toThrow(
+      TypeError,
+    );
+    expect(() => validateShareInsert(owned)).not.toThrow();
+    expect(() => validateShareInsert({ ...owned, passwordHash: "x".repeat(1024) })).not.toThrow();
+    for (const passwordHash of ["", "x".repeat(1025), "bad\0", 1])
+      expect(() =>
+        validateShareInsert({ ...owned, passwordHash } as unknown as ShareInsertInput),
+      ).toThrow(TypeError);
+    expect(() => validateShareInsert({ ...owned, at: new Date(Number.NaN) })).toThrow(TypeError);
+    expect(() => validateShareOwnedUpdate(identityId, identityId, ownedUpdate)).not.toThrow();
+    expect(() =>
+      validateShareOwnedUpdate(identityId, identityId, { ...ownedUpdate, passwordHash: "" }),
+    ).toThrow(TypeError);
+    expect(() => validateShareOwnedUpdate("bad", identityId, ownedUpdate)).toThrow(TypeError);
+    expect(() => validateShareOwnedUpdate(identityId, "bad", ownedUpdate)).toThrow(TypeError);
+  });
+});
+
+describe("memory share repository: owned rows", () => {
+  it("inserts owned rows without an upstream id and keeps the hash off the record", async () => {
+    const repo = createMemoryShareRepo();
+    const open = await repo.insert(owned);
+    const locked = await repo.insert({ ...owned, name: "Locked", passwordHash: "hash-1" });
+    expect(open).toMatchObject({
+      identityId,
+      sftpgoShareId: null,
+      hasPassword: false,
+      views: 0,
+      createdAt: at,
+      updatedAt: at,
+    });
+    expect(open.id).not.toBe(locked.id);
+    expect(locked.hasPassword).toBe(true);
+    expect(locked).not.toHaveProperty("passwordHash");
+    expect(await repo.get(locked.id)).not.toHaveProperty("passwordHash");
+    expect(await repo.passwordHash(open.id)).toBeNull();
+    expect(await repo.passwordHash(locked.id)).toBe("hash-1");
+    const native = await repo.upsert(input);
+    expect(await repo.passwordHash(native.id)).toBeNull();
+    expect(await repo.listOwned(identityId)).toHaveLength(3);
+  });
+  it("updates only owned rows, keeping, replacing or removing the password", async () => {
+    const repo = createMemoryShareRepo();
+    const row = await repo.insert({ ...owned, passwordHash: "hash-1" });
+    const kept = await repo.updateOwned(identityId, row.id, { ...ownedUpdate, name: "Renamed" });
+    expect(kept).toEqual({ ...row, name: "Renamed", updatedAt: later });
+    expect(await repo.passwordHash(row.id)).toBe("hash-1");
+    const replaced = await repo.updateOwned(identityId, row.id, {
+      ...ownedUpdate,
+      passwordHash: "hash-2",
+    });
+    expect(replaced?.hasPassword).toBe(true);
+    expect(await repo.passwordHash(row.id)).toBe("hash-2");
+    const removed = await repo.updateOwned(identityId, row.id, {
+      ...ownedUpdate,
+      passwordHash: null,
+    });
+    expect(removed?.hasPassword).toBe(false);
+    expect(await repo.passwordHash(row.id)).toBeNull();
+    expect(await repo.updateOwned(otherIdentity, row.id, ownedUpdate)).toBeNull();
+    const native = await repo.upsert(input);
+    expect(await repo.updateOwned(identityId, native.id, ownedUpdate)).toBeNull();
+    expect(await repo.get(native.id)).toEqual(native);
+    expect(await repo.removeOwned(identityId, row.id)).toBe(true);
+    expect(await repo.passwordHash(row.id)).toBeNull();
+  });
+  it("consumes downloads only while the limit and expiry allow, never for a native row", async () => {
+    const repo = createMemoryShareRepo();
+    const limited = await repo.insert({ ...owned, maxDownloads: 2 });
+    expect((await repo.consume(limited.id, at))?.views).toBe(1);
+    expect((await repo.consume(limited.id, at))?.views).toBe(2);
+    expect(await repo.consume(limited.id, at)).toBeNull();
+    expect((await repo.get(limited.id))?.views).toBe(2);
+    const unlimited = await repo.insert(owned);
+    for (let i = 1; i <= 3; i++) expect((await repo.consume(unlimited.id, at))?.views).toBe(i);
+    const expiring = await repo.insert({ ...owned, expiresAt: later });
+    expect((await repo.consume(expiring.id, at))?.views).toBe(1);
+    expect(await repo.consume(expiring.id, later)).toBeNull();
+    const native = await repo.upsert(input);
+    expect(await repo.consume(native.id, at)).toBeNull();
+    expect(await repo.consume(otherIdentity, at)).toBeNull();
+    expect(shareAdmitsDownload({ expiresAt: null, maxDownloads: 0, views: 5 }, at)).toBe(true);
+    await expect(repo.consume("bad", at)).rejects.toThrow(TypeError);
+    await expect(repo.consume(limited.id, new Date(Number.NaN))).rejects.toThrow(TypeError);
+    await expect(repo.passwordHash("bad")).rejects.toThrow(TypeError);
+    await expect(repo.insert({ ...owned, identityId: "bad" })).rejects.toThrow(TypeError);
+    await expect(repo.updateOwned(identityId, "bad", ownedUpdate)).rejects.toThrow(TypeError);
   });
 });
 
