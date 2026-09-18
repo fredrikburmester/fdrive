@@ -3,8 +3,8 @@ import { SftpgoError } from "@fdrive/sftpgo";
 import { Context } from "hono";
 import { expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors.ts";
-import { attachment, downloadResponse, publicCall, publicDownloadOptions } from "./routes.ts";
-import { shareCall } from "./service.ts";
+import { publicCall, shareCall } from "./native-access.ts";
+import { attachment, downloadResponse, publicDownloadOptions } from "./routes.ts";
 import { sharesHarness } from "./test-fixtures/index.ts";
 
 it("sanitizes errors without treating generic400 as successful password verification", async () => {
@@ -54,11 +54,16 @@ it("sanitizes errors without treating generic400 as successful password verifica
     "a",
   );
   expect(response.headers.get("content-type")).toBe("application/octet-stream");
-  for (const range of ["bytes=-3", "bytes=2-"]) {
+  expect(response.headers.get("accept-ranges")).toBe("bytes");
+  for (const [range, parsed] of [
+    ["bytes=-3", { suffix: 3 }],
+    ["bytes=2-", { start: 2 }],
+    ["bytes=2-5", { start: 2, end: 5 }],
+  ] as const) {
     const ctx = new Context(
       new Request("http://test/", { headers: { range, "if-range": "etag" } }),
     );
-    expect(publicDownloadOptions(ctx)).toMatchObject({ rangeHeader: range, ifRange: "etag" });
+    expect(publicDownloadOptions(ctx)).toMatchObject({ range: parsed, ifRange: "etag" });
   }
   const multiRange = new Context(
     new Request("http://test/", {
@@ -66,7 +71,7 @@ it("sanitizes errors without treating generic400 as successful password verifica
     }),
   );
   expect(publicDownloadOptions(multiRange)).not.toMatchObject({
-    rangeHeader: expect.anything(),
+    range: expect.anything(),
     ifRange: expect.anything(),
   });
 });
@@ -157,26 +162,26 @@ it("publicThumbTarget and verifySharePassword expose exactly what the public thu
   const target = await h.service.publicThumbTarget(id);
   expect(target).toMatchObject({
     identityId: row.identityId,
-    sftpgoShareId: row.sftpgoShareId,
     scope: "read",
     paths: ["/folder"],
     hasPassword: true,
     unavailableReason: null,
   });
+  // The route never learns what stores the share.
+  expect(target).not.toHaveProperty("sftpgoShareId");
 
   await expect(
     h.service.publicThumbTarget("00000000-0000-4000-8000-000000000000"),
   ).rejects.toThrow();
 
+  await expect(h.service.verifySharePassword(id, "wrong")).resolves.toBe(false);
   await expect(
-    h.service.verifySharePassword(target.identityId, target.sftpgoShareId, "wrong"),
-  ).resolves.toBe(false);
+    h.service.verifySharePassword("00000000-0000-4000-8000-000000000000", "secret"),
+  ).rejects.toMatchObject({ kind: "not_found" });
   // A directory share (unlike a single-file one) actually completes the
   // root listing, so the correct password hits the plain success path
   // rather than the single-file "bad_request" fallback.
-  await expect(
-    h.service.verifySharePassword(target.identityId, target.sftpgoShareId, "secret"),
-  ).resolves.toBe(true);
+  await expect(h.service.verifySharePassword(id, "secret")).resolves.toBe(true);
 
   const publicShareSpy = vi.spyOn(h.client, "publicShare").mockReturnValueOnce({
     downloadFile: () => Promise.reject(new Error("not used")),
@@ -185,9 +190,7 @@ it("publicThumbTarget and verifySharePassword expose exactly what the public thu
     zip: () => Promise.reject(new Error("not used")),
     upload: () => Promise.reject(new Error("not used")),
   });
-  await expect(
-    h.service.verifySharePassword(target.identityId, target.sftpgoShareId, "secret"),
-  ).rejects.toThrow("upstream exploded");
+  await expect(h.service.verifySharePassword(id, "secret")).rejects.toThrow("upstream exploded");
   publicShareSpy.mockRestore();
 });
 it("preserves upstream IP restrictions and refuses unsupported scope before PATCH", async () => {
