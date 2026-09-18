@@ -99,6 +99,16 @@ export interface StorageProvider {
    */
   readonly maxPublishBytes?: number;
 
+  /**
+   * Set when moving a directory copies every object under it instead of
+   * renaming it in one step, so the work is proportional to the tree rather
+   * than constant. S3 has no rename, so it is the only such backend today.
+   * Callers that serialize publication must keep a move like this outside that
+   * serialization: holding a lock for a copy of unbounded length would refuse
+   * every other writer for as long as it runs.
+   */
+  readonly movesDirectoriesByCopy?: boolean;
+
   list(path: string): Promise<FileEntry[]>;
 
   /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */
@@ -149,9 +159,24 @@ export interface StorageProvider {
 
   mkdir(path: string, opts?: { parents?: boolean }): Promise<void>;
 
-  move(path: string, target: string, opts?: { overwrite?: boolean }): Promise<void>;
+  /**
+   * `resume` continues a transfer an earlier attempt left unfinished: what is
+   * already at the target is that attempt's own progress, so the target is not
+   * cleared first and an entry already copied is left in place. Only backends
+   * that copy a directory have anything to resume; the rest may ignore it,
+   * since their move is one operation that either happened or did not.
+   */
+  move(
+    path: string,
+    target: string,
+    opts?: { overwrite?: boolean; resume?: boolean },
+  ): Promise<void>;
 
-  copy(path: string, target: string, opts?: { overwrite?: boolean }): Promise<void>;
+  copy(
+    path: string,
+    target: string,
+    opts?: { overwrite?: boolean; resume?: boolean },
+  ): Promise<void>;
 
   deleteFile(path: string): Promise<void>;
 

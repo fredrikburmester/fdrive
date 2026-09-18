@@ -233,6 +233,52 @@ describe("moves and copies", () => {
     expect(await text((await storage.download("/folder")).body)).toBe("a");
   });
 
+  it("moves a folder larger than the directory bound, which only listing applies", async () => {
+    // The bound exists so one listing cannot grow without limit. A move streams
+    // the tree a page at a time instead of collecting it, so the folder fdrive
+    // can move is limited by time rather than by that number.
+    const { server, storage } = harness({}, "", 3);
+    for (let index = 0; index < 12; index += 1)
+      server.put("bucket", `big/${index}.txt`, `v${index}`);
+    await storage.move("/big", "/moved");
+    expect([...server.objects("bucket").keys()].sort()).toEqual(
+      Array.from({ length: 12 }, (_, index) => `moved/${index}.txt`).sort(),
+    );
+    expect(await text((await storage.download("/moved/7.txt")).body)).toBe("v7");
+    // Listing the same folder still refuses, which is what the bound is for.
+    expect(await kindOf(storage.list("/moved"))).toBe("internal");
+  });
+
+  it("resumes a move onto its own partial result without clearing or recopying it", async () => {
+    const copied: string[] = [];
+    const { server, storage } = harness({
+      intercept: (request, parsed) => {
+        if (parsed.method === "PUT" && request.headers.has("x-amz-copy-source"))
+          copied.push(parsed.key);
+        return null;
+      },
+    });
+    server.put("bucket", "src/a.txt", "a");
+    server.put("bucket", "src/b.txt", "b");
+    // What an interrupted attempt had already copied.
+    server.put("bucket", "dst/a.txt", "a");
+    await storage.move("/src", "/dst", { overwrite: true, resume: true });
+    // Only the object the earlier attempt had not reached is copied again, so a
+    // tree interrupted near the end finishes rather than starting over.
+    expect(copied).toEqual(["dst/b.txt"]);
+    expect(await text((await storage.download("/dst/a.txt")).body)).toBe("a");
+    expect(await text((await storage.download("/dst/b.txt")).body)).toBe("b");
+    expect(server.objects("bucket").has("src/a.txt")).toBe(false);
+    // Without resume the same shape of call replaces the target wholesale.
+    copied.length = 0;
+    server.put("bucket", "again/a.txt", "a");
+    server.put("bucket", "again/stale.txt", "stale");
+    server.put("bucket", "fresh/a.txt", "a");
+    await storage.move("/fresh", "/again", { overwrite: true });
+    expect(server.objects("bucket").has("again/stale.txt")).toBe(false);
+    expect(copied).toEqual(["again/a.txt"]);
+  });
+
   it("passes a target check failure through instead of treating it as free", async () => {
     const { server, storage } = harness({ keys: [{ ...ALICE, denyPrefixes: ["locked/"] }] });
     server.put("bucket", "src.txt", "a");

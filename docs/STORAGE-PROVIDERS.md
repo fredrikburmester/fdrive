@@ -243,6 +243,11 @@ permission checks; the capability is not proof that an Office server is configur
 | `zip` | Requires `storage.zip`. Without it, multi-download downloads individual files and skips directories; folder-only selections cannot download. |
 | `setModifiedAt` | Requires support for supplied mtimes and the optional setter. The Inspector shows an upload-time note when false. |
 | `atomicMove` | Describes the backend operation. False adds caution copy for folder moves/renames; it does not create a progress job. |
+
+A backend whose move is not one operation also declares it on the storage port, where the write
+paths can see it: `movesDirectoriesByCopy` keeps a folder move out of any publication lock, and
+`maxPublishBytes` caps what a caller may stage when publication is a copy the backend bounds.
+Both are absent for a backend that renames.
 | `trash` | Also requires `trash !== "none"` and enabled per-provider Trash settings. See below. |
 | `shares` | Must equal `shares !== "none"`; a registry test checks every module. Keep `"none"` for a new backend: only `"native"` is served today. See below. |
 | `office` | Keep false until storage admission, provider-bound locations and the full Office flow work for the new backend. |

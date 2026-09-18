@@ -226,6 +226,36 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
     return keys;
   }
 
+  /**
+   * Every key under `keyPrefix`, one page at a time. A tree fdrive moves as a
+   * whole costs a page of memory rather than its entire key list, so the size
+   * it can move is bounded by time and not by `MAX_DIRECTORY_KEYS`.
+   */
+  async function* keyPages(client: S3Client, keyPrefix: string): AsyncGenerator<ListedKey[]> {
+    let token: string | undefined;
+    do {
+      const result = await page(client, keyPrefix, { token });
+      if (result.files.length > 0) yield result.files;
+      token = result.next;
+    } while (token !== undefined);
+  }
+
+  /**
+   * Deletes every key under `keyPrefix`, re-listing from the start each round
+   * rather than walking a continuation token: the token describes a listing the
+   * deletions are themselves changing.
+   */
+  async function deleteTree(client: S3Client, keyPrefix: string): Promise<void> {
+    for (;;) {
+      const result = await page(client, keyPrefix, {});
+      if (result.files.length === 0) return;
+      await deleteKeys(
+        client,
+        result.files.map((item) => item.key),
+      );
+    }
+  }
+
   async function dirExists(client: S3Client, keyPrefix: string): Promise<boolean> {
     const result = await page(client, keyPrefix, { maxKeys: 1 });
     return result.files.length > 0;
@@ -298,7 +328,7 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
   async function transfer(
     path: string,
     target: string,
-    opts: { overwrite?: boolean } | undefined,
+    opts: { overwrite?: boolean; resume?: boolean } | undefined,
     removeSource: boolean,
   ): Promise<void> {
     const source = normalizePath(path);
@@ -324,12 +354,10 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
       // server does: a folder's objects go first so none survive under the new
       // one, and a file under a folder's name goes too. A file target is
       // overwritten by the copy itself.
-      if (current?.kind === "dir") {
-        const stale = await collectKeys(client, targetDir, destination);
-        await deleteKeys(
-          client,
-          stale.map((item) => item.key),
-        );
+      // `resume` continues a transfer that was interrupted, so what already sits
+      // at the destination is its own earlier progress, not a target to replace.
+      if (current?.kind === "dir" && opts?.resume !== true) {
+        await deleteTree(client, targetDir);
       } else if (current?.kind === "file" && existing.kind === "dir") {
         await deleteKeys(client, [fileKey(prefix, destination)]);
       }
@@ -340,16 +368,21 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
         return;
       }
       const sourceDir = dirKey(prefix, source);
-      const keys = await collectKeys(client, sourceDir, source);
-      await mapLimit(keys, COPY_CONCURRENCY, (from) =>
-        copyObject(client, from, `${targetDir}${from.key.slice(sourceDir.length)}`),
-      );
-      if (removeSource) {
-        await deleteKeys(
-          client,
-          keys.map((item) => item.key),
-        );
+      for await (const batch of keyPages(client, sourceDir)) {
+        await mapLimit(batch, COPY_CONCURRENCY, async (from) => {
+          const to = `${targetDir}${from.key.slice(sourceDir.length)}`;
+          // Resuming skips what a previous attempt already copied, so an
+          // interrupted move of a large tree continues instead of starting over.
+          if (opts?.resume === true) {
+            const done = await head(client, to);
+            if (done !== null && done.size === from.size) return;
+          }
+          await copyObject(client, from, to);
+        });
       }
+      // Only after every object is at the destination, so an interrupted move
+      // always leaves the whole source recoverable.
+      if (removeSource) await deleteTree(client, sourceDir);
     }, source);
   }
 
@@ -358,6 +391,8 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
     // bytes arrived: multipart uploads a 16 GiB object happily and then no
     // copy can move it into place.
     maxPublishBytes: MAX_COPY_BYTES,
+    // No rename: moving a folder copies every object under it.
+    movesDirectoriesByCopy: true,
 
     async list(path: string): Promise<FileEntry[]> {
       const normalized = normalizePath(path);

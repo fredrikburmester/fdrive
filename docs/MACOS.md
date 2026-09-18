@@ -133,6 +133,17 @@ cannot publish that much. S3 publishes with `CopyObject`, which refuses above 5 
 bytes arrived, so an S3 location advertises 5 GiB and refuses a larger file before any of it is
 transferred rather than at the rename, where the transfer would already be spent.
 
+**Folders on storage without a rename.** S3 moves a folder by copying every object under it,
+which is proportional to the tree rather than constant. That copy runs *outside* the publication
+lock: the lock is per identity and its waiters give up after 30 seconds, so holding it for a
+large folder would refuse every other Mac write for as long as the copy ran. The lock still
+covers the decision — the destination is free, the source is what was observed, the destination
+is reserved under the operation — and the copy then proceeds the way any other client of that
+storage performs the same move, with the destination filling as it goes. Every object is copied
+before any is removed, so an interruption leaves the source whole; the same operation id resumes
+and skips what the previous attempt already copied, rather than starting again or stranding the
+work where only an administrator could clear it.
+
 **Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
 `apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
 writer that uses that same endpoint. Enable it only when **every writer uses the same

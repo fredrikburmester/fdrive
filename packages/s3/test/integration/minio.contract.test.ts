@@ -69,6 +69,27 @@ describe("S3 provider against MinIO", () => {
     { overwritesOnMove: true },
   );
 
+  it("moves a folder whose listing spans several pages, in one call", async () => {
+    // S3 lists 1000 keys at a time. A move streams those pages rather than
+    // collecting the tree, so the folder size fdrive can move is bounded by time
+    // and not by memory or by `MAX_DIRECTORY_KEYS`. 1200 crosses that boundary.
+    const storage = storageFor(container, container.writer);
+    const total = 1200;
+    const body = new TextEncoder().encode("x");
+    for (let start = 0; start < total; start += 50) {
+      await Promise.all(
+        Array.from({ length: Math.min(50, total - start) }, (_, offset) =>
+          storage.upload(`/wide/file-${start + offset}.txt`, body.slice()),
+        ),
+      );
+    }
+    await storage.move("/wide", "/wide-moved");
+    expect(await kindOf(storage.stat("/wide"))).toBe("not_found");
+    expect(await text((await storage.download("/wide-moved/file-1199.txt")).body)).toBe("x");
+    expect(await text((await storage.download("/wide-moved/file-0.txt")).body)).toBe("x");
+    await storage.deleteDir("/wide-moved");
+  });
+
   it("probes the bucket and authenticates through the module", async () => {
     expect(await probeConnection(container.baseUrl, { fetch: globalThis.fetch })).toEqual({
       ok: true,
