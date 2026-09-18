@@ -1,17 +1,17 @@
-import type { DownloadOptions, DownloadResult, SftpgoPublicShareApi } from "@fdrive/sftpgo";
 import {
   PEEK_MAX_CENTRAL_DIRECTORY_BYTES,
   type PeekStoragePort,
   UnreadableArchiveError,
 } from "../archive/peek.ts";
+import type { PublicShareAccess, ShareDownloadOptions } from "./access.ts";
 
 /**
- * The suffix range `createSharePeekPort`'s `statFile` issues to discover a
- * shared file's size without a real `statFile` call on the public share
- * API. Wide enough to comfortably cover a zip's end-of-central-directory
- * record, matching `peek.ts`'s own tail read.
+ * The suffix `createSharePeekPort`'s `statFile` reads to discover a shared
+ * file's size without a real `statFile` on the public share. Wide enough to
+ * comfortably cover a zip's end-of-central-directory record, matching
+ * `peek.ts`'s own tail read.
  */
-export const SHARE_PEEK_SUFFIX_RANGE_HEADER = "bytes=-65536";
+export const SHARE_PEEK_SUFFIX_BYTES = 65536;
 
 /**
  * Parses the total size out of an HTTP `Content-Range` response header of
@@ -42,36 +42,34 @@ async function discard(body: ReadableStream<Uint8Array>): Promise<void> {
 }
 
 export interface SharePeekPortOptions {
-  readonly api: SftpgoPublicShareApi;
-  /** True when the share itself is a single file (the request path is
-   * always `"/"` in that case), so the adapter reads through
-   * `downloadFile` rather than `download(path, ...)`, matching every other
-   * public share route's convention. */
+  readonly access: Pick<PublicShareAccess, "download">;
+  /** True when the share itself is a single file: `peekArchive` is then
+   * given the shared path for its extension, while the share is read at
+   * `/`, the path every public share route uses for that file. */
   readonly isSingleFile: boolean;
 }
 
 /**
- * Adapts a `SftpgoPublicShareApi` (a public share's `list` / `download` /
- * `downloadFile` / `zip` / `upload` surface, with no `statFile`) into the
- * two-method `PeekStoragePort` `peekArchive` needs. `statFile` has no real
- * counterpart on the share API, so it is synthesized from a suffix-range
- * read (`Range: bytes=-65536`) and the resulting `Content-Range` header's
- * total. When the server ignores the range and answers `200` instead, the
- * whole body is accepted as the size only when `Content-Length` is known
- * and at most `PEEK_MAX_CENTRAL_DIRECTORY_BYTES`; otherwise the archive is
- * treated as unreadable rather than risking an unbounded buffer.
+ * Adapts a `PublicShareAccess` (which has no `statFile`) into the two-method
+ * `PeekStoragePort` `peekArchive` needs. `statFile` is synthesized from a
+ * suffix-range read (the last `SHARE_PEEK_SUFFIX_BYTES`) and the resulting
+ * `Content-Range` header's total. When the backend ignores the range and
+ * answers `200` instead, the whole body is accepted as the size only when
+ * `Content-Length` is known and at most `PEEK_MAX_CENTRAL_DIRECTORY_BYTES`;
+ * otherwise the archive is treated as unreadable rather than risking an
+ * unbounded buffer.
  */
 export function createSharePeekPort(opts: SharePeekPortOptions): PeekStoragePort {
-  const { api, isSingleFile } = opts;
+  const { access, isSingleFile } = opts;
 
-  function download(path: string, downloadOpts?: DownloadOptions): Promise<DownloadResult> {
-    return isSingleFile ? api.downloadFile(downloadOpts) : api.download(path, downloadOpts);
+  function download(path: string, options: ShareDownloadOptions = {}) {
+    return access.download(isSingleFile ? "/" : path, options);
   }
 
   async function statFile(
     path: string,
   ): Promise<{ size: number; modifiedAt: Date | null; contentType: string | null }> {
-    const result = await download(path, { rangeHeader: SHARE_PEEK_SUFFIX_RANGE_HEADER });
+    const result = await download(path, { range: { suffix: SHARE_PEEK_SUFFIX_BYTES } });
     await discard(result.body);
 
     if (result.status === 206) {
@@ -98,7 +96,7 @@ export function createSharePeekPort(opts: SharePeekPortOptions): PeekStoragePort
       path: string,
       opts?: { range?: { start: number; end?: number }; signal?: AbortSignal },
     ) {
-      const options: DownloadOptions = {};
+      const options: { range?: { start: number; end?: number }; signal?: AbortSignal } = {};
       if (opts?.range !== undefined) options.range = opts.range;
       if (opts?.signal !== undefined) options.signal = opts.signal;
       return download(path, options);

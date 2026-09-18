@@ -22,12 +22,12 @@ export const ShareScope = z.enum(["read", "write"]);
 export const SharePresentation = z.enum(["auto", "list", "gallery", "download"]);
 export type SharePresentation = z.infer<typeof SharePresentation>;
 /**
- * A share's download limit is stored by SFTPGo, not by fdrive: it travels as
- * `max_tokens`, a column SFTPGo's PostgreSQL and MySQL data providers declare
- * `integer`. Signed 32-bit is therefore the largest limit every supported
- * provider can hold, so requests are bounded here instead of failing inside
- * SFTPGo. Responses stay unbounded: they must keep reading whatever limit a
- * share already carries.
+ * The largest download limit a share can carry, whatever stores it. A native
+ * share's limit travels to SFTPGo as `max_tokens`, a column its PostgreSQL
+ * and MySQL data providers declare `integer`, and `app.shares.max_downloads`
+ * is the same width, so one bound serves both and a request fails here
+ * instead of inside a backend. Responses stay unbounded: they must keep
+ * reading whatever limit a share already carries.
  */
 export const MAX_SHARE_DOWNLOADS = 2_147_483_647;
 export const CreateShareRequest = z.strictObject({

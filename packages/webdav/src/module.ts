@@ -17,6 +17,8 @@ import { createWebdavStorageProvider } from "./storage-provider.js";
 import type { WebdavClient } from "./types.js";
 import { withWebdavWriteLease } from "./write-lease.js";
 
+/** The only `desktopWriteMode` under which WebDAV storage offers a write lease. */
+export const WEBDAV_EXCLUSIVE_MODE = "apache-webdav-exclusive";
 export const WEBDAV_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
   { name: "password", label: "Password", kind: "password", required: true },
@@ -78,7 +80,7 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
         kind: "text",
         required: false,
         maxLength: 32,
-        help: 'Blank: fdrive serializes Mac writes itself and keeps a backup of each replaced file. "apache-webdav-exclusive": Apache mod_dav locks fence every writer on this endpoint.',
+        help: `Blank: fdrive serializes Mac writes itself and keeps a backup of each replaced file. "${WEBDAV_EXCLUSIVE_MODE}": Apache mod_dav locks fence every writer on this endpoint.`,
       },
     ],
     credentialFields: WEBDAV_CREDENTIAL_FIELDS,
@@ -95,6 +97,9 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
     // No recycle bin in the protocol: the API storage factory moves deleted
     // files into the configured folder itself (`withMoveToTrash`).
     trash: "move",
+    // No public links in the protocol, and fdrive does not serve them for
+    // this storage yet: the share routes refuse and the web states the limit.
+    shares: "none",
 
     probe(instance, ctx) {
       return probeConnection(instance.baseUrl, { fetch: ctx.fetch });
@@ -127,7 +132,7 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
           password: (await session.getCredential()).password ?? "",
         }),
       });
-      if (instance.config.desktopWriteMode !== "apache-webdav-exclusive") return storage;
+      if (instance.config.desktopWriteMode !== WEBDAV_EXCLUSIVE_MODE) return storage;
       return {
         ...storage,
         async withWriteLease(action, signal) {

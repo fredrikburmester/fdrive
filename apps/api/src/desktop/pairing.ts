@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type {
   DesktopAccessMode,
   DesktopCredential,
-  DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
 import type { ApiTokenRepo, DesktopPublishLock, IdentityRepo, ProviderRepo } from "@fdrive/db";
@@ -14,6 +13,7 @@ import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
+import type { DesktopWriteAvailability, DesktopWriteGate } from "./writes.js";
 
 type IssuedCredential = Omit<DesktopCredential, "location"> & {
   location: DesktopCredential["location"] | DesktopWriteCredential["location"];
@@ -37,7 +37,8 @@ interface Pair {
   result?: Promise<IssuedCredential[]>;
 }
 export interface DesktopDeps {
-  writeCapabilities?: (principal: Principal) => Promise<DesktopWriteCapabilities>;
+  /** How the deployment answers a full grant; absent when desktop writes are not wired. */
+  writeAvailability?: (principal: Principal) => Promise<DesktopWriteAvailability>;
   maxUploadBytes?: number;
   apiTokens: ApiTokenRepo;
   identities: IdentityRepo;
@@ -50,16 +51,29 @@ export interface DesktopDeps {
   publishLock?: DesktopPublishLock;
 }
 
+/**
+ * Why a full-access grant still lands read-only, phrased for whoever paired the
+ * Mac: an administrator can act on it and anyone else can pass it on. Every unmet
+ * gate is named, so fixing one never promises writes that the next still blocks.
+ * Every storage publishes once the server serializes Mac writes, so nothing here
+ * depends on the provider.
+ */
+function writeUnavailableReason(missing: readonly DesktopWriteGate[]): string {
+  const steps: string[] = [];
+  if (missing.includes("state_dir")) steps.push("sets FDRIVE_DESKTOP_STATE_DIR on this server");
+  if (missing.includes("publish_lock"))
+    steps.push("configures the desktop publish lock on this server");
+  if (steps.length === 0)
+    return "Finder writes are turned off on this server. Files stay read-only.";
+  return `Read-only until an administrator ${steps.join(" and ")}.`;
+}
+
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
  * One promise issues credentials once; retries with the app's secret retrieve the same bundle.
  * Secrets are retained only for the five-minute pairing window, never in browser responses.
  * A bundle the app never confirms (crash between poll and Keychain) is revoked when the
  * window closes, so an orphaned credential lives at most five minutes.
  */
-/** The one way a full-access grant still lands read-only now that every storage publishes. */
-const WRITES_OFF =
-  "Finder writes are turned off on this server (FDRIVE_DESKTOP_STATE_DIR is not set). Files stay read-only.";
-
 export function createDesktopPairing(deps: DesktopDeps) {
   const pairs = new Map<string, Pair>();
   const tokens = createTokenService({ ...deps, generateToken: generateDesktopToken });
@@ -112,19 +126,28 @@ export function createDesktopPairing(deps: DesktopDeps) {
     };
     if (protocolVersion === 1)
       return { ...common, protocolVersion: 1 as const, readOnly: true as const };
-    const capabilities =
-      principal.tokenAccess?.mode === "full" && deps.writeCapabilities
-        ? await deps.writeCapabilities(principal)
-        : { create: false, update: false, move: false, trash: false, restore: false };
+    const granted = principal.tokenAccess?.mode === "full";
+    const { capabilities, missing } =
+      granted && deps.writeAvailability
+        ? await deps.writeAvailability(principal)
+        : {
+            capabilities: {
+              create: false,
+              update: false,
+              move: false,
+              trash: false,
+              restore: false,
+            },
+            missing: [] as readonly DesktopWriteGate[],
+          };
+    const readOnly = !Object.values(capabilities).some(Boolean);
     return {
       ...common,
       protocolVersion: 2 as const,
-      readOnly: !Object.values(capabilities).some(Boolean),
+      readOnly,
       capabilities,
       maxUploadBytes: deps.maxUploadBytes ?? 16 * 1024 ** 3,
-      ...(principal.tokenAccess?.mode === "full" && !Object.values(capabilities).some(Boolean)
-        ? { writeUnavailableReason: WRITES_OFF }
-        : {}),
+      ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
     };
   }
   async function issue(pair: Pair): Promise<IssuedCredential[]> {

@@ -81,8 +81,9 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
           protocolVersion: 2,
           readOnly: true,
           capabilities: { create: false, update: false },
+          // Stock SFTPGo needs no setting of its own; only the missing state dir is named.
           writeUnavailableReason:
-            "Finder writes are turned off on this server (FDRIVE_DESKTOP_STATE_DIR is not set). Files stay read-only.",
+            "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
         },
       },
     ],

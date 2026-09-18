@@ -11,10 +11,8 @@ import {
   type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
-import { parseRangeHeader, toFsPath } from "@fdrive/core";
+import { toFsPath } from "@fdrive/core";
 import type { IdentityRepo, IndexQueries } from "@fdrive/db";
-import type { DownloadOptions, DownloadResult } from "@fdrive/sftpgo";
-import { SftpgoError } from "@fdrive/sftpgo";
 import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { z } from "zod";
@@ -39,8 +37,16 @@ import {
   type ThumbFileReader,
 } from "../thumbs/serve.ts";
 import {
+  parseShareRange,
+  RangeNotSatisfiableError,
+  type ShareByteRange,
+  type ShareDownloadOptions,
+  type ShareDownloadResult,
+} from "./access.ts";
+import {
   SHARE_CREDENTIAL_COOKIE,
   SHARE_CREDENTIAL_SECONDS,
+  type ShareCredential,
   type ShareCredentialCodec,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
@@ -178,22 +184,20 @@ export function shareId(c: Context): string {
   if (!id.success) throw new ApiHttpError("bad_request", "Invalid share ID");
   return id.data;
 }
-export function publicDownloadOptions(c: Context): DownloadOptions {
-  const options: DownloadOptions = { signal: c.req.raw.signal };
-  const range = c.req.header("range");
-  if (range !== undefined) {
-    if (parseRangeHeader(range, null).kind === "multiple") return options;
-    if (!/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(range))
-      throw new ApiHttpError("bad_request", "Unsupported byte range");
-    const [start, end] = range.slice(6).split("-");
-    if (
-      (start && !Number.isSafeInteger(Number(start))) ||
-      (end && !Number.isSafeInteger(Number(end))) ||
-      (start && end && Number(end) < Number(start)) ||
-      (!start && Number(end) === 0)
-    )
-      throw new ApiHttpError("bad_request", "Unsupported byte range");
-    options.rangeHeader = range;
+/**
+ * The download options a public request asks for. A well-formed multi-range
+ * header is ignored as a whole, `If-Range` included, and the complete file
+ * is sent; a malformed range is `bad_request`.
+ */
+export function publicDownloadOptions(c: Context): ShareDownloadOptions {
+  const options: { range?: ShareByteRange; ifRange?: string; signal: AbortSignal } = {
+    signal: c.req.raw.signal,
+  };
+  const header = c.req.header("range");
+  if (header !== undefined) {
+    const range = parseShareRange(header);
+    if (range === null) return options;
+    options.range = range;
   }
   const ifRange = c.req.header("if-range");
   if (ifRange !== undefined) options.ifRange = ifRange;
@@ -202,32 +206,29 @@ export function publicDownloadOptions(c: Context): DownloadOptions {
 export function attachment(name: string): string {
   return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(name.replace(/\p{Cc}/gu, "")).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
-export function downloadResponse(result: DownloadResult, name: string): Response {
+export function downloadHeaders(result: Omit<ShareDownloadResult, "body">, name: string): Headers {
   const headers = new Headers({
     "Content-Type": result.contentType ?? "application/octet-stream",
     "Content-Disposition": attachment(name),
+    "Accept-Ranges": "bytes",
   });
   if (result.contentLength !== null) headers.set("Content-Length", String(result.contentLength));
   if (result.contentRange !== null) headers.set("Content-Range", result.contentRange);
   if (result.lastModified !== null) headers.set("Last-Modified", result.lastModified.toUTCString());
-  return new Response(result.body, { status: result.status, headers });
+  return headers;
 }
-export async function publicCall<T>(fn: () => Promise<T>, hasPassword: boolean): Promise<T> {
-  try {
-    return await fn();
-  } catch (error) {
-    if (
-      error instanceof SftpgoError &&
-      hasPassword &&
-      (error.kind === "unauthorized" || error.kind === "forbidden")
-    )
-      throw new ApiHttpError("unauthorized", "Share password required or incorrect", {
-        reason: "password",
-      });
-    return shareCall(async () => {
-      throw error;
-    });
-  }
+export function downloadResponse(result: ShareDownloadResult, name: string): Response {
+  return new Response(result.body, {
+    status: result.status,
+    headers: downloadHeaders(result, name),
+  });
+}
+/** The 416 for a range the file cannot satisfy, naming the size when the backend knew it. */
+export function rangeNotSatisfiable(size: number | null): Response {
+  return new Response(null, {
+    status: 416,
+    headers: size === null ? {} : { "Content-Range": `bytes */${size}` },
+  });
 }
 export function registerSharesRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -308,8 +309,12 @@ export function registerSharesRoutes(
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Content-Type-Options", "nosniff");
   });
-  function password(c: Context) {
+  function credential(c: Context) {
     return deps.codec.decode(shareId(c), getCookie(c, SHARE_CREDENTIAL_COOKIE));
+  }
+  /** The password cache is keyed by what the cookie carried, whichever form that was. */
+  function credentialKey(provided: ShareCredential): string {
+    return "password" in provided ? provided.password : `verified:${provided.verified}`;
   }
   function credentialCookie(c: Context, value: string, maxAge: number) {
     setCookie(c, SHARE_CREDENTIAL_COOKIE, value, {
@@ -321,14 +326,14 @@ export function registerSharesRoutes(
     });
   }
   groups.public.get(pub, (c) =>
-    shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), password(c)))),
+    shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), credential(c)))),
   );
   groups.public.post(`${pub}${PUBLIC_SHARE_SUFFIXES.credentials}`, (c) =>
     shareCall(async () => {
       const id = shareId(c);
       const body = await publicBody(ShareCredentialsRequest, c);
-      await deps.service.publicMetadata(id, undefined);
-      credentialCookie(c, deps.codec.encode(id, body.password), SHARE_CREDENTIAL_SECONDS);
+      const credential = await deps.service.credential(id, body.password);
+      credentialCookie(c, deps.codec.encode(id, credential), SHARE_CREDENTIAL_SECONDS);
       return c.json({ ok: true });
     }),
   );
@@ -339,10 +344,10 @@ export function registerSharesRoutes(
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.entries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
-      if (share.paths.length !== 1)
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
+      if (access.view.paths.length !== 1)
         throw new ApiHttpError("bad_request", "This share is an archive");
-      const entries = await publicCall(() => api.list(path), share.hasPassword);
+      const entries = await access.list(path);
       return c.json({
         items: entries.map((entry) => ({
           name: entry.name,
@@ -356,53 +361,40 @@ export function registerSharesRoutes(
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archiveEntries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
       // A limited link never peeks: every Range read the port issues is a
-      // real SFTPGo download that would consume the link's own budget, the
-      // same reasoning as the gallery refusing a limited link. An
-      // archive-of-many share (`paths.length !== 1`) has no single archive
-      // file to peek either. Both answer the same plain 403, never
-      // distinguishing why, matching every other share-authorization
-      // failure on this route group.
-      if (share.maxTokens > 0 || share.paths.length !== 1) {
+      // real download that would consume the link's own budget, the same
+      // reasoning as the gallery refusing a limited link. An archive-of-many
+      // share (`paths.length !== 1`) has no single archive file to peek
+      // either. Both answer the same plain 403, never distinguishing why,
+      // matching every other share-authorization failure on this route group.
+      if (access.view.maxDownloads > 0 || access.view.paths.length !== 1) {
         throw new ApiHttpError("forbidden", "This share cannot be peeked");
       }
-      // Not wrapped in `publicCall`: unlike a single `api.list`/`download`
-      // call, `peekArchive` issues several Range reads through the adapter,
-      // so a wrong-password `SftpgoError` is recognized inline below
-      // instead of losing its type through `publicCall`'s own `shareCall`
-      // fallback for anything else, which would answer `upstream_unavailable`
-      // even for a peek-specific error such as an unsupported extension.
       const isSingleFile = path === "/";
       // `peekArchive` detects the archive format from its path's extension.
       // A single-file share's request path is always `/` (it names the
       // share, not the file), so the actual name with its extension comes
-      // from the share's own shared path instead, matching `/download`'s
-      // `path === "/"` convention for which SFTPGo call to make.
-      const extensionPath = isSingleFile ? (share.paths[0] ?? path) : path;
+      // from the share's own shared path instead; the port reads the share
+      // at `/` as every other public route does.
+      const extensionPath = isSingleFile ? (access.view.paths[0] ?? path) : path;
       let result: Awaited<ReturnType<typeof peekArchive>>;
       try {
         result = await peekArchive({
-          storage: createSharePeekPort({ api, isSingleFile }),
+          storage: createSharePeekPort({ access, isSingleFile }),
           path: extensionPath,
           maxBytes: deps.config.fdriveArchivePeekMaxBytes ?? DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
           signal: c.req.raw.signal,
         });
       } catch (error) {
+        // The access object has already mapped its backend's failures,
+        // including a wrong password, to `ApiHttpError`; only the peek's
+        // own verdicts on the archive are left to translate.
         if (
           error instanceof UnsupportedPeekFormatError ||
           error instanceof UnreadableArchiveError
         ) {
           throw new ApiHttpError("bad_request", error.message);
-        }
-        if (
-          error instanceof SftpgoError &&
-          share.hasPassword &&
-          (error.kind === "unauthorized" || error.kind === "forbidden")
-        ) {
-          throw new ApiHttpError("unauthorized", "Share password required or incorrect", {
-            reason: "password",
-          });
         }
         throw error;
       }
@@ -452,20 +444,16 @@ export function registerSharesRoutes(
     if (sharedRoot === undefined) throw THUMB_NOT_FOUND();
 
     if (target.hasPassword) {
-      const provided = password(c);
+      const provided = credential(c);
       if (provided === undefined) throw THUMB_NOT_FOUND();
-      let verified = passwordCache.get(id, provided);
+      let verified = passwordCache.get(id, credentialKey(provided));
       if (verified === undefined) {
         try {
-          verified = await deps.service.verifySharePassword(
-            target.identityId,
-            target.sftpgoShareId,
-            provided,
-          );
+          verified = await deps.service.verifySharePassword(id, provided);
         } catch {
           throw THUMB_NOT_FOUND();
         }
-        passwordCache.set(id, provided, verified);
+        passwordCache.set(id, credentialKey(provided), verified);
       }
       if (!verified) throw THUMB_NOT_FOUND();
     }
@@ -503,33 +491,64 @@ export function registerSharesRoutes(
     response.headers.set("Cache-Control", "private, max-age=60");
     return response;
   });
-  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.download}`, (c) =>
+  // HEAD is registered on its own rather than left to Hono's HEAD-as-GET
+  // fallback, which would drop the body without cancelling the stream and
+  // leave the upstream connection open until it drained.
+  const download = (c: Context) =>
     shareCall(async () => {
       const path = publicPath(c);
       const options = publicDownloadOptions(c);
-      const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
-      if (share.paths.length !== 1)
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
+      if (access.view.paths.length !== 1)
         throw new ApiHttpError("bad_request", "Use the archive download for this share");
-      const result = await publicCall(
-        () => (path === "/" ? api.downloadFile(options) : api.download(path, options)),
-        share.hasPassword,
-      );
-      return downloadResponse(
-        result,
+      const name =
         path === "/"
-          ? share.paths[0]?.split("/").at(-1) || "download"
-          : path.slice(path.lastIndexOf("/") + 1),
-      );
-    }),
-  );
+          ? access.view.paths[0]?.split("/").at(-1) || "download"
+          : path.slice(path.lastIndexOf("/") + 1);
+      // A backend that can stat through the share answers HEAD from the
+      // stat: no stream is opened and nothing is spent from its budget.
+      if (c.req.method === "HEAD" && access.statFile !== undefined) {
+        const stat = await access.statFile(path);
+        return new Response(null, {
+          status: 200,
+          headers: downloadHeaders(
+            {
+              status: 200,
+              contentLength: stat.size,
+              contentRange: null,
+              contentType: stat.contentType,
+              lastModified: stat.modifiedAt,
+            },
+            name,
+          ),
+        });
+      }
+      let result: ShareDownloadResult;
+      try {
+        result = await access.download(path, options);
+      } catch (error) {
+        if (error instanceof RangeNotSatisfiableError) return rangeNotSatisfiable(error.size);
+        throw error;
+      }
+      if (c.req.method === "HEAD") {
+        await result.body.cancel();
+        return new Response(null, {
+          status: result.status,
+          headers: downloadHeaders(result, name),
+        });
+      }
+      return downloadResponse(result, name);
+    });
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
+  groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, (c) =>
     shareCall(async () => {
-      const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "read");
-      const body = await publicCall(() => api.zip({ signal: c.req.raw.signal }), share.hasPassword);
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
+      const body = await access.zip({ signal: c.req.raw.signal });
       return new Response(body, {
         headers: {
           "Content-Type": "application/zip",
-          "Content-Disposition": attachment(`${share.name}.zip`),
+          "Content-Disposition": attachment(`${access.view.name}.zip`),
         },
       });
     }),
@@ -540,17 +559,14 @@ export function registerSharesRoutes(
       const maxBytes = deps.config.fdriveShareUploadMaxBytes;
       if (contentLengthExceeds(c.req.header("content-length"), maxBytes))
         throw new ApiHttpError("payload_too_large", "Share upload is too large");
-      const { share, api } = await deps.service.publicAccess(shareId(c), password(c), "write");
-      if (share.paths.length !== 1) throw new ApiHttpError("bad_request", "Invalid upload share");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "write");
+      if (access.view.paths.length !== 1)
+        throw new ApiHttpError("bad_request", "Invalid upload share");
       const cap = c.req.raw.body === null ? null : capByteStream(c.req.raw.body, maxBytes);
       try {
-        await publicCall(
-          () =>
-            api.upload(path.slice(1), cap?.stream ?? new Uint8Array(), {
-              signal: c.req.raw.signal,
-            }),
-          share.hasPassword,
-        );
+        await access.upload(path.slice(1), cap?.stream ?? new Uint8Array(), {
+          signal: c.req.raw.signal,
+        });
       } catch (error) {
         if (cap?.exceeded() === true) {
           throw new ApiHttpError("payload_too_large", "Share upload is too large");

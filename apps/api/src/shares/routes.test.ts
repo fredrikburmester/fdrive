@@ -101,6 +101,7 @@ function sharesHarnessWithThumbs(
     shares,
     logger: h.logger,
     clientFor: (_baseUrl: string) => h.client,
+    storageFor: h.storageFactory,
   };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);
@@ -473,6 +474,30 @@ it("ignores a valid multi-range request while preserving public download account
   expect(await response.text()).toBe("alice data");
   expect(PublicShare.parse(await (await h.request(path)).json()).usedDownloads).toBe(1);
 });
+it("answers HEAD without a body, serves a suffix range, and 416s a range past the end", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const { id } = await h.create(cookie);
+  const path = publicBase(id);
+
+  const head = await h.request(`${path}/download`, { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(head.headers.get("accept-ranges")).toBe("bytes");
+  expect(head.headers.get("content-length")).toBe("10");
+  expect(head.headers.get("content-disposition")).toContain("a.docx");
+  expect(await head.text()).toBe("");
+
+  const tail = await h.request(`${path}/download`, { headers: { range: "bytes=-4" } });
+  expect(tail.status).toBe(206);
+  expect(tail.headers.get("content-range")).toBe("bytes 6-9/10");
+  expect(await tail.text()).toBe("data");
+
+  const beyond = await h.request(`${path}/download`, { headers: { range: "bytes=10-" } });
+  expect(beyond.status).toBe(416);
+  // The share's storage knows the size but does not say so in a 416.
+  expect(beyond.headers.get("content-range")).toBeNull();
+  expect(await beyond.text()).toBe("");
+});
 it("compensates persistence failure, sanitizes compensation failure and reconciles upstream deletions", async () => {
   const h = sharesHarness();
   const cookie = await h.login();
@@ -490,13 +515,13 @@ it("compensates persistence failure, sanitizes compensation failure and reconcil
   spy.mockRestore();
   const share = await h.create(cookie);
   const row = await h.shares.get(share.id);
-  if (!row) throw new Error("row missing");
+  if (!row?.sftpgoShareId) throw new Error("row missing");
   await user.shares.remove(row.sftpgoShareId);
   expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toEqual([]);
   expect(await h.shares.get(share.id)).toBeNull();
   const gone = await h.create(cookie);
   const second = await h.shares.get(gone.id);
-  if (!second) throw new Error("row missing");
+  if (!second?.sftpgoShareId) throw new Error("row missing");
   await user.shares.remove(second.sftpgoShareId);
   expect((await h.request(`${base}/${gone.id}`, { cookie, method: "DELETE" })).status).toBe(200);
   vi.spyOn(h.repos.providers, "get").mockResolvedValue(null);
@@ -601,6 +626,7 @@ function sharesHarnessWithUploadLimit(maxBytes: number) {
     shares,
     logger: h.logger,
     clientFor: (_baseUrl: string) => h.client,
+    storageFor: h.storageFactory,
   };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);

@@ -118,6 +118,9 @@ export function createS3Module(options: CreateS3ModuleOptions = {}): ProviderMod
     // No recycle bin in S3: the API storage factory moves deleted objects
     // into the configured folder itself (`withMoveToTrash`).
     trash: "move",
+    // No public links in S3 itself, and fdrive does not serve them for this
+    // storage yet: the share routes refuse and the web states the limit.
+    shares: "none",
 
     probe(instance, ctx) {
       return probeConnection(instance.baseUrl, { fetch: ctx.fetch });

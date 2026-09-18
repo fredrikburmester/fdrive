@@ -1,13 +1,13 @@
 cask "fdrive" do
-  version "0.2.0"
-  sha256 "991b76f3b323b1fbaa00462eacc5883af83c9a33fadb15541d1a495912d68bb1"
+  version "0.3.0"
+  sha256 "48962ba710d2b8c2704e4710ef20ea2017fd3ac240c8861b15dec76da1bc99c8"
 
   # Private releases use GitHub's authenticated asset endpoint. The ordinary URL
   # works without a token after the source repository becomes public.
   if ENV["HOMEBREW_GITHUB_API_TOKEN"].to_s.empty?
     url "https://github.com/fredrikburmester/fdrive/releases/download/macos-v#{version}/fdrive-#{version}-arm64.dmg"
   else
-    url "https://api.github.com/repos/fredrikburmester/fdrive/releases/assets/571955570",
+    url "https://api.github.com/repos/fredrikburmester/fdrive/releases/assets/572036188",
         header: ["Accept: application/octet-stream",
                  "Authorization: Bearer #{ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")}"]
   end

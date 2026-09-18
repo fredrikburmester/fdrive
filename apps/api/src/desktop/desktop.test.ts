@@ -18,7 +18,7 @@ import { createTokenService } from "../tokens/service.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing } from "./pairing.js";
 import { registerDesktopRoutes } from "./routes.js";
-import { createDesktopWrites } from "./writes.js";
+import { createDesktopWrites, type DesktopWriteGate, NO_WRITES } from "./writes.js";
 
 it("runs the complete v2 routes with explicit grants, streamed content, receipts and revocation", async () => {
   const f = await fixture(true);
@@ -926,4 +926,43 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("explains a read-only full grant by every unmet gate", async () => {
+  const f = await fixture();
+  async function reason(
+    identityId: string,
+    missing: readonly DesktopWriteGate[] | null,
+    mode: "full" | "read" = "full",
+  ) {
+    const pairing = createDesktopPairing({
+      ...f.deps,
+      ...(missing ? { writeAvailability: async () => ({ capabilities: NO_WRITES, missing }) } : {}),
+    });
+    const pair = pairing.create("Mac", "reasons", 2);
+    await pairing.approve(pair.id, f.account.id, [identityId], { [identityId]: mode });
+    const result = await pairing.poll(pair.id, pair.secret);
+    if (result.status !== "connected") throw new Error("Expected credentials");
+    const location = result.credentials[0]?.location;
+    expect(location).toMatchObject({ protocolVersion: 2, readOnly: true });
+    return location && "writeUnavailableReason" in location
+      ? location.writeUnavailableReason
+      : undefined;
+  }
+  expect(await reason(f.identity.id, ["state_dir"])).toBe(
+    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
+  );
+  expect(await reason(f.identity.id, ["publish_lock"])).toBe(
+    "Read-only until an administrator configures the desktop publish lock on this server.",
+  );
+  // Both gates unmet: naming only one would promise writes it cannot deliver.
+  expect(await reason(f.second.id, ["state_dir", "publish_lock"])).toBe(
+    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server and configures the desktop publish lock on this server.",
+  );
+  // A deployment without desktop writes wired says so without guessing at a cause.
+  expect(await reason(f.identity.id, null)).toBe(
+    "Finder writes are turned off on this server. Files stay read-only.",
+  );
+  // A read grant is read-only by choice and carries no reason.
+  expect(await reason(f.identity.id, ["state_dir"], "read")).toBeUndefined();
 });
