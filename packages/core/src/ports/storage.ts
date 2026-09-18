@@ -75,6 +75,34 @@ export interface EntryStat {
  * - Optional methods are absent, not throwing, when the backend cannot
  *   offer them; `ProviderCapabilities` says which.
  */
+/** Options shared by `move` and `copy`. */
+export interface TransferOptions {
+  /** Replace an existing target rather than refusing it. */
+  readonly overwrite?: boolean;
+  /**
+   * Continue a transfer an earlier attempt left unfinished: what is already at
+   * the target is that attempt's own progress, so the target is not cleared
+   * first and an entry already copied is left in place. Only a backend that
+   * copies a directory has anything to resume; the rest may ignore it, since
+   * their move is one operation that either happened or did not.
+   */
+  readonly resume?: boolean;
+  /**
+   * Called as a transfer proceeds, in bytes, with `total` settled before the
+   * first byte moves. Only a backend that copies object by object can report
+   * anything; supplying it may cost that backend an extra listing pass, so
+   * callers pass it only when something is waiting to watch.
+   */
+  readonly onProgress?: (completed: number, total: number) => void;
+  /**
+   * Stops a transfer that copies entry by entry. Honoured only while it is
+   * still copying: a backend that copies removes the source only once every
+   * entry is at the destination, so abandoning it before that leaves the source
+   * whole, and abandoning it after would be the one way to lose the only copy.
+   */
+  readonly signal?: AbortSignal;
+}
+
 export interface StorageProvider {
   /**
    * Runs under a storage-enforced exclusive namespace lease. Only provided for
@@ -98,6 +126,16 @@ export interface StorageProvider {
    * whatever it accepts.
    */
   readonly maxPublishBytes?: number;
+
+  /**
+   * Set when moving a directory copies every object under it instead of
+   * renaming it in one step, so the work is proportional to the tree rather
+   * than constant. S3 has no rename, so it is the only such backend today.
+   * Callers that serialize publication must keep a move like this outside that
+   * serialization: holding a lock for a copy of unbounded length would refuse
+   * every other writer for as long as it runs.
+   */
+  readonly movesDirectoriesByCopy?: boolean;
 
   list(path: string): Promise<FileEntry[]>;
 
@@ -149,9 +187,9 @@ export interface StorageProvider {
 
   mkdir(path: string, opts?: { parents?: boolean }): Promise<void>;
 
-  move(path: string, target: string, opts?: { overwrite?: boolean }): Promise<void>;
+  move(path: string, target: string, opts?: TransferOptions): Promise<void>;
 
-  copy(path: string, target: string, opts?: { overwrite?: boolean }): Promise<void>;
+  copy(path: string, target: string, opts?: TransferOptions): Promise<void>;
 
   deleteFile(path: string): Promise<void>;
 

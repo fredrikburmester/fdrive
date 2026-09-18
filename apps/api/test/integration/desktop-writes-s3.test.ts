@@ -116,12 +116,13 @@ it("publishes on S3 with no configuration and refuses an out-of-band change", {
       bytes: string,
       item?: ReturnType<typeof DesktopWriteEntry.parse>,
       baseContent?: string,
+      parentId = "root",
     ) => {
       const operationId = randomUUID();
       await json(`${base}/uploads`, {
         operationId,
         name,
-        parentId: "root",
+        parentId,
         itemId: item?.id,
         base: item ? { ...item.version, content: sha(baseContent ?? "") } : null,
         size: Buffer.byteLength(bytes),
@@ -153,6 +154,37 @@ it("publishes on S3 with no configuration and refuses an out-of-band change", {
     const second = DesktopWriteEntry.parse(
       ((await replaced.json()) as { item: unknown }).item as object,
     );
+
+    // A folder rename on object storage is a copy of every object under it.
+    // Finder issues it as one move, and it must land whole.
+    const folderOp = randomUUID();
+    const folder = await json(`${base}/folders`, {
+      operationId: folderOp,
+      parentId: "root",
+      name: "reports",
+    });
+    expect((folder as { state: string }).state).toBe("ready");
+    const made = DesktopWriteEntry.parse(
+      ((await json(`${base}/operations/${folderOp}/commit`, {})) as { item: unknown })
+        .item as object,
+    );
+    for (const name of ["q1.txt", "q2.txt"]) {
+      const created = await publish(name, `${name} body`, undefined, undefined, made.id);
+      expect(created.status, await created.clone().text()).toBe(200);
+    }
+    const renameOp = randomUUID();
+    await json(`${base}/moves`, {
+      operationId: renameOp,
+      itemId: made.id,
+      parentId: "root",
+      name: "reports-2024",
+      base: made.version,
+    });
+    const renamed = await call(`${base}/operations/${renameOp}/commit`, {});
+    expect(renamed.status, await renamed.clone().text()).toBe(200);
+    expect(await read("/reports-2024/q1.txt")).toBe("q1.txt body");
+    expect(await read("/reports-2024/q2.txt")).toBe("q2.txt body");
+    await expect(outside.stat("/reports")).rejects.toMatchObject({ kind: "not_found" });
 
     // A writer fdrive does not mediate changes the object. The next publication must
     // refuse rather than drop it, and the external content must survive untouched.

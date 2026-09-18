@@ -133,6 +133,32 @@ cannot publish that much. S3 publishes with `CopyObject`, which refuses above 5 
 bytes arrived, so an S3 location advertises 5 GiB and refuses a larger file before any of it is
 transferred rather than at the rename, where the transfer would already be spent.
 
+**Folders on storage without a rename.** S3 moves a folder by copying every object under it,
+which is proportional to the tree rather than constant. That copy runs *outside* the publication
+lock: the lock is per identity and its waiters give up after 30 seconds, so holding it for a
+large folder would refuse every other Mac write for as long as the copy ran. The lock still
+covers the decision — the destination is free, the source is what was observed, the destination
+is reserved under the operation — and the copy then proceeds the way any other client of that
+storage performs the same move, with the destination filling as it goes. Every object is copied
+before any is removed, so an interruption leaves the source whole; the same operation id resumes
+and skips what the previous attempt already copied, rather than starting again or stranding the
+work where only an administrator could clear it.
+
+Finder shows a real proportion for that copy rather than an indeterminate bar. The server
+settles the total size before the first object moves and records how far it has got as it runs,
+at most once a second whatever the tree's size; the Mac app follows that while the commit is in
+flight. It is advisory — a move that finishes before the first poll never asks, and a poll that
+fails leaves the bar where it was rather than disturbing the write.
+
+Stopping that move in Finder stops it on the server too, and takes back what it had copied.
+Dropping the request would only end the Mac's side of it, so the app asks the server, and the
+copy reads that ask on its next tick — which is why it works from any API process, not only the
+one doing the copying. The destination is removed and the source left where it was. That is safe
+only while copying, because copying takes nothing from the source until every object is across:
+once removal starts the move has effectively happened, the cancellation is ignored, and it
+finishes. The server proves the source is still there before removing anything, so a cancellation
+that loses its race with the last object can never delete the only copy.
+
 **Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
 `apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
 writer that uses that same endpoint. Enable it only when **every writer uses the same

@@ -117,7 +117,7 @@ describe("directories as key prefixes", () => {
     expect((await storage.list("/a")).map((entry) => entry.name)).toEqual(["ok.txt"]);
   });
 
-  it("refuses a folder with too many objects instead of walking it forever", async () => {
+  it("refuses to list a folder with too many entries instead of walking it forever", async () => {
     // Every page claims more follow; a small bound keeps the test quick and
     // the production bound is a constant the adapter reports in its message.
     const page = Array.from({ length: 1000 }, (_, index) => `big/${index}.txt`);
@@ -134,10 +134,17 @@ describe("directories as key prefixes", () => {
     expect(String((error as Error).message)).toContain(
       "more than 2500 entries; fdrive cannot list",
     );
-    const removal = await storage.deleteDir("/big").catch((cause: unknown) => cause);
-    expect(removal).toMatchObject({ kind: "internal" });
-    expect(String((removal as Error).message)).toContain("more than 2500 objects");
     expect(MAX_DIRECTORY_KEYS).toBe(100_000);
+  });
+
+  it("deletes a folder with more objects than one listing may return", async () => {
+    // The bound holds a listing's answer together in memory; deleting streams it
+    // a page at a time, so undoing a cancelled move has no ceiling of its own.
+    const { server, storage } = harness({}, "", 3);
+    for (let index = 0; index < 12; index += 1) server.put("bucket", `big/${index}.txt`, "x");
+    await storage.deleteDir("/big");
+    expect([...server.objects("bucket").keys()]).toEqual([]);
+    expect(await kindOf(storage.deleteDir("/big"))).toBe("not_found");
   });
 
   it("creates markers and refuses to create over a file or an existing folder", async () => {
@@ -231,6 +238,121 @@ describe("moves and copies", () => {
     expect(server.objects("bucket").has("folder/")).toBe(false);
     expect(server.objects("bucket").has("folder/inner.txt")).toBe(false);
     expect(await text((await storage.download("/folder")).body)).toBe("a");
+  });
+
+  it("moves a folder larger than the directory bound, which only listing applies", async () => {
+    // The bound exists so one listing cannot grow without limit. A move streams
+    // the tree a page at a time instead of collecting it, so the folder fdrive
+    // can move is limited by time rather than by that number.
+    const { server, storage } = harness({}, "", 3);
+    for (let index = 0; index < 12; index += 1)
+      server.put("bucket", `big/${index}.txt`, `v${index}`);
+    await storage.move("/big", "/moved");
+    expect([...server.objects("bucket").keys()].sort()).toEqual(
+      Array.from({ length: 12 }, (_, index) => `moved/${index}.txt`).sort(),
+    );
+    expect(await text((await storage.download("/moved/7.txt")).body)).toBe("v7");
+    // Listing the same folder still refuses, which is what the bound is for.
+    expect(await kindOf(storage.list("/moved"))).toBe("internal");
+  });
+
+  it("resumes a move onto its own partial result without clearing or recopying it", async () => {
+    const copied: string[] = [];
+    const { server, storage } = harness({
+      intercept: (request, parsed) => {
+        if (parsed.method === "PUT" && request.headers.has("x-amz-copy-source"))
+          copied.push(parsed.key);
+        return null;
+      },
+    });
+    server.put("bucket", "src/a.txt", "a");
+    server.put("bucket", "src/b.txt", "b");
+    // What an interrupted attempt had already copied.
+    server.put("bucket", "dst/a.txt", "a");
+    await storage.move("/src", "/dst", { overwrite: true, resume: true });
+    // Only the object the earlier attempt had not reached is copied again, so a
+    // tree interrupted near the end finishes rather than starting over.
+    expect(copied).toEqual(["dst/b.txt"]);
+    expect(await text((await storage.download("/dst/a.txt")).body)).toBe("a");
+    expect(await text((await storage.download("/dst/b.txt")).body)).toBe("b");
+    expect(server.objects("bucket").has("src/a.txt")).toBe(false);
+    // Without resume the same shape of call replaces the target wholesale.
+    copied.length = 0;
+    server.put("bucket", "again/a.txt", "a");
+    server.put("bucket", "again/stale.txt", "stale");
+    server.put("bucket", "fresh/a.txt", "a");
+    await storage.move("/fresh", "/again", { overwrite: true });
+    expect(server.objects("bucket").has("again/stale.txt")).toBe(false);
+    expect(copied).toEqual(["again/a.txt"]);
+  });
+
+  it("reports byte progress against a settled total, and costs a listing only then", async () => {
+    let listings = 0;
+    const { server, storage } = harness({
+      intercept: (_request, parsed) => {
+        if (parsed.method === "GET" && parsed.query.has("list-type")) listings += 1;
+        return null;
+      },
+    });
+    server.put("bucket", "src/a.txt", "aaaa");
+    server.put("bucket", "src/b.txt", "bb");
+    const reports: [number, number][] = [];
+    await storage.move("/src", "/dst", {
+      onProgress: (done, total) => reports.push([done, total]),
+    });
+    // The total is settled before the first byte, so the bar is never a guess.
+    expect(reports[0]).toEqual([0, 6]);
+    expect(reports.at(-1)).toEqual([6, 6]);
+    const watched = listings;
+
+    // Resuming counts what an earlier attempt left at the destination as done,
+    // so the bar reflects the whole tree rather than only this attempt's share.
+    server.put("bucket", "again/a.txt", "aaaa");
+    server.put("bucket", "more/a.txt", "aaaa");
+    server.put("bucket", "more/b.txt", "bb");
+    const resumed: [number, number][] = [];
+    await storage.move("/more", "/again", {
+      overwrite: true,
+      resume: true,
+      onProgress: (done, total) => resumed.push([done, total]),
+    });
+    expect(resumed.at(-1)).toEqual([6, 6]);
+
+    // A move nobody is watching does not pay for the costing pass.
+    listings = 0;
+    server.put("bucket", "quiet/a.txt", "aaaa");
+    await storage.move("/quiet", "/quieter");
+    expect(listings).toBeLessThan(watched);
+  });
+
+  it("stops a cancelled copy with the source whole, and ignores it once removing", async () => {
+    const { server, storage } = harness();
+    for (const name of ["a", "b", "c"]) server.put("bucket", `src/${name}.txt`, name);
+    const copying = new AbortController();
+    // Cancelled the moment the total is known, before any object is copied.
+    const stopped = await kindOf(
+      storage.move("/src", "/dst", { onProgress: () => copying.abort(), signal: copying.signal }),
+    );
+    expect(stopped).toBe("upstream_unavailable");
+    // The source is whole, because copying never removes anything from it. That
+    // is what makes undoing a cancelled move safe: the destination holds only
+    // this transfer's own partial copy.
+    expect(await text((await storage.download("/src/a.txt")).body)).toBe("a");
+
+    // A signal that only trips once every object is at the destination is past
+    // the point of no return: the move finishes rather than stranding the tree.
+    const removing = new AbortController();
+    let copied = 0;
+    await storage.move("/src", "/late", {
+      onProgress: (done, total) => {
+        copied = done;
+        if (done === total) removing.abort();
+      },
+      signal: removing.signal,
+    });
+    expect(copied).toBeGreaterThan(0);
+    expect(await kindOf(storage.stat("/src"))).toBe("not_found");
+    expect(await text((await storage.download("/late/c.txt")).body)).toBe("c");
   });
 
   it("passes a target check failure through instead of treating it as free", async () => {

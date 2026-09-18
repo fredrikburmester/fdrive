@@ -72,6 +72,7 @@ public struct APIClient: Sendable {
             case "version_conflict": throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved.")
             case "name_collision": throw DriveError.nameCollision(message ?? "An item with this name already exists. Your pending copy is preserved.")
             case "operation_uncertain": throw DriveError.writeUncertain
+            case "operation_cancelled": throw DriveError.cancelled
             case "quota_exceeded": throw DriveError.quota
             case "unsupported", "permission_denied": throw DriveError.permission
             default: break
@@ -169,6 +170,9 @@ public struct APIClient: Sendable {
     }
     public func commitWrite(_ id: String) async throws -> WriteResult {
         try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true)
+    }
+    public func writeStatus(_ id: String) async throws -> WriteResult {
+        try await send("operations/\(id)")
     }
     public func acknowledgeWrite(_ id: String) async throws {
         let _: WriteResult = try await send("operations/\(id)/acknowledge", body: Data("{}".utf8), writing: true)
