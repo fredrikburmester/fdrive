@@ -87,6 +87,18 @@ export interface StorageProvider {
     signal?: AbortSignal,
   ): Promise<T>;
 
+  /**
+   * The largest file this backend can publish, when it bounds it at all.
+   * Publication copies or renames a staged file into place, and S3's
+   * `CopyObject` refuses above 5 GiB however the bytes arrived, so a backend
+   * can accept an upload it could never publish. Callers that stage before
+   * publishing must apply this before accepting the transfer: discovering it
+   * at publication spends the whole transfer first and leaves a commit that
+   * only an administrator can clear. Absent when the backend publishes
+   * whatever it accepts.
+   */
+  readonly maxPublishBytes?: number;
+
   list(path: string): Promise<FileEntry[]>;
 
   /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */

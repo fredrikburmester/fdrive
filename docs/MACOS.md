@@ -128,13 +128,20 @@ write of theirs landing between that proof and the replacement is silently lost,
 backup holding the pre-fdrive content rather than the lost version. OCR's own size and mtime
 checks mean a collision there is refused on both sides rather than silently applied.
 
+**Upload size is bounded by publication.** fdrive accepts 16 GiB, or less where the storage
+cannot publish that much. S3 publishes with `CopyObject`, which refuses above 5 GiB however the
+bytes arrived, so an S3 location advertises 5 GiB and refuses a larger file before any of it is
+transferred rather than at the rename, where the transfer would already be spent.
+
 **Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
 `apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
 writer that uses that same endpoint. Enable it only when **every writer uses the same
 lock-enforcing DAV endpoint**; direct filesystem or SFTP access to the same files voids it.
 
 Publication is refused, and every location stays read-only, only when the server has no recovery
-storage or no publish lock; the Mac app shows that reason on each card. Credentials issued as
+storage or no publish lock; the Mac app shows that reason on each card. A publication the
+storage refuses outright leaves the operation discardable from the Mac app; only one whose
+outcome is genuinely unknown waits for an administrator. Credentials issued as
 read-only stay read-only; Reconnect grants access without changing the domain.
 
 Protocol 2 uses `/api/v2/desktop`; protocol 1 is unchanged. New apps fall back to read-only

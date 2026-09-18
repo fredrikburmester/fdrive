@@ -66,13 +66,14 @@ Re-stating the observation closer to the rename would narrow its window to nothi
 fresh stat would adopt whatever another writer had just written; `optimistic-publish.test.ts`
 pins that with a regression test firing a write the instant the recovery copy is taken.
 
-**3. `verified-optimistic` is selectable on stock SFTPGo** (superseded 2026-09-18: it is the default for every storage and no longer selectable). The capability gate moved off
+**3. `verified-optimistic` is selectable on stock SFTPGo.** Superseded 2026-09-18: it is the
+default for every storage and no longer selectable. The capability gate moved off
 `storage.withWriteLease` onto `publishesSafely` in `apps/api/src/desktop/publish-gate.ts`, which
-accepts either a lease or `optimisticPublish` **together with** a configured publish lock — a
-deployment without the lock stays read-only instead of publishing unserialized.
+now accepts any storage **together with** a configured publish lock — a deployment without the
+lock stays read-only instead of publishing unserialized.
 
-**4. Documentation.** `docs/MACOS.md#write-configuration-and-recovery` carries the three modes
-and what each actually guarantees.
+**4. Documentation.** `docs/MACOS.md#write-configuration-and-recovery` carries the default
+contract, the optional Apache mode, and what each actually guarantees.
 
 **5. The lock is isolated from the API's connection pool.** It runs on its own bounded pool and
 is taken for the publication step only, never for the transfer, and not at all when the storage

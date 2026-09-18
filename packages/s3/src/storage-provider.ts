@@ -354,6 +354,11 @@ export function createS3StorageProvider(deps: S3StorageProviderDeps): StoragePro
   }
 
   return {
+    // Publication is a `CopyObject`, which S3 refuses above this however the
+    // bytes arrived: multipart uploads a 16 GiB object happily and then no
+    // copy can move it into place.
+    maxPublishBytes: MAX_COPY_BYTES,
+
     async list(path: string): Promise<FileEntry[]> {
       const normalized = normalizePath(path);
       const client = await deps.client();

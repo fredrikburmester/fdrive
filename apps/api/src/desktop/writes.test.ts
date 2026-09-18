@@ -1573,3 +1573,63 @@ it("reports every precondition a full grant is missing, and none for a read gran
   ]);
   expect(unrecoverable.capabilities(f.principal)).toEqual(NO_WRITES);
 });
+
+it("refuses a file the storage could never publish, before any of it is transferred", async () => {
+  const f = await fixture();
+  // S3 publishes with a copy it refuses above 5 GiB, however the bytes arrived.
+  const bounded: Principal = { ...f.principal, storage: { ...f.storage, maxPublishBytes: 8 } };
+  const upload = vi.spyOn(f.raw, "upload");
+  const request = {
+    kind: "upload" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    name: "big.bin",
+    base: null,
+    size: 9,
+    sha256: sha("123456789"),
+  };
+  await expect(f.service.prepare(bounded, request)).rejects.toMatchObject({
+    kind: "bad_request",
+    details: { code: "quota_exceeded" },
+  });
+  expect(upload).not.toHaveBeenCalled();
+  // The bound is the storage's, not a rejection of everything: its own size fits.
+  expect(
+    (await f.service.prepare(bounded, { ...request, size: 8, sha256: sha("12345678") })).state,
+  ).toBe("receiving");
+  // The replaced file is copied to recovery first, so it meets the same bound
+  // even when the incoming one does. "/old.txt" holds three bytes.
+  const tight: Principal = { ...f.principal, storage: { ...f.storage, maxPublishBytes: 2 } };
+  const existing = await f.service.stat(f.principal, "/old.txt");
+  await expect(
+    f.service.prepare(tight, {
+      ...request,
+      operationId: randomUUID(),
+      name: "old.txt",
+      itemId: existing.id,
+      base: { ...existing.version, content: sha("old") },
+      size: 1,
+      sha256: sha("x"),
+    }),
+  ).rejects.toMatchObject({ kind: "bad_request", details: { code: "quota_exceeded" } });
+  expect(await f.read("/old.txt")).toBe("old");
+});
+
+it("leaves a publication the storage refused discardable rather than uncertain", async () => {
+  const f = await fixture();
+  const request = await f.stage("fresh.txt", "bytes");
+  // Every backend evaluates `overwrite: false` before writing, so a conflict
+  // here means the destination was never touched.
+  vi.spyOn(f.raw, "move").mockRejectedValueOnce(
+    new StorageError("conflict", "The destination already exists"),
+  );
+  const failure = await f.service.commit(f.principal, request.operationId).catch((e: unknown) => e);
+  expect(failure).toMatchObject({ kind: "conflict" });
+  expect((failure as { details?: { code?: string } }).details?.code).not.toBe(
+    "operation_uncertain",
+  );
+  const state = (await f.service.status(f.principal, request.operationId)).state;
+  expect(state).not.toBe("uncertain");
+  // The Mac app clears it on its own; an uncertain commit would need an administrator.
+  expect((await f.service.cancel(f.principal, request.operationId)).state).toBe("cancelled");
+});
