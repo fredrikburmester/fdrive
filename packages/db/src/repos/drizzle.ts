@@ -14,6 +14,7 @@ import {
   settings,
   tags,
 } from "../schema/app.js";
+import { createAiChatRepo } from "./ai-chats.js";
 import { supersedeDesktopEffects } from "./desktop-effects.js";
 import { validateIdentityLinkId } from "./identity-links-types.js";
 import { selectPathChunks } from "./path-chunks.js";
@@ -993,5 +994,6 @@ export function createRepos(db: Db): Repos {
     recents: createRecentRepo(db),
     metadataPaths: createMetadataPathRepo(db),
     systemEvents: createSystemEventRepo(db),
+    aiChats: createAiChatRepo(db),
   };
 }

@@ -24,6 +24,7 @@ import { registerAccountsRoutes } from "./accounts/routes.ts";
 import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
+import { createChatService } from "./ai/chat/service.ts";
 import { createOrganizeRuns } from "./ai/organize/runs.ts";
 import { createOrganizeService } from "./ai/organize/service.ts";
 import { createAiModel } from "./ai/provider.ts";
@@ -744,6 +745,15 @@ export async function composeApp(
     }),
     mcp: mcpToolDeps,
   });
+  const chatService = createChatService({
+    settings: aiSettings,
+    modelFor: aiModelFor,
+    chats: repos.aiChats,
+    mcp: mcpToolDeps,
+    fs: { bus, clock, metadata: metadataService },
+    clock,
+    onUnexpectedError: (error) => logger.warn({ err: error }, "chat reply failed"),
+  });
 
   const app = createApp({
     ...(config.fdriveBackupStateDir
@@ -927,6 +937,7 @@ export async function composeApp(
       registerAiRoutes(groups, {
         settings: aiSettings,
         organize: organizeService,
+        chat: chatService,
         modelFor: aiModelFor,
       });
       registerEventRoutes(groups, { bus, clock });

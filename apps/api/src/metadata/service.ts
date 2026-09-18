@@ -1,5 +1,6 @@
 import type { FsEntry } from "@fdrive/contracts";
 import type {
+  AiChatRepo,
   Tag as DbTag,
   FavoriteKind,
   FavoriteRepo,
@@ -40,6 +41,8 @@ export interface MetadataFolderView {
 }
 
 export interface MetadataServiceDeps {
+  /** AI chat references follow the same moves and deletes; optional for tests that have no chats. */
+  readonly aiChats?: Pick<AiChatRepo, "moveReferences" | "markReferencesMissing"> | undefined;
   readonly tags: TagRepo;
   readonly fileTags: FileTagRepo;
   readonly favorites: FavoriteRepo;
@@ -257,14 +260,17 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
 
     async onMoved(identityId, oldPath, newPath, isDir) {
       await deps.metadataPaths.movePrefix(identityId, oldPath, newPath, isDir);
+      await deps.aiChats?.moveReferences(identityId, oldPath, newPath, isDir);
     },
 
     async onDeleted(identityId, path, isDir) {
       await deps.metadataPaths.deletePrefix(identityId, path, isDir);
+      await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
     },
 
     async onTrashed(identityId, path, isDir) {
       await deps.recents.deletePrefix(identityId, path, isDir);
+      await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
     },
 
     onCopied() {

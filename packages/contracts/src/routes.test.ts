@@ -3,6 +3,10 @@ import {
   accountTokenRoute,
   adminProviderRoute,
   adminProviderTestRoute,
+  chatActionRoute,
+  chatCancelRoute,
+  chatMessagesRoute,
+  chatRoute,
   IDENTITY_HEADER,
   identityScopeRoute,
   jobCancelRoute,
@@ -174,9 +178,17 @@ describe("AI routes", () => {
     expect(ROUTES.ai).toEqual({
       status: "/api/v1/ai/status",
       organize: "/api/v1/ai/organize",
+      chats: "/api/v1/ai/chats",
     });
     expect(organizeRunRoute("run/1")).toBe("/api/v1/ai/organize/run%2F1");
     expect(organizeRunCancelRoute("run-1")).toBe("/api/v1/ai/organize/run-1/cancel");
+  });
+
+  it("builds chat paths, encoding ids", () => {
+    expect(chatRoute("chat/1")).toBe("/api/v1/ai/chats/chat%2F1");
+    expect(chatMessagesRoute("c1")).toBe("/api/v1/ai/chats/c1/messages");
+    expect(chatCancelRoute("c1")).toBe("/api/v1/ai/chats/c1/cancel");
+    expect(chatActionRoute("c1", "card 1")).toBe("/api/v1/ai/chats/c1/actions/card%201");
   });
 });
 

@@ -1590,5 +1590,178 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           .toEqual(["c", "b"]);
       });
     });
+
+    describe("aiChats", () => {
+      const SHARE = { contents: true, otherFileNames: true };
+      let identity: string;
+      let other: string;
+
+      beforeEach(async () => {
+        const account = await repos.accounts.create({ displayName: null });
+        const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+        identity = (
+          await repos.identities.create({
+            accountId: account.id,
+            providerId: provider.id,
+            externalUsername: "alice",
+          })
+        ).id;
+        other = (
+          await repos.identities.create({
+            accountId: account.id,
+            providerId: provider.id,
+            externalUsername: "bob",
+          })
+        ).id;
+      });
+
+      it("scopes every chat operation to its identity", async () => {
+        const chat = await repos.aiChats.create({
+          identityId: identity,
+          title: "Taxes",
+          share: SHARE,
+        });
+
+        expect(await repos.aiChats.get(identity, chat.id)).toEqual(chat);
+        expect(await repos.aiChats.get(other, chat.id)).toBeNull();
+        expect(await repos.aiChats.rename(other, chat.id, "Mine")).toBeNull();
+        expect(await repos.aiChats.delete(other, chat.id)).toBe(false);
+        expect(await repos.aiChats.list(other, 10)).toEqual([]);
+        expect((await repos.aiChats.rename(identity, chat.id, "2024 taxes"))?.title).toBe(
+          "2024 taxes",
+        );
+        expect(await repos.aiChats.delete(identity, chat.id)).toBe(true);
+        expect(await repos.aiChats.get(identity, chat.id)).toBeNull();
+      });
+
+      it("appends messages with dense ordinals, bumps the chat and lists most recent first", async () => {
+        const older = await repos.aiChats.create({
+          identityId: identity,
+          title: "A",
+          share: SHARE,
+        });
+        const newer = await repos.aiChats.create({
+          identityId: identity,
+          title: "B",
+          share: SHARE,
+        });
+        const first = await repos.aiChats.appendMessage(older.id, {
+          role: "user",
+          parts: [{ kind: "text", text: "hi" }],
+          references: ["/a.txt"],
+          location: "/",
+        });
+        const second = await repos.aiChats.appendMessage(older.id, {
+          role: "assistant",
+          parts: [],
+          references: [],
+          location: null,
+        });
+
+        expect([first.ordinal, second.ordinal]).toEqual([1, 2]);
+        expect(first).toMatchObject({ role: "user", references: ["/a.txt"], location: "/" });
+        const bumped = await repos.aiChats.get(identity, older.id);
+        expect(bumped?.lastMessageAt.getTime()).toBeGreaterThanOrEqual(newer.createdAt.getTime());
+        expect((await repos.aiChats.list(identity, 10)).map((chat) => chat.id)).toEqual([
+          older.id,
+          newer.id,
+        ]);
+        expect((await repos.aiChats.list(identity, 1)).map((chat) => chat.id)).toEqual([older.id]);
+
+        await repos.aiChats.updateMessageParts(second.id, [{ kind: "text", text: "Hello" }]);
+        expect((await repos.aiChats.messages(older.id)).map((message) => message.parts)).toEqual([
+          [{ kind: "text", text: "hi" }],
+          [{ kind: "text", text: "Hello" }],
+        ]);
+        await expect(
+          repos.aiChats.appendMessage("00000000-0000-4000-8000-000000000000", {
+            role: "user",
+            parts: [],
+            references: [],
+            location: null,
+          }),
+        ).rejects.toThrow();
+      });
+
+      it("prunes idle chats and everything beyond the most recent ones", async () => {
+        const chats: Record<string, string> = {};
+        for (const title of ["one", "two", "three", "four"])
+          chats[title] = (
+            await repos.aiChats.create({ identityId: identity, title, share: SHARE })
+          ).id;
+        const foreign = await repos.aiChats.create({ identityId: other, title: "x", share: SHARE });
+        const cutoff = new Date();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await repos.aiChats.appendMessage(chats.two as string, {
+          role: "user",
+          parts: [],
+          references: [],
+          location: null,
+        });
+        await repos.aiChats.appendMessage(chats.four as string, {
+          role: "user",
+          parts: [],
+          references: [],
+          location: null,
+        });
+
+        // Idle before the cutoff go first, then only two of the rest stay.
+        expect(await repos.aiChats.prune(identity, { keep: 2, idleBefore: cutoff })).toBe(2);
+        expect((await repos.aiChats.list(identity, 10)).map((chat) => chat.title).sort()).toEqual([
+          "four",
+          "two",
+        ]);
+        expect(await repos.aiChats.prune(identity, { keep: 1, idleBefore: new Date(0) })).toBe(1);
+        expect((await repos.aiChats.list(identity, 10)).map((chat) => chat.title)).toEqual([
+          "four",
+        ]);
+        expect(await repos.aiChats.get(other, foreign.id)).not.toBeNull();
+      });
+
+      it("keeps references per chat, following moves and marking trashed ones missing", async () => {
+        const chat = await repos.aiChats.create({ identityId: identity, title: "A", share: SHARE });
+        const foreign = await repos.aiChats.create({ identityId: other, title: "B", share: SHARE });
+        await repos.aiChats.addReferences(chat.id, [
+          "/Inbox/a.pdf",
+          "/Inbox/b.pdf",
+          "/Docs",
+          "/Docs/x.md",
+        ]);
+        await repos.aiChats.addReferences(foreign.id, ["/Inbox/a.pdf"]);
+
+        await repos.aiChats.markReferencesMissing(identity, "/Inbox/b.pdf", false);
+        await repos.aiChats.addReferences(chat.id, ["/Inbox/b.pdf"]);
+        await repos.aiChats.markReferencesMissing(identity, "/Docs", true);
+        await repos.aiChats.moveReferences(identity, "/Inbox/a.pdf", "/Archive/a.pdf", false);
+        await repos.aiChats.moveReferences(identity, "/Docs", "/Notes", true);
+
+        const refs = await repos.aiChats.references(chat.id);
+        expect(refs.map((ref) => [ref.path, ref.missing])).toEqual([
+          ["/Archive/a.pdf", false],
+          ["/Inbox/b.pdf", false],
+          ["/Notes", true],
+          ["/Notes/x.md", true],
+        ]);
+        expect((await repos.aiChats.references(foreign.id)).map((ref) => ref.path)).toEqual([
+          "/Inbox/a.pdf",
+        ]);
+
+        // A move onto itself and an unknown chat are handled without touching anything.
+        await repos.aiChats.moveReferences(identity, "/Notes", "/Notes", true);
+        expect((await repos.aiChats.references(chat.id)).map((ref) => ref.path)).toContain(
+          "/Notes",
+        );
+        await expect(
+          repos.aiChats.addReferences("00000000-0000-4000-8000-000000000000", ["/x"]),
+        ).rejects.toThrow();
+
+        // Moving onto a path the chat already references keeps one row.
+        await repos.aiChats.addReferences(chat.id, ["/Archive/b.pdf"]);
+        await repos.aiChats.moveReferences(identity, "/Inbox/b.pdf", "/Archive/b.pdf", false);
+        expect(
+          (await repos.aiChats.references(chat.id)).filter((ref) => ref.path === "/Archive/b.pdf"),
+        ).toHaveLength(1);
+      });
+    });
   });
 }

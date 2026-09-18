@@ -7,11 +7,12 @@ import {
   parentPath,
   toFsPath,
 } from "@fdrive/core";
+import type { IndexedFile } from "@fdrive/db";
 import { z } from "zod";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
-import { resolveScopeContext, virtualPathFor } from "../../mcp/scope-context.js";
-import { createReadAuthorizer } from "../../scoping/read-authorizer.js";
+import { resolveScopeContext, type ScopeContext, virtualPathFor } from "../../mcp/scope-context.js";
+import { createReadAuthorizer, type ReadAuthorizer } from "../../scoping/read-authorizer.js";
 import { toIndexRelativePath } from "../../search/scopes.js";
 import { createPathLocator } from "./stored-paths.ts";
 import { type AiTool, AiToolError, defineTool, formatSize } from "./tool.ts";
@@ -280,6 +281,57 @@ function listFolderTool(deps: DriveToolsDeps): AiTool {
   );
 }
 
+export interface IndexScope {
+  readonly ctx: ScopeContext;
+  readonly authorizer: ReadAuthorizer;
+}
+
+export interface IndexLookup {
+  /** The identity's verified index scope, resolved once; `null` when the index cannot be used. */
+  scope(): Promise<IndexScope | null>;
+  /** The index row for a stored path that round-trips and passes a live read check, else `null`. */
+  file(path: string): Promise<{ file: IndexedFile; scope: IndexScope } | null>;
+}
+
+/** Index access for tools that read a file's extracted text or index row. */
+export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
+  let scope: Promise<IndexScope | null> | undefined;
+  const lookup: IndexLookup = {
+    scope() {
+      if (scope === undefined)
+        scope = (async (): Promise<IndexScope | null> => {
+          const identity = await deps.mcp.identities.get(deps.principal.identityId);
+          const verified =
+            identity === null ? null : await deps.mcp.scopeResolver.verifiedIndexScopes(identity);
+          if (verified === null || !verified.available) return null;
+          const ctx = await resolveScopeContext(
+            deps.mcp.indexQueries,
+            verified.scopes,
+            trashPathOf(deps),
+          );
+          if (ctx === null) return null;
+          return { ctx, authorizer: createReadAuthorizer({ storage: deps.principal.storage }) };
+        })();
+      return scope;
+    },
+    async file(path) {
+      const resolved = await lookup.scope();
+      if (resolved === null) return null;
+      const { ctx, authorizer } = resolved;
+      const fsPath = toFsPath(ctx.scopes, path);
+      const rootId = fsPath === null ? undefined : ctx.rootIdByName.get(fsPath.rootName);
+      const file =
+        fsPath === null || rootId === undefined
+          ? null
+          : await deps.mcp.indexQueries.fileByPath(rootId, toIndexRelativePath(fsPath.fsPath));
+      if (file === null || virtualPathFor(ctx, file.rootId, file.path) !== path) return null;
+      if (!(await authorizer.authorize({ path, kind: "file" })).allowed) return null;
+      return { file, scope: resolved };
+    },
+  };
+  return lookup;
+}
+
 function readExcerptsTool(deps: DriveToolsDeps): AiTool {
   const { focus } = deps;
   const schema = z.object({
@@ -291,16 +343,7 @@ function readExcerptsTool(deps: DriveToolsDeps): AiTool {
         `${capitalize(focus.adjective)} files (or files inside ${focus.adjective} folders) to read, at most 25.`,
       ),
   });
-  let scope: ReturnType<typeof resolveScope> | undefined;
-  function resolveScope() {
-    return (async () => {
-      const identity = await deps.mcp.identities.get(deps.principal.identityId);
-      const verified =
-        identity === null ? null : await deps.mcp.scopeResolver.verifiedIndexScopes(identity);
-      if (verified === null || !verified.available) return null;
-      return resolveScopeContext(deps.mcp.indexQueries, verified.scopes, trashPathOf(deps));
-    })();
-  }
+  const index = createIndexLookup(deps);
   return defineTool(
     "read_excerpts",
     `Reads the start of each file's already-extracted text (documents, PDFs, OCR'd scans), up to ${EXCERPT_CHARS} characters each. Only works on ${focus.adjective} items.`,
@@ -311,10 +354,8 @@ function readExcerptsTool(deps: DriveToolsDeps): AiTool {
           ? `Read ${baseName(args.paths[0] as string)}`
           : `Read ${args.paths.length} files`,
       async run(args) {
-        scope ??= resolveScope();
-        const ctx = await scope;
-        if (ctx === null) return "Extracted text is not available for this drive.";
-        const authorizer = createReadAuthorizer({ storage: deps.principal.storage });
+        if ((await index.scope()) === null)
+          return "Extracted text is not available for this drive.";
         const locator = createPathLocator(deps.principal.storage);
         const sections = await mapLimit(args.paths, 6, async (raw) => {
           let path: string;
@@ -326,19 +367,9 @@ function readExcerptsTool(deps: DriveToolsDeps): AiTool {
           path = (await locator.locate(path)).path;
           if (!isWithin(focus.paths, path))
             return `### ${raw}\n(Not a ${focus.adjective} item; only ${focus.adjective} items can be read.)`;
-          const resolved = toFsPath(ctx.scopes, path);
-          const rootId = resolved === null ? undefined : ctx.rootIdByName.get(resolved.rootName);
-          const file =
-            resolved === null || rootId === undefined
-              ? null
-              : await deps.mcp.indexQueries.fileByPath(
-                  rootId,
-                  toIndexRelativePath(resolved.fsPath),
-                );
-          if (file === null || virtualPathFor(ctx, file.rootId, file.path) !== path)
-            return `### ${path}\n(Not indexed.)`;
-          if (!(await authorizer.authorize({ path, kind: "file" })).allowed)
-            return `### ${path}\n(Not indexed.)`;
+          const found = await index.file(path);
+          if (found === null) return `### ${path}\n(Not indexed.)`;
+          const { file } = found;
           const text = (await deps.mcp.indexQueries.fileTextPrefix(file.id, EXCERPT_CHARS)).trim();
           return text.length > 0
             ? `### ${path}\n${text}`

@@ -12,7 +12,7 @@ import {
   type AiModel,
   AiProviderError,
   type AiSendOptions,
-  type AiToolSpec,
+  type AiStartOptions,
   type AiTurn,
 } from "./model.ts";
 
@@ -92,8 +92,11 @@ export function createAnthropicModel(options: AnthropicModelOptions): AiModel {
   let limits: ModelLimits | undefined;
 
   return {
-    start({ system, tools }: { system: string; tools: readonly AiToolSpec[] }): AiConversation {
-      const messages: BetaMessageParam[] = [];
+    start({ system, tools, history = [] }: AiStartOptions): AiConversation {
+      const messages: BetaMessageParam[] = history.map((entry) => ({
+        role: entry.role,
+        content: entry.text,
+      }));
       return {
         async send(
           input: AiInput,

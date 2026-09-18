@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import type { ChatService } from "./chat/service.ts";
 import type { AiModel } from "./model.ts";
 import type { OrganizeService } from "./organize/service.ts";
 import { registerAiRoutes } from "./routes.ts";
@@ -86,6 +87,7 @@ function buildApp(
       registerAiRoutes(groups, {
         settings,
         organize,
+        chat: {} as ChatService,
         modelFor,
         ...(options.testTimeoutMs !== undefined ? { testTimeoutMs: options.testTimeoutMs } : {}),
       }),
