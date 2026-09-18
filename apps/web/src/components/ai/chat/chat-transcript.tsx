@@ -13,7 +13,7 @@ import {
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion";
+import { Suggestion } from "@/components/ai-elements/suggestion";
 import {
   Tool,
   ToolContent,
@@ -80,11 +80,12 @@ export function ChatTranscript({
             Drop files or folders here, or add them from a selection, then ask away.
           </p>
         </div>
-        <Suggestions className="max-w-full">
+        {/* Wrap rather than the registry's scrolling row: the panel is too narrow for one line. */}
+        <div className="flex max-w-full flex-wrap justify-center gap-2">
           {CHAT_SUGGESTIONS.map((suggestion) => (
             <Suggestion key={suggestion} suggestion={suggestion} onClick={onSuggestion} />
           ))}
-        </Suggestions>
+        </div>
       </ConversationEmptyState>
     );
   }
