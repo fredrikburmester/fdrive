@@ -152,7 +152,10 @@ fails leaves the bar where it was rather than disturbing the write. The commit r
 open and silent for the whole copy, so it is exempt from the idle timeout that governs metadata
 calls: minutes without a byte there is the copy working, not a server that has stopped
 answering. The session's 24-hour resource limit still bounds it, and the poll and Finder's
-cancel are what end it early.
+cancel are what end it early. File Provider has its own patience and reissues a modification
+it decides has taken too long; that retry finds the operation still publishing and waits for it,
+following the same progress, rather than reporting a save that is still running as one the
+server could not confirm. Only a genuinely unknown outcome waits for an administrator.
 
 Stopping that move in Finder stops it on the server too, and takes back what it had copied.
 Dropping the request would only end the Mac's side of it, so the app asks the server, and the
