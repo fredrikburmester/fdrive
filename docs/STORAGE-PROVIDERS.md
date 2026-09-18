@@ -259,8 +259,10 @@ login dialog once such a storage is chosen, under its login on the Account page,
 provider dialog, and on its System > Storage row, where a **Not available** chip row lists
 every capability the type lacks beside **Supports**. Search says "not available for this
 login" with what it needs, rather than a generic failure, when the scope reason is
-`no_roots`. All of it is driven by flags, never by a type name, so a new backend gets the
-copy by keeping its flags honest.
+`no_roots`. The Shares page does the same: with a login whose storage cannot share it names
+the login, says which storage can, and never asks the API for the list, since the sidebar
+shows Shares whenever any linked login can share. All of it is driven by flags, never by a
+type name, so a new backend gets the copy by keeping its flags honest.
 
 The public provider list carries the type's flags (`PublicProvider.capabilities`) so the
 note can show before sign-in. They are constants of the type and reveal nothing about the
