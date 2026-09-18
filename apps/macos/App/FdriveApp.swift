@@ -745,13 +745,20 @@ final class AppModel: ObservableObject {
             // Keep enough state to retry cleanup after network or framework failures.
             if let index = locations.firstIndex(where: { $0.id == location.id }) { locations[index].disconnecting = true }
             try store.save(locations)
-            do { try await client.disconnect() } catch DriveError.authentication {} catch DriveError.missing {}
+            // A courtesy, not a precondition: an unreachable server must not strand
+            // a location in the list with no way to remove it.
+            let revoked = await client.revokeAccess()
             let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
             let preserved = try await NSFileProviderManager.remove(domain, mode: .preserveDirtyUserData)
             if let preserved { NSWorkspace.shared.open(preserved) }
             try store.removeToken(location.id); try store.removeMetadata(location.id)
             locations.removeAll { $0.id == location.id }; try store.save(locations)
             status.removeValue(forKey: location.id)
+            // Say so rather than implying the credential is gone from the server too.
+            if !revoked {
+                error = "Removed this location. The server could not be reached to revoke its "
+                    + "access, so that access remains until it expires on its own."
+            }
         } catch { self.report(error); status[location.id] = "Disconnect incomplete — retry" }
     }
 }

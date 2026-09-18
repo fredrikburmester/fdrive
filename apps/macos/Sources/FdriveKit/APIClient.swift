@@ -173,6 +173,22 @@ public struct APIClient: Sendable {
         struct Result: Decodable, Sendable { let ok: Bool }
         let _: Result = try await send("disconnect", body: Data("{}".utf8))
     }
+    /// Tells the server this device is done with it, and says whether it heard.
+    ///
+    /// Disconnecting a location is local work: the File Provider domain, the token
+    /// and the metadata all live on this Mac. Revoking the credential is a courtesy
+    /// on top, and the credential expires on its own regardless — so this never
+    /// throws. A server that is down, moved, or never coming back would otherwise
+    /// strand a location in the list with no way to remove it.
+    ///
+    /// A refused or forgotten credential counts as revoked: there is nothing left
+    /// to revoke either way.
+    public func revokeAccess() async -> Bool {
+        do { try await disconnect(); return true }
+        catch DriveError.authentication { return true }
+        catch DriveError.missing { return true }
+        catch { return false }
+    }
     public func prepareWrite(_ operation: WriteRequest, route: String) async throws -> WriteResult {
         guard protocolVersion == 2 else { throw DriveError.permission }
         return try await send(route, body: operation.body(route: route), writing: true)
