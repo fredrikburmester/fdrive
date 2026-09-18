@@ -60,8 +60,11 @@ Read-only locations use `downloadLazilyAndEvictOnRemoteUpdate`; writable locatio
 Reconnect rotates that location's credential while retaining its domain/catalog IDs.
 Disconnect refuses pending journaled writes, then removes the domain using File Provider's
 `preserveDirtyUserData` mode before clearing metadata/Keychain state. Any additional dirty
-files retained by macOS are revealed in Finder. Failed cleanup stays visible for retry. Account → API
-tokens can revoke access independently. Revocation cannot erase previously exported copies.
+files retained by macOS are revealed in Finder. Failed cleanup stays visible for retry. Telling the
+server is a courtesy with a ten-second limit, never a precondition: when it cannot be reached, answers
+with an error, or no longer serves fdrive, the location is still removed and the app says the
+credential remains until it expires or is revoked from Account → API tokens, which works at any
+time. Revocation cannot erase previously exported copies.
 
 ### Display-name refresh
 
