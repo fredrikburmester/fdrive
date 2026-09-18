@@ -443,6 +443,16 @@ test.describe("trash available", () => {
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();
 
+    // Shares stays in the sidebar for alice's SFTPGo login; with the S3
+    // login active the page states the limit instead of failing to load.
+    await page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Shares" }).click();
+    await expect(page.getByText("Shares aren't available for this login")).toBeVisible();
+    await expect(
+      page.getByText(
+        "s3-trash is on storage that can't create share links. Switch to a login on SFTPGo storage to see its links.",
+      ),
+    ).toBeVisible();
+
     const fileName = `${uniqueName("s3-trash-me")}.txt`;
     await page.goto(`${webBaseUrl}/files`);
     await uploadFiles(page, [{ name: fileName, mimeType: "text/plain", contents: "over s3" }]);
