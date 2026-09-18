@@ -17,6 +17,8 @@ import { createWebdavStorageProvider } from "./storage-provider.js";
 import type { WebdavClient } from "./types.js";
 import { withWebdavWriteLease } from "./write-lease.js";
 
+/** The only `desktopWriteMode` under which WebDAV storage offers a write lease. */
+export const WEBDAV_EXCLUSIVE_MODE = "apache-webdav-exclusive";
 export const WEBDAV_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
   { name: "password", label: "Password", kind: "password", required: true },
@@ -78,10 +80,15 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
         kind: "text",
         required: false,
         maxLength: 32,
-        help: "Use apache-webdav-exclusive only for Apache storage where every writer obeys WebDAV locks.",
+        help: `Use ${WEBDAV_EXCLUSIVE_MODE} only for Apache storage where every writer obeys WebDAV locks.`,
       },
     ],
     credentialFields: WEBDAV_CREDENTIAL_FIELDS,
+    desktopWrites: {
+      field: "desktopWriteMode",
+      mode: WEBDAV_EXCLUSIVE_MODE,
+      caveat: "Apache mod_dav only, where every writer obeys WebDAV locks",
+    },
     capabilities: {
       zip: false,
       setModifiedAt: false,
@@ -127,7 +134,7 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
           password: (await session.getCredential()).password ?? "",
         }),
       });
-      if (instance.config.desktopWriteMode !== "apache-webdav-exclusive") return storage;
+      if (instance.config.desktopWriteMode !== WEBDAV_EXCLUSIVE_MODE) return storage;
       return {
         ...storage,
         async withWriteLease(action, signal) {
