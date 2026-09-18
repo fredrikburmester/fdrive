@@ -64,6 +64,9 @@ export const queryKeys = {
   ai: {
     status: () => ["ai", "status"] as const,
     run: (id: string) => ["ai", "organize", id] as const,
+    chats: () => ["ai", "chats"] as const,
+    /** Not under `chats`: refreshing the list must not refetch a chat and overwrite a fresher transcript. */
+    chat: (id: string) => ["ai", "chat", id] as const,
   },
   trash: {
     status: () => ["trash", "status"] as const,

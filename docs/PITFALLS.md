@@ -66,6 +66,15 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   or creating anything.
 - Zod 4's `z.iso.datetime()` rejects `+00:00` offsets unless `{ offset: true }`; Python emits
   offsets.
+- AI Elements (Vercel's shadcn registry) is written for the AI SDK and Radix: `npx shadcn add
+  @ai-elements/<name>` overwrites the project's own `components/ui/*` files with the registry's
+  versions (restore them from git), pulls `ai`, `nanoid`, `shiki`, `@streamdown/*` and
+  `react-resizable-panels` into `package.json`, and types tool parts as `ToolUIPart`. Keep only
+  the files the panel uses, trimmed of AI SDK types and OS attachments, and install `streamdown`
+  and `use-stick-to-bottom` alone; `globals.css` needs `@source` for Streamdown's bundle so its
+  Tailwind classes exist. Base UI's `Tooltip`/`DropdownMenu` take a `render` prop where Radix
+  used `asChild`, and Base UI button handlers receive `BaseUIEvent`s, so type them from the
+  component's own `onClick`.
 - Base UI: `DropdownMenuLabel` must sit inside a group; never nest a `ToggleGroup` in a menu; pass
   `nativeButton={false}` when a `Button` renders a link; React events bubble through portals, so
   listen on the DOM node when a container must ignore its portalled children.

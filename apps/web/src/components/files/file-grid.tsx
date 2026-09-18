@@ -76,6 +76,8 @@ export interface FileGridProps {
   /** Hides archive actions for a virtual listing. */
   /** Shows "Organize" in each row's context menu (see `FileContextMenu`). */
   showOrganize?: boolean;
+  /** Shows "Add to chat" in the row context menu, when AI is set up. Hidden by default. */
+  showChat?: boolean;
   hideArchive?: boolean;
   /** What the active login's storage can do, for every tile's context menu
    * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
@@ -161,6 +163,7 @@ export function FileGrid({
   showReveal = false,
   hideArchive = false,
   showOrganize = false,
+  showChat = false,
   capabilities = DEFAULT_CAPABILITIES,
   scrollRequest = null,
   onScrollConsumed,
@@ -370,6 +373,7 @@ export function FileGrid({
                         showReveal={showReveal}
                         hideArchive={hideArchive}
                         showOrganize={showOrganize}
+                        showChat={showChat}
                         tags={tags}
                         tagCheckState={(tagId) =>
                           computeTagCheckState(

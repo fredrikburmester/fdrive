@@ -11,6 +11,7 @@ import {
   FolderInputIcon,
   FolderSearchIcon,
   Link2Icon,
+  MessageSquarePlusIcon,
   PackageOpenIcon,
   PencilIcon,
   SparklesIcon,
@@ -54,6 +55,7 @@ export type RowContextAction =
   | "moveTo"
   | "copyTo"
   | "organize"
+  | "addToChat"
   | "delete"
   | "duplicate"
   | "compress"
@@ -91,6 +93,8 @@ export interface FileContextMenuProps {
   hideMoveCopy?: boolean;
   /** Shows "Organize" after "Move to"/"Copy to", when AI is set up. Hidden by default. */
   showOrganize?: boolean;
+  /** Shows "Add to chat" after "Organize", when AI is set up. Hidden by default. */
+  showChat?: boolean;
   /** Shows "Reveal in folder" above "Open", for a "virtual listing" whose
    * rows are not already inside the folder they live in (favorites,
    * recents, a tag's files). Hidden by default, since the plain file
@@ -132,6 +136,7 @@ export function FileContextMenu({
   capabilities = DEFAULT_CAPABILITIES,
   hideMoveCopy = false,
   showOrganize = false,
+  showChat = false,
   showReveal = false,
   hideArchive = false,
   tags = DEFAULT_TAGS,
@@ -199,6 +204,12 @@ export function FileContextMenu({
               <ContextMenuItem onClick={() => onAction("organize", entry)}>
                 <SparklesIcon />
                 Organize
+              </ContextMenuItem>
+            )}
+            {showChat && (
+              <ContextMenuItem onClick={() => onAction("addToChat", entry)}>
+                <MessageSquarePlusIcon />
+                Add to chat
               </ContextMenuItem>
             )}
           </>

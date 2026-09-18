@@ -11,6 +11,12 @@ import {
   AiConnectionTestResponse,
   type AiSettingsUpdateRequest,
   AiStatusResponse,
+  Chat,
+  type ChatActionRequest,
+  type ChatCreateRequest,
+  ChatListResponse,
+  type ChatMessageRequest,
+  type ChatRenameRequest,
   type OrganizeRequest,
   OrganizeRun,
   SystemAiResponse,
@@ -78,6 +84,10 @@ import {
   accountTokenRoute,
   adminProviderRoute,
   adminProviderTestRoute,
+  chatActionRoute,
+  chatCancelRoute,
+  chatMessagesRoute,
+  chatRoute,
   IDENTITY_HEADER,
   IDENTITY_QUERY_PARAM,
   identityScopeRoute,
@@ -239,6 +249,17 @@ export interface ApiClient {
   startOrganize(req: OrganizeRequest): Promise<OrganizeRun>;
   organizeRun(id: string): Promise<OrganizeRun>;
   cancelOrganize(id: string): Promise<OrganizeRun>;
+  /** The caller's recent chats, most recent message first. */
+  chats(): Promise<ChatListResponse>;
+  createChat(req?: ChatCreateRequest): Promise<Chat>;
+  chat(id: string): Promise<Chat>;
+  renameChat(id: string, req: ChatRenameRequest): Promise<Chat>;
+  deleteChat(id: string): Promise<void>;
+  /** Sends a message; poll `chat` while the reply is `running`. */
+  sendChatMessage(id: string, req: ChatMessageRequest): Promise<Chat>;
+  cancelChat(id: string): Promise<Chat>;
+  /** Applies or declines one pending action card. */
+  actOnChat(id: string, actionId: string, req: ChatActionRequest): Promise<Chat>;
   /** The Trash settings of one storage server; every server keeps its own. */
   systemTrash(providerId: string): Promise<TrashSettings>;
   systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
@@ -890,6 +911,30 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     cancelOrganize(id: string): Promise<OrganizeRun> {
       return post(organizeRunCancelRoute(id), OrganizeRun);
+    },
+    chats(): Promise<ChatListResponse> {
+      return get(ROUTES.ai.chats, ChatListResponse);
+    },
+    createChat(req: ChatCreateRequest = {}): Promise<Chat> {
+      return post(ROUTES.ai.chats, Chat, { jsonBody: req });
+    },
+    chat(id: string): Promise<Chat> {
+      return get(chatRoute(id), Chat);
+    },
+    renameChat(id: string, req: ChatRenameRequest): Promise<Chat> {
+      return patch(chatRoute(id), Chat, { jsonBody: req });
+    },
+    async deleteChat(id: string): Promise<void> {
+      await del(chatRoute(id), OkResponse);
+    },
+    sendChatMessage(id: string, req: ChatMessageRequest): Promise<Chat> {
+      return post(chatMessagesRoute(id), Chat, { jsonBody: req });
+    },
+    cancelChat(id: string): Promise<Chat> {
+      return post(chatCancelRoute(id), Chat);
+    },
+    actOnChat(id: string, actionId: string, req: ChatActionRequest): Promise<Chat> {
+      return post(chatActionRoute(id, actionId), Chat, { jsonBody: req });
     },
     systemTrash(providerId: string): Promise<TrashSettings> {
       return get(ROUTES.system.trash, TrashSettings, { query: { providerId } });

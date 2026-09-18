@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { ChatButton } from "@/components/ai/chat/chat-button";
 import { SearchButton } from "@/components/search/search-button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -34,6 +35,7 @@ export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{breadcrumbs}</div>
       <div className="flex shrink-0 items-center gap-2">
         <SearchButton />
+        <ChatButton />
         {actions}
       </div>
     </header>

@@ -164,7 +164,7 @@ deltas, the OpenAI-compatible adapter adds `stream: true` parsing.
   referenced) and the row context menu's **Add to chat**. Shown only while AI is available.
 - **Drop to reference.** The whole panel is a drop target for `application/x-fdrive-paths`
   (`readDraggedPaths`), with a highlighted "Drop to add to chat" state while an internal drag
-  is over it and `dropEffect` `link`. Dropped entries become reference chips in the composer;
+  is over it and `dropEffect` `copy` (listings allow copy or move, so `link` would cancel the drop). Dropped entries become reference chips in the composer;
   sending attaches them to that message. Chips above the composer are removable before send;
   earlier references are listed in a collapsible **References** header with links, and a
   missing one is struck through. Drops of OS files are refused with the usual copy (chat does
@@ -222,7 +222,13 @@ Each step is one PR with the AGENTS.md checks; the earlier ones do not change wh
    last few replies summarized inline) instead of native tool blocks, so it needs no
    provider-specific history. Pending cards survive a restart and can still be applied; only
    the assistant's continuation after them needs the live conversation.
-3. **Chat panel.** First a short spike: install the AI Elements components listed above,
+3. **Chat panel.** Done in the web app (`apps/web/src/components/ai/chat/`, preferences and
+   hooks in `apps/web/src/lib/ai/chat*.ts`). The spike kept `conversation`, `message`, `tool`,
+   `prompt-input` and `suggestion` from AI Elements, each trimmed to what fdrive uses (no AI
+   SDK types, no OS attachments, no code/math/mermaid plugins), see the notes in
+   [PITFALLS](../PITFALLS.md); the `loader` item does not exist in the registry, and the resize
+   handle is a small pointer handler rather than the `resizable` primitive. Originally: install
+   the AI Elements components listed above,
    confirm they build and render on the Base UI primitives in a throwaway page, and record
    any adjustments. Then the shell-mounted panel, preferences, chat list, composer with
    drop-to-reference and Add to chat entry points, transcript rendering, action cards, apply
