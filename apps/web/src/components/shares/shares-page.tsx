@@ -1,7 +1,7 @@
 "use client";
 
 import type { FsEntry, ManagedShare } from "@fdrive/contracts";
-import { Copy, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
+import { Copy, Link2Off, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { EmptyState } from "@/components/files/empty-state";
 import { PageHeader } from "@/components/shell/page-header";
@@ -27,15 +27,31 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
+import { capabilitiesFor } from "@/lib/identity/capabilities";
+import { loginDisplay } from "@/lib/identity/login-display";
 import { useShareManagement } from "@/lib/shares/management";
 import { publicShareHref } from "@/lib/shares/paths";
 import { PRESENTATION_LABEL } from "@/lib/shares/presentation-label";
 import { shareAccessLabel, shareItemLabel, shareUsage } from "@/lib/shares/status";
 import { ShareDialog } from "./share-dialog";
 
+/**
+ * Said when the active login's storage cannot share while another linked
+ * login can (the sidebar shows Shares for the union), or when someone
+ * opens the page by address with a files-only login.
+ */
+export function unavailableNote(login: string): string {
+  return `${login} is on storage that can't create share links. Switch to a login on SFTPGo storage to see its links.`;
+}
+
 export function SharesPage() {
-  const management = useShareManagement();
+  const me = useMe();
+  const activeLogin = me.data?.identities.find((login) => login.id === me.data?.activeIdentityId);
+  // Before `me` answers, the default (an SFTPGo login) applies, as in Files.
+  const canShare = capabilitiesFor(me.data).shares;
+  const management = useShareManagement({ list: canShare });
   const [editing, setEditing] = useState<{ share: ManagedShare; entries: FsEntry[] } | null>(null);
   const [revoking, setRevoking] = useState<ManagedShare | null>(null);
   const [pending, setPending] = useState(false);
@@ -90,11 +106,19 @@ export function SharesPage() {
             <AlertDescription>{error ?? describeApiError(management.query.error)}</AlertDescription>
           </Alert>
         )}
-        {management.query.isPending ? (
+        {!canShare ? (
+          <EmptyState
+            icon={Link2Off}
+            title="Shares aren't available for this login"
+            description={unavailableNote(
+              activeLogin ? loginDisplay(activeLogin).title : "This login",
+            )}
+          />
+        ) : management.query.isPending ? (
           <p role="status" className="text-sm text-muted-foreground">
             Loading links…
           </p>
-        ) : management.query.data?.items.length === 0 ? (
+        ) : management.query.isError ? null : management.query.data?.items.length === 0 ? (
           <EmptyState
             title="No share links yet"
             description="Select files or a folder in Files and choose Share to create one."

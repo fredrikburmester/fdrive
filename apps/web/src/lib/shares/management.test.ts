@@ -147,3 +147,17 @@ describe("share management ownership", () => {
     await expect(pending).resolves.toBeNull();
   });
 });
+describe("share management for a login that cannot share", () => {
+  it("never lists, yet still runs writes and refreshes for the displayed login", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useShareManagement({ list: false }), { wrapper });
+    await act(async () => {
+      expect(await result.current.revoke("id")).toEqual({ ok: true });
+    });
+    expect(mocks.clients.get("left")?.listShares).not.toHaveBeenCalled();
+    expect(result.current.query.fetchStatus).toBe("idle");
+    expect(result.current.query.data).toBeUndefined();
+  });
+});
