@@ -40,8 +40,9 @@ or content hash alone never grants another identity access. Provider-backed publ
 are proxied by fdrive; only a module whose share strategy is `native` (SFTPGo) has them
 today. The upstream public share API remains the authority for file access; never fall back
 to the owner's file credentials when public access fails. Protected share metadata must not leak before authentication.
-Share passwords are not persisted in the share database record; the public credential-cookie
-flow has separate protections. See the API's [share implementation](../apps/api/src/shares/).
+Share passwords are never stored in clear: a native row holds nothing (SFTPGo keeps the
+password), an owned row holds only a hash in `password_hash`, which no share record
+projection returns; the public credential-cookie flow has separate protections. See the API's [share implementation](../apps/api/src/shares/).
 
 Linking an already-owned identity transfers that login and its metadata, not the source
 account's administrator rights or API tokens. Re-authentication and session revocation
@@ -108,8 +109,9 @@ thresholds and CI configuration are authoritative; do not copy historic phase ta
 
 ## Interface names and persistence
 
-Public share `usedDownloads` is the provider's consumed transfer-token count;
-`app.shares.views` is its legacy cached column name. Write shares count uploads;
+Public share `usedDownloads` is the provider's consumed transfer-token count for a native
+share and fdrive's own counter for an owned one; `app.shares.views` is the legacy column
+name for both. Write shares count uploads;
 read shares count downloads and full-size previews. Thumbnail views do not consume
 that budget. Names remain compatible with existing clients and stored data.
 

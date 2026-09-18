@@ -514,13 +514,13 @@ it("compensates persistence failure, sanitizes compensation failure and reconcil
   spy.mockRestore();
   const share = await h.create(cookie);
   const row = await h.shares.get(share.id);
-  if (!row) throw new Error("row missing");
+  if (!row?.sftpgoShareId) throw new Error("row missing");
   await user.shares.remove(row.sftpgoShareId);
   expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toEqual([]);
   expect(await h.shares.get(share.id)).toBeNull();
   const gone = await h.create(cookie);
   const second = await h.shares.get(gone.id);
-  if (!second) throw new Error("row missing");
+  if (!second?.sftpgoShareId) throw new Error("row missing");
   await user.shares.remove(second.sftpgoShareId);
   expect((await h.request(`${base}/${gone.id}`, { cookie, method: "DELETE" })).status).toBe(200);
   vi.spyOn(h.repos.providers, "get").mockResolvedValue(null);

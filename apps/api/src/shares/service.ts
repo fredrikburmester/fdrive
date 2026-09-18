@@ -138,6 +138,9 @@ export function createSharesService(deps: SharesDeps) {
     return (
       row.sftpgoShareId === share.id &&
       row.name === share.name &&
+      row.description === share.description &&
+      row.maxDownloads === share.maxTokens &&
+      row.updatedAt.getTime() === share.updatedAt.getTime() &&
       row.scope === share.scope &&
       row.paths.length === share.paths.length &&
       row.paths.every((path, index) => path === share.paths[index]) &&
@@ -163,14 +166,29 @@ export function createSharesService(deps: SharesDeps) {
       identityId,
       sftpgoShareId: share.id,
       name: share.name,
+      description: share.description,
       scope: share.scope,
       paths: share.paths,
       hasPassword: share.hasPassword,
       expiresAt: share.expiresAt,
+      maxDownloads: share.maxTokens,
       views: share.usedTokens,
       presentation,
+      updatedAt: share.updatedAt,
       at: deps.clock(),
     });
+  }
+  /**
+   * The backend's id of a native row. An owned row has none; none can exist
+   * until the owned store lands, and one that did is refused as unsupported
+   * rather than served through the wrong backend.
+   */
+  function upstreamId(row: ShareRecord): string {
+    if (row.sftpgoShareId === null)
+      throw new ApiHttpError("unsupported", "Sharing is not available for this storage", {
+        capability: "shares",
+      });
+    return row.sftpgoShareId;
   }
   function supported(share: SftpgoShare) {
     if (share.rawScope !== undefined && share.rawScope !== 1 && share.rawScope !== 2)
@@ -180,8 +198,9 @@ export function createSharesService(deps: SharesDeps) {
   /** Single-share read. The only call that may conclude a share is gone upstream. */
   async function getUpstream(row: ShareRecord, accountId?: string) {
     try {
+      const upstream = upstreamId(row);
       return supported(
-        await withOwner(row.identityId, (api) => api.shares.get(row.sftpgoShareId), accountId),
+        await withOwner(row.identityId, (api) => api.shares.get(upstream), accountId),
       );
     } catch (error) {
       if (error instanceof SftpgoError && error.kind === "not_found")
@@ -280,7 +299,7 @@ export function createSharesService(deps: SharesDeps) {
       const upstream = await listUpstream(input.principal.identityId, input.principal.accountId);
       for (const row of rows) {
         try {
-          const listed = upstream.get(row.sftpgoShareId);
+          const listed = upstream.get(upstreamId(row));
           const share =
             listed === undefined
               ? await getUpstream(row, input.principal.accountId)
@@ -339,10 +358,11 @@ export function createSharesService(deps: SharesDeps) {
         presentation: row.presentation,
       };
       const merged = CreateShareRequest.parse({ ...base, ...patch });
+      const upstream = upstreamId(row);
       await withOwner(
         row.identityId,
         (api) =>
-          api.shares.update(row.sftpgoShareId, {
+          api.shares.update(upstream, {
             ...shareInput(merged),
             allowFrom: current.allowFrom,
           }),
@@ -353,10 +373,11 @@ export function createSharesService(deps: SharesDeps) {
     },
     async remove(input: AccountRequestContext, id: string) {
       const row = await managed(input, id);
+      const upstream = upstreamId(row);
       try {
         await withOwner(
           row.identityId,
-          (api) => api.shares.remove(row.sftpgoShareId),
+          (api) => api.shares.remove(upstream),
           input.principal.accountId,
         );
       } catch (error) {
@@ -454,7 +475,7 @@ export function createSharesService(deps: SharesDeps) {
     async verifySharePassword(id: string, password: string): Promise<boolean> {
       const row = await deps.shares.get(id);
       if (row === null) throw new ApiHttpError("not_found", "Share unavailable");
-      return verifyPassword(row.identityId, row.sftpgoShareId, password);
+      return verifyPassword(row.identityId, upstreamId(row), password);
     },
   };
 }
