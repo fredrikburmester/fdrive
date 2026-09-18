@@ -36,6 +36,21 @@ import type { DesktopDeps } from "./pairing.js";
 import { missingPublishGates, type PublishGate } from "./publish-gate.js";
 
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
+const gib = (bytes: number) => `${Number((bytes / 1024 ** 3).toFixed(1))} GiB`;
+/**
+ * The largest file this storage can take: fdrive's own ceiling, or the
+ * backend's publication limit where that is lower. A staged write is only
+ * worth accepting if it can be published, and S3 takes a multipart upload far
+ * larger than the copy that publishes it — so the bound belongs before the
+ * transfer and in what the Mac app is told, not at the rename, where the whole
+ * transfer is already spent and the commit lands uncertain.
+ */
+export function maxWritableBytes(
+  storage: StorageProvider,
+  ceiling = DESKTOP_MAX_UPLOAD_BYTES,
+): number {
+  return Math.min(ceiling, storage.maxPublishBytes ?? Number.POSITIVE_INFINITY);
+}
 export const NO_WRITES: DesktopWriteCapabilities = {
   create: false,
   update: false,
@@ -429,9 +444,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         throw new ApiHttpError("conflict", "Operation ID was reused with different contents");
       return status(prior);
     }
+    const limit = maxWritableBytes(principal.storage);
     if (request.kind === "upload") {
-      if (request.size > DESKTOP_MAX_UPLOAD_BYTES)
-        throw new ApiHttpError("bad_request", "File exceeds the 16 GiB upload limit", {
+      if (request.size > limit)
+        throw new ApiHttpError("bad_request", `File exceeds the ${gib(limit)} upload limit`, {
           code: "quota_exceeded",
         });
       if (!!request.itemId !== !!request.base)
@@ -444,6 +460,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     // survives acknowledgement: backups are never purged to admit another save.
     const sourceSize =
       request.kind === "upload" && source ? (await files.stat(principal, source.path)).size : 0;
+    // Publication copies the replaced file to recovery first, so it meets the
+    // same ceiling — and a backend can hold a file larger than it can copy.
+    if (sourceSize > limit)
+      throw new ApiHttpError("bad_request", `The file being replaced exceeds ${gib(limit)}`, {
+        code: "quota_exceeded",
+      });
     const recoveryBytes = request.kind === "upload" ? 2 * sourceSize : 0;
     let op: DesktopOperationRecord;
     try {
@@ -871,9 +893,16 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         return receipt;
       } catch (error) {
         const conflict = error instanceof ApiHttpError && error.kind === "conflict";
-        const state = publicationStarted ? "uncertain" : conflict ? "conflict" : "ready";
+        // A storage answering `conflict` refused the operation outright: every
+        // backend evaluates `overwrite: false` against the destination before
+        // writing anything, as the port contract requires. The destination is
+        // untouched, so the commit is an ordinary failed one the Mac app can
+        // retry or discard, not one only an administrator can clear.
+        const published =
+          publicationStarted && !(isStorageError(error) && error.kind === "conflict");
+        const state = published ? "uncertain" : conflict ? "conflict" : "ready";
         await transition(principal, id, "committing", state);
-        if (publicationStarted)
+        if (published)
           fail(
             "operation_uncertain",
             "Commit could not be confirmed. The pending file and recovery copies are preserved; do not retry with a new operation ID.",
