@@ -242,6 +242,9 @@ private struct LocationCard: View {
                 if let warning = model.warnings[location.id] {
                     Text(warning).font(.body).foregroundStyle(.orange).textSelection(.enabled)
                 }
+                if location.location.readOnly, let reason = location.location.writeUnavailableReason {
+                    Text(reason).font(.body).foregroundStyle(.secondary).textSelection(.enabled)
+                }
                 if let expires = location.expiresAt { Text("Connection expires \(expires.prefix(10))").font(.body).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 12)
@@ -716,7 +719,7 @@ final class AppModel: ObservableObject {
                 }
                 signalledAt[saved.id] = Date()
                 let pending = try await catalog.pendingWrites().filter { $0.result == nil }
-                status[saved.id] = pending.isEmpty ? (current.readOnly ? current.writeUnavailableReason ?? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
+                status[saved.id] = pending.isEmpty ? (current.readOnly ? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
                 retryAfter[saved.id] = nil; failures[saved.id] = nil
             } catch {
                 if Task.isCancelled { return }
