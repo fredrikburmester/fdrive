@@ -129,6 +129,7 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
     type: "sftpgo",
     label: "SFTPGo",
     configFields: SFTPGO_CONFIG_FIELDS,
+    desktopWrites: { field: "desktopWriteMode", mode: SFTPGO_OPTIMISTIC_MODE },
     credentialFields: SFTPGO_CREDENTIAL_FIELDS,
     capabilities: {
       zip: true,

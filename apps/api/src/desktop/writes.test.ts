@@ -18,6 +18,7 @@ import {
 } from "./writes.js";
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+const ALL_WRITES = { create: true, update: true, move: true, trash: true, restore: true };
 function required<T>(value: T | null | undefined): T {
   if (value == null) throw Error("Missing fixture value");
   return value;
@@ -1536,4 +1537,37 @@ it("rejects metadata capacity before staging or publishing, and retries the same
   expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
   expect((await f.service.commit(f.principal, request.operationId)).state).toBe("completed");
   expect(await f.read("/old.txt")).toBe("new");
+});
+
+it("reports every precondition a full grant is missing, and none for a read grant", async () => {
+  const f = await fixture();
+  const raw = createMemoryStorage({});
+  const optimistic: StorageProvider = { ...raw, optimisticPublish: true };
+  const withStorage = (storage: StorageProvider): Principal => ({ ...f.principal, storage });
+  expect(f.service.availability(f.principal)).toEqual({ capabilities: ALL_WRITES, missing: [] });
+  expect(
+    f.service.availability({ ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } }),
+  ).toEqual({ capabilities: NO_WRITES, missing: [] });
+  expect(f.service.availability(withStorage(raw))).toEqual({
+    capabilities: NO_WRITES,
+    missing: ["storage"],
+  });
+  expect(f.service.availability(withStorage(optimistic)).missing).toEqual(["publish_lock"]);
+  const serialized = createDesktopWrites({
+    ...f.deps,
+    publishLock: async (_identityId, run) => run(),
+  });
+  expect(serialized.availability(withStorage(optimistic))).toEqual({
+    capabilities: ALL_WRITES,
+    missing: [],
+  });
+  // Without recovery storage every gate is still reported, so one fix never masks the next.
+  const { stateDir: _unused, ...withoutStateDir } = f.deps;
+  const unrecoverable = createDesktopWrites(withoutStateDir);
+  expect(unrecoverable.availability(f.principal)).toEqual({
+    capabilities: NO_WRITES,
+    missing: ["state_dir"],
+  });
+  expect(unrecoverable.availability(withStorage(raw)).missing).toEqual(["state_dir", "storage"]);
+  expect(unrecoverable.capabilities(f.principal)).toEqual(NO_WRITES);
 });

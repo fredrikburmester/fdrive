@@ -242,7 +242,7 @@ private struct LocationCard: View {
                 if let warning = model.warnings[location.id] {
                     Text(warning).font(.body).foregroundStyle(.orange).textSelection(.enabled)
                 }
-                if location.location.readOnly, let reason = location.location.writeUnavailableReason {
+                if status.hasPrefix("Connected"), location.location.readOnly, let reason = location.location.writeUnavailableReason {
                     Text(reason).font(.body).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 if let expires = location.expiresAt { Text("Connection expires \(expires.prefix(10))").font(.body).foregroundStyle(.secondary) }
@@ -265,7 +265,7 @@ private struct LocationCard: View {
         }.padding(14).background(.fill.quaternary, in: .rect(cornerRadius: 16))
     }
     private var status: String { model.status[location.id] ?? "Connected" }
-    /// Decorative only: the text beside the dot always says what needs attention.
+    /// Decorative only: the text beside the dot, or the note under a read-only connection, says what needs attention.
     private var tone: Color {
         if model.health[location.id]?.guidance != nil || model.warnings[location.id] != nil { return .orange }
         if status.hasPrefix("Connected") { return .green }

@@ -33,7 +33,7 @@ import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import { createDesktopFiles, DESKTOP_INTERNAL_ROOT } from "./files.js";
 import type { DesktopDeps } from "./pairing.js";
-import { publishesSafely } from "./publish-gate.js";
+import { missingPublishGates, type PublishGate } from "./publish-gate.js";
 
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
 export const NO_WRITES: DesktopWriteCapabilities = {
@@ -44,6 +44,13 @@ export const NO_WRITES: DesktopWriteCapabilities = {
   restore: false,
 };
 export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
+/** A precondition of Finder writes that this deployment does not meet. */
+export type DesktopWriteGate = "state_dir" | PublishGate;
+export interface DesktopWriteAvailability {
+  readonly capabilities: DesktopWriteCapabilities;
+  /** Every unmet precondition, each its own thing to fix; empty when writable. */
+  readonly missing: readonly DesktopWriteGate[];
+}
 /**
  * Wraps the publication step: everything that proves the destination, and the
  * rename. For a replace-upload that includes the recovery copy and its digest,
@@ -103,12 +110,22 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     while (Buffer.byteLength(stem.join("") + suffix) > 255) stem.pop();
     return stem.join("") + suffix;
   }
+  /** The grant's capabilities together with why a full grant still lands read-only. */
+  function availability(principal: Principal): DesktopWriteAvailability {
+    const missing: DesktopWriteGate[] = [
+      ...(deps.stateDir ? [] : (["state_dir"] as const)),
+      ...missingPublishGates(principal.storage, deps.publishLock !== undefined),
+    ];
+    const writable = principal.tokenAccess?.mode === "full" && missing.length === 0;
+    return {
+      capabilities: writable
+        ? { create: true, update: true, move: true, trash: true, restore: true }
+        : NO_WRITES,
+      missing,
+    };
+  }
   function capabilities(principal: Principal): DesktopWriteCapabilities {
-    return deps.stateDir &&
-      principal.tokenAccess?.mode === "full" &&
-      publishesSafely(principal.storage, deps.publishLock !== undefined)
-      ? { create: true, update: true, move: true, trash: true, restore: true }
-      : NO_WRITES;
+    return availability(principal).capabilities;
   }
   /**
    * Runs a write under whichever mutual exclusion the storage qualifies for, and
@@ -449,6 +466,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   }
   return {
     capabilities,
+    availability,
     decorate,
     files: {
       async content(principal: Principal, path: string, signal: AbortSignal) {
