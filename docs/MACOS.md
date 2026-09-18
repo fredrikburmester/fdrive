@@ -148,7 +148,11 @@ Finder shows a real proportion for that copy rather than an indeterminate bar. T
 settles the total size before the first object moves and records how far it has got as it runs,
 at most once a second whatever the tree's size; the Mac app follows that while the commit is in
 flight. It is advisory — a move that finishes before the first poll never asks, and a poll that
-fails leaves the bar where it was rather than disturbing the write.
+fails leaves the bar where it was rather than disturbing the write. The commit request stays
+open and silent for the whole copy, so it is exempt from the idle timeout that governs metadata
+calls: minutes without a byte there is the copy working, not a server that has stopped
+answering. The session's 24-hour resource limit still bounds it, and the poll and Finder's
+cancel are what end it early.
 
 Stopping that move in Finder stops it on the server too, and takes back what it had copied.
 Dropping the request would only end the Mac's side of it, so the app asks the server, and the

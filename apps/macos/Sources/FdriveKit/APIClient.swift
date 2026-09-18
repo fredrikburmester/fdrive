@@ -27,6 +27,17 @@ public struct APIClient: Sendable {
     public let protocolVersion: Int
     private let token: String?
     private let session: URLSession
+    /// How long a commit may go without a byte from the server before it is abandoned.
+    ///
+    /// The session's own sixty seconds fits metadata calls, which answer at once. A
+    /// commit does not: the server replies only once the write is published, and on
+    /// storage without a rename publishing a folder copies every object under it.
+    /// That runs for as long as the folder is large, and sends nothing meanwhile, so
+    /// sixty seconds of silence is the normal case rather than a failure. Hold the
+    /// connection to the session's resource limit instead and let the two things that
+    /// can actually judge the move end it early: the progress poll, which says whether
+    /// the server is still working, and Finder's cancel.
+    static let commitTimeout: TimeInterval = 86_400
     public init(server: URL, token: String? = nil, session: URLSession? = nil, protocolVersion: Int = 1) throws {
         self.server = try Self.normalizeServer(server)
         self.token = token
@@ -52,7 +63,8 @@ public struct APIClient: Sendable {
         guard let normalized = parts.url else { throw DriveError.invalidServer }
         return normalized
     }
-    private func request(_ route: String, query: [URLQueryItem] = [], body: Data? = nil) throws -> URLRequest {
+    private func request(_ route: String, query: [URLQueryItem] = [], body: Data? = nil,
+                         timeout: TimeInterval? = nil) throws -> URLRequest {
         var url = URLComponents(url: server.appendingPathComponent("api/v\(protocolVersion)/desktop/" + route), resolvingAgainstBaseURL: false)!
         url.queryItems = query.isEmpty ? nil : query
         var request = URLRequest(url: url.url!)
@@ -61,6 +73,8 @@ public struct APIClient: Sendable {
         request.setValue("fdrive", forHTTPHeaderField: "X-Requested-With")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        // A request that sets this wins over the session's `timeoutIntervalForRequest`.
+        if let timeout { request.timeoutInterval = timeout }
         return request
     }
     private func check(_ response: URLResponse, data: Data? = nil, writing: Bool = false) throws {
@@ -92,8 +106,10 @@ public struct APIClient: Sendable {
         default: throw DriveError.server("The server rejected this request (\(response.statusCode)).")
         }
     }
-    private func send<T: Decodable & Sendable>(_ route: String, query: [URLQueryItem] = [], body: Data? = nil, writing: Bool = false) async throws -> T {
-        let (data, response) = try await session.data(for: request(route, query: query, body: body), delegate: TransferDelegate())
+    private func send<T: Decodable & Sendable>(_ route: String, query: [URLQueryItem] = [], body: Data? = nil,
+                                              writing: Bool = false, timeout: TimeInterval? = nil) async throws -> T {
+        let (data, response) = try await session.data(for: request(route, query: query, body: body, timeout: timeout),
+                                                      delegate: TransferDelegate())
         try check(response, data: data, writing: writing)
         guard data.count <= 8 * 1024 * 1024 else { throw DriveError.server("The metadata response is too large.") }
         return try JSONDecoder().decode(T.self, from: data)
@@ -169,7 +185,7 @@ public struct APIClient: Sendable {
         return try JSONDecoder().decode(WriteResult.self, from: data)
     }
     public func commitWrite(_ id: String) async throws -> WriteResult {
-        try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true)
+        try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true, timeout: Self.commitTimeout)
     }
     public func writeStatus(_ id: String) async throws -> WriteResult {
         try await send("operations/\(id)")
