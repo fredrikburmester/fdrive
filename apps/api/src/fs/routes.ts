@@ -41,6 +41,7 @@ import type { z } from "zod";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
+import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
@@ -404,10 +405,12 @@ export function registerFsRoutes(
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
     const trashPath = deps.trashPathForStorage?.(principal.storage);
-    const visible =
-      trashPath != null
-        ? entries.filter((entry) => normalizeOrThrow(entry.path) !== trashPath)
-        : entries;
+    // The provider-bound trash folder and the Mac app's bookkeeping namespace are fdrive's own;
+    // neither is a user folder, so the tree does not show them.
+    const visible = entries.filter((entry) => {
+      const entryPath = normalizeOrThrow(entry.path);
+      return entryPath !== trashPath && entryPath !== DESKTOP_INTERNAL_ROOT;
+    });
     const serialized = visible.map(serializeEntry);
     const decorated =
       deps.metadata !== undefined

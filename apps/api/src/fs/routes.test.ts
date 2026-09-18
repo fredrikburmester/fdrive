@@ -320,6 +320,56 @@ describe("GET /fs/list", () => {
     expect(body.entries.map((e) => e.name)).toEqual(["hello.txt"]);
   });
 
+  it("omits the Mac app's bookkeeping folder even when no trashPath is configured", async () => {
+    const storage = makeStubStorage({
+      list: async () => [
+        {
+          name: ".fdrive-desktop",
+          path: "/.fdrive-desktop",
+          kind: "dir",
+          size: 0,
+          modifiedAt: new Date(0),
+          ext: "",
+        },
+        {
+          name: "hello.txt",
+          path: "/hello.txt",
+          kind: "file",
+          size: 1,
+          modifiedAt: new Date(0),
+          ext: ".txt",
+        },
+      ],
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request("/api/v1/fs/list?path=/");
+    expect(res.status).toBe(200);
+    const body = await readJson<ListJson>(res);
+    expect(body.entries.map((e) => e.name)).toEqual(["hello.txt"]);
+  });
+
+  it("keeps a folder of the same name that is not at the storage root", async () => {
+    const storage = makeStubStorage({
+      list: async () => [
+        {
+          name: ".fdrive-desktop",
+          path: "/projects/.fdrive-desktop",
+          kind: "dir",
+          size: 0,
+          modifiedAt: new Date(0),
+          ext: "",
+        },
+      ],
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request("/api/v1/fs/list?path=/projects");
+    expect(res.status).toBe(200);
+    const body = await readJson<ListJson>(res);
+    expect(body.entries.map((e) => e.name)).toEqual([".fdrive-desktop"]);
+  });
+
   it("keeps every entry, including the configured trash path, when no trashPath is configured", async () => {
     const storage = makeStubStorage({
       list: async () => [
