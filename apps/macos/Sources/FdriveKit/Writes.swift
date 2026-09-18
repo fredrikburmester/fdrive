@@ -114,15 +114,44 @@ public struct WriteCoordinator: Sendable {
             }
         }
         defer { watcher.cancel() }
-        do { return try await client.commitWrite(id) } catch {
-            guard error is CancellationError || (error as? URLError)?.code == .cancelled
-            else { throw error }
-            // Dropping the request only stops this side of it. Tell the server,
-            // or it finishes a copy nobody is waiting for and leaves what it had
-            // written behind. Detached, so cancelling this task does not cancel
-            // the one message that ends the work.
-            await Task.detached { [client] in try? await client.cancelWrite(id) }.value
-            throw DriveError.cancelled
+        do { return try await client.commitWrite(id) } catch { try await stopped(id, error) }
+    }
+
+    /// Rethrows anything that is not this side being asked to stop; ends the work if it is.
+    ///
+    /// Dropping the request only stops this side of it. Tell the server, or it finishes
+    /// a copy nobody is waiting for and leaves what it had written behind. Detached, so
+    /// cancelling this task does not cancel the one message that ends the work.
+    private func stopped(_ id: String, _ error: Error) async throws -> Never {
+        guard error is CancellationError || (error as? URLError)?.code == .cancelled
+        else { throw error }
+        await Task.detached { [client] in try? await client.cancelWrite(id) }.value
+        throw DriveError.cancelled
+    }
+
+    /// Follows a commit this call did not start, until the server settles it.
+    ///
+    /// File Provider retries a modification it decides has taken too long, and on
+    /// storage without a rename publishing a folder copies every object under it, so
+    /// a large move outlasts that patience easily. The retry then finds the operation
+    /// still `committing`. That is not an unknown outcome — it is one that has not
+    /// arrived yet, and the server is still reporting how far it has got. Wait for it,
+    /// driving the same bar, rather than telling someone their save could not be
+    /// confirmed while it is in fact still running.
+    ///
+    /// A status that cannot be read ends the wait rather than hiding a dead server:
+    /// File Provider retries again, and the retry re-attaches here.
+    private func follow(_ id: String, progress: Progress) async throws -> WriteResult {
+        while true {
+            do {
+                let current = try await client.writeStatus(id)
+                if let reported = current.progress, reported.total > 0 {
+                    progress.totalUnitCount = reported.total
+                    progress.completedUnitCount = min(reported.completed, reported.total)
+                }
+                guard current.state == "committing" else { return current }
+                try await Task.sleep(for: progressPoll)
+            } catch { try await stopped(id, error) }
         }
     }
 
@@ -138,10 +167,15 @@ public struct WriteCoordinator: Sendable {
             try Task.checkCancellation()
             if remote.state == "ready" {
                 remote = try await commit(pending.request.operationId, progress: progress)
+            } else if remote.state == "committing" {
+                remote = try await follow(pending.request.operationId, progress: progress)
             }
             switch remote.state {
             case "completed", "acknowledged": break
             case "conflict": throw DriveError.writeConflict("This item changed remotely. Your pending copy is preserved in Recovery.")
+            // Asked for and already settled, by this device or another: finished, not failed.
+            case "cancelled": throw DriveError.cancelled
+            // `committing` only survives `follow` when the wait itself could not settle it.
             case "committing", "uncertain": throw DriveError.writeUncertain
             default: throw DriveError.unavailable
             }
