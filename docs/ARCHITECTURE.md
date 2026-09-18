@@ -37,9 +37,9 @@ See [authentication](AUTH.md) and [adding providers](STORAGE-PROVIDERS.md).
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
 propagate renames; index paths must be translated through the identity's scopes. A path
 or content hash alone never grants another identity access. Provider-backed public shares
-are proxied by fdrive; current share support is SFTPGo-specific. The upstream public share
-API remains the authority for file access; never fall back to the owner's file credentials
-when public access fails. Protected share metadata must not leak before authentication.
+are proxied by fdrive; only a module whose share strategy is `native` (SFTPGo) has them
+today. The upstream public share API remains the authority for file access; never fall back
+to the owner's file credentials when public access fails. Protected share metadata must not leak before authentication.
 Share passwords are not persisted in the share database record; the public credential-cookie
 flow has separate protections. See the API's [share implementation](../apps/api/src/shares/).
 

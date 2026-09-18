@@ -59,6 +59,16 @@ export interface ProviderCapabilities {
  */
 export type TrashStrategy = "native" | "move" | "none";
 
+/**
+ * How public share links exist for a provider: the backend keeps its own
+ * share objects and public API, which fdrive manages with the owner's token
+ * and proxies to visitors (`native`, SFTPGo); fdrive keeps the share and
+ * serves it through the module's storage (`owned`); or there are no shares
+ * (`none`). `capabilities.shares` is the type-level summary and is true
+ * exactly when this is not `none`.
+ */
+export type ShareStrategy = "native" | "owned" | "none";
+
 /** One configured provider: a row of `app.providers` as the module sees it. */
 export interface ProviderInstance {
   readonly id: string;
@@ -143,6 +153,7 @@ export interface ProviderModule {
   readonly credentialFields: readonly ProviderField[];
   readonly capabilities: ProviderCapabilities;
   readonly trash: TrashStrategy;
+  readonly shares: ShareStrategy;
   /** Absent for providers whose storage never qualifies for Finder writes. */
   readonly desktopWrites?: DesktopWriteSetup;
   /**

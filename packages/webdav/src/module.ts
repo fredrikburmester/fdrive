@@ -102,6 +102,9 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
     // No recycle bin in the protocol: the API storage factory moves deleted
     // files into the configured folder itself (`withMoveToTrash`).
     trash: "move",
+    // No public links in the protocol, and fdrive does not serve them for
+    // this storage yet: the share routes refuse and the web states the limit.
+    shares: "none",
 
     probe(instance, ctx) {
       return probeConnection(instance.baseUrl, { fetch: ctx.fetch });
