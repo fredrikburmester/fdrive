@@ -141,6 +141,9 @@ export function createSftpgoModule(options: CreateSftpgoModuleOptions = {}): Pro
       scopeMapping: true,
     },
     trash: "native",
+    // SFTPGo keeps the share objects; fdrive manages them with the owner's
+    // token and proxies the public share API to visitors.
+    shares: "native",
 
     indexRootName(instance) {
       try {

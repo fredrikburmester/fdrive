@@ -92,9 +92,11 @@ export async function shareCall<T>(fn: () => Promise<T>): Promise<T> {
 }
 export function createSharesService(deps: SharesDeps) {
   /**
-   * Shares are an SFTPGo feature: the identity's provider must be an
-   * enabled SFTPGo row, and the client is bound to that row's endpoint for
-   * the operation's lifetime.
+   * Shares follow the module's share strategy, never its type. Only `native`
+   * is served today: the identity's provider must be an enabled row whose
+   * backend keeps the share objects, and the client is bound to that row's
+   * endpoint for the operation's lifetime. `owned` is refused like `none`
+   * until the owned share store exists.
    */
   async function owner(identityId: string, accountId?: string) {
     const identity = await deps.repos.identities.get(identityId);
@@ -106,7 +108,7 @@ export function createSharesService(deps: SharesDeps) {
     } catch {
       throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
     }
-    if (resolved.provider.type !== "sftpgo")
+    if (resolved.module.shares !== "native")
       throw new ApiHttpError("unsupported", "Sharing is not available for this storage", {
         capability: "shares",
       });

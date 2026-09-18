@@ -91,8 +91,8 @@ verify that the new dependency builds and is included in the deployed API depend
 ## 2. Implement ProviderModule
 
 Export a module with `type`, `label`, `configFields`, `credentialFields`, all eight capability
-flags, a Trash strategy, `probe`, `authenticate` and `createStorage`. Optional members are
-`indexRootName` and `mint`. There is no `attribution`, `configSchema`, `credentialSchema` or
+flags, a Trash strategy, a share strategy, `probe`, `authenticate` and `createStorage`.
+Optional members are `indexRootName` and `mint`. There is no `attribution`, `configSchema`, `credentialSchema` or
 `createShares` member: `/about` names the connected provider, not its upstream project.
 
 This compilable wiring skeleton uses injected protocol implementations. It does not implement
@@ -126,6 +126,7 @@ export function createExampleModule(driver: ExampleDriver): ProviderModule {
       scopeMapping: false,
     },
     trash: "none",
+    shares: "none",
     probe: (instance, ctx) => driver.probe(instance, ctx),
     authenticate: (instance, credential, ctx) => driver.authenticate(instance, credential, ctx),
     createStorage: (instance, session, ctx) => driver.createStorage(instance, session, ctx),
@@ -243,7 +244,7 @@ permission checks; the capability is not proof that an Office server is configur
 | `setModifiedAt` | Requires support for supplied mtimes and the optional setter. The Inspector shows an upload-time note when false. |
 | `atomicMove` | Describes the backend operation. False adds caution copy for folder moves/renames; it does not create a progress job. |
 | `trash` | Also requires `trash !== "none"` and enabled per-provider Trash settings. See below. |
-| `shares` | Keep false for a new backend: the current shares service explicitly requires SFTPGo. There is no generic owned-share fallback. |
+| `shares` | Must equal `shares !== "none"`; a registry test checks every module. Keep `"none"` for a new backend: only `"native"` is served today. See below. |
 | `office` | Keep false until storage admission, provider-bound locations and the full Office flow work for the new backend. |
 | `index` | Also requires `indexRootName(instance)` to name a configured root. The scope resolver currently admits SFTPGo only, so a new remote backend needs more than this callback. |
 | `scopeMapping` | Same root restriction; keep false until the scope resolver can safely map that backend. |
@@ -289,6 +290,17 @@ path containers under the recycle root; Trash listing ignores them and **Empty T
 them. This preserves empty directories without an unsafe list-then-recursive-delete cleanup.
 A recycle root belongs to one configured provider strategy; do not share it between native
 and generic move layouts. Native providers reserve no original filename for the generic layout.
+
+### Shares
+
+`shares: "native"` means the backend keeps its own public share objects and API: the share
+service creates and edits them with the owner's token and proxies the public share API to
+visitors (SFTPGo). `"none"` means no share links: the management routes refuse with
+`unsupported` and `capability: "shares"`, and the web states the limit. `"owned"`, where
+fdrive keeps the share in `app.shares` and serves the link through the module's storage, is
+the planned path for files-only backends ([Owned shares](plans/OWNED-SHARES.md)) and is
+refused like `"none"` until that store exists. The share code reads the strategy, never the
+provider type.
 
 Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
 `provider.config.trash`. They default to disabled with path `/.trash`. The native layout is
