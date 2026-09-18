@@ -126,6 +126,20 @@ export interface StorageSession {
 }
 
 /**
+ * How an administrator enables Mac Finder writes on an instance, for the
+ * providers whose storage can qualify at all: the config field to set, the
+ * value that qualifies, and any condition the deployment must meet first.
+ */
+export interface DesktopWriteSetup {
+  /** The name of the `configFields` entry that selects the write contract. */
+  readonly field: string;
+  /** The value of that field under which the storage qualifies. */
+  readonly mode: string;
+  /** What must be true of the deployment for that mode's guarantee to hold. */
+  readonly caveat?: string;
+}
+
+/**
  * A storage backend as a package: everything fdrive needs to configure it,
  * authenticate users against it and read and write files through it. One
  * module per provider type, registered once in the API; routes, the web
@@ -140,6 +154,8 @@ export interface ProviderModule {
   readonly capabilities: ProviderCapabilities;
   readonly trash: TrashStrategy;
   readonly shares: ShareStrategy;
+  /** Absent for providers whose storage never qualifies for Finder writes. */
+  readonly desktopWrites?: DesktopWriteSetup;
   /**
    * The name of the index root `instance`'s files live under, when the
    * deployment's indexer can read them at all; `null` when the instance
