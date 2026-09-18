@@ -46,6 +46,7 @@ import {
 import {
   SHARE_CREDENTIAL_COOKIE,
   SHARE_CREDENTIAL_SECONDS,
+  type ShareCredential,
   type ShareCredentialCodec,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
@@ -205,7 +206,7 @@ export function publicDownloadOptions(c: Context): ShareDownloadOptions {
 export function attachment(name: string): string {
   return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(name.replace(/\p{Cc}/gu, "")).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
-export function downloadHeaders(result: ShareDownloadResult, name: string): Headers {
+export function downloadHeaders(result: Omit<ShareDownloadResult, "body">, name: string): Headers {
   const headers = new Headers({
     "Content-Type": result.contentType ?? "application/octet-stream",
     "Content-Disposition": attachment(name),
@@ -308,8 +309,12 @@ export function registerSharesRoutes(
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Content-Type-Options", "nosniff");
   });
-  function password(c: Context) {
+  function credential(c: Context) {
     return deps.codec.decode(shareId(c), getCookie(c, SHARE_CREDENTIAL_COOKIE));
+  }
+  /** The password cache is keyed by what the cookie carried, whichever form that was. */
+  function credentialKey(provided: ShareCredential): string {
+    return "password" in provided ? provided.password : `verified:${provided.verified}`;
   }
   function credentialCookie(c: Context, value: string, maxAge: number) {
     setCookie(c, SHARE_CREDENTIAL_COOKIE, value, {
@@ -321,14 +326,14 @@ export function registerSharesRoutes(
     });
   }
   groups.public.get(pub, (c) =>
-    shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), password(c)))),
+    shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), credential(c)))),
   );
   groups.public.post(`${pub}${PUBLIC_SHARE_SUFFIXES.credentials}`, (c) =>
     shareCall(async () => {
       const id = shareId(c);
       const body = await publicBody(ShareCredentialsRequest, c);
-      await deps.service.publicMetadata(id, undefined);
-      credentialCookie(c, deps.codec.encode(id, body.password), SHARE_CREDENTIAL_SECONDS);
+      const credential = await deps.service.credential(id, body.password);
+      credentialCookie(c, deps.codec.encode(id, credential), SHARE_CREDENTIAL_SECONDS);
       return c.json({ ok: true });
     }),
   );
@@ -339,7 +344,7 @@ export function registerSharesRoutes(
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.entries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const access = await deps.service.publicAccess(shareId(c), password(c), "read");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
       if (access.view.paths.length !== 1)
         throw new ApiHttpError("bad_request", "This share is an archive");
       const entries = await access.list(path);
@@ -356,7 +361,7 @@ export function registerSharesRoutes(
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archiveEntries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const access = await deps.service.publicAccess(shareId(c), password(c), "read");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
       // A limited link never peeks: every Range read the port issues is a
       // real download that would consume the link's own budget, the same
       // reasoning as the gallery refusing a limited link. An archive-of-many
@@ -439,16 +444,16 @@ export function registerSharesRoutes(
     if (sharedRoot === undefined) throw THUMB_NOT_FOUND();
 
     if (target.hasPassword) {
-      const provided = password(c);
+      const provided = credential(c);
       if (provided === undefined) throw THUMB_NOT_FOUND();
-      let verified = passwordCache.get(id, provided);
+      let verified = passwordCache.get(id, credentialKey(provided));
       if (verified === undefined) {
         try {
           verified = await deps.service.verifySharePassword(id, provided);
         } catch {
           throw THUMB_NOT_FOUND();
         }
-        passwordCache.set(id, provided, verified);
+        passwordCache.set(id, credentialKey(provided), verified);
       }
       if (!verified) throw THUMB_NOT_FOUND();
     }
@@ -493,9 +498,31 @@ export function registerSharesRoutes(
     shareCall(async () => {
       const path = publicPath(c);
       const options = publicDownloadOptions(c);
-      const access = await deps.service.publicAccess(shareId(c), password(c), "read");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
       if (access.view.paths.length !== 1)
         throw new ApiHttpError("bad_request", "Use the archive download for this share");
+      const name =
+        path === "/"
+          ? access.view.paths[0]?.split("/").at(-1) || "download"
+          : path.slice(path.lastIndexOf("/") + 1);
+      // A backend that can stat through the share answers HEAD from the
+      // stat: no stream is opened and nothing is spent from its budget.
+      if (c.req.method === "HEAD" && access.statFile !== undefined) {
+        const stat = await access.statFile(path);
+        return new Response(null, {
+          status: 200,
+          headers: downloadHeaders(
+            {
+              status: 200,
+              contentLength: stat.size,
+              contentRange: null,
+              contentType: stat.contentType,
+              lastModified: stat.modifiedAt,
+            },
+            name,
+          ),
+        });
+      }
       let result: ShareDownloadResult;
       try {
         result = await access.download(path, options);
@@ -503,10 +530,6 @@ export function registerSharesRoutes(
         if (error instanceof RangeNotSatisfiableError) return rangeNotSatisfiable(error.size);
         throw error;
       }
-      const name =
-        path === "/"
-          ? access.view.paths[0]?.split("/").at(-1) || "download"
-          : path.slice(path.lastIndexOf("/") + 1);
       if (c.req.method === "HEAD") {
         await result.body.cancel();
         return new Response(null, {
@@ -520,7 +543,7 @@ export function registerSharesRoutes(
   groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, (c) =>
     shareCall(async () => {
-      const access = await deps.service.publicAccess(shareId(c), password(c), "read");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
       const body = await access.zip({ signal: c.req.raw.signal });
       return new Response(body, {
         headers: {
@@ -536,7 +559,7 @@ export function registerSharesRoutes(
       const maxBytes = deps.config.fdriveShareUploadMaxBytes;
       if (contentLengthExceeds(c.req.header("content-length"), maxBytes))
         throw new ApiHttpError("payload_too_large", "Share upload is too large");
-      const access = await deps.service.publicAccess(shareId(c), password(c), "write");
+      const access = await deps.service.publicAccess(shareId(c), credential(c), "write");
       if (access.view.paths.length !== 1)
         throw new ApiHttpError("bad_request", "Invalid upload share");
       const cap = c.req.raw.body === null ? null : capByteStream(c.req.raw.body, maxBytes);

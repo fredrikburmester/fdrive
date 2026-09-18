@@ -174,14 +174,16 @@ it("publicThumbTarget and verifySharePassword expose exactly what the public thu
     h.service.publicThumbTarget("00000000-0000-4000-8000-000000000000"),
   ).rejects.toThrow();
 
-  await expect(h.service.verifySharePassword(id, "wrong")).resolves.toBe(false);
+  await expect(h.service.verifySharePassword(id, { password: "wrong" })).resolves.toBe(false);
+  // A marker is what an owned share issues; a native share never verifies one.
+  await expect(h.service.verifySharePassword(id, { verified: "v" })).resolves.toBe(false);
   await expect(
-    h.service.verifySharePassword("00000000-0000-4000-8000-000000000000", "secret"),
+    h.service.verifySharePassword("00000000-0000-4000-8000-000000000000", { password: "secret" }),
   ).rejects.toMatchObject({ kind: "not_found" });
   // A directory share (unlike a single-file one) actually completes the
   // root listing, so the correct password hits the plain success path
   // rather than the single-file "bad_request" fallback.
-  await expect(h.service.verifySharePassword(id, "secret")).resolves.toBe(true);
+  await expect(h.service.verifySharePassword(id, { password: "secret" })).resolves.toBe(true);
 
   const publicShareSpy = vi.spyOn(h.client, "publicShare").mockReturnValueOnce({
     downloadFile: () => Promise.reject(new Error("not used")),
@@ -190,7 +192,9 @@ it("publicThumbTarget and verifySharePassword expose exactly what the public thu
     zip: () => Promise.reject(new Error("not used")),
     upload: () => Promise.reject(new Error("not used")),
   });
-  await expect(h.service.verifySharePassword(id, "secret")).rejects.toThrow("upstream exploded");
+  await expect(h.service.verifySharePassword(id, { password: "secret" })).rejects.toThrow(
+    "upstream exploded",
+  );
   publicShareSpy.mockRestore();
 });
 it("preserves upstream IP restrictions and refuses unsupported scope before PATCH", async () => {

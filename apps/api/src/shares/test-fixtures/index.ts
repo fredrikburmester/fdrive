@@ -11,6 +11,8 @@ export function sharesHarness(
     limiterCapacity?: number;
     modules?: Readonly<Record<string, ProviderModule>>;
     wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
+    /** The owner's Trash folder, which owned shares must keep out of. */
+    trashPath?: string;
   } = {},
 ) {
   const h = accountsHarness({
@@ -25,6 +27,8 @@ export function sharesHarness(
     shares,
     logger: h.logger,
     clientFor: (_baseUrl: string) => h.client,
+    storageFor: h.storageFactory,
+    trashPathFor: async () => options.trashPath ?? null,
   };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);
