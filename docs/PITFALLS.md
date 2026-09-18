@@ -72,3 +72,14 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Base UI Select: use `null` for an empty controlled value, not `undefined`; switching from
   undefined to a root name causes an uncontrolled-to-controlled warning. Give sentinel values
   explicit `SelectValue` display text so users see "All roots" instead of `__all__`.
+
+## Product scope
+
+- A new storage backend brings file operations, not features. Search, thumbnails, embeddings,
+  folder sizes, shares and Office were built on SFTPGo's files sitting on a disk the indexer
+  reads and on SFTPGo's native share links, so the WebDAV and S3 adapters arrived with none of
+  them and read as a lesser product until the copy said why (2026-09). fdrive is an SFTPGo
+  client first: say so plainly, keep every feature behind a capability flag rather than a type
+  name, derive the limit copy from the flags, and add a feature to another backend one flag at
+  a time once fdrive can provide it without a local disk. Do not add a backend expecting the
+  features to come with it.

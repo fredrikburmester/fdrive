@@ -3,7 +3,10 @@ import { type AdminProvider, type AdminProviderType, ApiClientError } from "@fdr
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
+import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
+
+/** The note for storage with none of the features fdrive builds on SFTPGo. */
+const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 const PRIMARY: AdminProvider = {
   id: "00000000-0000-4000-8000-000000000009",
@@ -190,6 +193,21 @@ it("says plainly what files-only storage cannot do", () => {
     expect(within(missing).getByText(label)).toBeTruthy();
   }
   expect(screen.getByText(FILES_ONLY_NOTE)).toBeTruthy();
+});
+
+it("names only the missing features for storage that has some of them", () => {
+  const sharing: AdminProviderType = {
+    ...S3_TYPE,
+    type: "webdav",
+    label: "WebDAV",
+    capabilities: { ...S3_TYPE.capabilities, shares: true },
+  };
+  renderPage([{ ...SPARE, type: "webdav" }], [SFTPGO_TYPE, sharing]);
+
+  expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
+  expect(
+    screen.getByText("Search and thumbnails and Office work with SFTPGo storage, not here."),
+  ).toBeTruthy();
 });
 
 it("warns in the add dialog as soon as a files-only type is chosen", () => {

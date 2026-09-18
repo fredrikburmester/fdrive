@@ -5,10 +5,12 @@ class 1 server behind Basic authentication. Administrators add one under **Syste
 by endpoint URL; people log in with a username and password, link it beside an SFTPGo login,
 and browse, upload, download, rename, move, copy and delete through the ordinary file UI.
 Deleted files go to fdrive's own recycle folder when Trash is enabled for the row. Shares,
-Office, search, thumbnails and scope mapping stay unavailable for WebDAV logins; the UI hides
-those controls and the API refuses them through capability flags. WebDAV is files-only storage
-beside SFTPGo, and the UI states that where it is added or picked; see
-[Files-only storage](STORAGE-PROVIDERS.md#files-only-storage).
+Office, search, thumbnails and scope mapping are not available for WebDAV logins today; the UI
+hides those controls and the API refuses them through capability flags. fdrive is an SFTPGo
+client first, and WebDAV is storage beside it: the UI names what a WebDAV login lacks where it
+is added or picked, and each missing feature is its own capability flag, so one can reach
+WebDAV later without the others; see
+[Storage beside SFTPGo](STORAGE-PROVIDERS.md#storage-beside-sftpgo).
 
 Verified against a real server in CI (SFTPGo's own WebDAV binding, see
 `packages/webdav/test/integration`) and against an in-memory protocol fake in unit tests

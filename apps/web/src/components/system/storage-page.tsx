@@ -25,7 +25,7 @@ import {
   useAdminTestProvider,
   useAdminUpdateProvider,
 } from "@/lib/api/system-queries";
-import { CAPABILITY_LABELS, FILES_ONLY_NOTE, isFilesOnly } from "@/lib/identity/capabilities";
+import { CAPABILITY_LABELS, storageNote } from "@/lib/identity/capabilities";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 import {
   connectionSourceLabel,
@@ -61,7 +61,7 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
   const removeBlock = providerRemoveBlock(provider);
   const capabilities = type === undefined ? [] : enabledCapabilities(type.capabilities);
   const missing = type === undefined ? [] : missingCapabilities(type.capabilities);
-  const filesOnly = type !== undefined && isFilesOnly(type.capabilities);
+  const note = type === undefined ? null : storageNote(type.capabilities);
 
   return (
     <SystemSection
@@ -164,7 +164,7 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
           ))}
         </div>
       ) : null}
-      {filesOnly ? <p className="text-xs text-muted-foreground">{FILES_ONLY_NOTE}</p> : null}
+      {note === null ? null : <p className="text-xs text-muted-foreground">{note}</p>}
       {removeBlock === null ? null : <p className="text-xs text-muted-foreground">{removeBlock}</p>}
       {update.isError ? (
         <p className="text-sm text-destructive">{describeApiError(update.error)}</p>

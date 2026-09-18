@@ -17,17 +17,51 @@ export const CAPABILITY_LABELS: Readonly<Record<CapabilityKey, string>> = {
 export const CAPABILITY_KEYS = Object.keys(CAPABILITY_LABELS) as readonly CapabilityKey[];
 
 /**
- * True for storage that only moves files: no search or thumbnails, no
- * shares and no Office. Today that is every provider type except SFTPGo,
- * which is the main storage; the others are a second place to browse.
+ * The features fdrive builds on SFTPGo storage. fdrive is an SFTPGo client
+ * first: other storage gets ordinary file management plus whatever fdrive
+ * can add for it without SFTPGo (Trash today), one capability flag at a
+ * time. Nothing here keys on a provider type, so a feature added to another
+ * backend needs only its flag flipped.
  */
+export const SFTPGO_FEATURE_KEYS = [
+  "index",
+  "shares",
+  "office",
+] as const satisfies readonly CapabilityKey[];
+export type SftpgoFeatureKey = (typeof SFTPGO_FEATURE_KEYS)[number];
+
+/** How the storage note names each feature, and whether the phrase takes a plural verb. */
+const SFTPGO_FEATURE_PHRASES: Readonly<
+  Record<SftpgoFeatureKey, { readonly phrase: string; readonly plural: boolean }>
+> = {
+  index: { phrase: "search and thumbnails", plural: true },
+  shares: { phrase: "shares", plural: true },
+  office: { phrase: "Office", plural: false },
+};
+
+/** True for storage that only moves files: none of the features fdrive builds on SFTPGo. */
 export function isFilesOnly(capabilities: ProviderCapabilities): boolean {
-  return !capabilities.index && !capabilities.shares && !capabilities.office;
+  return SFTPGO_FEATURE_KEYS.every((key) => !capabilities[key]);
 }
 
-/** Said wherever someone picks or adds files-only storage, before they miss a feature. */
-export const FILES_ONLY_NOTE =
-  "Files only. Search, thumbnails, folder sizes, shares and Office work with SFTPGo storage, not here.";
+/**
+ * One line said wherever someone picks or adds storage that lacks a feature
+ * fdrive builds on SFTPGo, before they miss it. Derived from the flags, so
+ * it names only what this storage lacks and disappears once it lacks
+ * nothing. "Files only." leads when it lacks all of them.
+ */
+export function storageNote(capabilities: ProviderCapabilities): string | null {
+  const missing = SFTPGO_FEATURE_KEYS.filter((key) => !capabilities[key]);
+  const first = missing[0];
+  if (first === undefined) return null;
+  const phrases = missing.map((key) => SFTPGO_FEATURE_PHRASES[key].phrase);
+  const list =
+    phrases.length === 1 ? phrases[0] : `${phrases.slice(0, -1).join(", ")} and ${phrases.at(-1)}`;
+  const verb = missing.length > 1 || SFTPGO_FEATURE_PHRASES[first].plural ? "work" : "works";
+  const lead = missing.length === SFTPGO_FEATURE_KEYS.length ? "Files only. " : "";
+  const sentence = `${list} ${verb} with SFTPGo storage, not here.`;
+  return `${lead}${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
+}
 
 /** Every capability set to `value`; for tests and for "this provider type can do nothing here". */
 export const allCapabilities = (value: boolean): ProviderCapabilities =>

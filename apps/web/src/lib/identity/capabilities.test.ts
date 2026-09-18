@@ -12,6 +12,7 @@ import {
   isFilesOnly,
   NO_SELECTION,
   selectionOf,
+  storageNote,
 } from "./capabilities";
 
 const me: MeResponse = {
@@ -107,5 +108,31 @@ describe("isFilesOnly", () => {
     expect(isFilesOnly({ ...allCapabilities(true), index: false, scopeMapping: false })).toBe(
       false,
     );
+  });
+});
+
+describe("storageNote", () => {
+  it("leads with files only and names every SFTPGo-built feature when the storage has none", () => {
+    expect(storageNote({ ...allCapabilities(false), trash: true })).toBe(
+      "Files only. Search and thumbnails, shares and Office work with SFTPGo storage, not here.",
+    );
+  });
+
+  it("names only what the storage lacks once a feature is added to it", () => {
+    // A backend that gained shares: the note shrinks by itself, and no longer says files only.
+    expect(storageNote({ ...allCapabilities(false), trash: true, shares: true })).toBe(
+      "Search and thumbnails and Office work with SFTPGo storage, not here.",
+    );
+    expect(storageNote({ ...allCapabilities(true), office: false })).toBe(
+      "Office works with SFTPGo storage, not here.",
+    );
+    expect(storageNote({ ...allCapabilities(true), shares: false })).toBe(
+      "Shares work with SFTPGo storage, not here.",
+    );
+  });
+
+  it("says nothing for storage with every SFTPGo-built feature, whatever else it lacks", () => {
+    expect(storageNote(allCapabilities(true))).toBeNull();
+    expect(storageNote({ ...allCapabilities(true), zip: false, trash: false })).toBeNull();
   });
 });
