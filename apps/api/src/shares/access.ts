@@ -45,6 +45,10 @@ export interface ShareView {
 export interface PublicShareAccess {
   readonly view: ShareView;
   list(path: string): Promise<readonly ShareEntry[]>;
+  /** The file at `path` without opening it; absent when the backend cannot stat through a share. */
+  statFile?(
+    path: string,
+  ): Promise<{ size: number; modifiedAt: Date | null; contentType: string | null }>;
   download(path: string, opts?: ShareDownloadOptions): Promise<ShareDownloadResult>;
   /** Every shared path, as one zip stream. */
   zip(opts?: { signal?: AbortSignal }): Promise<ReadableStream<Uint8Array>>;

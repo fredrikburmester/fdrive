@@ -101,6 +101,7 @@ function sharesHarnessWithThumbs(
     shares,
     logger: h.logger,
     clientFor: (_baseUrl: string) => h.client,
+    storageFor: h.storageFactory,
   };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);
@@ -625,6 +626,7 @@ function sharesHarnessWithUploadLimit(maxBytes: number) {
     shares,
     logger: h.logger,
     clientFor: (_baseUrl: string) => h.client,
+    storageFor: h.storageFactory,
   };
   const service = createSharesService(deps);
   const codec = createShareCredentialCodec(h.master, h.clock);

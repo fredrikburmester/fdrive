@@ -16,13 +16,18 @@ import {
 import type { Logger } from "pino";
 import { liveAccountSession } from "../accounts/service.ts";
 import type { AccountRequestContext } from "../accounts/types.ts";
+import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import type { TokenSource } from "../auth/token-source.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { ProviderService } from "../providers/service.ts";
 import type { PublicShareAccess } from "./access.ts";
+import type { ShareCredential } from "./credentials.ts";
+import { type PublicThumbTarget, type ShareLimits, unavailableReason } from "./limits.ts";
 import { nativeShareAccess, shareCall } from "./native-access.ts";
+import { createOwnedShares } from "./owned.ts";
+import { createScryptSharePasswords, type SharePasswords } from "./passwords.ts";
 
-export { shareCall };
+export { type PublicThumbTarget, shareCall, unavailableReason };
 
 export interface SharesDeps {
   repos: Repos;
@@ -30,25 +35,25 @@ export interface SharesDeps {
   clientFor: (baseUrl: string) => SftpgoClient;
   tokenSource: Pick<TokenSource, "get" | "invalidate">;
   providers: Pick<ProviderService, "forIdentity">;
+  /** The owner's storage as every feature gets it, for the shares fdrive serves itself. */
+  storageFor: IdentityStorageFactory;
+  /** The owner's Trash folder while Trash is on: never shared and never listed through a share. */
+  trashPathFor?: (identityId: string) => Promise<string | null>;
+  passwords?: SharePasswords;
   clock: () => Date;
   logger: Logger;
 }
-export function unavailableReason(share: SftpgoShare, now: Date): "expired" | "limit" | null {
-  if (share.expiresAt !== null && share.expiresAt.getTime() <= now.getTime()) return "expired";
-  if (share.maxTokens > 0 && share.usedTokens >= share.maxTokens) return "limit";
-  return null;
+/** Which backend serves a row: the one that keeps the share, or fdrive itself. */
+export type ShareKind = "native" | "owned";
+export function shareKind(row: Pick<ShareRecord, "sftpgoShareId">): ShareKind {
+  return row.sftpgoShareId === null ? "owned" : "native";
 }
-/**
- * Everything the public share thumb route needs to decide whether a
- * thumbnail may be served, without reaching into `ShareRepo` or the storage
- * behind the share: see `SharesService.publicThumbTarget`.
- */
-export interface PublicThumbTarget {
-  readonly identityId: string;
-  readonly scope: "read" | "write";
-  readonly paths: readonly string[];
-  readonly hasPassword: boolean;
-  readonly unavailableReason: ReturnType<typeof unavailableReason>;
+function nativeLimits(share: SftpgoShare): ShareLimits {
+  return {
+    expiresAt: share.expiresAt,
+    maxDownloads: share.maxTokens,
+    usedDownloads: share.usedTokens,
+  };
 }
 export function managedShare(row: ShareRecord, share: SftpgoShare): ManagedShare {
   return {
@@ -79,14 +84,26 @@ export function shareInput(input: CreateShareRequest): SftpgoShareInput {
   };
 }
 export function createSharesService(deps: SharesDeps) {
+  const owned = createOwnedShares({
+    shares: deps.shares,
+    storageFor: deps.storageFor,
+    trashPathFor: deps.trashPathFor ?? (async () => null),
+    passwords: deps.passwords ?? createScryptSharePasswords(),
+    clock: deps.clock,
+  });
+  const unsupported = () =>
+    new ApiHttpError("unsupported", "Sharing is not available for this storage", {
+      capability: "shares",
+    });
   /**
-   * Shares follow the module's share strategy, never its type. Only `native`
-   * is served today: the identity's provider must be an enabled row whose
-   * backend keeps the share objects, and the client is bound to that row's
-   * endpoint for the operation's lifetime. `owned` is refused like `none`
-   * until the owned share store exists.
+   * Who owns `identityId`'s shares and which backend serves them: the
+   * module's share strategy, never its type. `none` is refused, and so is
+   * any strategy but `expected` when the caller already holds a row of one
+   * kind, since a row is only ever served by the backend that made it. For
+   * a native share the client is bound to the provider row's endpoint for
+   * the operation's lifetime.
    */
-  async function owner(identityId: string, accountId?: string) {
+  async function owner(identityId: string, accountId?: string, expected?: ShareKind) {
     const identity = await deps.repos.identities.get(identityId);
     if (identity === null || (accountId !== undefined && identity.accountId !== accountId))
       throw new ApiHttpError("not_found", "Share unavailable");
@@ -96,11 +113,9 @@ export function createSharesService(deps: SharesDeps) {
     } catch {
       throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
     }
-    if (resolved.module.shares !== "native")
-      throw new ApiHttpError("unsupported", "Sharing is not available for this storage", {
-        capability: "shares",
-      });
-    return { identity, baseUrl: resolved.provider.baseUrl };
+    const kind = resolved.module.shares;
+    if (kind === "none" || (expected !== undefined && kind !== expected)) throw unsupported();
+    return { identity, kind, baseUrl: resolved.provider.baseUrl };
   }
   /** Runs `fn` with the owner's JWT, re-minting once when SFTPGo answers 401. */
   async function withOwner<T>(
@@ -108,13 +123,13 @@ export function createSharesService(deps: SharesDeps) {
     fn: (api: SftpgoUserApi) => Promise<T>,
     accountId?: string,
   ) {
-    const location = await owner(identityId, accountId);
+    const location = await owner(identityId, accountId, "native");
     const client = deps.clientFor(location.baseUrl);
     const call = async (): Promise<T> => {
       const token = await deps.tokenSource.get(identityId);
       if (token === null)
         throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
-      const current = await owner(identityId, accountId);
+      const current = await owner(identityId, accountId, "native");
       if (current.baseUrl !== location.baseUrl)
         throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
       return fn(client.user(token));
@@ -178,16 +193,9 @@ export function createSharesService(deps: SharesDeps) {
       at: deps.clock(),
     });
   }
-  /**
-   * The backend's id of a native row. An owned row has none; none can exist
-   * until the owned store lands, and one that did is refused as unsupported
-   * rather than served through the wrong backend.
-   */
+  /** The backend's id of a native row; callers dispatch on `shareKind` first. */
   function upstreamId(row: ShareRecord): string {
-    if (row.sftpgoShareId === null)
-      throw new ApiHttpError("unsupported", "Sharing is not available for this storage", {
-        capability: "shares",
-      });
+    if (row.sftpgoShareId === null) throw unsupported();
     return row.sftpgoShareId;
   }
   function supported(share: SftpgoShare) {
@@ -217,18 +225,25 @@ export function createSharesService(deps: SharesDeps) {
     const shares = await withOwner(identityId, (api) => api.shares.list(), accountId);
     return new Map(shares.map((share) => [share.id, share]));
   }
+  /** A management call: the caller's live session, its backend, and the row it names. */
   async function managed(input: AccountRequestContext, id: string) {
     await liveAccountSession(deps, input);
-    await owner(input.principal.identityId, input.principal.accountId);
+    const location = await owner(input.principal.identityId, input.principal.accountId);
     const row = await deps.shares.getOwned(input.principal.identityId, id);
     if (row === null) throw new ApiHttpError("not_found", "Share unavailable");
-    return row;
+    if (shareKind(row) !== location.kind) throw unsupported();
+    return { row, kind: location.kind };
   }
+  /** A public row and the backend that made it. */
   async function loadPublic(id: string) {
     const row = await deps.shares.get(id);
     if (row === null) throw new ApiHttpError("not_found", "Share unavailable");
-    const share = await getUpstream(row);
-    return { row, share };
+    return { row, kind: shareKind(row) };
+  }
+  /** The owned backend for a row, once its identity's module still serves owned shares. */
+  async function ownedFor(row: ShareRecord) {
+    await owner(row.identityId, undefined, "owned");
+    return owned;
   }
   async function layout(
     row: Pick<ShareRecord, "identityId">,
@@ -267,7 +282,7 @@ export function createSharesService(deps: SharesDeps) {
     sftpgoShareId: string,
     password: string,
   ): Promise<boolean> {
-    const location = await owner(identityId);
+    const location = await owner(identityId, undefined, "native");
     try {
       await deps.clientFor(location.baseUrl).publicShare(sftpgoShareId, password).list();
       return true;
@@ -281,6 +296,8 @@ export function createSharesService(deps: SharesDeps) {
       throw error;
     }
   }
+  const passwordOf = (credential: ShareCredential | undefined) =>
+    credential !== undefined && "password" in credential ? credential.password : undefined;
   return {
     /** Cheap local admission check for the public route limiter. */
     async publicShareExists(id: string): Promise<boolean> {
@@ -288,8 +305,12 @@ export function createSharesService(deps: SharesDeps) {
     },
     async list(input: AccountRequestContext) {
       await liveAccountSession(deps, input);
-      await owner(input.principal.identityId, input.principal.accountId);
-      const rows = await deps.shares.listOwned(input.principal.identityId, { limit: 1000 });
+      const location = await owner(input.principal.identityId, input.principal.accountId);
+      // A row the identity's backend did not make is not its to list.
+      const rows = (
+        await deps.shares.listOwned(input.principal.identityId, { limit: 1000 })
+      ).filter((row) => shareKind(row) === location.kind);
+      if (location.kind === "owned") return { items: rows.map(owned.managedShare) };
       const items: ManagedShare[] = [];
       if (rows.length === 0) return { items };
       // One bulk read replaces the per-row upstream GET. The page is smaller
@@ -314,12 +335,15 @@ export function createSharesService(deps: SharesDeps) {
       return { items };
     },
     async get(input: AccountRequestContext, id: string) {
-      const row = await managed(input, id);
+      const { row, kind } = await managed(input, id);
+      if (kind === "owned") return owned.managedShare(row);
       const share = await getUpstream(row, input.principal.accountId);
       return managedShare(await mirror(row.identityId, share, row.presentation), share);
     },
     async create(input: AccountRequestContext, body: CreateShareRequest) {
       await liveAccountSession(deps, input);
+      const location = await owner(input.principal.identityId, input.principal.accountId);
+      if (location.kind === "owned") return owned.create(input.principal.identityId, body);
       return withOwner(
         input.principal.identityId,
         async (api) => {
@@ -342,7 +366,8 @@ export function createSharesService(deps: SharesDeps) {
       );
     },
     async update(input: AccountRequestContext, id: string, patch: UpdateShareRequest) {
-      const row = await managed(input, id);
+      const { row, kind } = await managed(input, id);
+      if (kind === "owned") return owned.update(row, patch);
       const current = await getUpstream(row, input.principal.accountId);
       const base: CreateShareRequest = {
         name: current.name,
@@ -372,7 +397,11 @@ export function createSharesService(deps: SharesDeps) {
       return managedShare(await mirror(row.identityId, share, merged.presentation), share);
     },
     async remove(input: AccountRequestContext, id: string) {
-      const row = await managed(input, id);
+      const { row, kind } = await managed(input, id);
+      if (kind === "owned") {
+        await owned.remove(row);
+        return;
+      }
       const upstream = upstreamId(row);
       try {
         await withOwner(
@@ -388,32 +417,41 @@ export function createSharesService(deps: SharesDeps) {
     /**
      * Possessing a share's UUID reveals nothing about it: for a
      * password-protected share the name, description, file name, layout,
-     * expiry and download counts are withheld until `password` verifies
-     * (through the same token-free root listing the thumb route uses).
-     * A write share cannot be listed, so only its upload ever checks the
-     * password: its details stay withheld and `credentialPresent` merely
+     * expiry and download counts are withheld until the credential verifies.
+     * A native write share cannot be listed, so only its upload ever checks
+     * the password: its details stay withheld and `credentialPresent` merely
      * reports that a password cookie is set, as it does for an expired share.
+     * An owned share checked its password when the cookie was issued, so a
+     * write share reveals itself too.
      */
-    async publicMetadata(id: string, password: string | undefined): Promise<PublicShare> {
-      const { row, share } = await loadPublic(id);
-      const unavailable = unavailableReason(share, deps.clock());
+    async publicMetadata(
+      id: string,
+      credential: ShareCredential | undefined,
+    ): Promise<PublicShare> {
+      const { row, kind } = await loadPublic(id);
+      if (kind === "owned") return (await ownedFor(row)).publicMetadata(row, credential);
+      const share = await getUpstream(row);
+      const unavailable = unavailableReason(nativeLimits(share), deps.clock());
       const verifiable = share.hasPassword && share.scope === "read" && unavailable === null;
+      const password = passwordOf(credential);
       const verified =
         verifiable && password !== undefined
           ? await verifyPassword(row.identityId, share.id, password)
           : false;
       const revealed = !share.hasPassword || verified;
-      const kind = revealed ? await layout(row, share) : "directory";
+      const layoutKind = revealed ? await layout(row, share) : "directory";
       return {
         name: revealed ? share.name : "",
         description: revealed ? share.description : "",
         scope: share.scope,
-        layout: kind,
+        layout: layoutKind,
         presentation: row.presentation,
         fileName:
-          revealed && kind === "single-file" ? (share.paths[0]?.split("/").at(-1) ?? null) : null,
+          revealed && layoutKind === "single-file"
+            ? (share.paths[0]?.split("/").at(-1) ?? null)
+            : null,
         hasPassword: share.hasPassword,
-        credentialPresent: password !== undefined && (!verifiable || verified),
+        credentialPresent: credential !== undefined && (!verifiable || verified),
         expiresAt: revealed ? (share.expiresAt?.toISOString() ?? null) : null,
         maxDownloads: revealed ? share.maxTokens : 0,
         usedDownloads: revealed ? share.usedTokens : 0,
@@ -422,32 +460,50 @@ export function createSharesService(deps: SharesDeps) {
     },
     /**
      * The share as the public routes may use it, once its scope, expiry and
-     * download budget allow `scope`. The password is not checked here: the
-     * access object's backend refuses a wrong one on the first operation.
+     * download budget allow `scope`. A native backend checks the password
+     * itself on the first operation; an owned share checks the credential
+     * here against the password it was issued for.
      */
     async publicAccess(
       id: string,
-      password: string | undefined,
+      credential: ShareCredential | undefined,
       scope: "read" | "write",
     ): Promise<PublicShareAccess> {
-      const { row, share } = await loadPublic(id);
+      const { row, kind } = await loadPublic(id);
+      if (kind === "owned") return (await ownedFor(row)).publicAccess(row, credential, scope);
+      const share = await getUpstream(row);
       if (share.scope !== scope)
         throw new ApiHttpError("forbidden", "This share does not allow this operation");
-      const reason = unavailableReason(share, deps.clock());
+      const reason = unavailableReason(nativeLimits(share), deps.clock());
       if (reason !== null)
         throw new ApiHttpError(
           "forbidden",
           reason === "expired" ? "Share expired" : "Share download limit reached",
           { reason },
         );
-      const location = await owner(row.identityId);
-      return nativeShareAccess(deps.clientFor(location.baseUrl).publicShare(share.id, password), {
-        name: share.name,
-        scope: share.scope,
-        paths: share.paths,
-        hasPassword: share.hasPassword,
-        maxDownloads: share.maxTokens,
-      });
+      const location = await owner(row.identityId, undefined, "native");
+      return nativeShareAccess(
+        deps.clientFor(location.baseUrl).publicShare(share.id, passwordOf(credential)),
+        {
+          name: share.name,
+          scope: share.scope,
+          paths: share.paths,
+          hasPassword: share.hasPassword,
+          maxDownloads: share.maxTokens,
+        },
+      );
+    },
+    /**
+     * What the credential cookie seals for `password`: the password itself
+     * for a backend that checks it on every operation, or a marker for the
+     * password fdrive verified right now. A wrong password on an owned share
+     * is refused here; a native one is only found out on the next operation.
+     */
+    async credential(id: string, password: string): Promise<ShareCredential> {
+      const { row, kind } = await loadPublic(id);
+      if (kind === "owned") return (await ownedFor(row)).credential(row, password);
+      await getUpstream(row);
+      return { password };
     },
     /**
      * Loads just enough of a share for the public thumb route to decide
@@ -458,23 +514,27 @@ export function createSharesService(deps: SharesDeps) {
      * turns every one of those into the same 404.
      */
     async publicThumbTarget(id: string): Promise<PublicThumbTarget> {
-      const { row, share } = await loadPublic(id);
+      const { row, kind } = await loadPublic(id);
+      if (kind === "owned") return (await ownedFor(row)).thumbTarget(row);
+      const share = await getUpstream(row);
       return {
         identityId: row.identityId,
         scope: share.scope,
         paths: share.paths,
         hasPassword: share.hasPassword,
-        unavailableReason: unavailableReason(share, deps.clock()),
+        unavailableReason: unavailableReason(nativeLimits(share), deps.clock()),
       };
     },
     /**
-     * Whether `password` opens the share `id`, without spending any of its
+     * Whether `credential` opens the share `id`, without spending any of its
      * budget. Throws when the share row is gone or its storage cannot be
      * asked, never settling either as a wrong password.
      */
-    async verifySharePassword(id: string, password: string): Promise<boolean> {
-      const row = await deps.shares.get(id);
-      if (row === null) throw new ApiHttpError("not_found", "Share unavailable");
+    async verifySharePassword(id: string, credential: ShareCredential): Promise<boolean> {
+      const { row, kind } = await loadPublic(id);
+      if (kind === "owned") return (await ownedFor(row)).verify(row, credential);
+      const password = passwordOf(credential);
+      if (password === undefined) return false;
       return verifyPassword(row.identityId, upstreamId(row), password);
     },
   };

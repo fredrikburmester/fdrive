@@ -1,5 +1,5 @@
 import { withBackupWriter } from "@fdrive/backup";
-import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
+import { type ProviderModule, parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
   createDb,
   createDesktopEffectsRepo,
@@ -131,6 +131,8 @@ export interface ComposeAppDeps {
   readonly officeCanEdit?: OfficeDeps["canEdit"];
   /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
   readonly fetch?: typeof globalThis.fetch;
+  /** Replaces the registry's provider modules by type, for fixtures that flip a module's strategies. */
+  readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
 export interface ComposedApp {
@@ -204,6 +206,7 @@ export async function composeApp(
       indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
     },
     trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
+    ...(deps.modules === undefined ? {} : { modules: deps.modules }),
   });
   if (!(await repos.settings.get("backup.recovery.v1")))
     await providerService.seedFromEnvironment();
@@ -843,6 +846,8 @@ export async function composeApp(
           clientFor: (baseUrl) => createSftpgoClient({ baseUrl, fetch: fetchImpl }),
           tokenSource,
           providers: providerService,
+          storageFor: storageFactory,
+          trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
           clock,
           logger,
         }),
