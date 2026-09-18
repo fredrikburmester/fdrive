@@ -18,7 +18,7 @@ import { createTokenService } from "../tokens/service.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing } from "./pairing.js";
 import { registerDesktopRoutes } from "./routes.js";
-import { createDesktopWrites } from "./writes.js";
+import { createDesktopWrites, type DesktopWriteGate, NO_WRITES } from "./writes.js";
 
 it("runs the complete v2 routes with explicit grants, streamed content, receipts and revocation", async () => {
   const f = await fixture(true);
@@ -926,4 +926,57 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("explains a read-only full grant by every unmet gate, in the provider's own terms", async () => {
+  const f = await fixture();
+  const bucket = await f.repos.providers.ensure({ type: "s3", baseUrl: "https://s3.invalid" });
+  const third = await f.repos.identities.create({
+    accountId: f.account.id,
+    providerId: bucket.id,
+    externalUsername: "alice",
+  });
+  async function reason(
+    identityId: string,
+    missing: readonly DesktopWriteGate[] | null,
+    mode: "full" | "read" = "full",
+  ) {
+    const pairing = createDesktopPairing({
+      ...f.deps,
+      ...(missing ? { writeAvailability: async () => ({ capabilities: NO_WRITES, missing }) } : {}),
+    });
+    const pair = pairing.create("Mac", "reasons", 2);
+    await pairing.approve(pair.id, f.account.id, [identityId], { [identityId]: mode });
+    const result = await pairing.poll(pair.id, pair.secret);
+    if (result.status !== "connected") throw new Error("Expected credentials");
+    const location = result.credentials[0]?.location;
+    expect(location).toMatchObject({ protocolVersion: 2, readOnly: true });
+    return location && "writeUnavailableReason" in location
+      ? location.writeUnavailableReason
+      : undefined;
+  }
+  // Both gates unmet: naming only the provider setting would promise writes it cannot deliver.
+  expect(await reason(f.identity.id, ["state_dir", "storage"])).toBe(
+    'Read-only until an administrator sets "Native write enforcement" to verified-optimistic on this SFTPGo server (System › Storage) and sets FDRIVE_DESKTOP_STATE_DIR on this server.',
+  );
+  expect(await reason(f.identity.id, ["state_dir"])).toBe(
+    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
+  );
+  expect(await reason(f.identity.id, ["publish_lock"])).toBe(
+    "Read-only until an administrator configures the desktop publish lock on this server.",
+  );
+  // The WebDAV mode carries the condition its lease guarantee depends on.
+  expect(await reason(f.second.id, ["storage"])).toBe(
+    'Read-only until an administrator sets "Mac write support" to apache-webdav-exclusive on this WebDAV server (System › Storage; Apache mod_dav only, where every writer obeys WebDAV locks).',
+  );
+  // Storage that can never qualify gets no instructions at all.
+  expect(await reason(third.id, ["storage", "state_dir"])).toBe(
+    "Finder writes are not supported for this storage type. Files stay read-only.",
+  );
+  // A deployment without desktop writes wired says so without guessing at a cause.
+  expect(await reason(f.identity.id, null)).toBe(
+    "Finder writes are turned off on this server. Files stay read-only.",
+  );
+  // A read grant is read-only by choice and carries no reason.
+  expect(await reason(f.identity.id, ["storage"], "read")).toBeUndefined();
 });
