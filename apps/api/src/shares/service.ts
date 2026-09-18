@@ -19,6 +19,10 @@ import type { AccountRequestContext } from "../accounts/types.ts";
 import type { TokenSource } from "../auth/token-source.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { ProviderService } from "../providers/service.ts";
+import type { PublicShareAccess } from "./access.ts";
+import { nativeShareAccess, shareCall } from "./native-access.ts";
+
+export { shareCall };
 
 export interface SharesDeps {
   repos: Repos;
@@ -36,13 +40,12 @@ export function unavailableReason(share: SftpgoShare, now: Date): "expired" | "l
 }
 /**
  * Everything the public share thumb route needs to decide whether a
- * thumbnail may be served, without reaching into `ShareRepo` or the SFTPGo
- * client itself: see `SharesService.publicThumbTarget`.
+ * thumbnail may be served, without reaching into `ShareRepo` or the storage
+ * behind the share: see `SharesService.publicThumbTarget`.
  */
 export interface PublicThumbTarget {
   readonly identityId: string;
-  readonly sftpgoShareId: string;
-  readonly scope: SftpgoShare["scope"];
+  readonly scope: "read" | "write";
   readonly paths: readonly string[];
   readonly hasPassword: boolean;
   readonly unavailableReason: ReturnType<typeof unavailableReason>;
@@ -74,21 +77,6 @@ export function shareInput(input: CreateShareRequest): SftpgoShareInput {
     maxTokens: input.maxDownloads,
     ...(input.password === undefined ? {} : { password: input.password }),
   };
-}
-export async function shareCall<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error instanceof ApiHttpError) throw error;
-    if (error instanceof SftpgoError) {
-      if (error.kind === "not_found") throw new ApiHttpError("not_found", "Share unavailable");
-      if (error.kind === "unauthorized" || error.kind === "forbidden")
-        throw new ApiHttpError("forbidden", "Share access denied");
-      if (error.kind === "bad_request")
-        throw new ApiHttpError("bad_request", "Share operation rejected by storage");
-    }
-    throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
-  }
 }
 export function createSharesService(deps: SharesDeps) {
   /**
@@ -411,7 +399,16 @@ export function createSharesService(deps: SharesDeps) {
         unavailableReason: unavailable,
       };
     },
-    async publicAccess(id: string, password: string | undefined, scope: "read" | "write") {
+    /**
+     * The share as the public routes may use it, once its scope, expiry and
+     * download budget allow `scope`. The password is not checked here: the
+     * access object's backend refuses a wrong one on the first operation.
+     */
+    async publicAccess(
+      id: string,
+      password: string | undefined,
+      scope: "read" | "write",
+    ): Promise<PublicShareAccess> {
       const { row, share } = await loadPublic(id);
       if (share.scope !== scope)
         throw new ApiHttpError("forbidden", "This share does not allow this operation");
@@ -423,7 +420,13 @@ export function createSharesService(deps: SharesDeps) {
           { reason },
         );
       const location = await owner(row.identityId);
-      return { share, api: deps.clientFor(location.baseUrl).publicShare(share.id, password) };
+      return nativeShareAccess(deps.clientFor(location.baseUrl).publicShare(share.id, password), {
+        name: share.name,
+        scope: share.scope,
+        paths: share.paths,
+        hasPassword: share.hasPassword,
+        maxDownloads: share.maxTokens,
+      });
     },
     /**
      * Loads just enough of a share for the public thumb route to decide
@@ -437,14 +440,22 @@ export function createSharesService(deps: SharesDeps) {
       const { row, share } = await loadPublic(id);
       return {
         identityId: row.identityId,
-        sftpgoShareId: share.id,
         scope: share.scope,
         paths: share.paths,
         hasPassword: share.hasPassword,
         unavailableReason: unavailableReason(share, deps.clock()),
       };
     },
-    verifySharePassword: verifyPassword,
+    /**
+     * Whether `password` opens the share `id`, without spending any of its
+     * budget. Throws when the share row is gone or its storage cannot be
+     * asked, never settling either as a wrong password.
+     */
+    async verifySharePassword(id: string, password: string): Promise<boolean> {
+      const row = await deps.shares.get(id);
+      if (row === null) throw new ApiHttpError("not_found", "Share unavailable");
+      return verifyPassword(row.identityId, row.sftpgoShareId, password);
+    },
   };
 }
 export type SharesService = ReturnType<typeof createSharesService>;
