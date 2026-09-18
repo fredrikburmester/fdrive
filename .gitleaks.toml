@@ -1,0 +1,20 @@
+# Run with: gitleaks git --log-opts="--all" .
+# Every entry below is a reviewed false positive of the generic-api-key rule.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Microsoft's public WOPI proof-key test vectors (MIT), cited in the file header"
+paths = ['''^apps/api/src/office/protocol/proof-vectors\.fixture\.ts$''']
+
+[[allowlists]]
+description = "Alphabet for generated share passwords, internal office callback path, and prose in docs"
+regexTarget = "match"
+regexes = [
+  '''ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789''',
+  '''api:3001/api/v1/internal/office''',
+  '''token misses, invalidation/prime''',
+  '''content-keyed by sha256, L2-normalized''',
+  '''passwords, expiry/count''',
+]

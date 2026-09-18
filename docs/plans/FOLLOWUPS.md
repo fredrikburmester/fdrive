@@ -18,5 +18,4 @@ The provider-binding integration gap and Phase 5 strict performance gap are clos
 backed by SFTPGo fakes; do not describe that as two containerized upstream implementations.
 No new benchmark or browser run was performed during this documentation audit.
 
-Active security findings remain in [pentest findings](PENTEST-FINDINGS.md);
-do not duplicate their changing status here.
+Security reports follow [SECURITY.md](../../SECURITY.md); do not track them here.

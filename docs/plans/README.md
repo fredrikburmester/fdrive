@@ -12,7 +12,6 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [macOS writes](MACOS-WRITES.md) | Retention, recovery administration and native write beta qualification |
 | [Stock storage writes](STOCK-SFTPGO-WRITES.md) | Finder writes on unmodified SFTPGo via fdrive-side serialization |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
-| [Pentest findings](PENTEST-FINDINGS.md) | Security triage list from the Shannon runs |
 | [AI chat](AI-CHAT.md) | Proposed chat with files, building on AI organize |
 
 These are a backlog, not a claim that an agent is working on every item.
