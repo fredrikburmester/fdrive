@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AccountIdentity } from "@/lib/account/identities";
 import { useAccountTransition } from "@/lib/account/transition";
-import { FILES_ONLY_NOTE, isFilesOnly } from "@/lib/identity/capabilities";
+import { storageNote } from "@/lib/identity/capabilities";
 import { loginDisplay } from "@/lib/identity/login-display";
 import { IdentityScope } from "./identity-scope";
 import { LinkLoginDialog } from "./link-login-dialog";
@@ -34,6 +34,7 @@ export function IdentitiesCard() {
         ) : (
           me.identities.map((identity) => {
             const display = loginDisplay(identity);
+            const note = storageNote(identity.capabilities);
             return (
               <div
                 key={identity.id}
@@ -62,9 +63,7 @@ export function IdentitiesCard() {
                     </Button>
                   </div>
                 </div>
-                {isFilesOnly(identity.capabilities) && (
-                  <p className="text-xs text-muted-foreground">{FILES_ONLY_NOTE}</p>
-                )}
+                {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
                 {identity.capabilities.scopeMapping && (
                   <IdentityScope identityId={identity.id} username={identity.username} />
                 )}

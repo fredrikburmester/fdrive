@@ -3,9 +3,9 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import type { Route } from "next";
 import { type FormEvent, useState } from "react";
-import { FilesOnlyNote } from "@/components/identity/files-only-note";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { ProviderPicker } from "@/components/identity/provider-picker";
+import { StorageNote } from "@/components/identity/storage-note";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldError, FieldGroup } from "@/components/ui/field";
@@ -79,9 +79,7 @@ export function LoginForm({ providers, destination }: LoginFormProps) {
                   disabled={login.isPending}
                 />
               )}
-              {providers.length > 1 ? null : (
-                <FilesOnlyNote capabilities={provider?.capabilities} />
-              )}
+              {providers.length > 1 ? null : <StorageNote capabilities={provider?.capabilities} />}
               <ProviderFieldInputs
                 key={provider?.id ?? "default"}
                 fields={fields}

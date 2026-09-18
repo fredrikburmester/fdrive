@@ -61,9 +61,9 @@ const UI_LABEL = "e2e-s3-ui";
 /** Bound by a login, so it cannot be removed; it is disabled again after the spec. */
 const LOGIN_LABEL = "e2e-s3-login";
 const MUTATION_HEADERS = { "x-requested-with": "fdrive" };
-/** The one line fdrive shows wherever files-only storage is added or picked. */
+/** The one line fdrive shows wherever storage without any SFTPGo-built feature is added or picked. */
 const FILES_ONLY_NOTE =
-  "Files only. Search, thumbnails, folder sizes, shares and Office work with SFTPGo storage, not here.";
+  "Files only. Search and thumbnails, shares and Office work with SFTPGo storage, not here.";
 
 async function listProviders(admin: APIRequestContext): Promise<ProviderRow[]> {
   const response = await admin.get("/api/v1/admin/providers");

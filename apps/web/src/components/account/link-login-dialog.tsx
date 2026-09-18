@@ -2,9 +2,9 @@
 
 import { LinkIdentityRequest } from "@fdrive/contracts";
 import { useState } from "react";
-import { FilesOnlyNote } from "@/components/identity/files-only-note";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { ProviderPicker } from "@/components/identity/provider-picker";
+import { StorageNote } from "@/components/identity/storage-note";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -115,7 +115,7 @@ export function LinkLoginDialog({
                 disabled={actions.pending}
               />
             )}
-            {providers.length > 1 ? null : <FilesOnlyNote capabilities={provider?.capabilities} />}
+            {providers.length > 1 ? null : <StorageNote capabilities={provider?.capabilities} />}
             <ProviderFieldInputs
               key={provider?.id ?? "default"}
               fields={fields}

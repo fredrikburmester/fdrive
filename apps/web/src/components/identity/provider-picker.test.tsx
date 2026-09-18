@@ -2,8 +2,11 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { allCapabilities, FILES_ONLY_NOTE } from "@/lib/identity/capabilities";
+import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 import { ProviderPicker } from "./provider-picker";
+
+/** The note for storage with none of the features fdrive builds on SFTPGo. */
+const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 afterEach(cleanup);
 

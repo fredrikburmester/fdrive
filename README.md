@@ -2,7 +2,7 @@
 
 Current design: [Architecture](docs/ARCHITECTURE.md). Unfinished work: [Plans](docs/plans/README.md).
 
-**fdrive** is a clean, fast web drive for your home server. It connects to your existing [SFTPGo](https://github.com/drakkan/sftpgo) storage so you can browse, upload, preview, and share your files from any browser on your home network, without moving your data into a database or giving up control.
+**fdrive** is a clean, fast web drive for your home server, built for [SFTPGo](https://github.com/drakkan/sftpgo) first. It connects to your existing SFTPGo storage so you can browse, upload, preview, search, and share your files from any browser on your home network, without moving your data into a database or giving up control.
 
 Think of it like Google Drive or iCloud Drive, but running completely on your own hardware, right over your existing files.
 
@@ -15,7 +15,7 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 ## Highlights
 
 - **Your files stay yours**: Files remain plain files on your disk, managed by SFTPGo. fdrive never moves, hides, or locks them into a proprietary format.
-- **Other storage too**: Add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside SFTPGo as a second place to browse. These are files only: browsing, uploads and Trash work; search, thumbnails, folder sizes, shares and Office need SFTPGo storage, and fdrive says so wherever you add or pick one.
+- **SFTPGo first, other storage beside it**: Search, thumbnails, shares and Office are built on SFTPGo storage. You can add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside it for browsing, uploads and Trash. fdrive names the features a storage lacks wherever you add or pick one, and features reach other storage one at a time as fdrive learns to provide them itself.
 - **Lightning fast & clean**: Minimalist, distraction-free interface with dark mode, keyboard navigation, and mobile support.
 - **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
 - **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file over SFTP or directly on disk.
@@ -197,6 +197,7 @@ concurrency and optional hard caps. See
 - 🤖 **[AI Assistant Integration (MCP)](docs/MCP.md)**: Connect Claude or Raycast to search and read your files.
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
+- **[WebDAV](docs/WEBDAV.md) and [S3](docs/S3.md)**: What each storage beside SFTPGo supports today, and what it does not yet.
 - **[Adding a Storage Provider](docs/STORAGE-PROVIDERS.md)**: Implement, register and test a backend.
 
 ---
@@ -208,6 +209,8 @@ Most self-hosted drives either try to replace your filesystem with their own dat
 fdrive sits right in the sweet spot:
 1. **SFTPGo handles storage & protocols**: SFTP, user management, and permissions are handled by SFTPGo, a rock-solid, battle-tested Go server.
 2. **fdrive handles the modern web experience**: A polished, responsive browser UI, fast search, document editing, and mobile-friendly links.
+
+That pairing is the product: fdrive is an SFTPGo client first, and the full experience lives there. Other storage is welcome beside it for plain file management. Features that fdrive can provide on its own, without SFTPGo's disk or its share links, reach that storage one at a time; Trash already has.
 
 ---
 
