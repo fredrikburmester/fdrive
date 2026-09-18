@@ -3,21 +3,18 @@ import { baseName, type Scope, StorageError, type StorageProvider } from "@fdriv
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
 import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import {
-  createOrganizeTools,
+  createDriveTools,
   EXCERPT_CHARS,
-  formatSize,
-  isSelectedOrInside,
-  type OrganizeTool,
-  OrganizeToolError,
+  isWithin,
+  type ToolFocus,
   TREE_LISTING_BUDGET,
   TREE_MAX_LINES,
-  toolSpec,
-} from "./tools.ts";
+} from "./drive-tools.ts";
+import { type AiTool, AiToolError } from "./tool.ts";
 
 vi.mock("../../mcp/handlers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../mcp/handlers.js")>()),
@@ -57,7 +54,9 @@ function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
 
 interface ToolsSetup {
   readonly storage?: StorageProvider;
+  /** The focus paths; Organize's closed, "selected" wording unless `focus` says otherwise. */
   readonly selected?: readonly string[];
+  readonly focus?: Partial<Omit<ToolFocus, "paths">>;
   readonly indexed?: boolean;
   readonly share?: OrganizeSharing;
   readonly mcp?: Partial<McpToolDeps>;
@@ -65,14 +64,27 @@ interface ToolsSetup {
 
 const NAMES_WITHHELD: OrganizeSharing = { contents: true, otherFileNames: false };
 
+/** Chat's focus: what the person referenced, folders opened. */
+const REFERENCED: Partial<Omit<ToolFocus, "paths">> = {
+  adjective: "referenced",
+  group: "the references",
+  openFolders: true,
+};
+
 function toolsFor(setup: ToolsSetup = {}) {
   const storage = setup.storage ?? createMemoryStorage();
   const principal = principalWith(storage);
   const mcp = mcpDeps(setup.mcp);
-  const tools = createOrganizeTools({
+  const tools = createDriveTools({
     mcp,
     principal,
-    selected: new Set(setup.selected ?? []),
+    focus: {
+      paths: new Set(setup.selected ?? []),
+      adjective: "selected",
+      group: "the selection",
+      openFolders: false,
+      ...setup.focus,
+    },
     indexed: setup.indexed ?? true,
     ...(setup.share === undefined ? {} : { share: setup.share }),
   });
@@ -80,7 +92,7 @@ function toolsFor(setup: ToolsSetup = {}) {
     tools,
     principal,
     mcp,
-    tool(name: string): OrganizeTool {
+    tool(name: string): AiTool {
       const found = tools.find((candidate) => candidate.spec.name === name);
       if (found === undefined) throw new Error(`no tool named ${name}`);
       return found;
@@ -90,14 +102,14 @@ function toolsFor(setup: ToolsSetup = {}) {
 
 /** Parses `args` through the tool's schema, like the agent does, then runs it. */
 function runTool(
-  tool: OrganizeTool,
+  tool: AiTool,
   args: unknown,
   signal: AbortSignal = new AbortController().signal,
 ): Promise<string> {
   return tool.run(tool.schema.parse(args), signal);
 }
 
-function activityOf(tool: OrganizeTool, args: unknown): string {
+function activityOf(tool: AiTool, args: unknown): string {
   return tool.activity(tool.schema.parse(args));
 }
 
@@ -108,62 +120,24 @@ function manyFiles(count: number, path: (n: string) => string): Record<string, s
   return files;
 }
 
-describe("formatSize", () => {
-  it("shows bytes as whole numbers", () => {
-    expect(formatSize(0)).toBe("0 B");
-    expect(formatSize(1023)).toBe("1023 B");
-  });
-
-  it("shows larger sizes with one decimal", () => {
-    expect(formatSize(1024)).toBe("1.0 KB");
-    expect(formatSize(1536)).toBe("1.5 KB");
-    expect(formatSize(5 * 1024 ** 2)).toBe("5.0 MB");
-    expect(formatSize(2.25 * 1024 ** 3)).toBe("2.3 GB");
-  });
-
-  it("stops at terabytes", () => {
-    expect(formatSize(3 * 1024 ** 4)).toBe("3.0 TB");
-    expect(formatSize(2048 * 1024 ** 4)).toBe("2048.0 TB");
-  });
-});
-
-describe("isSelectedOrInside", () => {
+describe("isWithin", () => {
   const selected = new Set(["/Inbox/scan.pdf", "/Projects"]);
 
   it("matches a selected item and anything inside a selected folder", () => {
-    expect(isSelectedOrInside(selected, "/Inbox/scan.pdf")).toBe(true);
-    expect(isSelectedOrInside(selected, "/Projects")).toBe(true);
-    expect(isSelectedOrInside(selected, "/Projects/site/index.html")).toBe(true);
+    expect(isWithin(selected, "/Inbox/scan.pdf")).toBe(true);
+    expect(isWithin(selected, "/Projects")).toBe(true);
+    expect(isWithin(selected, "/Projects/site/index.html")).toBe(true);
   });
 
   it("does not match siblings, parents or look-alike prefixes", () => {
-    expect(isSelectedOrInside(selected, "/Inbox")).toBe(false);
-    expect(isSelectedOrInside(selected, "/Inbox/other.pdf")).toBe(false);
-    expect(isSelectedOrInside(selected, "/Projects-old/a.txt")).toBe(false);
-    expect(isSelectedOrInside(new Set(), "/anything")).toBe(false);
+    expect(isWithin(selected, "/Inbox")).toBe(false);
+    expect(isWithin(selected, "/Inbox/other.pdf")).toBe(false);
+    expect(isWithin(selected, "/Projects-old/a.txt")).toBe(false);
+    expect(isWithin(new Set(), "/anything")).toBe(false);
   });
 });
 
-describe("toolSpec", () => {
-  it("drops the $schema key and marks defaulted fields optional", () => {
-    const spec = toolSpec(
-      "example",
-      "An example.",
-      z.object({ path: z.string(), depth: z.number().default(2) }),
-    );
-
-    expect(spec.name).toBe("example");
-    expect(spec.description).toBe("An example.");
-    expect(spec.inputSchema).not.toHaveProperty("$schema");
-    expect(spec.inputSchema).toMatchObject({
-      type: "object",
-      required: ["path"],
-      properties: { path: { type: "string" }, depth: { type: "number", default: 2 } },
-    });
-  });
-});
-
-describe("createOrganizeTools", () => {
+describe("createDriveTools", () => {
   it("offers only the folder tools when the identity is not indexed", () => {
     const { tools } = toolsFor({ indexed: false });
 
@@ -205,6 +179,18 @@ describe("createOrganizeTools", () => {
     );
     expect(tool("list_folder").spec.description).toContain("Other files are counted, not named");
     expect(tool("read_excerpts")).toBeDefined();
+  });
+
+  it("words the tools after the focus and says only Trash stays closed when folders open", () => {
+    const { tool } = toolsFor({ focus: REFERENCED, share: NAMES_WITHHELD });
+
+    expect(tool("folder_tree").spec.description).toBe(
+      "Shows how the drive is organized: nested folders with their file counts. File names outside the references are not shared. Trash is not opened.",
+    );
+    expect(tool("list_folder").spec.description).toContain("with referenced files");
+    expect(tool("read_excerpts").spec.description).toContain("Only works on referenced items.");
+    expect(tool("similar_files").spec.description).toContain("resembles a referenced file");
+    expect(tool("similar_files").schema.parse({ path: "/a" })).toEqual({ path: "/a" });
   });
 });
 
@@ -273,6 +259,33 @@ describe("folder_tree", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("opens folders in an open focus and still marks them", async () => {
+    const storage = tree();
+    const { tool } = toolsFor({
+      storage,
+      selected: ["/Inbox/scan001.pdf", "/Projects"],
+      focus: REFERENCED,
+    });
+
+    const output = await runTool(tool("folder_tree"), {});
+
+    expect(output).toBe(
+      [
+        "/ 4 folders, 1 files: notes.md",
+        "  Finance/ 1 folders, 1 files: budget.xlsx",
+        "    Receipts/",
+        "  Inbox/ 0 folders, 2 files: scan001.pdf (referenced), todo.txt",
+        "  Photos/ 1 folders, 0 files",
+        "    2024/",
+        "  Projects/ (referenced) 1 folders, 0 files",
+        "    site/",
+      ].join("\n"),
+    );
+    expect(await runTool(tool("folder_tree"), { path: "/Projects", depth: 1 })).toBe(
+      ["/Projects/ (referenced) 1 folders, 0 files", "  site/"].join("\n"),
+    );
+  });
+
   it("names only selected files when other file names are withheld, keeping every count", async () => {
     const storage = tree();
     const { tool } = toolsFor({
@@ -319,10 +332,10 @@ describe("folder_tree", () => {
     );
     expect(list.mock.calls.map(([path]) => path)).not.toContain("/.Trash");
     await expect(runTool(tool("folder_tree"), { path: "/.Trash" })).rejects.toThrow(
-      new OrganizeToolError("That folder is the Trash."),
+      new AiToolError("That folder is the Trash."),
     );
     await expect(runTool(tool("folder_tree"), { path: "/.Trash/nested" })).rejects.toBeInstanceOf(
-      OrganizeToolError,
+      AiToolError,
     );
   });
 
@@ -404,7 +417,7 @@ describe("folder_tree", () => {
     const { tool } = toolsFor();
 
     await expect(runTool(tool("folder_tree"), { path: "/bad\0path" })).rejects.toThrow(
-      new OrganizeToolError('"/bad\0path" is not a valid path.'),
+      new AiToolError('"/bad\0path" is not a valid path.'),
     );
   });
 
@@ -489,7 +502,7 @@ describe("list_folder", () => {
       ["/: 2 entries", "Docs/", "top.txt (1 B, 1970-01-01)"].join("\n"),
     );
     await expect(runTool(tool("list_folder"), { path: "/.Trash/x" })).rejects.toThrow(
-      new OrganizeToolError("That folder is the Trash."),
+      new AiToolError("That folder is the Trash."),
     );
   });
 
@@ -525,9 +538,7 @@ describe("list_folder", () => {
   it("rejects an invalid path and passes storage errors through", async () => {
     const { tool } = toolsFor();
 
-    await expect(runTool(tool("list_folder"), { path: "\0" })).rejects.toBeInstanceOf(
-      OrganizeToolError,
-    );
+    await expect(runTool(tool("list_folder"), { path: "\0" })).rejects.toBeInstanceOf(AiToolError);
     await expect(runTool(tool("list_folder"), { path: "/Missing" })).rejects.toBeInstanceOf(
       StorageError,
     );
@@ -699,6 +710,14 @@ describe("read_excerpts", () => {
       ].join("\n\n"),
     );
     expect(fileByPath).not.toHaveBeenCalled();
+  });
+
+  it("refuses with the focus's own wording", async () => {
+    const { tool } = toolsFor({ selected: ["/Inbox/scan.pdf"], focus: REFERENCED });
+
+    expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/other.pdf"] })).toBe(
+      "### /Inbox/other.pdf\n(Not a referenced item; only referenced items can be read.)",
+    );
   });
 
   it("reports selected files it cannot tie to a readable index row as not indexed", async () => {
@@ -897,10 +916,10 @@ describe("similar_files", () => {
     const { tool } = toolsFor({ selected: ["/Inbox/scan.pdf"] });
 
     await expect(runTool(tool("similar_files"), { path: "/Finance/a.pdf" })).rejects.toThrow(
-      new OrganizeToolError("Only selected items can be compared."),
+      new AiToolError("Only selected items can be compared."),
     );
     await expect(runTool(tool("similar_files"), { path: "/bad\0" })).rejects.toBeInstanceOf(
-      OrganizeToolError,
+      AiToolError,
     );
     expect(runSimilarFiles).not.toHaveBeenCalled();
   });

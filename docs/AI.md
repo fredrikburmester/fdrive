@@ -77,6 +77,10 @@ suggestions, which the person still has to approve; the organizer has no tool th
   automatic prompt caching and server-side refusal fallbacks on `claude-opus-5` and
   `claude-fable-5-1`. The OpenAI-compatible adapter uses `fetch`, refuses redirects and allows
   five minutes per turn.
-- The tools reuse the MCP read handlers (`runSearch`, `runSimilarFiles`) and index scoping; see
-  [MCP](MCP.md). `IndexQueries.fileTextPrefix` reads excerpts without touching originals.
+- The tools live in `apps/api/src/ai/tools/`, shared with the planned chat: `tool.ts` is the
+  `AiTool` shape and the executor every agent loop uses, `drive-tools.ts` the read-only drive
+  tools built for one *focus* (the items the assistant may read the contents of, and whether it
+  may open folders among them; Organize's focus is the selection, closed). They reuse the MCP
+  read handlers (`runSearch`, `runSimilarFiles`) and index scoping; see [MCP](MCP.md).
+  `IndexQueries.fileTextPrefix` reads excerpts without touching originals.
 - Chat with files is planned in [AI chat](plans/AI-CHAT.md).

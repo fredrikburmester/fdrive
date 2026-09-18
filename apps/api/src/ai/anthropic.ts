@@ -11,6 +11,7 @@ import {
   type AiInput,
   type AiModel,
   AiProviderError,
+  type AiSendOptions,
   type AiToolSpec,
   type AiTurn,
 } from "./model.ts";
@@ -94,20 +95,29 @@ export function createAnthropicModel(options: AnthropicModelOptions): AiModel {
     start({ system, tools }: { system: string; tools: readonly AiToolSpec[] }): AiConversation {
       const messages: BetaMessageParam[] = [];
       return {
-        async send(input: AiInput, signal: AbortSignal): Promise<AiTurn> {
+        async send(
+          input: AiInput,
+          signal: AbortSignal,
+          sendOptions: AiSendOptions = {},
+        ): Promise<AiTurn> {
           messages.push(
             input.kind === "user"
               ? { role: "user", content: input.text }
               : {
                   role: "user",
-                  content: input.results.map(
-                    (result): BetaToolResultBlockParam => ({
-                      type: "tool_result",
-                      tool_use_id: result.id,
-                      content: result.content,
-                      is_error: result.isError,
-                    }),
-                  ),
+                  content: [
+                    ...input.results.map(
+                      (result): BetaToolResultBlockParam => ({
+                        type: "tool_result",
+                        tool_use_id: result.id,
+                        content: result.content,
+                        is_error: result.isError,
+                      }),
+                    ),
+                    ...(input.text === undefined
+                      ? []
+                      : [{ type: "text" as const, text: input.text }]),
+                  ],
                 },
           );
           let message: BetaMessage;
@@ -133,7 +143,10 @@ export function createAnthropicModel(options: AnthropicModelOptions): AiModel {
                 ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
                 : {}),
             };
-            message = await client.beta.messages.stream(params, { signal }).finalMessage();
+            const stream = client.beta.messages.stream(params, { signal });
+            const { onText } = sendOptions;
+            if (onText !== undefined) stream.on("text", (delta) => onText(delta));
+            message = await stream.finalMessage();
           } catch (error) {
             throw toProviderError(error);
           }
