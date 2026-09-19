@@ -16,7 +16,7 @@ export type UploadAction =
   | { readonly type: "enqueue"; readonly items: readonly UploadItem[] }
   | { readonly type: "start"; readonly id: string }
   | { readonly type: "progress"; readonly id: string; readonly loaded: number }
-  | { readonly type: "succeed"; readonly id: string }
+  | { readonly type: "succeed"; readonly id: string; readonly completedAt?: number }
   | { readonly type: "fail"; readonly id: string; readonly message: string }
   | { readonly type: "skip"; readonly id: string }
   | { readonly type: "cancel"; readonly id: string }
@@ -89,6 +89,7 @@ export function uploadReducer(state: UploadQueueState, action: UploadAction): Up
         ...withoutError(item),
         status: "done",
         progress: 1,
+        ...(action.completedAt === undefined ? {} : { completedAt: action.completedAt }),
       }));
 
     case "fail":
@@ -116,9 +117,21 @@ export function uploadReducer(state: UploadQueueState, action: UploadAction): Up
       );
 
     case "clearFinished": {
+      // A batch stays whole while any of its files is still running, so its
+      // finished entries keep their destination actions until it is done.
+      const pendingBatches = new Set(
+        Object.values(state.items)
+          .filter((item) => !TERMINAL_STATUSES.has(item.status))
+          .map((item) => item.batchId)
+          .filter((id) => id !== undefined),
+      );
       const order = state.order.filter((id) => {
         const item = state.items[id];
-        return item !== undefined && !TERMINAL_STATUSES.has(item.status);
+        return (
+          item !== undefined &&
+          (!TERMINAL_STATUSES.has(item.status) ||
+            (item.batchId !== undefined && pendingBatches.has(item.batchId)))
+        );
       });
       if (order.length === state.order.length) {
         return state;

@@ -1,4 +1,4 @@
-import type { IndexQueries } from "@fdrive/db";
+import type { ActivityReadInput, ActivityReadsRepo, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import {
   createFakeSftpgoServer,
@@ -12,6 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import { createLoginLimiter, DEFAULT_MAX_FAILURES } from "../auth/login-limiter.js";
 import { loadConfig } from "../config.js";
@@ -110,6 +111,8 @@ interface Harness {
   readonly port: number;
   readonly token: string;
   readonly toolDeps: McpToolDeps;
+  readonly activity: ReturnType<typeof activityFixture>;
+  readonly reads: ActivityReadInput[];
   close(): Promise<void>;
 }
 
@@ -161,7 +164,17 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     throw new Error(`unexpected fetch to ${String(input)}`);
   }) as typeof globalThis.fetch;
 
+  const clock = () => new Date("2026-01-01T00:00:00.000Z");
+  const activity = activityFixture(clock);
+  const reads: ActivityReadInput[] = [];
   const toolDeps: McpToolDeps = {
+    activity: activity.service,
+    activityReads: {
+      record: async (input: ActivityReadInput) => {
+        reads.push(input);
+        return undefined as never;
+      },
+    } as unknown as ActivityReadsRepo,
     indexQueries: stubIndexQueries(),
     searchService: stubSearchService(),
     scopeResolver: {
@@ -214,6 +227,8 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     port,
     token: rawToken,
     toolDeps,
+    activity,
+    reads,
     async close() {
       const server = currentServer;
       currentServer = null;
@@ -613,6 +628,48 @@ describe("MCP server end to end: writes enabled", () => {
       entries: { name: string }[];
     };
     expect(listingBody.entries.map((e) => e.name)).toContain("moved.txt");
+
+    await client.close();
+  });
+
+  it("records MCP writes once and aggregates repeated reads by token", async () => {
+    const client = await connectBearerClient(harness.port, harness.token);
+
+    await client.callTool({ name: "create_folder", arguments: { path: "/reports" } });
+    await client.callTool({
+      name: "move_path",
+      arguments: { src: "/hello.txt", dst: "/reports/hello.txt" },
+    });
+    expect(harness.activity.operations.map((row) => [row.action, row.source])).toEqual([
+      ["folder.create", "mcp"],
+      ["file.move", "mcp"],
+    ]);
+    expect(harness.activity.outcomes.every((row) => row.outcome === "success")).toBe(true);
+
+    // Reads are reported to the aggregation journal, never as their own events.
+    for (let call = 0; call < 3; call++)
+      await client.callTool({
+        name: "read_file_text",
+        arguments: { path: "/reports/hello.txt" },
+      });
+    expect(harness.reads).toHaveLength(3);
+    expect(new Set(harness.reads.map((read) => read.requestId)).size).toBe(3);
+    expect(harness.reads[0]).toMatchObject({
+      action: "file.read",
+      source: "mcp",
+      evidence: "server_confirmed",
+      path: "/reports/hello.txt",
+    });
+    // The token identifies the reader across calls, and never appears in a row.
+    expect(new Set(harness.reads.map((read) => read.contextHash)).size).toBe(1);
+    expect(JSON.stringify(harness.reads)).not.toContain(harness.token);
+    expect(harness.activity.operations.map((row) => row.action)).not.toContain("file.read");
+
+    // Listing and searching are automatic traffic, so they stay out of history.
+    await client.callTool({ name: "list_directory", arguments: { path: "/" } });
+    await client.callTool({ name: "search", arguments: { query: "hello" } });
+    expect(harness.activity.operations).toHaveLength(2);
+    expect(harness.reads).toHaveLength(3);
 
     await client.close();
   });

@@ -7,6 +7,9 @@ export type UploadStatus = "queued" | "uploading" | "done" | "error" | "skipped"
 
 export interface UploadItem {
   readonly id: string;
+  /** Groups one enqueue, so the whole batch reports its outcome once. */
+  readonly batchId?: string;
+  readonly completedAt?: number;
   /** Captured before conflict handling; retries keep this identity. */
   readonly identityId?: string;
   readonly file: File;

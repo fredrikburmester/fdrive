@@ -1,5 +1,7 @@
+import type { ActivityFacts, PersonalActivityAction } from "@fdrive/contracts";
 import type { Principal } from "../auth/principal.js";
 import type { OfficeActor, OfficeDeps } from "../office/types.js";
+import { activityStat } from "./service.js";
 
 /**
  * The authorized browser session behind an editor action, as an actor history
@@ -48,6 +50,42 @@ export async function recordOfficeOpen<T>(
       bridge: { namespace: "office", externalId: fileId },
     },
     mutate,
+  );
+  return result.value;
+}
+
+/**
+ * Records one editor write. The editor reports a save against the document it
+ * opened, so the recorded subject is the opened path and the target is where
+ * the bytes actually landed. Save As therefore reads as a copy of the original.
+ */
+export async function recordOfficeAction<T>(
+  deps: OfficeDeps,
+  actor: OfficeActor,
+  action: PersonalActivityAction,
+  path: string,
+  target: string,
+  bridgeId: string | undefined,
+  mutate: () => Promise<T>,
+  facts: ActivityFacts = {},
+): Promise<T> {
+  if (!deps.activity) return mutate();
+  const before = await activityStat(actor.storage, path);
+  const result = await deps.activity.run(
+    officeActivityPrincipal(deps, actor),
+    {
+      action,
+      source: "office",
+      requested: {
+        path,
+        targetPath: target,
+        ...(action === "file.copy" ? { variant: "save_as" as const } : {}),
+      },
+      ...(before ? { before } : {}),
+      ...(bridgeId ? { bridge: { namespace: "office", externalId: bridgeId } } : {}),
+    },
+    mutate,
+    () => ({ path: target, kind: "file" as const, ...facts }),
   );
   return result.value;
 }

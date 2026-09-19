@@ -1,5 +1,6 @@
 import type { ProviderModule } from "@fdrive/core";
 import { createMemoryShareRepo } from "@fdrive/db";
+import { activityFixture } from "../../../test/activity-fixture.js";
 import { accountsHarness, cookieFrom } from "../../accounts/test-fixtures/index.ts";
 import { createApp } from "../../app.ts";
 import { createShareCredentialCodec } from "../credentials.ts";
@@ -19,6 +20,7 @@ export function sharesHarness(
     ...(options.modules === undefined ? {} : { modules: options.modules }),
     ...(options.wrapFetch === undefined ? {} : { wrapFetch: options.wrapFetch }),
   });
+  const activity = activityFixture(h.clock);
   const shares = createMemoryShareRepo();
   const deps = {
     ...h.deps,
@@ -43,6 +45,7 @@ export function sharesHarness(
     registerRoutes: (groups) => {
       h.auth.registerRoutes(groups);
       registerSharesRoutes(groups, {
+        activity: activity.service,
         service,
         codec,
         limiter,
@@ -107,5 +110,5 @@ export function sharesHarness(
     if (response.status !== 201) throw new Error(await response.text());
     return response.json() as Promise<{ id: string; hasPassword: boolean }>;
   }
-  return { ...h, shares, deps, service, codec, limiter, app, request, login, create };
+  return { ...h, shares, deps, service, codec, limiter, app, request, login, create, activity };
 }

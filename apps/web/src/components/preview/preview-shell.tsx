@@ -31,6 +31,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useActivityGesture } from "@/lib/activity/gestures";
 import { editHref } from "@/lib/editor/route";
 import { isEditableTarget } from "@/lib/keyboard";
 import { apiClient, pathToHref, queryKeys, useTouchRecent, viewHref } from "@/lib/preview/deps";
@@ -170,7 +171,8 @@ function PreviewShellContent({ path }: PreviewShellProps) {
   const [actionsOpen, setActionsOpen] = useState(false);
   const parent = parentPath(path);
 
-  const touchRecent = useTouchRecent();
+  const touchRecent = useTouchRecent(path);
+  useActivityGesture("file.preview", path);
   const touchRecentRef = useRef(touchRecent.mutate);
   touchRecentRef.current = touchRecent.mutate;
   useEffect(() => {

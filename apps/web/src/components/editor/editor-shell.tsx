@@ -114,7 +114,7 @@ export function EditorShell({ path }: EditorShellProps) {
   const parent = parentPath(path);
   const backHref = viewHref(path);
 
-  const touchRecent = useTouchRecent();
+  const touchRecent = useTouchRecent(path);
   const touchRecentRef = useRef(touchRecent.mutate);
   touchRecentRef.current = touchRecent.mutate;
   useEffect(() => {
@@ -189,6 +189,7 @@ export function EditorShell({ path }: EditorShellProps) {
     try {
       const blob = new Blob([documentText], { type: "text/plain;charset=utf-8" });
       const saved = await apiClient.upload(path, blob, {
+        intent: "save",
         modifiedAt: new Date(),
         contentLength: blob.size,
       });

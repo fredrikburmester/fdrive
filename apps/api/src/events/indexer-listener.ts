@@ -106,6 +106,15 @@ export interface IndexerListenerLogger {
 }
 
 export interface IndexerListenerDeps {
+  /** Converts one watcher signal into personal observations, per identity. */
+  readonly onActivityEvent?: (identityId: string, event: IndexerEventPayload) => Promise<void>;
+  /** True when this identity already has history on the path, so a deletion is worth relinking. */
+  readonly activityTracks?: (identityId: string, path: string) => Promise<boolean>;
+  readonly onActivityRelink?: (
+    identityId: string,
+    path: string,
+    candidate: string,
+  ) => Promise<void>;
   readonly onStorageEvent?: (event: IndexerEventPayload) => Promise<void>;
   readonly createClient: () => NotificationClient;
   readonly identities: IdentityRepo;
@@ -293,7 +302,16 @@ async function handleCreatedOrChanged(
  */
 async function handleDeleted(
   deps: LiveCheckDeps &
-    Pick<IndexerListenerDeps, "bus" | "metadata" | "fileTags" | "favorites" | "indexQueries">,
+    Pick<
+      IndexerListenerDeps,
+      | "bus"
+      | "metadata"
+      | "fileTags"
+      | "favorites"
+      | "indexQueries"
+      | "activityTracks"
+      | "onActivityRelink"
+    >,
   scopes: readonly Scope[],
   rootIdByName: ReadonlyMap<string, number>,
   identityId: string,
@@ -306,7 +324,9 @@ async function handleDeleted(
 
   const rootId = rootIdByName.get(event.root);
   if (rootId !== undefined) {
-    const tracked = await hasTrackedMetadata(deps, identityId, virtualPath);
+    const tracked =
+      (await hasTrackedMetadata(deps, identityId, virtualPath)) ||
+      (await deps.activityTracks?.(identityId, virtualPath));
     if (tracked) {
       const sha256 = await deps.indexQueries.deletedRowSha(rootId, event.path);
       if (sha256 !== null) {
@@ -318,6 +338,7 @@ async function handleDeleted(
           const newVirtualPath = candidates[0] as string;
           await deps.metadata.onMoved(identityId, virtualPath, newVirtualPath, false);
           if (await isLiveReadable(deps, identityId, newVirtualPath)) {
+            await deps.onActivityRelink?.(identityId, virtualPath, newVirtualPath);
             publish(deps.bus, identityId, "move", [virtualPath], [newVirtualPath], event.at);
           } else {
             publish(deps.bus, identityId, "delete", [virtualPath], undefined, event.at);
@@ -463,6 +484,11 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
     await deps.onStorageEvent?.(event);
     const { entries, rootIdByName } = await getCache();
     for (const entry of entries) {
+      try {
+        await deps.onActivityEvent?.(entry.identityId, event);
+      } catch (error) {
+        deps.logger.warn({ error }, "indexer-listener: activity comparison deferred");
+      }
       await handleEventForIdentity(deps, entry.scopes, rootIdByName, entry.identityId, event);
     }
   }

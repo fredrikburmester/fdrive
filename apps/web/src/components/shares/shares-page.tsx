@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { activityGesture } from "@/lib/activity/gestures";
 import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import { capabilitiesFor } from "@/lib/identity/capabilities";
@@ -67,11 +68,13 @@ export function SharesPage() {
     }
   }
   async function copy(share: ManagedShare) {
+    const report = activityGesture("share.copy_link", share.paths[0] ?? "/", share.id);
     try {
       await navigator.clipboard.writeText(
         new URL(publicShareHref(share.id), window.location.origin).href,
       );
       setCopied(share.id);
+      void report().catch(() => undefined);
     } catch {
       setError("Could not copy the link.");
     }

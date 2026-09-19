@@ -1,7 +1,10 @@
+import { createHash, randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
+import { activityStorage } from "../activity/storage.js";
 import type { AppHono } from "../app.js";
+import { trashPathFor } from "./access.js";
 import { authenticateMcpRequest, type McpAuthDeps } from "./auth.js";
 import { boundedBytes } from "./content.ts";
 import type { McpToolDeps } from "./handlers.js";
@@ -63,7 +66,43 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
   }
 
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
-  registerMcpTools(server, auth.principal, deps.toolDeps);
+  const requestId = c.req.header("x-fdrive-operation-id");
+  if (requestId && !/^[a-zA-Z0-9:_-]{1,200}$/.test(requestId))
+    return withMcpResponseHeaders(
+      Response.json({ error: "invalid operation ID" }, { status: 400 }),
+    );
+  // The credential identifies the caller across requests, so repeated reads by
+  // one token aggregate together. It is hashed: no token text reaches history.
+  const operationId = requestId ?? randomUUID();
+  const credential = c.req.header("authorization") ?? c.req.param("token") ?? operationId;
+  const context = createHash("sha256").update(credential).digest("hex");
+  const tool = (parsedBody as { params?: { name?: string } } | undefined)?.params?.name;
+  let principal = auth.principal;
+  let child = 0;
+  if (deps.toolDeps.activity)
+    principal = {
+      ...principal,
+      storage: activityStorage(
+        principal,
+        deps.toolDeps.activity,
+        () => ({
+          source: "mcp",
+          operationId: `${context}:${operationId}:${child++}`,
+          uploadAction:
+            tool === "edit_file"
+              ? "file.save"
+              : tool === "upload_file"
+                ? "file.upload"
+                : "file.create",
+        }),
+        trashPathFor(deps.toolDeps, principal),
+      ),
+    };
+  registerMcpTools(server, principal, {
+    ...deps.toolDeps,
+    activityContext: context,
+    activityRequestId: operationId,
+  });
 
   // A fresh server and transport per request: the SDK's documented pattern
   // for a stateless streamable-HTTP MCP server with JSON responses.

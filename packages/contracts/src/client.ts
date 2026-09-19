@@ -204,6 +204,8 @@ export interface ApiClientOptions {
 }
 
 export interface ApiClientUploadOptions {
+  /** What the caller is doing, which history records as the action. */
+  readonly intent?: "upload" | "create" | "save";
   mkdirParents?: boolean;
   modifiedAt?: Date;
   contentLength?: number;
@@ -760,6 +762,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return put(ROUTES.fs.upload, EntryResponse, {
         query: {
           path,
+          intent: opts?.intent,
           mkdirParents:
             opts?.mkdirParents === undefined ? undefined : opts.mkdirParents ? "true" : "false",
         },

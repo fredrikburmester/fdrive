@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
 import { accountTransition } from "@/lib/account/transition";
+import { activityGesture } from "@/lib/activity/gestures";
 import { addToChat } from "@/lib/ai/chat-panel";
 import { useAiStatus } from "@/lib/ai/queries";
 import { useOrganize } from "@/lib/ai/use-organize";
@@ -358,6 +359,7 @@ export function FileBrowser({
       return;
     }
     lastRevealedRef.current = targetPath;
+    void activityGesture("file.reveal", targetPath)().catch(() => undefined);
     dispatchSelection({ type: "set", paths: [targetPath] });
     scrollTokenRef.current += 1;
     setScrollRequest({ path: targetPath, token: scrollTokenRef.current });
@@ -639,7 +641,7 @@ export function FileBrowser({
     setNewFilePending(true);
     const targetPath = joinPath(path, name);
     try {
-      await apiClient.upload(targetPath, new Blob([]), { contentLength: 0 });
+      await apiClient.upload(targetPath, new Blob([]), { contentLength: 0, intent: "create" });
       void queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(path) });
       setNewFileKind(null);
       router.push(toRoute(editHref(targetPath)));

@@ -18,6 +18,8 @@ import {
 } from "@fdrive/contracts";
 import { type ActivityReadsRepo, ConflictError } from "@fdrive/db";
 import type { ActivityAdmission } from "../activity/admission.js";
+import { recordMetadataAction } from "../activity/metadata.js";
+import type { PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import { normalizeOrThrow, parseBody, statEntry } from "../fs/routes.js";
@@ -32,6 +34,12 @@ function routePath(fullPath: string): string {
 
 export interface MetadataRoutesDeps {
   readonly metadata: MetadataService;
+  /**
+   * Records tag, favorite and folder-view changes in personal history. The
+   * metadata write and its immutable outcome commit in one transaction, so a
+   * rolled back change leaves no recorded event behind.
+   */
+  readonly activity?: PersonalActivityService;
   /**
    * Reads recents from actor-attributed history instead of the legacy
    * `app.recents` table. Both are optional so deployments and route tests
@@ -92,10 +100,23 @@ export function registerMetadataRoutes(
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.color !== undefined ? { color: input.color } : {}),
     };
-    const tag = await runTagCall(() => metadata.updateTag(principal.accountId, id, patch));
-    if (tag === null) {
-      throw new ApiHttpError("not_found", `tag not found: ${id}`);
-    }
+    const before = (await metadata.listTags(principal.accountId)).find((tag) => tag.id === id);
+    const tag = await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      {
+        action: "tag.update",
+        requested: { ...(before ? { tags: [{ ...before, ...patch }] } : {}) },
+        ...(before ? { before: { tags: [before] } } : {}),
+      },
+      async (metadata) => {
+        const updated = await runTagCall(() => metadata.updateTag(principal.accountId, id, patch));
+        if (updated === null) throw new ApiHttpError("not_found", `tag not found: ${id}`);
+        return updated;
+      },
+      (tag) => ({ tags: [tag] }),
+    );
     const body: Tag = tag;
     return c.json(body);
   });
@@ -103,7 +124,15 @@ export function registerMetadataRoutes(
   authed.delete(`${routePath(ROUTES.tags)}/:id`, async (c) => {
     const principal = c.get("principal");
     const id = c.req.param("id");
-    await metadata.deleteTag(principal.accountId, id);
+    const before = (await metadata.listTags(principal.accountId)).find((tag) => tag.id === id);
+    await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      { action: "tag.delete", requested: { ...(before ? { tags: [before] } : {}) } },
+      (metadata) => metadata.deleteTag(principal.accountId, id),
+      () => ({ tags: [] }),
+    );
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -121,10 +150,20 @@ export function registerMetadataRoutes(
     const input = await parseBody(SetFileTagsRequest, c);
     const path = normalizeOrThrow(input.path);
     try {
-      await metadata.setFileTags(
-        { accountId: principal.accountId, identityId: principal.identityId },
-        path,
-        input.tagIds,
+      const tags = (await metadata.listTags(principal.accountId)).filter((tag) =>
+        input.tagIds.includes(tag.id),
+      );
+      await recordMetadataAction(
+        deps.activity,
+        c,
+        metadata,
+        { action: "file.tags.set", requested: { path, tags } },
+        (metadata) =>
+          metadata.setFileTags(
+            { accountId: principal.accountId, identityId: principal.identityId },
+            path,
+            input.tagIds,
+          ),
       );
     } catch (err) {
       if (err instanceof UnknownTagError) {
@@ -155,7 +194,13 @@ export function registerMetadataRoutes(
     const path = normalizeOrThrow(input.path);
     const entry = await statEntry(principal.storage, path);
     const kind = entry.kind === "dir" ? "dir" : "file";
-    await metadata.addFavorite(principal.identityId, path, kind);
+    await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      { action: "file.favorite.set", requested: { path, kind, favorite: true } },
+      (metadata) => metadata.addFavorite(principal.identityId, path, kind),
+    );
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -164,7 +209,13 @@ export function registerMetadataRoutes(
     const principal = c.get("principal");
     const input = await parseBody(FavoriteRequest, c);
     const path = normalizeOrThrow(input.path);
-    await metadata.removeFavorite(principal.identityId, path);
+    await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      { action: "file.favorite.set", requested: { path, favorite: false } },
+      (metadata) => metadata.removeFavorite(principal.identityId, path),
+    );
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -198,17 +249,33 @@ export function registerMetadataRoutes(
     const path = normalizeOrThrow(input.path);
     const entry = await statEntry(principal.storage, path);
     if (entry.kind !== "dir") throw new ApiHttpError("bad_request", "path must be a directory");
-    await metadata.setFolderView(principal.identityId, path, {
-      ...(input.mode === undefined ? {} : { mode: input.mode }),
-      ...(input.sort === undefined ? {} : { sort: input.sort }),
-    });
+    await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      {
+        action: "folder.view.set",
+        requested: { path, kind: "dir", ...(input.mode ? { view: input.mode } : {}) },
+      },
+      (metadata) =>
+        metadata.setFolderView(principal.identityId, path, {
+          ...(input.mode === undefined ? {} : { mode: input.mode }),
+          ...(input.sort === undefined ? {} : { sort: input.sort }),
+        }),
+    );
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
 
   authed.delete(routePath(ROUTES.folderViews.all), async (c) => {
     const principal = c.get("principal");
-    await metadata.resetFolderViews(principal.accountId);
+    await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      { action: "folder.view.reset", requested: { variant: "all" } },
+      (metadata) => metadata.resetFolderViews(principal.accountId),
+    );
     const body: OkResponse = { ok: true };
     return c.json(body);
   });
@@ -217,7 +284,13 @@ export function registerMetadataRoutes(
     const principal = c.get("principal");
     const input = await parseBody(RemoveFolderViewRequest, c);
     const path = normalizeOrThrow(input.path);
-    await metadata.removeFolderView(principal.identityId, path, input.part);
+    await recordMetadataAction(
+      deps.activity,
+      c,
+      metadata,
+      { action: "folder.view.reset", requested: { path, kind: "dir", variant: "single" } },
+      (metadata) => metadata.removeFolderView(principal.identityId, path, input.part),
+    );
     const body: OkResponse = { ok: true };
     return c.json(body);
   });

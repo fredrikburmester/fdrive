@@ -111,6 +111,7 @@ describe("ROUTES", () => {
       batches: "/api/v1/activity/batches",
       events: "/api/v1/activity/events",
       stream: "/api/v1/activity/stream",
+      exports: "/api/v1/activity/exports",
     });
   });
 

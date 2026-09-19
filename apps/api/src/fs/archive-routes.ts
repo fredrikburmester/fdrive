@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import {
@@ -25,7 +26,9 @@ import {
   stripArchiveExtension,
   uniqueCopyName,
 } from "@fdrive/core";
-import { recordFsAction } from "../activity/fs-context.js";
+import { activityRequestContext, recordFsAction } from "../activity/fs-context.js";
+import { activityStat } from "../activity/service.js";
+import { activityStorage } from "../activity/storage.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { compressToTemp } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
@@ -40,6 +43,7 @@ import type { Principal } from "../auth/principal.js";
 import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import { JobQueueFullError } from "../jobs/runner.js";
+import type { JobRunContext } from "../jobs/types.js";
 import {
   type FsContext,
   type FsRoutesDeps,
@@ -186,13 +190,15 @@ export function registerArchiveRoutes(
 
   authed.get(routePath(ROUTES.fs.jobs), (c) => {
     const principal = c.get("principal");
-    const body: JobsResponse = { jobs: deps.jobRunner.list(principal.identityId) };
+    const body: JobsResponse = {
+      jobs: deps.jobRunner.list(principal.identityId, principal.accountId),
+    };
     return c.json(body);
   });
 
   authed.get(`${routePath(ROUTES.fs.jobs)}/:id`, (c) => {
     const principal = c.get("principal");
-    const job = deps.jobRunner.get(c.req.param("id"), principal.identityId);
+    const job = deps.jobRunner.get(c.req.param("id"), principal.identityId, principal.accountId);
     if (job === null) {
       throw new ApiHttpError("not_found", "job not found");
     }
@@ -201,7 +207,7 @@ export function registerArchiveRoutes(
 
   authed.post(`${routePath(ROUTES.fs.jobs)}/:id/cancel`, (c) => {
     const principal = c.get("principal");
-    const job = deps.jobRunner.cancel(c.req.param("id"), principal.identityId);
+    const job = deps.jobRunner.cancel(c.req.param("id"), principal.identityId, principal.accountId);
     if (job === null) {
       throw new ApiHttpError("not_found", "job not found");
     }
@@ -238,9 +244,9 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
     throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
   }
 
-  const job = submitJob(deps, principal, "compress", async (ctx) => {
+  const job = await submitJob(deps, c, "compress", paths, targetPath, async (ctx, storage) => {
     const { file, size } = await compressToTemp({
-      storage: principal.storage,
+      storage,
       paths,
       format: body.format,
       tmpDir: deps.tmpDir,
@@ -251,7 +257,7 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
       if (await pathExists(principal.storage, targetPath)) {
         throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
       }
-      await protectArchiveWrites(principal.storage, principal.identityId).upload(
+      await protectArchiveWrites(storage, principal.identityId).upload(
         targetPath,
         webStreamFromNodeReadable(createReadStream(file)),
         { contentLength: size, signal: ctx.signal, overwrite: false },
@@ -290,19 +296,26 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
   if (destination === null)
     throw new ApiHttpError("bad_request", "archive has no safe destination name");
 
-  const job = submitJob(deps, principal, "extract", async (ctx) => {
-    const result = await extractArchive({
-      storage: protectArchiveWrites(principal.storage, principal.identityId),
-      archivePath,
-      destination,
-      tmpDir: deps.tmpDir,
-      signal: ctx.signal,
-      report: ctx.report,
-      maxBytes: deps.jobMaxBytes,
-    });
-    publishFsEvent(deps, principal, "create", [destination]);
-    return result;
-  });
+  const job = await submitJob(
+    deps,
+    c,
+    "extract",
+    [archivePath],
+    destination,
+    async (ctx, storage) => {
+      const result = await extractArchive({
+        storage: protectArchiveWrites(storage, principal.identityId),
+        archivePath,
+        destination,
+        tmpDir: deps.tmpDir,
+        signal: ctx.signal,
+        report: ctx.report,
+        maxBytes: deps.jobMaxBytes,
+      });
+      publishFsEvent(deps, principal, "create", [destination]);
+      return result;
+    },
+  );
 
   const responseBody: JobAccepted = { id: job.id, jobId: job.id };
   return c.json(responseBody, 202);
@@ -360,20 +373,113 @@ async function handleArchiveEntries(c: FsContext, deps: ArchiveRoutesDeps): Prom
   return c.json(responseBody);
 }
 
-function submitJob(
+/**
+ * Queues one archive job and journals its intent before any work starts. The
+ * job's own storage is decorated, so every file the worker actually writes
+ * becomes a child of the archive operation instead of an unattributed write.
+ */
+async function submitJob(
   deps: FsRoutesDeps,
-  principal: Principal,
+  c: FsContext,
   kind: "compress" | "extract",
-  run: Parameters<FsRoutesDeps["jobRunner"]["submit"]>[0]["run"],
-): ReturnType<FsRoutesDeps["jobRunner"]["submit"]> {
+  paths: readonly string[],
+  target: string,
+  run: (
+    context: JobRunContext,
+    storage: Principal["storage"],
+  ) => Promise<{ path: string; warning?: string }>,
+): Promise<ReturnType<FsRoutesDeps["jobRunner"]["submit"]>> {
+  const principal = c.get("principal");
+  const context = activityRequestContext(c);
+  const source = paths[0] ?? target;
+  const requested = {
+    path: source,
+    targetPath: target,
+    kind: kind === "extract" ? ("dir" as const) : ("file" as const),
+    variant: "stored" as const,
+  };
+  const before = await activityStat(principal.storage, source);
+  const operation = deps.activity
+    ? await deps.activity.repo.begin({
+        accountId: principal.accountId,
+        identityId: principal.identityId,
+        action: `archive.${kind}`,
+        source: context.source,
+        producerOperationId: context.producerOperationId ?? randomUUID(),
+        requested,
+        ...(before ? { before } : {}),
+        requestDigest: createHash("sha256")
+          .update(JSON.stringify([kind, paths, target]))
+          .digest("hex"),
+        subjects: paths.map((path) => ({ path, identityId: principal.identityId })),
+      })
+    : null;
+  if (operation && operation.state !== "prepared")
+    throw new ApiHttpError("conflict", "This job was already submitted; check its activity");
   try {
     return deps.jobRunner.submit({
       identityId: principal.identityId,
+      accountId: principal.accountId,
+      ...(operation
+        ? {
+            id: operation.id,
+            onOutcome: async (state, result) => {
+              // Some outputs may already be committed when a job fails, so a
+              // failure with committed children is partial, never a clean loss.
+              const committed =
+                (await deps.activity?.repo.completedChildren(principal.accountId, operation.id)) ??
+                0;
+              await deps.activity?.repo.finish(principal.accountId, operation.id, {
+                outcome:
+                  state === "done"
+                    ? "success"
+                    : committed > 0
+                      ? "partial"
+                      : result.authorityRevoked
+                        ? "denied"
+                        : state === "cancelled"
+                          ? "cancelled"
+                          : "failed",
+                after: {
+                  ...requested,
+                  path: result.path ?? target,
+                  size: result.bytes,
+                  completedCount: committed,
+                },
+                ...(state === "done" ? {} : { errorCode: `job_${state}` }),
+              });
+            },
+          }
+        : {}),
       kind,
       ...(principal.verifyAuthority !== undefined ? { authorize: principal.verifyAuthority } : {}),
-      run,
+      run: async (ctx) => {
+        const activity = deps.activity;
+        if (!operation || !activity) return run(ctx, principal.storage);
+        if (!(await activity.repo.claim(principal.accountId, operation.id)))
+          throw new ApiHttpError("conflict", "This job was already submitted");
+        const timer = setInterval(() => {
+          void activity.repo.heartbeat(principal.accountId, operation.id).catch(() => undefined);
+        }, 15_000);
+        timer.unref();
+        try {
+          return await activity.withParent(principal, operation.id, () =>
+            run(
+              ctx,
+              activityStorage(principal, activity, () => ({ source: context.source })),
+            ),
+          );
+        } finally {
+          clearInterval(timer);
+        }
+      },
     });
   } catch (error) {
+    if (operation)
+      await deps.activity?.repo.finish(principal.accountId, operation.id, {
+        outcome: "failed",
+        errorCode: "queue_rejected",
+      });
     if (error instanceof JobQueueFullError) {
       throw new ApiHttpError("rate_limited", error.message);
     }

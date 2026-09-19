@@ -43,6 +43,7 @@ import type { UploadItem, UploadStatus } from "@/lib/upload/types";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { ActivityPill } from "./activity-pill";
 import { LiveActivity } from "./live-activity-dock";
+import { UploadCompletionActions } from "./upload-completion-actions";
 
 const SAMPLE_HISTORY_LIMIT = 50;
 /**
@@ -63,7 +64,7 @@ function statusLabel(status: UploadStatus): string {
     case "uploading":
       return "Uploading";
     case "done":
-      return "Done";
+      return "Uploaded";
     case "error":
       return "Failed";
     case "skipped":
@@ -116,6 +117,9 @@ function UploadRow({ item, onRetry, onCancel }: UploadRowProps) {
         </div>
       </div>
       {item.status === "uploading" && <Progress value={item.progress * 100} />}
+      {item.status === "done" && item.identityId !== undefined && (
+        <UploadCompletionActions item={{ ...item, identityId: item.identityId }} />
+      )}
       {item.status === "error" && item.error !== undefined && (
         <p className="truncate text-xs text-destructive">{item.error}</p>
       )}

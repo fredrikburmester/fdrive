@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { activityGesture } from "@/lib/activity/gestures";
 import {
   canUploadShare,
   initialShareFields,
@@ -87,10 +88,12 @@ export function ShareDialog({
   }
   async function copyCreated() {
     if (!created) return;
+    const report = activityGesture("share.copy_link", created.paths[0] ?? "/", created.id);
     try {
       await navigator.clipboard.writeText(
         new URL(publicShareHref(created.id), window.location.origin).href,
       );
+      void report().catch(() => undefined);
     } catch {
       setError("Could not copy the link. Select and copy it below.");
     }

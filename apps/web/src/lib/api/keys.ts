@@ -4,6 +4,13 @@
  * across chunks; do not build fs/auth query keys by hand elsewhere.
  */
 export const queryKeys = {
+  activity: {
+    all: (accountId: string) => ["personal-activity", accountId] as const,
+    feed: (accountId: string, filters: unknown, scope: string) =>
+      ["personal-activity", accountId, "feed", scope, filters] as const,
+    file: (accountId: string, fileId: string) =>
+      ["personal-activity", accountId, "file", fileId] as const,
+  },
   auth: {
     me: () => ["auth", "me"] as const,
   },

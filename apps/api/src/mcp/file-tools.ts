@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { extensionOf, isStorageError, trashLeafPath } from "@fdrive/core";
+import { recordMetadataCommand } from "../activity/metadata.js";
 import type { Principal } from "../auth/principal.ts";
 import { relocatePath, requireUnoccupiedTarget } from "../fs/mutations.ts";
 import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
@@ -262,17 +263,31 @@ export async function fileTags(
   const metadata = requireMetadata(deps);
   let tags = await metadata.listTags(principal.accountId);
   if (names !== undefined) {
-    const selected = [];
+    const selected: typeof tags = [];
     for (const name of new Set(names)) {
       const tag =
         tags.find((tag) => tag.name === name) ??
         (await metadata.createTag(principal.accountId, { name, color: null }));
       selected.push(tag);
     }
-    await metadata.setFileTags(
+    await recordMetadataCommand(
+      deps.activity,
       principal,
-      info.path,
-      selected.map((tag) => tag.id),
+      metadata,
+      {
+        action: "file.tags.set",
+        source: "mcp",
+        ...(deps.activityRequestId
+          ? { producerOperationId: `${deps.activityContext}:${deps.activityRequestId}:tags` }
+          : {}),
+        requested: { path: info.path, tags: selected },
+      },
+      (metadata) =>
+        metadata.setFileTags(
+          principal,
+          info.path,
+          selected.map((tag) => tag.id),
+        ),
     );
     tags = selected;
   } else {
@@ -303,8 +318,24 @@ export async function setFavorite(
   const metadata = requireMetadata(deps);
   if (info.kind !== "file" && info.kind !== "dir")
     throw new Error("only files and folders can be favorites");
-  if (args.favorite) await metadata.addFavorite(principal.identityId, info.path, info.kind);
-  else await metadata.removeFavorite(principal.identityId, info.path);
+  const kind = info.kind;
+  await recordMetadataCommand(
+    deps.activity,
+    principal,
+    metadata,
+    {
+      action: "file.favorite.set",
+      source: "mcp",
+      ...(deps.activityRequestId
+        ? { producerOperationId: `${deps.activityContext}:${deps.activityRequestId}:favorite` }
+        : {}),
+      requested: { path: info.path, kind, favorite: args.favorite },
+    },
+    (metadata) =>
+      args.favorite
+        ? metadata.addFavorite(principal.identityId, info.path, kind)
+        : metadata.removeFavorite(principal.identityId, info.path),
+  );
   return { path: info.path, favorite: args.favorite };
 }
 

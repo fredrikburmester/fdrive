@@ -720,3 +720,106 @@ function writeBarrier(): { promise: Promise<void>; resolve: () => void } {
   });
   return { promise, resolve: () => resolve() };
 }
+
+describe("editor writes in personal history", () => {
+  it("records save, Save As lineage, rename and creation, and keeps a rejected save out", async () => {
+    const h = await officeHarness();
+    const opened = await h.open();
+    const writes = () =>
+      h.activity.operations.filter((row) => row.action !== "file.open").map((row) => row.action);
+
+    await h.locks.apply({
+      fileId: opened.fileId,
+      operation: "lock",
+      lockId: "writer",
+      now: h.clock(),
+    });
+    expect(
+      (
+        await h.callback(opened, {
+          method: "POST",
+          contents: true,
+          headers: { "X-WOPI-Override": "PUT", "X-WOPI-Lock": "writer" },
+          body: "saved",
+        })
+      ).status,
+    ).toBe(200);
+    expect(writes()).toEqual(["file.save"]);
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      source: "office",
+      accountId: h.alice.session.accountId,
+      requested: { path: "/a.docx", targetPath: "/a.docx" },
+    });
+
+    // Save As keeps the opened document as the source, so the copy has lineage.
+    expect(
+      (
+        await h.callback(opened, {
+          method: "POST",
+          headers: {
+            "X-WOPI-Override": "PUT_RELATIVE",
+            "X-WOPI-RelativeTarget": "copy.docx",
+            "X-WOPI-Lock": "writer",
+          },
+          body: "copied",
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      action: "file.copy",
+      requested: { path: "/a.docx", targetPath: "/copy.docx", variant: "save_as" },
+    });
+
+    expect(
+      (
+        await h.callback(opened, {
+          method: "POST",
+          headers: {
+            "X-WOPI-Override": "RENAME_FILE",
+            "X-WOPI-RequestedName": "renamed",
+            "X-WOPI-Lock": "writer",
+          },
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      action: "file.rename",
+      requested: { path: "/a.docx", targetPath: "/renamed.docx" },
+    });
+
+    expect(
+      (await h.browser("/api/v1/office/documents", { parent: "/", name: "new.docx" })).status,
+    ).toBe(201);
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      action: "file.create",
+      requested: { path: "/new.docx" },
+    });
+    expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
+    expect(h.activity.outcomes.at(-1)?.bridge).toMatchObject({ namespace: "office" });
+  });
+
+  it("records nothing for a save the edit policy refuses after the document was opened", async () => {
+    let editable = true;
+    const h = await officeHarness({ deps: { canEdit: async () => editable } });
+    const opened = await h.open();
+    await h.locks.apply({
+      fileId: opened.fileId,
+      operation: "lock",
+      lockId: "writer",
+      now: h.clock(),
+    });
+    editable = false;
+    expect(
+      (
+        await h.callback(opened, {
+          method: "POST",
+          contents: true,
+          headers: { "X-WOPI-Override": "PUT", "X-WOPI-Lock": "writer" },
+          body: "saved",
+        })
+      ).status,
+    ).toBe(403);
+    expect(h.activity.operations.map((row) => row.action)).toEqual(["file.open"]);
+    expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+  });
+});
