@@ -26,6 +26,7 @@ import { registerAccountsRoutes } from "./accounts/routes.ts";
 import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
+import { createActivityAdmission } from "./activity/admission.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
 import { createActivityService } from "./activity/service.ts";
 import { createChatService } from "./ai/chat/service.ts";
@@ -268,6 +269,15 @@ export async function composeApp(
     fetch: fetchImpl,
     clock,
     resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
+  });
+  const admitActivity = createActivityAdmission({
+    reads: activityReads,
+    repo: activityRepo,
+    identities: repos.identities,
+    storageFactory,
+    secret: config.fdriveMasterKey,
+    clock,
+    shares: createShareRepo(db),
   });
   const pinnedStorageFactory = createPinnedStorageFactory({
     providers: providerService,
@@ -539,6 +549,7 @@ export async function composeApp(
     storageFactory: accountStorage,
     metadata: metadataService,
     bus,
+    activity: personalActivity,
   });
 
   // The indexer's `LISTEN idx_events` connection only has anything to listen
@@ -947,6 +958,7 @@ export async function composeApp(
       };
       registerFsRoutes(groups, fsRoutesDeps);
       registerTrashRoutes(groups, {
+        activity: personalActivity,
         bus,
         clock,
         settingsForStorage: trashSettingsForStorage,
@@ -963,7 +975,11 @@ export async function composeApp(
         activeProvider: currentOfficeProvider,
       });
       registerOfficeRoutes(groups, { service: officeService });
-      registerMetadataRoutes(groups, { metadata: metadataService });
+      registerMetadataRoutes(groups, {
+        metadata: metadataService,
+        reads: activityReads,
+        admitActivity,
+      });
       registerAiRoutes(groups, {
         settings: aiSettings,
         organize: organizeService,

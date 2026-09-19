@@ -499,7 +499,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       if (!!request.itemId !== !!request.base)
         throw new ApiHttpError("bad_request", "Updates require an item and base version");
     }
-    await record(principal, request.parentId);
+    const parent = await record(principal, request.parentId);
     const source =
       "itemId" in request && request.itemId ? await record(principal, request.itemId) : undefined;
     // Include both the incoming body and retained originals. This reservation
@@ -520,7 +520,30 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         identityId: principal.identityId,
         accountId: principal.accountId,
         requestHash: hash(request),
-        request: { ...request, recoveryBytes },
+        // History reads its facts from the reserved request, so an interrupted
+        // commit still knows what the person asked for. `appendNativeActivity`
+        // re-derives the final action from the receipt's own effects.
+        request: {
+          ...request,
+          recoveryBytes,
+          activityPath: source?.path ?? `${parent.path === "/" ? "" : parent.path}/${request.name}`,
+          activityTarget: `${parent.path === "/" ? "" : parent.path}/${request.name}`,
+          activityKind: source?.kind === "dir" || request.kind === "folder" ? "dir" : "file",
+          activityAction:
+            request.kind === "folder"
+              ? "folder.create"
+              : request.kind === "upload"
+                ? source
+                  ? "file.save"
+                  : "file.create"
+                : request.parentId === "trash"
+                  ? "file.trash"
+                  : source?.originalPath
+                    ? "file.restore"
+                    : source && parentPath(source.path) === parent.path
+                      ? "file.rename"
+                      : "file.move",
+        },
         state: request.kind === "upload" ? "receiving" : "ready",
       });
     } catch (error) {
@@ -805,6 +828,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
             directory: request.kind === "folder" || source?.kind === "dir",
             trash: trashing,
+            ...(source?.originalPath && !trashing ? { restored: true } : {}),
           };
           if (
             context.from &&

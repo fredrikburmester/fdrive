@@ -1,4 +1,5 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import type { ActivityReadInput, ActivityReadsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import {
   createFakeSftpgoServer,
@@ -9,6 +10,7 @@ import {
 } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
+import { type ActivityAdmissionDeps, createActivityAdmission } from "../activity/admission.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
@@ -69,7 +71,36 @@ function requestedWith(init: RequestInit = {}): RequestInit {
   return { ...init, headers: { ...init.headers, "x-requested-with": "fdrive" } };
 }
 
-async function buildHarness(seed: FakeSeed = SEED) {
+/**
+ * Stands in for the activity journal so a recents test can assert what was
+ * recorded without a database. Durable aggregation has its own PostgreSQL test.
+ */
+function activityReadsFixture(storage: StorageProvider) {
+  const recorded: ActivityReadInput[] = [];
+  const windows = new Map<string, Date>();
+  const reads = {
+    async record(input: ActivityReadInput) {
+      recorded.push(input);
+      windows.set(input.path, input.at);
+      return "window";
+    },
+    async recents() {
+      return [...windows].reverse().map(([path, openedAt]) => ({ path, openedAt }));
+    },
+  } as unknown as ActivityReadsRepo;
+  const admit = createActivityAdmission({
+    reads,
+    repo: { clientEvent: async () => ({ id: "copy" }) },
+    identities: { get: async () => ({ accountId: ACCOUNT_ID }) },
+    storageFactory: async () => storage,
+    secret: "server-secret",
+    clock: () => new Date(CLOCK_ISO),
+    shares: { getOwned: async () => null },
+  } as unknown as ActivityAdmissionDeps);
+  return { reads, admit, recorded };
+}
+
+async function buildHarness(seed: FakeSeed = SEED, withActivity = false) {
   const server = createFakeSftpgoServer(seed);
   const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
   const withToken = await withTokenFor(client, "alice", "secret");
@@ -85,6 +116,7 @@ async function buildHarness(seed: FakeSeed = SEED) {
 
   const repos = createMemoryRepos();
   const metadata = createMetadataService(repos);
+  const activity = activityReadsFixture(storage);
   const bus = createEventBus();
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
@@ -115,11 +147,14 @@ async function buildHarness(seed: FakeSeed = SEED) {
           identities: { get: async () => null },
         },
       });
-      registerMetadataRoutes(groups, { metadata });
+      registerMetadataRoutes(groups, {
+        metadata,
+        ...(withActivity ? { reads: activity.reads, admitActivity: activity.admit } : {}),
+      });
     },
   });
 
-  return { app, repos, metadata };
+  return { app, repos, metadata, activity };
 }
 
 interface TagJson {
@@ -341,6 +376,75 @@ describe("recents", () => {
     const listRes = await app.request("/api/v1/recents");
     const body = (await listRes.json()) as { items: { path: string }[] };
     expect(body.items.map((item) => item.path)).toEqual(["/hello.txt"]);
+  });
+
+  it("records an open as the caller's own history and reads the list back from it", async () => {
+    const { app, repos, activity } = await buildHarness(SEED, true);
+
+    const touch = await app.request(
+      "/api/v1/recents/touch",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: "fdrive_session=private" },
+        body: JSON.stringify({ path: "/hello.txt" }),
+      }),
+    );
+
+    expect(touch.status).toBe(200);
+    expect(activity.recorded).toEqual([
+      expect.objectContaining({
+        accountId: ACCOUNT_ID,
+        identityId: ALICE_IDENTITY_ID,
+        path: "/hello.txt",
+        kind: "file",
+        action: "file.open",
+        evidence: "client_reported",
+      }),
+    ]);
+    // Legacy `app.recents` rows carry no actor, so history never writes there.
+    expect(await repos.recents.list(ALICE_IDENTITY_ID, 100)).toEqual([]);
+
+    const listed = await app.request("/api/v1/recents");
+    const body = (await listed.json()) as { items: { path: string }[] };
+    expect(body.items.map((item) => item.path)).toEqual(["/hello.txt"]);
+  });
+
+  it("treats a retried report as the same gesture and rejects an expired one", async () => {
+    const { app, activity } = await buildHarness(SEED, true);
+    const requestId = "00000000-0000-4000-8000-0000000000f1";
+    const touch = (body: Record<string, unknown>) =>
+      app.request(
+        "/api/v1/recents/touch",
+        requestedWith({
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: "fdrive_session=private" },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    expect((await touch({ path: "/hello.txt", requestId })).status).toBe(200);
+    expect((await touch({ path: "/hello.txt", requestId })).status).toBe(200);
+    expect(activity.recorded.map((row) => row.requestId)).toEqual([requestId, requestId]);
+
+    const expired = await touch({ path: "/hello.txt", at: "2024-05-01T00:00:00.000Z" });
+    expect(expired.status).toBe(400);
+    expect(activity.recorded).toHaveLength(2);
+  });
+
+  it("refuses a report for a file the caller can no longer read", async () => {
+    const { app, activity } = await buildHarness(SEED, true);
+
+    const res = await app.request(
+      "/api/v1/recents/touch",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: "fdrive_session=private" },
+        body: JSON.stringify({ path: "/missing.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(404);
+    expect(activity.recorded).toEqual([]);
   });
 });
 

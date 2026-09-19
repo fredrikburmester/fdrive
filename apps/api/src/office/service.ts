@@ -13,6 +13,7 @@ import {
   parentPath,
   toFsPath,
 } from "@fdrive/core";
+import { recordOfficeOpen } from "../activity/office.js";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
 import { selectDiscoveryAction } from "./protocol/discovery.ts";
@@ -241,7 +242,9 @@ export function createOfficeService(deps: OfficeDeps) {
         file,
         request.mode === "view" ? "view" : "edit",
       );
-      await deps.metadata.touchRecent(actor.identity.id, request.path);
+      await recordOfficeOpen(deps, actor, request.path, file.id, () =>
+        deps.metadata.touchRecent(actor.identity.id, request.path),
+      );
       return {
         fileId: file.id,
         identityId: actor.identity.id,
