@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { MoveManyResponse } from "@fdrive/contracts";
-import { StorageError, type StorageProvider } from "@fdrive/core";
+import { StorageError, type StorageProvider, withMoveToTrash } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import {
@@ -13,6 +13,8 @@ import {
 import { getRequestListener } from "@hono/node-server";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
+import { activityFixture } from "../../test/activity-fixture.js";
+import { captureRecycleReceipt } from "../activity/trash.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
@@ -100,6 +102,7 @@ interface Harness {
   readonly app: ReturnType<typeof createApp>;
   readonly bus: EventBus;
   readonly events: BusEvent[];
+  readonly activity: ReturnType<typeof activityFixture>;
 }
 
 async function buildHarness(
@@ -128,6 +131,7 @@ async function buildHarness(
 
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
+  const activity = activityFixture(clock);
 
   const app = createApp({
     config,
@@ -138,6 +142,7 @@ async function buildHarness(
     principalResolver: async () => principal,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
+        activity: activity.service,
         bus,
         clock,
         jobRunner: buildJobRunner(),
@@ -148,7 +153,7 @@ async function buildHarness(
       }),
   });
 
-  const harness: Harness = { app, bus, events };
+  const harness: Harness = { app, bus, events, activity };
   return harness;
 }
 
@@ -211,6 +216,7 @@ async function buildHarnessWithStorage(
 
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
+  const activity = activityFixture(clock);
 
   const app = createApp({
     config,
@@ -221,6 +227,7 @@ async function buildHarnessWithStorage(
     principalResolver: async () => principal,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
+        activity: activity.service,
         bus,
         clock,
         jobRunner: buildJobRunner(),
@@ -235,7 +242,7 @@ async function buildHarnessWithStorage(
       }),
   });
 
-  return { app, bus, events };
+  return { app, bus, events, activity };
 }
 
 function requestedWith(init: RequestInit = {}): RequestInit {
@@ -1888,5 +1895,183 @@ describe("trashMany", () => {
         { path: "/dir/b.txt", kind: "file" },
       ]),
     ).rejects.toThrow("socket hang up");
+  });
+});
+
+describe("personal activity for fs commands", () => {
+  function jsonPost(body: unknown): RequestInit {
+    return requestedWith({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("records each core command with its requested, before and after facts", async () => {
+    const { app, activity } = await buildHarness();
+
+    const upload = await app.request(
+      "/api/v1/fs/upload?path=/note.txt&intent=save",
+      requestedWith({ method: "PUT", body: "hi", headers: { "content-length": "2" } }),
+    );
+    expect(upload.status).toBe(201);
+    expect(upload.headers.get("X-Activity-Status")).toBe("recorded");
+    expect(upload.headers.get("X-Activity-Event-Id")).not.toBeNull();
+
+    await app.request("/api/v1/fs/mkdir", jsonPost({ path: "/archive" }));
+    await app.request("/api/v1/fs/rename", jsonPost({ path: "/note.txt", newName: "memo.txt" }));
+    await app.request("/api/v1/fs/copy", jsonPost({ path: "/memo.txt", target: "/copy.txt" }));
+    await app.request("/api/v1/fs/move", jsonPost({ path: "/copy.txt", target: "/archive/c.txt" }));
+
+    expect(activity.operations.map((operation) => operation.action)).toEqual([
+      "file.save",
+      "folder.create",
+      "file.rename",
+      "file.copy",
+      "file.move",
+    ]);
+    expect(activity.outcomes.every((outcome) => outcome.outcome === "success")).toBe(true);
+    expect(activity.operations[2]).toMatchObject({
+      requested: { path: "/note.txt", targetPath: "/memo.txt" },
+      before: { path: "/note.txt", kind: "file" },
+    });
+    expect(activity.outcomes[4]).toMatchObject({ after: { path: "/archive/c.txt", kind: "file" } });
+  });
+
+  it("binds the trash leaf fdrive moved the item to", async () => {
+    const base = createMemoryStorage();
+    await base.upload("/hello.txt", new TextEncoder().encode("hello"));
+    const storage = withRecycleFolderTrash(
+      withMoveToTrash({
+        storage: base,
+        trashPath: "/.trash",
+        clock: () => new Date(CLOCK_ISO),
+        onRecycled: captureRecycleReceipt,
+      }),
+      "/.trash",
+      "move",
+    );
+    const { app, activity } = await buildHarnessWithStorage(storage, { trashPath: "/.trash" });
+
+    const res = await app.request(
+      "/api/v1/fs/delete",
+      jsonPost({ items: [{ path: "/hello.txt", kind: "file" }] }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(activity.operations.at(-1)?.action).toBe("file.trash");
+    expect(activity.outcomes.at(-1)?.after).toMatchObject({
+      path: "/hello.txt",
+      trashStrategy: "fdrive_move",
+      trashLeaf: expect.stringContaining("/.trash/"),
+    });
+  });
+
+  it("records a real delete when the storage has no trash and inside the trash folder", async () => {
+    const base = createMemoryStorage();
+    await base.upload("/gone.txt", new TextEncoder().encode("x"));
+    const plain = await buildHarnessWithStorage(base);
+    await plain.app.request(
+      "/api/v1/fs/delete",
+      jsonPost({ items: [{ path: "/gone.txt", kind: "file" }] }),
+    );
+    expect(plain.activity.operations.at(-1)?.action).toBe("file.delete");
+
+    const withTrash = createMemoryStorage();
+    await withTrash.mkdir("/.trash");
+    await withTrash.upload("/.trash/old.txt", new TextEncoder().encode("x"));
+    const purge = await buildHarnessWithStorage(withRecycleFolderTrash(withTrash, "/.trash"), {
+      trashPath: "/.trash",
+    });
+    await purge.app.request(
+      "/api/v1/fs/delete",
+      jsonPost({ items: [{ path: "/.trash/old.txt", kind: "file" }] }),
+    );
+    expect(purge.activity.operations.at(-1)?.action).toBe("file.delete");
+  });
+
+  it("records the failed outcome of a move that never happened", async () => {
+    const { app, activity, events } = await buildHarness();
+
+    const res = await app.request(
+      "/api/v1/fs/move",
+      jsonPost({ path: "/missing.txt", target: "/elsewhere.txt" }),
+    );
+
+    expect(res.status).toBe(404);
+    expect(activity.outcomes.at(-1)).toMatchObject({ outcome: "failed", errorCode: "not_found" });
+    expect(events).toEqual([]);
+  });
+
+  it("rejects malformed activity correlation headers before touching storage", async () => {
+    const { app, activity } = await buildHarness();
+
+    const badOperation = await app.request("/api/v1/fs/mkdir", {
+      ...jsonPost({ path: "/x" }),
+      headers: {
+        "content-type": "application/json",
+        "x-requested-with": "fdrive",
+        "x-fdrive-operation-id": "not valid",
+      },
+    });
+    const badBatch = await app.request("/api/v1/fs/mkdir", {
+      ...jsonPost({ path: "/x" }),
+      headers: {
+        "content-type": "application/json",
+        "x-requested-with": "fdrive",
+        "x-fdrive-batch-id": "nope",
+      },
+    });
+
+    expect([badOperation.status, badBatch.status]).toEqual([400, 400]);
+    expect(activity.operations).toEqual([]);
+  });
+
+  it("correlates a web batch and reports history that is not written yet", async () => {
+    const { app, activity } = await buildHarness();
+    const batchId = "00000000-0000-4000-8000-0000000000ba";
+    vi.spyOn(activity.service.repo, "finish").mockResolvedValueOnce(undefined as never);
+
+    const res = await app.request("/api/v1/fs/mkdir", {
+      ...jsonPost({ path: "/batched" }),
+      headers: {
+        "content-type": "application/json",
+        "x-requested-with": "fdrive",
+        "x-fdrive-batch-id": batchId,
+        "sec-fetch-site": "same-origin",
+      },
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.headers.get("X-Activity-Status")).toBe("pending");
+    expect(res.headers.get("X-Activity-Event-Id")).toBeNull();
+    expect(activity.operations.at(-1)).toMatchObject({ source: "web", batchId });
+  });
+
+  it("acknowledges a committed upload whose stat fails, and refuses the replay", async () => {
+    const base = createMemoryStorage();
+    const upload = vi.spyOn(base, "upload");
+    const h = await buildHarnessWithStorage({
+      ...base,
+      stat: async () => {
+        throw new StorageError("upstream_unavailable", "offline");
+      },
+      statFile: async () => {
+        throw new StorageError("upstream_unavailable", "offline");
+      },
+    });
+    const options = requestedWith({
+      method: "PUT",
+      body: "bytes",
+      headers: { "x-fdrive-operation-id": "upload-once", "content-length": "5" },
+    });
+
+    const response = await h.app.request("/api/v1/fs/upload?path=/a.txt", options);
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ path: "/a.txt", size: 5, metadataPending: true });
+    expect(h.activity.outcomes.at(-1)).toMatchObject({ action: "file.upload", outcome: "success" });
+    expect((await h.app.request("/api/v1/fs/upload?path=/a.txt", options)).status).toBe(409);
+    expect(upload).toHaveBeenCalledOnce();
   });
 });

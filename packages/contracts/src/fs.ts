@@ -35,6 +35,8 @@ export const FsEntry = z.object({
   ext: z.string(),
   mime: z.string().nullable(),
   meta: FsEntryMeta.optional(),
+  /** A write committed but its follow-up stat failed. Size/time are placeholders until refresh. */
+  metadataPending: z.boolean().optional(),
 });
 
 export type FsEntry = z.infer<typeof FsEntry>;
@@ -77,6 +79,7 @@ export const DownloadQuery = z.object({
 export type DownloadQuery = z.infer<typeof DownloadQuery>;
 
 export const UploadQuery = z.object({
+  intent: z.enum(["upload", "create", "save"]).optional(),
   path: z.string(),
   mkdirParents: z.enum(["true", "false"]).optional(),
 });

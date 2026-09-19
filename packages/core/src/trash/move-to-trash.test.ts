@@ -138,6 +138,27 @@ describe("withMoveToTrash", () => {
     expect(storage.dump()).toEqual({ "/docs/.trash/old.txt/123": "keep" });
   });
 
+  it("reports the leaf it chose, and only after the move succeeded", async () => {
+    const storage = createMemoryStorage({ "/docs/a.txt": "hello", "/docs/2026/b.txt": "there" });
+    const recycled: [string, string][] = [];
+    const wrapped = withMoveToTrash({
+      storage,
+      trashPath: "/.trash",
+      clock: () => AT,
+      onRecycled: (path, leaf) => recycled.push([path, leaf]),
+    });
+
+    await wrapped.deleteFile("/docs/a.txt");
+    await wrapped.deleteDir("/docs/2026");
+    await expect(wrapped.deleteFile("/docs/missing.txt")).rejects.toThrow();
+    await wrapped.deleteFile(FILE_LEAF);
+
+    expect(recycled).toEqual([
+      ["/docs/a.txt", FILE_LEAF],
+      ["/docs/2026", DIR_LEAF],
+    ]);
+  });
+
   it("deletes for real inside the recycle folder so purge and empty work", async () => {
     const storage = createMemoryStorage({ [`/.trash/docs/a.txt/${LEAF}`]: "hello" });
     const wrapped = withMoveToTrash({ storage, trashPath: "/.trash", clock: () => AT });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CopyRequest,
   DeleteRequest,
@@ -38,6 +39,14 @@ import {
 } from "@fdrive/core";
 import type { Context } from "hono";
 import type { z } from "zod";
+import {
+  type ActivityCallContext,
+  activityRequestContext,
+  recordActivity,
+  recordFsAction,
+} from "../activity/fs-context.js";
+import { activityStat, type PersonalActivityService } from "../activity/service.js";
+import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
@@ -58,6 +67,8 @@ function routePath(fullPath: string): string {
 }
 
 export interface FsRoutesDeps {
+  /** Absent in fixtures that do not exercise personal history; every route works without it. */
+  readonly activity?: PersonalActivityService;
   readonly bus: EventBus;
   readonly clock: () => Date;
   readonly jobRunner: JobRunner;
@@ -400,11 +411,15 @@ async function handleDownload(c: FsContext): Promise<Response> {
  * no empty folder behind.
  */
 export async function moveMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata">,
+  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">,
   principal: Principal,
   body: MoveManyRequest,
+  context: ActivityCallContext = { source: "api" },
 ): Promise<MoveManyResult[]> {
   const results: MoveManyResult[] = [];
+  const batchId = context.batchId ?? randomUUID();
+  const operationBase = context.producerOperationId ?? randomUUID();
+  const provenance = context.conversationId ? { conversationId: context.conversationId } : {};
   const moved: { path: string; target: string }[] = [];
   const created: string[] = [];
   const readyParents = new Set<string>();
@@ -437,9 +452,29 @@ export async function moveMany(
         const target = normalizeOrThrow(item.target);
         // Check the source first, so a move that cannot happen leaves no new empty folder behind.
         const source = await runStorageCall(() => principal.storage.stat(path));
-        if (body.createParents === true && path !== target && !isUnderPath(path, target))
-          await runStorageCall(() => ensureParent(target));
-        await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+        const kind = source.kind === "dir" ? "dir" : "file";
+        await recordActivity(
+          deps.activity,
+          principal,
+          {
+            ...context,
+            producerOperationId: `${operationBase}:${results.length}`,
+            batchId,
+            action: "file.move",
+            requested: { path, targetPath: target, ...provenance },
+            before: {
+              path,
+              kind,
+              ...(source.size === undefined ? {} : { size: source.size }),
+            },
+          },
+          async () => {
+            if (body.createParents === true && path !== target && !isUnderPath(path, target))
+              await runStorageCall(() => ensureParent(target));
+            await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+          },
+          () => ({ path: target, kind }),
+        );
         moved.push({ path, target });
         try {
           await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
@@ -477,6 +512,54 @@ export async function moveMany(
   return results;
 }
 
+/**
+ * Deletes one item and records it as a trash or a real delete, whichever the
+ * login's storage actually performs. Deletes of the same path are serialized so
+ * two callers cannot claim the same new trash leaf.
+ */
+async function removeOne(
+  deps: Pick<FsRoutesDeps, "activity" | "trashPathForStorage">,
+  principal: Principal,
+  item: { path: string; kind: "file" | "dir" },
+  context: ActivityCallContext,
+  operation: { operationId: string; batchId: string },
+): Promise<void> {
+  const trashRoot = deps.trashPathForStorage?.(principal.storage) ?? null;
+  const insideTrash =
+    trashRoot !== null && (item.path === trashRoot || isUnderPath(trashRoot, item.path));
+  const trashing = principal.storage.trash !== undefined && !insideTrash;
+  const remove = () =>
+    recordActivity(
+      deps.activity,
+      principal,
+      {
+        ...context,
+        producerOperationId: operation.operationId,
+        batchId: operation.batchId,
+        action: trashing ? "file.trash" : "file.delete",
+        requested: {
+          path: item.path,
+          kind: item.kind,
+          ...(context.conversationId ? { conversationId: context.conversationId } : {}),
+        },
+        before: { path: item.path, kind: item.kind },
+      },
+      () =>
+        deleteWithActivityReceipt(
+          principal.storage,
+          item.path,
+          item.kind,
+          deps.activity !== undefined && trashing ? trashRoot : null,
+        ),
+      (facts) => facts,
+    );
+  if (!deps.activity) {
+    await remove();
+    return;
+  }
+  await deps.activity.repo.withPathLock(principal.identityId, item.path, remove);
+}
+
 export interface TrashManyResult {
   readonly path: string;
   readonly ok: boolean;
@@ -489,20 +572,24 @@ export interface TrashManyResult {
  * dropped; otherwise every path-keyed metadata row goes with the item.
  */
 export async function trashMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata">,
+  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage">,
   principal: Principal,
   items: readonly { path: string; kind: "file" | "dir" }[],
+  context: ActivityCallContext = { source: "api" },
 ): Promise<TrashManyResult[]> {
   const results: TrashManyResult[] = [];
   const removed: string[] = [];
+  const batchId = context.batchId ?? randomUUID();
+  const operationBase = context.producerOperationId ?? randomUUID();
   try {
     for (const item of items) {
       try {
         const path = normalizeOrThrow(item.path);
         await runStorageCall(() =>
-          item.kind === "dir"
-            ? principal.storage.deleteDir(path)
-            : principal.storage.deleteFile(path),
+          removeOne(deps, principal, { path, kind: item.kind }, context, {
+            operationId: `${operationBase}:${results.length}`,
+            batchId,
+          }),
         );
         removed.push(path);
         try {
@@ -623,13 +710,46 @@ export function registerFsRoutes(
       }
     }
 
-    await runStorageCall(() =>
-      principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
+    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
+    await recordFsAction(
+      deps.activity,
+      c,
+      {
+        action: `file.${query.intent ?? "upload"}`,
+        requested: { path, kind: "file" },
+        ...(before ? { before } : {}),
+      },
+      () =>
+        runStorageCall(() =>
+          principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
+        ),
+      async () =>
+        (await activityStat(principal.storage, path)) ?? {
+          path,
+          kind: "file",
+          ...(uploadOpts.contentLength === undefined ? {} : { size: uploadOpts.contentLength }),
+          ...(uploadOpts.modifiedAt ? { modifiedAt: uploadOpts.modifiedAt.toISOString() } : {}),
+        },
     );
 
-    const entry = await statEntry(principal.storage, path);
     publishFsEvent(deps, principal, "create", [path]);
-    const body: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    // The provider accepted the bytes even when the follow-up stat fails, and
+    // repeating the upload would overwrite a file that is already committed.
+    let body: EntryResponse;
+    try {
+      body = EntryResponse.parse(serializeEntry(await statEntry(principal.storage, path)));
+    } catch {
+      body = EntryResponse.parse({
+        name: baseName(path),
+        path,
+        kind: "file",
+        size: uploadOpts.contentLength ?? 0,
+        modifiedAt: (uploadOpts.modifiedAt ?? new Date(0)).toISOString(),
+        ext: extensionOf(baseName(path)),
+        mime: null,
+        metadataPending: true,
+      });
+    }
     return c.json(body, 201);
   });
 
@@ -637,7 +757,12 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(MkdirRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
-    await runStorageCall(() => principal.storage.mkdir(path));
+    await recordFsAction(
+      deps.activity,
+      c,
+      { action: "folder.create", requested: { path, kind: "dir" } },
+      () => runStorageCall(() => principal.storage.mkdir(path)),
+    );
     const entry = await statEntry(principal.storage, path);
     publishFsEvent(deps, principal, "mkdir", [path]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
@@ -649,7 +774,18 @@ export function registerFsRoutes(
     const body = await parseBody(MoveRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
+    await recordFsAction(
+      deps.activity,
+      c,
+      {
+        action: "file.move",
+        requested: { path, targetPath: target },
+        ...(before ? { before } : {}),
+      },
+      () => runStorageCall(() => relocatePath(principal.storage, "move", path, target)),
+      () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
+    );
     const entry = await statEntry(principal.storage, target);
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
@@ -662,7 +798,11 @@ export function registerFsRoutes(
   authed.post(routePath(ROUTES.fs.moveMany), async (c) => {
     const principal = c.get("principal");
     const body = await parseBody(MoveManyRequest, c, jsonMaxBytes);
-    return c.json(MoveManyResponse.parse({ results: await moveMany(deps, principal, body) }));
+    return c.json(
+      MoveManyResponse.parse({
+        results: await moveMany(deps, principal, body, activityRequestContext(c)),
+      }),
+    );
   });
 
   authed.post(routePath(ROUTES.fs.copy), async (c) => {
@@ -670,7 +810,22 @@ export function registerFsRoutes(
     const body = await parseBody(CopyRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    await runStorageCall(() => relocatePath(principal.storage, "copy", path, target));
+    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
+    await recordFsAction(
+      deps.activity,
+      c,
+      {
+        action: "file.copy",
+        requested: { path, targetPath: target },
+        ...(before ? { before } : {}),
+      },
+      () => runStorageCall(() => relocatePath(principal.storage, "copy", path, target)),
+      () => ({
+        path: target,
+        ...(before?.kind ? { kind: before.kind } : {}),
+        ...(before?.size === undefined ? {} : { size: before.size }),
+      }),
+    );
     const entry = await statEntry(principal.storage, target);
     deps.metadata?.onCopied(principal.identityId, path, target);
     publishFsEvent(deps, principal, "copy", [path], [target]);
@@ -683,7 +838,18 @@ export function registerFsRoutes(
     const body = await parseBody(RenameRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = changeBaseName(path, body.newName);
-    await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
+    await recordFsAction(
+      deps.activity,
+      c,
+      {
+        action: "file.rename",
+        requested: { path, targetPath: target },
+        ...(before ? { before } : {}),
+      },
+      () => runStorageCall(() => relocatePath(principal.storage, "move", path, target)),
+      () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
+    );
     const entry = await statEntry(principal.storage, target);
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
@@ -697,15 +863,20 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(DeleteRequest, c, jsonMaxBytes);
     const removed: string[] = [];
+    const context = activityRequestContext(c);
+    const batchId = context.batchId ?? randomUUID();
+    const operationBase = context.producerOperationId ?? randomUUID();
     try {
       for (const item of body.items) {
         const path = normalizeOrThrow(item.path);
         try {
-          if (item.kind === "dir") {
-            await principal.storage.deleteDir(path);
-          } else {
-            await principal.storage.deleteFile(path);
-          }
+          await removeOne(
+            deps,
+            principal,
+            { path, kind: item.kind === "dir" ? "dir" : "file" },
+            context,
+            { operationId: `${operationBase}:${removed.length}`, batchId },
+          );
         } catch (error) {
           if (isStorageError(error)) {
             const mapped = toApiHttpError(error);

@@ -16,6 +16,7 @@ import type { Logger } from "pino";
 import * as tar from "tar-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZipFile } from "yazl";
+import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
@@ -133,6 +134,7 @@ interface Harness {
   readonly bus: EventBus;
   readonly fsEvents: FsEvent[];
   readonly tmpDir: string;
+  readonly activity: ReturnType<typeof activityFixture>;
 }
 
 const tempDirs: string[] = [];
@@ -166,6 +168,7 @@ async function buildHarness(
   });
 
   const clock = () => new Date();
+  const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
   const tmpDir = join(tmpdir(), `fdrive-archive-routes-test-${Date.now()}-${Math.random()}`);
   await mkdir(tmpDir, { recursive: true });
@@ -182,6 +185,7 @@ async function buildHarness(
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
+        activity: activity.service,
         bus,
         clock,
         jobRunner,
@@ -193,7 +197,7 @@ async function buildHarness(
     },
   });
 
-  const harness: Harness = { app, bus, fsEvents, tmpDir };
+  const harness: Harness = { app, bus, fsEvents, tmpDir, activity };
   return harness;
 }
 
@@ -227,6 +231,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
   });
 
   const clock = () => new Date();
+  const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
   const tmpDir = join(tmpdir(), `fdrive-archive-routes-peek-${Date.now()}-${Math.random()}`);
   await mkdir(tmpDir, { recursive: true });
@@ -234,6 +239,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
 
   const config = loadConfig(REQUIRED_ENV);
   const fsRoutesDeps = {
+    activity: activity.service,
     bus,
     clock,
     jobRunner,
@@ -252,7 +258,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
-  return { app, bus, fsEvents, tmpDir };
+  return { app, bus, fsEvents, tmpDir, activity };
 }
 
 /** Builds a harness around an arbitrary `StorageProvider`, for exercising error-mapping branches. */
@@ -274,6 +280,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
   });
 
   const clock = () => new Date();
+  const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
   const tmpDir = join(tmpdir(), `fdrive-archive-routes-stub-${Date.now()}-${Math.random()}`);
   await mkdir(tmpDir, { recursive: true });
@@ -289,6 +296,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     principalResolver: async () => principal,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
+        activity: activity.service,
         bus,
         clock,
         jobRunner,
@@ -298,7 +306,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
       }),
   });
 
-  return { app, bus, fsEvents, tmpDir };
+  return { app, bus, fsEvents, tmpDir, activity };
 }
 
 afterEach(async () => {
@@ -406,6 +414,22 @@ describe("POST /fs/duplicate", () => {
         targetPaths: ["/hello copy.txt"],
       }),
     ]);
+  });
+
+  it("records the duplicate as a copy of the chosen source, with its own target", async () => {
+    const { app, activity } = await buildHarness();
+
+    await app.request("/api/v1/fs/duplicate", jsonPost({ path: "/hello.txt" }));
+
+    expect(activity.operations.at(-1)).toMatchObject({
+      action: "file.copy",
+      requested: { path: "/hello.txt", targetPath: "/hello copy.txt", variant: "duplicate" },
+      before: { path: "/hello.txt", kind: "file" },
+    });
+    expect(activity.outcomes.at(-1)).toMatchObject({
+      outcome: "success",
+      after: { path: "/hello copy.txt" },
+    });
   });
 
   it("numbers the second duplicate", async () => {

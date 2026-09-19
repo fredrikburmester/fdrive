@@ -6,6 +6,7 @@ import {
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
+import { captureRecycleReceipt } from "../activity/trash.js";
 import { withoutBackupPaths } from "../backups/reserved-storage.js";
 import type { ProviderService } from "../providers/service.js";
 import type { TokenSource } from "./token-source.js";
@@ -133,7 +134,12 @@ export function createIdentityStorageFactory(
     if (settings?.enabled === true && module.trash !== "none") {
       const base =
         module.trash === "move"
-          ? withMoveToTrash({ storage, trashPath: settings.path, clock: deps.clock })
+          ? withMoveToTrash({
+              storage,
+              trashPath: settings.path,
+              clock: deps.clock,
+              onRecycled: captureRecycleReceipt,
+            })
           : storage;
       result = withRecycleFolderTrash(base, settings.path, module.trash);
     }

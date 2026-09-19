@@ -44,6 +44,8 @@ export type PersonalActivityAction = z.infer<typeof PersonalActivityAction>;
 export const PersonalActivitySource = z.enum([
   "web",
   "api",
+  // The account acting through an approved AI proposal, not an autonomous actor.
+  "ai",
   "office",
   "mcp",
   "native",
@@ -110,6 +112,8 @@ export const ActivityFacts = z
     expiresAt: instant.nullable().optional(),
     permissions: z.array(z.string().max(40)).max(16).optional(),
     observationId: CanonicalUuid.optional(),
+    /** The chat that proposed this command, when the person applied an AI action. */
+    conversationId: CanonicalUuid.optional(),
     reason: z
       .enum([
         "missing",
