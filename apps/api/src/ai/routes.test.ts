@@ -31,6 +31,7 @@ const RUN: OrganizeRun = {
 const CONFIGURATION: AiSettings = {
   revision: 1,
   enabled: true,
+  chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
   baseUrl: null,
@@ -42,6 +43,7 @@ const SAVED: ResolvedAiConfig = {
   model: "claude-opus-5",
   baseUrl: null,
   apiKey: "sk-ant-1",
+  chat: true,
 };
 
 function buildApp(
@@ -60,7 +62,7 @@ function buildApp(
     isAdmin: options.isAdmin ?? false,
   };
   const organize = {
-    status: vi.fn(async () => ({ available: true, provider: "anthropic" as const })),
+    status: vi.fn(async () => ({ available: true, provider: "anthropic" as const, chat: true })),
     start: vi.fn(async () => RUN),
     get: vi.fn(() => RUN),
     cancel: vi.fn(() => ({ ...RUN, state: "cancelled" as const })),
@@ -101,7 +103,7 @@ describe("AI routes", () => {
       const { app } = buildApp({ isAdmin: false });
       const response = await app.request(ROUTES.ai.status);
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ available: true, provider: "anthropic" });
+      expect(await response.json()).toEqual({ available: true, provider: "anthropic", chat: true });
     });
 
     it("starts a run for the caller with the parsed request", async () => {
@@ -189,6 +191,7 @@ describe("AI routes", () => {
       const input = {
         revision: 1,
         enabled: true,
+        chat: true,
         provider: "anthropic",
         model: "claude-sonnet-5",
         baseUrl: null,

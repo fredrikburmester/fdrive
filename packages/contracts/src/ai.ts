@@ -25,6 +25,8 @@ const aiModel = z.string().trim().min(1).max(200);
 export const AiSettings = z.object({
   revision: z.number().int().nonnegative(),
   enabled: z.boolean(),
+  /** Whether the chat panel is offered while AI is on; Organize is always offered. */
+  chat: z.boolean(),
   provider: AiProvider,
   model: aiModel,
   /** Required for `openai_compatible`, e.g. `http://ollama:11434/v1`; always `null` for `anthropic`. */
@@ -38,6 +40,7 @@ export const AiSettingsUpdateRequest = z
   .strictObject({
     revision: z.number().int().nonnegative(),
     enabled: z.boolean(),
+    chat: z.boolean(),
     provider: AiProvider,
     model: aiModel,
     baseUrl: HttpUrl.nullable(),
@@ -78,6 +81,8 @@ export type AiConnectionTestResponse = z.infer<typeof AiConnectionTestResponse>;
 export const AiStatusResponse = z.object({
   available: z.boolean(),
   provider: AiProvider.nullable(),
+  /** Whether the chat panel is offered: AI is on and the administrator has not turned chat off. */
+  chat: z.boolean(),
 });
 
 export type AiStatusResponse = z.infer<typeof AiStatusResponse>;

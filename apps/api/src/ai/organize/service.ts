@@ -76,7 +76,11 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
   return {
     async status() {
       const config = await deps.settings.resolved();
-      return { available: config !== null, provider: config?.provider ?? null };
+      return {
+        available: config !== null,
+        provider: config?.provider ?? null,
+        chat: config?.chat ?? false,
+      };
     },
 
     async start(principal, request) {

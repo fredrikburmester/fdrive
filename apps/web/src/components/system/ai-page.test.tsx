@@ -35,6 +35,7 @@ const { AiSystemPage } = await import("./ai-page");
 const claude: AiSettings = {
   revision: 2,
   enabled: true,
+  chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
   baseUrl: null,
@@ -68,8 +69,9 @@ afterEach(() => {
 
 it("summarizes the saved provider and what leaves the server", () => {
   render(<AiSystemPage />);
-  expect(screen.getByText("On")).toBeTruthy();
-  expect(screen.getByText("Organize is available to everyone signed in.")).toBeTruthy();
+  // The status badge and the Chat stat both read "On".
+  expect(screen.getAllByText("On")).toHaveLength(2);
+  expect(screen.getByText("Organize and Chat are available to everyone signed in.")).toBeTruthy();
   expect(screen.getByText("Anthropic (Claude)")).toBeTruthy();
   expect(screen.getByText("Saved")).toBeTruthy();
   expect(screen.getByText(/fdrive sends Claude \(Anthropic\) only what it needs/)).toBeTruthy();
@@ -97,6 +99,23 @@ it("asks for a key before Anthropic can be checked or used", () => {
   expect(screen.getByRole("button", { name: "Check connection" })).toHaveProperty("disabled", true);
 });
 
+it("turns chat off on its own, and says so on the page", () => {
+  withSettings({ ...claude, chat: false });
+  render(<AiSystemPage />);
+  expect(
+    screen.getByText("Organize is available to everyone signed in. Chat is turned off."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  const toggle = screen.getByRole("switch", { name: "Chat" });
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(mocks.mutate).toHaveBeenCalledWith(
+    expect.objectContaining({ enabled: true, chat: true }),
+    expect.anything(),
+  );
+});
+
 it("saves a new model and key from the settings sheet", () => {
   render(<AiSystemPage />);
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -108,6 +127,7 @@ it("saves a new model and key from the settings sheet", () => {
     {
       revision: 2,
       enabled: true,
+      chat: true,
       provider: "anthropic",
       model: "claude-sonnet-5",
       baseUrl: null,

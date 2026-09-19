@@ -13,7 +13,8 @@ An administrator opens **System > AI > Settings**:
 | OpenAI-compatible server | Base URL, model | Ollama, LM Studio, vLLM or OpenRouter. Choose a model that supports tool calling. The key is optional. |
 
 **Check connection** verifies the key, address and model without generating text. Once AI is on,
-**Organize** appears in the selection bar and the row context menu for everyone signed in.
+**Organize** appears in the selection bar and the row context menu for everyone signed in. A
+second switch, **Chat**, turns the chat panel off while keeping Organize.
 
 The key is sealed with `FDRIVE_MASTER_KEY` and bound to the provider and base URL it was
 entered for. Changing either removes the saved key unless a new one is entered, so a key is
@@ -22,7 +23,7 @@ shows as missing.
 
 ## Chat
 
-Once AI is on, a **Chat** button in the page header (or Cmd+Shift+K, Ctrl+Shift+K elsewhere)
+Once AI is on and Chat is not turned off, a **Chat** button in the page header (or Cmd+Shift+K, Ctrl+Shift+K elsewhere)
 opens a panel beside the page that stays open while you move between folders and pages. Drop
 files or folders onto it from any listing, or use **Add to chat** from a selection or a row's
 menu, then ask: what the files are about, whether one is a duplicate, whether they can be

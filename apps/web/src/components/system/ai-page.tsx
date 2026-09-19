@@ -73,7 +73,7 @@ export function AiSystemPage() {
   return (
     <SystemPage
       title="AI"
-      description="Suggests where files belong, using Claude or a model you host."
+      description="Organizes files and chats about them, using Claude or a model you host."
       lastUpdated={query.dataUpdatedAt > 0 ? new Date(query.dataUpdatedAt) : null}
       actions={
         <SystemSettingsButton
@@ -92,10 +92,12 @@ export function AiSystemPage() {
             title="Status"
             description={
               status.tone === "on"
-                ? "Organize is available to everyone signed in."
+                ? saved.chat
+                  ? "Organize and Chat are available to everyone signed in."
+                  : "Organize is available to everyone signed in. Chat is turned off."
                 : status.tone === "off"
-                  ? "Organize is hidden. Turn AI on in Settings."
-                  : "Organize stays hidden until an API key is saved."
+                  ? "Organize and Chat are hidden. Turn AI on in Settings."
+                  : "Organize and Chat stay hidden until an API key is saved."
             }
             actions={
               <Button
@@ -131,6 +133,7 @@ export function AiSystemPage() {
               { label: "Provider", value: AI_PROVIDER_LABELS[saved.provider] },
               { label: "Model", value: saved.model },
               { label: "API key", value: saved.hasApiKey ? "Saved" : "None" },
+              { label: "Chat", value: saved.chat ? "On" : "Off" },
             ]}
           />
 
@@ -160,7 +163,7 @@ export function AiSystemPage() {
 
       <SettingsSheet
         title="AI settings"
-        description="The provider, model and key Organize uses."
+        description="The provider, model and key Organize and Chat use."
         open={settingsOpen}
         onOpenChange={(open) => {
           setSettingsOpen(open);
@@ -221,7 +224,21 @@ function AiSettingsFields({
           onCheckedChange={(enabled) => onChange({ enabled })}
         />
       </Field>
-      <FieldDescription>Shows Organize to everyone signed in to fdrive.</FieldDescription>
+      <FieldDescription>
+        Shows Organize, and Chat when it is on, to everyone signed in.
+      </FieldDescription>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="ai-chat">Chat</FieldLabel>
+        <Switch
+          id="ai-chat"
+          checked={values.chat}
+          disabled={disabled || !values.enabled}
+          onCheckedChange={(chat) => onChange({ chat })}
+        />
+      </Field>
+      <FieldDescription>
+        Lets people chat about their files in a panel and approve the changes it proposes.
+      </FieldDescription>
       <Field>
         <FieldLabel htmlFor="ai-provider">Provider</FieldLabel>
         <Select

@@ -18,6 +18,7 @@ const secrets: SecretBox = {
 interface StoredRow {
   revision: number;
   enabled: boolean;
+  chat?: boolean;
   provider: "anthropic" | "openai_compatible";
   model: string;
   baseUrl: string | null;
@@ -56,6 +57,7 @@ function anthropicUpdate(
   return {
     revision: 0,
     enabled: false,
+    chat: true,
     provider: "anthropic",
     model: "claude-opus-5",
     baseUrl: null,
@@ -67,6 +69,7 @@ function ollamaUpdate(overrides: Partial<AiSettingsUpdateRequest> = {}): AiSetti
   return {
     revision: 0,
     enabled: true,
+    chat: true,
     provider: "openai_compatible",
     model: "llama3",
     baseUrl: OLLAMA,
@@ -89,6 +92,7 @@ describe("AI settings service", () => {
     expect(await service.configuration()).toEqual({
       revision: 0,
       enabled: false,
+      chat: true,
       provider: "anthropic",
       model: DEFAULT_AI_MODEL.anthropic,
       baseUrl: null,
@@ -104,6 +108,7 @@ describe("AI settings service", () => {
     expect(view).toEqual({
       revision: 1,
       enabled: true,
+      chat: true,
       provider: "anthropic",
       model: "claude-opus-5",
       baseUrl: null,
@@ -118,6 +123,7 @@ describe("AI settings service", () => {
       model: "claude-opus-5",
       baseUrl: null,
       apiKey: "sk-ant-1",
+      chat: true,
     });
   });
 
@@ -183,6 +189,7 @@ describe("AI settings service", () => {
         model: "llama3",
         baseUrl: "http://elsewhere:8000/v1",
         apiKey: null,
+        chat: true,
       });
     });
 
@@ -228,6 +235,7 @@ describe("AI settings service", () => {
       return {
         revision: 3,
         enabled: true,
+        chat: true,
         provider: "anthropic",
         model: "claude-opus-5",
         baseUrl: null,
@@ -244,6 +252,7 @@ describe("AI settings service", () => {
         model: "claude-opus-5",
         baseUrl: null,
         apiKey: "sk-ant-1",
+        chat: true,
       });
     });
 
@@ -279,6 +288,7 @@ describe("AI settings service", () => {
         model: "llama3",
         baseUrl: "http://attacker.example/v1",
         apiKey: null,
+        chat: true,
       });
     });
 
@@ -303,6 +313,7 @@ describe("AI settings service", () => {
         model: "llama3",
         baseUrl: OLLAMA,
         apiKey: null,
+        chat: true,
       });
     });
 
@@ -326,19 +337,37 @@ describe("AI settings service", () => {
         "general",
         "info",
         "AI settings updated",
-        { enabled: true, provider: "openai_compatible", model: "llama3", apiKeyChanged: true },
+        {
+          enabled: true,
+          provider: "openai_compatible",
+          model: "llama3",
+          chat: true,
+          apiKeyChanged: true,
+        },
       ],
       [
         "general",
         "info",
         "AI settings updated",
-        { enabled: false, provider: "openai_compatible", model: "llama3", apiKeyChanged: false },
+        {
+          enabled: false,
+          provider: "openai_compatible",
+          model: "llama3",
+          chat: true,
+          apiKeyChanged: false,
+        },
       ],
       [
         "general",
         "info",
         "AI settings updated",
-        { enabled: true, provider: "openai_compatible", model: "llama3", apiKeyChanged: true },
+        {
+          enabled: true,
+          provider: "openai_compatible",
+          model: "llama3",
+          chat: true,
+          apiKeyChanged: true,
+        },
       ],
     ]);
     expect(JSON.stringify(eventLog.record.mock.calls)).not.toContain("sk-local");

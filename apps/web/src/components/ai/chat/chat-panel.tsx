@@ -46,7 +46,7 @@ import { ChatTranscript } from "./chat-transcript";
  */
 export function ChatPanel() {
   const { data: aiStatus } = useAiStatus();
-  const available = aiStatus?.available === true;
+  const available = aiStatus?.chat === true;
   const [open, setOpen] = useChatPanelOpen();
   const [currentId] = useCurrentChatId();
   const isMobile = useIsMobile();

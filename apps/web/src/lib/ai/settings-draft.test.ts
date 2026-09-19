@@ -12,6 +12,7 @@ import {
 const anthropic: AiSettings = {
   revision: 3,
   enabled: true,
+  chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
   baseUrl: null,
@@ -21,6 +22,7 @@ const anthropic: AiSettings = {
 const ollama: AiSettings = {
   revision: 1,
   enabled: true,
+  chat: true,
   provider: "openai_compatible",
   model: "qwen3:32b",
   baseUrl: "http://ollama:11434/v1",
@@ -32,6 +34,7 @@ describe("draftFrom and isDirty", () => {
     const draft = draftFrom(ollama);
     expect(draft).toEqual({
       enabled: true,
+      chat: true,
       provider: "openai_compatible",
       model: "qwen3:32b",
       baseUrl: "http://ollama:11434/v1",
@@ -71,6 +74,7 @@ describe("requestFrom", () => {
         request: {
           revision: 3,
           enabled: true,
+          chat: true,
           provider: "anthropic",
           model: "claude-sonnet-5",
           baseUrl: null,
@@ -115,6 +119,7 @@ describe("requestFrom", () => {
       request: {
         revision: 1,
         enabled: true,
+        chat: true,
         provider: "openai_compatible",
         model: "qwen3:32b",
         baseUrl: "http://ollama:11434/v1",

@@ -9,6 +9,7 @@ import {
 /** The AI settings form as edited: text fields stay strings until they are saved. */
 export interface AiDraft {
   readonly enabled: boolean;
+  readonly chat: boolean;
   readonly provider: AiProvider;
   readonly model: string;
   readonly baseUrl: string;
@@ -26,6 +27,7 @@ export const AI_PROVIDER_LABELS: Record<AiProvider, string> = {
 export function draftFrom(settings: AiSettings): AiDraft {
   return {
     enabled: settings.enabled,
+    chat: settings.chat,
     provider: settings.provider,
     model: settings.model,
     baseUrl: settings.baseUrl ?? "",
@@ -80,6 +82,7 @@ export function requestFrom(draft: AiDraft, saved: AiSettings): AiDraftResult {
     request: {
       revision: saved.revision,
       enabled: draft.enabled,
+      chat: draft.chat,
       provider: draft.provider,
       model,
       baseUrl: draft.provider === "anthropic" ? null : baseUrl,

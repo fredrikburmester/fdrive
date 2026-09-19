@@ -22,6 +22,8 @@ export interface ResolvedAiConfig {
   readonly model: string;
   readonly baseUrl: string | null;
   readonly apiKey: string | null;
+  /** Whether the chat panel is offered; Organize is offered whenever AI resolves. */
+  readonly chat: boolean;
 }
 
 export interface AiSettingsService {
@@ -36,6 +38,8 @@ export interface AiSettingsService {
 const StoredAiSettings = z.object({
   revision: z.number().int().nonnegative(),
   enabled: z.boolean(),
+  /** Rows saved before the switch existed keep chat on. */
+  chat: z.boolean().default(true),
   provider: AiProvider,
   model: z.string().min(1),
   baseUrl: z.string().nullable(),
@@ -48,6 +52,7 @@ type StoredAiSettings = z.infer<typeof StoredAiSettings>;
 const DEFAULTS: StoredAiSettings = {
   revision: 0,
   enabled: false,
+  chat: true,
   provider: "anthropic",
   model: DEFAULT_AI_MODEL.anthropic,
   baseUrl: null,
@@ -67,6 +72,7 @@ function publicView(stored: StoredAiSettings, hasApiKey: boolean): AiSettings {
   return {
     revision: stored.revision,
     enabled: stored.enabled,
+    chat: stored.chat,
     provider: stored.provider,
     model: stored.model,
     baseUrl: stored.baseUrl,
@@ -111,6 +117,7 @@ export function createAiSettingsService(deps: {
       model: stored.model,
       baseUrl: stored.baseUrl,
       apiKey: openKey(stored),
+      chat: stored.chat,
     };
   }
 
@@ -153,6 +160,7 @@ export function createAiSettingsService(deps: {
       const next: StoredAiSettings = {
         revision: input.revision + 1,
         enabled: input.enabled,
+        chat: input.chat,
         provider: input.provider,
         model: input.model,
         baseUrl: input.baseUrl,
@@ -165,6 +173,7 @@ export function createAiSettingsService(deps: {
         );
       eventLog.record("general", "info", "AI settings updated", {
         enabled: next.enabled,
+        chat: next.chat,
         provider: next.provider,
         model: next.model,
         apiKeyChanged: input.apiKey !== undefined || !sameAddress,

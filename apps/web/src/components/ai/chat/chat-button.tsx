@@ -33,7 +33,7 @@ export function useChatShortcut(enabled: boolean): void {
 export function ChatButton() {
   const { data: aiStatus } = useAiStatus();
   const [open, setOpen] = useChatPanelOpen();
-  if (aiStatus?.available !== true) return null;
+  if (aiStatus?.chat !== true) return null;
   return (
     <Tooltip>
       <TooltipTrigger

@@ -1804,6 +1804,7 @@ describe("AI client", () => {
       configuration: {
         revision: 1,
         enabled: true,
+        chat: true,
         provider: "anthropic" as const,
         model: "claude-opus-5",
         baseUrl: null,
@@ -1837,13 +1838,13 @@ describe("AI client", () => {
     const fetchMock = vi.fn<typeof fetch>(async (url) => {
       const path = String(url);
       if (path.endsWith("/status"))
-        return Response.json({ available: true, provider: "anthropic" });
+        return Response.json({ available: true, provider: "anthropic", chat: true });
       if (path.endsWith("/move-many"))
         return Response.json({ results: [{ ok: true, path: "/a", target: "/b/a" }] });
       return Response.json(run);
     });
     const client = createApiClient({ fetch: fetchMock });
-    expect(await client.aiStatus()).toEqual({ available: true, provider: "anthropic" });
+    expect(await client.aiStatus()).toEqual({ available: true, provider: "anthropic", chat: true });
     expect(await client.startOrganize({ paths: ["/a"] })).toEqual(run);
     expect(await client.organizeRun(run.id)).toEqual(run);
     expect(await client.cancelOrganize(run.id)).toEqual(run);

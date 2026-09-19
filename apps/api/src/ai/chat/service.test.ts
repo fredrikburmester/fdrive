@@ -19,6 +19,7 @@ const CONFIG: ResolvedAiConfig = {
   model: "claude-opus-5",
   baseUrl: null,
   apiKey: "sk",
+  chat: true,
 };
 const HOME_SCOPES: readonly Scope[] = [
   { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
@@ -80,6 +81,7 @@ async function setup(
     trash?: boolean;
     limits?: Record<string, number>;
     aiOff?: boolean;
+    chatOff?: boolean;
     noIdentity?: boolean;
   } = {},
 ): Promise<Setup> {
@@ -137,7 +139,10 @@ async function setup(
   let counter = 0;
   const build = () =>
     createChatService({
-      settings: { resolved: async () => (options.aiOff ? null : CONFIG) },
+      settings: {
+        resolved: async () =>
+          options.aiOff ? null : options.chatOff ? { ...CONFIG, chat: false } : CONFIG,
+      },
       modelFor: () => script.model,
       chats: repos.aiChats,
       mcp,
@@ -644,6 +649,22 @@ describe("chat service", () => {
     await expect(
       ended.service.act(gone, c.id, card.id, { decision: "apply" }),
     ).rejects.toMatchObject({ kind: "unauthorized" });
+  });
+
+  it("is unavailable while an administrator has chat turned off", async () => {
+    const off = await setup({ chatOff: true });
+    await expect(off.service.create(off.principal, {})).rejects.toMatchObject({
+      kind: "unsupported",
+      message: "Chat is turned off. An administrator can turn it on under System > AI.",
+    });
+    const chat = await off.repos.aiChats.create({
+      identityId: off.principal.identityId,
+      title: "t",
+      share: { contents: true, otherFileNames: true },
+    });
+    await expect(off.service.send(off.principal, chat.id, { text: "x" })).rejects.toMatchObject({
+      kind: "unsupported",
+    });
   });
 
   it("is unavailable until an administrator sets AI up", async () => {

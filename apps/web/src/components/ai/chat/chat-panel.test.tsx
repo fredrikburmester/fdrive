@@ -110,7 +110,7 @@ function renderPanel() {
 }
 
 beforeEach(() => {
-  mocks.client.aiStatus.mockResolvedValue({ available: true, provider: "anthropic" });
+  mocks.client.aiStatus.mockResolvedValue({ available: true, provider: "anthropic", chat: true });
   mocks.client.chats.mockResolvedValue({
     chats: [
       {
@@ -134,13 +134,13 @@ afterEach(() => {
 });
 
 it("stays hidden until AI is set up, and closed shows only a pill while something is happening", async () => {
-  mocks.client.aiStatus.mockResolvedValue({ available: false, provider: null });
+  mocks.client.aiStatus.mockResolvedValue({ available: false, provider: null, chat: false });
   const { container } = renderPanel();
   await waitFor(() => expect(mocks.client.aiStatus).toHaveBeenCalled());
   expect(container.querySelector('[data-slot="chat-panel"]')).toBeNull();
 
   cleanup();
-  mocks.client.aiStatus.mockResolvedValue({ available: true, provider: "anthropic" });
+  mocks.client.aiStatus.mockResolvedValue({ available: true, provider: "anthropic", chat: true });
   mocks.client.chat.mockResolvedValue(chat({ state: "awaiting_approval" }));
   setCurrentChatId("c1");
   renderPanel();

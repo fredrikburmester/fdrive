@@ -179,7 +179,7 @@ export function FileBrowser({
   const { data: officeStatus } = useOfficeStatus();
   const { data: aiStatus } = useAiStatus();
   const organizeAvailable = aiStatus?.available === true;
-  const chatAvailable = organizeAvailable;
+  const chatAvailable = aiStatus?.chat === true;
   const organize = useOrganize();
   const [officeKind, setOfficeKind] = useState<OfficeDocumentKind | null>(null);
   const [officePending, setOfficePending] = useState(false);

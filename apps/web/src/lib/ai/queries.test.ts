@@ -66,11 +66,11 @@ beforeEach(() => {
 
 describe("AI status and organize runs", () => {
   it("reads whether AI is available", async () => {
-    client.aiStatus.mockResolvedValue({ available: true, provider: "anthropic" });
+    client.aiStatus.mockResolvedValue({ available: true, provider: "anthropic", chat: true });
     const { wrapper } = setup();
     const { result } = renderHook(() => useAiStatus(), { wrapper });
     await waitFor(() =>
-      expect(result.current.data).toEqual({ available: true, provider: "anthropic" }),
+      expect(result.current.data).toEqual({ available: true, provider: "anthropic", chat: true }),
     );
   });
 
@@ -176,6 +176,7 @@ describe("System AI settings", () => {
     configuration: {
       revision: 1,
       enabled: true,
+      chat: true,
       provider: "anthropic",
       model: "claude-opus-5",
       baseUrl: null,
@@ -188,7 +189,11 @@ describe("System AI settings", () => {
     client.systemUpdateAi.mockResolvedValue(response);
     client.systemTestAi.mockResolvedValue({ ok: true, message: "Connected." });
     const { queryClient, wrapper } = setup();
-    queryClient.setQueryData(queryKeys.ai.status(), { available: false, provider: null });
+    queryClient.setQueryData(queryKeys.ai.status(), {
+      available: false,
+      provider: null,
+      chat: false,
+    });
 
     const query = renderHook(() => useSystemAi(), { wrapper });
     await waitFor(() => expect(query.result.current.data).toEqual(response));

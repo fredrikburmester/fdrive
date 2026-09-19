@@ -190,6 +190,22 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     };
   }
 
+  /** The resolved configuration, or the error the person sees when AI or chat is off. */
+  async function chatConfig(): Promise<ResolvedAiConfig> {
+    const config = await deps.settings.resolved();
+    if (config === null)
+      throw new ApiHttpError(
+        "unsupported",
+        "AI is not set up. An administrator can turn it on under System > AI.",
+      );
+    if (!config.chat)
+      throw new ApiHttpError(
+        "unsupported",
+        "Chat is turned off. An administrator can turn it on under System > AI.",
+      );
+    return config;
+  }
+
   async function buildTools(principal: Principal, chat: AiChat) {
     const references = await deps.chats.references(chat.id);
     const focus: ToolFocus = {
@@ -378,11 +394,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     },
 
     async create(principal, request) {
-      if ((await deps.settings.resolved()) === null)
-        throw new ApiHttpError(
-          "unsupported",
-          "AI is not set up. An administrator can turn it on under System > AI.",
-        );
+      await chatConfig();
       await deps.chats.prune(principal.identityId, {
         keep: limits.maxChats - 1,
         idleBefore: new Date(deps.clock().getTime() - limits.retentionDays * 24 * 60 * 60 * 1000),
@@ -416,12 +428,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     },
 
     async send(principal, id, request) {
-      const config = await deps.settings.resolved();
-      if (config === null)
-        throw new ApiHttpError(
-          "unsupported",
-          "AI is not set up. An administrator can turn it on under System > AI.",
-        );
+      const config = await chatConfig();
       live.sweep();
       const chat = await load(principal, id);
       const before = await deps.chats.messages(chat.id);
