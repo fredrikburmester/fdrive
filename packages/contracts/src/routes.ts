@@ -115,6 +115,24 @@ export const ROUTES = {
     /** POST: permanently delete every entry -> `OkResponse`. */
     empty: "/api/v1/trash/empty",
   },
+  activity: {
+    /** GET: the caller's own history -> `PersonalActivityResponse`. Account session only. */
+    feed: "/api/v1/activity",
+    /** POST: report one gesture only the browser can see -> `{ id }` (202). */
+    clientEvents: "/api/v1/activity/client-events",
+    /** GET: the storages the caller has history on -> `ActivityLocationsResponse`. */
+    locations: "/api/v1/activity/locations",
+    /** GET: the history ID for one `identityId` and `path` -> `{ id }`. 404 before anything is recorded. */
+    resolveFile: "/api/v1/activity/files/resolve",
+    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage` and `/:id/revisions` hang off it. */
+    files: "/api/v1/activity/files",
+    /** GET: `/:id/events` for one batch -> `PersonalActivityResponse` with a `batchSummary`. */
+    batches: "/api/v1/activity/batches",
+    /** GET: one immutable event -> `PersonalActivityEvent`. `/:id/subjects` pages its full membership. */
+    events: "/api/v1/activity/events",
+    /** GET, Server-Sent Events: committed history sequences for the caller. */
+    stream: "/api/v1/activity/stream",
+  },
   ai: {
     /** GET: whether AI actions are available to the caller -> `AiStatusResponse`. */
     status: "/api/v1/ai/status",

@@ -28,6 +28,7 @@ import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
+import { registerPersonalActivityRoutes } from "./activity/routes.ts";
 import { createActivityService } from "./activity/service.ts";
 import { createChatService } from "./ai/chat/service.ts";
 import { createOrganizeRuns } from "./ai/organize/runs.ts";
@@ -979,6 +980,14 @@ export async function composeApp(
         metadata: metadataService,
         reads: activityReads,
         admitActivity,
+      });
+      registerPersonalActivityRoutes(groups, {
+        repo: activityRepo,
+        reads: activityReads,
+        identities: repos.identities,
+        storageFactory,
+        admitActivity,
+        cursorSecret: config.fdriveMasterKey,
       });
       registerAiRoutes(groups, {
         settings: aiSettings,
