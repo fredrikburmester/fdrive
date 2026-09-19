@@ -1,6 +1,8 @@
 import { withBackupWriter } from "@fdrive/backup";
 import { type ProviderModule, parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
+  createActivityReadsRepo,
+  createActivityRepo,
   createDb,
   createDesktopEffectsRepo,
   createDesktopPublishLock,
@@ -24,6 +26,8 @@ import { registerAccountsRoutes } from "./accounts/routes.ts";
 import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
+import { createActivityMaintenance } from "./activity/maintenance.ts";
+import { createActivityService } from "./activity/service.ts";
 import { createChatService } from "./ai/chat/service.ts";
 import { createOrganizeRuns } from "./ai/organize/runs.ts";
 import { createOrganizeService } from "./ai/organize/service.ts";
@@ -180,6 +184,22 @@ export async function composeApp(
   if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
   const backups = createBackupModule(config);
   await backups.start();
+
+  const activityRepo = createActivityRepo(db, clock);
+  const activityReads = createActivityReadsRepo(db, clock);
+  const personalActivity = createActivityService({
+    repo: activityRepo,
+    clock,
+    pending: (operationId) =>
+      logger.warn({ operationId }, "personal activity outcome pending recovery"),
+  });
+
+  const activityMaintenance = createActivityMaintenance({
+    repo: activityRepo,
+    reads: activityReads,
+    clock,
+    onError: (error) => logger.warn({ err: error }, "personal activity maintenance pending"),
+  });
 
   const eventLog = createSystemEventLog({ repo: repos.systemEvents, logger });
 
@@ -750,7 +770,16 @@ export async function composeApp(
     modelFor: aiModelFor,
     chats: repos.aiChats,
     mcp: mcpToolDeps,
-    fs: { bus, clock, metadata: metadataService },
+    fs: {
+      bus,
+      clock,
+      metadata: metadataService,
+      activity: personalActivity,
+      trashPathForStorage: (storage) => {
+        const settings = trashSettingsForStorage(storage);
+        return settings?.enabled === true ? settings.path : null;
+      },
+    },
     clock,
     onUnexpectedError: (error) => logger.warn({ err: error }, "chat reply failed"),
   });
@@ -893,6 +922,7 @@ export async function composeApp(
       // `registerArchiveRoutes` without TypeScript's excess-property check
       // rejecting it.
       const fsRoutesDeps = {
+        activity: personalActivity,
         bus,
         clock,
         jobRunner,
@@ -1008,12 +1038,14 @@ export async function composeApp(
     toolDeps: mcpToolDeps,
   });
 
+  activityMaintenance.start();
   desktopEffectsWorker.start();
   desktopRetention.start();
   return {
     app,
     close: async () => {
       await backups.close();
+      await activityMaintenance.stop();
       await desktopRetention.stop();
       await desktopEffectsWorker.stop();
       if (indexerListener !== null) {

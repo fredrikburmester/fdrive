@@ -7,6 +7,8 @@ export interface MoveToTrashOptions {
   readonly storage: StorageProvider;
   readonly trashPath: string;
   readonly clock: () => Date;
+  /** Internal receipt for the known virtual destination, after the provider move succeeds. */
+  readonly onRecycled?: (originalPath: string, trashLeaf: string) => void;
 }
 
 /** Nanosecond epoch leaf name from `at`, read back by the move-layout parser. */
@@ -44,6 +46,7 @@ export function withMoveToTrash(options: MoveToTrashOptions): StorageProvider {
     await requireLeafFree(leafPath);
     await storage.mkdir(parentPath(leafPath), { parents: true });
     await storage.move(normalized, leafPath, { overwrite: false });
+    options.onRecycled?.(normalized, leafPath);
   }
 
   return {
