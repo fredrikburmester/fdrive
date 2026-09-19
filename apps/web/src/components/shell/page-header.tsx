@@ -35,8 +35,8 @@ export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{breadcrumbs}</div>
       <div className="flex shrink-0 items-center gap-2">
         <SearchButton />
-        <ChatButton />
         {actions}
+        <ChatButton />
       </div>
     </header>
   );
