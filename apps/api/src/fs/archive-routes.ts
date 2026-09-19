@@ -25,6 +25,7 @@ import {
   stripArchiveExtension,
   uniqueCopyName,
 } from "@fdrive/core";
+import { recordFsAction } from "../activity/fs-context.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { compressToTemp } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
@@ -159,7 +160,20 @@ export function registerArchiveRoutes(
     const newName = uniqueCopyName(baseName(path), existing);
     const target = joinPath(parent, newName);
 
-    await runStorageCall(() => principal.storage.copy(path, target));
+    await recordFsAction(
+      deps.activity,
+      c,
+      {
+        action: "file.copy",
+        requested: { path, targetPath: target, variant: "duplicate" },
+        before: {
+          path,
+          kind: siblings.find((entry) => entry.path === path)?.kind === "dir" ? "dir" : "file",
+        },
+      },
+      () => runStorageCall(() => principal.storage.copy(path, target)),
+      () => ({ path: target }),
+    );
     const entry = await statEntry(principal.storage, target);
     publishFsEvent(deps, principal, "copy", [path], [target]);
     const responseBody = EntryResponse.parse(serializeEntry(entry));

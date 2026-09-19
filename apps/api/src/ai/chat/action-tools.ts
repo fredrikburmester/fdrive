@@ -1,6 +1,8 @@
 import type { ChatActionEdits, ChatActionProposal, ChatActionResult } from "@fdrive/contracts";
 import { baseName, isStorageError, isUnderPath, normalizePath, parentPath } from "@fdrive/core";
 import { z } from "zod";
+import type { ActivityCallContext } from "../../activity/fs-context.js";
+import { recordActivity } from "../../activity/fs-context.js";
 import { requireUnoccupiedTarget } from "../../fs/mutations.js";
 import type { FsRoutesDeps } from "../../fs/routes.js";
 import { moveMany, publishFsEvent, trashMany } from "../../fs/routes.js";
@@ -13,7 +15,21 @@ import { type ActionOutcome, type ActionTool, defineActionTool } from "./actions
 import { DOCUMENT_EXTENSIONS, readBytes, referencedArg } from "./tools.ts";
 
 export interface ChatActionToolsDeps extends DriveToolsDeps {
-  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata">;
+  readonly fs: Pick<
+    FsRoutesDeps,
+    "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage"
+  >;
+  /** The chat whose proposal the person approved, recorded with every action it applies. */
+  readonly conversationId: string;
+}
+
+/**
+ * Provenance for anything the person approves in chat. The account is acting,
+ * with the model as the tool, so the conversation is recorded rather than an
+ * actor of its own.
+ */
+function activityContext(deps: ChatActionToolsDeps): ActivityCallContext {
+  return { source: "ai", conversationId: deps.conversationId };
 }
 
 /** The most text one written file may hold. */
@@ -112,7 +128,12 @@ function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
             results: [],
             toolResult: "The person kept no moves.",
           };
-        const results = await moveMany(deps.fs, deps.principal, { items, createParents: true });
+        const results = await moveMany(
+          deps.fs,
+          deps.principal,
+          { items, createParents: true },
+          activityContext(deps),
+        );
         const mapped: ChatActionResult[] = results.map((result) =>
           result.ok
             ? {
@@ -192,7 +213,7 @@ function trashItemsTool(deps: ChatActionToolsDeps): ActionTool {
             results: [],
             toolResult: "The person kept no items.",
           };
-        const results = await trashMany(deps.fs, deps.principal, items);
+        const results = await trashMany(deps.fs, deps.principal, items, activityContext(deps));
         const mapped: ChatActionResult[] = results.map((result) =>
           result.ok
             ? { path: result.path, ok: true }
@@ -341,11 +362,22 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
         }
         const bytes = Buffer.from(proposal.text, "utf8");
         try {
-          await deps.principal.storage.upload(path, bytes, {
-            overwrite: mode === "replace",
-            contentLength: bytes.length,
-            signal,
-          });
+          await recordActivity(
+            deps.fs.activity,
+            deps.principal,
+            {
+              ...activityContext(deps),
+              action: mode === "create" ? "file.create" : "file.save",
+              requested: { path, kind: "file", conversationId: deps.conversationId },
+            },
+            () =>
+              deps.principal.storage.upload(path, bytes, {
+                overwrite: mode === "replace",
+                contentLength: bytes.length,
+                signal,
+              }),
+            () => ({ path, kind: "file", size: bytes.length }),
+          );
         } catch (error) {
           const message = errorMessage(error);
           return {

@@ -4,6 +4,7 @@ import type { StorageProvider, TrashProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
+import { activityFixture } from "../../../test/activity-fixture.js";
 import type { Principal } from "../../auth/principal.js";
 import { type BusEvent, createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
@@ -11,6 +12,7 @@ import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./action-tools.ts";
 
 const IDENTITY = "223e4567-e89b-42d3-a456-426614174000";
+const CONVERSATION = "323e4567-e89b-42d3-a456-426614174000";
 
 function setup(
   options: { files?: Record<string, string>; referenced?: string[]; trash?: boolean } = {},
@@ -49,6 +51,7 @@ function setup(
   const bus = createEventBus();
   const events: BusEvent[] = [];
   bus.subscribe({ identityId: IDENTITY }, (event) => events.push(event));
+  const activity = activityFixture(() => new Date("2026-09-18T10:00:00.000Z"));
   const tools = createChatActionTools({
     mcp,
     principal,
@@ -59,7 +62,13 @@ function setup(
       openFolders: true,
     },
     indexed: false,
-    fs: { bus, clock: () => new Date("2026-09-18T10:00:00.000Z") },
+    conversationId: CONVERSATION,
+    fs: {
+      bus,
+      clock: () => new Date("2026-09-18T10:00:00.000Z"),
+      activity: activity.service,
+      ...(options.trash ? { trashPathForStorage: () => "/.Trash" } : {}),
+    },
   });
   const tool = (name: string): ActionTool => {
     const found = tools.find((candidate) => candidate.spec.name === name);
@@ -73,7 +82,7 @@ function setup(
     proposal: ChatActionProposal,
     edits?: Parameters<ActionTool["apply"]>[1],
   ) => tool(name).apply(proposal, edits, new AbortController().signal);
-  return { storage, tools, tool, verify, apply, events };
+  return { storage, tools, tool, verify, apply, events, activity };
 }
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -451,6 +460,85 @@ describe("action tools: edge cases", () => {
       outcome: "It failed.",
       results: [{ path: "/Inbox/new.md", ok: false, message: "It failed." }],
       toolResult: "Could not write /Inbox/new.md: It failed.",
+    });
+  });
+});
+
+describe("history for approved chat actions", () => {
+  it("records only what the person applied, as the account acting through the chat", async () => {
+    const { verify, apply, activity } = setup();
+
+    const proposal = await verify("move_items", {
+      summary: "File them.",
+      moves: [
+        { path: "/Inbox/a.txt", destination: "/Docs", reason: "A note." },
+        { path: "/Inbox/scan.pdf", destination: "/Archive", reason: "Old scan." },
+      ],
+    });
+    expect(activity.operations).toEqual([]);
+
+    await apply("move_items", proposal, {
+      moves: [{ path: "/Inbox/a.txt", target: "/Docs/a.txt" }],
+    });
+
+    expect(activity.operations).toHaveLength(1);
+    expect(activity.operations[0]).toMatchObject({
+      action: "file.move",
+      source: "ai",
+      requested: {
+        path: "/Inbox/a.txt",
+        targetPath: "/Docs/a.txt",
+        conversationId: CONVERSATION,
+      },
+    });
+    expect(activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
+  });
+
+  it("records a trash and a written file with the same provenance", async () => {
+    const { verify, apply, activity } = setup({ trash: true, referenced: ["/Inbox/a.txt"] });
+
+    await apply(
+      "trash_items",
+      await verify("trash_items", {
+        summary: "Clear it.",
+        items: [{ path: "/Inbox/a.txt", reason: "Done with it." }],
+      }),
+    );
+    await apply(
+      "write_text_file",
+      await verify("write_text_file", {
+        summary: "Note it.",
+        path: "/Inbox/new.md",
+        mode: "create",
+        text: "x",
+      }),
+    );
+
+    expect(activity.operations.map((operation) => [operation.action, operation.source])).toEqual([
+      ["file.trash", "ai"],
+      ["file.create", "ai"],
+    ]);
+    expect(activity.operations.every((o) => o.requested.conversationId === CONVERSATION)).toBe(
+      true,
+    );
+  });
+
+  it("records a failed write rather than a silent one", async () => {
+    const { verify, apply, storage, activity } = setup({ referenced: ["/Inbox/a.txt"] });
+    const proposal = await verify("write_text_file", {
+      summary: "s",
+      path: "/Inbox/new.md",
+      mode: "create",
+      text: "x",
+    });
+    vi.spyOn(storage, "upload").mockRejectedValueOnce(new Error("disk full"));
+
+    await apply("write_text_file", proposal);
+
+    expect(activity.outcomes.at(-1)).toMatchObject({
+      action: "file.create",
+      outcome: "unknown",
+      errorCode: "outcome_unconfirmed",
     });
   });
 });

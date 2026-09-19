@@ -78,7 +78,10 @@ export interface ChatServiceDeps {
   /** The MCP read handlers the tools reuse. */
   readonly mcp: McpToolDeps;
   /** What applying a move or trash card needs: events and metadata hooks. */
-  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata">;
+  readonly fs: Pick<
+    FsRoutesDeps,
+    "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage"
+  >;
   readonly clock: () => Date;
   readonly ids?: () => string;
   readonly live?: LiveChats;
@@ -225,7 +228,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       ...createDriveTools(toolDeps).filter((tool) => tool.spec.name !== "read_excerpts"),
       ...createChatReadTools(toolDeps),
     ];
-    const actions: ActionTool[] = createChatActionTools({ ...toolDeps, fs: deps.fs });
+    const actions: ActionTool[] = createChatActionTools({
+      ...toolDeps,
+      fs: deps.fs,
+      conversationId: chat.id,
+    });
     return {
       tools: new Map(tools.map((tool) => [tool.spec.name, tool])),
       actions: new Map(actions.map((tool) => [tool.spec.name, tool])),
