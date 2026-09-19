@@ -101,6 +101,19 @@ describe("ROUTES", () => {
     });
   });
 
+  it("defines every personal activity route under /api/v1/activity", () => {
+    expect(ROUTES.activity).toEqual({
+      feed: "/api/v1/activity",
+      clientEvents: "/api/v1/activity/client-events",
+      locations: "/api/v1/activity/locations",
+      resolveFile: "/api/v1/activity/files/resolve",
+      files: "/api/v1/activity/files",
+      batches: "/api/v1/activity/batches",
+      events: "/api/v1/activity/events",
+      stream: "/api/v1/activity/stream",
+    });
+  });
+
   it("defines every setup route under /api/v1/setup", () => {
     expect(ROUTES.setup).toEqual({
       status: "/api/v1/setup/status",
