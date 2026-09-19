@@ -72,8 +72,9 @@ export interface OfficeDeps {
   ) => StorageProvider | Promise<StorageProvider>;
   readonly metadata: MetadataService;
   readonly bus: EventBus;
-  /** Optional so office tests and deployments without history keep working. */
-  readonly activity?: PersonalActivityService;
+  /** Optional so office tests and deployments without history keep working.
+   * Explicitly `undefined` is allowed so a caller can clear it in a spread. */
+  readonly activity?: PersonalActivityService | undefined;
 }
 export interface OfficeActor {
   readonly identity: Identity;
