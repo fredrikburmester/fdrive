@@ -293,6 +293,30 @@ describe("Anthropic model", () => {
     });
   });
 
+  it("replays stored history as plain messages before the new one", async () => {
+    const fake = fakeClient([message([text("Still here.")])]);
+    const conversation = createAnthropicModel({
+      apiKey: "sk",
+      model: "claude-opus-5",
+      client: fake.client,
+    }).start({
+      system: "s",
+      tools: [],
+      history: [
+        { role: "user", text: "What is this?" },
+        { role: "assistant", text: "An invoice." },
+      ],
+    });
+
+    await conversation.send({ kind: "user", text: "And now?" }, new AbortController().signal);
+
+    expect(request(fake.requests, 0).messages).toEqual([
+      { role: "user", content: "What is this?" },
+      { role: "assistant", content: "An invoice." },
+      { role: "user", content: "And now?" },
+    ]);
+  });
+
   it("streams text deltas to onText before the turn resolves", async () => {
     const fake = fakeClient([message([thinking, text("Hello"), text("world")])]);
     const conversation = createAnthropicModel({

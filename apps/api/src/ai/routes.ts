@@ -11,6 +11,8 @@ import type { AppHono, AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
 import { parseBody } from "../fs/routes.js";
+import { registerChatRoutes } from "./chat/routes.ts";
+import type { ChatService } from "./chat/service.ts";
 import type { AiModel } from "./model.ts";
 import type { OrganizeService } from "./organize/service.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "./settings.ts";
@@ -18,13 +20,14 @@ import type { AiSettingsService, ResolvedAiConfig } from "./settings.ts";
 export interface AiRoutesDeps {
   readonly settings: AiSettingsService;
   readonly organize: OrganizeService;
+  readonly chat: ChatService;
   readonly modelFor: (config: ResolvedAiConfig) => AiModel;
   /** How long the connection check may take. Default 15 seconds. */
   readonly testTimeoutMs?: number;
 }
 
 /**
- * `/ai/*` for every signed-in person (status and organize runs) and
+ * `/ai/*` for every signed-in person (status, organize runs and chats) and
  * `/system/ai` for administrators (provider settings and a connection check).
  */
 export function registerAiRoutes(
@@ -52,6 +55,8 @@ export function registerAiRoutes(
   authed.post(`${organizePath}/:id/cancel`, (c) =>
     c.json(OrganizeRun.parse(deps.organize.cancel(c.get("principal"), c.req.param("id")))),
   );
+
+  registerChatRoutes(authed, deps.chat);
 
   const systemPath = withoutApiV1Prefix(ROUTES.system.ai);
 

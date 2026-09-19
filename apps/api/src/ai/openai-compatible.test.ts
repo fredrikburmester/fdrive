@@ -220,6 +220,27 @@ describe("OpenAI-compatible model", () => {
     ]);
   });
 
+  it("replays stored history after the system prompt", async () => {
+    const { model, call } = setup([completion({ content: "Still here." })]);
+    const conversation = model.start({
+      system: "s",
+      tools: [],
+      history: [
+        { role: "user", text: "What is this?" },
+        { role: "assistant", text: "An invoice." },
+      ],
+    });
+
+    await conversation.send(user("And now?"), new AbortController().signal);
+
+    expect(call(0).body.messages).toEqual([
+      { role: "system", content: "s" },
+      { role: "user", content: "What is this?" },
+      { role: "assistant", content: "An invoice." },
+      { role: "user", content: "And now?" },
+    ]);
+  });
+
   it("delivers the whole reply to onText at once, and nothing for an empty reply", async () => {
     const { model } = setup([
       completion({ content: "Hello world" }),

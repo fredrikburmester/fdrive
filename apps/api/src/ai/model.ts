@@ -54,8 +54,21 @@ export interface AiConversation {
   send(input: AiInput, signal: AbortSignal, options?: AiSendOptions): Promise<AiTurn>;
 }
 
+/** One earlier exchange replayed as plain text when a conversation is rebuilt from a stored transcript. */
+export interface AiHistoryMessage {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+}
+
+export interface AiStartOptions {
+  readonly system: string;
+  readonly tools: readonly AiToolSpec[];
+  /** Earlier messages, alternating roles, ending with the assistant; the next `send` continues after them. */
+  readonly history?: readonly AiHistoryMessage[] | undefined;
+}
+
 export interface AiModel {
-  start(options: { system: string; tools: readonly AiToolSpec[] }): AiConversation;
+  start(options: AiStartOptions): AiConversation;
   /** Checks the key, address and model without generating text. */
   ping(signal: AbortSignal): Promise<{ ok: boolean; message: string }>;
 }

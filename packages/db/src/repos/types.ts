@@ -340,6 +340,85 @@ export interface MetadataPathRepo {
   deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
 }
 
+/** What one AI chat shares with the model; mirrors the contracts' `OrganizeSharing`. */
+export interface AiChatSharing {
+  readonly contents: boolean;
+  readonly otherFileNames: boolean;
+}
+
+export type AiChatRole = "user" | "assistant";
+
+export interface AiChat {
+  readonly id: string;
+  readonly identityId: string;
+  readonly title: string;
+  readonly share: AiChatSharing;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  readonly lastMessageAt: Date;
+}
+
+export interface AiChatMessage {
+  readonly id: string;
+  readonly chatId: string;
+  /** 1 for the first message; dense and unique within a chat. */
+  readonly ordinal: number;
+  readonly role: AiChatRole;
+  /** Transcript parts as stored; the API validates them against its contracts. */
+  readonly parts: readonly unknown[];
+  readonly references: readonly string[];
+  readonly location: string | null;
+  readonly createdAt: Date;
+}
+
+export interface AiChatReference {
+  readonly path: string;
+  readonly missing: boolean;
+  readonly addedAt: Date;
+}
+
+/**
+ * AI chats, their transcripts and references. Every read and write that
+ * names a chat is scoped to the identity that owns it, so one login can
+ * never see or touch another's chats.
+ */
+export interface AiChatRepo {
+  create(input: { identityId: string; title: string; share: AiChatSharing }): Promise<AiChat>;
+  get(identityId: string, id: string): Promise<AiChat | null>;
+  /** The identity's chats, most recent message first. */
+  list(identityId: string, limit: number): Promise<AiChat[]>;
+  rename(identityId: string, id: string, title: string): Promise<AiChat | null>;
+  /** True when a chat was deleted. */
+  delete(identityId: string, id: string): Promise<boolean>;
+  /** Deletes the identity's chats idle since before `idleBefore`, then all but the `keep` most recent. Returns how many went. */
+  prune(identityId: string, options: { keep: number; idleBefore: Date }): Promise<number>;
+  /** The chat's messages in order. */
+  messages(chatId: string): Promise<AiChatMessage[]>;
+  /** Appends a message with the next ordinal and marks the chat as active now. */
+  appendMessage(
+    chatId: string,
+    input: {
+      role: AiChatRole;
+      parts: readonly unknown[];
+      references: readonly string[];
+      location: string | null;
+    },
+  ): Promise<AiChatMessage>;
+  updateMessageParts(messageId: string, parts: readonly unknown[]): Promise<void>;
+  references(chatId: string): Promise<AiChatReference[]>;
+  /** Adds paths, or clears `missing` on ones already referenced. */
+  addReferences(chatId: string, paths: readonly string[]): Promise<void>;
+  /** Follows a move or rename across every chat of the identity; a folder carries its contents. */
+  moveReferences(
+    identityId: string,
+    oldPath: string,
+    newPath: string,
+    isDir: boolean,
+  ): Promise<void>;
+  /** Marks references at `path` (and inside it when a folder) missing across every chat of the identity. */
+  markReferencesMissing(identityId: string, path: string, isDir: boolean): Promise<void>;
+}
+
 /** Severity of one `SystemEvent`, ordered `info` < `warn` < `error`. */
 export type SystemEventLevel = "info" | "warn" | "error";
 
@@ -416,4 +495,5 @@ export interface Repos {
   readonly recents: RecentRepo;
   readonly metadataPaths: MetadataPathRepo;
   readonly systemEvents: SystemEventRepo;
+  readonly aiChats: AiChatRepo;
 }

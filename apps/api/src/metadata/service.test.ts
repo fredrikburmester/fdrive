@@ -398,3 +398,52 @@ describe("hasTrackedMetadata", () => {
     expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(true);
   });
 });
+
+describe("createMetadataService: AI chat references", () => {
+  async function withChat() {
+    const repos = createMemoryRepos();
+    const service = createMetadataService(repos);
+    const account = await repos.accounts.create({ displayName: "Alice" });
+    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+    const identity = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "alice",
+    });
+    const chat = await repos.aiChats.create({
+      identityId: identity.id,
+      title: "t",
+      share: { contents: true, otherFileNames: true },
+    });
+    await repos.aiChats.addReferences(chat.id, ["/a.txt", "/dir/x.txt"]);
+    const references = async () =>
+      (await repos.aiChats.references(chat.id)).map((r) => [r.path, r.missing]);
+    return { service, identity: identity.id, references };
+  }
+
+  it("follows moves and marks trashed and deleted items missing", async () => {
+    const { service, identity, references } = await withChat();
+
+    await service.onMoved(identity, "/a.txt", "/b.txt", false);
+    await service.onMoved(identity, "/dir", "/moved", true);
+    expect(await references()).toEqual([
+      ["/b.txt", false],
+      ["/moved/x.txt", false],
+    ]);
+
+    await service.onTrashed(identity, "/b.txt", false);
+    await service.onDeleted(identity, "/moved", true);
+    expect(await references()).toEqual([
+      ["/b.txt", true],
+      ["/moved/x.txt", true],
+    ]);
+  });
+
+  it("works without a chat repository", async () => {
+    const repos = createMemoryRepos();
+    const { aiChats: _aiChats, ...withoutChats } = repos;
+    const service = createMetadataService(withoutChats);
+    await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
+    await expect(service.onTrashed(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
+  });
+});

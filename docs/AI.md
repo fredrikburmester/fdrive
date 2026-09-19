@@ -83,4 +83,16 @@ suggestions, which the person still has to approve; the organizer has no tool th
   may open folders among them; Organize's focus is the selection, closed). They reuse the MCP
   read handlers (`runSearch`, `runSimilarFiles`) and index scoping; see [MCP](MCP.md).
   `IndexQueries.fileTextPrefix` reads excerpts without touching originals.
-- Chat with files is planned in [AI chat](plans/AI-CHAT.md).
+- Chat (`apps/api/src/ai/chat/`, routes under `/api/v1/ai/chats`) is the API side of
+  [AI chat](plans/AI-CHAT.md); the panel is not built yet. A chat's *references* (the files and
+  folders a person attached) are the tools' focus; `service.ts` stores transcripts and references
+  through `AiChatRepo` (`app.ai_chats`, `app.ai_chat_messages`, `app.ai_chat_references`), keeps
+  one live provider conversation per active chat in memory (`live.ts`) and rebuilds it from the
+  transcript as plain text after a restart (`history.ts`). Read tools (`tools.ts`: `read_file`,
+  `file_info`, `duplicates_of`) run at once. Write tools (`action-tools.ts`: `move_items`,
+  `trash_items` where Trash is configured, `write_text_file`) never write: `agent.ts` verifies
+  the call into a pending action card, the turn pauses in `awaiting_approval`, and only
+  `POST /ai/chats/:id/actions/:actionId` applies it under the same identity, re-checking the
+  session, SHA-256 and targets, before the assistant continues with the outcome. A new message
+  declines any pending cards first. References follow moves and are marked missing on delete
+  through `MetadataService`.

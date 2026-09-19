@@ -4,6 +4,10 @@ import { validateIdentityLinkId } from "../repos/identity-links-types.js";
 import type {
   Account,
   AccountRepo,
+  AiChat,
+  AiChatMessage,
+  AiChatReference,
+  AiChatRepo,
   ApiToken,
   ApiTokenRepo,
   Credential,
@@ -934,6 +938,154 @@ function createMemorySystemEventRepo(): SystemEventRepo {
  * uniqueness and expiry semantics of the Drizzle-backed repositories.
  * Intended for fast unit tests; not shared across processes.
  */
+function createMemoryAiChatRepo(ids: () => string): AiChatRepo {
+  const chats = new Map<string, AiChat>();
+  const messages = new Map<string, AiChatMessage[]>();
+  const references = new Map<string, Map<string, AiChatReference>>();
+  // Activity order breaks ties between chats active in the same millisecond.
+  const order = new Map<string, number>();
+  let activity = 0;
+
+  function owned(identityId: string, id: string): AiChat | null {
+    const chat = chats.get(id);
+    return chat !== undefined && chat.identityId === identityId ? chat : null;
+  }
+  function sorted(identityId: string): AiChat[] {
+    return [...chats.values()]
+      .filter((chat) => chat.identityId === identityId)
+      .sort(
+        (a, b) =>
+          b.lastMessageAt.getTime() - a.lastMessageAt.getTime() ||
+          (order.get(b.id) ?? 0) - (order.get(a.id) ?? 0),
+      );
+  }
+  function remove(id: string): void {
+    chats.delete(id);
+    order.delete(id);
+    messages.delete(id);
+    references.delete(id);
+  }
+  function movedPath(path: string, oldPath: string, newPath: string, isDir: boolean) {
+    if (path === oldPath) return newPath;
+    if (isDir && path.startsWith(`${oldPath}/`)) return `${newPath}${path.slice(oldPath.length)}`;
+    return null;
+  }
+
+  return {
+    async create(input) {
+      const now = new Date();
+      const chat: AiChat = {
+        id: ids(),
+        identityId: input.identityId,
+        title: input.title,
+        share: { ...input.share },
+        createdAt: now,
+        updatedAt: now,
+        lastMessageAt: now,
+      };
+      chats.set(chat.id, chat);
+      order.set(chat.id, ++activity);
+      messages.set(chat.id, []);
+      references.set(chat.id, new Map());
+      return chat;
+    },
+    async get(identityId, id) {
+      return owned(identityId, id);
+    },
+    async list(identityId, limit) {
+      return sorted(identityId).slice(0, limit);
+    },
+    async rename(identityId, id, title) {
+      const chat = owned(identityId, id);
+      if (chat === null) return null;
+      const renamed = { ...chat, title, updatedAt: new Date() };
+      chats.set(id, renamed);
+      return renamed;
+    },
+    async delete(identityId, id) {
+      if (owned(identityId, id) === null) return false;
+      remove(id);
+      return true;
+    },
+    async prune(identityId, options) {
+      const all = sorted(identityId);
+      const gone = all.filter(
+        (chat, index) => chat.lastMessageAt < options.idleBefore || index >= options.keep,
+      );
+      for (const chat of gone) remove(chat.id);
+      return gone.length;
+    },
+    async messages(chatId) {
+      return [...(messages.get(chatId) ?? [])];
+    },
+    async appendMessage(chatId, input) {
+      const chat = chats.get(chatId);
+      const list = messages.get(chatId);
+      if (chat === undefined || list === undefined) throw new Error("chat does not exist");
+      const now = new Date();
+      const message: AiChatMessage = {
+        id: ids(),
+        chatId,
+        ordinal: list.length === 0 ? 1 : (list[list.length - 1] as AiChatMessage).ordinal + 1,
+        role: input.role,
+        parts: [...input.parts],
+        references: [...input.references],
+        location: input.location,
+        createdAt: now,
+      };
+      list.push(message);
+      chats.set(chatId, { ...chat, lastMessageAt: now, updatedAt: now });
+      order.set(chatId, ++activity);
+      return message;
+    },
+    async updateMessageParts(messageId, parts) {
+      for (const list of messages.values()) {
+        const index = list.findIndex((message) => message.id === messageId);
+        if (index >= 0) list[index] = { ...(list[index] as AiChatMessage), parts: [...parts] };
+      }
+    },
+    async references(chatId) {
+      return [...(references.get(chatId)?.values() ?? [])].sort(
+        (a, b) => a.addedAt.getTime() - b.addedAt.getTime() || a.path.localeCompare(b.path),
+      );
+    },
+    async addReferences(chatId, paths) {
+      const refs = references.get(chatId);
+      if (refs === undefined) throw new Error("chat does not exist");
+      for (const path of paths) {
+        const existing = refs.get(path);
+        refs.set(
+          path,
+          existing === undefined
+            ? { path, missing: false, addedAt: new Date() }
+            : { ...existing, missing: false },
+        );
+      }
+    },
+    async moveReferences(identityId, oldPath, newPath, isDir) {
+      if (oldPath === newPath) return;
+      for (const chat of chats.values()) {
+        if (chat.identityId !== identityId) continue;
+        const refs = references.get(chat.id) ?? new Map<string, AiChatReference>();
+        for (const ref of [...refs.values()]) {
+          const target = movedPath(ref.path, oldPath, newPath, isDir);
+          if (target === null) continue;
+          refs.delete(ref.path);
+          refs.set(target, { ...ref, path: target });
+        }
+      }
+    },
+    async markReferencesMissing(identityId, path, isDir) {
+      for (const chat of chats.values()) {
+        if (chat.identityId !== identityId) continue;
+        for (const ref of references.get(chat.id)?.values() ?? [])
+          if (ref.path === path || (isDir && ref.path.startsWith(`${path}/`)))
+            references.get(chat.id)?.set(ref.path, { ...ref, missing: true });
+      }
+    },
+  };
+}
+
 export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const ids = opts.ids ?? randomUUID;
   const fileTags = createMemoryFileTagRepo();
@@ -959,5 +1111,6 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     recents,
     metadataPaths: createMemoryMetadataPathRepo({ fileTags, favorites, folderViews, recents }),
     systemEvents: createMemorySystemEventRepo(),
+    aiChats: createMemoryAiChatRepo(ids),
   };
 }

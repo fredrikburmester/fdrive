@@ -3,7 +3,14 @@ import {
   AiSettings,
   AiSettingsUpdateRequest,
   AiStatusResponse,
+  Chat,
+  ChatActionRequest,
+  ChatCreateRequest,
+  ChatMessageRequest,
+  ChatPart,
+  ChatRenameRequest,
   DEFAULT_AI_MODEL,
+  MAX_CHAT_REFERENCES,
   MAX_ORGANIZE_ITEMS,
   OrganizeRequest,
   OrganizeRun,
@@ -123,5 +130,105 @@ describe("OrganizeRun", () => {
     };
     expect(OrganizeRun.parse(run)).toEqual(run);
     expect(OrganizeRun.safeParse({ ...run, state: "queued" }).success).toBe(false);
+  });
+});
+
+describe("chat requests", () => {
+  it("bounds a message, its references and the location", () => {
+    expect(
+      ChatMessageRequest.parse({
+        text: "  What is this?  ",
+        references: ["/a.pdf"],
+        location: null,
+      }),
+    ).toEqual({ text: "What is this?", references: ["/a.pdf"], location: null });
+    expect(ChatMessageRequest.safeParse({ text: "   " }).success).toBe(false);
+    expect(ChatMessageRequest.safeParse({ text: "x".repeat(8001) }).success).toBe(false);
+    expect(
+      ChatMessageRequest.safeParse({
+        text: "x",
+        references: Array.from({ length: MAX_CHAT_REFERENCES + 1 }, (_, i) => `/f${i}`),
+      }).success,
+    ).toBe(false);
+    expect(ChatMessageRequest.safeParse({ text: "x", extra: true }).success).toBe(false);
+  });
+
+  it("takes a decision with optional edits", () => {
+    expect(ChatActionRequest.parse({ decision: "decline" })).toEqual({ decision: "decline" });
+    expect(
+      ChatActionRequest.parse({
+        decision: "apply",
+        edits: { moves: [{ path: "/a", target: "/b/a" }], mode: "create" },
+      }),
+    ).toEqual({
+      decision: "apply",
+      edits: { moves: [{ path: "/a", target: "/b/a" }], mode: "create" },
+    });
+    expect(ChatActionRequest.safeParse({ decision: "maybe" }).success).toBe(false);
+    expect(ChatActionRequest.safeParse({ decision: "decline", edits: {} }).success).toBe(false);
+    expect(ChatRenameRequest.safeParse({ title: " " }).success).toBe(false);
+    expect(ChatCreateRequest.parse({})).toEqual({});
+  });
+});
+
+describe("Chat", () => {
+  it("accepts a transcript with every kind of part and card", () => {
+    const chat = Chat.parse({
+      id: "c",
+      title: "Taxes",
+      createdAt: "2026-09-18T10:00:00.000Z",
+      updatedAt: "2026-09-18T10:00:00.000Z",
+      lastMessageAt: "2026-09-18T10:00:00.000Z",
+      state: "awaiting_approval",
+      share: { contents: true, otherFileNames: false },
+      references: [{ path: "/a.pdf", missing: false }],
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          parts: [{ kind: "text", text: "Hi" }],
+          references: ["/a.pdf"],
+          location: "/",
+          createdAt: "2026-09-18T10:00:00.000Z",
+        },
+        {
+          id: "m2",
+          role: "assistant",
+          parts: [
+            {
+              kind: "tool",
+              id: "t",
+              name: "read_file",
+              activity: "Read a.pdf",
+              input: "{}",
+              output: "text",
+              state: "done",
+            },
+            {
+              kind: "action",
+              id: "a",
+              state: "pending",
+              proposal: {
+                kind: "write",
+                summary: "Rewrite",
+                path: "/a.md",
+                mode: "create",
+                text: "# Hi",
+                expectedSha256: null,
+              },
+            },
+            { kind: "error", message: "Stopped." },
+          ],
+          references: [],
+          location: null,
+          createdAt: "2026-09-18T10:00:01.000Z",
+        },
+      ],
+    });
+    expect(chat.messages[1]?.parts).toHaveLength(3);
+    expect(
+      ChatPart.safeParse({ kind: "action", id: "a", state: "pending", proposal: { kind: "nope" } })
+        .success,
+    ).toBe(false);
   });
 });
