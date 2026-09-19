@@ -1,280 +1,199 @@
 # Personal activity and file journeys
 
-Status: proposal, updated 2026-09-14. Planning only. Required by the user: personal history,
-comprehensive action tracking, and the ability to trace a file's journey. UI and implementation
-choices below are proposed. Source reviewed at local `ad076ce`; upload/Recents behavior was
-also compared with cached `origin/main` at `922da2e`. Reconcile newer migrations/protocols before
-implementation. This replaces the earlier upload-only scope and short retention proposal.
-Native write/recovery changes are being merged concurrently; review the integrated version
-before implementation and preserve its existing operation IDs and recovery guarantees.
+Status: all four slices are implemented on the unmerged branch `codex/recent-activity`, built
+from `origin/main` `26bc01e` on 2026-09-14 and verified there. No PR was opened. Reconciled
+against `origin/main` `484f8a91` on 2026-09-19 for re-landing in slices. Every producer seam
+named here still exists on main; every departure main has since forced is marked
+**Since 26bc01e**, here and in the three companion documents. Original checkout and native WIP remain untouched.
 
-## Outcome
+## Outcome and invariants
 
-Answer “Where did my upload go?” and “What have I done with this file since it arrived?” from
-one durable personal history. Track meaningful file actions across fdrive's web, API, Office,
-MCP and native interfaces. Upload completion remains the first usable slice, but the feature
-is not complete until the action coverage and file-journey acceptance criteria below pass.
+Ship useful upload completion first, then a durable personal history that answers “Where did
+my upload go?” and “What happened to this file?” Web and native are the main access paths.
+Unknown events explain observable gaps; they do not fabricate an external actor or destination.
 
-Operating assumption: fdrive web and the native client are the main access points. Treat their
-operations as the normal authoritative history. External interference is an exception that
-the first release must represent through explicit **Unknown event** observations.
+- Private owner is the authenticated **account**, allowing a cross-storage timeline. Always
+  retain the **storage identity** alongside it for paths, location filters, provider binding
+  and share/grant checks. Every API, count, lineage edge, export and notification is owner-scoped.
+- Known actions belong to their immutable actor. Unknown observations have a null actor and
+  belong only to the user's already tracked personal journey. Shared-file access and admin
+  status do not reveal another user's actions or create a global feed.
+- History ownership never follows identity transfer. My historical facts survive inaccessible
+  files, Trash and disconnected locations; live actions require current ownership/read authority.
+- Stable file IDs survive proven moves/renames and accepted Trash/restore bindings. Copies and
+  derived files get new IDs with lineage; deletion/recreation at one path gets a new identity.
+- Record actual server outcomes, client-reported intent and uncertain observations distinctly.
+  Unknown remains explicit when recovery cannot prove an outcome. Never replay file writes
+  merely to repair history, or infer upload time from mtime/index discovery.
+- Preserve journey metadata by default. Any configured retention/deletion is explicit and
+  displays its cutoff; no silent 90-day/10,000-row truncation. Revision history does not promise
+  stored old bytes, content diffs or rollback; those remain the separate snapshot feature.
 
-Example: uploaded `invoice.pdf` → renamed `Invoice September.pdf` → moved to `/Accounts/2026`
-→ opened → saved revision 2 → copied to `/Shared` → created a share → moved original to Trash
-→ restored. The copy branches into its own journey, linked to its source.
+## Implementer artifacts
 
-## Personal scope: required
-
-- **Only my actions.** Capture immutable `actorAccountId` from authenticated authority when an
-  operation starts, together with its storage identity. Carry this context into jobs, callbacks
-  and retries. Never trust a client-supplied user ID or infer the actor from the file owner.
-- Enforce private ownership in API/repository reads: feed, file history, lineage, search,
-  batch children/counts, cursors, exports and notifications. Action events belong to their actor.
-  Unknown-event observations belong to the user's existing personal journey and have no
-  invented actor. Admin status grants no exception.
-- Another user's actions on the same shared file never appear in my activity. File access,
-  sharing or being the uploader does not grant access to another actor's history.
-- Identity transfer/relink never reassigns recorded authorship. Old events do not become the
-  new account's history. Keep my own recorded history when a file is deleted or a storage
-  location becomes unavailable; disable live actions and do not fetch unauthorized new details.
-- Other users or system processes can change the file's current state. Display current state
-  only when authorized; distinguish it from my recorded actions without exposing their events.
-  This is my journey with the file, not a global audit of everyone who ever touched it.
-- Unknown observations are the explicit exception to “only my actions”: they explain gaps
-  affecting files already in my personal history. Label them as observations, never my actions
-  or another person's private activity. Shared-folder access alone must not seed a global feed.
-- Recently opened must obey the same actor rule. Existing identity-only rows cannot safely be
-  assigned to a new owner after transfer; omit legacy rows whose actor cannot be established.
-
-## Findings and reusable pieces
-
-| Area | Current behavior and implication |
+| Artifact | Contents |
 | --- | --- |
-| Recents | [Page](../../apps/web/src/components/metadata/recents-page.tsx) and [queries](../../apps/web/src/lib/metadata/queries.ts) track opened paths, not an event history. |
-| Uploads | [Store](../../apps/web/src/lib/upload/store.ts) is temporary, preserves original mtime and only passes a parent path to its completion callback. [Panel](../../apps/web/src/components/activity/activity-panel.tsx) lacks upload destination actions. |
-| Reveal | [Helpers](../../apps/web/src/lib/files/reveal.ts) already select and scroll in the file browser; reuse them. |
-| Events | [Bus](../../apps/api/src/events/bus.ts) is transient. Generic file events are cache invalidation signals, not durable actor-attributed history. |
-| Writes | [File routes](../../apps/api/src/fs/routes.ts), [MCP](../../apps/api/src/mcp/file-tools.ts), [Office](../../apps/api/src/office/writes.ts) and jobs have separate entry points. Instrumenting web uploads alone misses actions. |
-| File IDs | [Office registry](../../apps/api/src/office/registry-events.ts) has mapped-location UUIDs and move/delete integration. [Office guide](../OFFICE-DEVELOPMENT.md) describes its constraints. It is not a universal registry for every provider/path. |
-| Native | [Mac guide](../MACOS.md) describes domain-local catalog UUIDs, path-based server requests and external moves observed as removal/addition. These UUIDs cannot simply become server-wide history IDs. |
-| Recovery | [Trash](../TRASH.md) uses provider entries; file contents/version snapshots are a separate [roadmap feature](ROADMAP.md#file-snapshots-and-version-history). |
+| [Event taxonomy](RECENT-ACTIVITY-EVENTS.md) | Exact action names, stages/outcomes, evidence and read-volume rules |
+| [Schema and API](RECENT-ACTIVITY-SCHEMA.md) | Tables/columns, constraints, transaction boundaries, implemented endpoints |
+| [Coverage inventory](RECENT-ACTIVITY-COVERAGE.md) | Existing producers, recorder seams, regressions, runtime limits and delivery slice |
 
-## What gets recorded
+The artifacts describe the implementation and its acceptance contract. Each slice has its own
+definition of done below. Upload completion uses only the existing queue and navigation helpers;
+it does not depend on a journal query or stable file registry.
 
-Track user operations and their outcomes, not every HTTP request generated by a screen.
-Maintain an explicit coverage inventory mapping every file-related command/endpoint to its
-recorder, actor proof, success evidence and regression test; release with no unexplained gaps.
+## Source facts and explicit departures
 
-| Action family | Required events and details |
+| Area | Verified source and design consequence |
 | --- | --- |
-| Create and upload | File/folder creation, upload and confirmed replacement; destination, size, batch and revision evidence. Differentiate the shared upload endpoint's create/save/upload callers. |
-| Access | Explicit open/preview, folder visit, inspect/info, download/export, and MCP read; distinguish user intent, content delivery and cancellation. An internal stat/thumbnail request is not another user open. |
-| Content changes | Web text saves, Office saves, MCP edits and supported native saves; previous/new revision references, size and source application. Preserve each confirmed save; group autosaves only in presentation. |
-| Organization | Rename, move, copy and folder operations; before/after paths, source/target object IDs and per-item outcomes. |
-| Recovery | Trash, restore, permanent deletion and Empty Trash; stable trash correlation, actual restore destination and per-item outcomes. |
-| Sharing | Create/update/revoke share, permission/expiry changes, and explicit copy-link actions when reported by the client. Record safe settings, never passwords, bearer tokens or secret share URLs. Recipient actions are not the owner's actions. |
-| Metadata | Tag additions/removals/renames affecting the file, favorite/unfavorite and explicit folder-view changes; previous/new values. Account-wide tag edits relate only to the actor's affected file scopes. |
-| Derived files | Compression, extraction, Save As, supported conversion and copy; job/batch relation, inputs, outputs and partial completion. Automatic indexer/OCR processing is a system event, not a personal edit. |
-| Attempts | Failed, denied, cancelled, skipped, conflicted and interrupted/unknown operations alongside successes; safe error reason and attempted target, without revealing inaccessible existing-file metadata. |
+| Upload completion | [Upload store](../../apps/web/src/lib/upload/store.ts) already captures identity/target and reports success; its callback now includes the captured identity, batch and final target. [Panel](../../apps/web/src/components/activity/activity-panel.tsx) and [reveal helpers](../../apps/web/src/lib/files/reveal.ts) can provide destination/Open/Show in folder without a database change. Queue entries remain temporary in slice 1. |
+| Existing Recents | [Queries](../../apps/web/src/lib/metadata/queries.ts) and `app.recents` track opened paths with no actor account. Uploads preserve original mtime, so modified-date sorting cannot substitute for upload history. |
+| Identity relink | [identity-links.ts](../../packages/db/src/repos/identity-links.ts) remaps tag associations and changes the identity's account; identity-keyed favorites follow it. Recents are untouched and there is no relink history proving their original actor. Immutable activity authorship deliberately differs from current transferable metadata; keep tags/favorites behavior unchanged and do not backfill an actor from today's owner. |
+| System log | [app.ts](../../packages/db/src/schema/app.ts) defines durable `system_events` for administrator/subsystem messages, with no actor. It is explicitly **not** the personal-history store; do not extend it for this feature. |
+| Native journal | `desktop_operations` is recovery/receipt state, with a state/updated-time cleanup index. Current [acknowledge](../../apps/api/src/desktop/writes.ts) says receipts remain indefinitely and deletes spool data; no operation-row pruning was found in current source. History must nevertheless be independent of receipt/payload retention: copy facts into append-only events in the [complete transaction](../../packages/db/src/repos/desktop.ts), never join history to disposable recovery rows. |
+| Physical/virtual bridge | Indexer payloads and `office_files` use root-relative physical locations. Consume these internally through `configuredMappings` and [roundTripVirtualPath](../../apps/api/src/scoping/round-trip.ts), honoring shadowed mounts and [scoping rules](../SCOPING.md). Persist/render virtual paths in personal events. Existing trusted registries retain their internal root/path keys; opaque registry-ID bridges are allowed. Raw physical paths never enter personal event payloads/APIs. |
+| Recorder seam, **Since 26bc01e** | [Chat action tools](../../apps/api/src/ai/chat/action-tools.ts) call the exported `moveMany` and `trashMany` from [fs routes](../../apps/api/src/fs/routes.ts) directly, not over HTTP. A recorder attached to the Hono handler records nothing for an approved chat action. Record inside the shared helpers instead, and build the actor context from the principal rather than only from a request context. |
+| AI producers, **Since 26bc01e** | [Organize](../../apps/api/src/ai/organize/service.ts) never moves anything itself: the web client applies its proposal through the ordinary fs routes, so F2 already covers it. [Chat](../../apps/api/src/ai/chat/actions.ts) verifies a proposal and only the person's `apply` touches storage. Both are the authenticated account acting, with `source: ai`; neither is an autonomous actor. |
+| Stable registries | Office UUIDs are provider/mapped-root based; `desktop_items` is identity/path based. Bridge their IDs to tracked-file IDs without resetting native catalogs or changing Office authorization. Neither registry alone covers every producer/provider. |
 
-Unauthenticated traffic is not attributed to a user. Search queries, routine polling and UI
-layout interactions are outside a file's journey; explicit file actions from search are covered.
-If a user cancels before contacting the server, a client-reported cancellation can be recorded
-with that provenance. It must not claim a server-observed storage operation occurred.
+### Accepted Trash binding
 
-## Interface
+For SFTPGo, the configured [recycle rule](../TRASH.md) performs a synchronous rename to
+`/.trash/{original directory}/{name}/{provider timestamp}`. Delete returns no new opaque
+receipt to fdrive. **Full original virtual path plus the observed provider-generated timestamp
+is the accepted SFTPGo binding**, scoped to storage identity/provider; do not require a UUID
+that the provider cannot return. The parsed Trash entry/path becomes the restore correlation.
+Capture a bounded before/after listing of that exact original-path Trash branch, associate its
+new leaf with the delete, and persist the leaf verbatim. Serialize fdrive deletes of the same
+path; if external concurrency yields multiple new leaves or no observable leaf, leave the
+binding unresolved rather than choosing the nearest timestamp. Never fabricate the timestamp
+from the API clock or correlate across folders by basename alone.
 
-- **My activity:** replace the old Recents entry with one searchable personal timeline. Proposed
-  default: all my storage locations, with filters for location, action, date, outcome and source
-  (Web, Office, MCP, Mac). Preserve `/recents` as the Recently opened filtered view.
-- **File history:** accessible from file menu, inspector, preview and activity rows; stable URL
-  by file ID. Show my chronological actions, previous names/locations, revisions, source and
-  outcomes. Keep it reachable through history after Trash/deletion.
-- **Journey:** a readable timeline with expandable copy/derived-file branches. Current location
-  and last known state appear above it; history retains names and paths as they were then.
-  Follow only lineage links visible to the actor. Do not reveal hidden actors or branch counts.
-- **Details:** exact time/timezone, source app/device label when known, operation outcome,
-  before/after values, related batch and sanitized failure. Distinguish server-confirmed,
-  client-reported and uncertain observations. Never call unknown source/device information known.
-- **Unknown event:** a neutral, distinct timeline entry showing what changed, the last known
-  location, when it was last seen and when the discrepancy was detected. Offer Check again;
-  show a confirmed accessible new location only when one is known. Do not invent a destination.
-- Group by day and collapse batches/autosaves/repeated reads for readability, with every
-  recorded action available on expansion. Grouping must not discard the underlying events.
-- Search current and historical names/paths, including a deleted file's recorded name. Use
-  indexed, paginated queries; do not stat the entire library to render a feed.
-- Offer Open, Show in folder and View history where valid. Restore/revoke or other mutation
-  shortcuts use existing current permission/conflict flows; history itself grants no action.
-- Upload queue shows storage, final path and Open/Show in folder on success. One notification
-  per batch reports mixed results and links to the corresponding history. No automatic page
-  navigation; clearing/collapsing the queue does not erase recorded events.
-- Show history starting date, explicit gaps and stale/offline/error states. No invented events
-  from old mtime/index records; file upload completion appears before indexing/thumbnail work.
-- Provide actor-scoped JSON/CSV history export, with sensitive fields excluded and safe CSV
-  cell encoding. Export the selected scope completely or clearly report a bounded export.
+**Since 26bc01e** the WebDAV-specific destination is a shared layout, and S3 now uses it.
+[withMoveToTrash](../../packages/core/src/trash/move-to-trash.ts) builds the leaf itself from
+[moveTrashLeafPath](../../packages/core/src/trash/recycle-folder.ts), read back by
+[createRecycleFolderTrash](../../packages/core/src/trash/recycle-folder-trash.ts) in
+`layout: "move"` mode, and [storage-factory](../../apps/api/src/auth/storage-factory.ts) wraps
+every provider that has no server-side rule of its own. fdrive therefore knows the exact leaf
+before the move for both WebDAV and S3, so the strong binding covers both: carry that known
+virtual leaf out through an internal result/hook, leaving public delete compatibility unchanged.
+Restore preserves the original file ID when that accepted binding and the actual returned target
+agree. Only SFTPGo keeps the weak provider-generated-timestamp case above. Trash is per storage
+server, so bindings, restore and purge stay scoped to their storage identity.
 
-## Stable files and lineage
+## Provider-specific Unknown-event reconciliation
 
-1. Introduce a server-side tracked-file registry independent of indexing and active browser
-   state. Assign a UUID at first observed authorized operation; an existing file begins as
-   “History starts here”, not “Created”. Include files and folders on SFTPGo and WebDAV.
-2. Keep UUID through known rename/move and Trash/restore, including folder descendants. Store
-   historical location changes separately from current location. Permanent deletion tombstones
-   the object; a new file at the same path receives a new ID. Do not merge by filename/hash.
-3. Copy/Save As creates a new UUID and a lineage edge to the source. Model archive extraction
-   and conversion as derivation, not rename. Cross-provider transfers have linked source/target
-   identities and explicit copy/delete stages; partial completion cannot masquerade as a move.
-4. Prefer proven provider object IDs when supported; otherwise maintain canonical virtual-path
-   bindings with lifecycle generations and confirmed operation results. Treat identity/provider
-   boundaries explicitly; matching shared-folder paths never establish equivalence or access.
-5. Bridge existing Office and Mac IDs with explicit mappings, preserving their stable IDs and
-   authorization contracts. Do not repurpose an Office mapped-root key for unindexed WebDAV,
-   or reset a Mac domain/catalog. The history registry is the common reference for new events.
-6. Capture revision references for confirmed writes: provider version/ETag where trustworthy,
-   hash when already available or computed during the streamed write, size and prior revision.
-   No unbounded content reads for history. Missing revision evidence stays unknown. A history
-   of revisions does not imply old bytes are stored or that content diff/rollback is available.
-7. Bind Trash results to opaque provider trash IDs using verified provider evidence. Extend the
-   operation result if necessary; do not correlate by basename or time alone. Unproven restores
-   must show uncertain continuity instead of silently attaching to the wrong prior object.
+The SFTPGo input already exists: Linux [inotify watcher](../../services/indexer/src/fdrive_indexer/watcher.py)
+→ indexer `created/changed/deleted/moved` → PostgreSQL `idx_events` →
+[indexer-listener.ts](../../apps/api/src/events/indexer-listener.ts). The listener maps both
+endpoints, handles unique SHA-256 metadata relinks, and checks live read authority before
+announcing created/changed/moved/relinked destinations. Extend this concrete pipeline;
+do not consume only the generic SSE delete after it has lost the original move evidence.
 
-## Durable operation recording
-
-- Add an operation journal, append-only activity events, tracked-file/location records and
-  lineage/revision references in PostgreSQL. Fields include immutable private owner, nullable
-  actor, action/observation classification, storage identity,
-  file IDs, operation/batch/parent IDs, action, source, timestamps, outcome, evidence/provenance
-  and bounded before/after details. Never store raw content, credentials or physical paths.
-  Every query requires `ownerAccountId = principal.accountId`. For actions, owner equals the
-  authenticated actor; for observations, actor is null and owner derives from that account's
-  already recorded journey. The observer service is provenance, not the human actor.
-- Route every supported operation through a shared recorder at its authoritative service
-  boundary. Carry validated intent/source separately from authorization. Instrument web/API,
-  MCP, Office and native producers; a storage wrapper alone cannot tell preview from download.
-  Adapt the incoming [native operation journal](../../apps/api/src/desktop/writes.ts) and
-  metadata recovery machinery into this recorder instead of creating a competing retry or
-  publication protocol. Reuse native operation IDs and separate private history from recovery.
-- Durably record an authorized operation's intent before upstream mutation. If that initial
-  write fails, do not begin the mutation. After confirmed storage success, commit outcome,
-  registry/location changes, revisions, lineage and an event outbox together. Deliver SSE
-  from the outbox with actor-scoped reconnect cursors; polling remains a recovery path.
-- An upstream write and PostgreSQL are not atomic. If the outcome transaction fails after
-  bytes were saved, report storage success with history pending, retain the durable intent,
-  and reconcile metadata without repeating the write. Use operation IDs and unique event
-  constraints to deduplicate retries/callbacks; this does not imply exactly-once provider I/O.
-- On restart, reconcile unfinished operations only with sufficient provider/version evidence.
-  Record a separate reconciliation result. If it cannot be proven, preserve Unknown/interrupted
-  rather than invent Success/Failure from a current stat. Never overwrite historical facts.
-- Capture read intent before delivery where possible; finalize stream outcomes. A completed
-  server response means bytes delivered, not proof that a browser saved them to disk. Client
-  preview acknowledgments remain distinct, and repeated range requests share one operation.
-- Capture actor context for delayed jobs and Office sessions; recheck current authority before
-  storage access. Coauthor/editor callbacks identify the accountable authorized operation,
-  not automatically every human editor of the document. Unprovable authorship remains unknown.
-- Append-only describes normal application behavior, not cryptographic tamper-proof storage.
-  Explicit account deletion/retention policy remains possible and must be visible.
-
-## Coverage limits and retention
-
-- fdrive web/native are the primary access paths; comprehensive known-operation coverage is
-  the priority. External SFTP/WebDAV clients, server-side changes and offline/local cached opens
-  are not comprehensively observable from the API. Represent detected external discrepancies
-  with the required unknown-event mechanism below, without claiming exhaustive external history.
-- Native downloads can be observed, but background hydration/refresh is not evidence that a
-  person opened the file. Log truthful native operations; only emit a user-open event when
-  the platform provides a reliable signal. Report this boundary in the coverage inventory.
-- Authorized observations may establish that a location/revision changed outside recorded
-  activity. Show an unattributed gap when appropriate; never fabricate an actor or merge
-  ambiguous external rename/delete/recreate events. Other users' events remain private.
-- Preserve journey metadata by default, including deleted-file history. Remove the former
-  90-day/10,000-event silent cap. Use indexed keyset pagination, bounded batch children,
-  partitioning/archival and explicit configurable retention. If policy truncates history,
-  show its cutoff and preserve enough tombstone/lineage structure to avoid false continuity.
-- Optimize separately for private owner/time, owner/file/time and historical-path lookup. Avoid
-  expensive live checks or full hashes per history row; live actions enforce current access.
-
-## Unknown events and reconciliation: required
-
-Compare the last confirmed registry state with authorized observations from normal web reads,
-native refresh and existing trusted change signals. Reconcile pending fdrive operations first:
-an in-flight move, delayed callback or missing completion response must not become a false
-external event. Background reconciliation is bounded to tracked locations and current grants.
-
-| Observation | Timeline treatment |
+| Provider/input | Observation and required treatment |
 | --- | --- |
-| File absent from its last known location, cause unproven | **Unknown event — location unavailable.** “File no longer found at /Documents/invoice.pdf. It may have been moved or removed outside fdrive.” Keep destination unknown. |
-| Reliable stable-ID or trusted move evidence proves a new authorized location, with no recorded operation | **Unknown event — moved outside recorded activity.** Show old/new virtual paths and actor unknown; preserve the file ID. |
-| Evidence proves departure from the authorized scope but no accessible destination | **Unknown event — left tracked location.** Preserve the last known path and disable Open; never expose an out-of-scope destination or probe beyond grants. |
-| Same known object has an unexpected revision | **Unknown event — content changed outside recorded activity.** Show only available version/size evidence, not an invented save action or author. |
-| A matching-looking file appears but identity is ambiguous | Keep a separate observed object; state continuity could not be established. Matching name, size, mtime or hash is insufficient to join journeys automatically. |
-| Previously missing object is identified again with reliable evidence | Append a linked resolution, update current location and restore permitted actions. Keep the original unknown observation in history. |
+| SFTPGo, mounted root watcher, `moved` | After round-trip mapping and pending-operation correlation, a proven in-scope move with readable destination yields `observation.location_changed`, actor unknown. Source-only mapping yields `observation.left_scope`; never include the inaccessible physical destination. A move with denied destination does not disclose the target. |
+| SFTPGo watcher, `deleted` or `changed` | For an already tracked personal file, record confirmed disappearance or unexpected revision evidence after excluding known operations. An unpaired deletion cannot establish where a file went. Created events can resolve a tracked gap; they do not add everyone else's new files to My activity. |
+| SFTPGo listener, SHA-256 relink | Existing behavior relinks tags/favorites for exactly one same-root/scope candidate; destination announcement requires live read. Reuse this as labelled `sha256_relink` evidence. It is a candidate for history continuity, not proof of actor or globally unique file identity. Preserve ambiguous history separately; do not weaken existing metadata behavior. Include history-tracked files when selecting candidates, not only tagged/favorited files. |
+| SFTPGo, no mounted root/watcher disabled or disconnected | Fall back to authorized refresh comparison; display any observation gap. LISTEN/NOTIFY is not a durable replay log. Normal API operation history works with indexing disabled. |
+| WebDAV and S3, web/native refresh comparison, **Since 26bc01e** | Neither has a watcher input. Compare complete authorized listings/stats and known registry state. Confirmed absence yields `observation.location_missing`; changed reliable version yields `observation.content_changed`. Do not claim external move/left-scope from absence alone. A verified provider ID may prove a relocation if available; path/size/hash similarity alone does not. |
+| Either provider, timeout/partial scan/403 | Check/access failure only; preserve last-known state. Do not emit a move/delete observation from a failed or incomplete observation. |
+| Either provider, same-path rediscovery | Append `observation.resolved` linked to the prior gap. This resolves location availability only: assign a new file UUID and target subject, keep the earlier journey unknown, and never infer identity continuity from path/size/hash. Proven watcher moves and accepted Trash receipts have their separate continuity rules. |
 
-- “Outside scope” is an explanation only when proven. A not-found response alone cannot
-  distinguish move, deletion or another cause. Unknown events describe observations first.
-- A failed/incomplete scan, timeout or offline provider is a check failure, not evidence of
-  disappearance. Permission denial means access unavailable, not moved/deleted. Require a
-  trustworthy successful observation and confirmation before declaring an unexplained absence;
-  retain the last known state during transient failures and concurrent refreshes.
-- Store last confirmed observation time, detection time, evidence source, relevant known
-  revision/location and an optional occurrence interval. Display “Detected at”, not an exact
-  action time invented from mtime or scan time.
-- Deduplicate by tracked file, last confirmed state and discrepancy; repeated refreshes update
-  operational check state without creating identical timeline events or repeated notifications.
-- Resolution appends a new event linked to the earlier discrepancy. Never silently rewrite
-  Unknown into a supposed user action. A later journal reconciliation can link the proven
-  operation while retaining the observation/reconciliation sequence.
-- Maintain personal visibility for observations and resolutions. If another person's shared
-  file action explains the change, do not expose that action or actor through this mechanism.
+Unknown-event UI shows last-known location, last-confirmed time, detection time and evidence.
+Example: “File no longer found at /Documents/invoice.pdf. It may have moved or been removed
+outside fdrive.” Recheck is bounded to current grants. Resolve pending writes/moves/callbacks
+first; deduplicate by file/prior-state/discrepancy, including across refreshes/restarts. No
+outside-scope probing, guessed action time, false user attribution or repeated identical rows.
 
-## Delivery sequence
+## Delivery and separate definitions of done
 
-1. **Foundation and one full journey:** stable identity, actor isolation, event taxonomy,
-   journal/outbox and operation recovery. Prove upload → rename → move → Trash → restore,
-   including crash points and another account sharing the same folder. Include the unknown-
-   event state model and one external-move/disappearance reconciliation path in this slice.
-2. **Immediate recovery and history UI:** completion actions, My activity, file history,
-   filters, historical-name search, pagination and restart/device continuity.
-3. **Comprehensive producers:** instrument every coverage-matrix action across currently
-   supported web/API/MCP/Office/native operations; include failures, reads, shares, metadata,
-   copies and jobs. Coordinate native writes with its implementation plan. Unsupported
-   platform signals stay explicitly documented; upload-only delivery is not completion.
-4. **Journey depth and qualification:** lineage/revisions, grouping, export, large-history
-   queries, retention, real-provider recovery and mobile/accessibility verification.
+### Slice 1 — Upload completion, no schema
 
-## Acceptance
+**Ships:** visible storage/destination, final filename, Open and Show in folder on successful
+upload; batch completion feedback with mixed outcomes. Reveal selects/scrolls in list/grid.
+Keep the page/sort unchanged. View uploads expands the current panel until history exists.
 
-- Trace the example journey through renamed files and folder ancestors; search by the original
-  name, follow a copy branch, delete/recreate the original path and prove the histories differ.
-- Two accounts sharing a folder see only their own actions. Cover admin users, guessed IDs,
-  lineage edges, export, filters/counts, cursors, callbacks and identity transfer during a job.
-- Deleted/unlinked files retain my recorded history with live actions appropriately unavailable.
-  Legacy Recents migration must not expose a previous account's opened paths.
-- Test the recorder before/after each provider boundary and outcome commit: restart, dropped
-  response, duplicate callbacks, database outage, cancellation, conflict and partial batch.
-  No unrecorded begun mutation when intent persistence fails; no duplicate provider retry
-  to repair history; unresolved outcomes remain explicit.
-- Each action/producer has an end-to-end coverage case with correct actor, file identity,
-  source, time, outcome and before/after details. Distinguish fixtures from real integrations.
-- Record native/API reads honestly: cached local opens, prefetch, thumbnail requests and
-  downloads do not silently become verified human opens. External changes never fabricate
-  personal events. Test shared Office saves without claiming unverified individual authorship.
-- Move a tracked file externally within authorized storage, move it beyond tracked scope,
-  delete it, change its bytes and recreate its path. Verify known evidence versus unknown
-  continuity, last-known/detected timestamps, no guessed destinations and no scope escape.
-- Repeat refreshes and restart during a discrepancy: one unknown event, then a linked
-  resolution if identity is proven. Incomplete scans, permission errors, provider outages,
-  pending fdrive moves and delayed callbacks must not manufacture an external move/deletion.
-- Upload old-dated files with indexing/AI disabled; completion/reveal/history work immediately.
-  Clear the queue, reload, reconnect and open a second browser: the journal remains available.
-- Exercise 1,000-file batches and at least 1 million events across multiple accounts; capture
-  query plans, bounded response/stat counts, first-page and historical-name search timings.
-  Set explicit performance budgets from this fixture before qualification.
-- Inspect 320/393/768px and desktop, light/dark, long paths/names, keyboard, accessible labels,
-  44px mobile actions and no horizontal overflow. Verify grouped details and lineage navigation.
-- Run focused checks, then application, integration, affected browser and native checks when
-  changed. Verify real PostgreSQL/SFTPGo/WebDAV,
-  relevant Office/MCP/native paths and the real dev UI. Preserve all existing quality gates.
+**Implementation:** extend the existing store callback to carry captured identity, final path,
+local batch and result; reuse preview/reveal helpers. Keep original identity through retries
+and navigation; switching login requires an explicit return to the original authorized login.
+No activity schema, journal, SSE outbox, stable registry or reconciliation prerequisite.
 
-Planning verification covers source/document checks only; runtime and completeness remain
-unverified until implementation. No application implementation, commit or deployment here.
-The latest amendment passed local link/anchor and whitespace checks.
+**Done when:** old-mtime upload into a nested folder can be opened/revealed; navigation during
+upload, mixed success/skip/cancel, same names on two logins and identity switching work. Inspect
+320/393px and desktop, list/grid, light/dark, long names, keyboard and 44px mobile actions.
+Run `application`, affected upload browser checks and real dev/provider verification, then
+`workflow`. Queue history still disappears on reload: explicitly defer persistence to slice 2.
+
+### Slice 2 — Durable personal history for core operations
+
+**Ships:** My activity and file history for core file mutations, Trash/restore and native write
+receipts, with existing Open/Show in folder. Saved records survive reload/device changes;
+filter by storage/action/date and search current/historical virtual names. Recently opened
+uses actor-attributed new records; ambiguous legacy Recents remain unimported.
+
+**Implementation:** schema/recorder/outbox, stable IDs, explicit Trash binding, per-file/batch
+outcomes and core/native producer rows marked S2 in the inventory. Record basic copy lineage
+and revision references now; defer branch visualization/export and non-core producers.
+
+**Done when:** upload → rename → folder move → Trash → restore stays one file history; copy
+and delete/recreate have distinct IDs. Test two accounts/shared paths, relink/unlink, guessed
+history IDs/cursors, native receipt independence and callback retries. Inject failure before
+intent, after provider success and during outcome commit: no unjournaled begun mutation after
+intent failure, no repeated file write to repair history, explicit uncertain outcome. Prove
+reload/second browser with real PostgreSQL/SFTPGo/WebDAV; test 1,000 history events and a
+100-file batch with bounded pagination. Run `application`, `integration`, affected `browser`,
+native checks if changed, and `workflow`. UI lists currently supported history sources and its
+start date; no claim of complete epic coverage yet. Unknown detection is slice 3.
+
+### Slice 3 — Remaining producers and Unknown events
+
+**Ships:** supported Office/MCP/read/share/metadata/archive/job actions and provider-specific
+Unknown events, completing the S3 coverage rows. Drop folder-visit recording; apply the
+write-time read aggregation contract, not presentation-only collapse.
+
+**Done when:** every S3 row has its named actor/provenance/outcome regression. Exercise SFTPGo
+watcher events, unique/ambiguous hash relinks, WebDAV refresh-only discrepancies, in/out-of-scope
+moves, denial/outage/partial listing, duplicate observations and resolution after restart.
+Prove no observer reveals others' activity or raw physical paths. Aggregate 1,000 repeated
+reads with accurate counts and retry deduplication; a write splits revision groups. Confirm
+native hydration/cached-open limits and Office coauthor attribution. Run affected application,
+integration/browser and native/Office checks; `python indexer` if its code changes, plus
+`workflow`. Full branching/export and million-event qualification remain slice 4.
+
+### Slice 4 — Journey navigation and large-history qualification
+
+**Ships:** copy/derived-file branches, revision/before-after details, complete actor-scoped
+JSON/CSV export, explicit history boundaries and complete timeline filters/group expansion.
+No retention cutoff is enabled; archive/purge administration is outside this delivery.
+
+**Done when:** trace the full example through copies, saves, sharing, deletion/restore and
+Unknown resolution; exports/counts/lineage remain private. Exercise 1,000-file batches and
+one million events across multiple accounts; review query plans and measure first-page,
+file-history and historical-name-search latency against budgets fixed for that fixture before
+qualification. Cover the no-cutoff default, retained tombstones/lineage, no unbounded stat/hash
+fan-out and accessible mobile/desktop journey UI. Run applicable full gates and real-provider
+rehearsals. All inventory rows must be covered or have a documented supported-platform limit;
+this is epic completion, not a gate on shipping slices 1–3.
+
+## Product boundaries retained
+
+**Since 26bc01e** the Mac app keeps a root-level `/.fdrive-desktop` bookkeeping folder that
+[fs list](../../apps/api/src/fs/routes.ts) hides next to the trash folder. It is real on storage,
+so watcher and refresh observers see its churn: exclude it at admission, exactly as the trash
+folder is excluded, or the feed fills with the app's own housekeeping.
+
+Owned shares now serve recipient traffic through fdrive's own API
+([owned-access](../../apps/api/src/shares/owned-access.ts)). Not attributing a recipient's
+download to the share owner is therefore a deliberate choice about observable traffic, no longer
+a limitation of what fdrive can see. The shares module also holds share passwords now, which
+makes the existing rule against recording secrets load-bearing rather than theoretical.
+
+No automatic file-byte snapshots, global/admin personal feed or claims of exhaustive external
+activity. A native background download is not a proven human open, and cached local opens may
+be unobservable. Unsupported evidence is labelled, never invented. Routine folder navigation,
+search queries, prefetch, thumbnail reads, polling and internal permission probes are excluded.
+The [taxonomy](RECENT-ACTIVITY-EVENTS.md) defines the remaining explicit reads and their counts.
+
+Implementation and verification evidence belong in the PR for each slice; the `docs/workflow`
+STATUS file this plan used to reference was removed with the orchestration scripts. Server
+deployment and signed native/editor release qualification remain separate.

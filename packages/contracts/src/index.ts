@@ -165,6 +165,7 @@ export {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+export * from "./personal-activity.ts";
 export * from "./processing-failures.ts";
 export {
   AdminProvider,

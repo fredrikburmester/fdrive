@@ -3,11 +3,25 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { resolveMigrationsFolder } from "./migrations-path.js";
+import * as activitySchema from "./schema/activity.js";
 import * as appSchema from "./schema/app.js";
 import * as idxSchema from "./schema/idx.js";
 
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
+export { type ActivityRepo, appendActivityOutcome, createActivityRepo } from "./repos/activity.js";
+export { type ActivityExportsRepo, createActivityExportsRepo } from "./repos/activity-exports.js";
+export { activityMetadataUnchanged, captureActivityMetadata } from "./repos/activity-metadata.js";
+export {
+  type ActivityObservationsRepo,
+  createActivityObservationsRepo,
+} from "./repos/activity-observations.js";
+export {
+  type ActivityReadsRepo,
+  AGGREGATED_ACTIVITY_READS,
+  createActivityReadsRepo,
+} from "./repos/activity-reads.js";
+export * from "./repos/activity-types.js";
 export { createAiChatRepo } from "./repos/ai-chats.js";
 export {
   createDesktopRepo,
@@ -178,7 +192,7 @@ export {
 export { createWopiLockRepo } from "./repos/wopi-locks.js";
 export * from "./vector.js";
 
-export const schema = { ...appSchema, ...idxSchema };
+export const schema = { ...appSchema, ...idxSchema, ...activitySchema };
 export type Schema = typeof schema;
 export type Db = NodePgDatabase<Schema>;
 
