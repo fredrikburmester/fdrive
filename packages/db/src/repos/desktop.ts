@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { desktopEffects, desktopItems, desktopOperations } from "../schema/app.js";
+import {
+  appendNativeActivity,
+  finishNativeFailure,
+  prepareNativeActivity,
+} from "./activity-native.js";
 import { captureDesktopEffects } from "./desktop-effects.js";
 import type { DesktopEffectContext, DesktopEffectPayload } from "./desktop-effects-types.js";
 
@@ -213,7 +218,12 @@ export function createDesktopRepo(db: Db): DesktopRepo {
             64 * 1024 ** 3
         )
           throw Error("Desktop recovery capacity reached");
-        await tx.insert(desktopOperations).values(input).onConflictDoNothing();
+        const inserted = await tx
+          .insert(desktopOperations)
+          .values(input)
+          .onConflictDoNothing()
+          .returning();
+        if (inserted[0]) await prepareNativeActivity(tx, inserted[0]);
       });
       const existing = await repo.operation(input.identityId, input.accountId, input.id);
       if (!existing) throw Error("Operation belongs to another account");
@@ -253,8 +263,9 @@ export function createDesktopRepo(db: Db): DesktopRepo {
           .update(desktopOperations)
           .set({ state: "completed", result, updatedAt: new Date() })
           .where(and(op(identityId, accountId, id), eq(desktopOperations.state, "committing")))
-          .returning({ id: desktopOperations.id });
+          .returning();
         if (!updated.length) return false;
+        await appendNativeActivity(tx, updated[0] as DesktopOperationRecord, result, effects);
         const payload = effects;
         await tx.insert(desktopEffects).values({ operationId: id, identityId, accountId, payload });
         return true;
@@ -310,20 +321,23 @@ export function createDesktopRepo(db: Db): DesktopRepo {
       return updated.length === 1;
     },
     async transition(identityId, accountId, id, expected, state, result, attempt) {
-      const updated = await db
-        .update(desktopOperations)
-        .set({ state, updatedAt: new Date(), ...(result === undefined ? {} : { result }) })
-        .where(
-          and(
-            op(identityId, accountId, id),
-            eq(desktopOperations.state, expected),
-            ...(attempt === undefined
-              ? []
-              : [sql`${desktopOperations.result}->>'attempt' = ${attempt}`]),
-          ),
-        )
-        .returning({ id: desktopOperations.id });
-      return updated.length === 1;
+      return db.transaction(async (tx) => {
+        const updated = await tx
+          .update(desktopOperations)
+          .set({ state, updatedAt: new Date(), ...(result === undefined ? {} : { result }) })
+          .where(
+            and(
+              op(identityId, accountId, id),
+              eq(desktopOperations.state, expected),
+              ...(attempt === undefined
+                ? []
+                : [sql`${desktopOperations.result}->>'attempt' = ${attempt}`]),
+            ),
+          )
+          .returning();
+        if (updated[0]) await finishNativeFailure(tx, updated[0]);
+        return updated.length === 1;
+      });
     },
   };
   return repo;

@@ -3,6 +3,7 @@ export interface DesktopEffectContext {
   to: string;
   directory: boolean;
   trash: boolean;
+  restored?: boolean;
   office: { providerId: string; rootName: string; from: string; to: string | null } | null;
 }
 
