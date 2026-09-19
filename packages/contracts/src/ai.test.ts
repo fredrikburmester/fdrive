@@ -18,7 +18,8 @@ import {
 
 const update = {
   revision: 0,
-  enabled: true,
+  organize: true,
+  chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
   baseUrl: null,
@@ -69,9 +70,10 @@ describe("AI responses", () => {
   it("never carries a key, only whether one is saved", () => {
     const settings = { ...update, hasApiKey: true };
     expect(AiSettings.parse({ ...settings, apiKey: "secret" })).toEqual(settings);
-    expect(AiStatusResponse.parse({ available: false, provider: null })).toEqual({
-      available: false,
+    expect(AiStatusResponse.parse({ provider: null, organize: false, chat: false })).toEqual({
       provider: null,
+      organize: false,
+      chat: false,
     });
     expect(DEFAULT_AI_MODEL.anthropic).toBe("claude-opus-5");
   });

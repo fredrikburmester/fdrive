@@ -76,7 +76,11 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
   return {
     async status() {
       const config = await deps.settings.resolved();
-      return { available: config !== null, provider: config?.provider ?? null };
+      return {
+        provider: config?.provider ?? null,
+        organize: config?.organize ?? false,
+        chat: config?.chat ?? false,
+      };
     },
 
     async start(principal, request) {
@@ -85,6 +89,11 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
         throw new ApiHttpError(
           "unsupported",
           "AI is not set up. An administrator can turn it on under System > AI.",
+        );
+      if (!config.organize)
+        throw new ApiHttpError(
+          "unsupported",
+          "Organize is turned off. An administrator can turn it on under System > AI.",
         );
       const trashPath =
         deps.mcp.trashPathForStorage?.(principal.storage) ?? deps.mcp.trashPath ?? null;

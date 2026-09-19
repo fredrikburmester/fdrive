@@ -30,6 +30,8 @@ describe("createAiModel", () => {
       model: "claude-opus-5",
       baseUrl: null,
       apiKey: "sk-ant-1",
+      organize: true,
+      chat: true,
     });
 
     expect(await model.ping(new AbortController().signal)).toEqual({
@@ -47,6 +49,8 @@ describe("createAiModel", () => {
       model: "claude-opus-5",
       baseUrl: null,
       apiKey: null,
+      organize: true,
+      chat: true,
     });
     expect(model.ping).toBeTypeOf("function");
   });
@@ -59,6 +63,8 @@ describe("createAiModel", () => {
         model: "llama3",
         baseUrl: "http://ollama:11434/v1",
         apiKey: "sk-local",
+        organize: true,
+        chat: true,
       },
       { fetch: fetchImpl },
     );
@@ -82,6 +88,8 @@ describe("createAiModel", () => {
       model: "llama3",
       baseUrl: null,
       apiKey: null,
+      organize: true,
+      chat: true,
     });
 
     expect((await model.ping(new AbortController().signal)).ok).toBe(false);
