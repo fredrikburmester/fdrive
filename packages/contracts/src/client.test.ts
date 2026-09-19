@@ -1862,4 +1862,66 @@ describe("AI client", () => {
       createParents: true,
     });
   });
+
+  it("lists, creates, reads, renames, deletes and drives chats", async () => {
+    const chat = {
+      id: "chat 1",
+      title: "Taxes",
+      createdAt: "2026-09-18T10:00:00.000Z",
+      updatedAt: "2026-09-18T10:00:00.000Z",
+      lastMessageAt: "2026-09-18T10:00:00.000Z",
+      state: "idle" as const,
+      share: { contents: true, otherFileNames: true },
+      references: [],
+      messages: [],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const path = String(url);
+      if (path === "/api/v1/ai/chats" && init?.method === "GET")
+        return Response.json({
+          chats: [
+            {
+              ...chat,
+              state: undefined,
+              share: undefined,
+              references: undefined,
+              messages: undefined,
+            },
+          ],
+        });
+      if (init?.method === "DELETE") return Response.json({ ok: true });
+      return Response.json(chat);
+    });
+    const client = createApiClient({ fetch: fetchMock });
+    expect((await client.chats()).chats[0]).toMatchObject({ id: "chat 1", title: "Taxes" });
+    expect(await client.createChat()).toEqual(chat);
+    expect(await client.createChat({ share: { contents: false, otherFileNames: true } })).toEqual(
+      chat,
+    );
+    expect(await client.chat(chat.id)).toEqual(chat);
+    expect(await client.renameChat(chat.id, { title: "Renamed" })).toEqual(chat);
+    await client.deleteChat(chat.id);
+    expect(
+      await client.sendChatMessage(chat.id, { text: "Hi", references: ["/a"], location: "/" }),
+    ).toEqual(chat);
+    expect(await client.cancelChat(chat.id)).toEqual(chat);
+    expect(await client.actOnChat(chat.id, "card 1", { decision: "decline" })).toEqual(chat);
+    expect(fetchMock.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+      ["/api/v1/ai/chats", "GET"],
+      ["/api/v1/ai/chats", "POST"],
+      ["/api/v1/ai/chats", "POST"],
+      ["/api/v1/ai/chats/chat%201", "GET"],
+      ["/api/v1/ai/chats/chat%201", "PATCH"],
+      ["/api/v1/ai/chats/chat%201", "DELETE"],
+      ["/api/v1/ai/chats/chat%201/messages", "POST"],
+      ["/api/v1/ai/chats/chat%201/cancel", "POST"],
+      ["/api/v1/ai/chats/chat%201/actions/card%201", "POST"],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({});
+    expect(JSON.parse(String(fetchMock.mock.calls[6]?.[1]?.body))).toEqual({
+      text: "Hi",
+      references: ["/a"],
+      location: "/",
+    });
+  });
 });

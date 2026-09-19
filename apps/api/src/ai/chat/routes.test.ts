@@ -108,7 +108,8 @@ describe("chat routes", () => {
       method: "DELETE",
       headers: WRITE_HEADERS,
     });
-    expect(deleted.status).toBe(204);
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ ok: true });
     expect(chat.delete).toHaveBeenCalledWith(principal, "chat-1");
   });
 

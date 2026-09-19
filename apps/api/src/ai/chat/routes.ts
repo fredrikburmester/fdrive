@@ -5,6 +5,7 @@ import {
   ChatListResponse,
   ChatMessageRequest,
   ChatRenameRequest,
+  OkResponse,
   ROUTES,
 } from "@fdrive/contracts";
 import type { AuthedHono } from "../../app.js";
@@ -36,7 +37,7 @@ export function registerChatRoutes(authed: AuthedHono, chat: ChatService): void 
 
   authed.delete(`${base}/:id`, async (c) => {
     await chat.delete(c.get("principal"), c.req.param("id"));
-    return c.body(null, 204);
+    return c.json(OkResponse.parse({ ok: true }));
   });
 
   authed.post(`${base}/:id/messages`, async (c) => {

@@ -238,7 +238,7 @@ export function organizeRunCancelRoute(id: string): string {
   return `${organizeRunRoute(id)}/cancel`;
 }
 
-/** GET: one chat with its transcript -> `Chat`. PATCH: rename -> `Chat`. DELETE: remove it. 404 for another identity's chat. */
+/** GET: one chat with its transcript -> `Chat`. PATCH: rename -> `Chat`. DELETE: remove it -> `OkResponse`. 404 for another identity's chat. */
 export function chatRoute(id: string): string {
   return `${ROUTES.ai.chats}/${encodeURIComponent(id)}`;
 }

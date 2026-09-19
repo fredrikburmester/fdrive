@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
 import { accountTransition } from "@/lib/account/transition";
+import { addToChat } from "@/lib/ai/chat-panel";
 import { useAiStatus } from "@/lib/ai/queries";
 import { useOrganize } from "@/lib/ai/use-organize";
 import { useMe } from "@/lib/api/auth-queries";
@@ -178,6 +179,7 @@ export function FileBrowser({
   const { data: officeStatus } = useOfficeStatus();
   const { data: aiStatus } = useAiStatus();
   const organizeAvailable = aiStatus?.available === true;
+  const chatAvailable = organizeAvailable;
   const organize = useOrganize();
   const [officeKind, setOfficeKind] = useState<OfficeDocumentKind | null>(null);
   const [officePending, setOfficePending] = useState(false);
@@ -575,6 +577,9 @@ export function FileBrowser({
       case "organize":
         if (organizeAvailable) organize.open(entriesForAction(entry));
         break;
+      case "addToChat":
+        if (chatAvailable) addToChat(entriesForAction(entry).map((item) => item.path));
+        break;
       case "delete":
         setDeleteTargets(entriesForAction(entry));
         break;
@@ -912,6 +917,11 @@ export function FileBrowser({
                 ? () => organize.open(selectedEntries)
                 : undefined
             }
+            onAddSelectionToChat={
+              chatAvailable && selectedEntries.length > 0
+                ? () => addToChat(selectedEntries.map((item) => item.path))
+                : undefined
+            }
             onDownloadSelection={handleDownloadSelection}
             showThumbnails={showThumbnails && capabilities.index}
             onShowThumbnailsChange={setShowThumbnails}
@@ -975,6 +985,7 @@ export function FileBrowser({
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 showOrganize={organizeAvailable}
+                showChat={chatAvailable}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -998,6 +1009,7 @@ export function FileBrowser({
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 showOrganize={organizeAvailable}
+                showChat={chatAvailable}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -1022,6 +1034,7 @@ export function FileBrowser({
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
                 showOrganize={organizeAvailable}
+                showChat={chatAvailable}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}

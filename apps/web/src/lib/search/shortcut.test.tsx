@@ -16,11 +16,16 @@ afterEach(() => {
 });
 
 describe("search shortcut ownership", () => {
-  it("matches Cmd/Ctrl K case-insensitively, without matching unmodified keys", () => {
-    expect(isSearchShortcut({ key: "K", metaKey: true, ctrlKey: false })).toBe(true);
-    expect(isSearchShortcut({ key: "k", metaKey: false, ctrlKey: true })).toBe(true);
-    expect(isSearchShortcut({ key: "k", metaKey: false, ctrlKey: false })).toBe(false);
-    expect(isSearchShortcut({ key: "x", metaKey: true, ctrlKey: false })).toBe(false);
+  it("matches Cmd/Ctrl K case-insensitively, without matching unmodified or shifted keys", () => {
+    const plain = { shiftKey: false };
+    expect(isSearchShortcut({ key: "K", metaKey: true, ctrlKey: false, ...plain })).toBe(true);
+    expect(isSearchShortcut({ key: "k", metaKey: false, ctrlKey: true, ...plain })).toBe(true);
+    expect(isSearchShortcut({ key: "k", metaKey: false, ctrlKey: false, ...plain })).toBe(false);
+    expect(isSearchShortcut({ key: "x", metaKey: true, ctrlKey: false, ...plain })).toBe(false);
+    // Cmd+Shift+K toggles the chat panel, so search leaves it alone.
+    expect(isSearchShortcut({ key: "k", metaKey: true, ctrlKey: false, shiftKey: true })).toBe(
+      false,
+    );
   });
 
   it("owns shortcut state, ignores pending changes, and removes its listener", () => {
