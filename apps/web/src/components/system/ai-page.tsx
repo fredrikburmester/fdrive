@@ -131,6 +131,7 @@ export function AiSystemPage() {
           </SystemSection>
 
           <StatGrid
+            columns={3}
             stats={[
               { label: "Provider", value: AI_PROVIDER_LABELS[saved.provider] },
               { label: "Model", value: saved.model },
