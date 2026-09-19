@@ -4,6 +4,7 @@ import {
   type AiInput,
   type AiModel,
   AiProviderError,
+  type AiSendOptions,
   type AiToolSpec,
   type AiTurn,
 } from "./model.ts";
@@ -111,15 +112,21 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleModelOption
     start({ system, tools }: { system: string; tools: readonly AiToolSpec[] }): AiConversation {
       const messages: ChatMessage[] = [{ role: "system", content: system }];
       return {
-        async send(input: AiInput, signal: AbortSignal): Promise<AiTurn> {
+        async send(
+          input: AiInput,
+          signal: AbortSignal,
+          sendOptions: AiSendOptions = {},
+        ): Promise<AiTurn> {
           if (input.kind === "user") messages.push({ role: "user", content: input.text });
-          else
+          else {
             for (const result of input.results)
               messages.push({
                 role: "tool",
                 tool_call_id: result.id,
                 content: result.isError ? `Error: ${result.content}` : result.content,
               });
+            if (input.text !== undefined) messages.push({ role: "user", content: input.text });
+          }
           const body = await request(
             "/chat/completions",
             {
@@ -151,6 +158,8 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleModelOption
           const choice = parsed.data.choices[0] as (typeof parsed.data.choices)[number];
           const calls = choice.message.tool_calls ?? [];
           const text = choice.message.content ?? "";
+          // The whole reply arrives at once; the caller still sees it through `onText`.
+          if (text.length > 0) sendOptions.onText?.(text);
           messages.push({
             role: "assistant",
             content: choice.message.content ?? null,

@@ -27,7 +27,12 @@ export interface AiToolResult {
 
 export type AiInput =
   | { readonly kind: "user"; readonly text: string }
-  | { readonly kind: "tool_results"; readonly results: readonly AiToolResult[] };
+  | {
+      readonly kind: "tool_results";
+      readonly results: readonly AiToolResult[];
+      /** Something the person said after the tool calls, delivered in the same turn as their results. */
+      readonly text?: string | undefined;
+    };
 
 export interface AiTurn {
   readonly text: string;
@@ -36,8 +41,17 @@ export interface AiTurn {
   readonly stop: "end_turn" | "tool_use" | "max_tokens" | "refusal";
 }
 
+export interface AiSendOptions {
+  /**
+   * Receives the turn's text as it arrives. An adapter that does not stream
+   * delivers the whole text as one delta before `send` resolves, so a caller
+   * sees every character either way.
+   */
+  readonly onText?: ((delta: string) => void) | undefined;
+}
+
 export interface AiConversation {
-  send(input: AiInput, signal: AbortSignal): Promise<AiTurn>;
+  send(input: AiInput, signal: AbortSignal, options?: AiSendOptions): Promise<AiTurn>;
 }
 
 export interface AiModel {

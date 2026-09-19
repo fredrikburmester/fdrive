@@ -1,10 +1,9 @@
 import { DEFAULT_ORGANIZE_SHARING, type OrganizeSharing } from "@fdrive/contracts";
-import { isStorageError, parentPath } from "@fdrive/core";
+import { parentPath } from "@fdrive/core";
 import { z } from "zod";
-import { McpToolError } from "../../mcp/handlers.js";
 import type { AiInput, AiModel, AiToolCall, AiToolResult } from "../model.ts";
+import { type AiTool, executeToolCall, formatSize, issuesText, toolSpec } from "../tools/tool.ts";
 import { OrganizeError } from "./runs.ts";
-import { formatSize, type OrganizeTool, OrganizeToolError, toolSpec } from "./tools.ts";
 
 /** One selected item as the agent is told about it. */
 export interface OrganizeItem {
@@ -105,22 +104,9 @@ export function initialMessage(
   ].join("\n");
 }
 
-function issuesText(error: z.ZodError): string {
-  return error.issues
-    .slice(0, 5)
-    .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
-    .join("; ");
-}
-
-function safeToolErrorMessage(error: unknown): string {
-  if (error instanceof OrganizeToolError || error instanceof McpToolError) return error.message;
-  if (isStorageError(error)) return `Storage error (${error.kind}): ${error.message}`;
-  return "The tool failed.";
-}
-
 export interface RunOrganizeAgentOptions {
   readonly model: AiModel;
-  readonly tools: readonly OrganizeTool[];
+  readonly tools: readonly AiTool[];
   readonly items: readonly OrganizeItem[];
   readonly instructions?: string | undefined;
   readonly indexed: boolean;
@@ -169,23 +155,10 @@ export async function runOrganizeAgent(
       submit(parsed.data);
       return { id: call.id, isError: false, content: "Received." };
     }
-    const tool = toolsByName.get(call.name);
-    if (tool === undefined)
-      return { id: call.id, isError: true, content: `There is no tool named ${call.name}.` };
-    const parsed = tool.schema.safeParse(call.input);
-    if (!parsed.success)
-      return {
-        id: call.id,
-        isError: true,
-        content: `Invalid arguments: ${issuesText(parsed.error)}`,
-      };
-    options.activity(tool.activity(parsed.data));
-    try {
-      return { id: call.id, isError: false, content: await tool.run(parsed.data, options.signal) };
-    } catch (error) {
-      if (options.signal.aborted) throw error;
-      return { id: call.id, isError: true, content: safeToolErrorMessage(error) };
-    }
+    return executeToolCall(toolsByName, call, {
+      signal: options.signal,
+      activity: options.activity,
+    });
   }
 
   let input: AiInput = {

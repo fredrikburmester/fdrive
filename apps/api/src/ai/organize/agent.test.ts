@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { McpToolError } from "../../mcp/handlers.js";
 import type { AiInput, AiModel, AiToolCall, AiToolSpec, AiTurn } from "../model.ts";
+import { type AiTool, AiToolError, defineTool } from "../tools/tool.ts";
 import {
   initialMessage,
   MAX_TURNS,
@@ -14,7 +15,6 @@ import {
   SUBMIT_TOOL,
 } from "./agent.ts";
 import { OrganizeError } from "./runs.ts";
-import { defineTool, type OrganizeTool, OrganizeToolError } from "./tools.ts";
 
 /** A model that replays `turns` in order and records what it was started with and sent. */
 function scriptedModel(turns: readonly AiTurn[]) {
@@ -60,7 +60,7 @@ function submitCall(id: string, input: unknown = SUBMISSION): AiToolCall {
   return { id, name: SUBMIT_TOOL, input };
 }
 
-function echoTool(run?: (text: string, signal: AbortSignal) => Promise<string>): OrganizeTool {
+function echoTool(run?: (text: string, signal: AbortSignal) => Promise<string>): AiTool {
   return defineTool("echo", "Repeats text.", z.object({ text: z.string() }), {
     activity: (args) => `Echoed ${args.text}`,
     run: (args, signal) => (run ? run(args.text, signal) : Promise.resolve(args.text)),
@@ -275,7 +275,7 @@ describe("runOrganizeAgent", () => {
 
   it("returns safe messages for tool failures", async () => {
     const failures: Record<string, unknown> = {
-      organize: new OrganizeToolError("That folder is the Trash."),
+      organize: new AiToolError("That folder is the Trash."),
       mcp: new McpToolError("file is not indexed"),
       storage: new StorageError("forbidden", "permission denied"),
       other: new Error("connection string postgres://secret"),

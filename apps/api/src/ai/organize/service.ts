@@ -10,10 +10,10 @@ import { ApiHttpError } from "../../errors.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { type AiModel, AiProviderError } from "../model.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "../settings.ts";
+import { createDriveTools } from "../tools/drive-tools.ts";
 import { type OrganizeItem, runOrganizeAgent } from "./agent.ts";
 import { buildProposal } from "./proposal.ts";
 import { OrganizeBusyError, OrganizeError, type OrganizeRuns } from "./runs.ts";
-import { createOrganizeTools } from "./tools.ts";
 
 export interface OrganizeService {
   status(): Promise<AiStatusResponse>;
@@ -126,10 +126,16 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
               const indexed = await indexedFor(principal);
               const submission = await runOrganizeAgent({
                 model,
-                tools: createOrganizeTools({
+                tools: createDriveTools({
                   mcp: deps.mcp,
                   principal,
-                  selected: new Set(items.map((item) => item.path)),
+                  // Selected folders move whole, so the organizer never needs to look inside them.
+                  focus: {
+                    paths: new Set(items.map((item) => item.path)),
+                    adjective: "selected",
+                    group: "the selection",
+                    openFolders: false,
+                  },
                   indexed,
                   share,
                 }),
