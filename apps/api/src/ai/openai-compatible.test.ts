@@ -188,6 +188,56 @@ describe("OpenAI-compatible model", () => {
     ]);
   });
 
+  it("sends what the person said after the tool results as a user message", async () => {
+    const { model, call } = setup([
+      completion(
+        {
+          content: null,
+          tool_calls: [
+            { id: "call_1", function: { name: "list_folder", arguments: '{"path":"/"}' } },
+          ],
+        },
+        "tool_calls",
+      ),
+      completion({ content: "Sure." }),
+    ]);
+    const conversation = model.start({ system: "s", tools: TOOLS });
+    const signal = new AbortController().signal;
+    await conversation.send(user("Look."), signal);
+
+    await conversation.send(
+      {
+        kind: "tool_results",
+        results: [{ id: "call_1", content: "[]", isError: false }],
+        text: "Actually, skip that and summarize.",
+      },
+      signal,
+    );
+
+    expect((call(1).body.messages as unknown[]).slice(-2)).toEqual([
+      { role: "tool", tool_call_id: "call_1", content: "[]" },
+      { role: "user", content: "Actually, skip that and summarize." },
+    ]);
+  });
+
+  it("delivers the whole reply to onText at once, and nothing for an empty reply", async () => {
+    const { model } = setup([
+      completion({ content: "Hello world" }),
+      completion({ content: null, tool_calls: [] }, "stop"),
+    ]);
+    const conversation = model.start({ system: "s", tools: [] });
+    const signal = new AbortController().signal;
+    const onText = vi.fn();
+
+    const first = await conversation.send(user("Hi"), signal, { onText });
+    expect(onText).toHaveBeenCalledTimes(1);
+    expect(onText).toHaveBeenCalledWith("Hello world");
+    expect(first.text).toBe("Hello world");
+
+    await conversation.send(user("Again"), signal, { onText });
+    expect(onText).toHaveBeenCalledTimes(1);
+  });
+
   it("replays a plain assistant reply without tool calls", async () => {
     const { model, call } = setup([
       completion({ content: "First." }),

@@ -7,8 +7,8 @@ import {
   parentPath,
   type StorageProvider,
 } from "@fdrive/core";
+import { createPathLocator, nameKey } from "../tools/stored-paths.ts";
 import type { OrganizeItem, OrganizeSubmission } from "./agent.ts";
-import { createPathLocator, nameKey } from "./stored-paths.ts";
 
 /** Longest reason or summary kept from the model; the review shows one line. */
 const MAX_REASON_CHARS = 300;

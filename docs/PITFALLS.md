@@ -62,7 +62,7 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
   "o" plus a combining mark, while models (and most typing) produce one character. A model
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.
-  Resolve paths a model writes against storage (`ai/organize/stored-paths.ts`) before comparing
+  Resolve paths a model writes against storage (`ai/tools/stored-paths.ts`) before comparing
   or creating anything.
 - Zod 4's `z.iso.datetime()` rejects `+00:00` offsets unless `{ offset: true }`; Python emits
   offsets.

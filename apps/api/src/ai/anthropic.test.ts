@@ -60,19 +60,37 @@ function modelInfo(
   };
 }
 
-/** A fake SDK client that answers each streamed request with the next queued message or error. */
+/**
+ * A fake SDK client that answers each streamed request with the next queued
+ * message or error. Text listeners get each text block in two deltas before
+ * the final message resolves, the way the real stream emits them.
+ */
 function fakeClient(replies: (BetaMessage | Error)[] = []) {
   const requests: BetaMessageStreamParams[] = [];
   const stream = vi.fn((params: BetaMessageStreamParams, _options: { signal: AbortSignal }) => {
     requests.push(structuredClone(params));
     const reply = replies.shift();
-    return {
+    const listeners: ((delta: string, snapshot: string) => void)[] = [];
+    const handle = {
+      on(event: string, listener: (delta: string, snapshot: string) => void) {
+        if (event === "text") listeners.push(listener);
+        return handle;
+      },
       finalMessage: async () => {
         if (reply === undefined) throw new Error("no reply queued");
         if (reply instanceof Error) throw reply;
+        for (const block of reply.content) {
+          if (block.type !== "text") continue;
+          const half = Math.ceil(block.text.length / 2);
+          for (const listener of listeners) {
+            listener(block.text.slice(0, half), block.text.slice(0, half));
+            listener(block.text.slice(half), block.text);
+          }
+        }
         return reply;
       },
     };
+    return handle;
   });
   const retrieve = vi.fn().mockResolvedValue(modelInfo());
   const client = {
@@ -242,6 +260,56 @@ describe("Anthropic model", () => {
         ],
       },
     ]);
+  });
+
+  it("adds what the person said after the tool results, in the same turn", async () => {
+    const fake = fakeClient([
+      message([toolUse("toolu_1", { path: "/" })], "tool_use"),
+      message([text("Sure.")]),
+    ]);
+    const conversation = createAnthropicModel({
+      apiKey: "sk",
+      model: "claude-opus-5",
+      client: fake.client,
+    }).start({ system: "s", tools: TOOLS });
+    const signal = new AbortController().signal;
+    await conversation.send({ kind: "user", text: "Look." }, signal);
+
+    await conversation.send(
+      {
+        kind: "tool_results",
+        results: [{ id: "toolu_1", content: "[]", isError: false }],
+        text: "Actually, skip that and summarize.",
+      },
+      signal,
+    );
+
+    expect(request(fake.requests, 1).messages[2]).toEqual({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "toolu_1", content: "[]", is_error: false },
+        { type: "text", text: "Actually, skip that and summarize." },
+      ],
+    });
+  });
+
+  it("streams text deltas to onText before the turn resolves", async () => {
+    const fake = fakeClient([message([thinking, text("Hello"), text("world")])]);
+    const conversation = createAnthropicModel({
+      apiKey: "sk",
+      model: "claude-opus-5",
+      client: fake.client,
+    }).start({ system: "s", tools: [] });
+    const deltas: string[] = [];
+
+    const turn = await conversation.send(
+      { kind: "user", text: "Hi" },
+      new AbortController().signal,
+      { onText: (delta) => deltas.push(delta) },
+    );
+
+    expect(deltas).toEqual(["Hel", "lo", "wor", "ld"]);
+    expect(turn.text).toBe("Hello\nworld");
   });
 
   it.each([

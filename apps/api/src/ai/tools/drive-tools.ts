@@ -13,26 +13,30 @@ import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers
 import { resolveScopeContext, virtualPathFor } from "../../mcp/scope-context.js";
 import { createReadAuthorizer } from "../../scoping/read-authorizer.js";
 import { toIndexRelativePath } from "../../search/scopes.js";
-import type { AiToolSpec } from "../model.ts";
 import { createPathLocator } from "./stored-paths.ts";
+import { type AiTool, AiToolError, defineTool, formatSize } from "./tool.ts";
 
-/** A tool the organizer can call. Every tool only reads; moving is the person's decision. */
-export interface OrganizeTool<T = unknown> {
-  readonly spec: AiToolSpec;
-  readonly schema: z.ZodType<T>;
-  /** One short step for the run's activity list. */
-  activity(args: T): string;
-  run(args: T, signal: AbortSignal): Promise<string>;
+/**
+ * The items one AI feature lets the assistant read the contents of, and how
+ * the tools talk about them. Organize's focus is the selection: its folders
+ * move whole, so they are never opened. Chat's focus is what the person
+ * referenced, folders included.
+ */
+export interface ToolFocus {
+  /** Normalized paths; a folder covers everything inside it. */
+  readonly paths: ReadonlySet<string>;
+  /** How one item is described, e.g. "selected", as in "(selected)" and "a selected file". */
+  readonly adjective: string;
+  /** How the set is described, e.g. "the selection", as in "outside the selection". */
+  readonly group: string;
+  /** Whether the folder tools open folders in the focus. */
+  readonly openFolders: boolean;
 }
 
-/** An error whose message is returned to the model as the tool result. */
-export class OrganizeToolError extends Error {}
-
-export interface OrganizeToolsDeps {
+export interface DriveToolsDeps {
   readonly mcp: McpToolDeps;
   readonly principal: Principal;
-  /** Normalized paths of the selected items. */
-  readonly selected: ReadonlySet<string>;
+  readonly focus: ToolFocus;
   /** Whether the identity has verified index scopes, so excerpts, search and similarity can work. */
   readonly indexed: boolean;
   /** What the person chose to share with the model; defaults to everything. */
@@ -48,40 +52,19 @@ const LIST_PAGE = 200;
 export const MAX_EXCERPT_PATHS = 25;
 export const EXCERPT_CHARS = 1500;
 
-export function toolSpec(name: string, description: string, schema: z.ZodType): AiToolSpec {
-  const { $schema: _schema, ...inputSchema } = z.toJSONSchema(schema, { io: "input" });
-  return { name, description, inputSchema };
-}
-
-export function defineTool<T>(
-  name: string,
-  description: string,
-  schema: z.ZodType<T>,
-  handlers: Pick<OrganizeTool<T>, "activity" | "run">,
-): OrganizeTool {
-  return { spec: toolSpec(name, description, schema), schema, ...handlers } as OrganizeTool;
-}
-
-export function formatSize(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+function capitalize(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 function describeFile(entry: FileEntry): string {
   return `${entry.name} (${formatSize(entry.size)}, ${entry.modifiedAt.toISOString().slice(0, 10)})`;
 }
 
-function sharingOf(deps: OrganizeToolsDeps): OrganizeSharing {
+function sharingOf(deps: DriveToolsDeps): OrganizeSharing {
   return deps.share ?? DEFAULT_ORGANIZE_SHARING;
 }
 
-function trashPathOf(deps: OrganizeToolsDeps): string | null {
+function trashPathOf(deps: DriveToolsDeps): string | null {
   return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
 }
 
@@ -93,20 +76,25 @@ function normalizeArg(path: string): string {
   try {
     return normalizePath(path);
   } catch {
-    throw new OrganizeToolError(`"${path}" is not a valid path.`);
+    throw new AiToolError(`"${path}" is not a valid path.`);
   }
 }
 
 /** The stored spelling of a path the model wrote, which may encode accents differently. */
-async function storedArg(deps: OrganizeToolsDeps, path: string): Promise<string> {
+async function storedArg(deps: DriveToolsDeps, path: string): Promise<string> {
   return (await createPathLocator(deps.principal.storage).locate(normalizeArg(path))).path;
 }
 
-/** True when `path` is a selected item or lies inside a selected folder. */
-export function isSelectedOrInside(selected: ReadonlySet<string>, path: string): boolean {
-  if (selected.has(path)) return true;
-  for (const item of selected) if (isUnderPath(item, path)) return true;
+/** True when `path` is one of `paths` or lies inside one of its folders. */
+export function isWithin(paths: ReadonlySet<string>, path: string): boolean {
+  if (paths.has(path)) return true;
+  for (const item of paths) if (isUnderPath(item, path)) return true;
   return false;
+}
+
+/** A folder the tools leave closed: in the focus, when the focus is closed. */
+function isClosed(focus: ToolFocus, path: string): boolean {
+  return !focus.openFolders && focus.paths.has(path);
 }
 
 async function mapLimit<T, R>(
@@ -130,7 +118,7 @@ function describeListingError(error: unknown): string {
   return error instanceof Error ? error.message : "could not be listed";
 }
 
-function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
+function folderTreeTool(deps: DriveToolsDeps): AiTool {
   const schema = z.object({
     path: z.string().default("/").describe("Folder to start from. Defaults to the drive root."),
     depth: z
@@ -142,20 +130,24 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
       .describe("How many folder levels to open, 1 to 4. The level below is shown by name."),
   });
   const { otherFileNames } = sharingOf(deps);
+  const { focus } = deps;
+  const notOpened = focus.openFolders
+    ? "Trash is not opened."
+    : `${capitalize(focus.adjective)} items and Trash are not opened.`;
   return defineTool(
     "folder_tree",
     otherFileNames
-      ? "Shows how the drive is organized: nested folders with their file counts and a few example file names. Selected items and Trash are not opened."
-      : "Shows how the drive is organized: nested folders with their file counts. File names outside the selection are not shared. Selected items and Trash are not opened.",
+      ? `Shows how the drive is organized: nested folders with their file counts and a few example file names. ${notOpened}`
+      : `Shows how the drive is organized: nested folders with their file counts. File names outside ${focus.group} are not shared. ${notOpened}`,
     schema,
     {
       activity: (args) => `Looked through ${args.path}`,
       async run(args, signal) {
         const root = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
-        if (inTrash(trashPath, root)) throw new OrganizeToolError("That folder is the Trash.");
+        if (inTrash(trashPath, root)) throw new AiToolError("That folder is the Trash.");
         const listings = new Map<string, FileEntry[] | string>();
-        let frontier = deps.selected.has(root) ? [] : [root];
+        let frontier = isClosed(focus, root) ? [] : [root];
         let budget = TREE_LISTING_BUDGET;
         let stopped = false;
         for (let level = 0; level < args.depth && frontier.length > 0; level++) {
@@ -179,7 +171,7 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
                     (entry) =>
                       entry.kind === "dir" &&
                       !inTrash(trashPath, entry.path) &&
-                      !deps.selected.has(entry.path),
+                      !isClosed(focus, entry.path),
                   )
                   .map((entry) => entry.path)
                   .sort();
@@ -192,33 +184,34 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
           const pad = "  ".repeat(indent);
           const label = folder === "/" ? "/" : `${indent === 0 ? folder : baseName(folder)}/`;
           const entries = listings.get(folder);
-          if (deps.selected.has(folder)) {
-            lines.push(`${pad}${label} (selected)`);
+          const mark = focus.paths.has(folder) ? ` (${focus.adjective})` : "";
+          if (isClosed(focus, folder)) {
+            lines.push(`${pad}${label}${mark}`);
             return;
           }
           if (entries === undefined) {
-            lines.push(`${pad}${label}`);
+            lines.push(`${pad}${label}${mark}`);
             return;
           }
           if (typeof entries === "string") {
-            lines.push(`${pad}${label} (${entries})`);
+            lines.push(`${pad}${label}${mark} (${entries})`);
             return;
           }
           const dirs = entries
             .filter((entry) => entry.kind === "dir" && !inTrash(trashPath, entry.path))
             .sort((a, b) => a.name.localeCompare(b.name));
           const files = entries.filter((entry) => entry.kind !== "dir");
-          // Without other file names, only selected files are named; the count still covers every file.
+          // Without other file names, only files in the focus are named; the count still covers every file.
           const samples = (
-            otherFileNames ? files : files.filter((entry) => deps.selected.has(entry.path))
+            otherFileNames ? files : files.filter((entry) => focus.paths.has(entry.path))
           )
             .slice(0, TREE_SAMPLE_FILES)
             .map((entry) =>
-              deps.selected.has(entry.path) ? `${entry.name} (selected)` : entry.name,
+              focus.paths.has(entry.path) ? `${entry.name} (${focus.adjective})` : entry.name,
             );
           const more = files.length > samples.length ? `, … +${files.length - samples.length}` : "";
           lines.push(
-            `${pad}${label} ${dirs.length} folders, ${files.length} files${samples.length > 0 ? `: ${samples.join(", ")}${more}` : ""}`,
+            `${pad}${label}${mark} ${dirs.length} folders, ${files.length} files${samples.length > 0 ? `: ${samples.join(", ")}${more}` : ""}`,
           );
           for (const dir of dirs) render(dir.path, indent + 1);
         };
@@ -235,34 +228,33 @@ function folderTreeTool(deps: OrganizeToolsDeps): OrganizeTool {
   );
 }
 
-function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
+function listFolderTool(deps: DriveToolsDeps): AiTool {
   const schema = z.object({
     path: z.string().describe("Folder to list."),
     offset: z.number().int().min(0).default(0).describe("Skip this many entries, for paging."),
   });
   const { otherFileNames } = sharingOf(deps);
+  const { focus } = deps;
   return defineTool(
     "list_folder",
     otherFileNames
       ? "Lists every folder and file directly inside one folder, with file sizes and modification dates."
-      : "Lists every folder directly inside one folder, with selected files. Other files are counted, not named.",
+      : `Lists every folder directly inside one folder, with ${focus.adjective} files. Other files are counted, not named.`,
     schema,
     {
       activity: (args) => `Opened ${args.path}`,
       async run(args) {
         const path = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
-        if (inTrash(trashPath, path)) throw new OrganizeToolError("That folder is the Trash.");
+        if (inTrash(trashPath, path)) throw new AiToolError("That folder is the Trash.");
         const all = (await deps.principal.storage.list(path)).filter(
           (entry) => !inTrash(trashPath, entry.path),
         );
         const withheld = otherFileNames
           ? 0
-          : all.filter((entry) => entry.kind !== "dir" && !deps.selected.has(entry.path)).length;
+          : all.filter((entry) => entry.kind !== "dir" && !focus.paths.has(entry.path)).length;
         const entries = all
-          .filter(
-            (entry) => otherFileNames || entry.kind === "dir" || deps.selected.has(entry.path),
-          )
+          .filter((entry) => otherFileNames || entry.kind === "dir" || focus.paths.has(entry.path))
           .sort((a, b) =>
             a.kind === "dir" && b.kind !== "dir"
               ? -1
@@ -273,7 +265,7 @@ function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
         const page = entries.slice(args.offset, args.offset + LIST_PAGE);
         const lines = page.map((entry) => {
           const label = entry.kind === "dir" ? `${entry.name}/` : describeFile(entry);
-          return deps.selected.has(entry.path) ? `${label} (selected)` : label;
+          return focus.paths.has(entry.path) ? `${label} (${focus.adjective})` : label;
         });
         const header = `${path}: ${all.length} entries`;
         if (withheld > 0)
@@ -288,13 +280,16 @@ function listFolderTool(deps: OrganizeToolsDeps): OrganizeTool {
   );
 }
 
-function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
+function readExcerptsTool(deps: DriveToolsDeps): AiTool {
+  const { focus } = deps;
   const schema = z.object({
     paths: z
       .array(z.string())
       .min(1)
       .max(MAX_EXCERPT_PATHS)
-      .describe("Selected files (or files inside selected folders) to read, at most 25."),
+      .describe(
+        `${capitalize(focus.adjective)} files (or files inside ${focus.adjective} folders) to read, at most 25.`,
+      ),
   });
   let scope: ReturnType<typeof resolveScope> | undefined;
   function resolveScope() {
@@ -308,7 +303,7 @@ function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
   }
   return defineTool(
     "read_excerpts",
-    `Reads the start of each file's already-extracted text (documents, PDFs, OCR'd scans), up to ${EXCERPT_CHARS} characters each. Only works on selected items.`,
+    `Reads the start of each file's already-extracted text (documents, PDFs, OCR'd scans), up to ${EXCERPT_CHARS} characters each. Only works on ${focus.adjective} items.`,
     schema,
     {
       activity: (args) =>
@@ -329,8 +324,8 @@ function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
             return `### ${raw}\n(Not a valid path.)`;
           }
           path = (await locator.locate(path)).path;
-          if (!isSelectedOrInside(deps.selected, path))
-            return `### ${raw}\n(Not a selected item; only selected items can be read.)`;
+          if (!isWithin(focus.paths, path))
+            return `### ${raw}\n(Not a ${focus.adjective} item; only ${focus.adjective} items can be read.)`;
           const resolved = toFsPath(ctx.scopes, path);
           const rootId = resolved === null ? undefined : ctx.rootIdByName.get(resolved.rootName);
           const file =
@@ -358,16 +353,16 @@ function readExcerptsTool(deps: OrganizeToolsDeps): OrganizeTool {
 /** Groups hits by folder so the model sees where related things live, not other files' contents. Without `names`, only counts. */
 function groupByFolder(
   hits: readonly { path: string; name: string }[],
-  selected: ReadonlySet<string>,
+  focus: ToolFocus,
   names: boolean,
 ): string {
   const folders = new Map<string, string[]>();
   for (const hit of hits) {
-    if (isSelectedOrInside(selected, hit.path)) continue;
+    if (isWithin(focus.paths, hit.path)) continue;
     const folder = parentPath(hit.path);
     folders.set(folder, [...(folders.get(folder) ?? []), hit.name]);
   }
-  if (folders.size === 0) return "No related files outside the selection.";
+  if (folders.size === 0) return `No related files outside ${focus.group}.`;
   return [...folders.entries()]
     .sort((a, b) => b[1].length - a[1].length)
     .map(([folder, matches]) => {
@@ -377,7 +372,7 @@ function groupByFolder(
     .join("\n");
 }
 
-function searchTool(deps: OrganizeToolsDeps): OrganizeTool {
+function searchTool(deps: DriveToolsDeps): AiTool {
   const schema = z.object({
     query: z
       .string()
@@ -398,38 +393,39 @@ function searchTool(deps: OrganizeToolsDeps): OrganizeTool {
         });
         if ("unavailable" in response && response.unavailable)
           return "Search is not available right now.";
-        return groupByFolder(response.results, deps.selected, sharingOf(deps).otherFileNames);
+        return groupByFolder(response.results, deps.focus, sharingOf(deps).otherFileNames);
       },
     },
   );
 }
 
-function similarTool(deps: OrganizeToolsDeps): OrganizeTool {
+function similarTool(deps: DriveToolsDeps): AiTool {
+  const { focus } = deps;
   const schema = z.object({
-    path: z.string().describe("A selected file."),
+    path: z.string().describe(`A ${focus.adjective} file.`),
   });
   return defineTool(
     "similar_files",
-    "Finds indexed files whose content resembles a selected file and reports which folders they are in.",
+    `Finds indexed files whose content resembles a ${focus.adjective} file and reports which folders they are in.`,
     schema,
     {
       activity: (args) => `Compared ${baseName(args.path)} with similar files`,
       async run(args) {
         const path = await storedArg(deps, args.path);
-        if (!isSelectedOrInside(deps.selected, path))
-          throw new OrganizeToolError("Only selected items can be compared.");
+        if (!isWithin(focus.paths, path))
+          throw new AiToolError(`Only ${focus.adjective} items can be compared.`);
         const response = await runSimilarFiles(deps.mcp, deps.principal, { path, limit: 20 });
-        return groupByFolder(response.results, deps.selected, sharingOf(deps).otherFileNames);
+        return groupByFolder(response.results, focus, sharingOf(deps).otherFileNames);
       },
     },
   );
 }
 
 /**
- * The read-only tools for one organize run: index-backed tools only when the
+ * The read-only drive tools for one focus: index-backed tools only when the
  * identity is indexed, and excerpts only when the person shares contents.
  */
-export function createOrganizeTools(deps: OrganizeToolsDeps): OrganizeTool[] {
+export function createDriveTools(deps: DriveToolsDeps): AiTool[] {
   return [
     folderTreeTool(deps),
     listFolderTool(deps),
