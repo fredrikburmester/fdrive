@@ -20,6 +20,23 @@ entered for. Changing either removes the saved key unless a new one is entered, 
 never forwarded to a different address. A key that no longer decrypts (a rotated master key)
 shows as missing.
 
+## Chat
+
+Once AI is on, a **Chat** button in the page header (or Cmd+Shift+K, Ctrl+Shift+K elsewhere)
+opens a panel beside the page that stays open while you move between folders and pages. Drop
+files or folders onto it from any listing, or use **Add to chat** from a selection or a row's
+menu, then ask: what the files are about, whether one is a duplicate, whether they can be
+removed, where they should go, or for a more professional version of a text file. The
+assistant reads only what you attached (and what is inside attached folders) and answers with
+links to the files it talks about.
+
+When it wants to change something, it shows a card instead: moves grouped by destination that
+you can uncheck or redirect, items to move to Trash (only where Trash is configured), or a new
+text file (or a new version of an attached text file) whose text you see first. Nothing happens
+until you apply the card; the assistant then continues with the outcome. Sending a new message
+declines any waiting cards. Recent chats are in the panel's menu; a chat keeps its transcript
+across reloads and stays for 90 days after its last message.
+
 ## What is sent
 
 - Paths, sizes and dates of the selected items, and the names of folders the assistant lists

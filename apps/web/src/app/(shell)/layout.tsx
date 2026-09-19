@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ChatPanel } from "@/components/ai/chat/chat-panel";
 import { AppSidebar } from "@/components/shell/app-sidebar";
 import { MeHydration } from "@/components/shell/me-hydration";
 import { ShellRuntime } from "@/components/shell/shell-runtime";
@@ -18,6 +19,8 @@ export default async function ShellLayout({ children }: { children: ReactNode })
           <SidebarInset className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
             {children}
           </SidebarInset>
+          {/* Docked beside the page, not inside it, so it follows the person between folders and pages. */}
+          <ChatPanel />
         </SidebarProvider>
       </ShellRuntime>
     </MeHydration>

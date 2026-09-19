@@ -93,6 +93,14 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
   density (`fdrive.list.density`), size units (`fdrive.format.sizes`), date style
   (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.
+- The AI chat panel is mounted in the shell layout beside the page, not inside the file
+  browser, so it follows the person between folders and pages; below the tablet breakpoint it
+  is a sheet. Its open state, width and current chat are `fdrive.chat.open`, `fdrive.chat.width`
+  and `fdrive.chat.current`, read through the same `useSyncExternalStore` pattern as the other
+  browser preferences. Files and folders reach it by drag (the listings' internal
+  `application/x-fdrive-paths` drag) or **Add to chat** from a selection or row. Its transcript
+  and composer are the trimmed AI Elements components under `components/ai-elements/`; the
+  action cards and reference chips are fdrive's own.
 - Use the existing UI tokens and components. Action labels omit ellipses; progress labels
   may use them. Keep transient failures from deleting persisted preferences.
 - HEIC/HEIF files are stored as uploaded. The web client decodes them natively where the

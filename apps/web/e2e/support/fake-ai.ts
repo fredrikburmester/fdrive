@@ -8,6 +8,7 @@ interface ChatMessage {
   readonly role: string;
   readonly content?: string | null;
   readonly tool_call_id?: string;
+  readonly tool_calls?: { function: { name: string; arguments: string } }[];
 }
 
 export interface FakeAi {
@@ -24,6 +25,65 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function textReply(content: string) {
+  return { choices: [{ finish_reason: "stop", message: { content } }] };
+}
+
+/** The attached paths in the latest person message, as the chat lists them. */
+function attachedPaths(messages: readonly ChatMessage[]): string[] {
+  const latest = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
+  return [...latest.matchAll(/^- (\/.+?) \(/gm)].map((match) => match[1] as string);
+}
+
+/**
+ * The chat script: reads the first attached file when asked what files are
+ * about, proposes a move into a `Notes` folder next to the file, drafts a
+ * professional version as a new text file, and answers a duplicate
+ * question in words. After a tool result it confirms in one line.
+ */
+function chatReply(messages: readonly ChatMessage[]) {
+  const last = messages.at(-1);
+  if (last?.role === "tool") {
+    const call = [...messages].reverse().find((message) => message.tool_calls?.length)
+      ?.tool_calls?.[0];
+    const name = call?.function.name ?? "";
+    const paths = attachedPaths(messages);
+    if (name === "read_file")
+      return textReply(
+        `${paths[0] ?? "That file"} is an invoice for 2024; ${paths[1] ?? "the other"} is a shopping list.`,
+      );
+    if (name === "move_items") return textReply("Moved them into Notes.");
+    if (name === "write_text_file") return textReply("Saved the professional version next to it.");
+    return textReply("Done.");
+  }
+  const question = (last?.content ?? "").toLowerCase();
+  const paths = attachedPaths(messages);
+  const first = paths[0] ?? "/";
+  const folder = first.slice(0, first.lastIndexOf("/"));
+  if (question.includes("about")) return toolCall("call-read", "read_file", { path: first });
+  if (question.includes("duplicate"))
+    return textReply(
+      "I cannot compare contents here: the file is not indexed, so I can only go by names.",
+    );
+  if (question.includes("move"))
+    return toolCall("call-move", "move_items", {
+      summary: "Notes go into a Notes folder.",
+      moves: paths.map((path) => ({
+        path,
+        destination: `${folder}/Notes`,
+        reason: "It is a note.",
+      })),
+    });
+  if (question.includes("rewrite"))
+    return toolCall("call-write", "write_text_file", {
+      summary: "A more professional version, as a new file.",
+      path: `${folder}/shopping-professional.txt`,
+      mode: "create",
+      text: "Grocery list\n\n- Milk\n- Eggs",
+    });
+  return textReply("Hello. Attach files to ask about them.");
 }
 
 function toolCall(id: string, name: string, args: unknown) {
@@ -43,7 +103,8 @@ function toolCall(id: string, name: string, args: unknown) {
 }
 
 /**
- * A scripted OpenAI-compatible server for `organize.spec.ts`: it first asks
+ * A scripted OpenAI-compatible server for `organize.spec.ts` and `chat.spec.ts`
+ * (the chat script is `chatReply`). For Organize it first asks
  * for the folder tree, then files every selected item whose name contains
  * "invoice" under the sandbox's existing `Finance` folder and everything else
  * under a new `Notes` folder. It runs in the Playwright worker, which the
@@ -65,6 +126,11 @@ export async function startFakeAi(): Promise<FakeAi> {
       }
       const body = (await readJson(req)) as FakeAi["requests"][number];
       requests.push(body);
+      const system = body.messages.find((message) => message.role === "system")?.content ?? "";
+      if (system.startsWith("You are the assistant inside fdrive")) {
+        res.end(JSON.stringify(chatReply(body.messages)));
+        return;
+      }
       if (!body.messages.some((message) => message.role === "tool")) {
         res.end(JSON.stringify(toolCall("call-tree", "folder_tree", { path: "/", depth: 1 })));
         return;

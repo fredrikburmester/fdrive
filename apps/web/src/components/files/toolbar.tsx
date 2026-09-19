@@ -15,6 +15,7 @@ import {
   LayoutGridIcon,
   ListIcon,
   ListTreeIcon,
+  MessageSquarePlusIcon,
   MoreHorizontalIcon,
   PanelRightIcon,
   PlusIcon,
@@ -274,6 +275,8 @@ export interface FilesToolbarActionsProps {
   onCompressSelection: () => void;
   /** Asks the assistant where the selection belongs. Hidden when AI is not set up. */
   onOrganizeSelection?: (() => void) | undefined;
+  /** Adds the selection to the chat panel; shown when AI is set up. */
+  onAddSelectionToChat?: (() => void) | undefined;
   /** Downloads the currently selected entries (single direct download or zip). */
   onDownloadSelection: () => void;
   /** Whether image thumbnails are shown in list view. */
@@ -529,6 +532,7 @@ export function FilesToolbarActions({
   onDuplicateSelection,
   onCompressSelection,
   onOrganizeSelection,
+  onAddSelectionToChat,
   onDownloadSelection,
   showThumbnails,
   onShowThumbnailsChange,
@@ -637,6 +641,23 @@ export function FilesToolbarActions({
                 <SparklesIcon />
               </TooltipTrigger>
               <TooltipContent>Organize</TooltipContent>
+            </Tooltip>
+          )}
+          {onAddSelectionToChat !== undefined && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Add to chat"
+                    onClick={onAddSelectionToChat}
+                  />
+                }
+              >
+                <MessageSquarePlusIcon />
+              </TooltipTrigger>
+              <TooltipContent>Add to chat</TooltipContent>
             </Tooltip>
           )}
           <Tooltip>
@@ -784,6 +805,12 @@ export function FilesToolbarActions({
               <DropdownMenuItem disabled={selectedCount === 0} onClick={onOrganizeSelection}>
                 <SparklesIcon />
                 Organize
+              </DropdownMenuItem>
+            )}
+            {onAddSelectionToChat !== undefined && (
+              <DropdownMenuItem disabled={selectedCount === 0} onClick={onAddSelectionToChat}>
+                <MessageSquarePlusIcon />
+                Add to chat
               </DropdownMenuItem>
             )}
             {overflow.includes("download") && downloadAvailable && (

@@ -15,6 +15,8 @@ vi.mock("@/components/shell/me-hydration", () => ({
 vi.mock("@/components/shell/shell-runtime", () => ({
   ShellRuntime: ({ children }: { children: ReactNode }) => children,
 }));
+// The chat panel needs the query client the runtime provides; its own tests cover it.
+vi.mock("@/components/ai/chat/chat-panel", () => ({ ChatPanel: () => null }));
 
 import ShellLayout from "./layout";
 
