@@ -17,6 +17,7 @@ export {
   createActivityObservationsRepo,
 } from "./repos/activity-observations.js";
 export {
+  type ActivityReadInput,
   type ActivityReadsRepo,
   AGGREGATED_ACTIVITY_READS,
   createActivityReadsRepo,

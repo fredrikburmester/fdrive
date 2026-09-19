@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CreateTagRequest,
   FavoriteRequest,
@@ -15,7 +16,8 @@ import {
   type TagsResponse,
   UpdateTagRequest,
 } from "@fdrive/contracts";
-import { ConflictError } from "@fdrive/db";
+import { type ActivityReadsRepo, ConflictError } from "@fdrive/db";
+import type { ActivityAdmission } from "../activity/admission.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import { normalizeOrThrow, parseBody, statEntry } from "../fs/routes.js";
@@ -30,6 +32,13 @@ function routePath(fullPath: string): string {
 
 export interface MetadataRoutesDeps {
   readonly metadata: MetadataService;
+  /**
+   * Reads recents from actor-attributed history instead of the legacy
+   * `app.recents` table. Both are optional so deployments and route tests
+   * without the activity feature keep the old behavior.
+   */
+  readonly reads?: ActivityReadsRepo;
+  readonly admitActivity?: ActivityAdmission;
 }
 
 /** Runs `fn`, mapping a `ConflictError` (a duplicate tag name) into a 409 `ApiHttpError`. */
@@ -215,7 +224,9 @@ export function registerMetadataRoutes(
 
   authed.get(routePath(ROUTES.recents.list), async (c) => {
     const principal = c.get("principal");
-    const items = await metadata.listRecents(principal.identityId);
+    const items = deps.reads
+      ? await deps.reads.recents(principal.accountId, principal.identityId)
+      : await metadata.listRecents(principal.identityId);
     const body: RecentsResponse = {
       items: items.map((item) => ({ path: item.path, openedAt: item.openedAt.toISOString() })),
     };
@@ -226,7 +237,17 @@ export function registerMetadataRoutes(
     const principal = c.get("principal");
     const input = await parseBody(RecentTouchRequest, c);
     const path = normalizeOrThrow(input.path);
-    await metadata.touchRecent(principal.identityId, path);
+    // Legacy `app.recents` rows have no actor, so they are never backfilled
+    // into history. New opens are recorded as the person who made them.
+    if (deps.admitActivity)
+      await deps.admitActivity(c, {
+        identityId: principal.identityId,
+        path,
+        action: "file.open",
+        requestId: input.requestId ?? randomUUID(),
+        ...(input.at ? { at: input.at } : {}),
+      });
+    else await metadata.touchRecent(principal.identityId, path);
     const body: OkResponse = { ok: true };
     return c.json(body);
   });

@@ -127,6 +127,9 @@ export const RecentsResponse = z.object({
 export type RecentsResponse = z.infer<typeof RecentsResponse>;
 
 export const RecentTouchRequest = z.object({
+  /** Correlates retries of one gesture so a repeated report is not a second open. */
+  requestId: z.uuid().optional(),
+  at: z.iso.datetime({ offset: true }).optional(),
   path: z.string(),
 });
 
