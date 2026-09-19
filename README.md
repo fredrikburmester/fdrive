@@ -1,10 +1,8 @@
 # fdrive
 
-Current design: [Architecture](docs/ARCHITECTURE.md). Unfinished work: [Plans](docs/plans/README.md).
+**fdrive** is a clean web interface for your home server files, built for [SFTPGo](https://github.com/drakkan/sftpgo) first. It connects to your existing SFTPGo storage so you can browse, upload, preview, search, and share your files from any browser, without moving your data into a database or giving up control. fdrive is only a layer on top. 
 
-**fdrive** is a clean, fast web drive for your home server, built for [SFTPGo](https://github.com/drakkan/sftpgo) first. It connects to your existing SFTPGo storage so you can browse, upload, preview, search, and share your files from any browser on your home network, without moving your data into a database or giving up control.
-
-Think of it like Google Drive or iCloud Drive, but running completely on your own hardware, right over your existing files.
+fdrive also offers a native MacOS app, connecting your SFTPGo files (and other storage providers) directly into Finder.
 
 ![fdrive file browser in dark mode, with folders, favorites, tags, and file details](docs/screenshots/files-list-only-overview.png)
 
@@ -14,13 +12,13 @@ Think of it like Google Drive or iCloud Drive, but running completely on your ow
 
 ## Highlights
 
-- **Your files stay yours**: Files remain plain files on your disk, managed by SFTPGo. fdrive never moves, hides, or locks them into a proprietary format.
-- **SFTPGo first, other storage beside it**: Search, thumbnails, shares and Office are built on SFTPGo storage. You can add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside it for browsing, uploads and Trash. fdrive names the features a storage lacks wherever you add or pick one, and features reach other storage one at a time as fdrive learns to provide them itself.
+- **Your files stay yours**: Files remain plain files on your disk, managed by SFTPGo. fdrive is just a layer on top, adding more functionality.
+- **SFTPGo first, other storage beside it**: Search, thumbnails, shares and Office are built on SFTPGo storage. You can add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside it for browsing and uploads (but these storage providers do not support the features SFTPGo supports).
 - **Lightning fast & clean**: Minimalist, distraction-free interface with dark mode, keyboard navigation, and mobile support.
 - **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
 - **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file over SFTP or directly on disk.
-- **Share with family & friends**: Create password-protected links with expiration dates, download limits, and beautiful photo galleries.
-- **Built-in Trash**: Safely restore accidentally deleted files.
+- **Share with family & friends**: Create password-protected links with expiration dates, download limits, and photo galleries.
+- **Trash support build on SFTPGo**: Safely restore accidentally deleted files (if set up)
 - **Modular power-ups**: Keep it featherlight (< 300 MB RAM) for basic browsing, or switch on full-text search, AI image search, OCR, and browser office editing whenever you want.
 
 ---
