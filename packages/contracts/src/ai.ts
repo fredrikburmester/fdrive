@@ -156,3 +156,190 @@ export const OrganizeRun = z.object({
 });
 
 export type OrganizeRun = z.infer<typeof OrganizeRun>;
+
+// ------------------------------------------------------------------ chat
+
+/** Chats one login keeps; creating another deletes the oldest by last message. */
+export const MAX_CHATS = 50;
+/** Messages one chat may hold, person and assistant together, before it is closed. */
+export const MAX_CHAT_MESSAGES = 200;
+/** Files and folders one chat may reference. */
+export const MAX_CHAT_REFERENCES = 200;
+/** Days a chat stays after its last message. */
+export const CHAT_RETENTION_DAYS = 90;
+
+const chatPath = z.string().min(1).max(4096);
+
+/**
+ * `running` while the assistant answers, `awaiting_approval` while an
+ * action card waits for the person, `closed` once the chat reached its
+ * message limit; otherwise `idle`.
+ */
+export const ChatState = z.enum(["idle", "running", "awaiting_approval", "closed"]);
+
+export type ChatState = z.infer<typeof ChatState>;
+
+/** One proposed move card: Organize's proposal, verified against storage the same way. */
+export const ChatMoveProposal = z.object({
+  kind: z.literal("move"),
+  summary: z.string(),
+  suggestions: z.array(OrganizeSuggestion),
+  unchanged: z.array(z.object({ path: z.string(), reason: z.string() })),
+});
+
+export const ChatTrashProposal = z.object({
+  kind: z.literal("trash"),
+  summary: z.string(),
+  items: z.array(z.object({ path: z.string(), kind: z.enum(["file", "dir"]), reason: z.string() })),
+});
+
+/** A text file to create next to a referenced item, or a referenced text file to replace. */
+export const ChatWriteProposal = z.object({
+  kind: z.literal("write"),
+  summary: z.string(),
+  path: z.string(),
+  mode: z.enum(["create", "replace"]),
+  text: z.string(),
+  /** The SHA-256 the draft was based on; `replace` refuses when the file changed since. */
+  expectedSha256: z.string().nullable(),
+});
+
+export const ChatActionProposal = z.discriminatedUnion("kind", [
+  ChatMoveProposal,
+  ChatTrashProposal,
+  ChatWriteProposal,
+]);
+
+export type ChatActionProposal = z.infer<typeof ChatActionProposal>;
+
+export const ChatActionState = z.enum(["pending", "applied", "declined", "failed"]);
+
+export type ChatActionState = z.infer<typeof ChatActionState>;
+
+/** What happened to one item when a card was applied. */
+export const ChatActionResult = z.object({
+  path: z.string(),
+  ok: z.boolean(),
+  /** Where the item ended up, for moves and writes. */
+  target: z.string().optional(),
+  message: z.string().optional(),
+});
+
+export type ChatActionResult = z.infer<typeof ChatActionResult>;
+
+export const ChatPart = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("text"), text: z.string() }),
+  z.object({
+    kind: z.literal("tool"),
+    id: z.string(),
+    name: z.string(),
+    /** One short line for the person, e.g. "Read invoice.pdf". */
+    activity: z.string(),
+    /** The arguments and result, each shortened for display. */
+    input: z.string(),
+    output: z.string(),
+    state: z.enum(["running", "done", "failed"]),
+  }),
+  z.object({
+    kind: z.literal("action"),
+    id: z.string(),
+    state: ChatActionState,
+    proposal: ChatActionProposal,
+    /** One line about the outcome once the card is no longer pending. */
+    outcome: z.string().optional(),
+    results: z.array(ChatActionResult).optional(),
+  }),
+  z.object({ kind: z.literal("error"), message: z.string() }),
+]);
+
+export type ChatPart = z.infer<typeof ChatPart>;
+
+export const ChatMessage = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant"]),
+  parts: z.array(ChatPart),
+  /** Paths attached to this message when it was sent. */
+  references: z.array(z.string()),
+  /** The folder open in the browser when it was sent. */
+  location: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+
+export type ChatMessage = z.infer<typeof ChatMessage>;
+
+export const ChatReference = z.object({
+  path: z.string(),
+  /** The item was moved out of reach or trashed after it was referenced. */
+  missing: z.boolean(),
+});
+
+export type ChatReference = z.infer<typeof ChatReference>;
+
+export const ChatSummary = z.object({
+  id: z.string(),
+  title: z.string(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  lastMessageAt: z.iso.datetime(),
+});
+
+export type ChatSummary = z.infer<typeof ChatSummary>;
+
+export const Chat = ChatSummary.extend({
+  state: ChatState,
+  share: OrganizeSharing,
+  references: z.array(ChatReference),
+  messages: z.array(ChatMessage),
+});
+
+export type Chat = z.infer<typeof Chat>;
+
+export const ChatListResponse = z.object({ chats: z.array(ChatSummary) });
+
+export type ChatListResponse = z.infer<typeof ChatListResponse>;
+
+export const ChatCreateRequest = z.strictObject({
+  /** Omitted means `DEFAULT_ORGANIZE_SHARING`. */
+  share: OrganizeSharing.optional(),
+});
+
+export type ChatCreateRequest = z.infer<typeof ChatCreateRequest>;
+
+export const ChatRenameRequest = z.strictObject({
+  title: z.string().trim().min(1).max(120),
+});
+
+export type ChatRenameRequest = z.infer<typeof ChatRenameRequest>;
+
+export const ChatMessageRequest = z.strictObject({
+  text: z.string().trim().min(1).max(8000),
+  /** Files and folders attached to this message; they stay referenced for the rest of the chat. */
+  references: z.array(chatPath).max(MAX_CHAT_REFERENCES).optional(),
+  /** The folder open in the browser, so "this folder" means something. */
+  location: chatPath.nullable().optional(),
+});
+
+export type ChatMessageRequest = z.infer<typeof ChatMessageRequest>;
+
+/** What the person changed on a card before applying it; an omitted field keeps the proposal. */
+export const ChatActionEdits = z.strictObject({
+  /** Moves to make, by item path and full target path; only proposal items count. */
+  moves: z
+    .array(z.object({ path: z.string(), target: z.string() }))
+    .max(500)
+    .optional(),
+  /** Items to trash; only proposal items count. */
+  paths: z.array(z.string()).max(500).optional(),
+  /** Another name or place for a written file. */
+  path: chatPath.optional(),
+  mode: z.enum(["create", "replace"]).optional(),
+});
+
+export type ChatActionEdits = z.infer<typeof ChatActionEdits>;
+
+export const ChatActionRequest = z.discriminatedUnion("decision", [
+  z.strictObject({ decision: z.literal("decline") }),
+  z.strictObject({ decision: z.literal("apply"), edits: ChatActionEdits.optional() }),
+]);
+
+export type ChatActionRequest = z.infer<typeof ChatActionRequest>;

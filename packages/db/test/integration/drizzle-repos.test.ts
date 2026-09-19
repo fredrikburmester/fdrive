@@ -35,6 +35,9 @@ afterAll(async () => {
 defineReposSuite("drizzle", async () => {
   await db.execute(sql`
     truncate table
+      app.ai_chat_references,
+      app.ai_chat_messages,
+      app.ai_chats,
       app.sessions,
       app.api_tokens,
       app.credentials,

@@ -5,7 +5,7 @@ import {
   type AiModel,
   AiProviderError,
   type AiSendOptions,
-  type AiToolSpec,
+  type AiStartOptions,
   type AiTurn,
 } from "./model.ts";
 
@@ -109,8 +109,16 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleModelOption
   }
 
   return {
-    start({ system, tools }: { system: string; tools: readonly AiToolSpec[] }): AiConversation {
-      const messages: ChatMessage[] = [{ role: "system", content: system }];
+    start({ system, tools, history = [] }: AiStartOptions): AiConversation {
+      const messages: ChatMessage[] = [
+        { role: "system", content: system },
+        ...history.map(
+          (entry): ChatMessage =>
+            entry.role === "user"
+              ? { role: "user", content: entry.text }
+              : { role: "assistant", content: entry.text },
+        ),
+      ];
       return {
         async send(
           input: AiInput,

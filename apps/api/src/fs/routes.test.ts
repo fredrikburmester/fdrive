@@ -20,7 +20,7 @@ import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { registerFsRoutes, requireTargetFree } from "./routes.js";
+import { registerFsRoutes, requireTargetFree, trashMany } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -1827,4 +1827,66 @@ it("publishes successful deletes before a later item fails", async () => {
   expect(events).toEqual([
     expect.objectContaining({ type: "fs", op: "delete", paths: ["/hello.txt"] }),
   ]);
+});
+
+describe("trashMany", () => {
+  it("removes what it can, continues past failures, and publishes one delete event", async () => {
+    const storage = createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" });
+    const metadata = createMetadataService(createMemoryRepos());
+    const onTrashed = vi.spyOn(metadata, "onTrashed");
+    const onDeleted = vi.spyOn(metadata, "onDeleted");
+    const bus = createEventBus();
+    const events: BusEvent[] = [];
+    bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
+    const principal: Principal = {
+      accountId: ACCOUNT_ID,
+      identityId: ALICE_IDENTITY_ID,
+      username: "alice",
+      storage,
+      isAdmin: false,
+    };
+
+    const results = await trashMany(
+      { bus, clock: () => new Date(CLOCK_ISO), metadata },
+      principal,
+      [
+        { path: "/a.txt", kind: "file" },
+        { path: "/missing.txt", kind: "file" },
+        { path: "/dir", kind: "dir" },
+      ],
+    );
+
+    expect(results).toEqual([
+      { path: "/a.txt", ok: true },
+      {
+        path: "/missing.txt",
+        ok: false,
+        error: { kind: "not_found", message: expect.any(String) },
+      },
+      { path: "/dir", ok: true },
+    ]);
+    // Without a provider Trash the deletes are final, so every metadata row goes.
+    expect(onDeleted.mock.calls.map(([, path, isDir]) => [path, isDir])).toEqual([
+      ["/a.txt", false],
+      ["/dir", true],
+    ]);
+    expect(onTrashed).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      {
+        type: "fs",
+        op: "delete",
+        identityId: ALICE_IDENTITY_ID,
+        paths: ["/a.txt", "/dir"],
+        at: CLOCK_ISO,
+      },
+    ]);
+    await expect(storage.stat("/a.txt")).rejects.toMatchObject({ kind: "not_found" });
+
+    vi.spyOn(storage, "deleteFile").mockRejectedValueOnce(new Error("socket hang up"));
+    await expect(
+      trashMany({ bus, clock: () => new Date(CLOCK_ISO), metadata }, principal, [
+        { path: "/dir/b.txt", kind: "file" },
+      ]),
+    ).rejects.toThrow("socket hang up");
+  });
 });

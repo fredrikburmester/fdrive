@@ -212,13 +212,16 @@ Each step is one PR with the AGENTS.md checks; the earlier ones do not change wh
 1. **Port and shared tools.** `AiInput` tool results with optional text; optional `onText`
    on `send` (Claude first). Move Organize's tools into `apps/api/src/ai/tools/` behind an
    `AiTool` type parameterized by the readable set; Organize keeps its behavior and tests.
-2. **Chat core (API).** Contracts, the two tables and migration, a chat repository, the loop
-   with pending actions and history rebuild, `read_file`, `file_info`, `duplicates_of`,
-   `move_items`, `trash_items`, `write_text_file`, the routes without SSE. Unit and
-   integration tests for approval flows (apply, decline, new message with pending cards,
-   stale SHA, missing Trash), rebuild after eviction, compaction, limits and eviction,
-   reference path updates on move and trash, cancel, and cross-identity isolation for every
-   route and tool.
+2. **Chat core (API).** Done in the API (`apps/api/src/ai/chat/`, see the developer notes in
+   [AI](../AI.md)): contracts, three tables (chats, messages, references) and migration, a
+   chat repository, the loop with pending actions and history rebuild, `read_file`,
+   `file_info`, `duplicates_of`, `move_items`, `trash_items`, `write_text_file`, the routes
+   without SSE, with unit tests and the shared repository suite. Two deviations from the
+   design above: references live in their own table so moves and trash can update them by
+   path, and a rebuilt conversation replays the transcript as plain text (tool calls of the
+   last few replies summarized inline) instead of native tool blocks, so it needs no
+   provider-specific history. Pending cards survive a restart and can still be applied; only
+   the assistant's continuation after them needs the live conversation.
 3. **Chat panel.** First a short spike: install the AI Elements components listed above,
    confirm they build and render on the Base UI primitives in a throwaway page, and record
    any adjustments. Then the shell-mounted panel, preferences, chat list, composer with

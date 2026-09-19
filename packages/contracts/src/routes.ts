@@ -120,6 +120,8 @@ export const ROUTES = {
     status: "/api/v1/ai/status",
     /** POST: ask the assistant where selected items belong -> `OrganizeRun` (202). Nothing moves. */
     organize: "/api/v1/ai/organize",
+    /** GET: the caller's recent chats -> `ChatListResponse`. POST: start a chat -> `Chat` (201). */
+    chats: "/api/v1/ai/chats",
   },
   /** GET: version and configured providers -> `AboutResponse`. */
   about: "/api/v1/about",
@@ -234,6 +236,26 @@ export function organizeRunRoute(id: string): string {
 /** POST: stop an organize run -> `OrganizeRun`. 404 for a run that belongs to another identity. */
 export function organizeRunCancelRoute(id: string): string {
   return `${organizeRunRoute(id)}/cancel`;
+}
+
+/** GET: one chat with its transcript -> `Chat`. PATCH: rename -> `Chat`. DELETE: remove it. 404 for another identity's chat. */
+export function chatRoute(id: string): string {
+  return `${ROUTES.ai.chats}/${encodeURIComponent(id)}`;
+}
+
+/** POST: send a message -> `Chat` (202); the reply arrives while the chat is `running`. */
+export function chatMessagesRoute(id: string): string {
+  return `${chatRoute(id)}/messages`;
+}
+
+/** POST: stop the reply being written -> `Chat`. */
+export function chatCancelRoute(id: string): string {
+  return `${chatRoute(id)}/cancel`;
+}
+
+/** POST: apply or decline one pending action card -> `Chat` (202 while the assistant continues). */
+export function chatActionRoute(id: string, actionId: string): string {
+  return `${chatRoute(id)}/actions/${encodeURIComponent(actionId)}`;
 }
 
 /** GET, admin only: one subsystem's event log -> `SystemLogsResponse`. */

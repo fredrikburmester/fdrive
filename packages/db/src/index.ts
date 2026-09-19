@@ -8,6 +8,7 @@ import * as idxSchema from "./schema/idx.js";
 
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
+export { createAiChatRepo } from "./repos/ai-chats.js";
 export {
   createDesktopRepo,
   type DesktopItemRecord,
@@ -117,6 +118,12 @@ export { createSystemEventRepo } from "./repos/system-events.js";
 export type {
   Account,
   AccountRepo,
+  AiChat,
+  AiChatMessage,
+  AiChatReference,
+  AiChatRepo,
+  AiChatRole,
+  AiChatSharing,
   ApiToken,
   ApiTokenRepo,
   Credential,

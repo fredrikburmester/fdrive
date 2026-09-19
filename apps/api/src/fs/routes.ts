@@ -392,6 +392,142 @@ async function handleDownload(c: FsContext): Promise<Response> {
  * move, copy, rename, delete) on the authed group, using `ROUTES.fs.*`
  * (minus the `/api/v1` prefix, since `authed` is already mounted there).
  */
+/**
+ * Moves items in order, continuing past failures, never overwriting, and
+ * reports each outcome. Used by `POST /fs/move-many` and by AI chat when a
+ * move card is applied. With `createParents`, missing target folders are
+ * created after the source was checked, so a move that cannot happen leaves
+ * no empty folder behind.
+ */
+export async function moveMany(
+  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata">,
+  principal: Principal,
+  body: MoveManyRequest,
+): Promise<MoveManyResult[]> {
+  const results: MoveManyResult[] = [];
+  const moved: { path: string; target: string }[] = [];
+  const created: string[] = [];
+  const readyParents = new Set<string>();
+
+  /** Creates the target's missing parent folders, recording each one so every listing above them refreshes. */
+  async function ensureParent(target: string): Promise<void> {
+    const parent = parentPath(target);
+    const missing: string[] = [];
+    for (let folder = parent; folder !== "/" && !readyParents.has(folder); ) {
+      try {
+        await principal.storage.stat(folder);
+        break;
+      } catch (error) {
+        if (!isStorageError(error) || error.kind !== "not_found") throw error;
+        missing.unshift(folder);
+        folder = parentPath(folder);
+      }
+    }
+    if (missing.length > 0) {
+      await principal.storage.mkdir(parent, { parents: true });
+      created.push(...missing);
+    }
+    for (let folder = parent; folder !== "/"; folder = parentPath(folder)) readyParents.add(folder);
+  }
+
+  try {
+    for (const item of body.items) {
+      try {
+        const path = normalizeOrThrow(item.path);
+        const target = normalizeOrThrow(item.target);
+        // Check the source first, so a move that cannot happen leaves no new empty folder behind.
+        const source = await runStorageCall(() => principal.storage.stat(path));
+        if (body.createParents === true && path !== target && !isUnderPath(path, target))
+          await runStorageCall(() => ensureParent(target));
+        await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+        moved.push({ path, target });
+        try {
+          await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
+          results.push({ ok: true, path, target });
+        } catch {
+          results.push({
+            ok: true,
+            path,
+            target,
+            warning: "Moved, but its tags, favorite or recent entry could not follow it.",
+          });
+        }
+      } catch (error) {
+        // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
+        if (!(error instanceof ApiHttpError)) throw error;
+        results.push({
+          ok: false,
+          path: item.path,
+          target: item.target,
+          error: { kind: error.kind, message: error.message },
+        });
+      }
+    }
+  } finally {
+    if (created.length > 0) publishFsEvent(deps, principal, "mkdir", created);
+    if (moved.length > 0)
+      publishFsEvent(
+        deps,
+        principal,
+        "move",
+        moved.map((entry) => entry.path),
+        moved.map((entry) => entry.target),
+      );
+  }
+  return results;
+}
+
+export interface TrashManyResult {
+  readonly path: string;
+  readonly ok: boolean;
+  readonly error?: { kind: string; message: string };
+}
+
+/**
+ * Deletes items one by one, continuing past failures. Where the login's
+ * storage has Trash, the deletes are recoverable and only recents are
+ * dropped; otherwise every path-keyed metadata row goes with the item.
+ */
+export async function trashMany(
+  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata">,
+  principal: Principal,
+  items: readonly { path: string; kind: "file" | "dir" }[],
+): Promise<TrashManyResult[]> {
+  const results: TrashManyResult[] = [];
+  const removed: string[] = [];
+  try {
+    for (const item of items) {
+      try {
+        const path = normalizeOrThrow(item.path);
+        await runStorageCall(() =>
+          item.kind === "dir"
+            ? principal.storage.deleteDir(path)
+            : principal.storage.deleteFile(path),
+        );
+        removed.push(path);
+        try {
+          if (principal.storage.trash !== undefined)
+            await deps.metadata?.onTrashed(principal.identityId, path, item.kind === "dir");
+          else await deps.metadata?.onDeleted(principal.identityId, path, item.kind === "dir");
+        } catch {
+          // The item is gone either way; stale metadata is repaired by the next listing.
+        }
+        results.push({ path, ok: true });
+      } catch (error) {
+        if (!(error instanceof ApiHttpError)) throw error;
+        results.push({
+          path: item.path,
+          ok: false,
+          error: { kind: error.kind, message: error.message },
+        });
+      }
+    }
+  } finally {
+    if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);
+  }
+  return results;
+}
+
 export function registerFsRoutes(
   groups: { public: AppHono; authed: AuthedHono },
   deps: FsRoutesDeps,
@@ -526,78 +662,7 @@ export function registerFsRoutes(
   authed.post(routePath(ROUTES.fs.moveMany), async (c) => {
     const principal = c.get("principal");
     const body = await parseBody(MoveManyRequest, c, jsonMaxBytes);
-    const results: MoveManyResult[] = [];
-    const moved: { path: string; target: string }[] = [];
-    const created: string[] = [];
-    const readyParents = new Set<string>();
-
-    /** Creates the target's missing parent folders, recording each one so every listing above them refreshes. */
-    async function ensureParent(target: string): Promise<void> {
-      const parent = parentPath(target);
-      const missing: string[] = [];
-      for (let folder = parent; folder !== "/" && !readyParents.has(folder); ) {
-        try {
-          await principal.storage.stat(folder);
-          break;
-        } catch (error) {
-          if (!isStorageError(error) || error.kind !== "not_found") throw error;
-          missing.unshift(folder);
-          folder = parentPath(folder);
-        }
-      }
-      if (missing.length > 0) {
-        await principal.storage.mkdir(parent, { parents: true });
-        created.push(...missing);
-      }
-      for (let folder = parent; folder !== "/"; folder = parentPath(folder))
-        readyParents.add(folder);
-    }
-
-    try {
-      for (const item of body.items) {
-        try {
-          const path = normalizeOrThrow(item.path);
-          const target = normalizeOrThrow(item.target);
-          // Check the source first, so a move that cannot happen leaves no new empty folder behind.
-          const source = await runStorageCall(() => principal.storage.stat(path));
-          if (body.createParents === true && path !== target && !isUnderPath(path, target))
-            await runStorageCall(() => ensureParent(target));
-          await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
-          moved.push({ path, target });
-          try {
-            await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
-            results.push({ ok: true, path, target });
-          } catch {
-            results.push({
-              ok: true,
-              path,
-              target,
-              warning: "Moved, but its tags, favorite or recent entry could not follow it.",
-            });
-          }
-        } catch (error) {
-          // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
-          if (!(error instanceof ApiHttpError)) throw error;
-          results.push({
-            ok: false,
-            path: item.path,
-            target: item.target,
-            error: { kind: error.kind, message: error.message },
-          });
-        }
-      }
-    } finally {
-      if (created.length > 0) publishFsEvent(deps, principal, "mkdir", created);
-      if (moved.length > 0)
-        publishFsEvent(
-          deps,
-          principal,
-          "move",
-          moved.map((entry) => entry.path),
-          moved.map((entry) => entry.target),
-        );
-    }
-    return c.json(MoveManyResponse.parse({ results }));
+    return c.json(MoveManyResponse.parse({ results: await moveMany(deps, principal, body) }));
   });
 
   authed.post(routePath(ROUTES.fs.copy), async (c) => {

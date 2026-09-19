@@ -17,7 +17,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type { DesktopEffectPayload } from "../repos/desktop-effects-types.js";
-import type { ApiTokenAccess } from "../repos/types.js";
+import type { AiChatSharing, ApiTokenAccess } from "../repos/types.js";
 import { vector } from "../vector.js";
 
 /**
@@ -520,3 +520,62 @@ export const backupAttachments = appSchema.table("backup_attachments", {
   sha256: text("sha256").notNull(),
   secret: bytea("secret").notNull(),
 });
+
+/** One AI chat a login keeps; its transcript is in `ai_chat_messages`, what it may read in `ai_chat_references`. */
+export const aiChats = appSchema.table(
+  "ai_chats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    /** What the person chose to share with the model: `{ contents, otherFileNames }`. */
+    share: jsonb("share").$type<AiChatSharing>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("ai_chats_identity_last_message_idx").on(table.identityId, table.lastMessageAt),
+  ],
+);
+
+export const aiChatMessages = appSchema.table(
+  "ai_chat_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    chatId: uuid("chat_id")
+      .notNull()
+      .references(() => aiChats.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    role: text("role").notNull(),
+    /** The transcript parts the browser renders, validated by the API's contracts on read. */
+    parts: jsonb("parts").$type<unknown[]>().notNull(),
+    /** Paths attached to the message when it was sent. */
+    references: jsonb("references").$type<string[]>().notNull(),
+    location: text("location"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique("ai_chat_messages_chat_ordinal").on(table.chatId, table.ordinal)],
+);
+
+/** What a chat's assistant may read, by path; moves follow renames, trash marks a row missing. */
+export const aiChatReferences = appSchema.table(
+  "ai_chat_references",
+  {
+    chatId: uuid("chat_id")
+      .notNull()
+      .references(() => aiChats.id, { onDelete: "cascade" }),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    missing: boolean("missing").notNull().default(false),
+    addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.chatId, table.path] }),
+    index("ai_chat_references_identity_path_idx").on(table.identityId, table.path),
+  ],
+);
