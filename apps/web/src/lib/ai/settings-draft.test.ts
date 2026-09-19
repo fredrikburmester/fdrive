@@ -11,7 +11,8 @@ import {
 
 const anthropic: AiSettings = {
   revision: 3,
-  enabled: true,
+  organize: true,
+  chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
   baseUrl: null,
@@ -20,7 +21,8 @@ const anthropic: AiSettings = {
 
 const ollama: AiSettings = {
   revision: 1,
-  enabled: true,
+  organize: true,
+  chat: true,
   provider: "openai_compatible",
   model: "qwen3:32b",
   baseUrl: "http://ollama:11434/v1",
@@ -31,7 +33,8 @@ describe("draftFrom and isDirty", () => {
   it("starts from the saved settings without a key", () => {
     const draft = draftFrom(ollama);
     expect(draft).toEqual({
-      enabled: true,
+      organize: true,
+      chat: true,
       provider: "openai_compatible",
       model: "qwen3:32b",
       baseUrl: "http://ollama:11434/v1",
@@ -70,7 +73,8 @@ describe("requestFrom", () => {
         ok: true,
         request: {
           revision: 3,
-          enabled: true,
+          organize: true,
+          chat: true,
           provider: "anthropic",
           model: "claude-sonnet-5",
           baseUrl: null,
@@ -84,7 +88,9 @@ describe("requestFrom", () => {
     expect(requestFrom({ ...draft, apiKey: " sk-ant " }, anthropic)).toMatchObject({
       request: { apiKey: "sk-ant" },
     });
-    expect(requestFrom({ ...draft, enabled: false, clearKey: true }, anthropic)).toMatchObject({
+    expect(
+      requestFrom({ ...draft, organize: false, chat: false, clearKey: true }, anthropic),
+    ).toMatchObject({
       request: { apiKey: null },
     });
   });
@@ -100,11 +106,11 @@ describe("requestFrom", () => {
     });
     expect(requestFrom({ ...draftFrom(anthropic), clearKey: true }, anthropic)).toEqual({
       ok: false,
-      errors: ["Enter an Anthropic API key to turn AI on."],
+      errors: ["Enter an Anthropic API key to turn Organize or Chat on."],
     });
     expect(
       requestFrom(withProvider(draftFrom(ollama), "anthropic"), { ...ollama, hasApiKey: true }),
-    ).toEqual({ ok: false, errors: ["Enter an Anthropic API key to turn AI on."] });
+    ).toEqual({ ok: false, errors: ["Enter an Anthropic API key to turn Organize or Chat on."] });
   });
 
   it("allows an OpenAI-compatible server without a key", () => {
@@ -114,7 +120,8 @@ describe("requestFrom", () => {
       ok: true,
       request: {
         revision: 1,
-        enabled: true,
+        organize: true,
+        chat: true,
         provider: "openai_compatible",
         model: "qwen3:32b",
         baseUrl: "http://ollama:11434/v1",
@@ -141,7 +148,10 @@ describe("keyWillBeDropped", () => {
 
 describe("aiStatus", () => {
   it("summarizes off, incomplete and on", () => {
-    expect(aiStatus({ ...anthropic, enabled: false })).toEqual({ tone: "off", label: "Off" });
+    expect(aiStatus({ ...anthropic, organize: false, chat: false })).toEqual({
+      tone: "off",
+      label: "Off",
+    });
     expect(aiStatus({ ...anthropic, hasApiKey: false })).toEqual({
       tone: "incomplete",
       label: "Needs an API key",

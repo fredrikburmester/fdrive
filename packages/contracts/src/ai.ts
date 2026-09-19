@@ -24,7 +24,10 @@ const aiModel = z.string().trim().min(1).max(200);
 /** The administrator's AI configuration as the browser sees it: the API key itself never leaves the server. */
 export const AiSettings = z.object({
   revision: z.number().int().nonnegative(),
-  enabled: z.boolean(),
+  /** Whether Organize is offered to everyone signed in. */
+  organize: z.boolean(),
+  /** Whether the chat panel is offered to everyone signed in. */
+  chat: z.boolean(),
   provider: AiProvider,
   model: aiModel,
   /** Required for `openai_compatible`, e.g. `http://ollama:11434/v1`; always `null` for `anthropic`. */
@@ -37,7 +40,8 @@ export type AiSettings = z.infer<typeof AiSettings>;
 export const AiSettingsUpdateRequest = z
   .strictObject({
     revision: z.number().int().nonnegative(),
-    enabled: z.boolean(),
+    organize: z.boolean(),
+    chat: z.boolean(),
     provider: AiProvider,
     model: aiModel,
     baseUrl: HttpUrl.nullable(),
@@ -74,10 +78,11 @@ export const AiConnectionTestResponse = z.object({
 
 export type AiConnectionTestResponse = z.infer<typeof AiConnectionTestResponse>;
 
-/** Returned by `GET /ai/status` to every signed-in user: whether AI actions can be offered. */
+/** Returned by `GET /ai/status` to every signed-in user: which AI features can be offered. */
 export const AiStatusResponse = z.object({
-  available: z.boolean(),
   provider: AiProvider.nullable(),
+  organize: z.boolean(),
+  chat: z.boolean(),
 });
 
 export type AiStatusResponse = z.infer<typeof AiStatusResponse>;

@@ -36,7 +36,7 @@ test("Organize suggests other folders, keeps both on a clash, moves what is kept
     await dismissActivityPanel(page);
     await page.getByRole("button", { name: "Settings" }).click();
     const sheet = page.getByRole("dialog").filter({ hasText: "AI settings" });
-    await sheet.getByRole("switch", { name: "Turn on AI" }).click();
+    await sheet.getByRole("switch", { name: "Organize" }).click();
     await sheet.getByLabel("Provider").click();
     await page.getByRole("option", { name: "OpenAI-compatible server" }).click();
     await sheet.getByLabel("Base URL").fill(fakeAi.baseUrl);
