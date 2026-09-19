@@ -30,7 +30,7 @@ const RUN: OrganizeRun = {
 
 const CONFIGURATION: AiSettings = {
   revision: 1,
-  enabled: true,
+  organize: true,
   chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
@@ -43,6 +43,7 @@ const SAVED: ResolvedAiConfig = {
   model: "claude-opus-5",
   baseUrl: null,
   apiKey: "sk-ant-1",
+  organize: true,
   chat: true,
 };
 
@@ -62,7 +63,7 @@ function buildApp(
     isAdmin: options.isAdmin ?? false,
   };
   const organize = {
-    status: vi.fn(async () => ({ available: true, provider: "anthropic" as const, chat: true })),
+    status: vi.fn(async () => ({ provider: "anthropic" as const, organize: true, chat: true })),
     start: vi.fn(async () => RUN),
     get: vi.fn(() => RUN),
     cancel: vi.fn(() => ({ ...RUN, state: "cancelled" as const })),
@@ -103,7 +104,7 @@ describe("AI routes", () => {
       const { app } = buildApp({ isAdmin: false });
       const response = await app.request(ROUTES.ai.status);
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ available: true, provider: "anthropic", chat: true });
+      expect(await response.json()).toEqual({ provider: "anthropic", organize: true, chat: true });
     });
 
     it("starts a run for the caller with the parsed request", async () => {
@@ -162,7 +163,7 @@ describe("AI routes", () => {
         headers: WRITE_HEADERS,
         body: JSON.stringify({
           revision: 1,
-          enabled: true,
+          organize: true,
           provider: "anthropic",
           model: "claude-opus-5",
           baseUrl: null,
@@ -190,7 +191,7 @@ describe("AI routes", () => {
       const { app, settings } = buildApp({ isAdmin: true });
       const input = {
         revision: 1,
-        enabled: true,
+        organize: true,
         chat: true,
         provider: "anthropic",
         model: "claude-sonnet-5",
@@ -216,7 +217,7 @@ describe("AI routes", () => {
         headers: WRITE_HEADERS,
         body: JSON.stringify({
           revision: 1,
-          enabled: true,
+          organize: true,
           provider: "openai_compatible",
           model: "llama3",
           baseUrl: null,

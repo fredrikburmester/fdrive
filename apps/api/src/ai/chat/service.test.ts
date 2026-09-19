@@ -19,6 +19,7 @@ const CONFIG: ResolvedAiConfig = {
   model: "claude-opus-5",
   baseUrl: null,
   apiKey: "sk",
+  organize: true,
   chat: true,
 };
 const HOME_SCOPES: readonly Scope[] = [

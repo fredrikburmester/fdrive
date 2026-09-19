@@ -17,7 +17,7 @@ const secrets: SecretBox = {
 
 interface StoredRow {
   revision: number;
-  enabled: boolean;
+  organize: boolean;
   chat?: boolean;
   provider: "anthropic" | "openai_compatible";
   model: string;
@@ -56,8 +56,8 @@ function anthropicUpdate(
 ): AiSettingsUpdateRequest {
   return {
     revision: 0,
-    enabled: false,
-    chat: true,
+    organize: false,
+    chat: false,
     provider: "anthropic",
     model: "claude-opus-5",
     baseUrl: null,
@@ -68,7 +68,7 @@ function anthropicUpdate(
 function ollamaUpdate(overrides: Partial<AiSettingsUpdateRequest> = {}): AiSettingsUpdateRequest {
   return {
     revision: 0,
-    enabled: true,
+    organize: true,
     chat: true,
     provider: "openai_compatible",
     model: "llama3",
@@ -87,12 +87,26 @@ async function rejection(promise: Promise<unknown>): Promise<ApiHttpError> {
 }
 
 describe("AI settings service", () => {
+  it("reads rows saved before the feature switches, where one flag covered everything", async () => {
+    const legacy = {
+      revision: 3,
+      provider: "anthropic",
+      model: "claude-opus-5",
+      baseUrl: null,
+      apiKey: null,
+    };
+    const on = setup({ initial: { ...legacy, enabled: true } });
+    expect(await on.service.configuration()).toMatchObject({ organize: true, chat: true });
+    const off = setup({ initial: { ...legacy, enabled: false } });
+    expect(await off.service.configuration()).toMatchObject({ organize: false, chat: false });
+  });
+
   it("returns the defaults when nothing is stored", async () => {
     const { service } = setup();
     expect(await service.configuration()).toEqual({
       revision: 0,
-      enabled: false,
-      chat: true,
+      organize: false,
+      chat: false,
       provider: "anthropic",
       model: DEFAULT_AI_MODEL.anthropic,
       baseUrl: null,
@@ -104,11 +118,11 @@ describe("AI settings service", () => {
 
   it("saves an update, bumps the revision and never exposes the key", async () => {
     const { service, settings, row } = setup();
-    const view = await service.update(anthropicUpdate({ enabled: true, apiKey: "sk-ant-1" }));
+    const view = await service.update(anthropicUpdate({ organize: true, apiKey: "sk-ant-1" }));
     expect(view).toEqual({
       revision: 1,
-      enabled: true,
-      chat: true,
+      organize: true,
+      chat: false,
       provider: "anthropic",
       model: "claude-opus-5",
       baseUrl: null,
@@ -123,7 +137,8 @@ describe("AI settings service", () => {
       model: "claude-opus-5",
       baseUrl: null,
       apiKey: "sk-ant-1",
-      chat: true,
+      organize: true,
+      chat: false,
     });
   });
 
@@ -145,7 +160,7 @@ describe("AI settings service", () => {
   });
 
   it("fails with an internal error when the stored row is invalid", async () => {
-    const { service } = setup({ initial: { revision: -1, enabled: "yes" } });
+    const { service } = setup({ initial: { revision: -1, organize: "yes" } });
     expect((await rejection(service.configuration())).kind).toBe("internal");
     expect((await rejection(service.resolved())).kind).toBe("internal");
     expect((await rejection(service.update(anthropicUpdate()))).kind).toBe("internal");
@@ -189,6 +204,7 @@ describe("AI settings service", () => {
         model: "llama3",
         baseUrl: "http://elsewhere:8000/v1",
         apiKey: null,
+        organize: true,
         chat: true,
       });
     });
@@ -211,13 +227,13 @@ describe("AI settings service", () => {
 
     it("refuses to turn Anthropic on without a key", async () => {
       const { service, settings } = setup();
-      const error = await rejection(service.update(anthropicUpdate({ enabled: true })));
+      const error = await rejection(service.update(anthropicUpdate({ organize: true })));
       expect(error.kind).toBe("bad_request");
       expect(settings.compareAndSet).not.toHaveBeenCalled();
 
       await service.update(anthropicUpdate({ apiKey: "sk-ant-1" }));
       const cleared = await rejection(
-        service.update(anthropicUpdate({ revision: 1, enabled: true, apiKey: null })),
+        service.update(anthropicUpdate({ revision: 1, organize: true, apiKey: null })),
       );
       expect(cleared.kind).toBe("bad_request");
     });
@@ -225,8 +241,8 @@ describe("AI settings service", () => {
     it("turns Anthropic on with a previously saved key", async () => {
       const { service } = setup();
       await service.update(anthropicUpdate({ apiKey: "sk-ant-1" }));
-      const view = await service.update(anthropicUpdate({ revision: 1, enabled: true }));
-      expect(view).toMatchObject({ enabled: true, hasApiKey: true });
+      const view = await service.update(anthropicUpdate({ revision: 1, organize: true }));
+      expect(view).toMatchObject({ organize: true, hasApiKey: true });
     });
   });
 
@@ -234,7 +250,7 @@ describe("AI settings service", () => {
     function storedRow(overrides: Partial<StoredRow>): StoredRow {
       return {
         revision: 3,
-        enabled: true,
+        organize: true,
         chat: true,
         provider: "anthropic",
         model: "claude-opus-5",
@@ -245,14 +261,15 @@ describe("AI settings service", () => {
     }
 
     it("is null while AI is turned off, but the saved configuration is still available", async () => {
-      const { service } = setup({ initial: storedRow({ enabled: false }) });
+      const { service } = setup({ initial: storedRow({ organize: false, chat: false }) });
       expect(await service.resolved()).toBeNull();
       expect(await service.saved()).toEqual({
         provider: "anthropic",
         model: "claude-opus-5",
         baseUrl: null,
         apiKey: "sk-ant-1",
-        chat: true,
+        organize: false,
+        chat: false,
       });
     });
 
@@ -288,6 +305,7 @@ describe("AI settings service", () => {
         model: "llama3",
         baseUrl: "http://attacker.example/v1",
         apiKey: null,
+        organize: true,
         chat: true,
       });
     });
@@ -313,6 +331,7 @@ describe("AI settings service", () => {
         model: "llama3",
         baseUrl: OLLAMA,
         apiKey: null,
+        organize: true,
         chat: true,
       });
     });
@@ -330,7 +349,7 @@ describe("AI settings service", () => {
     const eventLog = { record: vi.fn() };
     const { service } = setup({ eventLog });
     await service.update(ollamaUpdate({ apiKey: "sk-local" }));
-    await service.update(ollamaUpdate({ revision: 1, enabled: false }));
+    await service.update(ollamaUpdate({ revision: 1, organize: false }));
     await service.update(ollamaUpdate({ revision: 2, baseUrl: "http://elsewhere:8000/v1" }));
     expect(eventLog.record.mock.calls).toEqual([
       [
@@ -338,7 +357,7 @@ describe("AI settings service", () => {
         "info",
         "AI settings updated",
         {
-          enabled: true,
+          organize: true,
           provider: "openai_compatible",
           model: "llama3",
           chat: true,
@@ -350,7 +369,7 @@ describe("AI settings service", () => {
         "info",
         "AI settings updated",
         {
-          enabled: false,
+          organize: false,
           provider: "openai_compatible",
           model: "llama3",
           chat: true,
@@ -362,7 +381,7 @@ describe("AI settings service", () => {
         "info",
         "AI settings updated",
         {
-          enabled: true,
+          organize: true,
           provider: "openai_compatible",
           model: "llama3",
           chat: true,

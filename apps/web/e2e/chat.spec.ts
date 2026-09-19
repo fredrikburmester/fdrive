@@ -40,7 +40,7 @@ test("chat follows the person between folders, takes dropped files, reads them, 
     await dismissActivityPanel(page);
     await page.getByRole("button", { name: "Settings" }).click();
     const sheet = page.getByRole("dialog").filter({ hasText: "AI settings" });
-    await sheet.getByRole("switch", { name: "Turn on AI" }).click();
+    await sheet.getByRole("switch", { name: "Chat" }).click();
     await sheet.getByLabel("Provider").click();
     await page.getByRole("option", { name: "OpenAI-compatible server" }).click();
     await sheet.getByLabel("Base URL").fill(fakeAi.baseUrl);

@@ -8,7 +8,7 @@ import {
 
 /** The AI settings form as edited: text fields stay strings until they are saved. */
 export interface AiDraft {
-  readonly enabled: boolean;
+  readonly organize: boolean;
   readonly chat: boolean;
   readonly provider: AiProvider;
   readonly model: string;
@@ -26,7 +26,7 @@ export const AI_PROVIDER_LABELS: Record<AiProvider, string> = {
 
 export function draftFrom(settings: AiSettings): AiDraft {
   return {
-    enabled: settings.enabled,
+    organize: settings.organize,
     chat: settings.chat,
     provider: settings.provider,
     model: settings.model,
@@ -73,15 +73,19 @@ export function requestFrom(draft: AiDraft, saved: AiSettings): AiDraftResult {
   if (model === "") errors.push("Enter a model.");
   if (draft.provider === "openai_compatible" && !isHttpUrl(baseUrl))
     errors.push("Enter the server's base URL, starting with http:// or https://.");
-  if (draft.enabled && draft.provider === "anthropic" && !keyAfterSave(draft, saved))
-    errors.push("Enter an Anthropic API key to turn AI on.");
+  if (
+    (draft.organize || draft.chat) &&
+    draft.provider === "anthropic" &&
+    !keyAfterSave(draft, saved)
+  )
+    errors.push("Enter an Anthropic API key to turn Organize or Chat on.");
   if (errors.length > 0) return { ok: false, errors };
   const apiKey = draft.apiKey.trim();
   return {
     ok: true,
     request: {
       revision: saved.revision,
-      enabled: draft.enabled,
+      organize: draft.organize,
       chat: draft.chat,
       provider: draft.provider,
       model,
@@ -100,7 +104,7 @@ export type AiStatusTone = "on" | "off" | "incomplete";
 
 /** How the page summarizes saved settings. */
 export function aiStatus(settings: AiSettings): { tone: AiStatusTone; label: string } {
-  if (!settings.enabled) return { tone: "off", label: "Off" };
+  if (!settings.organize && !settings.chat) return { tone: "off", label: "Off" };
   if (settings.provider === "anthropic" && !settings.hasApiKey)
     return { tone: "incomplete", label: "Needs an API key" };
   return { tone: "on", label: "On" };

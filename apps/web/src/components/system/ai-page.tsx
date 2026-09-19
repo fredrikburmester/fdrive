@@ -92,11 +92,13 @@ export function AiSystemPage() {
             title="Status"
             description={
               status.tone === "on"
-                ? saved.chat
+                ? saved.organize && saved.chat
                   ? "Organize and Chat are available to everyone signed in."
-                  : "Organize is available to everyone signed in. Chat is turned off."
+                  : saved.organize
+                    ? "Organize is available to everyone signed in. Chat is off."
+                    : "Chat is available to everyone signed in. Organize is off."
                 : status.tone === "off"
-                  ? "Organize and Chat are hidden. Turn AI on in Settings."
+                  ? "Organize and Chat are off. Turn them on in Settings."
                   : "Organize and Chat stay hidden until an API key is saved."
             }
             actions={
@@ -133,6 +135,7 @@ export function AiSystemPage() {
               { label: "Provider", value: AI_PROVIDER_LABELS[saved.provider] },
               { label: "Model", value: saved.model },
               { label: "API key", value: saved.hasApiKey ? "Saved" : "None" },
+              { label: "Organize", value: saved.organize ? "On" : "Off" },
               { label: "Chat", value: saved.chat ? "On" : "Off" },
             ]}
           />
@@ -216,23 +219,23 @@ function AiSettingsFields({
   return (
     <>
       <Field orientation="horizontal">
-        <FieldLabel htmlFor="ai-enabled">Turn on AI</FieldLabel>
+        <FieldLabel htmlFor="ai-organize">Organize</FieldLabel>
         <Switch
-          id="ai-enabled"
-          checked={values.enabled}
+          id="ai-organize"
+          checked={values.organize}
           disabled={disabled}
-          onCheckedChange={(enabled) => onChange({ enabled })}
+          onCheckedChange={(organize) => onChange({ organize })}
         />
       </Field>
       <FieldDescription>
-        Shows Organize, and Chat when it is on, to everyone signed in.
+        Suggests where selected files belong, for everyone signed in.
       </FieldDescription>
       <Field orientation="horizontal">
         <FieldLabel htmlFor="ai-chat">Chat</FieldLabel>
         <Switch
           id="ai-chat"
           checked={values.chat}
-          disabled={disabled || !values.enabled}
+          disabled={disabled}
           onCheckedChange={(chat) => onChange({ chat })}
         />
       </Field>

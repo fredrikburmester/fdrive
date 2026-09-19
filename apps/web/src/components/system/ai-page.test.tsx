@@ -34,7 +34,7 @@ const { AiSystemPage } = await import("./ai-page");
 
 const claude: AiSettings = {
   revision: 2,
-  enabled: true,
+  organize: true,
   chat: true,
   provider: "anthropic",
   model: "claude-opus-5",
@@ -69,8 +69,8 @@ afterEach(() => {
 
 it("summarizes the saved provider and what leaves the server", () => {
   render(<AiSystemPage />);
-  // The status badge and the Chat stat both read "On".
-  expect(screen.getAllByText("On")).toHaveLength(2);
+  // The status badge and the Organize and Chat stats all read "On".
+  expect(screen.getAllByText("On")).toHaveLength(3);
   expect(screen.getByText("Organize and Chat are available to everyone signed in.")).toBeTruthy();
   expect(screen.getByText("Anthropic (Claude)")).toBeTruthy();
   expect(screen.getByText("Saved")).toBeTruthy();
@@ -103,7 +103,7 @@ it("turns chat off on its own, and says so on the page", () => {
   withSettings({ ...claude, chat: false });
   render(<AiSystemPage />);
   expect(
-    screen.getByText("Organize is available to everyone signed in. Chat is turned off."),
+    screen.getByText("Organize is available to everyone signed in. Chat is off."),
   ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   const toggle = screen.getByRole("switch", { name: "Chat" });
@@ -111,7 +111,7 @@ it("turns chat off on its own, and says so on the page", () => {
   fireEvent.click(toggle);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(mocks.mutate).toHaveBeenCalledWith(
-    expect.objectContaining({ enabled: true, chat: true }),
+    expect.objectContaining({ organize: true, chat: true }),
     expect.anything(),
   );
 });
@@ -126,7 +126,7 @@ it("saves a new model and key from the settings sheet", () => {
   expect(mocks.mutate).toHaveBeenCalledWith(
     {
       revision: 2,
-      enabled: true,
+      organize: true,
       chat: true,
       provider: "anthropic",
       model: "claude-sonnet-5",
@@ -143,10 +143,10 @@ it("removes a saved key only when asked, and then blocks turning Anthropic on", 
   render(<AiSystemPage />);
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove the saved key" }));
-  expect(screen.getByText("Enter an Anthropic API key to turn AI on.")).toBeTruthy();
+  expect(screen.getByText("Enter an Anthropic API key to turn Organize or Chat on.")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
   fireEvent.click(screen.getByRole("button", { name: "Keep the saved key" }));
-  expect(screen.queryByText("Enter an Anthropic API key to turn AI on.")).toBeNull();
+  expect(screen.queryByText("Enter an Anthropic API key to turn Organize or Chat on.")).toBeNull();
 });
 
 it("warns that editing a server address drops its saved key", () => {

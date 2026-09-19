@@ -25,6 +25,7 @@ const CONFIG: ResolvedAiConfig = {
   model: "claude-test",
   baseUrl: null,
   apiKey: "sk-test",
+  organize: true,
   chat: true,
 };
 
@@ -171,17 +172,13 @@ describe("createOrganizeService", () => {
     it("reports the configured provider", async () => {
       const { service } = setup();
 
-      expect(await service.status()).toEqual({
-        available: true,
-        provider: "anthropic",
-        chat: true,
-      });
+      expect(await service.status()).toEqual({ provider: "anthropic", organize: true, chat: true });
     });
 
     it("reports unavailable when AI is not set up", async () => {
       const { service } = setup({ resolved: null });
 
-      expect(await service.status()).toEqual({ available: false, provider: null, chat: false });
+      expect(await service.status()).toEqual({ provider: null, organize: false, chat: false });
     });
   });
 

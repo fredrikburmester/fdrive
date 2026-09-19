@@ -22,7 +22,9 @@ export interface ResolvedAiConfig {
   readonly model: string;
   readonly baseUrl: string | null;
   readonly apiKey: string | null;
-  /** Whether the chat panel is offered; Organize is offered whenever AI resolves. */
+  /** Whether Organize is offered. */
+  readonly organize: boolean;
+  /** Whether the chat panel is offered. */
   readonly chat: boolean;
 }
 
@@ -31,28 +33,36 @@ export interface AiSettingsService {
   update(input: AiSettingsUpdateRequest): Promise<AiSettings>;
   /** The usable configuration, or `null` when AI is off or not fully set up. */
   resolved(): Promise<ResolvedAiConfig | null>;
-  /** The saved configuration regardless of `enabled`, for the administrator's connection check. */
+  /** The saved configuration regardless of the feature switches, for the administrator's connection check. */
   saved(): Promise<ResolvedAiConfig | null>;
 }
 
-const StoredAiSettings = z.object({
-  revision: z.number().int().nonnegative(),
-  enabled: z.boolean(),
-  /** Rows saved before the switch existed keep chat on. */
-  chat: z.boolean().default(true),
-  provider: AiProvider,
-  model: z.string().min(1),
-  baseUrl: z.string().nullable(),
-  /** Base64 of the sealed key. */
-  apiKey: z.string().nullable(),
-});
+const StoredAiSettings = z.preprocess(
+  // Rows saved before the feature switches had one `enabled` flag covering everything.
+  (raw) => {
+    if (raw === null || typeof raw !== "object" || !("enabled" in raw) || "organize" in raw)
+      return raw;
+    const { enabled, ...rest } = raw as { enabled: unknown };
+    return { ...rest, organize: enabled, chat: enabled };
+  },
+  z.object({
+    revision: z.number().int().nonnegative(),
+    organize: z.boolean(),
+    chat: z.boolean(),
+    provider: AiProvider,
+    model: z.string().min(1),
+    baseUrl: z.string().nullable(),
+    /** Base64 of the sealed key. */
+    apiKey: z.string().nullable(),
+  }),
+);
 
 type StoredAiSettings = z.infer<typeof StoredAiSettings>;
 
 const DEFAULTS: StoredAiSettings = {
   revision: 0,
-  enabled: false,
-  chat: true,
+  organize: false,
+  chat: false,
   provider: "anthropic",
   model: DEFAULT_AI_MODEL.anthropic,
   baseUrl: null,
@@ -71,7 +81,7 @@ function keyContext(provider: AiProvider, baseUrl: string | null): string {
 function publicView(stored: StoredAiSettings, hasApiKey: boolean): AiSettings {
   return {
     revision: stored.revision,
-    enabled: stored.enabled,
+    organize: stored.organize,
     chat: stored.chat,
     provider: stored.provider,
     model: stored.model,
@@ -117,6 +127,7 @@ export function createAiSettingsService(deps: {
       model: stored.model,
       baseUrl: stored.baseUrl,
       apiKey: openKey(stored),
+      organize: stored.organize,
       chat: stored.chat,
     };
   }
@@ -155,11 +166,14 @@ export function createAiSettingsService(deps: {
                   keyContext(input.provider, input.baseUrl),
                 ),
               ).toString("base64");
-      if (input.enabled && input.provider === "anthropic" && apiKey === null)
-        throw new ApiHttpError("bad_request", "Enter an Anthropic API key before turning AI on.");
+      if ((input.organize || input.chat) && input.provider === "anthropic" && apiKey === null)
+        throw new ApiHttpError(
+          "bad_request",
+          "Enter an Anthropic API key before turning Organize or Chat on.",
+        );
       const next: StoredAiSettings = {
         revision: input.revision + 1,
-        enabled: input.enabled,
+        organize: input.organize,
         chat: input.chat,
         provider: input.provider,
         model: input.model,
@@ -172,7 +186,7 @@ export function createAiSettingsService(deps: {
           "AI settings changed in another session. Reload and try again.",
         );
       eventLog.record("general", "info", "AI settings updated", {
-        enabled: next.enabled,
+        organize: next.organize,
         chat: next.chat,
         provider: next.provider,
         model: next.model,
@@ -183,7 +197,7 @@ export function createAiSettingsService(deps: {
 
     async resolved() {
       const stored = (await read()).value;
-      if (!stored.enabled) return null;
+      if (!stored.organize && !stored.chat) return null;
       const config = resolve(stored);
       return usable(config) ? config : null;
     },
