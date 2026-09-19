@@ -1,5 +1,6 @@
 import type { Scope, StorageProvider } from "@fdrive/core";
 import type { Identity, Repos, Session, WopiLockRepo } from "@fdrive/db";
+import type { PersonalActivityService } from "../activity/service.js";
 import type { Principal } from "../auth/principal.js";
 import type { EventBus } from "../events/bus.js";
 import type { MetadataService } from "../metadata/service.js";
@@ -71,6 +72,8 @@ export interface OfficeDeps {
   ) => StorageProvider | Promise<StorageProvider>;
   readonly metadata: MetadataService;
   readonly bus: EventBus;
+  /** Optional so office tests and deployments without history keep working. */
+  readonly activity?: PersonalActivityService;
 }
 export interface OfficeActor {
   readonly identity: Identity;

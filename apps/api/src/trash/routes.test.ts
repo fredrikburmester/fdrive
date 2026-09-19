@@ -16,6 +16,7 @@ import {
 } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
+import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
@@ -93,6 +94,7 @@ interface Harness {
   readonly events: BusEvent[];
   readonly storage: StorageProvider;
   readonly metadata: MetadataService;
+  readonly activity: ReturnType<typeof activityFixture>;
 }
 
 async function buildHarness(
@@ -116,6 +118,7 @@ async function buildHarness(
   const withToken = await withTokenFor(client, username, password);
   const baseStorage = createSftpgoStorageProvider({ client, withToken });
   const clock = () => new Date(CLOCK_ISO);
+  const activity = activityFixture(clock);
   const trashLayout = opts.trashLayout ?? "native";
   const trashStorage =
     trashLayout === "move"
@@ -143,6 +146,7 @@ async function buildHarness(
   const metadata = createMetadataService(createMemoryRepos());
 
   const deps: TrashRoutesDeps = {
+    activity: activity.service,
     bus,
     clock,
     settingsForStorage: () =>
@@ -167,7 +171,7 @@ async function buildHarness(
     registerRoutes: (groups) => registerTrashRoutes(groups, deps),
   });
 
-  return { app, bus, events, storage, metadata };
+  return { app, bus, events, storage, metadata, activity };
 }
 
 function requestedWith(init: RequestInit = {}): RequestInit {
@@ -730,6 +734,183 @@ describe("POST /trash/purge", () => {
     );
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe("personal activity for trash commands", () => {
+  async function trashed(h: Harness, path: string, kind: "file" | "dir" = "file") {
+    if (kind === "dir") await h.storage.deleteDir(path);
+    else await h.storage.deleteFile(path);
+    const listed = TrashListResponse.parse(await readJson(await h.app.request(ROUTES.trash.list)));
+    const entry = listed.entries.find((candidate) => candidate.originalPath === path);
+    if (!entry) throw new Error(`expected ${path} in Trash`);
+    return entry.id;
+  }
+
+  it("records a restore against the trash leaf and the target it actually reached", async () => {
+    const h = await buildHarness({ trashLayout: "move" });
+    const id = await trashed(h, "/hello.txt");
+
+    const res = await h.app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id], target: "/recovered.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Activity-Status")).toBe("recorded");
+    expect(h.activity.operations).toHaveLength(1);
+    expect(h.activity.operations[0]).toMatchObject({
+      action: "file.restore",
+      requested: {
+        path: "/hello.txt",
+        trashLeaf: normalizePath(`${TRASH_PATH}/${id}`),
+        targetPath: "/recovered.txt",
+      },
+    });
+    expect(h.activity.outcomes).toEqual([
+      expect.objectContaining({
+        outcome: "success",
+        after: { path: "/recovered.txt", kind: "file", size: 11 },
+      }),
+    ]);
+  });
+
+  it("keeps a failed restore out of history as a conflict, not a success", async () => {
+    const h = await buildHarness({ trashLayout: "move" });
+    const id = await trashed(h, "/hello.txt");
+    await h.storage.upload("/hello.txt", new TextEncoder().encode("occupied"));
+
+    const res = await h.app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(h.activity.outcomes).toEqual([
+      expect.objectContaining({ action: "file.restore", outcome: "conflict" }),
+    ]);
+  });
+
+  it("records one delete per purged id, keyed to the path the file came from", async () => {
+    const h = await buildHarness({ trashLayout: "move" });
+    const first = await trashed(h, "/hello.txt");
+    const second = await trashed(h, "/dir", "dir");
+
+    const res = await h.app.request(
+      ROUTES.trash.purge,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [first, second] }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(h.activity.operations.map((row) => [row.action, row.requested.path])).toEqual([
+      ["file.delete", "/hello.txt"],
+      ["file.delete", "/dir"],
+    ]);
+    const batches = new Set(h.activity.operations.map((row) => row.batchId));
+    expect(batches.size).toBe(1);
+    expect(h.activity.outcomes.every((row) => row.outcome === "success")).toBe(true);
+  });
+
+  it("records each emptied leaf and one enclosing trash.empty", async () => {
+    const h = await buildHarness({ trashLayout: "move" });
+    await trashed(h, "/hello.txt");
+    await trashed(h, "/dir", "dir");
+
+    const res = await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
+
+    expect(res.status).toBe(200);
+    expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
+      ["file.delete", "success"],
+      ["file.delete", "success"],
+      ["trash.empty", "success"],
+    ]);
+    expect(h.activity.outcomes.at(-1)?.after).toEqual({ path: TRASH_PATH, completedCount: 2 });
+    const after = TrashListResponse.parse(await readJson(await h.app.request(ROUTES.trash.list)));
+    expect(after.entries).toEqual([]);
+  });
+
+  it("records partial emptying when a later provider purge fails", async () => {
+    const h = await buildHarness();
+    await h.storage.deleteFile("/hello.txt");
+    await h.storage.deleteDir("/dir");
+    const trash = h.storage.trash;
+    if (!trash) throw Error("Expected Trash");
+    const purge = trash.purge.bind(trash);
+    vi.spyOn(trash, "purge")
+      .mockImplementationOnce(purge)
+      .mockRejectedValueOnce(new StorageError("forbidden", "denied"));
+
+    const response = await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
+
+    expect(response.status).toBe(403);
+    expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
+      ["file.delete", "success"],
+      ["file.delete", "denied"],
+      ["trash.empty", "partial"],
+    ]);
+    expect(h.activity.outcomes.at(-1)?.detail).toEqual({ completedCount: 1, failedCount: 1 });
+    expect((await trash.list()).entries).toHaveLength(1);
+  });
+
+  it("leaves a truthful unresolved result when Trash cannot make progress", async () => {
+    const h = await buildHarness();
+    const trash = h.storage.trash;
+    if (!trash) throw Error("Expected Trash");
+    vi.spyOn(trash, "list").mockResolvedValue({ entries: [], truncated: true });
+
+    expect(
+      (await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }))).status,
+    ).toBe(409);
+    expect(h.activity.outcomes.at(-1)).toMatchObject({
+      action: "trash.empty",
+      outcome: "conflict",
+    });
+  });
+
+  it("stops instead of re-recording when the provider keeps a purged leaf listed", async () => {
+    const h = await buildHarness();
+    await h.storage.deleteFile("/hello.txt");
+    const trash = h.storage.trash;
+    if (!trash) throw Error("Expected Trash");
+    const listed = await trash.list();
+    vi.spyOn(trash, "purge").mockResolvedValue();
+    vi.spyOn(trash, "list").mockResolvedValue(listed);
+
+    expect(
+      (await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }))).status,
+    ).toBe(409);
+    expect(h.activity.outcomes.map((row) => row.action)).toEqual(["file.delete", "trash.empty"]);
+    expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "partial" });
+  });
+
+  it("rejects a malformed correlation header before touching Trash", async () => {
+    const h = await buildHarness({ trashLayout: "move" });
+    const id = await trashed(h, "/hello.txt");
+
+    const res = await h.app.request(
+      ROUTES.trash.purge,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json", "x-fdrive-batch-id": "not-a-uuid" },
+        body: JSON.stringify({ ids: [id] }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(h.activity.operations).toEqual([]);
+    expect((await h.storage.trash?.list())?.entries).toHaveLength(1);
   });
 });
 

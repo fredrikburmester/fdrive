@@ -15,6 +15,7 @@ import { registerOfficeRoutes, registerWopiRoutes } from "../../../src/office/ro
 import { createOfficeService } from "../../../src/office/service.ts";
 import { createOfficeTokenCodec } from "../../../src/office/tokens.ts";
 import type { OfficeConfig, OfficeDeps } from "../../../src/office/types.ts";
+import { activityFixture } from "../../activity-fixture.js";
 export const proofPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
 export function proofKey(pair = proofPair) {
   const jwk = pair.publicKey.export({ format: "jwk" });
@@ -123,6 +124,7 @@ export async function officeHarness(
   const cache = { get: async () => discovery, refresh: async () => discovery };
   const files = createMemoryOfficeFileRepo();
   const locks = createMemoryWopiLockRepo();
+  const activity = activityFixture(clock);
   const bus = createEventBus();
   const events: BusEvent[] = [];
   for (const user of users)
@@ -153,6 +155,7 @@ export async function officeHarness(
       ) ?? storage,
     metadata: createMetadataService(repos),
     bus,
+    activity: activity.service,
     ...options.deps,
   };
   const service = createOfficeService(deps);
@@ -222,6 +225,7 @@ export async function officeHarness(
   return {
     app,
     deps,
+    activity,
     service,
     config,
     cache,

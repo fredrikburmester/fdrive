@@ -2126,3 +2126,86 @@ it("keeps copying when the operation cannot be read back mid-move", async () => 
   expect((await service.commit(principal, operationId)).state).toBe("completed");
   expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
 });
+
+it("reserves the action and paths history will need before the native write starts", async () => {
+  const f = await fixture();
+  const identityId = f.principal.identityId;
+  const trashRoot = `/.fdrive-desktop/${identityId}/trash`;
+  await f.raw.mkdir("/.fdrive-desktop");
+  await f.raw.mkdir(`/.fdrive-desktop/${identityId}`);
+  await f.raw.mkdir(trashRoot);
+  const reserved = async (operationId: string) =>
+    required(await f.repo.operation(identityId, f.principal.accountId, operationId)).request;
+
+  const folder = {
+    kind: "folder" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    name: "d",
+  };
+  await f.service.prepare(f.principal, folder);
+  expect(await reserved(folder.operationId)).toMatchObject({
+    activityAction: "folder.create",
+    activityPath: "/d",
+    activityTarget: "/d",
+    activityKind: "dir",
+  });
+
+  const created = await f.stage("fresh.txt", "bytes");
+  expect(await reserved(created.operationId)).toMatchObject({
+    activityAction: "file.create",
+    activityPath: "/fresh.txt",
+    activityKind: "file",
+  });
+
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const saved = await f.stage("old.txt", "saved", original);
+  expect(await reserved(saved.operationId)).toMatchObject({
+    activityAction: "file.save",
+    activityPath: "/old.txt",
+    activityTarget: "/old.txt",
+  });
+  await f.service.commit(f.principal, saved.operationId);
+
+  const renamed = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: original.id,
+    parentId: "root",
+    name: "renamed.txt",
+    base: required((await f.service.status(f.principal, saved.operationId)).item).version,
+  };
+  await f.service.prepare(f.principal, renamed);
+  expect(await reserved(renamed.operationId)).toMatchObject({
+    activityAction: "file.rename",
+    activityPath: "/old.txt",
+    activityTarget: "/renamed.txt",
+  });
+  const afterRename = required((await f.service.commit(f.principal, renamed.operationId)).item);
+
+  const trashed = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: original.id,
+    parentId: "trash",
+    name: afterRename.name,
+    base: afterRename.version,
+  };
+  await f.service.prepare(f.principal, trashed);
+  expect(await reserved(trashed.operationId)).toMatchObject({ activityAction: "file.trash" });
+  const inTrash = required((await f.service.commit(f.principal, trashed.operationId)).item);
+
+  const restore = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: original.id,
+    parentId: "root",
+    name: inTrash.name,
+    base: inTrash.version,
+  };
+  await f.service.prepare(f.principal, restore);
+  expect(await reserved(restore.operationId)).toMatchObject({ activityAction: "file.restore" });
+  await f.service.commit(f.principal, restore.operationId);
+  // The receipt says this was a restore, so history does not read it as a plain move.
+  expect(f.effectContext.mock.calls.at(-1)?.[1]).toMatchObject({ restored: true, trash: false });
+});

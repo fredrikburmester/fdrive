@@ -21,6 +21,45 @@ describe("office opening and creation", () => {
     expect(before.Version).not.toBe(after.Version);
     expect(after.Size).toBe(5);
     expect((await h.deps.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
+    // Recently opened reads history, so each browser open is recorded there too.
+    expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
+      ["file.open", "success"],
+      ["file.open", "success"],
+      ["file.open", "success"],
+    ]);
+    expect(h.activity.operations[0]).toMatchObject({
+      action: "file.open",
+      source: "office",
+      accountId: h.alice.session.accountId,
+      identityId: h.alice.identity.id,
+      requested: { path: "/a.docx", kind: "file" },
+    });
+    expect(h.activity.outcomes[0]?.bridge).toEqual({ namespace: "office", externalId: a.fileId });
+  });
+
+  it("still opens and keeps legacy recents when no history is configured", async () => {
+    const h = await officeHarness({ deps: { activity: undefined } });
+
+    expect((await h.open()).fileId).toBeTruthy();
+
+    expect(h.activity.operations).toEqual([]);
+    expect((await h.deps.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
+  });
+
+  it("refuses to record an open whose session is revoked after it was authorized", async () => {
+    const h = await officeHarness();
+    const real = h.repos.sessions.getByIdHash.bind(h.repos.sessions);
+    let calls = 0;
+    vi.spyOn(h.repos.sessions, "getByIdHash").mockImplementation(async (hash, at) =>
+      calls++ === 0 ? real(hash, at) : null,
+    );
+
+    await expect(h.open()).rejects.toThrow();
+
+    expect(h.activity.outcomes).toEqual([
+      expect.objectContaining({ action: "file.open", outcome: "denied" }),
+    ]);
+    expect(await h.deps.metadata.listRecents(h.alice.identity.id)).toEqual([]);
   });
   it("returns quiet unavailable status for missing config and discovery failure", async () => {
     const h = await officeHarness();
