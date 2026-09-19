@@ -7,7 +7,7 @@ export default definePackageConfig({
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
-      "test/integration/!(desktop|desktop-effects|desktop-publish-lock).test.ts",
+      "test/integration/!(desktop|desktop-effects|desktop-publish-lock|activity).test.ts",
     ],
     coverage: {
       exclude: [
