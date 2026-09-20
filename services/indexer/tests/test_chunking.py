@@ -95,8 +95,28 @@ def test_chunk_all_whitespace_produces_no_pieces() -> None:
     assert chunk(text, size=1200, overlap=200, max_chunks=400) == []
 
 
-def test_chunk_stops_when_end_reaches_n_after_whitespace_cut() -> None:
-    # crafted so the whitespace search finds a cut very close to the end
-    text = "a" * 1190 + " " + "b" * 9
+def test_chunk_overlaps_consecutive_windows() -> None:
+    # docs/INDEXER.md: 1200-character chunks with a 200-character overlap. The
+    # cycling alphabet makes each 200-char window unique, so a dropped overlap
+    # changes the next piece's prefix instead of comparing equal by accident.
+    text = "".join(chr(ord("a") + i % 26) for i in range(3000))
     pieces = chunk(text, size=1200, overlap=200, max_chunks=400)
-    assert pieces[-1].endswith("bbbbbbbbb") or pieces[-1].endswith("a")
+    assert len(pieces) == 3
+    assert pieces[1].startswith(pieces[0][-200:])
+    assert pieces[2].startswith(pieces[1][-200:])
+
+
+def test_chunk_prefers_a_whitespace_cut_to_splitting_a_word() -> None:
+    text = "a" * 900 + " " + "b" * 2000
+    pieces = chunk(text, size=1200, overlap=200, max_chunks=400)
+    # The only whitespace before the window end sits at 900, so the first
+    # piece ends there instead of slicing into the "b" run.
+    assert pieces[0] == "a" * 900
+    assert "b" not in pieces[0]
+
+
+def test_chunk_final_piece_reaches_the_end_of_the_text() -> None:
+    text = "word " * 300
+    pieces = chunk(text, size=1200, overlap=200, max_chunks=400)
+    assert len(pieces) >= 2
+    assert pieces[-1].endswith("word")

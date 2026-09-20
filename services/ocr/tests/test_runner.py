@@ -599,3 +599,31 @@ def test_page_megapixel_limit_is_independent_of_pdf_megabytes() -> None:
     runner.run_ocrmypdf("in.pdf", "out.pdf", "eng", runner.MAX_OCR_PAGE_MEGAPIXELS, 30, 2, popen=popen)
     assert calls[0][calls[0].index("--skip-big") + 1] == "50"
     assert DEFAULT_SETTINGS.max_mb == 200
+
+
+def test_run_ocrmypdf_never_uses_skip_text_or_force_ocr() -> None:
+    """docs/OCR.md: a PDF that already has a text layer is left completely alone.
+
+    `--skip-text` would leave partly-OCRed files alone and `--force-ocr` would
+    re-render existing text; append-only rewriting depends on neither being in
+    the argv. The real fake `ocrmypdf` accepts unknown flags, so only the
+    recorded command can catch a regression here.
+    """
+    calls: list[list[str]] = []
+
+    class Process:
+        returncode = 0
+
+        def communicate(self, timeout: int) -> tuple[str, str]:
+            return "", ""
+
+    def popen(command: list[str], **_kwargs: object) -> Process:
+        calls.append(command)
+        return Process()
+
+    runner.run_ocrmypdf("in.pdf", "out.pdf", "swe+eng", 200, 30, 2, popen=popen)
+    assert calls
+    command = calls[0]
+    assert "--skip-text" not in command
+    assert "--force-ocr" not in command
+    assert command[0] == "ocrmypdf"
