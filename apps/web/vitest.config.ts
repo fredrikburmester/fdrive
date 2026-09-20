@@ -20,6 +20,10 @@ export default definePackageConfig({
     // file via a `// @vitest-environment jsdom` docblock), which need their
     // own pattern here or they are silently never run.
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "test/**/*.test.ts"],
+    // One worker per file puts ordinary imports past 5 s when the host is
+    // loaded; the extra headroom covers startup, not a lazy assertion.
+    testTimeout: 15_000,
+    hookTimeout: 15_000,
     coverage: {
       include: ["src/lib/**"],
     },

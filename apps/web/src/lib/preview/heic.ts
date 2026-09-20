@@ -9,7 +9,8 @@ import { HEIC_EXTENSIONS } from "./kind";
  */
 export const MAX_HEIC_DECODE_BYTES = 50 * 1024 * 1024;
 
-const TOO_LARGE = "HEIC image exceeds 50 MiB decode limit";
+const MAX_HEIC_DECODE_MIB = MAX_HEIC_DECODE_BYTES / (1024 * 1024);
+const TOO_LARGE = `HEIC image exceeds ${MAX_HEIC_DECODE_MIB} MiB decode limit`;
 
 /** True when `ext` (case-insensitive, with leading dot) is a HEIC or HEIF extension. */
 export function isHeicExt(ext: string): boolean {
