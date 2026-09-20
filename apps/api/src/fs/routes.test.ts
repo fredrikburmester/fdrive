@@ -22,7 +22,7 @@ import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { registerFsRoutes, requireTargetFree, trashMany } from "./routes.js";
+import { type FsRoutesDeps, registerFsRoutes, requireTargetFree, trashMany } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -110,6 +110,7 @@ async function buildHarness(
   username = "alice",
   password = "secret",
   metadata?: MetadataService,
+  activityObservations?: FsRoutesDeps["activityObservations"],
 ) {
   const server = createFakeSftpgoServer(seed);
   const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
@@ -150,6 +151,7 @@ async function buildHarness(
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(metadata === undefined ? {} : { metadata }),
+        ...(activityObservations === undefined ? {} : { activityObservations }),
       }),
   });
 
@@ -293,6 +295,17 @@ describe("GET /fs/list", () => {
     const dir = body.entries.find((e) => e.name === "dir");
     expect(dir?.kind).toBe("dir");
     expect(dir?.mime).toBeNull();
+  });
+
+  it("answers while history comparison is still probing the provider", async () => {
+    // Comparison reaches the provider. A listing never waits for it.
+    const { app } = await buildHarness(SEED, "alice", "secret", undefined, {
+      refresh: () => new Promise<void>(() => {}),
+    } as unknown as FsRoutesDeps["activityObservations"]);
+
+    const res = await app.request("/api/v1/fs/list?path=/");
+    expect(res.status).toBe(200);
+    expect((await readJson<ListJson>(res)).entries).toHaveLength(2);
   });
 
   it("returns bad_request when path is missing", async () => {

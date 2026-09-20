@@ -69,19 +69,24 @@ async function explicitRead<T>(
       .digest("hex")
       .slice(0, 32);
     const requestId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
-    await deps.activityReads.record({
-      accountId: principal.accountId,
-      identityId: principal.identityId,
-      path,
-      kind: "file",
-      action,
-      source: "mcp",
-      evidence: "server_confirmed",
-      contextHash: deps.activityContext ?? principal.identityId,
-      requestId,
-      at: deps.clock(),
-      outcome: "success",
-    });
+    try {
+      await deps.activityReads.record({
+        accountId: principal.accountId,
+        identityId: principal.identityId,
+        path,
+        kind: "file",
+        action,
+        source: "mcp",
+        evidence: "server_confirmed",
+        contextHash: deps.activityContext ?? principal.identityId,
+        requestId,
+        at: deps.clock(),
+        outcome: "success",
+      });
+    } catch {
+      /* The read already happened. An unavailable journal loses the entry,
+         not the answer the caller asked for. */
+    }
   }
   return value;
 }

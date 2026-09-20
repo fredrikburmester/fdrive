@@ -421,6 +421,34 @@ describe("createJobRunner", () => {
     expect(runner.get(status.id, IDENTITY_A)).toBeNull();
   });
 
+  it("still releases a finished job whose outcome could not be written", async () => {
+    const bus = createEventBus();
+    const events = collectJobEvents(bus, IDENTITY_A);
+    const runner = createJobRunner({ clock, bus, maxJobs: 1 });
+    const first = runner.submit({
+      identityId: IDENTITY_A,
+      kind: "compress",
+      onOutcome: async () => {
+        throw new Error("history offline");
+      },
+      run: async () => ({ path: "/a.zip" }),
+    });
+
+    await flush();
+    expect(runner.get(first.id, IDENTITY_A)?.state).toBe("done");
+
+    // An outcome nobody could record leaves the intent open in history, never a
+    // job pinned in memory: the slot is still reusable and still prunable.
+    const second = runner.submit({
+      identityId: IDENTITY_A,
+      kind: "compress",
+      run: () => new Promise(() => {}),
+    });
+    expect(second.state).toBe("running");
+    expect(runner.get(first.id, IDENTITY_A)).toBeNull();
+    expect(events.some((event) => event.type === "job" && event.job.state === "done")).toBe(true);
+  });
+
   it("uses a custom id generator when given", () => {
     const runner = createJobRunner({
       clock,

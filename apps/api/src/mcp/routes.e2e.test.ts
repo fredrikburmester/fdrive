@@ -113,6 +113,8 @@ interface Harness {
   readonly toolDeps: McpToolDeps;
   readonly activity: ReturnType<typeof activityFixture>;
   readonly reads: ActivityReadInput[];
+  /** Simulates an unavailable read journal. */
+  failReads(fail: boolean): void;
   close(): Promise<void>;
 }
 
@@ -167,10 +169,12 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
   const clock = () => new Date("2026-01-01T00:00:00.000Z");
   const activity = activityFixture(clock);
   const reads: ActivityReadInput[] = [];
+  let readsFail = false;
   const toolDeps: McpToolDeps = {
     activity: activity.service,
     activityReads: {
       record: async (input: ActivityReadInput) => {
+        if (readsFail) throw new Error("read journal offline");
         reads.push(input);
         return undefined as never;
       },
@@ -229,6 +233,9 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     toolDeps,
     activity,
     reads,
+    failReads(fail: boolean) {
+      readsFail = fail;
+    },
     async close() {
       const server = currentServer;
       currentServer = null;
@@ -669,6 +676,21 @@ describe("MCP server end to end: writes enabled", () => {
     await client.callTool({ name: "list_directory", arguments: { path: "/" } });
     await client.callTool({ name: "search", arguments: { query: "hello" } });
     expect(harness.activity.operations).toHaveLength(2);
+    expect(harness.reads).toHaveLength(3);
+
+    // The bytes were already read, so an unavailable journal loses the entry
+    // and nothing else.
+    harness.failReads(true);
+    try {
+      const answered = await client.callTool({
+        name: "read_file_text",
+        arguments: { path: "/reports/hello.txt" },
+      });
+      expect(answered.isError).toBeFalsy();
+      expect(JSON.stringify(answered.content)).toContain("hello");
+    } finally {
+      harness.failReads(false);
+    }
     expect(harness.reads).toHaveLength(3);
 
     await client.close();

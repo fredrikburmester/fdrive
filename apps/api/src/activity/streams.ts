@@ -2,6 +2,26 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Principal } from "../auth/principal.js";
 import type { PersonalActivityService } from "./service.js";
 
+/**
+ * How long the end of a transfer waits for its outcome to be written. The write
+ * still runs to completion in the background afterwards: an intent left open is
+ * recoverable, while a download that never reaches EOF is not, so a stalled
+ * journal must never hold the response open.
+ */
+const RECORD_DEADLINE_MS = 2_000;
+
+function bounded(work: Promise<void>): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, RECORD_DEADLINE_MS);
+    timer.unref();
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    work.then(done, done);
+  });
+}
+
 /** EOF confirms bytes sent; cancellation/stream failure never becomes a successful download. */
 export async function activityStream(
   activity: PersonalActivityService | undefined,
@@ -77,10 +97,12 @@ export async function activityStream(
       try {
         const item = await reader.read();
         if (item.done) {
-          await finish(
-            options.partial || (options.expectedBytes != null && bytes !== options.expectedBytes)
-              ? "partial"
-              : "success",
+          await bounded(
+            finish(
+              options.partial || (options.expectedBytes != null && bytes !== options.expectedBytes)
+                ? "partial"
+                : "success",
+            ),
           );
           controller.close();
         } else {
@@ -88,12 +110,12 @@ export async function activityStream(
           controller.enqueue(item.value);
         }
       } catch (error) {
-        await finish(bytes ? "partial" : "failed");
+        await bounded(finish(bytes ? "partial" : "failed"));
         controller.error(error);
       }
     },
     async cancel(reason) {
-      const recorded = finish(bytes ? "partial" : "cancelled");
+      const recorded = bounded(finish(bytes ? "partial" : "cancelled"));
       try {
         await reader.cancel(reason);
       } finally {

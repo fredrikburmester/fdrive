@@ -645,7 +645,9 @@ export function registerFsRoutes(
     const entries = await runStorageCall(() => principal.storage.list(path));
     // A complete authorized listing is the only refresh input WebDAV and S3
     // have. It suggests differences; only a live check can establish one.
-    await deps.activityObservations?.refresh(principal, path, entries);
+    // Comparison runs beside the response: it probes the provider, and a
+    // listing is not worth slowing down to notice an outside change sooner.
+    void deps.activityObservations?.refresh(principal, path, entries);
     const trashPath = deps.trashPathForStorage?.(principal.storage);
     // The provider-bound trash folder and the Mac app's bookkeeping namespace are fdrive's own;
     // neither is a user folder, so the tree does not show them.

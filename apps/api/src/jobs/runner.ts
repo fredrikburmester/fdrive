@@ -183,8 +183,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           ...(job.error === JOB_AUTHORITY_REVOKED_MESSAGE ? { authorityRevoked: true } : {}),
         })
         // A failed write leaves the intent open for recovery rather than
-        // replaying the job, and never hides the finished job from its caller.
-        .then(recorded, () => publish(job, { force: true }));
+        // replaying the job. It still releases the job: an outcome nobody
+        // could record must not pin a finished job in memory forever.
+        .then(recorded, recorded);
     } else recorded();
     if (releaseSlot) {
       const identityCount = runningCounts.get(job.identityId) ?? 0;

@@ -319,6 +319,34 @@ describe("transfer completion evidence", () => {
     );
   });
 
+  it("still reaches EOF when the outcome write never lands", async () => {
+    const { activity, principal, finish } = fixture();
+    finish.mockReturnValueOnce(new Promise(() => {}) as never);
+    vi.useFakeTimers();
+    try {
+      const stream = await activityStream(
+        activity,
+        principal,
+        "/a",
+        "file.download",
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new Uint8Array([1, 2, 3]));
+            c.close();
+          },
+        }),
+      );
+      const delivered = new Response(stream).arrayBuffer();
+      // The reader has to reach end of source before the deadline exists.
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await delivered).toHaveProperty("byteLength", 3);
+      expect(finish).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records cancelled hydration and stream errors without claiming a human open", async () => {
     const { activity, principal, finish } = fixture();
     const never = new ReadableStream<Uint8Array>({ pull() {} });
