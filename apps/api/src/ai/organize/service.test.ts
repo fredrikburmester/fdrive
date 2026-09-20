@@ -16,6 +16,7 @@ import {
   type AiTurn,
 } from "../model.ts";
 import type { ResolvedAiConfig } from "../settings.ts";
+import type { TypeSafeAnswer, TypeSafeClient, TypeSafeRequest } from "../typesafe.ts";
 import { SUBMIT_TOOL } from "./agent.ts";
 import { createOrganizeRuns, OrganizeBusyError, type OrganizeRuns } from "./runs.ts";
 import { createOrganizeService, type OrganizeServiceDeps } from "./service.ts";
@@ -27,6 +28,8 @@ const CONFIG: ResolvedAiConfig = {
   apiKey: "sk-test",
   organize: true,
   chat: true,
+  assist: false,
+  assistApiKey: null,
 };
 
 type Send = (input: AiInput, signal: AbortSignal) => Promise<AiTurn>;
@@ -119,6 +122,7 @@ function setup(
     mcp?: Partial<McpToolDeps>;
     runs?: OrganizeRuns;
     maxTurns?: number;
+    typeSafe?: TypeSafeClient;
   } = {},
 ) {
   const onUnexpectedError = vi.fn();
@@ -137,6 +141,9 @@ function setup(
     modelFor,
     runs,
     mcp: mcpDeps(options.mcp),
+    ...(options.typeSafe !== undefined
+      ? { typeSafeFor: () => options.typeSafe as TypeSafeClient }
+      : {}),
     ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
   };
   return { service: createOrganizeService(deps), modelFor, onUnexpectedError };
@@ -172,13 +179,31 @@ describe("createOrganizeService", () => {
     it("reports the configured provider", async () => {
       const { service } = setup();
 
-      expect(await service.status()).toEqual({ provider: "anthropic", organize: true, chat: true });
+      expect(await service.status()).toEqual({
+        provider: "anthropic",
+        organize: true,
+        chat: true,
+        assist: false,
+      });
     });
 
     it("reports unavailable when AI is not set up", async () => {
       const { service } = setup({ resolved: null });
 
-      expect(await service.status()).toEqual({ provider: null, organize: false, chat: false });
+      expect(await service.status()).toEqual({
+        provider: null,
+        organize: false,
+        chat: false,
+        assist: false,
+      });
+    });
+
+    it("reports the assist only once it has a key", async () => {
+      const withKey = setup({ resolved: { ...CONFIG, assist: true, assistApiKey: "ts-key" } });
+      const withoutKey = setup({ resolved: { ...CONFIG, assist: true, assistApiKey: null } });
+
+      expect((await withKey.service.status()).assist).toBe(true);
+      expect((await withoutKey.service.status()).assist).toBe(false);
     });
   });
 
@@ -610,6 +635,143 @@ describe("createOrganizeService", () => {
         state: "cancelled",
         activity: [],
       });
+    });
+  });
+
+  describe("the TypeSafe assist", () => {
+    const ASSIST: ResolvedAiConfig = { ...CONFIG, assist: true, assistApiKey: "ts-key" };
+
+    function fakeTypeSafe(answer: (request: TypeSafeRequest) => Record<string, TypeSafeAnswer>) {
+      const requests: TypeSafeRequest[] = [];
+      const client: TypeSafeClient = {
+        async systemOne(request) {
+          requests.push(request);
+          return answer(request);
+        },
+        async ping() {
+          return { ok: true, message: "ok" };
+        },
+      };
+      return { client, requests };
+    }
+
+    /** A Score answer putting `fits` on the top level and the rest on "Wrong". */
+    function fitScore(fits: number): TypeSafeAnswer {
+      return {
+        type: "score",
+        score: fits * 2,
+        confidence: 1,
+        probabilities: { "0": 1 - fits, "1": 0, "2": fits },
+      };
+    }
+
+    function asks(request: TypeSafeRequest): "triage" | "verify" {
+      return Object.values(request.questions)[0]?.type === "noul" ? "triage" : "verify";
+    }
+
+    it("tells the organizer which selected names say too little", async () => {
+      const { model, inputs } = fakeModel([
+        submitTurn([
+          { path: "/Inbox/a.pdf", destination: "/Finance/Receipts", reason: "A receipt." },
+        ]),
+      ]);
+      // `items[0]` is /Inbox/a.pdf and `items[1]` is /Inbox/b.pdf, in selection order.
+      const { client } = fakeTypeSafe((request) =>
+        asks(request) === "triage"
+          ? { q0: { type: "noul", noul: 0.1 }, q1: { type: "noul", noul: 0.9 } }
+          : { q0: fitScore(1) },
+      );
+      const { service } = setup({ model, resolved: ASSIST, typeSafe: client });
+      const principal = principalWith(drive());
+
+      const started = await service.start(principal, {
+        paths: ["/Inbox/a.pdf", "/Inbox/b.pdf"],
+      });
+      await finished(service, principal, started.id);
+
+      const firstText = inputs[0]?.kind === "user" ? inputs[0].text : "";
+      expect(firstText).toContain("- /Inbox/a.pdf (1 B, modified 1970-01-01) [name says little]");
+      expect(firstText).toContain("- /Inbox/b.pdf (1 B, modified 1970-01-01)\n");
+      expect(firstText).toContain("the 1 marked [name says little]");
+    });
+
+    it("marks a suggestion the assist does not believe in", async () => {
+      const { model } = fakeModel([
+        submitTurn([
+          { path: "/Inbox/a.pdf", destination: "/Finance/Receipts", reason: "A receipt." },
+          { path: "/Inbox/b.pdf", destination: "/Finance/Receipts", reason: "Also a receipt." },
+        ]),
+      ]);
+      const { client, requests } = fakeTypeSafe((request) =>
+        asks(request) === "triage"
+          ? { q0: { type: "noul", noul: 0.9 }, q1: { type: "noul", noul: 0.9 } }
+          : { q0: fitScore(0.9), q1: fitScore(0.2) },
+      );
+      const { service } = setup({ model, resolved: ASSIST, typeSafe: client });
+      const principal = principalWith(drive());
+
+      const started = await service.start(principal, {
+        paths: ["/Inbox/a.pdf", "/Inbox/b.pdf"],
+      });
+      const run = await finished(service, principal, started.id);
+
+      expect(run.state).toBe("done");
+      expect(run.proposal?.suggestions.map((suggestion) => suggestion.path)).toEqual([
+        "/Inbox/a.pdf",
+        "/Inbox/b.pdf",
+      ]);
+      // A believable destination is left alone rather than marked believable.
+      expect(run.proposal?.suggestions[0]).not.toHaveProperty("uncertain");
+      expect(run.proposal?.suggestions[1]).toMatchObject({ uncertain: true });
+      expect(run.activity).toContain("Double-checking where things would go");
+      expect(requests).toHaveLength(2);
+    });
+
+    it("finishes the run unchanged when the assist breaks", async () => {
+      const { model } = fakeModel([
+        submitTurn([
+          { path: "/Inbox/a.pdf", destination: "/Finance/Receipts", reason: "A receipt." },
+        ]),
+      ]);
+      const client: TypeSafeClient = {
+        async systemOne() {
+          throw new Error("typesafe exploded");
+        },
+        async ping() {
+          return { ok: false, message: "no" };
+        },
+      };
+      const { service, onUnexpectedError } = setup({ model, resolved: ASSIST, typeSafe: client });
+      const principal = principalWith(drive());
+
+      const started = await service.start(principal, { paths: ["/Inbox/a.pdf"] });
+      const run = await finished(service, principal, started.id);
+
+      expect(run.state).toBe("done");
+      expect(run.proposal?.suggestions).toHaveLength(1);
+      expect(run.proposal?.suggestions[0]).not.toHaveProperty("uncertain");
+      expect(onUnexpectedError).not.toHaveBeenCalled();
+    });
+
+    it("stays out of the way when it has no key", async () => {
+      const { model } = fakeModel([
+        submitTurn([
+          { path: "/Inbox/a.pdf", destination: "/Finance/Receipts", reason: "A receipt." },
+        ]),
+      ]);
+      const { client, requests } = fakeTypeSafe(() => ({}));
+      const { service } = setup({
+        model,
+        resolved: { ...ASSIST, assistApiKey: null },
+        typeSafe: client,
+      });
+      const principal = principalWith(drive());
+
+      const started = await service.start(principal, { paths: ["/Inbox/a.pdf"] });
+      const run = await finished(service, principal, started.id);
+
+      expect(run.state).toBe("done");
+      expect(requests).toEqual([]);
     });
   });
 });

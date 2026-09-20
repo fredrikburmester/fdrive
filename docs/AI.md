@@ -16,6 +16,13 @@ An administrator opens **System > AI > Settings**:
 turn the features on for everyone signed in: **Organize** puts Organize in the selection bar and
 the row context menu, and **Chat** shows the chat panel. Either works on its own.
 
+**TypeSafe assist** is a separate switch with its own key. With it on, Organize also asks
+TypeSafe's Jev model two things the provider above is poor value for: which selected names say
+too little to place, before the run, and whether each suggested destination makes sense, after
+it. It supplements the provider and never replaces it; with no key, or when TypeSafe cannot be
+reached, a run behaves exactly as it does without it. **Check connection** tests both services
+and fails if either refuses. The api container needs outbound HTTPS to `api.typesafe.ai`.
+
 The key is sealed with `FDRIVE_MASTER_KEY` and bound to the provider and base URL it was
 entered for. Changing either removes the saved key unless a new one is entered, so a key is
 never forwarded to a different address. A key that no longer decrypts (a rotated master key)
@@ -52,6 +59,12 @@ across reloads and stays for 90 days after its last message.
   - **Names of other files**: file names outside the selection seen in `folder_tree`,
     `list_folder`, `search_drive` and `similar_files`. Off leaves folder names and file counts.
 
+With the assist on, TypeSafe additionally receives the selected items' names, kinds, sizes and
+dates before the run, and afterwards each suggestion's item name, the folder it came from and
+the folder it would move to. Where the person shared the names of other files, it also sees up
+to 24 names from each existing destination, as a sample of what that folder holds. It never
+receives file contents, not even when the person shared them with the organizer.
+
 Files are never uploaded. Search and similar-file tools report which folders hold matches, not
 other files' contents. The request carries the choice as `share`; an omitted `share` means both.
 
@@ -65,18 +78,29 @@ other files' contents. The request carries the choice as `share`; an omitted `sh
    ready" until the sheet is reopened, and a toast offers to review suggestions that arrived
    while it was closed. Stop, Start over, applying every move or
    organizing another selection ends a session; a reload loses it.
-2. The organizer runs a tool loop with **read-only** tools: `folder_tree`, `list_folder`, and,
+2. With the assist on, one TypeSafe request asks a Noul per selected item: does its name say
+   enough to place it? Items scoring under 0.5 are marked `[name says little]` in the
+   organizer's first message, so it spends its turns reading and comparing those instead of
+   working that out for every item itself.
+3. The organizer runs a tool loop with **read-only** tools: `folder_tree`, `list_folder`, and,
    for indexed logins, `read_excerpts`, `search_drive` and `similar_files`. It ends by calling
    `submit_suggestions`. Runs stop after 40 turns, and the session's authority is re-checked
    before every turn.
-3. The server checks every suggestion against storage: it must name a selected item and a
+4. The server checks every suggestion against storage: it must name a selected item and a
    destination outside Trash, outside the selection and outside the item's current folder. Each
    suggestion is marked when its folder is new or its target name is taken. Unusable
    suggestions, and ones storage could not check, are listed as unchanged with the reason.
    Paths are matched by how names read, since macOS stores accents as separate marks and models
    write them as single characters: `Husarö` finds the stored folder instead of becoming a
    look-alike new one. The tools resolve paths the same way.
-4. The review groups suggestions by destination. Conflicts start unchecked, and any item can be
+5. With the assist on, one more TypeSafe request scores each surviving suggestion against three
+   levels: wrong folder, unclear, clearly right. A suggestion with under 0.5 probability on
+   "clearly right" is marked `uncertain`. This reads the probability of the top level rather
+   than the answer's `confidence`, because a confidently wrong destination concentrates
+   probability on "wrong" and would otherwise look certain. Nothing else about the suggestion
+   changes.
+6. The review groups suggestions by destination. Conflicts and `uncertain` suggestions start
+   unchecked, and any item can be
    pointed at another folder. **Move** calls `POST /api/v1/fs/move-many` with
    `createParents: true`. That endpoint moves items in order, continues past failures, never
    overwrites, and reports each outcome. It checks each source before creating folders, so an
@@ -88,6 +112,13 @@ suggestions, which the person still has to approve; the organizer has no tool th
 
 ## Developer notes
 
+- `apps/api/src/ai/typesafe.ts` is the TypeSafe client: one `POST /v1/systemone` carrying a
+  state and typed questions. It is deliberately *not* an `AiModel`; Jev neither generates text
+  nor calls tools, so it cannot drive the organizer's loop and is only ever an addition to it.
+  `apps/api/src/ai/organize/assist.ts` holds the two passes and their thresholds, batches 50
+  questions per request, and swallows every provider failure so a broken assist cannot fail a
+  run; `service.ts` guards both calls again with `withoutFailing`, which only lets a cancel
+  through.
 - `apps/api/src/ai/model.ts` is the provider-neutral port. Each adapter keeps its own native
   history, so Claude's thinking blocks are replayed unchanged between tool calls.
 - The Claude adapter reads the model's entry from the Models API once per run and uses adaptive

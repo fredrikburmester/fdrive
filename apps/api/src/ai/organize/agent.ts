@@ -59,12 +59,12 @@ export const MAX_TURNS = 40;
 /** Times the model may stop without submitting before the run fails. */
 const MAX_NUDGES = 2;
 
-function describeItem(item: OrganizeItem): string {
+function describeItem(item: OrganizeItem, unclearName: boolean): string {
   const details =
     item.kind === "dir"
       ? "folder"
       : `${formatSize(item.size)}${item.modifiedAt ? `, modified ${item.modifiedAt.toISOString().slice(0, 10)}` : ""}`;
-  return `- ${item.path} (${details})`;
+  return `- ${item.path} (${details})${unclearName ? " [name says little]" : ""}`;
 }
 
 /** What the assistant is told it can look at, given the index and what the person chose to share. */
@@ -88,6 +88,7 @@ export function initialMessage(
   instructions: string | undefined,
   indexed: boolean,
   share: OrganizeSharing = DEFAULT_ORGANIZE_SHARING,
+  unclearNames: ReadonlySet<string> = new Set(),
 ): string {
   const parents = new Set(items.map((item) => parentPath(item.path)));
   const commonParent = parents.size === 1 ? ([...parents][0] as string) : null;
@@ -95,11 +96,17 @@ export function initialMessage(
     commonParent === null
       ? `The ${items.length} selected items:`
       : `The ${items.length} selected items, all currently in ${commonParent}:`;
+  const marked = items.filter((item) => unclearNames.has(item.path)).length;
   return [
     heading,
-    ...items.map(describeItem),
+    ...items.map((item) => describeItem(item, unclearNames.has(item.path))),
     "",
     ...availabilityText(indexed, share),
+    ...(marked > 0
+      ? [
+          `A quick check already read the names: the ${marked} marked [name says little] are the ones whose names do not place them, so look at those before deciding. Take the rest from their names unless something looks wrong.`,
+        ]
+      : []),
     ...(instructions ? ["", `The person's instructions: ${instructions}`] : []),
   ].join("\n");
 }
@@ -112,6 +119,8 @@ export interface RunOrganizeAgentOptions {
   readonly indexed: boolean;
   /** What the person chose to share; defaults to everything. */
   readonly share?: OrganizeSharing | undefined;
+  /** Selected items a triage pass found too vaguely named to place from the name alone. */
+  readonly unclearNames?: ReadonlySet<string> | undefined;
   readonly signal: AbortSignal;
   readonly activity: (text: string) => void;
   /** Throws when the session that started the run may no longer act. Checked before every turn. */
@@ -168,6 +177,7 @@ export async function runOrganizeAgent(
       options.instructions,
       options.indexed,
       options.share ?? DEFAULT_ORGANIZE_SHARING,
+      options.unclearNames ?? new Set(),
     ),
   };
   let nudges = 0;

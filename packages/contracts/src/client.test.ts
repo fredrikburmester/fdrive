@@ -1809,6 +1809,8 @@ describe("AI client", () => {
         model: "claude-opus-5",
         baseUrl: null,
         hasApiKey: true,
+        assist: false,
+        hasAssistKey: true,
       },
     };
     const fetchMock = vi.fn<typeof fetch>(async (url) =>
@@ -1816,7 +1818,7 @@ describe("AI client", () => {
     );
     const client = createApiClient({ fetch: fetchMock });
     expect(await client.systemAi()).toEqual(response);
-    const { hasApiKey: _hasApiKey, ...input } = response.configuration;
+    const { hasApiKey: _hasApiKey, hasAssistKey: _hasAssistKey, ...input } = response.configuration;
     expect(await client.systemUpdateAi({ ...input, apiKey: "sk-ant" })).toEqual(response);
     expect(await client.systemTestAi()).toEqual({ ok: true, message: "Connected." });
     expect(fetchMock.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
@@ -1838,13 +1840,23 @@ describe("AI client", () => {
     const fetchMock = vi.fn<typeof fetch>(async (url) => {
       const path = String(url);
       if (path.endsWith("/status"))
-        return Response.json({ provider: "anthropic", organize: true, chat: true });
+        return Response.json({
+          provider: "anthropic",
+          organize: true,
+          chat: true,
+          assist: false,
+        });
       if (path.endsWith("/move-many"))
         return Response.json({ results: [{ ok: true, path: "/a", target: "/b/a" }] });
       return Response.json(run);
     });
     const client = createApiClient({ fetch: fetchMock });
-    expect(await client.aiStatus()).toEqual({ provider: "anthropic", organize: true, chat: true });
+    expect(await client.aiStatus()).toEqual({
+      provider: "anthropic",
+      organize: true,
+      chat: true,
+      assist: false,
+    });
     expect(await client.startOrganize({ paths: ["/a"] })).toEqual(run);
     expect(await client.organizeRun(run.id)).toEqual(run);
     expect(await client.cancelOrganize(run.id)).toEqual(run);

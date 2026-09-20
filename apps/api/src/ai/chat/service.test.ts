@@ -21,6 +21,8 @@ const CONFIG: ResolvedAiConfig = {
   apiKey: "sk",
   organize: true,
   chat: true,
+  assist: false,
+  assistApiKey: null,
 };
 const HOME_SCOPES: readonly Scope[] = [
   { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
