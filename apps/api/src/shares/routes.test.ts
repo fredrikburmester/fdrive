@@ -1319,3 +1319,51 @@ it("still edits a share whose stored download limit predates the bound", async (
   expect(after.name).toBe("Renamed");
   expect(after.maxDownloads).toBe(2_147_483_647);
 });
+
+it("records share create, update and revoke per account without copying any secret", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  const bob = await h.login("bob");
+  const share = await h.create(cookie, { password: "hunter2", expiresAt: null });
+  const created = h.activity.outcomes.at(-1);
+  expect(h.activity.operations.at(-1)).toMatchObject({
+    action: "share.create",
+    requested: { path: "/a.docx", permissions: ["read"] },
+  });
+  expect(created).toMatchObject({ outcome: "success", after: { shareId: share.id } });
+  expect(JSON.stringify(h.activity.operations)).not.toContain("hunter2");
+  expect(JSON.stringify(h.activity.outcomes)).not.toContain("hunter2");
+
+  // The same path shared by a second account is that account's own event.
+  await h.create(bob);
+  expect(h.activity.operations.at(-1)?.accountId).not.toBe(h.activity.operations.at(-2)?.accountId);
+
+  const path = `${base}/${share.id}`;
+  expect(
+    (await h.request(path, { method: "PATCH", cookie, body: { name: "Renamed" } })).status,
+  ).toBe(200);
+  expect(h.activity.operations.at(-1)).toMatchObject({
+    action: "share.update",
+    requested: { shareId: share.id },
+    before: { permissions: ["read"] },
+  });
+  expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
+  expect(h.activity.operations.at(-1)?.action).toBe("share.revoke");
+  expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
+});
+
+it("records a refused share as a failure and never as a created share", async () => {
+  const h = sharesHarness();
+  const cookie = await h.login();
+  vi.spyOn(h.service, "create").mockRejectedValueOnce(new Error("mirror unavailable"));
+  expect(
+    (
+      await h.request(base, {
+        method: "POST",
+        cookie,
+        body: { name: "Doc", paths: ["/a.docx"], scope: "read" },
+      })
+    ).status,
+  ).toBe(502);
+  expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "unknown" });
+});

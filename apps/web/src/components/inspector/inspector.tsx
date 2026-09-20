@@ -13,12 +13,14 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { FileJourneyButton } from "@/components/activity/file-journey-button";
 import { EntryMetadataSection } from "@/components/metadata/entry-metadata-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useActivityGesture } from "@/lib/activity/gestures";
 import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import { useFolderSize } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
@@ -136,6 +138,7 @@ function SingleEntryBody({
           <Icon className="size-16 text-muted-foreground" strokeWidth={1.25} />
         )}
         <p className="max-w-full break-all text-center text-sm font-medium">{entry.name}</p>
+        <FileJourneyButton path={entry.path} />
       </div>
       <Separator />
       <dl className="flex flex-col gap-2 text-sm">
@@ -207,6 +210,7 @@ export function Inspector({
   onClose,
   capabilities = DEFAULT_CAPABILITIES,
 }: InspectorProps) {
+  useActivityGesture("file.inspect", entries.length === 1 ? entries[0]?.path : undefined);
   const isWide = useIsWideScreen();
 
   if (isWide) {

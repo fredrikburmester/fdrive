@@ -9,7 +9,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { accountTransition, useAccountTransition } from "@/lib/account/transition";
@@ -284,15 +284,24 @@ export function useRecents() {
 /** Records `path` as opened just now. Fire-and-forget from the preview and
  * editor shells; a failure is silent (recents are a convenience, not a
  * critical path) and simply invalidates nothing. */
-export function useTouchRecent() {
+export function useTouchRecent(contextPath?: string) {
   const queryClient = useQueryClient();
   const scope = useMetadataScope();
+  // One gesture keeps one request ID, so a retried report is the same open
+  // rather than a second one.
+  const gesture = useMemo(
+    () => ({ path: contextPath, requestId: crypto.randomUUID(), at: new Date().toISOString() }),
+    [contextPath],
+  );
   return useMutation({
     mutationFn: (path: string) => {
       if (accountTransition.getSnapshot().pending || scope.generation !== currentGeneration()) {
         return Promise.reject(new Error("The active login changed."));
       }
-      return scope.client.touchRecent({ path });
+      return scope.client.touchRecent({
+        path,
+        ...(gesture.path === path ? { requestId: gesture.requestId, at: gesture.at } : {}),
+      });
     },
     onSuccess: () => {
       if (scope.generation !== currentGeneration()) return;

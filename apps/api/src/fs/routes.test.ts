@@ -22,7 +22,7 @@ import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { registerFsRoutes, requireTargetFree, trashMany } from "./routes.js";
+import { type FsRoutesDeps, registerFsRoutes, requireTargetFree, trashMany } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -110,6 +110,7 @@ async function buildHarness(
   username = "alice",
   password = "secret",
   metadata?: MetadataService,
+  activityObservations?: FsRoutesDeps["activityObservations"],
 ) {
   const server = createFakeSftpgoServer(seed);
   const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
@@ -150,6 +151,7 @@ async function buildHarness(
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(metadata === undefined ? {} : { metadata }),
+        ...(activityObservations === undefined ? {} : { activityObservations }),
       }),
   });
 
@@ -293,6 +295,17 @@ describe("GET /fs/list", () => {
     const dir = body.entries.find((e) => e.name === "dir");
     expect(dir?.kind).toBe("dir");
     expect(dir?.mime).toBeNull();
+  });
+
+  it("answers while history comparison is still probing the provider", async () => {
+    // Comparison reaches the provider. A listing never waits for it.
+    const { app } = await buildHarness(SEED, "alice", "secret", undefined, {
+      refresh: () => new Promise<void>(() => {}),
+    } as unknown as FsRoutesDeps["activityObservations"]);
+
+    const res = await app.request("/api/v1/fs/list?path=/");
+    expect(res.status).toBe(200);
+    expect((await readJson<ListJson>(res)).entries).toHaveLength(2);
   });
 
   it("returns bad_request when path is missing", async () => {
@@ -598,13 +611,28 @@ describe("GET/HEAD /fs/download", () => {
   });
 
   it("falls back to attachment when inline=1 but the type is not previewable", async () => {
-    const { app } = await buildHarness({
+    const { app, activity } = await buildHarness({
       ...SEED,
       files: { alice: { "/data.bin": "binary-ish" } },
     });
 
     const res = await app.request("/api/v1/fs/download?path=/data.bin&inline=1");
     expect(res.headers.get("content-disposition")).toContain("attachment");
+    // Bytes served as an attachment are a download, whatever the query asked
+    // for. Only a preview the browser actually renders stays out of history.
+    expect(await res.text()).toBe("binary-ish");
+    expect(activity.operations.map((row) => row.action)).toEqual(["file.download"]);
+  });
+
+  it("keeps an inline preview out of history", async () => {
+    const { app, activity } = await buildHarnessWithStorage(
+      makeStubStorage({ download: async () => makeDownloadResult() }),
+    );
+
+    const res = await app.request("/api/v1/fs/download?path=/hello.txt&inline=1");
+    expect(res.headers.get("content-disposition")).toContain("inline");
+    await res.text();
+    expect(activity.operations).toHaveLength(0);
   });
 
   it("forwards If-Range without erroring", async () => {

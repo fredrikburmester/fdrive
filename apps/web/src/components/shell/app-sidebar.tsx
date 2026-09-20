@@ -2,6 +2,7 @@
 
 import {
   ChevronsUpDown,
+  Clock3,
   Info,
   Link2,
   LogOut,
@@ -112,6 +113,21 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
         <FavoritesSection />
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={pathname?.startsWith("/activity")}
+                  render={<Link href={"/activity" as Route} />}
+                >
+                  <Clock3 />
+                  <span>My activity</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
         <TagsSection />
         <RecentsSection />
         {/* Shares and Trash sit at the bottom of the navigation, above System. */}

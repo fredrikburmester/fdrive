@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -47,6 +48,48 @@ export function wrap<Args>(
 }
 
 const ORDER_BY = z.enum(["modified_desc", "modified_asc", "size_desc", "path"]);
+
+/**
+ * Records one explicit read after it succeeded. Reads aggregate into a window
+ * per token and path, so a thousand repeated reads stay one entry with a count.
+ * The request ID is derived from the call, which makes a replayed continuation
+ * of the same MCP request the same read rather than a second one.
+ */
+async function explicitRead<T>(
+  deps: McpToolDeps,
+  principal: Principal,
+  path: string,
+  action: "file.read" | "file.inspect",
+  work: () => Promise<T>,
+): Promise<T> {
+  const value = await work();
+  if (deps.activityReads) {
+    const hash = createHash("sha256")
+      .update(`${deps.activityRequestId}:${action}:${path}`)
+      .digest("hex")
+      .slice(0, 32);
+    const requestId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+    try {
+      await deps.activityReads.record({
+        accountId: principal.accountId,
+        identityId: principal.identityId,
+        path,
+        kind: "file",
+        action,
+        source: "mcp",
+        evidence: "server_confirmed",
+        contextHash: deps.activityContext ?? principal.identityId,
+        requestId,
+        at: deps.clock(),
+        outcome: "success",
+      });
+    } catch {
+      /* The read already happened. An unavailable journal loses the entry,
+         not the answer the caller asked for. */
+    }
+  }
+  return value;
+}
 
 /**
  * Registers every fdrive MCP tool on `server`, scoped to `principal`'s
@@ -231,7 +274,11 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
           .describe("Default 8000, clamped to [200, 40000]."),
       },
     },
-    wrap((args) => runReadFileText(deps, principal, args)),
+    wrap((args) =>
+      explicitRead(deps, principal, args.path, "file.read", () =>
+        runReadFileText(deps, principal, args),
+      ),
+    ),
   );
 
   register(
@@ -243,7 +290,11 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
         "holding an identical copy (exact duplicates).",
       inputSchema: { path: z.string().min(1) },
     },
-    wrap((args) => runFileInfo(deps, principal, args)),
+    wrap((args) =>
+      explicitRead(deps, principal, args.path, "file.inspect", () =>
+        runFileInfo(deps, principal, args),
+      ),
+    ),
   );
 
   register(
@@ -350,7 +401,11 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
         "Read a file as base64, with its SHA-256. Maximum 4 MiB. Use read_file_text for text and read_image for images.",
       inputSchema: { path },
     },
-    wrap((args) => readFile(deps, principal, args.path)),
+    wrap((args) =>
+      explicitRead(deps, principal, args.path, "file.read", () =>
+        readFile(deps, principal, args.path),
+      ),
+    ),
   );
   register(
     "read_image",
@@ -362,7 +417,9 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     },
     async (args) => {
       try {
-        const file = await readStoredFile(deps, principal, args.path);
+        const file = await explicitRead(deps, principal, args.path, "file.read", () =>
+          readStoredFile(deps, principal, args.path),
+        );
         if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.mime))
           throw new Error("Use read_file for this image format.");
         return {
@@ -404,7 +461,11 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
         description: "Read tags attached to one accessible file or folder.",
         inputSchema: { path },
       },
-      wrap((args) => fileTags(deps, principal, args.path)),
+      wrap((args) =>
+        explicitRead(deps, principal, args.path, "file.inspect", () =>
+          fileTags(deps, principal, args.path),
+        ),
+      ),
     );
   if (!organize) return;
   register(

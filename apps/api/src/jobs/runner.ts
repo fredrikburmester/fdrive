@@ -16,6 +16,22 @@ export const JOB_AUTHORITY_REVOKED_MESSAGE =
   "the session that queued this job is no longer authorized";
 
 export interface SubmitJobInput {
+  /** Reuses a durable history operation ID, so a job and its event are one row. */
+  readonly id?: string;
+  /**
+   * The immutable account behind the job. Jobs outlive the session that queued
+   * them, so the account, not only today's identity, decides who may read one.
+   */
+  readonly accountId?: string;
+  /**
+   * Persists the job's real outcome. A finished job is held in memory until
+   * this resolves, so capacity eviction cannot drop a job before its history
+   * is durable.
+   */
+  readonly onOutcome?: (
+    state: "done" | "failed" | "cancelled",
+    result: { path?: string; processed: number; bytes: number; authorityRevoked?: boolean },
+  ) => Promise<void>;
   readonly identityId: string;
   readonly kind: JobKind;
   /**
@@ -30,10 +46,10 @@ export interface SubmitJobInput {
 
 export interface JobRunner {
   submit(input: SubmitJobInput): JobStatus;
-  get(id: string, identityId: string): JobStatus | null;
-  list(identityId: string): JobStatus[];
+  get(id: string, identityId: string, accountId?: string): JobStatus | null;
+  list(identityId: string, accountId?: string): JobStatus[];
   /** Aborts the job's signal. Returns its (possibly still-running) status, or `null` if not found for this identity. */
-  cancel(id: string, identityId: string): JobStatus | null;
+  cancel(id: string, identityId: string, accountId?: string): JobStatus | null;
 }
 
 export interface JobRunnerDeps {
@@ -50,6 +66,10 @@ export interface JobRunnerDeps {
 }
 
 interface InternalJob {
+  readonly accountId: string | undefined;
+  readonly onOutcome: SubmitJobInput["onOutcome"];
+  /** True while the outcome is being written; eviction skips such a job. */
+  historyPending: boolean;
   readonly id: string;
   readonly identityId: string;
   readonly kind: JobKind;
@@ -148,13 +168,35 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     update();
     job.state = state;
     job.updatedAt = clock();
-    publish(job, { force: true });
-    scheduleRetentionPrune(job);
+    const recorded = () => {
+      job.historyPending = false;
+      publish(job, { force: true });
+      scheduleRetentionPrune(job);
+    };
+    if (job.onOutcome) {
+      job.historyPending = true;
+      void job
+        .onOutcome(state, {
+          ...(job.result ? { path: job.result.path } : {}),
+          processed: job.processed,
+          bytes: job.bytes,
+          ...(job.error === JOB_AUTHORITY_REVOKED_MESSAGE ? { authorityRevoked: true } : {}),
+        })
+        // A failed write leaves the intent open for recovery rather than
+        // replaying the job. It still releases the job: an outcome nobody
+        // could record must not pin a finished job in memory forever.
+        .then(recorded, recorded);
+    } else recorded();
     if (releaseSlot) {
       const identityCount = runningCounts.get(job.identityId) ?? 0;
       runningCounts.set(job.identityId, Math.max(0, identityCount - 1));
       startNextQueued(job.identityId);
     }
+  }
+
+  /** A job queued before an identity moved account stays with the account that queued it. */
+  function owns(job: InternalJob, accountId: string | undefined): boolean {
+    return accountId === undefined || job.accountId === undefined || job.accountId === accountId;
   }
 
   function startJob(job: InternalJob): void {
@@ -237,7 +279,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return;
     }
     for (const [id, job] of jobs) {
-      if (job.state === "done" || job.state === "failed" || job.state === "cancelled") {
+      if (
+        !job.historyPending &&
+        (job.state === "done" || job.state === "failed" || job.state === "cancelled")
+      ) {
         jobs.delete(id);
         if (jobs.size < maxJobs) {
           return;
@@ -255,7 +300,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
       const now = clock();
       const job: InternalJob = {
-        id: idGenerator(),
+        id: input.id ?? idGenerator(),
+        accountId: input.accountId,
+        onOutcome: input.onOutcome,
+        historyPending: false,
         identityId: input.identityId,
         kind: input.kind,
         createdAt: now,
@@ -280,24 +328,26 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return toJobStatus(job);
     },
 
-    get(id: string, identityId: string): JobStatus | null {
+    get(id: string, identityId: string, accountId?: string): JobStatus | null {
       const job = jobs.get(id);
-      return job !== undefined && job.identityId === identityId ? toJobStatus(job) : null;
+      return job !== undefined && job.identityId === identityId && owns(job, accountId)
+        ? toJobStatus(job)
+        : null;
     },
 
-    list(identityId: string): JobStatus[] {
+    list(identityId: string, accountId?: string): JobStatus[] {
       const result: JobStatus[] = [];
       for (const job of jobs.values()) {
-        if (job.identityId === identityId) {
+        if (job.identityId === identityId && owns(job, accountId)) {
           result.push(toJobStatus(job));
         }
       }
       return result;
     },
 
-    cancel(id: string, identityId: string): JobStatus | null {
+    cancel(id: string, identityId: string, accountId?: string): JobStatus | null {
       const job = jobs.get(id);
-      if (job === undefined || job.identityId !== identityId) {
+      if (job === undefined || job.identityId !== identityId || !owns(job, accountId)) {
         return null;
       }
       if (job.state === "done" || job.state === "failed" || job.state === "cancelled") {

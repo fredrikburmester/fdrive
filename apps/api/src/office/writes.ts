@@ -1,4 +1,5 @@
 import { baseName, extensionOf, joinPath, parentPath } from "@fdrive/core";
+import { recordOfficeAction } from "../activity/office.js";
 import { requireOfficeEdit } from "./auth.ts";
 import { requireMatchingLock, WopiError } from "./errors.ts";
 import { decodeUtf7, lockHeader, requireFilename, suggestedFilename } from "./names.ts";
@@ -21,6 +22,7 @@ async function uploadRequest(
   request: Request,
   config: OfficeConfig,
   signal: AbortSignal,
+  bridgeId = opened.file.id,
 ): Promise<void> {
   const length = request.headers.get("Content-Length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))))
@@ -37,7 +39,16 @@ async function uploadRequest(
     if (length !== null && Number(length) !== size) throw new WopiError(400);
     await requireOfficeEdit(deps, opened.actor, opened.path);
     if (path !== opened.path) await requireOfficeEdit(deps, opened.actor, path);
-    await opened.actor.storage.upload(path, body, { signal, contentLength: size });
+    await recordOfficeAction(
+      deps,
+      opened.actor,
+      path === opened.path ? "file.save" : "file.copy",
+      opened.path,
+      path,
+      bridgeId,
+      () => opened.actor.storage.upload(path, body, { signal, contentLength: size }),
+      { size },
+    );
   });
 }
 async function putFile(
@@ -103,7 +114,15 @@ async function renameFile(
         if (target === opened.path) return Response.json({ Name: name });
         if (await fileExists(opened.actor, target))
           throw new WopiError(400, { "X-WOPI-InvalidFileNameError": "Name already exists" });
-        await opened.actor.storage.move(opened.path, target);
+        await recordOfficeAction(
+          deps,
+          opened.actor,
+          "file.rename",
+          opened.path,
+          target,
+          opened.file.id,
+          () => opened.actor.storage.move(opened.path, target),
+        );
         await scope.files.movePrefix({
           providerId: opened.file.providerId,
           rootName: opened.file.rootName,
@@ -170,7 +189,7 @@ async function putRelative(
             if (relative === null) return null;
             throw new WopiError(409, { "X-WOPI-Lock": "" });
           }
-          await uploadRequest(deps, opened, path, request, config, signal);
+          await uploadRequest(deps, opened, path, request, config, signal, file.id);
           await contentVersion(opened.actor.storage, path, config.maxBytes, signal);
           const fields = mintedFields(deps, config, opened.actor, file, "edit");
           return {

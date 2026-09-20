@@ -13,7 +13,7 @@ import {
   parentPath,
   toFsPath,
 } from "@fdrive/core";
-import { recordOfficeOpen } from "../activity/office.js";
+import { recordOfficeAction, recordOfficeOpen } from "../activity/office.js";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
 import { selectDiscoveryAction } from "./protocol/discovery.ts";
@@ -273,11 +273,21 @@ export function createOfficeService(deps: OfficeDeps) {
           // fdrive writers and rejects observed collisions; external SFTP writers can race.
           await requireOfficeEdit(deps, actor, path);
           if (await fileExists(actor, path)) throw new WopiError(409, { "X-WOPI-Lock": "" });
-          await actor.storage.upload(path, bytes, {
-            contentLength: bytes.byteLength,
-            signal: officeSignal(config),
-          });
-          await scope.files.ensure(location);
+          const file = await scope.files.ensure(location);
+          await recordOfficeAction(
+            deps,
+            actor,
+            "file.create",
+            path,
+            path,
+            file.id,
+            () =>
+              actor.storage.upload(path, bytes, {
+                contentLength: bytes.byteLength,
+                signal: officeSignal(config),
+              }),
+            { size: bytes.byteLength },
+          );
         }),
       );
       publishOfficeChange(deps, actor, path, "create");

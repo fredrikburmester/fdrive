@@ -7,6 +7,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { DestinationPicker } from "@/components/files/destination-picker";
 import { Button } from "@/components/ui/button";
+import { useActivityGesture } from "@/lib/activity/gestures";
 import { useArchiveEntries } from "@/lib/archive/queries";
 import { extractDestinationUnder } from "@/lib/files/archive";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
@@ -32,6 +33,7 @@ export interface ArchivePreviewProps {
  * `GET /fs/archive-entries`.
  */
 export function ArchivePreview({ entry, downloadUrl }: ArchivePreviewProps) {
+  useActivityGesture("archive.inspect", entry.path);
   const query = useArchiveEntries(entry.path);
   const [destinationPickerOpen, setDestinationPickerOpen] = useState(false);
 

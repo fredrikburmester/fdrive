@@ -1,10 +1,21 @@
 # Personal activity and file journeys
 
-Status: all four slices are implemented on the unmerged branch `codex/recent-activity`, built
-from `origin/main` `26bc01e` on 2026-09-14 and verified there. No PR was opened. Reconciled
-against `origin/main` `484f8a91` on 2026-09-19 for re-landing in slices. Every producer seam
-named here still exists on main; every departure main has since forced is marked
-**Since 26bc01e**, here and in the three companion documents. Original checkout and native WIP remain untouched.
+Status: shipped on `main`. The schema, repositories and migration landed in #93, the core
+file, Trash, native and editor producers in #94 and #95, and the read API in #96. Everything
+else, the remaining producers, Unknown observations, export and the web history and journey
+UI, landed together afterwards. This document is kept as the design record; rows marked
+**Since 26bc01e** record where the original `codex/recent-activity` design had to change for
+main. What remains open is listed under [what is not covered](#what-is-not-covered).
+
+## What is not covered
+
+- No retention cutoff is enabled and no archive or purge administration exists. The plan's
+  slice 4 scale qualification (a million events across accounts, measured latency budgets)
+  has a PostgreSQL fixture but no production hardware promise.
+- Cached and offline native opens stay unobservable, and WebDAV and S3 have no watcher: their
+  Unknown events come only from refresh comparison, which the feed's coverage block states.
+- Conversion and any other command that does not exist yet gets its taxonomy and inventory
+  row when it ships, not before.
 
 ## Outcome and invariants
 

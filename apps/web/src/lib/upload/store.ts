@@ -93,6 +93,10 @@ function buildUploadHeaders(
   if (identityId !== undefined) {
     headers[IDENTITY_HEADER] = identityId;
   }
+  // One ID per attempt: a request delivered twice records one upload, while a
+  // retry the person asked for is a new one.
+  headers["x-fdrive-operation-id"] = `${item.id}:${item.attempts + 1}`;
+  if (item.batchId) headers["x-fdrive-batch-id"] = item.batchId;
   return headers;
 }
 
@@ -144,7 +148,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
         .then((result) => {
           controllers.delete(item.id);
           if (result.status >= 200 && result.status < 300) {
-            dispatch({ type: "succeed", id: item.id });
+            dispatch({ type: "succeed", id: item.id, completedAt: Date.now() });
             if (item.identityId === get().activeIdentityId) onUploaded(parentPath(item.targetPath));
           } else {
             dispatch({
@@ -187,11 +191,16 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
       },
 
       enqueue(items) {
+        const batchId = crypto.randomUUID();
         const captured = items.map((item) => {
           const owner = item.identityId ?? get().activeIdentityId;
           if (owner === undefined && deps.requireIdentity)
             throw new Error("Select a login before uploading.");
-          return owner === undefined ? item : { ...item, identityId: owner };
+          return {
+            ...item,
+            batchId: item.batchId ?? batchId,
+            ...(owner === undefined ? {} : { identityId: owner }),
+          };
         });
         dispatch({ type: "enqueue", items: captured });
         scheduleNext();

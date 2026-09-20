@@ -17,6 +17,8 @@ import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { z } from "zod";
 import { accountContext } from "../accounts/routes.ts";
+import { recordFsAction } from "../activity/fs-context.js";
+import type { PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.ts";
 import {
   peekArchive,
@@ -234,6 +236,8 @@ export function registerSharesRoutes(
   groups: { public: AppHono; authed: AuthedHono },
   deps: {
     service: SharesService;
+    /** Records share mutations. Passwords and secret URLs are never facts. */
+    activity?: PersonalActivityService;
     thumbnailsEnabled?: () => Promise<boolean>;
     codec: ShareCredentialCodec;
     limiter: ShareLimiter;
@@ -256,8 +260,28 @@ export function registerSharesRoutes(
   groups.authed.post(base, (c) =>
     shareCall(async () => {
       const input = accountContext(c);
+      const body = await publicBody(CreateShareRequest, c, 32 * 1024 * 1024);
       return c.json(
-        await deps.service.create(input, await publicBody(CreateShareRequest, c, 32 * 1024 * 1024)),
+        await recordFsAction(
+          deps.activity,
+          c,
+          {
+            action: "share.create",
+            requested: {
+              ...(body.paths[0] ? { path: body.paths[0] } : {}),
+              permissions: [body.scope],
+              expiresAt: body.expiresAt ?? null,
+            },
+            subjects: body.paths.map((path) => ({ path, identityId: input.principal.identityId })),
+          },
+          () => deps.service.create(input, body),
+          (share) => ({
+            shareId: share.id,
+            ...(share.paths[0] ? { path: share.paths[0] } : {}),
+            permissions: [share.scope],
+            expiresAt: share.expiresAt,
+          }),
+        ),
         201,
       );
     }),
@@ -268,10 +292,34 @@ export function registerSharesRoutes(
   groups.authed.patch(`${base}/:id`, (c) =>
     shareCall(async () => {
       const input = accountContext(c);
-      const updated = await deps.service.update(
-        input,
-        shareId(c),
-        await publicBody(UpdateShareRequest, c, 32 * 1024 * 1024),
+      const previous = await deps.service.activitySnapshot(input, shareId(c));
+      const patch = await publicBody(UpdateShareRequest, c, 32 * 1024 * 1024);
+      const updated = await recordFsAction(
+        deps.activity,
+        c,
+        {
+          action: "share.update",
+          requested: {
+            ...(previous.paths[0] ? { path: previous.paths[0] } : {}),
+            shareId: previous.id,
+          },
+          before: {
+            ...(previous.paths[0] ? { path: previous.paths[0] } : {}),
+            permissions: [previous.scope],
+            expiresAt: previous.expiresAt,
+          },
+          subjects: [...new Set([...previous.paths, ...(patch.paths ?? [])])].map((path) => ({
+            path,
+            identityId: input.principal.identityId,
+          })),
+        },
+        () => deps.service.update(input, shareId(c), patch),
+        (share) => ({
+          shareId: share.id,
+          ...(share.paths[0] ? { path: share.paths[0] } : {}),
+          permissions: [share.scope],
+          expiresAt: share.expiresAt,
+        }),
       );
       // The password may have changed: no memoized verification survives an update.
       passwordCache.invalidate(shareId(c));
@@ -280,7 +328,25 @@ export function registerSharesRoutes(
   );
   groups.authed.delete(`${base}/:id`, (c) =>
     shareCall(async () => {
-      await deps.service.remove(accountContext(c), shareId(c));
+      const input = accountContext(c);
+      const previous = await deps.service.activitySnapshot(input, shareId(c));
+      await recordFsAction(
+        deps.activity,
+        c,
+        {
+          action: "share.revoke",
+          requested: {
+            shareId: previous.id,
+            ...(previous.paths[0] ? { path: previous.paths[0] } : {}),
+          },
+          before: { permissions: [previous.scope], expiresAt: previous.expiresAt },
+          subjects: previous.paths.map((path) => ({
+            path,
+            identityId: input.principal.identityId,
+          })),
+        },
+        () => deps.service.remove(input, shareId(c)),
+      );
       passwordCache.invalidate(shareId(c));
       return c.json({ ok: true });
     }),

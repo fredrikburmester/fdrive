@@ -55,6 +55,14 @@ Linking an already-owned identity transfers that login and its metadata, not the
 account's administrator rights or API tokens. Re-authentication and session revocation
 rules in the authentication guide supersede the original account-linking briefs.
 
+Personal activity is separately owned by the initiating account, with the storage identity
+captured alongside it. History never transfers with tags/favorites and never extends the
+actorless administrator `system_events`. The append-only journal, file registry, copied
+native receipts, read aggregation and provider-specific Unknown evidence are documented in
+the [activity schema and API](plans/RECENT-ACTIVITY-SCHEMA.md),
+[taxonomy](plans/RECENT-ACTIVITY-EVENTS.md) and
+[producer inventory](plans/RECENT-ACTIVITY-COVERAGE.md).
+
 ## Index authorization
 
 Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events, Office paths

@@ -24,11 +24,13 @@ import { normalizeOrThrow, parseBody } from "../fs/routes.js";
 import { createReadAuthorizer } from "../scoping/read-authorizer.js";
 import type { ActivityAdmission } from "./admission.js";
 import { createActivityCursors } from "./cursor.js";
+import { createActivityLimiter } from "./limiter.js";
+import type { ActivityObservations } from "./observations.js";
 
 const API_PREFIX = "/api/v1";
 
 /** Strips the `/api/v1` prefix from a route path, since `authed` is already mounted there. */
-function routePath(fullPath: string): string {
+export function routePath(fullPath: string): string {
   return fullPath.slice(API_PREFIX.length);
 }
 
@@ -38,7 +40,13 @@ export interface PersonalActivityRoutesDeps {
   readonly repo: ActivityRepo;
   readonly identities: IdentityRepo;
   readonly storageFactory: IdentityStorageFactory;
+  readonly observations: ActivityObservations;
   readonly cursorSecret: string;
+  /**
+   * True when an indexer watcher is running. Without one, observations come
+   * only from refresh comparison, and the UI must keep saying so.
+   */
+  readonly watcherEnabled: boolean;
 }
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
@@ -147,6 +155,9 @@ export function registerPersonalActivityRoutes(
 ) {
   const { authed } = groups;
   const cursors = createActivityCursors(deps.cursorSecret);
+  // An explicit recheck reaches the provider, so it gets a tighter budget
+  // than a read of already recorded history.
+  const recheck = createActivityLimiter(12);
   const files = routePath(ROUTES.activity.files);
   const events = routePath(ROUTES.activity.events);
 
@@ -236,7 +247,7 @@ export function registerPersonalActivityRoutes(
         reads: true,
         // Nothing detects changes made outside fdrive yet, so the UI must keep
         // saying so. Provider watchers and refresh reconciliation are slice 3.
-        observations: "unavailable",
+        observations: deps.watcherEnabled ? "watcher_and_refresh" : "refresh",
         observationGap: true,
       },
     };
@@ -336,6 +347,25 @@ export function registerPersonalActivityRoutes(
       ),
     });
   });
+  authed.post(`${files}/:fileId/recheck`, async (c) => {
+    const { principal } = accountContext(c);
+    recheck(principal.accountId);
+    const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));
+    if (!result) throw new ApiHttpError("not_found", "File journey not found");
+    // A recheck is bounded to what the caller may read right now, so an
+    // unlinked login is refused instead of probed.
+    const identity = await deps.identities.get(result.file.identityId);
+    if (identity?.accountId !== principal.accountId)
+      throw new ApiHttpError("forbidden", "Login is no longer linked");
+    const storage = await deps.storageFactory(identity.id);
+    return c.json(
+      await deps.observations.check(
+        { ...principal, identityId: identity.id, storage },
+        result.file.path,
+      ),
+    );
+  });
+
   authed.get(`${files}/:fileId`, async (c) => {
     const { principal } = accountContext(c);
     const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));

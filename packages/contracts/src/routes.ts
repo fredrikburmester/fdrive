@@ -124,7 +124,7 @@ export const ROUTES = {
     locations: "/api/v1/activity/locations",
     /** GET: the history ID for one `identityId` and `path` -> `{ id }`. 404 before anything is recorded. */
     resolveFile: "/api/v1/activity/files/resolve",
-    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage` and `/:id/revisions` hang off it. */
+    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage`, `/:id/revisions` and `POST /:id/recheck` hang off it. */
     files: "/api/v1/activity/files",
     /** GET: `/:id/events` for one batch -> `PersonalActivityResponse` with a `batchSummary`. */
     batches: "/api/v1/activity/batches",
@@ -132,6 +132,8 @@ export const ROUTES = {
     events: "/api/v1/activity/events",
     /** GET, Server-Sent Events: committed history sequences for the caller. */
     stream: "/api/v1/activity/stream",
+    /** POST: pin a snapshot of the caller's own history -> `{ id }`. `/:id` and `/:id/download` read it back. */
+    exports: "/api/v1/activity/exports",
   },
   ai: {
     /** GET: whether AI actions are available to the caller -> `AiStatusResponse`. */

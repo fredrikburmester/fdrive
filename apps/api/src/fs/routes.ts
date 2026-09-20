@@ -46,6 +46,7 @@ import {
   recordFsAction,
 } from "../activity/fs-context.js";
 import { activityStat, type PersonalActivityService } from "../activity/service.js";
+import { activityStream } from "../activity/streams.js";
 import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
@@ -67,6 +68,8 @@ function routePath(fullPath: string): string {
 }
 
 export interface FsRoutesDeps {
+  /** Compares a complete authorized listing against tracked history. */
+  readonly activityObservations?: import("../activity/observations.js").ActivityObservations;
   /** Absent in fixtures that do not exercise personal history; every route works without it. */
   readonly activity?: PersonalActivityService;
   readonly bus: EventBus;
@@ -344,7 +347,7 @@ async function resolveDownload(
   return { kind: "stream", result };
 }
 
-async function handleDownload(c: FsContext): Promise<Response> {
+async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Response> {
   const principal = c.get("principal");
   const query = parseQuery(DownloadQuery, c.req.query());
   const path = normalizeOrThrow(query.path);
@@ -395,7 +398,20 @@ async function handleDownload(c: FsContext): Promise<Response> {
     return c.body(null, result.status, headers);
   }
 
-  return c.body(result.body, result.status, headers);
+  // Inline bytes back a preview the browser decides to fetch; the explicit
+  // preview gesture is reported separately. Anything served as an attachment
+  // is bytes the person asked for, and only reaching EOF proves they were
+  // delivered.
+  const context = activityRequestContext(c);
+  const body = inline
+    ? result.body
+    : await activityStream(deps.activity, principal, path, "file.download", result.body, {
+        ...(context.producerOperationId ? { requestId: context.producerOperationId } : {}),
+        source: context.source === "api" ? "api" : "web",
+        partial: result.status === 206,
+        expectedBytes: result.contentLength,
+      });
+  return c.body(body, result.status, headers);
 }
 
 /**
@@ -627,6 +643,11 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
+    // A complete authorized listing is the only refresh input WebDAV and S3
+    // have. It suggests differences; only a live check can establish one.
+    // Comparison runs beside the response: it probes the provider, and a
+    // listing is not worth slowing down to notice an outside change sooner.
+    void deps.activityObservations?.refresh(principal, path, entries);
     const trashPath = deps.trashPathForStorage?.(principal.storage);
     // The provider-bound trash folder and the Mac app's bookkeeping namespace are fdrive's own;
     // neither is a user folder, so the tree does not show them.
@@ -657,8 +678,8 @@ export function registerFsRoutes(
     return c.json(body);
   });
 
-  authed.get(routePath(ROUTES.fs.download), handleDownload);
-  authed.on("HEAD", routePath(ROUTES.fs.download), handleDownload);
+  authed.get(routePath(ROUTES.fs.download), (c) => handleDownload(c, deps));
+  authed.on("HEAD", routePath(ROUTES.fs.download), (c) => handleDownload(c, deps));
 
   authed.post(routePath(ROUTES.fs.zip), async (c) => {
     const principal = c.get("principal");
@@ -675,7 +696,20 @@ export function registerFsRoutes(
     const firstPath = paths[0] as string;
     const derivedName = baseName(firstPath);
     const zipName = `${body.name ?? (derivedName.length > 0 ? derivedName : "download")}.zip`;
-    return c.body(stream, 200, {
+    const context = activityRequestContext(c);
+    const recorded = await activityStream(
+      deps.activity,
+      principal,
+      firstPath,
+      "archive.compress",
+      stream,
+      {
+        ...(context.producerOperationId ? { requestId: context.producerOperationId } : {}),
+        source: context.source === "api" ? "api" : "web",
+        subjects: paths.map((path) => ({ path, identityId: principal.identityId })),
+      },
+    );
+    return c.body(recorded, 200, {
       "Content-Type": "application/zip",
       "Content-Disposition": contentDisposition("attachment", zipName),
     });

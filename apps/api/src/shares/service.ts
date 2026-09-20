@@ -340,6 +340,15 @@ export function createSharesService(deps: SharesDeps) {
       const share = await getUpstream(row, input.principal.accountId);
       return managedShare(await mirror(row.identityId, share, row.presentation), share);
     },
+    /**
+     * The owned row as history records it, read before the change so an update
+     * or a revoke can report what it replaced. The local row survives an
+     * upstream deletion, so a revoke can still name what it revoked.
+     */
+    async activitySnapshot(input: AccountRequestContext, id: string) {
+      const { row } = await managed(input, id);
+      return { ...row, expiresAt: row.expiresAt?.toISOString() ?? null };
+    },
     async create(input: AccountRequestContext, body: CreateShareRequest) {
       await liveAccountSession(deps, input);
       const location = await owner(input.principal.identityId, input.principal.accountId);

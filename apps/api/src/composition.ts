@@ -1,6 +1,8 @@
 import { withBackupWriter } from "@fdrive/backup";
 import { type ProviderModule, parseSearchFilters, type StorageProvider } from "@fdrive/core";
 import {
+  createActivityExportsRepo,
+  createActivityObservationsRepo,
   createActivityReadsRepo,
   createActivityRepo,
   createDb,
@@ -27,7 +29,9 @@ import { createAccountsService } from "./accounts/service.ts";
 import type { AccountsDeps } from "./accounts/types.ts";
 import { createAccountViews } from "./accounts/views.ts";
 import { createActivityAdmission } from "./activity/admission.ts";
+import { registerActivityExports } from "./activity/exports.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
+import { createActivityObservations } from "./activity/observations.ts";
 import { registerPersonalActivityRoutes } from "./activity/routes.ts";
 import { createActivityService } from "./activity/service.ts";
 import { createChatService } from "./ai/chat/service.ts";
@@ -338,6 +342,13 @@ export async function composeApp(
   // `{ unavailable: true }` rather than erroring when the caller's
   // verified index scopes are unavailable for any reason.
   const indexQueries = createIndexQueries(db);
+  const activityObservations = createActivityObservations({
+    repo: createActivityObservationsRepo(db, clock),
+    identities: repos.identities,
+    storageFactory,
+    resolver: scopeResolver,
+    onError: (error) => logger.warn({ err: error }, "personal activity refresh deferred"),
+  });
   // Proposes physical locations for unmapped virtual folders from index rows
   // (`docs/SCOPING.md`); administrators confirm them.
   const scopeSuggester = createScopeSuggester({
@@ -569,6 +580,9 @@ export async function composeApp(
           favorites: repos.favorites,
           metadata: metadataService,
           onStorageEvent: (event) => applyOfficeRootEvent(officeFiles, providerService, event),
+          onActivityEvent: activityObservations.watcher,
+          activityTracks: activityObservations.tracks,
+          onActivityRelink: activityObservations.relink,
           bus,
           configuredMappingsFor: scopeResolver.configuredMappings,
           storageForIdentity: (identityId) => storageFactory(identityId),
@@ -860,6 +874,7 @@ export async function composeApp(
       });
       auth.registerRoutes(groups);
       registerDesktopRoutes(groups, {
+        activity: personalActivity,
         recovery: desktopEffects,
         writes: createDesktopWrites({
           repo: desktopRepo,
@@ -890,6 +905,7 @@ export async function composeApp(
         },
       });
       registerSharesRoutes(groups, {
+        activity: personalActivity,
         thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({
           repos,
@@ -935,6 +951,7 @@ export async function composeApp(
       // rejecting it.
       const fsRoutesDeps = {
         activity: personalActivity,
+        activityObservations,
         bus,
         clock,
         jobRunner,
@@ -978,16 +995,23 @@ export async function composeApp(
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, {
         metadata: metadataService,
+        activity: personalActivity,
         reads: activityReads,
         admitActivity,
+      });
+      registerActivityExports(groups.authed, {
+        repo: activityRepo,
+        exports: createActivityExportsRepo(db, clock),
       });
       registerPersonalActivityRoutes(groups, {
         repo: activityRepo,
         reads: activityReads,
         identities: repos.identities,
         storageFactory,
+        observations: activityObservations,
         admitActivity,
         cursorSecret: config.fdriveMasterKey,
+        watcherEnabled: indexerListener !== null,
       });
       registerAiRoutes(groups, {
         settings: aiSettings,

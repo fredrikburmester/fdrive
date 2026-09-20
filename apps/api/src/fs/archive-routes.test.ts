@@ -135,6 +135,8 @@ interface Harness {
   readonly fsEvents: FsEvent[];
   readonly tmpDir: string;
   readonly activity: ReturnType<typeof activityFixture>;
+  readonly storage: StorageProvider;
+  readonly jobRunner: ReturnType<typeof createJobRunner>;
 }
 
 const tempDirs: string[] = [];
@@ -197,7 +199,7 @@ async function buildHarness(
     },
   });
 
-  const harness: Harness = { app, bus, fsEvents, tmpDir, activity };
+  const harness: Harness = { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
   return harness;
 }
 
@@ -258,7 +260,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
-  return { app, bus, fsEvents, tmpDir, activity };
+  return { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
 }
 
 /** Builds a harness around an arbitrary `StorageProvider`, for exercising error-mapping branches. */
@@ -306,7 +308,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
       }),
   });
 
-  return { app, bus, fsEvents, tmpDir, activity };
+  return { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
 }
 
 afterEach(async () => {
@@ -444,6 +446,91 @@ describe("POST /fs/duplicate", () => {
 });
 
 describe("POST /fs/compress and the resulting job", () => {
+  it("records a job that fails on an externally created target and keeps those bytes", async () => {
+    const h = await buildHarness();
+    const download = h.storage.download.bind(h.storage);
+    vi.spyOn(h.storage, "download").mockImplementationOnce(async (...args) => {
+      await h.storage.upload("/dir.zip", Buffer.from("external bytes"));
+      return download(...args);
+    });
+    const accepted = await h.app.request(
+      "/api/v1/fs/compress",
+      jsonPost({ paths: ["/dir"], format: "zip" }),
+    );
+    const { jobId } = (await accepted.json()) as { jobId: string };
+    expect((await waitForJobDone(h.app, jobId)).state).toBe("failed");
+    expect(h.activity.outcomes.at(-1)).toMatchObject({
+      action: "archive.compress",
+      outcome: "failed",
+    });
+    expect(await new Response((await h.storage.download("/dir.zip")).body).text()).toBe(
+      "external bytes",
+    );
+  });
+
+  it("heartbeats a slow job, refuses its duplicate submission and writes the archive once", async () => {
+    const h = await buildHarness();
+    const upload = h.storage.upload.bind(h.storage);
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    const write = vi.spyOn(h.storage, "upload").mockImplementation(async (...args) => {
+      entered = true;
+      await paused;
+      return upload(...args);
+    });
+    const heartbeat = vi
+      .spyOn(h.activity.service.repo, "heartbeat")
+      .mockRejectedValueOnce(Error("temporary journal outage"));
+    const request = {
+      ...jsonPost({ paths: ["/dir"], format: "zip" }),
+      headers: {
+        "content-type": "application/json",
+        "x-requested-with": "fdrive",
+        "x-fdrive-operation-id": "slow-compress",
+      },
+    };
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const accepted = await h.app.request("/api/v1/fs/compress", request);
+      expect(accepted.status).toBe(202);
+      const { jobId } = (await accepted.json()) as { jobId: string };
+      await vi.waitFor(() => expect(entered).toBe(true));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(heartbeat).toHaveBeenCalled();
+      expect((await h.app.request("/api/v1/fs/compress", request)).status).toBe(409);
+      release();
+      expect((await waitForJobDone(h.app, jobId)).state).toBe("done");
+      expect(write).toHaveBeenCalledOnce();
+      expect(
+        h.activity.outcomes.some(
+          (event) => event.action === "archive.compress" && event.outcome === "success",
+        ),
+      ).toBe(true);
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a failed archive when its prepared intent cannot be claimed", async () => {
+    const h = await buildHarness();
+    vi.spyOn(h.activity.service.repo, "claim").mockResolvedValueOnce(false);
+    const accepted = await h.app.request(
+      "/api/v1/fs/compress",
+      jsonPost({ paths: ["/dir"], format: "zip" }),
+    );
+    const { jobId } = (await accepted.json()) as { jobId: string };
+    expect((await waitForJobDone(h.app, jobId)).state).toBe("failed");
+    expect(h.activity.outcomes.at(-1)).toMatchObject({
+      action: "archive.compress",
+      outcome: "failed",
+    });
+    expect((await h.app.request("/api/v1/fs/stat?path=/dir.zip")).status).toBe(404);
+  });
+
   it("compresses a folder to zip, completes, and publishes an fs create event", async () => {
     const { app, fsEvents } = await buildHarness();
 
@@ -670,6 +757,7 @@ describe("POST /fs/compress and the resulting job", () => {
       isAdmin: false,
     };
     const jobRunner = createJobRunner({ clock: () => new Date(), bus, maxJobs: 0 });
+    const activity = activityFixture(() => new Date());
     const tmpDir = join(tmpdir(), `fdrive-archive-routes-fullqueue-${Date.now()}`);
     await mkdir(tmpDir, { recursive: true });
     tempDirs.push(tmpDir);
@@ -683,6 +771,7 @@ describe("POST /fs/compress and the resulting job", () => {
       principalResolver: async () => principal,
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
+          activity: activity.service,
           bus,
           clock: () => new Date(),
           jobRunner,
@@ -698,6 +787,19 @@ describe("POST /fs/compress and the resulting job", () => {
     );
 
     expect(res.status).toBe(429);
+    expect(activity.outcomes.at(-1)).toMatchObject({
+      action: "archive.compress",
+      outcome: "failed",
+      errorCode: "queue_rejected",
+    });
+    vi.spyOn(jobRunner, "submit").mockImplementationOnce(() => {
+      throw new Error("queue stopped");
+    });
+    expect(
+      (await app.request("/api/v1/fs/compress", jsonPost({ paths: ["/dir"], format: "zip" })))
+        .status,
+    ).toBe(500);
+    expect(activity.outcomes.at(-1)?.errorCode).toBe("queue_rejected");
   });
 });
 

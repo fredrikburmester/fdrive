@@ -15,6 +15,9 @@ import {
 import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
 import { accountContext } from "../accounts/routes.js";
+import { activityOperationId } from "../activity/fs-context.js";
+import type { PersonalActivityService } from "../activity/service.js";
+import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { createRequireAdmin, type Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
@@ -31,6 +34,8 @@ export function registerDesktopRoutes(
     clientIp: (c: Context) => string;
     writes?: DesktopWrites;
     recovery?: Pick<DesktopEffectsRepo, "status">;
+    /** Records hydration. A background fetch is not a proven human open. */
+    activity?: PersonalActivityService;
   },
 ) {
   const base = DESKTOP_API.slice("/api/v1".length);
@@ -90,6 +95,8 @@ export function registerDesktopRoutes(
     if (!parsed.success) throw new ApiHttpError("bad_request", "Invalid file path");
     return parsed.data;
   }
+  /** The caller's own ID for one hydration, distinct from a write's operation ID. */
+  const hydrationId = (c: Context) => activityOperationId(c.req.header("x-fdrive-operation-id"));
   async function principal(
     c: Context,
     writeProtocol = false,
@@ -174,7 +181,20 @@ export function registerDesktopRoutes(
     const result = await files.content(auth.principal, path(c), c.req.raw.signal);
     c.header("Content-Type", "application/octet-stream");
     if (result.contentLength !== null) c.header("Content-Length", String(result.contentLength));
-    return c.body(result.body);
+    return c.body(
+      await activityStream(
+        deps.activity,
+        auth.principal,
+        path(c),
+        "file.materialize",
+        result.body,
+        {
+          // A hydration the client retries under one ID is one materialization.
+          ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
+          expectedBytes: result.contentLength,
+        },
+      ),
+    );
   });
   groups.public.post(`${base}/versions`, async (c) => {
     const auth = await principal(c);
@@ -232,7 +252,19 @@ export function registerDesktopRoutes(
       const result = await writeService().files.content(auth.principal, path(c), c.req.raw.signal);
       c.header("Content-Type", "application/octet-stream");
       if (result.contentLength !== null) c.header("Content-Length", String(result.contentLength));
-      return c.body(result.body);
+      return c.body(
+        await activityStream(
+          deps.activity,
+          auth.principal,
+          path(c),
+          "file.materialize",
+          result.body,
+          {
+            ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
+            expectedBytes: result.contentLength,
+          },
+        ),
+      );
     });
     v2.post(`${base}/versions`, async (c) => {
       const auth = await principal(c, true);

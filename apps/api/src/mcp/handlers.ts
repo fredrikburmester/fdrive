@@ -56,6 +56,12 @@ export const MAX_CANDIDATE_FILES = 2000;
 
 /** Dependencies every MCP tool handler needs, resolved once per fdrive process and shared across requests. */
 export interface McpToolDeps {
+  /** Records explicit tool commands. Absent in deployments without history. */
+  readonly activity?: import("../activity/service.js").PersonalActivityService;
+  readonly activityReads?: import("@fdrive/db").ActivityReadsRepo;
+  /** Hashed credential, so one token's repeated reads aggregate together. */
+  readonly activityContext?: string;
+  readonly activityRequestId?: string;
   readonly indexQueries: IndexQueries;
   readonly searchService: SearchService;
   readonly imageSearchService?: ImageSearchService;
