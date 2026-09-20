@@ -5,6 +5,18 @@ test("alice creates an API token, sees it once, the list shows it, and can revok
 }, testInfo) => {
   await page.goto("/files");
 
+  // A CI retry that failed between creating and revoking a token leaves it in
+  // the shared database, and the next attempt then fails at "No tokens yet.".
+  // Revoke leftovers first so the retry starts from the seeded state.
+  const existing = await page.request.get("/api/v1/account/tokens");
+  const tokens = (await existing.json()) as { items: { id: string; name: string }[] };
+  for (const token of tokens.items.filter((item) => item.name.startsWith("Playwright"))) {
+    const revoked = await page.request.delete(`/api/v1/account/tokens/${token.id}`, {
+      headers: { "x-requested-with": "fdrive" },
+    });
+    expect(revoked.ok()).toBe(true);
+  }
+
   // Reach /account through the sidebar footer menu, not by direct navigation,
   // so this also proves the "Account" item is wired up.
   await page.getByRole("button", { name: "alice" }).click();
