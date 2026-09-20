@@ -2,13 +2,19 @@ import { definePackageConfig } from "@fdrive/config/vitest.preset";
 
 export default definePackageConfig({
   test: {
-    // Exercise this raw SQL repository on real PostgreSQL in both the coverage
-    // and integration gates. Do not exclude the new persistence boundary.
-    exclude: [
-      "**/node_modules/**",
-      "**/dist/**",
-      "test/integration/!(desktop|desktop-effects|desktop-publish-lock|activity).test.ts",
+    // Explicit allow-list: the default coverage gate runs exactly these five
+    // raw-SQL persistence boundaries against real PostgreSQL. `activity-scale`
+    // is the deliberate million-event regression from
+    // docs/plans/RECENT-ACTIVITY-COVERAGE.md:95; it costs about three minutes,
+    // so treat it as an intentional part of the gate, not an accident. A new
+    // integration file joins the gate only by being listed here (or via
+    // vitest.integration.config.ts, which runs all of them).
+    include: [
+      "src/**/*.test.ts",
+      "test/*.test.ts",
+      "test/integration/{activity,activity-scale,desktop,desktop-effects,desktop-publish-lock}.test.ts",
     ],
+    exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
       exclude: [
         "src/**/*.test.ts",

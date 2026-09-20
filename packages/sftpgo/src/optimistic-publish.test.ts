@@ -1,8 +1,9 @@
-import type { StorageSession } from "@fdrive/core";
+import { StorageError, type StorageProvider, type StorageSession } from "@fdrive/core";
 import { expect, it } from "vitest";
 import { createSftpgoClient } from "./client.js";
 import { createFakeSftpgoServer } from "./fake/server.js";
 import { sftpgoModule } from "./module.js";
+import { withOverwriteGuard } from "./optimistic-publish.js";
 
 const baseUrl = "http://sftpgo.test/prefix";
 
@@ -65,4 +66,56 @@ it("emulates overwrite refusal on stock REST without any configuration", async (
     stock.copy("/missing.txt", "/original.txt", { overwrite: false }),
   ).rejects.toMatchObject({ kind: "conflict" });
   expect(f.calls.map((call) => call.method)).toEqual(["HEAD", "HEAD", "HEAD"]);
+});
+
+function guarded(stat: StorageProvider["stat"]) {
+  const calls: string[] = [];
+  const storage = {
+    stat,
+    upload: async () => {
+      calls.push("upload");
+    },
+    move: async () => {
+      calls.push("move");
+    },
+    copy: async () => {
+      calls.push("copy");
+    },
+  } as unknown as StorageProvider;
+  return { storage: withOverwriteGuard(storage), calls };
+}
+
+it("performs a guarded upload, move and copy when the target is absent", async () => {
+  const absent: StorageProvider["stat"] = async () => {
+    throw new StorageError("not_found", "gone");
+  };
+  const { storage, calls } = guarded(absent);
+
+  await storage.upload("/new.txt", new Uint8Array([1]), { overwrite: false });
+  await storage.move("/a.txt", "/b.txt", { overwrite: false });
+  await storage.copy("/a.txt", "/c.txt", { overwrite: false });
+
+  expect(calls).toEqual(["upload", "move", "copy"]);
+});
+
+it("rethrows a non-not_found stat failure and never runs the mutation", async () => {
+  const denied: StorageProvider["stat"] = async () => {
+    throw new StorageError("forbidden", "permission denied");
+  };
+  const { storage, calls } = guarded(denied);
+
+  await expect(storage.move("/a.txt", "/b.txt", { overwrite: false })).rejects.toMatchObject({
+    kind: "forbidden",
+  });
+  expect(calls).toEqual([]);
+});
+
+it("touches no stat at all when overwrite is not denied", async () => {
+  const { storage, calls } = guarded(async () => {
+    throw Error("stat must not run without overwrite: false");
+  });
+
+  await storage.upload("/new.txt", new Uint8Array([1]));
+
+  expect(calls).toEqual(["upload"]);
 });
