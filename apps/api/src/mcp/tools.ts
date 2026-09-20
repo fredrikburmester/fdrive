@@ -70,11 +70,12 @@ async function explicitRead<T>(
       .slice(0, 32);
     const requestId = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
     try {
+      const entry = await principal.storage.stat(path);
       await deps.activityReads.record({
         accountId: principal.accountId,
         identityId: principal.identityId,
         path,
-        kind: "file",
+        kind: entry.kind === "dir" ? "dir" : "file",
         action,
         source: "mcp",
         evidence: "server_confirmed",

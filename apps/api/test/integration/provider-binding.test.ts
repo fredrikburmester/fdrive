@@ -340,7 +340,11 @@ describe("composed native identity and API-token provider binding", () => {
         await expectDenied(await h.request(mode, true), mode);
         const after = h.a.counts();
         expect(after.passwords - before.passwords).toBe(phase === "mint" ? 1 : 0);
-        expect(after.bearers - before.bearers).toBe(phase === "cached" ? 0 : 1);
+        // MCP activity captures the pre-mutation stat before mkdir. Both
+        // requests must remain bound to A through the provider switch.
+        const bearerRequests =
+          phase === "cached" ? 0 : phase === "mutation" && mode === "api-token" ? 2 : 1;
+        expect(after.bearers - before.bearers).toBe(bearerRequests);
         expect(after.mutations - before.mutations).toBe(phase === "mutation" ? 1 : 0);
         expect(after.foreignCredentials).toBe(0);
         // Nothing ever authenticates to B.

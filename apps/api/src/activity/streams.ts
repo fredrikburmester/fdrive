@@ -56,10 +56,10 @@ export async function activityStream(
         .digest("hex"),
       requested: {
         path,
-        kind: "file",
+        ...(action === "archive.compress" ? {} : { kind: "file" as const }),
         ...(action === "archive.compress" ? { variant: "stream" } : {}),
       },
-      before: { path, kind: "file" },
+      before: { path, ...(action === "archive.compress" ? {} : { kind: "file" as const }) },
       ...(options.subjects ? { subjects: options.subjects } : {}),
     });
     // Replaying a read may send bytes again. It must not replay an attributed action.

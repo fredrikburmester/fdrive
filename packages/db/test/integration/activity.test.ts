@@ -28,6 +28,8 @@ it("keeps personal journeys stable, immutable and private across pools and ident
   const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
   const first = createDb(container.getConnectionUri()),
     second = createDb(container.getConnectionUri());
+  const firstLocks = createDb(container.getConnectionUri()),
+    secondLocks = createDb(container.getConnectionUri());
   try {
     await migrate(first.db);
     const repos = createRepos(first.db);
@@ -48,8 +50,8 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       externalUsername: "bob",
     });
     let at = new Date("2026-09-14T10:00:00.000Z");
-    const a = createActivityRepo(first.db, () => at),
-      b = createActivityRepo(second.db, () => at);
+    const a = createActivityRepo(first.db, () => at, firstLocks.db),
+      b = createActivityRepo(second.db, () => at, secondLocks.db);
     const actor = { accountId: alice.id, identityId: identity.id };
     const batchId = randomUUID();
     async function run(
@@ -731,6 +733,19 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     });
     const tag = await repos.tags.create(alice.id, { name: "Journey", color: null });
     const tagFact = { id: tag.id, name: tag.name, color: tag.color };
+    // These paths are established by storage evidence before tag membership
+    // alone can attach to their journeys.
+    await run("file.create", { path: "/tagged.txt", kind: "file" });
+    const otherTagged = await a.begin({
+      ...actor,
+      identityId: secondLogin.id,
+      action: "file.create",
+      source: "web",
+      producerOperationId: randomUUID(),
+      requestDigest: "other-tagged",
+      requested: { path: "/other-tagged.txt", kind: "file" },
+    });
+    await a.finish(alice.id, otherTagged.id, { outcome: "success" });
     await repos.fileTags.setTags(identity.id, "/tagged.txt", [tag.id]);
     await repos.fileTags.setTags(secondLogin.id, "/other-tagged.txt", [tag.id]);
     await repos.folderViews.set(identity.id, "/pinned", { mode: "grid" });
@@ -1241,8 +1256,210 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       ),
     ).rejects.toThrow();
   } finally {
+    await firstLocks.close();
+    await secondLocks.close();
     await first.close();
     await second.close();
+    await container.stop();
+  }
+});
+
+it("preserves folder journeys, fences descendant observations, leases queued work and avoids pool starvation", {
+  timeout: 180_000,
+}, async () => {
+  const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
+  const main = createDb(container.getConnectionUri(), { max: 2, connectionTimeoutMillis: 2_000 });
+  const locks = createDb(container.getConnectionUri(), { max: 2, connectionTimeoutMillis: 2_000 });
+  try {
+    await migrate(main.db);
+    const repos = createRepos(main.db);
+    const account = await repos.accounts.create({ displayName: "Activity regressions" });
+    const provider = await repos.providers.ensure({
+      type: "sftpgo",
+      baseUrl: "http://regressions.test",
+    });
+    const identity = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "alice",
+    });
+    const actor = { accountId: account.id, identityId: identity.id };
+    let now = new Date("2026-09-20T12:00:00Z");
+    const repo = createActivityRepo(main.db, () => now, locks.db);
+    const observations = createActivityObservationsRepo(main.db, () => now);
+    async function begin(
+      action: PersonalActivityAction,
+      requested: ActivityFacts,
+      before?: ActivityFacts,
+    ) {
+      return repo.begin({
+        ...actor,
+        action,
+        requested,
+        ...(before ? { before } : {}),
+        source: "web",
+        producerOperationId: randomUUID(),
+        requestDigest: randomUUID(),
+      });
+    }
+    async function record(action: PersonalActivityAction, requested: ActivityFacts) {
+      const op = await begin(action, requested);
+      return repo.finish(account.id, op.id, { outcome: "success", after: requested });
+    }
+    const folder = await record("folder.create", { path: "/folder_%", kind: "dir" });
+    const child = await record("file.create", { path: "/folder_%/child.txt", kind: "file" });
+    for (const action of [
+      "file.favorite.set",
+      "file.tags.set",
+      "share.create",
+      "archive.compress",
+    ] as const) {
+      const op = await repo.begin({
+        ...actor,
+        action,
+        source: "web",
+        producerOperationId: randomUUID(),
+        requestDigest: action,
+        requested: { path: "/folder_%" },
+        before: { path: "/folder_%" },
+        subjects: [{ identityId: identity.id, path: "/folder_%" }],
+      });
+      expect(op.fileId).toBe(folder.fileId);
+      await repo.finish(account.id, op.id, { outcome: "success", after: { path: "/folder_%" } });
+      expect((await repo.file(account.id, folder.fileId as string))?.file).toMatchObject({
+        kind: "dir",
+        state: "live",
+      });
+      expect((await repo.file(account.id, child.fileId as string))?.file).toMatchObject({
+        path: "/folder_%/child.txt",
+        state: "live",
+      });
+    }
+    const tag = await repos.tags.create(account.id, { name: "Folder", color: null });
+    await repos.fileTags.setTags(identity.id, "/folder_%", [tag.id]);
+    await repos.fileTags.setTags(identity.id, "/unobserved", [tag.id]);
+    const snapshot = await main.db.transaction((tx) =>
+      captureActivityMetadata(tx, account.id, identity.id, "tag.delete", { tags: [tag] }, now),
+    );
+    expect(snapshot.subjects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "/folder_%", fileId: folder.fileId }),
+        expect.objectContaining({ path: "/unobserved", fileId: null }),
+      ]),
+    );
+    const unknown = await begin(
+      "file.favorite.set",
+      { path: "/unobserved" },
+      { path: "/unobserved" },
+    );
+    expect(unknown.fileId).toBeNull();
+    expect((await repo.finish(account.id, unknown.id, { outcome: "success" })).fileId).toBeNull();
+
+    const neighbor = await record("file.create", { path: "/folder_%other/file.txt", kind: "file" });
+    const wildcardNeighbor = await record("file.create", {
+      path: "/folder_ab/file.txt",
+      kind: "file",
+    });
+    const target = await record("file.create", { path: "/destination/old.txt", kind: "file" });
+    const move = await begin(
+      "file.move",
+      { path: "/folder_%", targetPath: "/destination" },
+      { path: "/folder_%", kind: "dir" },
+    );
+    await repo.claim(account.id, move.id);
+    for (const input of [
+      { path: "/folder_%/child.txt", kind: "missing" as const },
+      {
+        path: "/folder_%/child.txt",
+        kind: "moved" as const,
+        after: { path: "/destination/child.txt", kind: "file" as const },
+      },
+      { path: "/destination/old.txt", kind: "missing" as const },
+    ]) {
+      expect(
+        await observations.observe({
+          ...actor,
+          ...input,
+          source: "indexer",
+          evidence: "watcher_change",
+        }),
+      ).toBeNull();
+    }
+    for (const event of [neighbor, wildcardNeighbor]) {
+      const path = event.after?.path as string;
+      expect(
+        await observations.observe({
+          ...actor,
+          path,
+          kind: "missing",
+          source: "indexer",
+          evidence: "watcher_change",
+        }),
+      ).not.toBeNull();
+    }
+    await repo.finish(account.id, move.id, {
+      outcome: "success",
+      after: { path: "/destination", kind: "dir" },
+    });
+    expect((await repo.file(account.id, child.fileId as string))?.file).toMatchObject({
+      path: "/destination/child.txt",
+      state: "live",
+    });
+    expect((await repo.file(account.id, target.fileId as string))?.file.state).toBe("deleted");
+    const trash = await begin(
+      "file.trash",
+      { path: "/destination" },
+      { path: "/destination", kind: "dir" },
+    );
+    expect(
+      await observations.observe({
+        ...actor,
+        path: "/destination/child.txt",
+        kind: "missing",
+        source: "indexer",
+        evidence: "watcher_change",
+      }),
+    ).toBeNull();
+    await repo.finish(account.id, trash.id, { outcome: "success" });
+    expect((await repo.file(account.id, child.fileId as string))?.file.state).toBe("trashed");
+
+    const queued = await begin("archive.compress", { path: "/queued", targetPath: "/queued.zip" });
+    now = new Date(now.getTime() + 660_000);
+    await repo.heartbeat(account.id, queued.id);
+    const cutoff = new Date(now.getTime() - 600_000);
+    expect((await repo.pending(cutoff)).some((op) => op.id === queued.id)).toBe(false);
+    expect(
+      await repo.recoverAbandoned(account.id, queued.id, { outcome: "cancelled" }, cutoff),
+    ).toBeNull();
+    expect(await repo.claim(account.id, queued.id)).toBe(true);
+    await repo.finish(account.id, queued.id, { outcome: "cancelled" });
+    await repo.heartbeat(account.id, queued.id);
+    expect(await repo.claim(account.id, queued.id)).toBe(false);
+
+    // Fill the entire lock pool before either callback needs the main pool.
+    // Sharing the pools deadlocks both callbacks at begin().
+    let entered = 0;
+    let release!: () => void;
+    const together = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await Promise.all(
+      ["/lock-a", "/lock-b"].map((path) =>
+        repo.withPathLock(identity.id, path, async () => {
+          if (++entered === 2) release();
+          await together;
+          const op = await begin("file.delete", { path });
+          await repo.claim(account.id, op.id);
+          await repo.finish(account.id, op.id, { outcome: "success" });
+        }),
+      ),
+    );
+    await expect(
+      createActivityRepo(main.db).withPathLock(identity.id, "/unsafe", async () => {}),
+    ).rejects.toThrow("dedicated database pool");
+  } finally {
+    await locks.close();
+    await main.close();
     await container.stop();
   }
 });

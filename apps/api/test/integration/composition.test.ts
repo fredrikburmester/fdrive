@@ -1,4 +1,4 @@
-import { createDb } from "@fdrive/db";
+import { createDb, createRepos } from "@fdrive/db";
 import { createFakeSftpgoServer } from "@fdrive/sftpgo";
 import { SEED_FILES, SEED_FOLDERS, SEED_USERS, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
@@ -6,6 +6,7 @@ import type { Logger } from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
 
 function createTestLogger(): Logger {
   const noop = () => undefined;
@@ -90,7 +91,7 @@ describe("composeApp", () => {
     await postgres.stop();
   }, 180_000);
 
-  it("migrates the database, logs in, lists seeded files, and streams a ping", async () => {
+  it("migrates, logs in, records MCP activity, preserves folder journeys and streams a ping", async () => {
     const server = createFakeSftpgoServer({
       users: [...SEED_USERS],
       folders: [...SEED_FOLDERS],
@@ -101,6 +102,7 @@ describe("composeApp", () => {
       DATABASE_URL: postgres.connectionString,
       SFTPGO_URL: "http://sftpgo.internal:8080",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 5).toString("base64"),
+      FDRIVE_MCP_WRITES: "true",
     });
 
     const composed = await composeApp(config, createTestLogger(), () => new Date(), {
@@ -142,6 +144,99 @@ describe("composeApp", () => {
 
       const storageDb = createDb(postgres.connectionString);
       try {
+        const repos = createRepos(storageDb.db);
+        const identity = (await repos.identities.listAll()).find(
+          (row) => row.externalUsername === "alice",
+        );
+        if (!identity) throw new Error("Alice's identity is missing");
+        const token = generateApiToken();
+        await repos.apiTokens.create({
+          accountId: identity.accountId,
+          identityId: identity.id,
+          name: "Activity regression",
+          tokenHash: hashApiToken(token),
+          expiresAt: null,
+          access: { mode: "full", paths: ["/"] },
+        });
+        let requestId = 0;
+        async function callTool(name: string, args: Record<string, unknown>) {
+          const response = await composed.app.request("/mcp", {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+              accept: "application/json, text/event-stream",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: ++requestId,
+              method: "tools/call",
+              params: { name, arguments: args },
+            }),
+          });
+          expect(response.status).toBe(200);
+          const result = await response.text();
+          expect(result).not.toContain('"isError":true');
+          expect(result).toContain('"result"');
+        }
+        await callTool("read_file", { path: "/docs/readme.md" });
+        await callTool("create_folder", { path: "/activity-folder" });
+        await callTool("create_file", { path: "/activity-folder/child.txt", text: "child" });
+        await callTool("file_info", { path: "/activity-folder" });
+        const files = await storageDb.db.execute(
+          sql`select id, virtual_path as path, kind, state from app.activity_files where identity_id = ${identity.id} and virtual_path like '/activity-folder%' order by virtual_path`,
+        );
+        expect(files.rows).toHaveLength(2);
+        expect(files.rows[0]).toMatchObject({
+          path: "/activity-folder",
+          kind: "dir",
+          state: "live",
+        });
+        for (const method of ["POST", "DELETE"]) {
+          const response = await composed.app.request("/api/v1/favorites", {
+            method,
+            headers: { cookie, "content-type": "application/json", "x-requested-with": "fdrive" },
+            body: JSON.stringify({ path: "/activity-folder" }),
+          });
+          expect(response.status).toBe(200);
+        }
+        const zip = await composed.app.request("/api/v1/fs/zip", {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json", "x-requested-with": "fdrive" },
+          body: JSON.stringify({ paths: ["/activity-folder"] }),
+        });
+        expect(zip.status).toBe(200);
+        expect((await zip.arrayBuffer()).byteLength).toBeGreaterThan(0);
+        const after = await storageDb.db.execute(
+          sql`select id, virtual_path as path, kind, state from app.activity_files where identity_id = ${identity.id} and virtual_path like '/activity-folder%' order by virtual_path`,
+        );
+        expect(after.rows).toEqual(files.rows);
+        const reads = await storageDb.db.execute(
+          sql`select action, source, owner_account_id from app.activity_read_windows where identity_id = ${identity.id}`,
+        );
+        expect(reads.rows).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              action: "file.read",
+              source: "mcp",
+              owner_account_id: identity.accountId,
+            }),
+            expect.objectContaining({
+              action: "file.inspect",
+              source: "mcp",
+              owner_account_id: identity.accountId,
+            }),
+          ]),
+        );
+        const writes = await storageDb.db.execute(
+          sql`select action, outcome from app.activity_events where identity_id = ${identity.id} and source = 'mcp' and stage = 'outcome'`,
+        );
+        expect(writes.rows).toEqual(
+          expect.arrayContaining([
+            { action: "folder.create", outcome: "success" },
+            { action: "file.create", outcome: "success" },
+          ]),
+        );
         await storageDb.db.execute(sql`update app.providers set enabled = false`);
         const about = await composed.app.request("/api/v1/about");
         expect(about.status).toBe(200);

@@ -515,6 +515,70 @@ describe("POST /fs/compress and the resulting job", () => {
     }
   });
 
+  it("renews queued jobs beyond recovery's cutoff and releases leases on cancellation or completion", async () => {
+    const h = await buildHarness();
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const blockers = Array.from({ length: 2 }, () =>
+      h.jobRunner.submit({
+        identityId: ALICE_IDENTITY_ID,
+        kind: "compress",
+        run: async () => {
+          await paused;
+          return { path: "/blocker" };
+        },
+      }),
+    );
+    const heartbeat = vi.spyOn(h.activity.service.repo, "heartbeat");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      async function queue() {
+        const request = jsonPost({ paths: ["/dir"], format: "zip" });
+        request.headers = {
+          ...request.headers,
+          "x-fdrive-operation-id": randomBytes(16).toString("hex"),
+        };
+        const response = await h.app.request("/api/v1/fs/compress", request);
+        expect(response.status).toBe(202);
+        const { jobId } = (await response.json()) as { jobId: string };
+        expect(h.jobRunner.get(jobId, ALICE_IDENTITY_ID)?.state).toBe("queued");
+        // A retry while prepared must not replace the queued job or leak a lease.
+        expect((await h.app.request("/api/v1/fs/compress", request)).status).toBe(409);
+        return jobId;
+      }
+      const cancelled = await queue();
+      await vi.advanceTimersByTimeAsync(660_000);
+      expect(heartbeat).toHaveBeenCalledWith(ACCOUNT_ID, cancelled);
+      expect(h.activity.operations.find((op) => op.id === cancelled)?.state).toBe("prepared");
+      h.jobRunner.cancel(cancelled, ALICE_IDENTITY_ID, ACCOUNT_ID);
+      await vi.waitFor(() =>
+        expect(
+          h.activity.outcomes.some(
+            (event) => event.operationId === cancelled && event.outcome === "cancelled",
+          ),
+        ).toBe(true),
+      );
+      heartbeat.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeat).not.toHaveBeenCalled();
+
+      const queued = await queue();
+      await vi.advanceTimersByTimeAsync(660_000);
+      expect(heartbeat).toHaveBeenCalledWith(ACCOUNT_ID, queued);
+      release();
+      for (const blocker of blockers) await waitForJobDone(h.app, blocker.id);
+      expect((await waitForJobDone(h.app, queued)).state).toBe("done");
+      heartbeat.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(heartbeat).not.toHaveBeenCalled();
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  });
+
   it("records a failed archive when its prepared intent cannot be claimed", async () => {
     const h = await buildHarness();
     vi.spyOn(h.activity.service.repo, "claim").mockResolvedValueOnce(false);

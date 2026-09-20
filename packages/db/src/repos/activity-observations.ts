@@ -108,8 +108,19 @@ export function createActivityObservationsRepo(db: Db, clock: () => Date = () =>
                 inArray(activityOperations.state, ["prepared", "running"]),
                 or(
                   eq(activityOperations.fileId, file.id),
-                  sql`${activityOperations.requested}->>'path' = ${input.path}`,
-                  sql`${activityOperations.requested}->>'targetPath' = ${input.path}`,
+                  // A directory operation owns uncertainty for its descendants
+                  // too. Literal prefix comparison keeps %, _ and backslashes
+                  // in file names from turning into SQL wildcard matches.
+                  sql`exists (
+                    select 1 from (values
+                      (${activityOperations.requested}->>'path'),
+                      (${activityOperations.requested}->>'targetPath')
+                    ) as pending(path)
+                    where ${input.path} = pending.path
+                      or starts_with(${input.path}, rtrim(pending.path, '/') || '/')
+                      or ${input.after?.path ?? null} = pending.path
+                      or starts_with(${input.after?.path ?? null}, rtrim(pending.path, '/') || '/')
+                  )`,
                 ),
               ),
             )

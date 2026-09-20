@@ -414,8 +414,22 @@ async function submitJob(
         subjects: paths.map((path) => ({ path, identityId: principal.identityId })),
       })
     : null;
-  if (operation && operation.state !== "prepared")
+  if (
+    operation &&
+    (operation.state !== "prepared" ||
+      deps.jobRunner.get(operation.id, principal.identityId, principal.accountId))
+  )
     throw new ApiHttpError("conflict", "This job was already submitted; check its activity");
+  // Queue time is part of this process's lease. A job can wait behind long
+  // transfers for longer than recovery's abandoned-operation threshold.
+  const timer = operation
+    ? setInterval(() => {
+        void deps.activity?.repo
+          .heartbeat(principal.accountId, operation.id)
+          .catch(() => undefined);
+      }, 15_000)
+    : undefined;
+  timer?.unref();
   try {
     return deps.jobRunner.submit({
       identityId: principal.identityId,
@@ -424,30 +438,36 @@ async function submitJob(
         ? {
             id: operation.id,
             onOutcome: async (state, result) => {
-              // Some outputs may already be committed when a job fails, so a
-              // failure with committed children is partial, never a clean loss.
-              const committed =
-                (await deps.activity?.repo.completedChildren(principal.accountId, operation.id)) ??
-                0;
-              await deps.activity?.repo.finish(principal.accountId, operation.id, {
-                outcome:
-                  state === "done"
-                    ? "success"
-                    : committed > 0
-                      ? "partial"
-                      : result.authorityRevoked
-                        ? "denied"
-                        : state === "cancelled"
-                          ? "cancelled"
-                          : "failed",
-                after: {
-                  ...requested,
-                  path: result.path ?? target,
-                  size: result.bytes,
-                  completedCount: committed,
-                },
-                ...(state === "done" ? {} : { errorCode: `job_${state}` }),
-              });
+              try {
+                // Some outputs may already be committed when a job fails, so a
+                // failure with committed children is partial, never a clean loss.
+                const committed =
+                  (await deps.activity?.repo.completedChildren(
+                    principal.accountId,
+                    operation.id,
+                  )) ?? 0;
+                await deps.activity?.repo.finish(principal.accountId, operation.id, {
+                  outcome:
+                    state === "done"
+                      ? "success"
+                      : committed > 0
+                        ? "partial"
+                        : result.authorityRevoked
+                          ? "denied"
+                          : state === "cancelled"
+                            ? "cancelled"
+                            : "failed",
+                  after: {
+                    ...requested,
+                    path: result.path ?? target,
+                    size: result.bytes,
+                    completedCount: committed,
+                  },
+                  ...(state === "done" ? {} : { errorCode: `job_${state}` }),
+                });
+              } finally {
+                clearInterval(timer);
+              }
             },
           }
         : {}),
@@ -458,23 +478,16 @@ async function submitJob(
         if (!operation || !activity) return run(ctx, principal.storage);
         if (!(await activity.repo.claim(principal.accountId, operation.id)))
           throw new ApiHttpError("conflict", "This job was already submitted");
-        const timer = setInterval(() => {
-          void activity.repo.heartbeat(principal.accountId, operation.id).catch(() => undefined);
-        }, 15_000);
-        timer.unref();
-        try {
-          return await activity.withParent(principal, operation.id, () =>
-            run(
-              ctx,
-              activityStorage(principal, activity, () => ({ source: context.source })),
-            ),
-          );
-        } finally {
-          clearInterval(timer);
-        }
+        return activity.withParent(principal, operation.id, () =>
+          run(
+            ctx,
+            activityStorage(principal, activity, () => ({ source: context.source })),
+          ),
+        );
       },
     });
   } catch (error) {
+    clearInterval(timer);
     if (operation)
       await deps.activity?.repo.finish(principal.accountId, operation.id, {
         outcome: "failed",

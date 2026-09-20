@@ -122,7 +122,13 @@ export async function appendActivityOutcome(
         },
       ];
   for (const subject of [...captured, ...(result.subjects ?? [])])
-    if (!subjects.some((entry) => entry.fileId === subject.fileId))
+    if (
+      !subjects.some((entry) =>
+        subject.fileId
+          ? entry.fileId === subject.fileId
+          : !entry.fileId && entry.identityId === subject.identityId && entry.path === subject.path,
+      )
+    )
       subjects.push({ ...subject, ordinal: subjects.length });
   const event = await appendActivityEvent(
     db,
@@ -272,7 +278,7 @@ export function activityConditions(accountId: string, options: ActivityListOptio
   );
 }
 
-export function createActivityRepo(db: Db, clock: () => Date = () => new Date()) {
+export function createActivityRepo(db: Db, clock: () => Date = () => new Date(), pathLockDb?: Db) {
   async function finishActivity(
     accountId: string,
     id: string,
@@ -400,7 +406,11 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date())
       });
     },
     async withPathLock<T>(identityId: string, path: string, work: () => Promise<T>): Promise<T> {
-      return db.transaction(async (tx) => {
+      // Hold locks on a separate pool: work commits its intent and outcome using
+      // the main pool, including before provider I/O. Sharing that pool deadlocks
+      // when concurrent lock holders exhaust its connections.
+      if (!pathLockDb) throw new Error("Activity path locks require a dedicated database pool");
+      return pathLockDb.transaction(async (tx) => {
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["activity-path", identityId, path])},0))`,
         );
@@ -445,25 +455,28 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date())
               tx,
               input.identityId,
               input.before.path,
-              input.before.kind ?? "file",
+              input.before.kind,
               now,
             )
           : null;
         const capturedSubjects = [];
-        for (const subject of input.subjects ?? [])
-          capturedSubjects.push(
-            activitySubject(
-              await ensureActivityFile(
-                tx,
-                subject.identityId,
-                subject.path,
-                subject.kind ?? "file",
-                now,
-              ),
-              "affected",
-              capturedSubjects.length + 1,
-            ),
+        for (const subject of input.subjects ?? []) {
+          const file = await ensureActivityFile(
+            tx,
+            subject.identityId,
+            subject.path,
+            subject.kind,
+            now,
           );
+          capturedSubjects.push({
+            fileId: file?.id ?? null,
+            identityId: subject.identityId,
+            path: subject.path,
+            role: "affected" as const,
+            ordinal: capturedSubjects.length + 1,
+            revisionId: file?.revisionId ?? null,
+          });
+        }
         const [operationRow] = await tx
           .insert(activityOperations)
           .values({
@@ -544,7 +557,7 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date())
           and(
             eq(activityOperations.id, id),
             eq(activityOperations.ownerAccountId, accountId),
-            eq(activityOperations.state, "running"),
+            inArray(activityOperations.state, ["prepared", "running"]),
           ),
         );
     },

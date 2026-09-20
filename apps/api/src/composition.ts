@@ -191,7 +191,12 @@ export async function composeApp(
   const backups = createBackupModule(config);
   await backups.start();
 
-  const activityRepo = createActivityRepo(db, clock);
+  const activityPathLocks = createDb(config.databaseUrl, {
+    max: 10,
+    connectionTimeoutMillis: 30_000,
+    onError: (error) => logger.warn({ err: error }, "idle activity lock connection error"),
+  });
+  const activityRepo = createActivityRepo(db, clock, activityPathLocks.db);
   const activityReads = createActivityReadsRepo(db, clock);
   const personalActivity = createActivityService({
     repo: activityRepo,
@@ -732,6 +737,8 @@ export async function composeApp(
   const subsystemReachability = () => cachedProbe();
 
   const mcpToolDeps: McpToolDeps = {
+    activity: personalActivity,
+    activityReads,
     indexQueries,
     searchService,
     scopeResolver,
@@ -1101,6 +1108,7 @@ export async function composeApp(
         await indexerListener.stop();
       }
       await desktopPublishPool.end();
+      await activityPathLocks.close();
       await pool.end();
     },
   };

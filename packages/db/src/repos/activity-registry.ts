@@ -57,8 +57,25 @@ export async function ensureActivityFile(
   path: string,
   kind: "file" | "dir",
   now: Date,
-): Promise<ActivityFileRecord> {
+): Promise<ActivityFileRecord>;
+export async function ensureActivityFile(
+  db: ActivityDb,
+  identityId: string,
+  path: string,
+  kind: "file" | "dir" | undefined,
+  now: Date,
+): Promise<ActivityFileRecord | null>;
+export async function ensureActivityFile(
+  db: ActivityDb,
+  identityId: string,
+  path: string,
+  kind: "file" | "dir" | undefined,
+  now: Date,
+): Promise<ActivityFileRecord | null> {
   const prior = await activityFileAt(db, identityId, path);
+  // Metadata and multi-path reads may know only the path. Preserve established
+  // identity, and leave new subjects unbound until storage establishes their kind.
+  if (!kind) return prior;
   if (prior && prior.kind === kind) return prior;
   if (prior) await retireActivityPath(db, identityId, path, "deleted", now);
   const [fileRow] = await db
@@ -372,11 +389,18 @@ export async function applyActivityOutcome(
     );
     subjects.push(...retired.map((entry, ordinal) => activitySubject(entry, "affected", ordinal)));
   } else {
+    // Successful creation establishes a kind even for older producers that
+    // omitted it. Reads, shares and metadata cannot establish one from a path.
+    const createdKind = ["file.create", "file.upload", "file.save"].includes(action)
+      ? "file"
+      : action === "folder.create"
+        ? "dir"
+        : undefined;
     file ??= await ensureActivityFile(
       db,
       identityId,
       target,
-      after.kind ?? before.kind ?? "file",
+      after.kind ?? before.kind ?? createdKind,
       now,
     );
   }

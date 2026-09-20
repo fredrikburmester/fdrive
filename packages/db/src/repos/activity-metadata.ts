@@ -2,7 +2,7 @@ import type { ActivityFacts, ActivitySubject, PersonalActivityAction } from "@fd
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { favorites, fileTags, folderViews, identities, tags } from "../schema/app.js";
-import { activitySubject, ensureActivityFile, lockActivityRegistry } from "./activity-registry.js";
+import { ensureActivityFile, lockActivityRegistry } from "./activity-registry.js";
 import { captureActivityIdentity } from "./activity-writer.js";
 
 /** Current values and membership, read on the same transaction that changes metadata. */
@@ -88,14 +88,17 @@ export async function captureActivityMetadata(
     paths = rows.map((row) => ({ identityId: row.identityId, path: row.path, kind: "dir" }));
   }
   const subjects: ActivitySubject[] = [];
-  for (const path of paths)
-    subjects.push(
-      activitySubject(
-        await ensureActivityFile(db, path.identityId, path.path, path.kind ?? "file", now),
-        "affected",
-        subjects.length,
-      ),
-    );
+  for (const path of paths) {
+    const file = await ensureActivityFile(db, path.identityId, path.path, path.kind, now);
+    subjects.push({
+      fileId: file?.id ?? null,
+      identityId: path.identityId,
+      path: path.path,
+      role: "affected",
+      ordinal: subjects.length,
+      revisionId: file?.revisionId ?? null,
+    });
+  }
   return { before, subjects, absent };
 }
 function ActivityView(value: string): NonNullable<ActivityFacts["view"]> {
