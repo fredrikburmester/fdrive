@@ -161,12 +161,18 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
               const indexed = await indexedFor(principal);
               // The assist only ever adds to what the organizer knows. Anything
               // it cannot answer leaves the run exactly as it would have been.
-              const unclearNames =
-                assist === null
-                  ? new Set<string>()
-                  : await withoutFailing(signal, () =>
-                      triageNames({ client: assist, items, signal }),
-                    ).then((names) => names ?? new Set<string>());
+              let unclearNames: ReadonlySet<string> = new Set<string>();
+              if (assist !== null) {
+                // The triage round trip happens before the organizer says
+                // anything, so it is announced rather than left as a silent gap.
+                activity("Reading the names");
+                unclearNames =
+                  (await withoutFailing(signal, () =>
+                    triageNames({ client: assist, items, signal }),
+                  )) ?? new Set<string>();
+                if (unclearNames.size > 0)
+                  activity(`${unclearNames.size} of ${items.length} names need a closer look`);
+              }
               const submission = await runOrganizeAgent({
                 model,
                 tools: createDriveTools({

@@ -687,8 +687,15 @@ describe("createOrganizeService", () => {
       const started = await service.start(principal, {
         paths: ["/Inbox/a.pdf", "/Inbox/b.pdf"],
       });
-      await finished(service, principal, started.id);
 
+      const run = await finished(service, principal, started.id);
+      expect(run.activity).toEqual([
+        "Looking at 2 items",
+        "Reading the names",
+        "1 of 2 names need a closer look",
+        "Checking the suggestions",
+        "Double-checking where things would go",
+      ]);
       const firstText = inputs[0]?.kind === "user" ? inputs[0].text : "";
       expect(firstText).toContain("- /Inbox/a.pdf (1 B, modified 1970-01-01) [name says little]");
       expect(firstText).toContain("- /Inbox/b.pdf (1 B, modified 1970-01-01)\n");
