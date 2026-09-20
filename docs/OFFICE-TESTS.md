@@ -11,8 +11,12 @@ Install dependencies in this checkout first. Run each product serially:
 ```sh
 pnpm test:e2e:office
 OFFICE_E2E_PRODUCT=collabora pnpm test:e2e:office
-pnpm --filter @fdrive/web exec vitest run --coverage --config office-e2e/vitest.config.ts
+pnpm --filter @fdrive/web test:office:harness
 ```
+
+The fixture-helper harness (`test:office:harness`, coverage thresholds 99/95) runs as part of
+the repository's default `pnpm test:coverage`, so a regression in the harness itself fails the
+cheap pull-request gate. The two Playwright products remain manual.
 
 The `Real Office editors` GitHub Actions workflow runs both products in separate
 Ubuntu 24.04 jobs, manual `workflow_dispatch` only (`gh workflow run "Real Office

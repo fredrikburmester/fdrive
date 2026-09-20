@@ -103,10 +103,16 @@ git tag macos-v0.1.0 COMMIT_ON_MAIN
 git push origin macos-v0.1.0
 ```
 
-The release workflow runs release script tests and Swift tests, archives/exports Release, verifies
-the app and extension's Developer ID team, timestamp, hardened runtime and shared entitlements,
-notarizes/staples the app, creates a DMG, then signs/notarizes/staples and assesses the DMG.
-Only successful artifacts reach publication. Checksums are calculated after stapling.
+When it runs, the release workflow runs release script tests and Swift tests, archives/exports
+Release, verifies the app and extension's Developer ID team, timestamp, hardened runtime and shared
+entitlements, notarizes/staples the app, creates a DMG, then signs/notarizes/staples and assesses
+the DMG. Only successful artifacts reach publication. Checksums are calculated after stapling.
+
+That workflow is manual (`workflow_dispatch` or a `macos-v*` tag) and GitHub Actions for this
+repository are currently disabled to protect the hosted-minutes budget, so tags alone do not run
+it. The local `cut-release.sh` path runs the same release-script unit tests and `swift test` before
+building, and `ci:full` does not include the macOS suites either: run both commands from
+[MACOS.md](MACOS.md#build-and-verify) yourself before tagging.
 
 GitHub Releases receives the DMG, `SHA256SUMS`, `release.json` and `fdrive.rb`. Releases with a
 `0.` version are marked prerelease. Publication starts as a draft until every asset has been
