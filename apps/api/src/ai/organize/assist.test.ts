@@ -158,6 +158,25 @@ describe("verifySuggestions", () => {
     });
   }
 
+  it("asks where the item belongs rather than how tidy the folder is", async () => {
+    const { client, requests } = fakeClient(() => ({ q0: fitScore(1) }));
+
+    await verifySuggestions({
+      client,
+      storage: drive(),
+      suggestions: [suggestion("/Inbox/rent-2026.pdf", "/Finance/Receipts")],
+      share: SHARE_ALL,
+      signal: SIGNAL,
+    });
+
+    const question = requests[0]?.questions.q0;
+    const levels = question?.type === "score" ? question.criteria : [];
+    // A catch-all folder can be the right home, so the top level must not
+    // require the item to match what the folder already holds.
+    expect(String(levels[levels.length - 1])).toContain("Right place");
+    expect(JSON.stringify(question?.instructions)).toContain("general-purpose folder");
+  });
+
   it("flags a destination the model does not put on the top level", async () => {
     const { client } = fakeClient(() => ({ q0: fitScore(0.9), q1: fitScore(0.49) }));
 

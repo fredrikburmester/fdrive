@@ -94,11 +94,12 @@ other files' contents. The request carries the choice as `share`; an omitted `sh
    write them as single characters: `Husarö` finds the stored folder instead of becoming a
    look-alike new one. The tools resolve paths the same way.
 5. With the assist on, one more TypeSafe request scores each surviving suggestion against three
-   levels: wrong folder, unclear, clearly right. A suggestion with under 0.5 probability on
-   "clearly right" is marked `uncertain`. This reads the probability of the top level rather
-   than the answer's `confidence`, because a confidently wrong destination concentrates
-   probability on "wrong" and would otherwise look certain. Nothing else about the suggestion
-   changes.
+   levels: wrong place, possible but unsupported, right place. A suggestion with under 0.5
+   probability on "right place" is marked `uncertain`. This reads the probability of the top
+   level rather than the answer's `confidence`, because a confidently wrong destination
+   concentrates probability on "wrong" and would otherwise look certain. The levels ask where
+   the item belongs rather than how homogeneous the folder is, so a broad catch-all folder can
+   still be the right home. Nothing else about the suggestion changes.
 6. The review groups suggestions by destination. Conflicts and `uncertain` suggestions start
    unchecked, and any item can be
    pointed at another folder. **Move** calls `POST /api/v1/fs/move-many` with

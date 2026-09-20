@@ -126,11 +126,20 @@ export async function triageNames(input: {
   return unclear;
 }
 
-/** The levels the fit question is scored against, lowest first. */
+/**
+ * The levels the fit question is scored against, lowest first.
+ *
+ * They ask where the item belongs, not how tidy the folder is. An earlier
+ * wording made the top level "clearly belongs with what that folder already
+ * holds", which a broad catch-all folder can never satisfy however right it
+ * is: it marked down correct placements into general folders, including a
+ * file moved next to the file it duplicates. Each level now describes the
+ * move from the point of view of someone later looking for the item.
+ */
 const FIT_LEVELS = [
-  "Wrong: that folder is for a different kind of thing, and moving the item there would be a mistake.",
-  "Unclear: the folder is possible, but nothing in the item's name, kind or date ties it to what that folder holds.",
-  "Right: the item clearly belongs with what that folder already holds.",
+  "Wrong place: someone looking for this item later would not think to look in that folder, and would be surprised to find it there.",
+  "Possible but unsupported: the folder would not be wrong, but nothing about this item points to it over the drive's other folders.",
+  "Right place: this is where the item belongs, either because the folder is meant for this kind of thing or because it is already the drive's home for it.",
 ];
 
 const TOP_LEVEL = String(FIT_LEVELS.length - 1);
@@ -189,7 +198,13 @@ export async function verifySuggestions(input: {
     group.forEach((_suggestion, index) => {
       questions[`q${index}`] = {
         type: "score",
-        instructions: `How well does the item in \`suggestions[${index}]\` fit the folder \`suggestions[${index}].destination\`?`,
+        instructions: {
+          question: `Is \`suggestions[${index}].destination\` the right place in this drive for the item in \`suggestions[${index}]\`?`,
+          judging: [
+            "Judge the destination as a home for this one item, not the folder's tidiness. A broad, general-purpose folder holding many unrelated things can be exactly the right home, and a folder is not a worse place for already holding something similar.",
+            "`destinationHolds` is only a sample of what the folder currently holds and may be missing or unrepresentative. `destinationIsNew` means the folder does not exist yet and would be created for this, so judge its name.",
+          ],
+        },
         criteria: FIT_LEVELS,
       };
     });
