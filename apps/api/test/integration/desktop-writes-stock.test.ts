@@ -147,12 +147,17 @@ it("publishes on stock SFTPGo with no configuration and refuses an out-of-band c
 
     // A writer fdrive does not mediate changes the file. The next publication must
     // refuse rather than drop it, and the external content must survive untouched.
-    // The refusal here is `checkBase`'s, taken before the serialized section: the
-    // change lands before the commit starts. The in-section proofs need a write
-    // that lands mid-commit, which `optimistic-publish.test.ts` injects with hooks.
+    // The out-of-band write races the commit, so the 409 can be raised either by
+    // the pre-lock `checkBase` or by the in-section recovery-copy digest recheck in
+    // `desktop/writes.ts` (`live?.sha256 !== request.base?.content`). This test pins
+    // the refusal contract; isolating a single guard needs a mid-commit write, which
+    // the unit fixtures in `desktop/writes.test.ts` can stage but do not assert today.
     expect((await webdav("/stock.txt", "PUT", "written over WebDAV")).ok).toBe(true);
     const refused = await publish("stock.txt", "third", second, "second");
     expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({
+      error: { kind: "conflict", details: { code: "version_conflict" } },
+    });
     expect(await (await webdav("/stock.txt", "GET")).text()).toBe("written over WebDAV");
   } finally {
     await composed.close?.();
