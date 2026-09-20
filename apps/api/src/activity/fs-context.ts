@@ -17,11 +17,16 @@ export interface ActivityCallContext {
   readonly conversationId?: string;
 }
 
-export function activityRequestContext(c: FsContext): ActivityCallContext {
-  const operation = c.req.header("x-fdrive-operation-id");
-  const batch = c.req.header("x-fdrive-batch-id");
-  if (operation && !/^[a-zA-Z0-9:_-]{1,200}$/.test(operation))
+/** Validates a caller-supplied operation ID, which routes outside `FsContext` also accept. */
+export function activityOperationId(value: string | undefined): string | undefined {
+  if (value && !/^[a-zA-Z0-9:_-]{1,200}$/.test(value))
     throw new ApiHttpError("bad_request", "Invalid activity operation ID");
+  return value || undefined;
+}
+
+export function activityRequestContext(c: FsContext): ActivityCallContext {
+  const operation = activityOperationId(c.req.header("x-fdrive-operation-id"));
+  const batch = c.req.header("x-fdrive-batch-id");
   if (batch && !CanonicalUuid.safeParse(batch).success)
     throw new ApiHttpError("bad_request", "Invalid activity batch ID");
   return {

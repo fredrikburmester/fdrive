@@ -399,18 +399,18 @@ async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Respons
   }
 
   // Inline bytes back a preview the browser decides to fetch; the explicit
-  // preview gesture is reported separately. A download is bytes the person
-  // asked for, and only reaching EOF proves they were delivered.
-  const body =
-    query.inline === "1"
-      ? result.body
-      : await activityStream(deps.activity, principal, path, "file.download", result.body, {
-          ...(c.req.header("x-fdrive-operation-id")
-            ? { requestId: c.req.header("x-fdrive-operation-id") as string }
-            : {}),
-          partial: result.status === 206,
-          expectedBytes: result.contentLength,
-        });
+  // preview gesture is reported separately. Anything served as an attachment
+  // is bytes the person asked for, and only reaching EOF proves they were
+  // delivered.
+  const context = activityRequestContext(c);
+  const body = inline
+    ? result.body
+    : await activityStream(deps.activity, principal, path, "file.download", result.body, {
+        ...(context.producerOperationId ? { requestId: context.producerOperationId } : {}),
+        source: context.source === "api" ? "api" : "web",
+        partial: result.status === 206,
+        expectedBytes: result.contentLength,
+      });
   return c.body(body, result.status, headers);
 }
 

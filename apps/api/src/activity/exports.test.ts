@@ -305,4 +305,13 @@ it("requires a private account session for manifest creation and downloads, with
   principal = { ...principal, accountId: h.owner, verifyAuthority: async () => false };
   const expired = await request(`/${h.snapshot.id}/download`);
   await expect(expired.text()).rejects.toThrow("Session expired");
+
+  // An export walks the whole account's history, so downloading one is budgeted
+  // per account rather than per snapshot.
+  principal = { ...principal, accountId: randomUUID() };
+  const download = async () =>
+    (JSON.parse(await (await request(`/${h.snapshot.id}/download`)).text()) as { error: string })
+      .error;
+  for (let call = 0; call < 6; call++) expect(await download()).toContain("not found");
+  expect(await download()).toContain("Too many activity requests");
 });

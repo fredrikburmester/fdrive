@@ -15,6 +15,7 @@ import {
 import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
 import { accountContext } from "../accounts/routes.js";
+import { activityOperationId } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
@@ -94,6 +95,8 @@ export function registerDesktopRoutes(
     if (!parsed.success) throw new ApiHttpError("bad_request", "Invalid file path");
     return parsed.data;
   }
+  /** The caller's own ID for one hydration, distinct from a write's operation ID. */
+  const hydrationId = (c: Context) => activityOperationId(c.req.header("x-fdrive-operation-id"));
   async function principal(
     c: Context,
     writeProtocol = false,
@@ -186,6 +189,8 @@ export function registerDesktopRoutes(
         "file.materialize",
         result.body,
         {
+          // A hydration the client retries under one ID is one materialization.
+          ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
           expectedBytes: result.contentLength,
         },
       ),
@@ -255,6 +260,7 @@ export function registerDesktopRoutes(
           "file.materialize",
           result.body,
           {
+            ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
             expectedBytes: result.contentLength,
           },
         ),

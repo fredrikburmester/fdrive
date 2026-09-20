@@ -8,6 +8,7 @@ import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
+import { activityFixture } from "../../test/activity-fixture.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
@@ -70,6 +71,21 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
   expect((await call("/entries?path=/")).status).toBe(200);
   expect((await call("/entry?path=/docs/a.txt")).status).toBe(200);
   expect(await (await call("/content?path=/docs/a.txt")).text()).toBe("alpha");
+  // A rejected ID is refused outright rather than costing the caller its bytes.
+  const hydration = async (id: string) =>
+    (
+      await f.app.request(`${base}/content?path=/docs/a.txt`, {
+        headers: { ...headers, "x-fdrive-operation-id": id },
+      })
+    ).text();
+  expect(await hydration("hydrate-1")).toBe("alpha");
+  expect(await hydration("hydrate-1")).toBe("alpha");
+  expect(await hydration("hydrate-2")).toBe("alpha");
+  // Four hydrations, three materializations: the repeat under one ID is the
+  // one the caller already made, and it is not attributed twice.
+  expect(f.activity.operations.filter((row) => row.action === "file.materialize")).toHaveLength(3);
+  expect(f.activity.outcomes.filter((row) => row.action === "file.materialize")).toHaveLength(3);
+  expect(JSON.parse(await hydration("not valid")).error.kind).toBe("bad_request");
   expect((await call("/versions", { paths: ["/docs/a.txt"] })).status).toBe(200);
   const folderId = randomUUID();
   expect(
@@ -143,6 +159,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
+  const activity = activityFixture(clock);
   const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({
     type: "sftpgo",
@@ -207,6 +224,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
       registerDesktopRoutes(groups, {
         ...deps,
         ...(recovery ? { recovery } : {}),
+        activity: activity.service,
         clientIp: () => "test",
         ...(stateDir
           ? { writes: createDesktopWrites({ ...deps, repo: memoryRepo().repo, stateDir }) }
@@ -223,6 +241,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
   return {
     repos,
     deps,
+    activity,
     account,
     provider,
     identity,

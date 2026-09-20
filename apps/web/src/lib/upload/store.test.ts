@@ -117,11 +117,9 @@ describe("networkErrorMessage", () => {
 describe("createUploadStore", () => {
   it("retains batch identity and outcomes through navigation and early clearing", async () => {
     const xhrs: FakeXhr[] = [];
-    const completed = vi.fn();
     const store = createUploadStore({
       identityId: "first",
       concurrency: 2,
-      onBatchCompleted: completed,
       createXhr: () => {
         const xhr = new FakeXhr();
         xhrs.push(xhr);
@@ -132,17 +130,26 @@ describe("createUploadStore", () => {
     store.getState().setActiveIdentity("second");
     xhrs[0]?.finishWith(201, "{}");
     await flush();
+    // A batch stays whole while any of its files is still running, so the
+    // finished ones keep their destination actions until it is done.
     store.getState().clearFinished();
+    expect(store.getState().state.order).toEqual(["a", "b"]);
     expect(store.getState().state.items.a?.identityId).toBe("first");
     expect(store.getState().state.items.a?.completedAt).toEqual(expect.any(Number));
-    expect(completed).not.toHaveBeenCalled();
     xhrs[1]?.finishWith(403, "{}");
     await flush();
-    expect(completed).toHaveBeenCalledTimes(1);
-    expect(completed.mock.calls[0]?.[0].message).toBe("1 uploaded · 1 failed");
     expect(
-      completed.mock.calls[0]?.[0].items.every((entry: UploadItem) => entry.identityId === "first"),
+      Object.values(store.getState().state.items).every(
+        (entry: UploadItem) => entry.identityId === "first",
+      ),
     ).toBe(true);
+
+    store.getState().retry("b");
+    expect(store.getState().state.items.b?.status).toBe("uploading");
+    xhrs[2]?.finishWith(201, "{}");
+    await flush();
+    expect(store.getState().state.items.b?.status).toBe("done");
+
     store.getState().clearFinished();
     expect(store.getState().state.order).toEqual([]);
   });

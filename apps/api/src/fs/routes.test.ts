@@ -611,13 +611,28 @@ describe("GET/HEAD /fs/download", () => {
   });
 
   it("falls back to attachment when inline=1 but the type is not previewable", async () => {
-    const { app } = await buildHarness({
+    const { app, activity } = await buildHarness({
       ...SEED,
       files: { alice: { "/data.bin": "binary-ish" } },
     });
 
     const res = await app.request("/api/v1/fs/download?path=/data.bin&inline=1");
     expect(res.headers.get("content-disposition")).toContain("attachment");
+    // Bytes served as an attachment are a download, whatever the query asked
+    // for. Only a preview the browser actually renders stays out of history.
+    expect(await res.text()).toBe("binary-ish");
+    expect(activity.operations.map((row) => row.action)).toEqual(["file.download"]);
+  });
+
+  it("keeps an inline preview out of history", async () => {
+    const { app, activity } = await buildHarnessWithStorage(
+      makeStubStorage({ download: async () => makeDownloadResult() }),
+    );
+
+    const res = await app.request("/api/v1/fs/download?path=/hello.txt&inline=1");
+    expect(res.headers.get("content-disposition")).toContain("inline");
+    await res.text();
+    expect(activity.operations).toHaveLength(0);
   });
 
   it("forwards If-Range without erroring", async () => {

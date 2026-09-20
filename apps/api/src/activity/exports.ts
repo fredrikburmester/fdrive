@@ -5,6 +5,7 @@ import { accountContext } from "../accounts/routes.ts";
 import type { AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
+import { createActivityLimiter } from "./limiter.js";
 import { routePath, serializeActivity, serializeReadWindow } from "./routes.js";
 
 const ExportFilters = PersonalActivityFilters.omit({ cursor: true, limit: true }).extend({
@@ -236,8 +237,13 @@ export function registerActivityExports(
   deps: { repo: ActivityRepo; exports: ActivityExportsRepo },
 ) {
   const base = routePath(ROUTES.activity.exports);
+  // An export walks the whole account's history, so it gets a tighter budget
+  // than a page of it. Snapshots are cheap; only downloading one does the work.
+  const snapshots = createActivityLimiter(20);
+  const downloads = createActivityLimiter(6);
   authed.post(base, async (c) => {
     const { principal } = accountContext(c);
+    snapshots(principal.accountId);
     const input = await parseBody(ExportRequest, c);
     const filters = Object.fromEntries(
       Object.entries(input.filters).filter(
@@ -269,6 +275,7 @@ export function registerActivityExports(
   });
   authed.get(`${base}/:id/download`, async (c) => {
     const { principal } = accountContext(c);
+    downloads(principal.accountId);
     const id = CanonicalUuid.safeParse(c.req.param("id"));
     const snapshot = id.success ? await deps.exports.get(principal.accountId, id.data) : null;
     if (!snapshot) throw new ApiHttpError("not_found", "Export not found or expired");

@@ -6,9 +6,7 @@ import {
   ROUTES,
 } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
-import { toast } from "sonner";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { type UploadCompletion, uploadCompletions } from "./completion.ts";
 import { createDefaultOnUploaded } from "./deps.ts";
 import {
   initialUploadQueueState,
@@ -34,8 +32,6 @@ export interface UploadStoreDeps {
   readonly createXhr?: () => XhrLike;
   /** Called with the parent directory of every successfully uploaded file. */
   readonly onUploaded?: (parentPath: string) => void;
-  /** Called once per batch, with its real mix of outcomes. */
-  readonly onBatchCompleted?: (result: UploadCompletion) => void;
 }
 
 export interface UploadStoreState {
@@ -97,7 +93,8 @@ function buildUploadHeaders(
   if (identityId !== undefined) {
     headers[IDENTITY_HEADER] = identityId;
   }
-  // A retry of one file is the same operation, so history records one upload.
+  // One ID per attempt: a request delivered twice records one upload, while a
+  // retry the person asked for is a new one.
   headers["x-fdrive-operation-id"] = `${item.id}:${item.attempts + 1}`;
   if (item.batchId) headers["x-fdrive-batch-id"] = item.batchId;
   return headers;
@@ -119,18 +116,10 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
 
   let onUploaded = deps.onUploaded ?? (() => {});
   const controllers = new Map<string, AbortController>();
-  const notified = new Set<string>();
 
   return create<UploadStoreState>((set, get) => {
     function dispatch(action: UploadAction): void {
       set((s) => ({ state: uploadReducer(s.state, action) }));
-      if (["succeed", "fail", "cancel", "enqueue"].includes(action.type)) {
-        for (const result of uploadCompletions(Object.values(get().state.items))) {
-          if (notified.has(result.batchId)) continue;
-          notified.add(result.batchId);
-          deps.onBatchCompleted?.(result);
-        }
-      }
     }
 
     function scheduleNext(): void {
@@ -187,7 +176,6 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
       reset() {
         for (const controller of controllers.values()) controller.abort();
         controllers.clear();
-        notified.clear();
         set({ state: initialUploadQueueState, activeIdentityId: undefined });
       },
       setActiveIdentity(id) {
@@ -219,9 +207,6 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
       },
 
       retry(id) {
-        // A retried batch reports again once every file has settled.
-        const batchId = get().state.items[id]?.batchId;
-        if (batchId !== undefined) notified.delete(batchId);
         dispatch({ type: "retry", id });
         scheduleNext();
       },
@@ -255,9 +240,4 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
 export const useUploadStore: UploadStore = createUploadStore({
   requireIdentity: true,
   onUploaded: createDefaultOnUploaded(),
-  onBatchCompleted: ({ message, hasFailures }) => {
-    (hasFailures ? toast.warning : toast.success)(message, {
-      description: "Open uploads in the transfer panel to find their destination.",
-    });
-  },
 });
