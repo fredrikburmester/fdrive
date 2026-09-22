@@ -80,6 +80,18 @@ test("links, switches, finds both owners of one path, and unlinks a login", asyn
   await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
   await expect(listing(page).getByText("renamed.txt", { exact: true })).toHaveCount(0);
+  // The seed is one-shot per run, so a retry or --repeat-each would start with
+  // account_right's /same.txt missing and fail on the favorite at the top.
+  // Restore it immediately, while account_right is still linked.
+  const restoredSame = await page.request.put("/api/v1/fs/upload?path=%2Fsame.txt", {
+    headers: {
+      "x-requested-with": "fdrive",
+      "x-identity-id": right.id,
+      "content-type": "application/octet-stream",
+    },
+    data: "Right account file",
+  });
+  expect(restoredSame.ok()).toBe(true);
   const untouched = await secondTab.request.get(
     `/api/v1/fs/download?path=%2Fsame.txt&identity=${left.id}`,
   );

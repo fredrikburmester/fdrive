@@ -515,6 +515,25 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(fetched).toBeNull();
       });
 
+      it("treats a session expiring exactly now as expired", async () => {
+        const account = await seedAccount();
+        const expiresAt = new Date("2026-01-01T00:00:00.000Z");
+        await repos.sessions.create({
+          idHash: "hash-boundary",
+          accountId: account.id,
+          activeIdentityId: null,
+          expiresAt,
+          userAgent: null,
+          ip: null,
+        });
+
+        // Both backends implement `expiresAt <= now`; this exact-equality case
+        // keeps the memory and Drizzle repos from drifting apart on it.
+        const fetched = await repos.sessions.getByIdHash("hash-boundary", expiresAt);
+
+        expect(fetched).toBeNull();
+      });
+
       it("returns null for an unknown session hash", async () => {
         const fetched = await repos.sessions.getByIdHash("no-such-hash", new Date());
 

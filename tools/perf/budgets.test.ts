@@ -3,30 +3,34 @@ import {
   allBudgetsPassed,
   evaluateBudgets,
   REQUIRED_SCENARIOS,
+  type ScenarioName,
   type ScenarioResults,
   validMeasurement,
 } from "./budgets.js";
 import { toScenarioResult } from "./results.js";
 
+function resultWithSamples(name: ScenarioName, samples: number) {
+  return toScenarioResult(
+    name,
+    Array.from({ length: samples }, () => 10),
+    100,
+    0,
+    {
+      warmupCount: 20,
+      uniquePaths: 20,
+      verifiedCount: name === "uploadSmallBurst" ? 200 : 10000,
+      maxMounted: 100,
+      expectedBytes: 512 * 1024 * 1024,
+      completedBytes: Array.from({ length: samples }, () => 512 * 1024 * 1024),
+      bytesPerSecond: 100,
+      wallTimeMs: 1000,
+    },
+  );
+}
+
 function valid(): ScenarioResults {
   const results: ScenarioResults = {};
-  for (const name of REQUIRED_SCENARIOS)
-    results[name] = toScenarioResult(
-      name,
-      Array.from({ length: 200 }, () => 10),
-      100,
-      0,
-      {
-        warmupCount: 20,
-        uniquePaths: 20,
-        verifiedCount: name === "uploadSmallBurst" ? 200 : 10000,
-        maxMounted: 100,
-        expectedBytes: 512 * 1024 * 1024,
-        completedBytes: Array.from({ length: 200 }, () => 512 * 1024 * 1024),
-        bytesPerSecond: 100,
-        wallTimeMs: 1000,
-      },
-    );
+  for (const name of REQUIRED_SCENARIOS) results[name] = resultWithSamples(name, 200);
   return results;
 }
 it("requires every complete finite error-free metric", () => {
@@ -50,6 +54,32 @@ it("requires every complete finite error-free metric", () => {
       expect(validMeasurement(name, { ...old, ...change })).toBe(false);
   }
 });
+it("pins each scenario's minimum sample count", () => {
+  // The floors from budgets.ts: a result at the floor is a valid measurement
+  // and one sample below it is not. Lowering a floor (or raising it past the
+  // current value) fails this test instead of silently relaxing the gate.
+  const floors = [
+    ["list1kCold", 20],
+    ["list1k", 100],
+    ["uiList", 5],
+    ["uiGrid", 5],
+    ["search25k", 100],
+    ["downloadViaApi", 3],
+    ["downloadDirect", 3],
+    ["uploadSmallBurst", 200],
+  ] as const;
+
+  for (const [name, floor] of floors) {
+    expect(validMeasurement(name, resultWithSamples(name, floor)), `${name} at ${floor}`).toBe(
+      true,
+    );
+    expect(
+      validMeasurement(name, resultWithSamples(name, floor - 1)),
+      `${name} one below ${floor}`,
+    ).toBe(false);
+  }
+});
+
 it("requires warmup, cold path uniqueness, verified uploads, bounded UI and full downloads", () => {
   const r = valid();
   for (const [name, change] of [

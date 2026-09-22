@@ -8,6 +8,13 @@ export const ACCOUNT_USERS: readonly SeedUser[] = [
     password: "account-right-test-password",
     permissions: { "/": ["*"] },
   },
+  {
+    // No seed files and no other spec touches it: its favorites, recents and
+    // tags sections stay genuinely empty, unlike the shared alice fixture.
+    username: "sidebar_empty",
+    password: "sidebar-empty-test-password",
+    permissions: { "/": ["*"] },
+  },
 ];
 export const ACCOUNT_FILES = {
   account_left: { "/same.txt": "Left account file", "/left-only.txt": "Left only" },

@@ -328,6 +328,13 @@ It builds unsigned and runs Swift tests. Backend work still requires the applica
 integration checks, and browser pairing requires `pnpm test:e2e e2e/desktop.spec.ts` and live
 UI inspection. Native checks supplement these gates.
 
+`swift test` covers the shared `FdriveKit` target only: the File Provider extension and the app
+shell have no test target, so their Finder behavior (trash, Put Back, collision handling and
+domain lifecycle) is verified manually through the checks above. Do not treat a green
+`swift test` as coverage for the extension. Nothing in pull-request CI or `ci:full` runs the
+Swift or `tools/macos` suites; run both before a release (see
+[MACOS-RELEASE.md](MACOS-RELEASE.md#build-and-publish)).
+
 For distribution, archive the Release scheme with Developer ID signing in Xcode, export via
 Developer ID distribution, notarize and staple. Keep the same identifiers and groups for
 upgrades. An Apple Development or Apple Distribution certificate is not a substitute for a

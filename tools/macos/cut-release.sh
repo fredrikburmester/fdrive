@@ -94,6 +94,12 @@ run() {
   $dry_run || "$@"
 }
 
+# The Actions workflows that also run these are manual (and currently disabled
+# to protect the hosted-minutes budget), so the local release path cannot rely
+# on them: run the release-safety unit tests and the shared Swift tests first.
+run python3 -m unittest discover -s tools/macos -p 'test_*.py'
+run swift test --package-path apps/macos --scratch-path .fdrive-workflow/swift-build
+
 run python3 tools/macos/release.py release \
   --version "$version" --build "$build" --team "$team" \
   --app-profile "$app_profile" --extension-profile "$extension_profile" \

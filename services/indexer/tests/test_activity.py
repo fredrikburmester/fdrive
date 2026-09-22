@@ -1,3 +1,4 @@
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,6 +75,7 @@ def test_activity_read_is_storage_free_and_exposes_embedding_waits() -> None:
     assert client.get("/activity").json()["operations"][1]["state"] == "running"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="inotify is Linux-only")
 def test_watcher_tracks_queued_work_and_cleans_up_submission_failure(tmp_path: Path) -> None:
     from fdrive_indexer.watcher import Watcher
 

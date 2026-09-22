@@ -12,17 +12,21 @@ import { SEED_USERS, startPostgres } from "@fdrive/testkit";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { open, seal } from "../auth/crypto.js";
-import { type AppConfig, loadConfig } from "../config.js";
-import * as registry from "../providers/registry.js";
-import { environmentFingerprint, resumeRecovery, runBackupCommand } from "./command.js";
-import { createBackupModule, rawBackupStorage } from "./module.js";
+import { open, seal } from "../../src/auth/crypto.js";
+import {
+  environmentFingerprint,
+  resumeRecovery,
+  runBackupCommand,
+} from "../../src/backups/command.js";
+import { createBackupModule, rawBackupStorage } from "../../src/backups/module.js";
 import {
   createRecoveryApp,
   recoveryIdentity,
   recoveryPreview,
   restoreOptions,
-} from "./recovery.js";
+} from "../../src/backups/recovery.js";
+import { type AppConfig, loadConfig } from "../../src/config.js";
+import * as registry from "../../src/providers/registry.js";
 
 let container: Awaited<ReturnType<typeof startPostgres>>;
 let control: ReturnType<typeof createDb>;

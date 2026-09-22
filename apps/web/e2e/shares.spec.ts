@@ -193,7 +193,7 @@ test("directory paths, bounded safe previews, Range and multipath ZIP use only p
   try {
     await visitor.goto(directory);
     await applyPassword(visitor, "wrong");
-    await expect(visitor.getByText(/password|credential|denied/i).last()).toBeVisible();
+    await expect(visitor.getByText("Share password incorrect.")).toBeVisible();
     await expect(visitor.getByRole("row").filter({ hasText: "document.docx" })).toHaveCount(0);
     await applyPassword(visitor, "folder-password");
     const unicode = visitor.getByRole("row").filter({ hasText: "日本 100%.txt" });

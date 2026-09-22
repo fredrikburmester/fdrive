@@ -31,6 +31,15 @@ describe("isHeicExt", () => {
   });
 });
 
+describe("MAX_HEIC_DECODE_BYTES", () => {
+  it("pins the documented 50 MiB cap and derives the refusal message from it", () => {
+    // docs/ARCHITECTURE.md: the client refuses HEIC files "over 50 MiB before
+    // they are downloaded"; the boundary tests below use the constant, so
+    // without this assertion a silent 50 -> 100 MiB change would pass.
+    expect(MAX_HEIC_DECODE_BYTES).toBe(50 * 1024 * 1024);
+  });
+});
+
 describe("decodeHeicBlob", () => {
   it("decodes a HEIC blob to JPEG at quality 0.92 via heic-to/csp", async () => {
     mockHeicTo.mockClear();
@@ -47,6 +56,14 @@ describe("decodeHeicBlob", () => {
 
     await expect(decodeHeicBlob(largeBlob)).rejects.toThrow("exceeds 50 MiB decode limit");
     expect(mockHeicTo).not.toHaveBeenCalled();
+  });
+
+  it("accepts a blob exactly at the cap (the documented limit is 'over 50 MiB')", async () => {
+    mockHeicTo.mockClear();
+    const atCap = { size: MAX_HEIC_DECODE_BYTES, type: "image/heic" } as unknown as Blob;
+
+    await expect(decodeHeicBlob(atCap)).resolves.toBeInstanceOf(Blob);
+    expect(mockHeicTo).toHaveBeenCalledTimes(1);
   });
 
   it("respects an already aborted signal", async () => {

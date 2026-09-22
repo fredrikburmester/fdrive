@@ -151,6 +151,40 @@ describe("createLoginLimiter", () => {
     expect(limiter.check(KEY)).toEqual({ allowed: true });
   });
 
+  it("recordSuccess clears only that key, leaving same-group siblings' history intact", () => {
+    const { clock } = createClock(0);
+    const limiter = createLoginLimiter({
+      clock,
+      maxFailures: 5,
+      windowMs: 60_000,
+      blockMs: 60_000,
+    });
+
+    const alice = "198.51.100.7|alice";
+    const bob = "198.51.100.7|bob";
+    for (let i = 0; i < 4; i += 1) {
+      limiter.recordFailure(alice, "198.51.100.7");
+      limiter.recordFailure(bob, "198.51.100.7");
+    }
+
+    // A valid login for Alice must not reset Bob's spraying budget for the
+    // same address block (docs/AUTH.md: a success clears "that username key's
+    // failure history ... never the address key").
+    limiter.recordSuccess(alice);
+    limiter.recordFailure(bob, "198.51.100.7");
+    expect(limiter.check(bob, "198.51.100.7")).toEqual({
+      allowed: false,
+      retryAfterMs: 60_000,
+    });
+
+    // Alice's own history is genuinely gone: four fresh failures stay tracked
+    // but do not block her.
+    for (let i = 0; i < 4; i += 1) {
+      limiter.recordFailure(alice, "198.51.100.7");
+    }
+    expect(limiter.check(alice, "198.51.100.7")).toEqual({ allowed: true });
+  });
+
   it("tracks separate keys independently", () => {
     const { clock } = createClock(0);
     const limiter = createLoginLimiter({

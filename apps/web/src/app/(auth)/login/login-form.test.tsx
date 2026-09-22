@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { PublicProvider } from "@fdrive/contracts";
+import { ApiClientError, type PublicProvider } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
@@ -12,7 +12,7 @@ const login = vi.hoisted(() => ({
   reset: vi.fn(),
   isPending: false,
   isError: false,
-  error: null,
+  error: null as unknown,
 }));
 vi.mock("@/lib/api/auth-queries", () => ({ useLogin: () => login }));
 const { LoginForm } = await import("./login-form");
@@ -42,6 +42,9 @@ const other: PublicProvider = {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  login.isPending = false;
+  login.isError = false;
+  login.error = null;
 });
 
 it("renders one provider's fields, names it, and submits its id with the credential", () => {
@@ -95,6 +98,14 @@ it("shows a picker for several providers and renders the chosen one's fields", (
   expect(screen.getByLabelText("Server")).toBeTruthy();
   expect(screen.getByLabelText("Username")).toBeTruthy();
   expect(screen.queryByLabelText("Archive user")).toBeNull();
+});
+
+it("shows the server's credential error when the login mutation fails", () => {
+  login.isError = true;
+  login.error = new ApiClientError("unauthorized", "invalid username or password", 401);
+  render(<LoginForm providers={[sftpgo]} />);
+
+  expect(screen.getByText("Invalid username or password.")).toBeTruthy();
 });
 
 it("does not submit while a required field is blank", () => {

@@ -105,7 +105,19 @@ test("an administrator restores an original and is warned before overwriting a c
 
   await page.getByRole("button", { name: "Manage", exact: true }).click();
   await expect(page.getByText("alice/docs/invoice.pdf")).toBeVisible();
-  await expect(page.getByText("Changed since OCR")).toBeVisible();
+  // The badge belongs to the changed receipt row, not to any other row.
+  await expect(
+    page
+      .getByRole("listitem")
+      .filter({ hasText: "alice/docs/receipt.pdf" })
+      .getByText("Changed since OCR"),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("listitem")
+      .filter({ hasText: "alice/docs/invoice.pdf" })
+      .getByText("Changed since OCR"),
+  ).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("ocr-originals.png"), fullPage: true });
 
   // The changed file is the one that must not be overwritten silently.

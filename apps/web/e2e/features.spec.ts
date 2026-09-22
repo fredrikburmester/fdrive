@@ -33,14 +33,15 @@ test("an owner resumes and finishes setup without entering the application shell
     await expect(page.getByText("Advanced storage settings")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Toggle Sidebar" })).toHaveCount(0);
 
-    for (const label of [
-      "Enable thumbnails",
-      "Enable full-text search",
-      "Enable search ocr",
-      "Enable semantic search",
-      "Enable image search",
-      "Enable searchable pdfs",
-    ]) {
+    for (const [label, caption] of [
+      ["Enable thumbnails", "Step 4 of 13 · Thumbnails"],
+      ["Enable full-text search", "Step 5 of 13 · Full-text search"],
+      ["Enable search ocr", "Step 6 of 13 · Search OCR"],
+      ["Enable semantic search", "Step 7 of 13 · Semantic search"],
+      ["Enable image search", "Step 8 of 13 · Image search"],
+      ["Enable searchable pdfs", "Step 9 of 13 · Searchable PDFs"],
+    ] as const) {
+      await expect(page.getByText(caption)).toBeVisible();
       await expect(page.getByRole("switch", { name: label })).toBeVisible();
       await expect(page).toHaveURL(/\/setup$/);
       await page.getByRole("button", { name: "Skip this feature" }).click();

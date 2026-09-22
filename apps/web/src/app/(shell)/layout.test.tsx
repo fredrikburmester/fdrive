@@ -15,8 +15,12 @@ vi.mock("@/components/shell/me-hydration", () => ({
 vi.mock("@/components/shell/shell-runtime", () => ({
   ShellRuntime: ({ children }: { children: ReactNode }) => children,
 }));
-// The chat panel needs the query client the runtime provides; its own tests cover it.
-vi.mock("@/components/ai/chat/chat-panel", () => ({ ChatPanel: () => null }));
+// The chat panel needs the query client the runtime provides; its own tests cover
+// its behavior. This marker only pins that the shell actually mounts it
+// (docs/ARCHITECTURE.md: docked beside the page so it follows the person).
+vi.mock("@/components/ai/chat/chat-panel", () => ({
+  ChatPanel: () => <aside>Assistant panel</aside>,
+}));
 
 import ShellLayout from "./layout";
 
@@ -32,4 +36,5 @@ it("bounds the shell viewport while keeping long page content vertically scrolla
   );
   expect(html).toContain("Settings content");
   expect(html).toContain("Navigation");
+  expect(html).toContain("Assistant panel");
 });
