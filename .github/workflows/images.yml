@@ -318,9 +318,17 @@ jobs:
           export FDRIVE_MASTER_KEY POSTGRES_PASSWORD
           # compose.yaml names the images by owner; a fork's prefix differs.
           sed "s#ghcr.io/fredrikburmester/fdrive#$PREFIX#" compose.yaml > compose.smoke.yaml
-          if ! docker compose -f compose.smoke.yaml up -d --wait --wait-timeout 300 proxy backup; then
-            docker compose -f compose.smoke.yaml ps
-            docker compose -f compose.smoke.yaml logs --tail=100 api web proxy backup
+          # Only the core stack runs here. The runner's DNS takes seconds to fail
+          # names no container holds, which pushes the API's health response past
+          # its healthcheck timeout, so the absent workers resolve to its loopback.
+          printf '%s\n' 'services:' '  api:' '    extra_hosts:' \
+            '      - "indexer:127.0.0.1"' '      - "ocr:127.0.0.1"' '      - "tika:127.0.0.1"' \
+            '      - "embed:127.0.0.1"' '      - "image-embed:127.0.0.1"' '      - "onlyoffice:127.0.0.1"' \
+            > compose.smoke-workers.yaml
+          stack=(-f compose.smoke.yaml -f compose.smoke-workers.yaml)
+          if ! docker compose "${stack[@]}" up -d --wait --wait-timeout 300 proxy backup; then
+            docker compose "${stack[@]}" ps
+            docker compose "${stack[@]}" logs --tail=100 api web proxy backup
             exit 1
           fi
           curl -fsS http://127.0.0.1:8090/api/v1/health
@@ -329,7 +337,7 @@ jobs:
           about=$(curl -fsS http://127.0.0.1:8090/api/v1/about)
           echo "$about"
           [[ $about == *"\"version\":\"$GITHUB_SHA\""* ]]
-          docker compose -f compose.smoke.yaml exec -T api node --input-type=module-typescript < wait-ready.ts
+          docker compose "${stack[@]}" exec -T api node --input-type=module-typescript < wait-ready.ts
 
   merge:
     name: Publish ${{ matrix.image }}
