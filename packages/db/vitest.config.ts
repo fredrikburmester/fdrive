@@ -4,6 +4,8 @@ export default definePackageConfig({
   test: {
     // Exercise this raw SQL repository on real PostgreSQL in both the coverage
     // and integration gates. Do not exclude the new persistence boundary.
+    // Those suites outlast Vitest's 5 s default on a loaded four-core CI runner.
+    testTimeout: 30_000,
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
