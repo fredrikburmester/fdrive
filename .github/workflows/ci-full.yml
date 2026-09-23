@@ -34,7 +34,23 @@ jobs:
       - run: pnpm bootstrap
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test:coverage
+      # As in ci.yml, web's coverage runs on its own runner in the next job.
+      - run: pnpm turbo run test:coverage --filter='!@fdrive/web' && pnpm test:coverage:tools
+
+  web:
+    name: Web coverage
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm bootstrap
+      - run: pnpm --filter @fdrive/web test:coverage
 
   integration:
     name: Integration tests

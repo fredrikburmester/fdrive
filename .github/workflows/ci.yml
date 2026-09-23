@@ -46,4 +46,20 @@ jobs:
       - run: pnpm bootstrap
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test:coverage
+      # `pnpm test:coverage` minus the web package, which gets its own runner
+      # below: its jsdom suites time out beside the others on four cores.
+      - run: pnpm turbo run test:coverage --filter='!@fdrive/web' && pnpm test:coverage:tools
+
+  web:
+    name: Web coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm bootstrap
+      - run: pnpm --filter @fdrive/web test:coverage
