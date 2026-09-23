@@ -36,8 +36,8 @@ function checkoutRevision(): string {
 
 /**
  * The images workflow builds `X.Y.Z` for a release tag, `main` for the main branch and `dev`
- * for anything else; update.sh passes the same values to source builds. Only a release or
- * `main` names what is running, so `dev`, an empty value and `latest` count as no release.
+ * for anything else. Only a release or `main` names what is running, so `dev`, an empty
+ * value and `latest` count as no release.
  */
 function parseRelease(value: string): string | null {
   if (value === "main") return value;

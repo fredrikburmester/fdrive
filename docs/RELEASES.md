@@ -43,8 +43,8 @@ pre-release, and when a release changes either file they tell operators to downl
 again. A pre-release's `compose.yaml` names its own version, because `latest` never moves
 to one. Edit the notes afterwards to call out anything else operators must do.
 
-Every installation on the default channel moves to the new release on its next pull (or
-`./update.sh` from a checkout), so tag only what is ready. Fix a bad release with a new
+Every installation on the default channel moves to the new release on its next pull, so tag
+only what is ready. Fix a bad release with a new
 patch release rather than deleting its tag: installations may already run it. If a
 release's images fail to publish, `latest` stays on the previous release; re-run the failed
 jobs or publish a new patch release.

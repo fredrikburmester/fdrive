@@ -150,8 +150,8 @@ docker compose pull && docker compose up -d
 
 This moves to the newest [release](https://github.com/fredrikburmester/fdrive/releases). When a
 release changes `compose.yaml`, its notes say so; download the file again first. To stay on
-one version, set `FDRIVE_VERSION=0.1.0` in `.env`. The [deployment guide](deploy/README.md)
-also covers installing from a git checkout and building from source.
+one version, set `FDRIVE_VERSION=0.1.0` in `.env`. See the [deployment guide](deploy/README.md)
+for pinning versions and troubleshooting.
 
 ---
 

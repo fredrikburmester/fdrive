@@ -1,21 +1,19 @@
-# Example override for attaching `api` to an existing external Docker
-# network that your SFTPGo instance already lives on (for example a
-# `backend` network created by a separate SFTPGo compose stack).
+# Attaches fdrive's API to the Docker network your SFTPGo container is on, so
+# fdrive can reach it by container name. Save it next to compose.yaml as
+# compose.sftpgo-network.yaml, set the network's name, and list both files in
+# .env:
 #
-# Copy this file, drop the ".example" suffix, adjust the network name, and
-# start the stack with both files:
+#   COMPOSE_FILE=compose.yaml:compose.sftpgo-network.yaml
 #
-#   docker compose -f compose.yaml -f compose.sftpgo-network.yaml up -d
-#
-# Then set SFTPGO_URL in your .env to the SFTPGo container's address on that
-# network, e.g. http://sftpgo:8080.
+# Run `docker compose up -d`, then enter SFTPGo's address on that network, such
+# as http://sftpgo:8080, during setup.
 
 services:
   api:
     networks:
       - default
-      - backend
-
+      - sftpgo
 networks:
-  backend:
+  sftpgo:
     external: true
+    name: replace-with-sftpgo-network

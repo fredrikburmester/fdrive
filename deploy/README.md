@@ -163,50 +163,6 @@ overlays, data folders, the database and your files, and don't delete volumes or
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't
 apply it.
 
-## Install from a git checkout
-
-You only need a checkout to build from source or to use Collabora instead of ONLYOFFICE. It
-adds `update.sh`, which validates `.env`, keeps the Compose files at the running release and
-waits for enabled features:
-
-```sh
-git clone https://github.com/fredrikburmester/fdrive.git /path/to/fdrive
-cd /path/to/fdrive/deploy
-./init-env.sh
-./update.sh
-```
-
-Run commands from `deploy/`. `init-env.sh` creates the same `.env` and never overwrites one.
-To update, run `./update.sh` again: it checks out the release `FDRIVE_VERSION` selects, then
-pulls and restarts. List overlays in `FDRIVE_COMPOSE_FILES` so updates keep them. It waits up
-to `FDRIVE_READY_TIMEOUT_SECONDS` (default 1200) for enabled features, then fails and names
-the checks still waiting.
-
-### Build from source
-
-To run a fork or local changes, list `compose.build.yaml` first in `FDRIVE_COMPOSE_FILES`:
-
-```dotenv
-FDRIVE_COMPOSE_FILES="compose.build.yaml"
-```
-
-`update.sh` then builds the release or branch that `FDRIVE_VERSION` selects, which needs
-several GB of memory. See [building from source](REFERENCE.md#building-from-source), including
-ARM64.
-
-### Installations from before published images
-
-These followed `main` and built every image on the server. Run `./update.sh` twice: the first
-run, still the old script, switches to the newest release's images, and the second moves the
-checkout to that release. Then:
-
-- Set `FDRIVE_VERSION=main` to keep following main, or add `compose.build.yaml` to keep
-  building on the server.
-- Remove `compose.arm64.yaml` from `FDRIVE_COMPOSE_FILES` unless you build from source. The
-  published images are native on ARM64.
-- Remove the old images:
-  `docker image rm fdrive-web fdrive-api fdrive-backup fdrive-indexer fdrive-ocr fdrive-tika fdrive-embed fdrive-image-embed fdrive-onlyoffice`.
-
 ## Troubleshooting
 
 - **Can't open fdrive**: check the containers, port, host address and firewall. With
@@ -234,8 +190,7 @@ checkout to that release. Then:
   reconnects on its own. If it stays unhealthy, Postgres isn't up.
 
 For more, see `docker compose logs --tail=100 indexer`, **System** in fdrive and the
-[advanced reference](REFERENCE.md). With `update.sh`, pass each overlay with `-f` to reach a
-service that only exists in an overlay.
+[advanced reference](REFERENCE.md).
 
 ## Installation backups
 

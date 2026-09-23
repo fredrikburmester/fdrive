@@ -31,9 +31,8 @@ On ARM64 hosts the harness builds native TEI from the pinned upstream source
 using `Dockerfile-arm64`; other hosts retain the upstream amd64 CPU image.
 Results record the selected image, platform and source revision. The model stays
 `intfloat/multilingual-e5-small`. The published `fdrive-embed` image ships the same
-ARM runtime, and dev stacks and production source builds can build it through
-`deploy/compose.arm64.yaml`; first build needs network access and takes a long
-time, subsequent builds use Docker cache.
+ARM runtime. The first native build needs network access and takes a long time;
+later builds use Docker's cache.
 
 Measurements:
 

@@ -43,7 +43,7 @@ function fixture() {
 }
 
 describe("deployment readiness", () => {
-  it("runs through Node's stdin entry point used by update.sh", () => {
+  it("runs through Node's stdin entry point used by the smoke job", () => {
     const f = fixture();
     const documents = { features: f.features, office: f.office, health: f.health };
     const input = `const documents = ${JSON.stringify(documents)};

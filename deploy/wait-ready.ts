@@ -130,7 +130,8 @@ export async function waitForReadiness({
   }
 }
 
-// update.sh streams this file to Node's stdin; imports in tests do not run it.
+// The Images workflow's smoke job streams this file to Node's stdin; imports in
+// tests do not run it.
 if (process.argv[1] === undefined) {
   await waitForReadiness().catch((error: Error) => {
     console.error(error.message);
