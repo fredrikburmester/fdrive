@@ -135,8 +135,10 @@ Trash and ONLYOFFICE don't need step 2. Other people just sign in with their own
 accounts. Everything stays editable in **System > Features**. Features start off and download
 models only when needed, and browsing keeps working if one is unavailable.
 
-Afterwards, check each enabled feature in **System** and look for a real thumbnail or search
-result. Healthy containers don't prove a feature works for a given user.
+Afterwards, wait until each enabled feature shows as ready in **System > Features**, or run
+`docker compose exec api node wait-ready.ts`, which returns once they all are. Then look for a
+real thumbnail or search result: healthy containers don't prove a feature works for a given
+user.
 
 Installing for someone else? Leave the feature choices, including PDF conversion, to them.
 Report the address, the version on the **About** page, whether step 2 was done and any failed
@@ -152,6 +154,11 @@ This moves to the newest [release](https://github.com/fredrikburmester/fdrive/re
 `.env` pins `FDRIVE_VERSION`. When a release changes `compose.yaml`, its notes say so;
 download that file again before you update.
 
+Enabled features restart with the update and can take a few minutes to be ready again.
+**System > Features** shows each one's state, or wait in the terminal with
+`docker compose exec api node wait-ready.ts`: it returns once every enabled feature is ready,
+and after 20 minutes fails and names the ones that aren't.
+
 | `FDRIVE_VERSION` | What runs |
 | --- | --- |
 | unset (default) | The newest release |
@@ -162,6 +169,10 @@ You can't go back to an older release once a newer one has migrated the database
 overlays, data folders, the database and your files, and don't delete volumes or redo setup to
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't
 apply it.
+
+**Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
+checkout's `deploy` folder like any other installation, and move extra Compose files from
+`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads.
 
 ## Troubleshooting
 

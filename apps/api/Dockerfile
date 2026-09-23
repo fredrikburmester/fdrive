@@ -42,6 +42,9 @@ ENV NODE_ENV=production
 
 COPY --from=build --chown=fdrive:fdrive /out ./
 
+# `docker compose exec api node wait-ready.ts` waits for the enabled features.
+COPY deploy/wait-ready.ts ./wait-ready.ts
+
 # Kept in the image so a container restart cannot report a newer checkout's revision.
 ARG FDRIVE_BUILD_REVISION=
 RUN printf '%s' "$FDRIVE_BUILD_REVISION" > build-revision

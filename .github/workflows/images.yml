@@ -348,7 +348,7 @@ jobs:
             .version == $sha and .revision == $sha
             and .release == (if $release == "dev" then null else $release end)
           ' <<< "$about"
-          docker compose "${stack[@]}" exec -T api node --input-type=module-typescript < wait-ready.ts
+          docker compose "${stack[@]}" exec -T api node wait-ready.ts
           backup=$(docker compose "${stack[@]}" ps --format '{{.State}}' backup)
           if [[ $backup != running ]]; then
             docker compose "${stack[@]}" logs --tail=100 backup
