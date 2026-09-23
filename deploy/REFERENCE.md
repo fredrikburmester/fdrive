@@ -194,26 +194,30 @@ indexing or account-specific search results; still verify those after deployment
 ## Running version and uptime
 
 The account menu's **About** page links to the project, feature guides, FDrive for macOS,
-and Buy Me a Coffee. Server version is the API image's Git revision, linked to its commit.
-API uptime is sampled when the page loads and resets on API restart; it is not host uptime.
-Both values are available from `GET /api/v1/about`, without probing optional workers.
+and Buy Me a Coffee. Server version is the release the API image was built as, such as
+`0.1.0`, or `main` for the main branch, followed by its Git commit, linked. API uptime is
+sampled when the page loads and resets on API restart; it is not host uptime.
+`GET /api/v1/about` serves them as `release`, `revision` and `uptimeSeconds`, without probing
+optional workers. Its `version`, like the health endpoint's, is still the revision when known.
 
-Published API images carry the full Git SHA of the commit they were built from, stored in
-the image and its OCI revision label, so restarting an older image does not report a newer
-checkout. For [source builds](#building-from-source), `update.sh` sets
-`FDRIVE_BUILD_REVISION` to the checkout's SHA before Compose builds the API. For manual
-builds:
+Published API images carry their release and the full Git SHA of the commit they were built
+from, stored in the image and its OCI version and revision labels, so restarting an older
+image does not report a newer checkout. For [source builds](#building-from-source),
+`update.sh` sets `FDRIVE_BUILD_REVISION` to the checkout's SHA and `FDRIVE_VERSION` to the
+release it checked out before Compose builds the API. For manual builds, name the release
+only when the checkout is one:
 
 ```sh
-FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up -d --build
+FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" FDRIVE_VERSION=0.1.0 docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up -d --build
 # Or, with the repository root as build context:
-docker build --build-arg FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" -f apps/api/Dockerfile .
+docker build --build-arg FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" --build-arg FDRIVE_BUILD_VERSION=0.1.0 -f apps/api/Dockerfile .
 ```
 
-Local API development resolves the checkout's HEAD once at startup. Without build metadata
-or Git, a package release version is used if present; the placeholder `0.0.0` is shown as
-**Development (version unavailable)**. Feature guides follow GitHub's `main` branch.
-The macOS link opens the app guide, which includes its requirements and release instructions.
+Any other build, including local API development, is shown as **Development** with its
+commit; local development resolves the checkout's HEAD once at startup. Without build
+metadata or Git it is **Development (version unavailable)**. Feature guides follow GitHub's
+`main` branch. The macOS link opens the app guide, which includes its requirements and
+release instructions.
 
 ## Processing Worker Resource Limits
 

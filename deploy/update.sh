@@ -99,7 +99,7 @@ if [[ -z "${FDRIVE_UPDATE_CHECKED_OUT:-}" ]]; then
 fi
 
 # Capture the source being run, after checking it out. Source builds
-# (compose.build.yaml) bake it into the API image.
+# (compose.build.yaml) bake the commit and release into the API image.
 FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)"
 export FDRIVE_BUILD_REVISION FDRIVE_VERSION="$version"
 

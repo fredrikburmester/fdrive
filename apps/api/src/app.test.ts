@@ -259,6 +259,26 @@ describe("createApp about route", () => {
     });
   });
 
+  it("reports the release and commit the running build was made from", async () => {
+    const revision = "0123456789abcdef0123456789abcdef01234567";
+    const { app } = buildApp({ version: revision, release: "0.1.0", revision });
+
+    const body = await (await app.request("/api/v1/about")).json();
+
+    expect(AboutResponse.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ version: revision, release: "0.1.0", revision });
+  });
+
+  it("omits the release and commit a development build does not have", async () => {
+    const { app } = buildApp({ version: "development", release: null, revision: null });
+
+    const body = await (await app.request("/api/v1/about")).json();
+
+    expect(body).toMatchObject({ version: "development" });
+    expect(body).not.toHaveProperty("release");
+    expect(body).not.toHaveProperty("revision");
+  });
+
   it("reveals the SFTPGo host's label once the caller has a resolvable session", async () => {
     const { app } = buildApp({
       principalResolver: async () => ({
