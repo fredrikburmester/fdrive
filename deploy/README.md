@@ -18,9 +18,12 @@ test -e .env || printf 'FDRIVE_MASTER_KEY=%s\nPOSTGRES_PASSWORD=%s\n' "$(openssl
 chmod 600 .env
 ```
 
+`test -e .env` checks whether `.env` already exists. That line creates it with two random
+secrets only if it doesn't, so it never replaces your keys.
+
 Run later commands from this folder. `compose.yaml` is the only file you need, and it pulls
-published images, so nothing is built on your server. `.env` gets two generated secrets and
-is never overwritten. If fdrive is already installed, keep its folder, `.env` and data.
+published images, so nothing is built on your server. If fdrive is already installed, keep
+its folder, `.env` and data.
 
 > [!IMPORTANT]
 > Back up `.env` and keep it out of logs and reports. The master key encrypts stored
