@@ -123,7 +123,7 @@ paste `compose.yaml` as a new stack and add the same two variables instead.
 ### 2. Point fdrive at your files and start
 
 For thumbnails, search and OCR, first tell the workers where SFTPGo keeps its files, as in
-[installation step 3](deploy/README.md#3-prepare-file-access-before-offering-processing-features).
+[installation step 2](deploy/README.md#2-mount-sftpgos-files-optional).
 Browsing alone needs no mount; the default `./data/roots/sftpgo` is not connected to SFTPGo.
 
 ```sh
