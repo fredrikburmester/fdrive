@@ -18,7 +18,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # tools/macos/cut-release.sh builds, tags and publishes a release from the
+  # owner's Mac, and the tag it pushes starts this workflow as well. The Mac's
+  # build numbers also run ahead of this workflow's run numbers, and File
+  # Provider refuses to upgrade to a lower build. A tag push therefore builds
+  # only when this run could publish a release nobody has published yet.
+  gate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+    steps:
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
+            | { grep '^macos-v' || true; } | grep -vFx "$GITHUB_REF_NAME" | sort -V | tail -n 1)
+          build=0
+          if [[ -n $previous ]]; then
+            build=$(gh release download "$previous" --repo "$GITHUB_REPOSITORY" --pattern release.json --output - | jq -r .build)
+          fi
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::$GITHUB_REF_NAME is already published; nothing to build."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          elif (( GITHUB_RUN_NUMBER <= build )); then
+            echo "::notice::Build $GITHUB_RUN_NUMBER would not be above build $build of $previous, so File Provider would refuse the upgrade. tools/macos/cut-release.sh publishes this tag from the Mac instead."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: gate
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.gate.outputs.proceed == 'true') }}
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -99,7 +133,17 @@ jobs:
         with:
           name: fdrive-macos-release
           path: release-artifacts
+      - id: existing
+        name: Check for a release published while this run built
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::$GITHUB_REF_NAME was published while this run built; leaving it as it is."
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish GitHub release and propose Homebrew update
+        if: steps.existing.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/macos/publish.py --repo "$GITHUB_REPOSITORY" --artifacts release-artifacts
