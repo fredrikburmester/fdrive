@@ -326,11 +326,14 @@ jobs:
             '      - "embed:127.0.0.1"' '      - "image-embed:127.0.0.1"' '      - "onlyoffice:127.0.0.1"' \
             > compose.smoke-workers.yaml
           stack=(-f compose.smoke.yaml -f compose.smoke-workers.yaml)
-          if ! docker compose "${stack[@]}" up -d --wait --wait-timeout 300 proxy backup; then
+          if ! docker compose "${stack[@]}" up -d --wait --wait-timeout 300 proxy; then
             docker compose "${stack[@]}" ps
-            docker compose "${stack[@]}" logs --tail=100 api web proxy backup
+            docker compose "${stack[@]}" logs --tail=100 api web proxy
             exit 1
           fi
+          # The backup worker has no healthcheck, which --wait refuses; it is
+          # checked for still running once the checks below are done.
+          docker compose "${stack[@]}" up -d backup
           curl -fsS http://127.0.0.1:8090/api/v1/health
           echo
           curl -fsS -o /dev/null -w 'web: HTTP %{http_code}\n' http://127.0.0.1:8090/login
@@ -338,6 +341,12 @@ jobs:
           echo "$about"
           [[ $about == *"\"version\":\"$GITHUB_SHA\""* ]]
           docker compose "${stack[@]}" exec -T api node --input-type=module-typescript < wait-ready.ts
+          backup=$(docker compose "${stack[@]}" ps --format '{{.State}}' backup)
+          if [[ $backup != running ]]; then
+            docker compose "${stack[@]}" logs --tail=100 backup
+            echo "::error::The backup worker is ${backup:-gone}, not running"
+            exit 1
+          fi
 
   merge:
     name: Publish ${{ matrix.image }}
