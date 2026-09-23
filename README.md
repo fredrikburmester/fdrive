@@ -115,15 +115,16 @@ curl -fsSLO https://github.com/fredrikburmester/fdrive/releases/latest/download/
 test -e .env || printf 'FDRIVE_MASTER_KEY=%s\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -hex 32)" > .env
 ```
 
-`.env` holds two generated secrets, and the `test -e` guard never overwrites an existing
-one. Keep it private and back it up: the master key encrypts stored credentials, and a lost
-key cannot be recovered. In Portainer, Dockge or a NAS app,
-paste `compose.yaml` as a new stack and add the same two variables instead.
+`test -e .env` checks whether `.env` already exists. That line creates it with two random
+secrets only if it doesn't, so it never replaces your keys. Keep `.env` private and back it
+up: the master key encrypts stored credentials, and a lost key cannot be recovered. In
+Portainer, Dockge or a NAS app, paste `compose.yaml` as a new stack and add the same two
+variables instead.
 
 ### 2. Point fdrive at your files and start
 
 For thumbnails, search and OCR, first tell the workers where SFTPGo keeps its files, as in
-[installation step 3](deploy/README.md#3-prepare-file-access-before-offering-processing-features).
+[installation step 2](deploy/README.md#2-mount-sftpgos-files-optional).
 Browsing alone needs no mount; the default `./data/roots/sftpgo` is not connected to SFTPGo.
 
 ```sh

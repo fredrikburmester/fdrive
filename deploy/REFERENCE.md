@@ -280,7 +280,7 @@ All services are hardened following security best practices:
 
 ## Processing storage and permissions
 
-Follow [installation step 3](README.md#3-prepare-file-access-before-offering-processing-features)
+Follow [installation step 2](README.md#2-mount-sftpgos-files-optional)
 for the standard bind mount. `FDRIVE_DATA_DIR` stores fdrive state;
 `FDRIVE_INDEX_SFTPGO_DIR` supplies existing user files. They are different settings.
 Setting only the former never attaches SFTPGo storage.
