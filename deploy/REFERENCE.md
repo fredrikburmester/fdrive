@@ -17,7 +17,14 @@ This document provides architectural and operational details for advanced deploy
 | `.env.example` | Minimal secrets-only quick start; configure SFTPGo and features in the walkthrough. |
 | `init-env.sh` | Creates `deploy/.env` with one-time private bootstrap secrets; refuses to overwrite it. |
 | `preflight.sh` | Sanity-checks `.env` syntax, keys, and values before Docker starts. |
-| `update.sh` | Moves the checkout to the chosen release, runs preflight, pulls that release's images (or builds them), restarts containers, and waits for readiness. |
+| `update.sh` | From a git checkout: moves the checkout to the chosen release, runs preflight, pulls that release's images (or builds them), restarts containers, and waits for readiness. |
+
+Add an overlay by saving it next to `compose.yaml` and listing both in Compose's own
+`COMPOSE_FILE` in `.env`, for example `COMPOSE_FILE=compose.yaml:compose.sftpgo.yaml`; every
+`docker compose` command then includes it. From a git checkout, list overlays in
+`FDRIVE_COMPOSE_FILES` instead, which `update.sh` reads. Each release attaches `compose.yaml`
+and `compose.sftpgo.yaml`. `compose.build.yaml`, `compose.arm64.yaml` and the Collabora
+overlay build images from source and need a checkout.
 
 ---
 
@@ -106,7 +113,7 @@ listen address, not a browser URL. Override `FDRIVE_HTTP_PORT` to change the por
 For local-only access, explicitly set `FDRIVE_HTTP_BIND=127.0.0.1`.
 
 An HTTPS reverse proxy (Nginx, Caddy, Traefik, NPM) in front of fdrive needs no
-`deploy/.env` setting. The bundled proxy passes the edge's `X-Forwarded-Proto` through to
+`.env` setting. The bundled proxy passes the edge's `X-Forwarded-Proto` through to
 every service, so the api sets Secure cookies and the bundled ONLYOFFICE builds `https://`
 browser URLs whenever the edge says the request was HTTPS, and direct LAN clients on
 `http://<server-ip>:8090` keep working at the same time. Forwarded headers are honoured
@@ -163,8 +170,8 @@ server {
 
 fdrive actively monitors its internal subsystems on startup and exposes diagnostic endpoints:
 
-`update.sh` waits for the saved enabled features and Office before reporting
-success. `FDRIVE_READY_TIMEOUT_SECONDS` defaults to 1200 (a positive integer,
+From a git checkout, `update.sh` waits for the saved enabled features and Office before
+reporting success. `FDRIVE_READY_TIMEOUT_SECONDS` defaults to 1200 (a positive integer,
 read from `.env` or the process environment). The check runs with the API
 container's Node runtime and worker credential; no extra host runtime is needed.
 It checks the API health body and, for text extraction, Tika's controller revision
@@ -265,7 +272,7 @@ All services are hardened following security best practices:
 - **Read-Only Root Filesystems**: Front-facing containers run with read-only root filesystems and isolated temporary `tmpfs` mounts.
 - **Log Rotation**: Built-in JSON log rotation (`max-size: 10m`, `max-file: 3`) prevents disk exhaustion.
 - **Pinned Image Digests**: All base images and third-party containers are pinned with exact `@sha256:` immutable digests in compose files to ensure reproducible builds.
-- **Versioned fdrive Images**: fdrive's own images are built in CI from the tagged commit and referenced by release version; `update.sh` keeps the Compose files at the same release.
+- **Versioned fdrive Images**: fdrive's own images are built in CI from the tagged commit and referenced by release version; `compose.yaml` runs the newest release unless `FDRIVE_VERSION` pins one.
 
 ## Processing storage and permissions
 
@@ -287,7 +294,8 @@ the OCR worker, which runs as UID 1000. Verify both rather than assuming they ru
 SFTPGo's user. Give the indexer read/traverse access and, if PDF conversion will be used,
 give the OCR worker read/write/traverse access through the host's existing permission
 model. Do not recursively change ownership of the SFTPGo library to make an installation
-succeed. Run `./update.sh` after changing `FDRIVE_INDEX_UID` to recreate the indexer.
+succeed. Run `docker compose up -d` (or `./update.sh`) after changing `FDRIVE_INDEX_UID` to
+recreate the indexer.
 
 For an account whose home is not named after its username, an administrator can set a
 per-account mapping in **Account** after setup. **System > Connection** also contains
@@ -333,7 +341,7 @@ account mapping can verify.
 
 For SFTPGo backed by a Docker named volume, explicitly share that existing volume through
 an overlay instead of depending on Docker's internal volume directory. Example
-`compose.storage.yaml` in `deploy`:
+`compose.storage.yaml` next to `compose.yaml`:
 
 ```yaml
 services:
@@ -350,8 +358,8 @@ volumes:
 ```
 
 The volume must already hold SFTPGo's user files. Set `FDRIVE_INDEX_SFTPGO_PATH` to their
-location inside SFTPGo. Add `compose.storage.yaml` to `FDRIVE_COMPOSE_FILES` in `.env`,
-retaining any other overlays. Verify both rendered mount destinations before starting.
+location inside SFTPGo. Add `compose.storage.yaml` to the overlays in `.env` (`COMPOSE_FILE`,
+or `FDRIVE_COMPOSE_FILES` from a checkout), retaining any other overlays. Verify both rendered mount destinations before starting.
 A remote host path or S3 bucket is not a local Docker volume: browsing can work without
 local processing, but this stack does not automatically mirror remote files.
 
@@ -360,11 +368,13 @@ local processing, but this stack does not automatically mirror remote files.
 If using the container-name URL instead of a published host HTTP port:
 
 1. Identify the existing Docker network shared with SFTPGo.
-2. Copy `compose.sftpgo-network.example.yaml` to `compose.sftpgo-network.yaml` and replace
-   the example external network name with that existing network.
-3. Add `compose.sftpgo-network.yaml` to `FDRIVE_COMPOSE_FILES` in `deploy/.env`. Preserve
-   any other filenames already in that space-separated list.
-4. Run `./update.sh`, then enter SFTPGo's network name and HTTP port in web onboarding.
+2. Save [`compose.sftpgo-network.example.yaml`](compose.sftpgo-network.example.yaml) next to
+   `compose.yaml` as `compose.sftpgo-network.yaml` and replace the example external network
+   name with that existing network.
+3. Add `compose.sftpgo-network.yaml` to the overlays in `.env` (`COMPOSE_FILE`, or
+   `FDRIVE_COMPOSE_FILES` from a checkout), preserving any others already listed.
+4. Run `docker compose up -d` (or `./update.sh`), then enter SFTPGo's network name and HTTP
+   port in web onboarding.
 
 This attaches fdrive's API to the network; it does not mount SFTPGo's files. Processing
 storage remains the separate deployment input described above. No SFTPGo configuration
@@ -372,10 +382,11 @@ change is required to use its existing network.
 
 ## Bundled SFTPGo
 
-Use this only when the operator has no existing SFTPGo service. In `deploy/.env`, configure:
+Use this only when the operator has no existing SFTPGo service. Download
+`compose.sftpgo.yaml` from the same release next to `compose.yaml`, then in `.env` configure:
 
 ```dotenv
-FDRIVE_COMPOSE_FILES=compose.sftpgo.yaml
+COMPOSE_FILE=compose.yaml:compose.sftpgo.yaml
 FDRIVE_DATA_DIR=/srv/fdrive-state
 FDRIVE_INDEX_SFTPGO_DIR=/srv/fdrive-state/sftpgo/data
 SFTPGO_ADMIN_USERNAME=admin
@@ -385,9 +396,10 @@ SFTPGO_ADMIN_PASSWORD=replace-with-a-strong-unique-password
 These paths are examples. The processing source must match the bundled SFTPGo data
 mount, which is `FDRIVE_DATA_DIR/sftpgo/data`. Create that directory as part of this **new**
 SFTPGo deployment, with appropriate service permissions. Keep existing overlay selections
-when adding `compose.sftpgo.yaml`. Leave `SFTPGO_URL` unset so fdrive uses web onboarding.
+when adding `compose.sftpgo.yaml`; from a git checkout, set `FDRIVE_COMPOSE_FILES=compose.sftpgo.yaml`
+instead of `COMPOSE_FILE`. Leave `SFTPGO_URL` unset so fdrive uses web onboarding.
 
-Run `./update.sh`. The bundled WebAdmin defaults to the host's loopback port 8091; access
+Run `docker compose up -d` (or `./update.sh`). The bundled WebAdmin defaults to the host's loopback port 8091; access
 it through the operator's chosen tunnel/proxy or deliberately configure its bind address.
 Create a normal file user in SFTPGo with a home such as `/srv/sftpgo/data/alice`. Then open
 fdrive, connect to `http://sftpgo:8080`, and verify that file user as fdrive's administrator.

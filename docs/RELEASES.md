@@ -32,14 +32,17 @@ git push origin v0.2.0
 The workflow refuses a tag that is not on `main` or not shaped like `v1.2.3` or `v1.2.3-rc.1`.
 It builds every image for amd64 and arm64, tags them, and creates the GitHub release with
 notes generated from the merged pull requests since the previous release. The release
-carries a `compose.yaml` pinned to its version, `compose.sftpgo.yaml` and `init-env.sh` for
-[installing without git](../deploy/README.md#installing-without-git). Edit the notes
-afterwards to call out anything operators must do.
+carries `compose.yaml` and `compose.sftpgo.yaml`, which installations download from
+`releases/latest/download/`. `compose.yaml` follows `latest`, so an installation updates
+with a pull. When a release changes either file, the workflow puts a note above the
+generated list telling operators to download them again. A pre-release's `compose.yaml`
+names its own version, because `latest` never moves to one. Edit the notes afterwards to
+call out anything else operators must do.
 
-Every installation on the default channel moves to the new release on its next
-`./update.sh`, so tag only what is ready. Fix a bad release with a new patch release rather
-than deleting its tag: installations may already have checked it out. If a release's images
-fail to publish, `update.sh` stops before touching running containers; re-run the failed
+Every installation on the default channel moves to the new release on its next pull (or
+`./update.sh` from a checkout), so tag only what is ready. Fix a bad release with a new
+patch release rather than deleting its tag: installations may already run it. If a
+release's images fail to publish, `latest` stays on the previous release; re-run the failed
 jobs or publish a new patch release.
 
 ## First publish of an image

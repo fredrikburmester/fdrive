@@ -76,7 +76,9 @@ FDRIVE_COLLABORA_APP_URL=https://drive.example.com
 `FDRIVE_COLLABORA_APP_URL` is the fdrive address Collabora allows to frame its editor; it
 is read when the container starts, so it cannot come from the address saved in onboarding.
 
-Route that hostname to the fdrive proxy, then run `./update.sh`. Enable and configure
+This overlay builds the web image, so it needs an installation from a
+[git checkout](../deploy/README.md#install-from-a-git-checkout). Route that hostname to the
+fdrive proxy, then run `./update.sh`. Enable and configure
 Office through the same System settings. The advanced overlay supplies its network
 endpoints and browser CSP origin. The web image bakes that origin in when it is built, so
 the overlay builds web from the checkout instead of pulling it; that build needs a few GB
