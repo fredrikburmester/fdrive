@@ -1,9 +1,7 @@
 # Mac releases and Homebrew
 
-The source repository also acts as the Homebrew tap. GitHub releases have the same visibility
-as the repository: downloads require authentication while it is private; after it becomes
-public, the same versioned DMG URLs work without authentication. No second repository or
-cross-repository access token is needed.
+The source repository also acts as the Homebrew tap, and the cask downloads the versioned DMG
+from its public GitHub release. No second repository or access token is needed.
 
 GitHub Actions is enabled. `tools/macos/cut-release.sh` below is the usual way to publish: it
 builds and signs on this Mac, then pushes the tag and publishes. That tag also starts the
@@ -111,12 +109,14 @@ notarizes/staples the app, creates a DMG, then signs/notarizes/staples and asses
 Only successful artifacts reach publication. Checksums are calculated after stapling.
 
 GitHub Releases receives the DMG, `SHA256SUMS`, `release.json` and `fdrive.rb`. Releases with a
-`0.` version are marked prerelease. Publication starts as a draft until every asset has been
-uploaded. An existing release is never overwritten; use a new version after a partial failed
-publication or remove only the failed draft yourself. `--cask-only` repairs a failed cask PR
-without rebuilding or replacing a checksummed DMG. Merge the generated cask PR to make the
-new version available through the tap. PRs created with `GITHUB_TOKEN` don't automatically
-trigger other Actions workflows; validate the cask during release and review its pinned URL/hash.
+`0.` version are marked prerelease, and no Mac release is marked Latest: that stays with the
+server release, whose `compose.yaml` the install guide downloads through the latest-release
+link. Publication starts as a draft until every asset has been uploaded. An existing release is
+never overwritten; use a new version after a partial failed publication or remove only the
+failed draft yourself. `--cask-only` repairs a failed cask PR without rebuilding or replacing a
+checksummed DMG. Merge the generated cask PR to make the new version available through the tap.
+PRs created with `GITHUB_TOKEN` don't automatically trigger other Actions workflows; validate
+the cask during release and review its pinned URL/hash.
 
 For a local signed release, first save a notarization profile using Apple's secure local
 Keychain (`xcrun notarytool store-credentials fdrive-notary`), then run:
@@ -155,32 +155,25 @@ tools/macos/cut-release.sh 0.1.0 1            # add --dry-run to see the command
 
 ## Install or upgrade with Homebrew
 
-After the first release and cask PR are merged, use the source repository as the tap. The
-explicit URL is required because the repository isn't named `homebrew-fdrive`. Homebrew 7
-refuses to load casks from untrusted third-party taps and aborts the tap, so trust it first.
-A tap on a custom remote is trusted by that URL; trusting `fredrikburmester/fdrive` has no effect:
+Use the source repository as the tap. The explicit URL is required because the repository
+isn't named `homebrew-fdrive`. Homebrew 7 refuses to load casks from untrusted third-party taps
+and aborts the tap, so trust it first. A tap on a custom remote is trusted by that URL;
+trusting `fredrikburmester/fdrive` has no effect:
 
 ```sh
-gh auth login
-gh auth setup-git
 brew trust --tap https://github.com/fredrikburmester/fdrive.git
 brew tap fredrikburmester/fdrive https://github.com/fredrikburmester/fdrive.git
-HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" brew install --cask fredrikburmester/fdrive/fdrive
+brew install --cask fredrikburmester/fdrive/fdrive
 ```
-
-The token must have read access to the private repository. It is supplied only to the install
-process and the authenticated GitHub release-asset endpoint; no token appears in a saved
-cask or URL. Avoid verbose Homebrew logging when using an authentication header.
 
 Quit FDrive before upgrading:
 
 ```sh
 brew update
-HOMEBREW_GITHUB_API_TOKEN="$(gh auth token)" brew upgrade --cask fdrive
+brew upgrade --cask fdrive
 ```
 
-Once the repository is public, omit `gh auth` and the `HOMEBREW_GITHUB_API_TOKEN` prefix.
-Homebrew then uses the ordinary GitHub release URL with the same pinned checksum. Disconnect
+Homebrew downloads the ordinary GitHub release URL and checks the pinned checksum. Disconnect
 locations inside the app before uninstalling; the cask deliberately does not remove File
 Provider databases or files under `~/Library/CloudStorage`.
 

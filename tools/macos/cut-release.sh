@@ -111,4 +111,4 @@ if $dry_run; then echo; echo "Dry run: nothing was built, tagged or published.";
 
 echo
 echo "Published $tag. Merge the cask pull request to serve it through the tap, then upgrade:"
-echo "  brew update && HOMEBREW_GITHUB_API_TOKEN=\"\$(gh auth token)\" brew upgrade --cask fdrive"
+echo "  brew update && brew upgrade --cask fdrive"
