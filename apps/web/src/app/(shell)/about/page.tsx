@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { serverApiClient } from "@/lib/api/server";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 import { formatUptime } from "@/lib/system/format";
+import { describeServerVersion } from "@/lib/system/server-version";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "About - fdrive" };
 
@@ -41,7 +43,7 @@ function ResourceLink({ href, children }: { href: string; children: ReactNode })
 export default async function AboutPage() {
   const client = await serverApiClient();
   const about = await client.about();
-  const isRevision = /^[a-f0-9]{40,64}$/i.test(about.version);
+  const server = describeServerVersion(about);
 
   return (
     <>
@@ -63,22 +65,22 @@ export default async function AboutPage() {
             <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
               <div className="min-w-0">
                 <dt className="text-muted-foreground">Server version</dt>
-                <dd className="mt-1 font-medium [overflow-wrap:anywhere]">
-                  {isRevision ? (
+                <dd className="mt-1 flex flex-wrap items-center gap-x-2 font-medium [overflow-wrap:anywhere]">
+                  {server.label !== null && <span>{server.label}</span>}
+                  {server.revision !== null && (
                     <a
-                      href={`${GITHUB}/commit/${about.version}`}
+                      href={`${GITHUB}/commit/${server.revision}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title={about.version}
-                      className="inline-flex min-h-11 items-center gap-1 font-mono underline-offset-4 hover:underline"
+                      title={server.revision}
+                      className={cn(
+                        "inline-flex min-h-11 items-center gap-1 font-mono underline-offset-4 hover:underline",
+                        server.label !== null && "text-muted-foreground hover:text-foreground",
+                      )}
                     >
-                      {about.version.slice(0, 12)}
+                      {server.revision.slice(0, 12)}
                       <ArrowUpRight aria-hidden="true" className="size-3.5" />
                     </a>
-                  ) : about.version === "development" || about.version === "0.0.0" ? (
-                    "Development (version unavailable)"
-                  ) : (
-                    about.version
                   )}
                 </dd>
               </div>

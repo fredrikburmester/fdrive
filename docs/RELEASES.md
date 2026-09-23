@@ -19,6 +19,10 @@ its own native runner. A channel moves only when every image built and the core 
 (proxy, web, API, backup worker and database) started from them through `compose.yaml`,
 so it never mixes images from two commits or moves to a stack that cannot start.
 
+The tag is the version, so every `package.json` stays at `0.0.0`. The API image records the
+version it was built as, `X.Y.Z` or `main`, with its commit, and the About page shows both;
+the stack check confirms that `GET /api/v1/about` reports them before a channel moves.
+
 ## Cutting a release
 
 Tag a commit that is already on `main`, using semantic versioning:

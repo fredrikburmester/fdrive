@@ -47,6 +47,11 @@ ARG FDRIVE_BUILD_REVISION=
 RUN printf '%s' "$FDRIVE_BUILD_REVISION" > build-revision
 LABEL org.opencontainers.image.revision=$FDRIVE_BUILD_REVISION
 
+# The release it was built as (0.1.0 or main); `dev` or empty for any other build.
+ARG FDRIVE_BUILD_VERSION=
+RUN printf '%s' "$FDRIVE_BUILD_VERSION" > build-version
+LABEL org.opencontainers.image.version=$FDRIVE_BUILD_VERSION
+
 RUN mkdir -p /var/lib/fdrive/desktop /var/lib/fdrive/backups && chown fdrive:fdrive /var/lib/fdrive/desktop /var/lib/fdrive/backups
 USER fdrive
 

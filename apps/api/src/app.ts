@@ -56,6 +56,9 @@ export interface AppDeps {
   readonly logger: Logger;
   readonly clock?: () => Date;
   readonly version: string;
+  /** Release and full commit `/about` reports alongside `version`; see `readBuild`. */
+  readonly release?: string | null;
+  readonly revision?: string | null;
   readonly startedAt: Date;
   /**
    * Resolves the authenticated caller for routes mounted on the `authed`
@@ -217,6 +220,8 @@ export function createApp(deps: AppDeps): AppHono {
     const principal = status.providers.length === 0 ? null : await principalResolver(c);
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
+      release: deps.release ?? undefined,
+      revision: deps.revision ?? undefined,
       uptimeSeconds: Math.max(0, (clock().getTime() - deps.startedAt.getTime()) / 1000),
       providers: status.providers.map((provider) => ({
         type: provider.type,

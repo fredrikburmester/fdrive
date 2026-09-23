@@ -30,6 +30,7 @@ services:
       dockerfile: apps/api/Dockerfile
       args:
         FDRIVE_BUILD_REVISION: ${FDRIVE_BUILD_REVISION:-}
+        FDRIVE_BUILD_VERSION: ${FDRIVE_VERSION:-}
 
   backup:
     image: fdrive-api:local
@@ -38,6 +39,7 @@ services:
       dockerfile: apps/api/Dockerfile
       args:
         FDRIVE_BUILD_REVISION: ${FDRIVE_BUILD_REVISION:-}
+        FDRIVE_BUILD_VERSION: ${FDRIVE_VERSION:-}
 
   indexer:
     image: fdrive-indexer:local

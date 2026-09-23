@@ -14,6 +14,13 @@ describe("AboutResponse", () => {
     expect(AboutResponse.safeParse({ ...valid, uptimeSeconds: -1 }).success).toBe(false);
   });
 
+  it("accepts the release and revision while remaining compatible with older servers", () => {
+    const build = { release: "0.1.0", revision: "0123456789abcdef0123456789abcdef01234567" };
+    expect(AboutResponse.parse({ ...valid, ...build })).toEqual({ ...valid, ...build });
+    expect(AboutResponse.parse(valid)).not.toHaveProperty("release");
+    expect(AboutResponse.parse(valid)).not.toHaveProperty("revision");
+  });
+
   it("parses a valid payload", () => {
     expect(AboutResponse.parse(valid)).toEqual(valid);
   });

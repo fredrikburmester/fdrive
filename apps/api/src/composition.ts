@@ -135,7 +135,7 @@ import { createTokenService } from "./tokens/service.js";
 import { registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
-import { readVersion } from "./version.js";
+import { readBuild } from "./version.js";
 
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
@@ -646,7 +646,7 @@ export async function composeApp(
     logger.info(`open ${(await publicUrl.current()) ?? ""}/setup to finish setup`);
   }
 
-  const version = readVersion();
+  const build = readBuild();
   const startedAt = clock();
 
   // GET /api/v1/health's `subsystems` field: reuses each sidecar's existing
@@ -837,7 +837,9 @@ export async function composeApp(
     config,
     logger,
     clock,
-    version,
+    version: build.version,
+    release: build.release,
+    revision: build.revision,
     startedAt,
     subsystemReachability,
     principalResolver: auth.principalResolver,

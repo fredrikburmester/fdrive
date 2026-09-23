@@ -42,7 +42,7 @@ export type HealthSubsystemStatus = z.infer<typeof HealthSubsystemStatus>;
 
 /**
  * Shape returned by the API's health endpoint. `version` is the running
- * Git revision (or package version when available) and `uptimeSeconds` is the number of seconds since the
+ * Git revision (or the release when no revision is known) and `uptimeSeconds` is the number of seconds since the
  * process started. `subsystems` reports every configurable subsystem's
  * state by name, so a misconfigured or unreachable sidecar is visible from
  * this public, unauthenticated endpoint without leaking any secret value:

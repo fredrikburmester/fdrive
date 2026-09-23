@@ -171,7 +171,9 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           platforms: linux/${{ matrix.platform }}
-          build-args: ${{ matrix.image == 'api' && format('FDRIVE_BUILD_REVISION={0}', github.sha) || '' }}
+          build-args: |
+            ${{ matrix.image == 'api' && format('FDRIVE_BUILD_REVISION={0}', github.sha) || '' }}
+            ${{ matrix.image == 'api' && format('FDRIVE_BUILD_VERSION={0}', needs.plan.outputs.version) || '' }}
           labels: |
             org.opencontainers.image.title=fdrive-${{ matrix.image }}
             org.opencontainers.image.description=${{ matrix.description }}
@@ -298,7 +300,9 @@ jobs:
         with:
           context: .
           file: apps/api/Dockerfile
-          build-args: FDRIVE_BUILD_REVISION=${{ github.sha }}
+          build-args: |
+            FDRIVE_BUILD_REVISION=${{ github.sha }}
+            FDRIVE_BUILD_VERSION=${{ needs.plan.outputs.version }}
           tags: ${{ needs.plan.outputs.prefix }}-api:smoke
           load: true
           cache-from: type=gha,scope=api-amd64
@@ -311,6 +315,8 @@ jobs:
           cache-from: type=gha,scope=web-amd64
       - name: Start the stack and check it through the proxy
         working-directory: deploy
+        env:
+          BUILD_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           export FDRIVE_VERSION=smoke FDRIVE_HTTP_BIND=127.0.0.1
           FDRIVE_MASTER_KEY=$(openssl rand -base64 32)
@@ -339,7 +345,11 @@ jobs:
           curl -fsS -o /dev/null -w 'web: HTTP %{http_code}\n' http://127.0.0.1:8090/login
           about=$(curl -fsS http://127.0.0.1:8090/api/v1/about)
           echo "$about"
-          [[ $about == *"\"version\":\"$GITHUB_SHA\""* ]]
+          # The API reports the commit and release it was built as; `dev` is no release.
+          jq -e --arg sha "$GITHUB_SHA" --arg release "$BUILD_VERSION" '
+            .version == $sha and .revision == $sha
+            and .release == (if $release == "dev" then null else $release end)
+          ' <<< "$about"
           docker compose "${stack[@]}" exec -T api node --input-type=module-typescript < wait-ready.ts
           backup=$(docker compose "${stack[@]}" ps --format '{{.State}}' backup)
           if [[ $backup != running ]]; then

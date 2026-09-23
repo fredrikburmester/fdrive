@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ProviderType } from "./providers.ts";
 
 /**
- * Shape returned by `GET /api/v1/about`: the running fdrive version and the
+ * Shape returned by `GET /api/v1/about`: the running fdrive build and the
  * providers users authenticate against. This endpoint is public, so
  * `providers[].label` is the host of the provider's endpoint and is only
  * revealed to an authenticated caller: an
@@ -13,7 +13,18 @@ import { ProviderType } from "./providers.ts";
  * `/setup` in that case.
  */
 export const AboutResponse = z.object({
+  /**
+   * The build as one value, which is all older servers send: the full Git
+   * revision, else the release, else `development` (`0.0.0` from the oldest).
+   */
   version: z.string(),
+  /**
+   * Release the API image was built as: `X.Y.Z` from a `vX.Y.Z` tag, or `main`
+   * for the main branch. Absent for any other build and from older servers.
+   */
+  release: z.string().optional(),
+  /** Full Git commit the API was built from. Absent when unknown and from older servers. */
+  revision: z.string().optional(),
   /** API process uptime, sampled on request. Optional for older servers. */
   uptimeSeconds: z.number().nonnegative().optional(),
   providers: z.array(

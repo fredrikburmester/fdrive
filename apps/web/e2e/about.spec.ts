@@ -71,18 +71,20 @@ test("/about identifies the running API and links to the project and feature gui
   await expect(info.locator("dt", { hasText: "API uptime" }).locator("+ dd")).toHaveText(
     /^(\d+d )?(\d+h )?\d+[ms]$/,
   );
-  if (/^[a-f0-9]{40,64}$/i.test(about.version)) {
-    await expect(info.getByRole("link", { name: about.version.slice(0, 12) })).toHaveAttribute(
-      "href",
-      `${github}/commit/${about.version}`,
-    );
+  // The e2e API runs from a checkout: a development build, with Git's commit when it has one.
+  expect(about.release).toBeUndefined();
+  const version = info.locator("dt", { hasText: "Server version" }).locator("+ dd");
+  if (about.revision === undefined) {
+    expect(about.version).toBe("development");
+    await expect(version).toHaveText("Development (version unavailable)");
   } else {
-    await expect(
-      info.getByText(
-        about.version === "development" ? "Development (version unavailable)" : about.version,
-        { exact: true },
-      ),
-    ).toBeVisible();
+    expect(about.revision).toMatch(/^[a-f0-9]{40,64}$/);
+    expect(about.version).toBe(about.revision);
+    await expect(version.getByText("Development", { exact: true })).toBeVisible();
+    await expect(version.getByRole("link", { name: about.revision.slice(0, 12) })).toHaveAttribute(
+      "href",
+      `${github}/commit/${about.revision}`,
+    );
   }
   const guides = info.locator('a[href*="/blob/main/"]');
   await expect(guides).toHaveCount(11);
