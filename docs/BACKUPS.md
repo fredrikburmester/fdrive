@@ -103,8 +103,7 @@ unclassified application/index table, including tables introduced by a future mi
 Indexes, extracted chunks, thumbnails, embeddings, sessions, provider token caches and WOPI
 locks are omitted. Original user files, fileserver permissions/users/Trash/shares, unsaved
 external editor state and device-only edits require their own backups. A configuration ZIP
-protects only the version uploaded. Legacy OCR originals without mapping sidecars remain
-preserved bytes and require manual identification.
+protects only the version uploaded.
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
 preserve bigint, bytea, JSON and timestamps exactly. An exclusive advisory checkpoint prevents
@@ -276,7 +275,3 @@ remote identity IDs; the database's `backup.recovery.v1` setting retains the sou
 Reconcile those bytes against the current fileserver before applying them. Subsequent backups
 also preserve this quarantine. External configuration ZIPs are restored with their external
 system's own tools. fdrive never replays old remote writes automatically.
-
-For a legacy installation missing its setup-owner record, a host operator can run
-`backup accounts`, then `backup claim-owner --account ACCOUNT_UUID`. This refuses to replace
-an existing owner. It is not exposed through the web API.

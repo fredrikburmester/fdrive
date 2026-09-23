@@ -8,23 +8,14 @@ This document provides architectural and operational details for advanced deploy
 
 | File | Purpose |
 | :--- | :--- |
-| `compose.yaml` | **Fixed fdrive stack**: Proxy, web, API, database, and idle optional-worker controllers, from the [published images](#published-images). Models and processing stay off until selected in the UI. |
-| `compose.build.yaml` | **Build from source**: Builds every fdrive image from the checkout instead of pulling it. See [building from source](#building-from-source). |
-| `compose.arm64.yaml` | **Native ARM64 embeddings from source**: With `compose.build.yaml` on ARM64 hosts, builds pinned upstream TEI source with the same multilingual-e5-small model. The published images need no overlay on ARM64. |
-| `compose.sftpgo.yaml` | **Optional SFTPGo**: Boots an SFTPGo container alongside fdrive for users who don't already have one. |
-| `compose.office.collabora.yaml` | **Optional Collabora**: Adds Collabora Online instead of ONLYOFFICE, and builds the web image locally to allow its origin. |
-| `compose.sftpgo-network.example.yaml` | Template showing how to attach the fdrive stack to an existing Docker bridge network containing your SFTPGo container. |
-| `.env.example` | Minimal secrets-only quick start; configure SFTPGo and features in the walkthrough. |
-| `init-env.sh` | Creates `deploy/.env` with one-time private bootstrap secrets; refuses to overwrite it. |
-| `preflight.sh` | Sanity-checks `.env` syntax, keys, and values before Docker starts. |
-| `update.sh` | From a git checkout: moves the checkout to the chosen release, runs preflight, pulls that release's images (or builds them), restarts containers, and waits for readiness. |
+| `compose.yaml` | **The fdrive stack**: proxy, web, API, database and idle optional-worker controllers, from the [published images](#published-images). Models and processing stay off until selected in the UI. |
+| `compose.sftpgo.yaml` | **Optional SFTPGo**: runs an SFTPGo container alongside fdrive for people who don't have one yet. See [bundled SFTPGo](#bundled-sftpgo). |
 
-Add an overlay by saving it next to `compose.yaml` and listing both in Compose's own
-`COMPOSE_FILE` in `.env`, for example `COMPOSE_FILE=compose.yaml:compose.sftpgo.yaml`; every
-`docker compose` command then includes it. From a git checkout, list overlays in
-`FDRIVE_COMPOSE_FILES` instead, which `update.sh` reads. Each release attaches `compose.yaml`
-and `compose.sftpgo.yaml`. `compose.build.yaml`, `compose.arm64.yaml` and the Collabora
-overlay build images from source and need a checkout.
+Each release attaches both files. Add an overlay by saving it next to `compose.yaml` and
+listing both in Compose's own `COMPOSE_FILE` in `.env`, for example
+`COMPOSE_FILE=compose.yaml:compose.sftpgo.yaml`; every `docker compose` command then includes
+it. The [SFTPGo network](#existing-sftpgo-docker-network) and
+[named volume](#processing-storage-and-permissions) overlays below work the same way.
 
 ---
 
@@ -50,27 +41,6 @@ records its source commit in its OCI labels and carries a build provenance attes
 Upstream text-embeddings-inference publishes amd64 only, so the `arm64` variant of
 `fdrive-embed` is built from its pinned source. How releases are cut:
 [releases](../docs/RELEASES.md).
-
-## Building from source
-
-`compose.build.yaml` builds every image from the checkout with the Dockerfiles CI uses,
-tagged `fdrive-<image>:local`. List it first in `FDRIVE_COMPOSE_FILES`, so that later
-overlays such as Collabora's keep their overrides; `update.sh` then builds instead of
-pulling. Build from source to run a fork or a local change, or for a web image that allows
-an external Office server: its origin, `FDRIVE_OFFICE_PUBLIC_URL`, is baked into the browser
-Content-Security-Policy when the web image is built. The Collabora overlay builds its web
-image for the same reason.
-
-On ARM64 hosts also list `compose.arm64.yaml`, after `compose.build.yaml`. Without it the
-embedding runtime builds from upstream's amd64 image and runs emulated. `update.sh` builds
-the pinned native TEI base first; with Compose directly, run the helper yourself:
-
-```bash
-./build-arm64-runtime.sh
-docker compose -f compose.yaml -f compose.build.yaml -f compose.arm64.yaml up -d --build embed
-```
-
-The first native build compiles TEI and takes a long time; later builds use Docker's cache.
 
 ---
 
@@ -127,8 +97,7 @@ so onboard through the address others will use: behind an HTTPS edge, the `https
 An `http://` address saved there hands the editor `http://` document URLs that an HTTPS
 page blocks as mixed content ("Download failed" with clean server logs).
 
-`FDRIVE_PROXY_SCHEME` and `FDRIVE_PUBLIC_URL` used to configure this; `preflight.sh` now
-rejects both. Leave `FDRIVE_COOKIE_SECURE` at its `auto` default. Keep direct LAN HTTP
+Leave `FDRIVE_COOKIE_SECURE` at its `auto` default. Keep direct LAN HTTP
 behind your home network firewall; use HTTPS for internet access.
 
 ### Proxy Requirements
@@ -170,14 +139,6 @@ server {
 
 fdrive actively monitors its internal subsystems on startup and exposes diagnostic endpoints:
 
-From a git checkout, `update.sh` waits for the saved enabled features and Office before
-reporting success. `FDRIVE_READY_TIMEOUT_SECONDS` defaults to 1200 (a positive integer,
-read from `.env` or the process environment). The check runs with the API
-container's Node runtime and worker credential; no extra host runtime is needed.
-It checks the API health body and, for text extraction, Tika's controller revision
-and readiness. Disabled features are ignored. This verifies startup, not completed
-indexing or account-specific search results; still verify those after deployment.
-
 - **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`, `trash`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
 - **ONLYOFFICE:** the bundled controller is healthy while disabled. Enable in **System > Features**; the document engine starts on demand. Readiness is shown in those settings. See [Office setup](../docs/OFFICE.md).
 - **Trash:** startup health means its integration is available, not enabled. The saved choice is in **System > Features > Trash**; user capability is reported by `/api/v1/trash/status`.
@@ -205,26 +166,12 @@ and Buy Me a Coffee. Server version is the release the API image was built as, s
 `0.1.0`, or `main` for the main branch, followed by its Git commit, linked. API uptime is
 sampled when the page loads and resets on API restart; it is not host uptime.
 `GET /api/v1/about` serves them as `release`, `revision` and `uptimeSeconds`, without probing
-optional workers. Its `version`, like the health endpoint's, is still the revision when known.
+optional workers. Its `version`, like the health endpoint's, is the revision when known.
 
 Published API images carry their release and the full Git SHA of the commit they were built
-from, stored in the image and its OCI version and revision labels, so restarting an older
-image does not report a newer checkout. For [source builds](#building-from-source),
-`update.sh` sets `FDRIVE_BUILD_REVISION` to the checkout's SHA and `FDRIVE_VERSION` to the
-release it checked out before Compose builds the API. For manual builds, name the release
-only when the checkout is one:
-
-```sh
-FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" FDRIVE_VERSION=0.1.0 docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up -d --build
-# Or, with the repository root as build context:
-docker build --build-arg FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" --build-arg FDRIVE_BUILD_VERSION=0.1.0 -f apps/api/Dockerfile .
-```
-
-Any other build, including local API development, is shown as **Development** with its
-commit; local development resolves the checkout's HEAD once at startup. Without build
-metadata or Git it is **Development (version unavailable)**. Feature guides follow GitHub's
-`main` branch. The macOS link opens the app guide, which includes its requirements and
-release instructions.
+from, in the image and in its OCI version and revision labels. Development builds show
+**Development** with their commit. Feature guides follow GitHub's `main` branch. The macOS
+link opens the app guide, which includes its requirements and release instructions.
 
 ## Processing Worker Resource Limits
 
@@ -288,8 +235,8 @@ Setting only the former never attaches SFTPGo storage.
 Check permissions using the actual worker identities:
 
 ```sh
-docker compose -f compose.yaml exec -T indexer id
-docker compose -f compose.yaml exec -T ocr id
+docker compose exec -T indexer id
+docker compose exec -T ocr id
 ```
 
 `FDRIVE_INDEX_UID` sets the UID and GID the indexer runs as, and owns its thumbnail and
@@ -298,8 +245,8 @@ the OCR worker, which runs as UID 1000. Verify both rather than assuming they ru
 SFTPGo's user. Give the indexer read/traverse access and, if PDF conversion will be used,
 give the OCR worker read/write/traverse access through the host's existing permission
 model. Do not recursively change ownership of the SFTPGo library to make an installation
-succeed. Run `docker compose up -d` (or `./update.sh`) after changing `FDRIVE_INDEX_UID` to
-recreate the indexer.
+succeed. Run `docker compose up -d` after changing `FDRIVE_INDEX_UID` to recreate the
+indexer.
 
 For an account whose home is not named after its username, an administrator can set a
 per-account mapping in **Account** after setup. **System > Connection** also contains
@@ -362,27 +309,36 @@ volumes:
 ```
 
 The volume must already hold SFTPGo's user files. Set `FDRIVE_INDEX_SFTPGO_PATH` to their
-location inside SFTPGo. Add `compose.storage.yaml` to the overlays in `.env` (`COMPOSE_FILE`,
-or `FDRIVE_COMPOSE_FILES` from a checkout), retaining any other overlays. Verify both rendered mount destinations before starting.
+location inside SFTPGo. Add `compose.storage.yaml` to `COMPOSE_FILE` in `.env`, keeping any
+other overlays, and check both mounts in `docker compose config` before starting.
 A remote host path or S3 bucket is not a local Docker volume: browsing can work without
 local processing, but this stack does not automatically mirror remote files.
 
 ## Existing SFTPGo Docker network
 
-If using the container-name URL instead of a published host HTTP port:
+To reach SFTPGo by container name instead of a published HTTP port, attach fdrive's API to
+SFTPGo's Docker network. Save this as `compose.sftpgo-network.yaml` next to `compose.yaml`,
+with that network's name:
 
-1. Identify the existing Docker network shared with SFTPGo.
-2. Save [`compose.sftpgo-network.example.yaml`](compose.sftpgo-network.example.yaml) next to
-   `compose.yaml` as `compose.sftpgo-network.yaml` and replace the example external network
-   name with that existing network.
-3. Add `compose.sftpgo-network.yaml` to the overlays in `.env` (`COMPOSE_FILE`, or
-   `FDRIVE_COMPOSE_FILES` from a checkout), preserving any others already listed.
-4. Run `docker compose up -d` (or `./update.sh`), then enter SFTPGo's network name and HTTP
-   port in web onboarding.
+```yaml
+services:
+  api:
+    networks:
+      - default
+      - sftpgo
+networks:
+  sftpgo:
+    external: true
+    name: replace-with-sftpgo-network
+```
 
-This attaches fdrive's API to the network; it does not mount SFTPGo's files. Processing
-storage remains the separate deployment input described above. No SFTPGo configuration
-change is required to use its existing network.
+Add it to `COMPOSE_FILE` in `.env`, for example
+`COMPOSE_FILE=compose.yaml:compose.sftpgo-network.yaml`, keeping any other overlays. Run
+`docker compose up -d`, then enter SFTPGo's container name and internal HTTP port, such as
+`http://sftpgo:8080`, during setup.
+
+This only connects fdrive's API to SFTPGo; it doesn't mount SFTPGo's files, which is the
+separate storage step above. SFTPGo's own configuration doesn't change.
 
 ## Bundled SFTPGo
 
@@ -399,26 +355,18 @@ SFTPGO_ADMIN_PASSWORD=replace-with-a-strong-unique-password
 
 These paths are examples. The processing source must match the bundled SFTPGo data
 mount, which is `FDRIVE_DATA_DIR/sftpgo/data`. Create that directory as part of this **new**
-SFTPGo deployment, with appropriate service permissions. Keep existing overlay selections
-when adding `compose.sftpgo.yaml`; from a git checkout, set `FDRIVE_COMPOSE_FILES=compose.sftpgo.yaml`
-instead of `COMPOSE_FILE`. Leave `SFTPGO_URL` unset so fdrive uses web onboarding.
+SFTPGo deployment, with appropriate service permissions. Keep any other overlays in
+`COMPOSE_FILE`. Leave `SFTPGO_URL` unset so fdrive uses web onboarding.
 
-Run `docker compose up -d` (or `./update.sh`). The bundled WebAdmin defaults to the host's loopback port 8091; access
-it through the operator's chosen tunnel/proxy or deliberately configure its bind address.
-Create a normal file user in SFTPGo with a home such as `/srv/sftpgo/data/alice`. Then open
+Run `docker compose up -d`. The bundled WebAdmin defaults to the host's loopback port 8091;
+access it through the operator's chosen tunnel/proxy or deliberately configure its bind
+address. Create a normal file user in SFTPGo with a home such as `/srv/sftpgo/data/alice`. Then open
 fdrive, connect to `http://sftpgo:8080`, and verify that file user as fdrive's administrator.
 The SFTPGo WebAdmin account and fdrive's chosen file-user account are separate.
 
 ## Native ARM64 embeddings
 
 The published `fdrive-embed` image is native on Apple Silicon and other ARM64 hosts. Its
-arm64 variant is built in CI from TEI's pinned upstream source, with the same
-multilingual-e5-small model, so existing embeddings remain compatible and no overlay is
-needed. `compose.arm64.yaml` builds the same runtime on the host for
-[source builds](#building-from-source).
-
-Optional processing starts off until selected in the walkthrough or System > Features.
-
-For local development, run `./deploy/build-arm64-runtime.sh`, then layer
-`deploy/compose.arm64.yaml` over `deploy/compose.dev.yaml`. The performance harness
-selects this same runtime automatically on ARM64 hosts.
+arm64 variant is built in CI from TEI's pinned upstream source with the same
+multilingual-e5-small model, so embeddings match those made on amd64 and no overlay is
+needed.

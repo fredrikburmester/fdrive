@@ -1,15 +1,13 @@
 name: fdrive
 
 # Core stack: proxy, web, api, db. SFTPGo is expected to already exist
-# somewhere reachable from `api` (see README.md and
-# compose.sftpgo-network.example.yaml). Only people who have no SFTPGo yet
-# should add compose.sftpgo.yaml on top of this file.
+# somewhere reachable from `api`. Only people who have no SFTPGo yet should add
+# compose.sftpgo.yaml on top of this file. Install guide:
+# https://github.com/fredrikburmester/fdrive/blob/main/deploy/README.md
 #
-# fdrive's own images are published by .github/workflows/images.yml for amd64
-# and arm64. FDRIVE_VERSION picks the release: unset follows :latest, so
-# `docker compose pull && docker compose up -d` updates; a value in .env pins
-# one; "main" follows the edge build. From a git checkout, update.sh sets it to
-# the release it checked out, and compose.build.yaml builds the images instead.
+# fdrive's own images are published for amd64 and arm64. FDRIVE_VERSION picks
+# the release: unset follows :latest, so `docker compose pull && docker compose
+# up -d` updates; a value in .env pins one; "main" follows the edge build.
 
 # Shared json-file log rotation for every service below: without a limit,
 # a long-running container's logs grow unbounded on the host disk.
@@ -96,9 +94,8 @@ services:
       FDRIVE_TIKA_URL: ${FDRIVE_TIKA_URL:-http://tika:9998}
 
       # ONLYOFFICE is bundled in this stack. The owner enables it and chooses
-      # the browser-facing origin in onboarding. Explicit overrides support
-      # an externally managed Office installation, whose origin the browser
-      # CSP allows only in a web image built by compose.build.yaml.
+      # the browser-facing origin in onboarding. Keep these defaults: the
+      # published web image's Content-Security-Policy allows only this editor.
       FDRIVE_OFFICE_PRODUCT: ${FDRIVE_OFFICE_PRODUCT:-onlyoffice}
       FDRIVE_OFFICE_URL: ${FDRIVE_OFFICE_URL:-http://onlyoffice}
       FDRIVE_WOPI_URL: ${FDRIVE_WOPI_URL:-http://api:3001/wopi}
@@ -234,9 +231,9 @@ services:
     user: "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}"
     environment:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      # Legacy operator mounts keep their conventional root. Managed mode
-      # suppresses all scans until a feature is selected; the fallback mount
-      # below makes a fresh no-storage install safe.
+      # The one indexed root, mounted below. Nothing is scanned until a feature
+      # is selected, and the fallback mount keeps an install without storage
+      # safe.
       INDEX_ROOTS: sftpgo=/roots/sftpgo
       TIKA_URL: http://tika:9998
       EMBED_URL: http://embed:80
