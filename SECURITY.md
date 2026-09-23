@@ -21,8 +21,8 @@ a clear decision after that. You are credited in the advisory unless you prefer 
 
 ## Supported versions
 
-Fixes land on `main` and in the latest FDrive for Mac release. Older commits and releases are
-not patched; update to receive a fix.
+Fixes land on `main` and ship in the next server release and FDrive for Mac release. Older
+commits and releases are not patched; update to receive a fix (`./update.sh` for a server).
 
 ## Scope
 

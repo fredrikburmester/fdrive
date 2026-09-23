@@ -78,8 +78,10 @@ is read when the container starts, so it cannot come from the address saved in o
 
 Route that hostname to the fdrive proxy, then run `./update.sh`. Enable and configure
 Office through the same System settings. The advanced overlay supplies its network
-endpoints and browser CSP origin. Environment variables do not activate
-Office. The standard bundled ONLYOFFICE engine stays idle when Collabora is selected.
+endpoints and browser CSP origin. The web image bakes that origin in when it is built, so
+the overlay builds web from the checkout instead of pulling it; that build needs a few GB
+of memory. Environment variables do not activate Office. The standard bundled ONLYOFFICE
+engine stays idle when Collabora is selected.
 
 ## Architecture and verification
 

@@ -52,3 +52,8 @@ Every pull request must pass the automated quality gates:
    pnpm test:coverage
    ```
 3. Open a pull request with a concise description of your changes and why they were made.
+
+GitHub Actions runs lint, typecheck and unit coverage on every pull request. `Python services`
+and `Images` run when their files change, and a maintainer can add the `ci:full` label for
+the integration, browser and image suites. A first-time contributor's runs start once a
+maintainer approves them. How merged work reaches installations: [releases](RELEASES.md).

@@ -29,6 +29,7 @@ First install: `pnpm bootstrap` (frozen install plus the `@fdrive/db` build that
 
 Run one heavy Docker suite at a time. A skipped, interrupted or failed check is not a pass.
 
-Hosted CI is budgeted: pull requests run only `CI` (lint, typecheck, coverage) plus `Python
-services` when service paths change. The `ci:full` label or `gh workflow run "CI (full)" --ref
-<ref>` runs everything. Nothing runs on push to `main`.
+Hosted CI stays lean for fast feedback: pull requests run `CI` (lint, typecheck, coverage), plus
+`Python services` and `Images` when their paths change. The `ci:full` label or `gh workflow run
+"CI (full)" --ref <ref>` runs everything. On `main` only `Images` runs, publishing the edge
+images; a `vX.Y.Z` tag publishes a release ([releases](docs/RELEASES.md)).

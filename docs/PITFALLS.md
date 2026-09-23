@@ -49,7 +49,8 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   import specifiers with `rewriteRelativeImportExtensions`. Production images build workspace
   packages first (`pnpm --filter <app>... run build`).
 - Next bakes `API_INTERNAL_URL` into the build; the compose proxy owns `/api`, and the web image is
-  built with the compose value.
+  built with the compose value. It bakes the CSP's Office origin too, so the published web image
+  frames same-origin Office only; Collabora and external Office servers need a local web build.
 - Never run `pnpm test:coverage` (or any turbo task) while a Playwright run is active in the same
   checkout: the e2e harness creates `apps/web-e2e-shadow-<ports>/`, which turbo rejects as a
   duplicate workspace. Run them one after the other.
