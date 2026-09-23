@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { checkReadiness, waitForReadiness } from "../../deploy/wait-ready.ts";
 
@@ -43,27 +46,39 @@ function fixture() {
 }
 
 describe("deployment readiness", () => {
-  it("runs through Node's stdin entry point used by the smoke job", () => {
+  it("runs as `node wait-ready.ts`, the command installations use", () => {
     const f = fixture();
     const documents = { features: f.features, office: f.office, health: f.health };
-    const input = `const documents = ${JSON.stringify(documents)};
+    const dir = mkdtempSync(join(tmpdir(), "wait-ready-"));
+    const preload = join(dir, "fetch.mjs");
+    writeFileSync(
+      preload,
+      `const documents = ${JSON.stringify(documents)};
 globalThis.fetch = async (url) => new Response(JSON.stringify(
   String(url).endsWith('/features') ? documents.features : String(url).endsWith('/office') ? documents.office : documents.health
-));\n${readFileSync(new URL("../../deploy/wait-ready.ts", import.meta.url), "utf8")}`;
-    const result = spawnSync(process.execPath, ["--input-type=module-typescript"], {
-      input,
-      encoding: "utf8",
-      env: { ...process.env, ...f.env },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Enabled subsystems ready.");
-    const failed = spawnSync(process.execPath, ["--input-type=module-typescript"], {
-      input,
-      encoding: "utf8",
-      env: { ...process.env, FDRIVE_READY_TIMEOUT_SECONDS: "0" },
-    });
-    expect(failed.status).toBe(1);
-    expect(failed.stderr).toContain("must be a positive integer");
+));\n`,
+    );
+    const script = fileURLToPath(new URL("../../deploy/wait-ready.ts", import.meta.url));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", pathToFileURL(preload).href, script],
+        {
+          encoding: "utf8",
+          env: { ...process.env, ...f.env },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Enabled subsystems ready.");
+      const failed = spawnSync(process.execPath, [script], {
+        encoding: "utf8",
+        env: { ...process.env, FDRIVE_READY_TIMEOUT_SECONDS: "0" },
+      });
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain("must be a positive integer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("accepts first-install disabled workers even when their servers are down", async () => {

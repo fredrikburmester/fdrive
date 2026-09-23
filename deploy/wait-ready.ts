@@ -1,6 +1,9 @@
-// Run with the API container's Node runtime; the worker credential stays inside
-// that container. No host Node/Python/jq installation is required.
+// Waits until every enabled feature is ready. The API image ships this file, so
+// an installation runs `docker compose exec api node wait-ready.ts`; the worker
+// credential stays inside that container and the host needs no Node or jq.
+import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const featureIds = [
   "thumbnails",
@@ -130,9 +133,8 @@ export async function waitForReadiness({
   }
 }
 
-// The Images workflow's smoke job streams this file to Node's stdin; imports in
-// tests do not run it.
-if (process.argv[1] === undefined) {
+// Runs only as Node's entry script; imports in tests do not run it.
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await waitForReadiness().catch((error: Error) => {
     console.error(error.message);
     process.exitCode = 1;
