@@ -452,14 +452,18 @@ jobs:
           args=(--verify-tag --title "fdrive $VERSION" --generate-notes)
           previous=$({ git tag --list 'v*' | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+'; echo "$tag"; } \
             | sort -uV | grep -B1 -Fx "$tag" | grep -vFx "$tag" || true)
-          if [[ -n $previous ]]; then
-            args+=(--notes-start-tag "$previous")
-            # A pull keeps the Compose files an installation already has, so say
-            # when this release needs the new ones. --notes goes above the list.
-            if ! git diff --quiet "$previous" "$tag" -- deploy/compose.yaml deploy/compose.sftpgo.yaml; then
-              args+=(--notes '**This release changes the Compose files.** Download `compose.yaml` (and `compose.sftpgo.yaml` if you use it) from this release before you pull and restart.')
-            fi
+          if [[ -n $previous ]]; then args+=(--notes-start-tag "$previous"); fi
+          # --notes goes above the generated list: how to take this release, and
+          # whether it needs new Compose files, which a pull does not replace.
+          if [[ $PRERELEASE == true ]]; then
+            notes="To try this pre-release, download its \`compose.yaml\`, which names this version, then run \`docker compose pull && docker compose up -d\`."
+          else
+            notes="Update with \`docker compose pull && docker compose up -d\`. New installation: see the [quickstart]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY#quickstart-home-server--lan)."
           fi
+          if [[ -n $previous ]] && ! git diff --quiet "$previous" "$tag" -- deploy/compose.yaml deploy/compose.sftpgo.yaml; then
+            notes="**This release changes the Compose files.** Download \`compose.yaml\` (and \`compose.sftpgo.yaml\` if you use it) from this release before you pull and restart."$'\n\n'"$notes"
+          fi
+          args+=(--notes "$notes")
           if [[ $PRERELEASE == true ]]; then
             args+=(--prerelease --latest=false)
           else

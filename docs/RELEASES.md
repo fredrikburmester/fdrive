@@ -34,10 +34,10 @@ It builds every image for amd64 and arm64, tags them, and creates the GitHub rel
 notes generated from the merged pull requests since the previous release. The release
 carries `compose.yaml` and `compose.sftpgo.yaml`, which installations download from
 `releases/latest/download/`. `compose.yaml` follows `latest`, so an installation updates
-with a pull. When a release changes either file, the workflow puts a note above the
-generated list telling operators to download them again. A pre-release's `compose.yaml`
-names its own version, because `latest` never moves to one. Edit the notes afterwards to
-call out anything else operators must do.
+with a pull. Above the generated list, the notes say how to update, or how to try a
+pre-release, and when a release changes either file they tell operators to download them
+again. A pre-release's `compose.yaml` names its own version, because `latest` never moves
+to one. Edit the notes afterwards to call out anything else operators must do.
 
 Every installation on the default channel moves to the new release on its next pull (or
 `./update.sh` from a checkout), so tag only what is ready. Fix a bad release with a new
