@@ -102,44 +102,55 @@ fdrive also offers a native MacOS app, connecting your SFTPGo files (and other s
 
 ## Quickstart (Home Server / LAN)
 
-You need a Linux server or NAS with Docker (Compose v2) and Git, and an SFTPGo server it
-can reach. No SFTPGo yet? [Add the bundled one](deploy/REFERENCE.md#bundled-sftpgo).
-fdrive's images are published for amd64 and 64-bit ARM, so a Raspberry Pi 4 or 5 on a 64-bit
-OS, an ARM NAS or an Apple silicon Mac works as well as a PC.
+You need a Linux server or NAS with Docker (Compose v2) and an SFTPGo server it can reach.
+No SFTPGo yet? [Add the bundled one](deploy/REFERENCE.md#bundled-sftpgo). fdrive's images
+are published for amd64 and 64-bit ARM, so a Raspberry Pi 4 or 5 on a 64-bit OS, an ARM NAS
+or an Apple silicon Mac works as well as a PC.
 
-### 1. Download and initialize
-
-```bash
-git clone https://github.com/fredrikburmester/fdrive.git
-cd fdrive/deploy
-./init-env.sh
-```
-
-`init-env.sh` creates a private `.env` containing two generated secrets. It never overwrites an existing file.
-
-### 2. Prepare storage and start
-
-For processing features, first point the workers at the existing SFTPGo file directory.
-Follow [installation step 3](deploy/README.md#3-prepare-file-access-before-offering-processing-features)
-before startup. Browsing-only installations can skip the mount and leave features off.
-The default `deploy/data/roots/sftpgo` directory is not automatically connected to SFTPGo.
+### 1. Download fdrive and create its secrets
 
 ```sh
-./update.sh
+mkdir fdrive && cd fdrive
+curl -fsSLO https://github.com/fredrikburmester/fdrive/releases/latest/download/compose.yaml
+test -e .env || printf 'FDRIVE_MASTER_KEY=%s\nPOSTGRES_PASSWORD=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -hex 32)" > .env
 ```
 
-`update.sh` checks out the newest [release](https://github.com/fredrikburmester/fdrive/releases),
-pulls its images, starts fdrive and waits until it is healthy. Run it again whenever you want
-to update. Nothing is compiled on your server. Running the stack from Portainer, Dockge or a
-NAS app instead? See [installing without git](deploy/README.md#installing-without-git).
+`.env` holds two generated secrets, and the `test -e` guard never overwrites an existing
+one. Keep it private and back it up: the master key encrypts stored credentials, and a lost
+key cannot be recovered. In Portainer, Dockge or a NAS app,
+paste `compose.yaml` as a new stack and add the same two variables instead.
+
+### 2. Point fdrive at your files and start
+
+For thumbnails, search and OCR, first tell the workers where SFTPGo keeps its files, as in
+[installation step 3](deploy/README.md#3-prepare-file-access-before-offering-processing-features).
+Browsing alone needs no mount; the default `./data/roots/sftpgo` is not connected to SFTPGo.
+
+```sh
+docker compose up -d
+```
+
+The first start downloads about 3 GB of images, including optional workers that stay idle
+until you turn their features on. Nothing is compiled on your server.
 
 ### 3. Complete the setup walkthrough
 
-From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`**. No port-binding or cookie settings are needed. Use the claim token printed in the API log, test your SFTPGo connection, and verify a normal SFTPGo WebClient account. That account becomes the fdrive administrator; its SFTPGo permissions stay unchanged. Choose optional features in the same setup screen, then finish into your files. Storage checks run automatically for enabled features.
+From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`**. No port-binding or cookie settings are needed. Use the claim token printed in the API log (`docker compose logs api`), test your SFTPGo connection, and verify a normal SFTPGo WebClient account. That account becomes the fdrive administrator; its SFTPGo permissions stay unchanged. Choose optional features in the same setup screen, then finish into your files. Storage checks run automatically for enabled features.
 
 Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Trash follows as a separate optional choice; [configure its SFTPGo recycle-bin rule](docs/TRASH.md) before enabling it. ONLYOFFICE follows as another optional choice, with browser viewing and an explicit editor-user list; see [Office setup](docs/OFFICE.md). Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
 
 Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers during deployment. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts and remote access.
+
+### Updating
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+This moves to the newest [release](https://github.com/fredrikburmester/fdrive/releases). When a
+release changes `compose.yaml`, its notes say so; download the file again first. To stay on
+one version, set `FDRIVE_VERSION=0.1.0` in `.env`. The [deployment guide](deploy/README.md)
+also covers installing from a git checkout and building from source.
 
 ---
 

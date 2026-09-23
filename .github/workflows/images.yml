@@ -438,21 +438,28 @@ jobs:
             echo "Release $tag already exists; its images were republished."
             exit 0
           fi
-          # The compose file attached to a release names that release, so an
-          # installation without git keeps running it until the next download.
+          # Installations download these from releases/latest/download and then
+          # only pull newer images, so compose.yaml follows :latest unless .env
+          # pins FDRIVE_VERSION. :latest never moves to a pre-release, so a
+          # pre-release's copy names its own version.
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
-          sed "s/FDRIVE_VERSION:-latest}/FDRIVE_VERSION:-$VERSION}/g" deploy/compose.yaml > "$assets/compose.yaml"
-          if grep -q 'FDRIVE_VERSION:-latest}' "$assets/compose.yaml" || ! grep -q "FDRIVE_VERSION:-$VERSION}" "$assets/compose.yaml"; then
-            echo "::error::Could not pin deploy/compose.yaml to $VERSION"
-            exit 1
+          cp deploy/compose.yaml deploy/compose.sftpgo.yaml "$assets/"
+          if [[ $PRERELEASE == true ]]; then
+            sed -i "s/FDRIVE_VERSION:-latest}/FDRIVE_VERSION:-$VERSION}/g" "$assets/compose.yaml"
           fi
-          cp deploy/compose.sftpgo.yaml deploy/init-env.sh "$assets/"
 
           args=(--verify-tag --title "fdrive $VERSION" --generate-notes)
           previous=$({ git tag --list 'v*' | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+'; echo "$tag"; } \
             | sort -uV | grep -B1 -Fx "$tag" | grep -vFx "$tag" || true)
-          if [[ -n $previous ]]; then args+=(--notes-start-tag "$previous"); fi
+          if [[ -n $previous ]]; then
+            args+=(--notes-start-tag "$previous")
+            # A pull keeps the Compose files an installation already has, so say
+            # when this release needs the new ones. --notes goes above the list.
+            if ! git diff --quiet "$previous" "$tag" -- deploy/compose.yaml deploy/compose.sftpgo.yaml; then
+              args+=(--notes '**This release changes the Compose files.** Download `compose.yaml` (and `compose.sftpgo.yaml` if you use it) from this release before you pull and restart.')
+            fi
+          fi
           if [[ $PRERELEASE == true ]]; then
             args+=(--prerelease --latest=false)
           else

@@ -229,11 +229,11 @@ full; it is not repeated here.
 
 ## Compose
 
-Production starts the processing services with the core stack, from `deploy/`. Enable
+Production starts the processing services with the core stack. Enable
 processing through onboarding or System > Features:
 
 ```sh
-./update.sh
+docker compose up -d
 ```
 
 Environment (see `deploy/.env.example`):

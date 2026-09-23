@@ -6,9 +6,10 @@ name: fdrive
 # should add compose.sftpgo.yaml on top of this file.
 #
 # fdrive's own images are published by .github/workflows/images.yml for amd64
-# and arm64. FDRIVE_VERSION picks the release: update.sh sets it to the release
-# it checked out, a pinned value in .env wins, and "main" follows the edge build.
-# compose.build.yaml builds the same images from this checkout instead.
+# and arm64. FDRIVE_VERSION picks the release: unset follows :latest, so
+# `docker compose pull && docker compose up -d` updates; a value in .env pins
+# one; "main" follows the edge build. From a git checkout, update.sh sets it to
+# the release it checked out, and compose.build.yaml builds the images instead.
 
 # Shared json-file log rotation for every service below: without a limit,
 # a long-running container's logs grow unbounded on the host disk.
@@ -78,7 +79,7 @@ services:
       FDRIVE_BACKUP_SOURCES: '[{"kind":"ocr","path":"/backup-sources/ocr"},{"kind":"logs","path":"/backup-sources/logs"},{"kind":"office","path":"/backup-sources/office"}]'
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       SFTPGO_URL: ${SFTPGO_URL:-}
-      FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY}
+      FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY:?set FDRIVE_MASTER_KEY in .env next to compose.yaml, see the fdrive README}
       FDRIVE_SETUP_TOKEN: ${FDRIVE_SETUP_TOKEN:-}
       # Reuse the database secret only inside the private compose network as
       # the worker/API authentication token; no extra operator secret exists.
@@ -173,7 +174,7 @@ services:
     environment:
       POSTGRES_DB: fdrive
       POSTGRES_USER: fdrive
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
     volumes:
       - ${FDRIVE_DATA_DIR:-./data}/pgdata:/var/lib/postgresql/data
     healthcheck:

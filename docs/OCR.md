@@ -203,11 +203,11 @@ bytes and sidecar, so they wait for an active backup capture to finish.
 
 ## Compose
 
-Production starts `ocr` alongside the other bundled services, from `deploy/`. Enable
+Production starts `ocr` alongside the other bundled services. Enable
 Searchable PDFs through onboarding or System > Features to allow processing:
 
 ```sh
-./update.sh
+docker compose up -d
 ```
 
 `ocr` mounts the same `FDRIVE_INDEX_SFTPGO_DIR` host directory as the indexer,
