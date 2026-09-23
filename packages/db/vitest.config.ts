@@ -5,12 +5,16 @@ export default definePackageConfig({
     // Exercise this raw SQL repository on real PostgreSQL in both the coverage
     // and integration gates. Do not exclude the new persistence boundary.
     // Those suites outlast Vitest's 5 s default on a loaded four-core CI runner.
+    // Named exactly: a !(...) exclude also let in every file whose name starts
+    // with a listed one, such as the million-event activity-scale benchmark,
+    // which runs in the integration gate only.
     testTimeout: 30_000,
-    exclude: [
-      "**/node_modules/**",
-      "**/dist/**",
-      "test/integration/!(desktop|desktop-effects|desktop-publish-lock|activity).test.ts",
+    include: [
+      "src/**/*.test.ts",
+      "test/*.test.ts",
+      "test/integration/{desktop,desktop-effects,desktop-publish-lock,activity}.test.ts",
     ],
+    exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
       exclude: [
         "src/**/*.test.ts",
