@@ -1,7 +1,8 @@
 #!/bin/bash
 # Fails loudly on common deploy/.env mistakes before `docker compose up`:
 # a leftover change-me placeholder, an unknown FDRIVE_* key (a likely
-# typo), or a FDRIVE_HOME_TEMPLATE that does not look like
+# typo), an FDRIVE_VERSION that is not a release number, latest or main, or a
+# FDRIVE_HOME_TEMPLATE that does not look like
 # <root>:<path with {username}>. Prints the resolved FDRIVE_INDEX_ROOTS and
 # bind address so the operator sees exactly what will be used. Reads only
 # deploy/.env; run automatically by update.sh before `up`, or directly:
@@ -52,6 +53,7 @@ KNOWN_FDRIVE_KEYS=(
     "FDRIVE_WOPI_URL"
     "FDRIVE_OFFICE_MAX_BYTES"
     "FDRIVE_OFFICE_EDIT_RULES"
+    "FDRIVE_VERSION"
     "FDRIVE_BUILD_REVISION"
     "FDRIVE_READY_TIMEOUT_SECONDS"
     "FDRIVE_DATA_DIR"
@@ -123,6 +125,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fail=1
   fi
 done < "$env_file"
+
+version="$(read_env_value FDRIVE_VERSION)"
+if [[ -n "$version" ]] && [[ ! "$version" =~ ^(latest|main|v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+  echo "error: FDRIVE_VERSION '$version' must be a release such as 0.3.1, or latest, or main" >&2
+  fail=1
+fi
 
 home_template="$(read_env_value FDRIVE_HOME_TEMPLATE)"
 if [[ -n "$home_template" ]] && [[ ! "$home_template" =~ ^[A-Za-z0-9_-]+:.*\{username\}.*$ ]]; then

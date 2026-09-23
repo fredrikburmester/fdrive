@@ -240,6 +240,27 @@ describe("deploy/preflight.sh", () => {
     expect(result.output).not.toContain("unknown key");
   });
 
+  it.each(["0.3.1", "v0.3.1", "1.0.0-rc.1", "latest", "main"])(
+    "accepts FDRIVE_VERSION=%s",
+    (value) => {
+      const result = runPreflight(
+        ["POSTGRES_PASSWORD=real", "FDRIVE_MASTER_KEY=abc", `FDRIVE_VERSION=${value}`].join("\n"),
+      );
+      expect(result.code).toBe(0);
+      expect(result.output).not.toContain("FDRIVE_VERSION");
+    },
+  );
+
+  it.each(["0.3", "release", "edge", "0.3.1 "])("rejects FDRIVE_VERSION=%s", (value) => {
+    const result = runPreflight(
+      ["POSTGRES_PASSWORD=real", "FDRIVE_MASTER_KEY=abc", `FDRIVE_VERSION=${value}`].join("\n"),
+    );
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      `FDRIVE_VERSION '${value}' must be a release such as 0.3.1, or latest, or main`,
+    );
+  });
+
   it("reports every failure together (both change-me and an unknown key) before exiting", () => {
     const result = runPreflight(
       ["POSTGRES_PASSWORD=change-me", "FDRIVE_MASTER_KEY=abc", "FDRIVE_TRUSTD_PROXY_HOPS=1"].join(
