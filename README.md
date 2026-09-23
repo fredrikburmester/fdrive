@@ -102,15 +102,16 @@ fdrive also offers a native MacOS app, connecting your SFTPGo files (and other s
 
 ## Quickstart (Home Server / LAN)
 
-If you already have Docker and SFTPGo running on your home server:
+You need a Linux server or NAS with Docker (Compose v2) and Git, and an SFTPGo server it
+can reach. No SFTPGo yet? [Add the bundled one](deploy/REFERENCE.md#bundled-sftpgo).
+fdrive's images are published for amd64 and 64-bit ARM, so a Raspberry Pi 4 or 5 on a 64-bit
+OS, an ARM NAS or an Apple silicon Mac works as well as a PC.
 
 ### 1. Download and initialize
 
-Repository access and a GitHub SSH key are required while the repository is private.
-
 ```bash
-git clone git@github.com:fredrikburmester/fdrive.git /path/to/fdrive
-cd /path/to/fdrive/deploy
+git clone https://github.com/fredrikburmester/fdrive.git
+cd fdrive/deploy
 ./init-env.sh
 ```
 
@@ -126,6 +127,11 @@ The default `deploy/data/roots/sftpgo` directory is not automatically connected 
 ```sh
 ./update.sh
 ```
+
+`update.sh` checks out the newest [release](https://github.com/fredrikburmester/fdrive/releases),
+pulls its images, starts fdrive and waits until it is healthy. Run it again whenever you want
+to update. Nothing is compiled on your server. Running the stack from Portainer, Dockge or a
+NAS app instead? See [installing without git](deploy/README.md#installing-without-git).
 
 ### 3. Complete the setup walkthrough
 
@@ -144,10 +150,9 @@ download when you open them, so your Mac does not need a full copy of your drive
 allow as read and write accept saves on every storage type; see
 [how writes are kept safe](docs/MACOS.md#write-configuration-and-recovery).
 It is an early release and needs macOS 26 or later on Apple silicon and an fdrive server
-reachable over HTTPS.
-
-> The first public build, 0.2.0, is not published yet. The Homebrew install below works once
-> it appears under [Releases](https://github.com/fredrikburmester/fdrive/releases).
+reachable over HTTPS. Mac builds are published under
+[Releases](https://github.com/fredrikburmester/fdrive/releases) as `macos-v…`; Homebrew
+installs the newest:
 
 ```sh
 brew trust --tap https://github.com/fredrikburmester/fdrive.git
@@ -188,13 +193,14 @@ concurrency and optional hard caps. See
 
 ## Documentation
 
-- 🚀 **[Home Server Setup Guide](deploy/README.md)**: Full step-by-step setup guide, optional add-ons, and LAN configuration.
+- 🚀 **[Home Server Setup Guide](deploy/README.md)**: Full step-by-step setup guide, updates and versions, optional add-ons, and LAN configuration.
 - 🗑️ **[Trash Setup](docs/TRASH.md)**: Enable safe recycle-bin restore for deleted files.
 - 🔍 **[Search, Thumbnails & AI](docs/SEARCH-AND-AI.md)**: How document search, image search, and OCR work.
 - 📝 **[Office Documents & Editing](docs/OFFICE.md)**: View and collaboratively edit office files in your browser.
 - 🤖 **[AI Assistant Integration (MCP)](docs/MCP.md)**: Connect Claude or Raycast to search and read your files.
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
+- 🏷️ **[Releases](docs/RELEASES.md)**: How server releases and their Docker images are published.
 - **[WebDAV](docs/WEBDAV.md) and [S3](docs/S3.md)**: What each storage beside SFTPGo supports today, and what it does not yet.
 - **[Adding a Storage Provider](docs/STORAGE-PROVIDERS.md)**: Implement, register and test a backend.
 

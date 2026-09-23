@@ -1,5 +1,5 @@
-# The complete suite: everything the old single CI workflow ran, ~30 billed
-# minutes a run (see the budget note in ci.yml). Opt in per pull request by
+# The complete suite: everything the old single CI workflow ran, ~30 runner
+# minutes a run (see the note in ci.yml). Opt in per pull request by
 # adding the `ci:full` label (the label event starts it and every later push
 # keeps it running), or dispatch it by hand for any ref:
 #   gh workflow run "CI (full)" --ref main
@@ -34,7 +34,23 @@ jobs:
       - run: pnpm bootstrap
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test:coverage
+      # As in ci.yml, web's coverage runs on its own runner in the next job.
+      - run: pnpm turbo run test:coverage --filter='!@fdrive/web' && pnpm test:coverage:tools
+
+  web:
+    name: Web coverage
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm bootstrap
+      - run: pnpm --filter @fdrive/web test:coverage
 
   integration:
     name: Integration tests
@@ -75,10 +91,11 @@ jobs:
           path: apps/web/playwright-report
           retention-days: 7
 
-  # The images an operator actually builds. `check` type-checks the sources, but
-  # nothing else here runs `next build` or exercises the Dockerfiles' build
-  # context, so a break that only surfaces during the image build reached
-  # self-hosters as a failed `./update.sh` with no attribution to upstream.
+  # The web and api images. `check` type-checks the sources, but nothing else
+  # here runs `next build` or exercises the Dockerfiles' build context, and the
+  # `Images` workflow builds them for a pull request only when a Dockerfile
+  # changes. Without this, a break that only surfaces in the image build is
+  # first seen when main fails to publish.
   images:
     name: Deployment images
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')

@@ -323,8 +323,7 @@ extension, causing Finder's generic loading error. See
 [Apple's App Group guidance](https://developer.apple.com/documentation/xcode/accessing-app-group-containers).
 Credentials use the shared Data Protection Keychain with AfterFirstUnlockThisDeviceOnly.
 
-The **macOS native** GitHub workflow is manual to preserve the repository's Actions budget.
-It builds unsigned and runs Swift tests. Backend work still requires the application and
+The **macOS native** GitHub workflow is manual. It builds unsigned and runs Swift tests. Backend work still requires the application and
 integration checks, and browser pairing requires `pnpm test:e2e e2e/desktop.spec.ts` and live
 UI inspection. Native checks supplement these gates.
 

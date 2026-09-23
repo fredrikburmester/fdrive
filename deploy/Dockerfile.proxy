@@ -1,0 +1,9 @@
+# Build context is the repository root:
+#   docker build -f deploy/Dockerfile.proxy -t fdrive-proxy .
+#
+# The bundled entry point: Caddy with fdrive's routing baked in, so compose.yaml
+# needs no file from a checkout. The Collabora overlay mounts its own Caddyfile
+# over this one. The official image's caddy binary keeps its
+# cap_net_bind_service file capability, which compose.yaml's cap_add relies on.
+FROM caddy:2@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
+COPY deploy/Caddyfile /etc/caddy/Caddyfile

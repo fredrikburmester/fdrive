@@ -21,10 +21,15 @@ services:
       FDRIVE_WOPI_URL: http://api:3001/wopi
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-104857600}
       FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-[]}
-  # The separate Collabora origin must be allowed by the browser CSP.
+  # The separate Collabora origin must be allowed by the browser CSP, which the
+  # web image bakes in at build time, so this overlay builds web from the checkout.
   web:
+    image: fdrive-web:collabora
     build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
       args:
+        API_INTERNAL_URL: http://api:3001
         FDRIVE_OFFICE_PUBLIC_URL: https://${FDRIVE_COLLABORA_HOST}
   proxy:
     environment:

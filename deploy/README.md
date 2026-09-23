@@ -24,28 +24,24 @@ Use an existing SFTPGo service when present. Do not create another instance, res
 users, move files, or change its configuration as part of installing fdrive. If none
 exists, first follow [bundled SFTPGo](REFERENCE.md#bundled-sftpgo).
 
-Prerequisites: Docker Engine with Compose v2, Git, Bash, curl, and outbound access for
-image builds/downloads. See the root [README](../README.md#resource-requirements) for
-resources and the [ARM64 instructions](REFERENCE.md#native-arm64-embeddings) when applicable.
+Prerequisites: Docker Engine with Compose v2, Git, Bash, curl, and outbound access to
+GitHub and its container registry, `ghcr.io`. fdrive's images are published for amd64 and
+64-bit ARM (arm64); the server builds nothing. See the root
+[README](../README.md#resource-requirements) for resources.
 
 ## 2. Initialize fdrive once
 
 For a new installation:
 
-The repository is private, so an anonymous clone fails. Arrange access first —
-an SSH key on an account with access, or a deploy key on this machine — then:
-
 ```sh
-git clone git@github.com:fredrikburmester/fdrive.git /path/to/fdrive
+git clone https://github.com/fredrikburmester/fdrive.git /path/to/fdrive
 cd /path/to/fdrive/deploy
 ./init-env.sh
 ```
 
-The HTTPS form (`https://github.com/fredrikburmester/fdrive.git`) works only
-with a personal access token that carries that access.
-
 Replace `/path/to/fdrive` with the chosen checkout path. All subsequent commands in
-this guide run from its `deploy` directory.
+this guide run from its `deploy` directory. The checkout supplies the Compose files and
+scripts; `update.sh` moves it to the release being run.
 
 `init-env.sh` creates a private `.env` with two generated secrets. Keep that file and
 back it up securely; do not print its contents into logs or reports. For an existing
@@ -120,9 +116,11 @@ ports may differ; inspect the existing service rather than assuming a port.
 ./update.sh
 ```
 
-The script pulls with fast-forward only, validates configuration, builds, and starts
-fdrive, then waits for the saved enabled subsystems, including search and Office,
-to become ready. Disabled features do not block a fresh installation. The default
+The script checks out the newest release (see [versions](#updates-and-versions)),
+validates configuration, pulls that release's images and starts fdrive, then waits for
+the saved enabled subsystems, including search and Office, to become ready. The first
+run downloads about 3 GB of images, including the optional workers; they stay idle until
+a feature needs them. Disabled features do not block a fresh installation. The default
 timeout is 1200 seconds; set `FDRIVE_READY_TIMEOUT_SECONDS` in `.env` for a slower
 model download. A timeout fails the update and names the outstanding checks.
 Preserve any configured overlays in `FDRIVE_COMPOSE_FILES` in `.env` so updates
@@ -182,7 +180,7 @@ For selected features, check readiness in System and verify an observable result
 intended account—for example, a thumbnail or a search result. Do not equate container
 health with feature readiness or access to the correct user directory.
 
-## Updates and troubleshooting
+## Updates and versions
 
 For an existing installation:
 
@@ -191,10 +189,77 @@ cd /path/to/fdrive/deploy
 ./update.sh
 ```
 
+`update.sh` moves the checkout to the release being run and pulls that release's images,
+so Compose files and images always match. `FDRIVE_VERSION` in `.env` chooses the release:
+
+| `FDRIVE_VERSION` | What `update.sh` runs |
+| --- | --- |
+| unset (default) | The newest release; each run moves to the next one once it is published |
+| a release, such as `0.3.1` | That release, until the value changes |
+| `main` | The main branch, with images built from its latest commit; newer and less tested |
+
+Each [release](https://github.com/fredrikburmester/fdrive/releases) lists its changes.
+Going back to an older release than one already run is not supported, because the newer
+release has already migrated the database.
+
 Preserve `.env`, configured overlays, data paths, database, and files. Do not delete
 volumes or reset onboarding to resolve a deployment error. If changing a storage mount,
 update the existing setting and run the update command; changing Compose configuration
 requires container recreation, not merely `docker restart`.
+
+### Build from source
+
+To run a fork or a local change, build the images from the checkout instead of pulling
+them. List `compose.build.yaml` first in `FDRIVE_COMPOSE_FILES`, before other overlays:
+
+```dotenv
+FDRIVE_COMPOSE_FILES="compose.build.yaml"
+```
+
+`update.sh` then builds instead of pulling, from the release or branch `FDRIVE_VERSION`
+selects. Builds need several GB of memory and take a while on a small host. See
+[building from source](REFERENCE.md#building-from-source), including the ARM64 overlay.
+
+### Installations from before published images
+
+Installations set up before images were published followed the main branch and built
+every image on the server. Run `./update.sh` twice: the first run still uses the old
+script, which switches the containers to the newest release's published images, and the
+second moves the checkout to that release. Then:
+
+- Set `FDRIVE_VERSION=main` to keep following the main branch, or add `compose.build.yaml`
+  to keep building on the server.
+- Remove `compose.arm64.yaml` from `FDRIVE_COMPOSE_FILES` unless you build from source; the
+  published images are native on ARM64.
+- Remove the old images:
+  `docker image rm fdrive-web fdrive-api fdrive-backup fdrive-indexer fdrive-ocr fdrive-tika fdrive-embed fdrive-image-embed fdrive-onlyoffice`.
+
+## Installing without git
+
+A stack managed in Portainer, Dockge or a NAS app can use the files attached to each
+release instead of a checkout. `compose.yaml` needs no other file from the repository:
+
+```sh
+mkdir fdrive && cd fdrive
+base=https://github.com/fredrikburmester/fdrive/releases/latest/download
+curl -fsSL -O "$base/compose.yaml" -O "$base/init-env.sh"
+bash init-env.sh
+docker compose up -d
+```
+
+In a web UI, paste `compose.yaml` as the stack and set its environment instead of running
+`init-env.sh`: `FDRIVE_MASTER_KEY` from `openssl rand -base64 32` and `POSTGRES_PASSWORD`
+from `openssl rand -hex 32`, kept private and never changed afterwards. Set
+`FDRIVE_DATA_DIR` to an absolute path, and `FDRIVE_INDEX_SFTPGO_DIR` as in
+[step 3](#3-prepare-file-access-before-offering-processing-features) for processing.
+
+A release's `compose.yaml` runs that release. To update, replace it with the newest one,
+then run `docker compose pull && docker compose up -d`. Without the checkout there is no
+`update.sh`, so no preflight check or readiness wait, and no source builds or overlays
+other than `compose.sftpgo.yaml`, which each release also carries. Get the claim token for
+the walkthrough from `docker compose logs api`.
+
+## Troubleshooting
 
 | Symptom | Check and resolution |
 | --- | --- |

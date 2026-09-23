@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CanonicalUuid } from "./canonical-uuid";
+import { CanonicalUuid } from "./canonical-uuid.ts";
 
 export const PersonalActivityAction = z.enum([
   "file.upload",

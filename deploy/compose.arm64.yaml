@@ -1,6 +1,8 @@
-# ARM64 override for the managed TEI embedding runtime. `update.sh` builds the
-# pinned upstream native base first, then this derived controller image. The
-# controller therefore retains the same lazy UI-managed lifecycle as amd64.
+# ARM64 override for the managed TEI embedding runtime, for source builds with
+# compose.build.yaml; the published fdrive-embed image is already native on
+# ARM64. `update.sh` builds the pinned upstream native base first, then this
+# derived controller image. The controller therefore retains the same lazy
+# UI-managed lifecycle as amd64.
 services:
   embed:
     image: fdrive-embed-runtime-arm64:4150561d42c4

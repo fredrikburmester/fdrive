@@ -1,5 +1,5 @@
-# Manual only since 2026-09-12: ~7 billed minutes a run on every pull request
-# and push to main was part of exhausting the Actions budget (see ci.yml).
+# Manual only since 2026-09-12, when ~7 minutes on every pull request and push
+# to main helped exhaust the then-private repository's budget (see ci.yml).
 #   gh workflow run "Performance budgets" --ref <branch>
 name: Performance budgets
 on:

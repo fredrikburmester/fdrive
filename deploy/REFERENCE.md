@@ -8,15 +8,62 @@ This document provides architectural and operational details for advanced deploy
 
 | File | Purpose |
 | :--- | :--- |
-| `compose.yaml` | **Fixed fdrive stack**: Proxy, web, API, database, and idle optional-worker controllers. Models and processing stay off until selected in the UI. |
-| `compose.arm64.yaml` | **Native ARM64 embeddings**: Builds pinned upstream TEI source with the same multilingual-e5-small model; layer over the fixed stack on ARM64 hosts. |
+| `compose.yaml` | **Fixed fdrive stack**: Proxy, web, API, database, and idle optional-worker controllers, from the [published images](#published-images). Models and processing stay off until selected in the UI. |
+| `compose.build.yaml` | **Build from source**: Builds every fdrive image from the checkout instead of pulling it. See [building from source](#building-from-source). |
+| `compose.arm64.yaml` | **Native ARM64 embeddings from source**: With `compose.build.yaml` on ARM64 hosts, builds pinned upstream TEI source with the same multilingual-e5-small model. The published images need no overlay on ARM64. |
 | `compose.sftpgo.yaml` | **Optional SFTPGo**: Boots an SFTPGo container alongside fdrive for users who don't already have one. |
-| `compose.office.collabora.yaml` | **Optional Collabora**: Adds Collabora Online instead of ONLYOFFICE. |
+| `compose.office.collabora.yaml` | **Optional Collabora**: Adds Collabora Online instead of ONLYOFFICE, and builds the web image locally to allow its origin. |
 | `compose.sftpgo-network.example.yaml` | Template showing how to attach the fdrive stack to an existing Docker bridge network containing your SFTPGo container. |
 | `.env.example` | Minimal secrets-only quick start; configure SFTPGo and features in the walkthrough. |
 | `init-env.sh` | Creates `deploy/.env` with one-time private bootstrap secrets; refuses to overwrite it. |
 | `preflight.sh` | Sanity-checks `.env` syntax, keys, and values before Docker starts. |
-| `update.sh` | Pulls updates, rebuilds images, runs preflight, and safely restarts containers. |
+| `update.sh` | Moves the checkout to the chosen release, runs preflight, pulls that release's images (or builds them), restarts containers, and waits for readiness. |
+
+---
+
+## Published images
+
+Each release publishes these images for `linux/amd64` and `linux/arm64` to the GitHub
+Container Registry, built by [`.github/workflows/images.yml`](../.github/workflows/images.yml)
+from the release's commit. `compose.yaml` runs them and needs no other file from the
+repository.
+
+| Image | Runs |
+| :--- | :--- |
+| `ghcr.io/fredrikburmester/fdrive-proxy` | Caddy with fdrive's routing ([`Caddyfile`](Caddyfile)), the one published port |
+| `ghcr.io/fredrikburmester/fdrive-web` | The web interface |
+| `ghcr.io/fredrikburmester/fdrive-api` | The API server; the `backup` service runs the same image as its worker |
+| `ghcr.io/fredrikburmester/fdrive-indexer` | Text extraction, thumbnails and search indexing |
+| `ghcr.io/fredrikburmester/fdrive-ocr` | Searchable PDF conversion |
+| `ghcr.io/fredrikburmester/fdrive-tika`, `-embed`, `-image-embed`, `-onlyoffice` | Apache Tika, text embeddings, image embeddings and ONLYOFFICE, each behind the controller that starts it only while its feature is enabled |
+
+Tags: `X.Y.Z` for a release, `X.Y` for the newest patch of that minor release, `latest` for
+the newest release, and `main` plus `sha-<commit>` for builds of the main branch. Every image
+records its source commit in its OCI labels and carries a build provenance attestation.
+Upstream text-embeddings-inference publishes amd64 only, so the `arm64` variant of
+`fdrive-embed` is built from its pinned source. How releases are cut:
+[releases](../docs/RELEASES.md).
+
+## Building from source
+
+`compose.build.yaml` builds every image from the checkout with the Dockerfiles CI uses,
+tagged `fdrive-<image>:local`. List it first in `FDRIVE_COMPOSE_FILES`, so that later
+overlays such as Collabora's keep their overrides; `update.sh` then builds instead of
+pulling. Build from source to run a fork or a local change, or for a web image that allows
+an external Office server: its origin, `FDRIVE_OFFICE_PUBLIC_URL`, is baked into the browser
+Content-Security-Policy when the web image is built. The Collabora overlay builds its web
+image for the same reason.
+
+On ARM64 hosts also list `compose.arm64.yaml`, after `compose.build.yaml`. Without it the
+embedding runtime builds from upstream's amd64 image and runs emulated. `update.sh` builds
+the pinned native TEI base first; with Compose directly, run the helper yourself:
+
+```bash
+./build-arm64-runtime.sh
+docker compose -f compose.yaml -f compose.build.yaml -f compose.arm64.yaml up -d --build embed
+```
+
+The first native build compiles TEI and takes a long time; later builds use Docker's cache.
 
 ---
 
@@ -151,12 +198,14 @@ and Buy Me a Coffee. Server version is the API image's Git revision, linked to i
 API uptime is sampled when the page loads and resets on API restart; it is not host uptime.
 Both values are available from `GET /api/v1/about`, without probing optional workers.
 
-`update.sh` sets `FDRIVE_BUILD_REVISION` to the pulled checkout's full Git SHA before
-Compose builds the API. The Dockerfile stores it in the image and its OCI revision label,
-so restarting an older image does not report a newer checkout. For manual builds:
+Published API images carry the full Git SHA of the commit they were built from, stored in
+the image and its OCI revision label, so restarting an older image does not report a newer
+checkout. For [source builds](#building-from-source), `update.sh` sets
+`FDRIVE_BUILD_REVISION` to the checkout's SHA before Compose builds the API. For manual
+builds:
 
 ```sh
-FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" docker compose -f deploy/compose.yaml up -d --build
+FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up -d --build
 # Or, with the repository root as build context:
 docker build --build-arg FDRIVE_BUILD_REVISION="$(git rev-parse HEAD)" -f apps/api/Dockerfile .
 ```
@@ -216,6 +265,7 @@ All services are hardened following security best practices:
 - **Read-Only Root Filesystems**: Front-facing containers run with read-only root filesystems and isolated temporary `tmpfs` mounts.
 - **Log Rotation**: Built-in JSON log rotation (`max-size: 10m`, `max-file: 3`) prevents disk exhaustion.
 - **Pinned Image Digests**: All base images and third-party containers are pinned with exact `@sha256:` immutable digests in compose files to ensure reproducible builds.
+- **Versioned fdrive Images**: fdrive's own images are built in CI from the tagged commit and referenced by release version; `update.sh` keeps the Compose files at the same release.
 
 ## Processing storage and permissions
 
@@ -231,12 +281,13 @@ docker compose -f compose.yaml exec -T indexer id
 docker compose -f compose.yaml exec -T ocr id
 ```
 
-`FDRIVE_INDEX_UID` sets the indexer image's UID and GID at build time; its default is
-1000. It does not configure the OCR image's identity. Verify both rather than assuming
-they run as SFTPGo's user. Give the indexer read/traverse access and, if PDF conversion
-will be used, give the OCR worker read/write/traverse access through the host's existing
-permission model. Do not recursively change ownership of the SFTPGo library to make
-an installation succeed. Rebuilding is required after changing the indexer build UID.
+`FDRIVE_INDEX_UID` sets the UID and GID the indexer runs as, and owns its thumbnail and
+log volumes; its default is 1000, the UID of SFTPGo's official image. It does not configure
+the OCR worker, which runs as UID 1000. Verify both rather than assuming they run as
+SFTPGo's user. Give the indexer read/traverse access and, if PDF conversion will be used,
+give the OCR worker read/write/traverse access through the host's existing permission
+model. Do not recursively change ownership of the SFTPGo library to make an installation
+succeed. Run `./update.sh` after changing `FDRIVE_INDEX_UID` to recreate the indexer.
 
 For an account whose home is not named after its username, an administrator can set a
 per-account mapping in **Account** after setup. **System > Connection** also contains
@@ -344,19 +395,14 @@ The SFTPGo WebAdmin account and fdrive's chosen file-user account are separate.
 
 ## Native ARM64 embeddings
 
-On Apple Silicon or other ARM64 hosts, use the native TEI override to avoid amd64
-emulation. It retains the configured model, volumes and service limits, and builds
-the pinned upstream source. First build requires network access and several minutes.
-
-```bash
-docker compose -f deploy/compose.yaml -f deploy/compose.arm64.yaml up -d --build embed
-```
-
-When using Compose directly, first run `./deploy/build-arm64-runtime.sh`; the
-normal `./deploy/update.sh` detects `compose.arm64.yaml` automatically.
+The published `fdrive-embed` image is native on Apple Silicon and other ARM64 hosts. Its
+arm64 variant is built in CI from TEI's pinned upstream source, with the same
+multilingual-e5-small model, so existing embeddings remain compatible and no overlay is
+needed. `compose.arm64.yaml` builds the same runtime on the host for
+[source builds](#building-from-source).
 
 Optional processing starts off until selected in the walkthrough or System > Features.
 
-For local development, replace `deploy/compose.yaml` with `deploy/compose.dev.yaml`.
-This changes the embedding runtime only; existing embeddings remain compatible.
-The performance harness selects this same runtime automatically on ARM64 hosts.
+For local development, run `./deploy/build-arm64-runtime.sh`, then layer
+`deploy/compose.arm64.yaml` over `deploy/compose.dev.yaml`. The performance harness
+selects this same runtime automatically on ARM64 hosts.

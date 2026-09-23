@@ -5,9 +5,11 @@ as the repository: downloads require authentication while it is private; after i
 public, the same versioned DMG URLs work without authentication. No second repository or
 cross-repository access token is needed.
 
-GitHub Actions is currently disabled for this repository to control hosted runner costs.
-Keep it disabled unless the owner explicitly requests re-enabling it. The local signed release
-command below remains available; merging this workflow does not enable Actions.
+GitHub Actions is enabled. `tools/macos/cut-release.sh` below is the usual way to publish: it
+builds and signs on this Mac, then pushes the tag and publishes. That tag also starts the
+**macOS release** workflow, which skips the build when the tag is already published or when
+its run number would not exceed the last published build number, because File Provider
+refuses to upgrade to a lower build.
 
 ## Apple and GitHub setup
 
@@ -133,8 +135,8 @@ settings. Outputs are under the specified directory; install the DMG only after 
 reports success. First-time Developer ID provisioning or restricted Apple capabilities may
 require additional account setup; an unsigned archive does not verify that setup.
 
-While Actions is disabled, publish a local build the same way: push the `macos-vX.Y.Z` tag
-for the commit you built, then run the publisher on its artifacts and merge the cask PR:
+Publish a local build the same way: push the `macos-vX.Y.Z` tag for the commit you built,
+then run the publisher on its artifacts and merge the cask PR:
 
 ```sh
 python3 tools/macos/publish.py --repo fredrikburmester/fdrive \

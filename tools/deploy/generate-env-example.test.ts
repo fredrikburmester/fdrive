@@ -284,6 +284,7 @@ describe("compose interpolation", () => {
   // out: `pnpm dev:env` drives it, not deploy/.env.
   const composeFiles = [
     "compose.yaml",
+    "compose.build.yaml",
     "compose.arm64.yaml",
     "compose.sftpgo.yaml",
     "compose.office.collabora.yaml",

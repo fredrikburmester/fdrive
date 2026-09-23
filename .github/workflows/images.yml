@@ -1,0 +1,461 @@
+# Builds the images a self-hosted installation pulls and publishes them to the
+# GitHub Container Registry as ghcr.io/<owner>/fdrive-<image>:
+#
+#   push to main        :main and :sha-<commit>, the edge channel (FDRIVE_VERSION=main)
+#   push of tag vX.Y.Z  :X.Y.Z, :X.Y and :latest, then a GitHub release for the tag
+#   pull request        amd64 builds and a stack start, without publishing, when an
+#                       image definition or compose.yaml changes
+#   manual              like a push of the chosen ref; other branches only build
+#
+# Every platform builds natively on its own runner and pushes by digest. One job
+# per image then tags the multi-platform image, only when every build succeeded
+# and the core stack started from this commit's images, so a channel never mixes
+# images from two commits or moves to a stack that cannot start.
+# deploy/compose.yaml pulls these images; deploy/compose.build.yaml builds the
+# same Dockerfiles locally.
+name: Images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/images.yml'
+      - '.dockerignore'
+      - 'apps/api/Dockerfile'
+      - 'apps/web/Dockerfile'
+      - 'deploy/Caddyfile'
+      - 'deploy/Dockerfile.proxy'
+      - 'deploy/compose.yaml'
+      - 'deploy/wait-ready.ts'
+      - 'deploy/runtime/**'
+      - 'deploy/office/Dockerfile.onlyoffice'
+      - 'deploy/office/onlyoffice-*.sh'
+      - 'services/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  # A publishing run always finishes, so no image tag is left behind the others;
+  # a newer main commit replaces a queued one instead.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      release: ${{ steps.plan.outputs.release }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      version: ${{ steps.plan.outputs.version }}
+      tags: ${{ steps.plan.outputs.tags }}
+      prefix: ${{ steps.plan.outputs.prefix }}
+      images: ${{ steps.plan.outputs.images }}
+      builds: ${{ steps.plan.outputs.builds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          publish=false release=false prerelease=false version=dev tags=
+          case "$GITHUB_REF" in
+            refs/heads/main)
+              if [[ $EVENT != pull_request ]]; then
+                publish=true version=main tags="main sha-${GITHUB_SHA::7}"
+              fi
+              ;;
+            refs/tags/v*)
+              version=${GITHUB_REF_NAME#v}
+              if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+                echo "::error::Release tags look like v1.2.3 or v1.2.3-rc.1, not $GITHUB_REF_NAME"
+                exit 1
+              fi
+              if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+                echo "::error::$GITHUB_REF_NAME must point to a commit that is already on main"
+                exit 1
+              fi
+              publish=true release=true
+              if [[ $version == *-* ]]; then
+                prerelease=true tags=$version
+              else
+                IFS=. read -r major minor _ <<< "$version"
+                tags="$version $major.$minor latest"
+              fi
+              ;;
+          esac
+
+          # The images a deployment runs. deploy/compose.yaml names each one, and
+          # deploy/compose.build.yaml builds the same context and Dockerfile.
+          images='[
+            {"image": "api", "context": ".", "file": "apps/api/Dockerfile",
+             "description": "fdrive API server and backup worker"},
+            {"image": "web", "context": ".", "file": "apps/web/Dockerfile",
+             "description": "fdrive web interface"},
+            {"image": "proxy", "context": ".", "file": "deploy/Dockerfile.proxy",
+             "description": "Caddy with fdrive routing, the entry point of an installation"},
+            {"image": "indexer", "context": "services/indexer", "file": "services/indexer/Dockerfile",
+             "description": "fdrive indexer: text extraction, thumbnails and search indexing"},
+            {"image": "ocr", "context": "services/ocr", "file": "services/ocr/Dockerfile",
+             "description": "fdrive searchable PDF conversion with OCRmyPDF"},
+            {"image": "tika", "context": ".", "file": "deploy/runtime/Dockerfile.tika",
+             "description": "Apache Tika text extraction, started by fdrive on demand"},
+            {"image": "embed", "context": ".", "file": "deploy/runtime/Dockerfile.tei",
+             "description": "Text embeddings for semantic search, started by fdrive on demand"},
+            {"image": "image-embed", "context": ".", "file": "deploy/runtime/Dockerfile.image-embed",
+             "description": "SigLIP 2 image embeddings for image search, started by fdrive on demand"},
+            {"image": "onlyoffice", "context": ".", "file": "deploy/office/Dockerfile.onlyoffice",
+             "description": "ONLYOFFICE Document Server, started by fdrive on demand"}
+          ]'
+          platforms='["amd64"]'
+          if [[ $publish == true ]]; then platforms='["amd64", "arm64"]'; fi
+          # Upstream TEI publishes amd64 only, so the arm64 embed image is built
+          # from source by its own job below.
+          builds=$(jq -c --argjson platforms "$platforms" '
+            [.[] as $image | $platforms[] as $platform
+             | select(($image.image == "embed" and $platform == "arm64") | not)
+             | $image + {platform: $platform,
+                         runner: (if $platform == "arm64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end)}]
+          ' <<< "$images")
+
+          {
+            echo "publish=$publish"
+            echo "release=$release"
+            echo "prerelease=$prerelease"
+            echo "version=$version"
+            echo "tags=$tags"
+            echo "prefix=ghcr.io/$(tr '[:upper:]' '[:lower:]' <<< "$OWNER")/fdrive"
+            echo "images=$(jq -c . <<< "$images")"
+            echo "builds=$builds"
+          } >> "$GITHUB_OUTPUT"
+          echo "publish=$publish version=$version tags=${tags:-none}"
+
+  build:
+    name: ${{ matrix.image }} (${{ matrix.platform }})
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        # Document Server unpacks to several gigabytes before its layers export.
+        if: matrix.image == 'onlyoffice'
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+      - uses: docker/setup-buildx-action@v3
+      - if: needs.plan.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.platform }}
+          build-args: ${{ matrix.image == 'api' && format('FDRIVE_BUILD_REVISION={0}', github.sha) || '' }}
+          labels: |
+            org.opencontainers.image.title=fdrive-${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.plan.outputs.version }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+          outputs: ${{ needs.plan.outputs.publish == 'true' && format('type=image,name={0}-{1},push-by-digest=true,name-canonical=true,push=true', needs.plan.outputs.prefix, matrix.image) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.platform }}
+      - if: needs.plan.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - if: needs.plan.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.platform }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  embed-arm64:
+    name: embed (arm64)
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04-arm
+    # A first build of the upstream Rust source takes most of this; later runs
+    # reuse the published base and take a minute.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Keep in step with deploy/build-arm64-runtime.sh and tools/perf/tei-runtime.ts.
+      TEI_REVISION: 4150561d42c495fe95f2aebb57fbb602c13ff4e6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: base
+        name: Look for the native TEI base
+        env:
+          PREFIX: ${{ needs.plan.outputs.prefix }}
+        run: |
+          image="$PREFIX-tei-arm64:${TEI_REVISION::12}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$image" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Free disk space
+        if: steps.base.outputs.exists == 'false'
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+      - name: Build the native TEI base from its pinned source
+        if: steps.base.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: https://github.com/huggingface/text-embeddings-inference.git#${{ env.TEI_REVISION }}
+          file: Dockerfile-arm64
+          target: http
+          platforms: linux/arm64
+          tags: ${{ steps.base.outputs.image }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          push: true
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/runtime/Dockerfile.tei-arm64
+          platforms: linux/arm64
+          build-args: TEI_BASE=${{ steps.base.outputs.image }}
+          labels: |
+            org.opencontainers.image.title=fdrive-embed
+            org.opencontainers.image.description=Text embeddings for semantic search, started by fdrive on demand
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.plan.outputs.version }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+          outputs: type=image,name=${{ needs.plan.outputs.prefix }}-embed,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=embed-arm64
+          cache-to: type=gha,mode=max,scope=embed-arm64
+      - env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-embed-arm64
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # The builds above prove each image builds, not that the stack runs: an API
+  # image once built cleanly and then failed to resolve a module at startup.
+  # Start the core stack from this commit's images through the real compose
+  # file before any tag moves.
+  smoke:
+    name: Stack starts
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PREFIX: ${{ needs.plan.outputs.prefix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.proxy
+          tags: ${{ needs.plan.outputs.prefix }}-proxy:smoke
+          load: true
+          cache-from: type=gha,scope=proxy-amd64
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          build-args: FDRIVE_BUILD_REVISION=${{ github.sha }}
+          tags: ${{ needs.plan.outputs.prefix }}-api:smoke
+          load: true
+          cache-from: type=gha,scope=api-amd64
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          tags: ${{ needs.plan.outputs.prefix }}-web:smoke
+          load: true
+          cache-from: type=gha,scope=web-amd64
+      - name: Start the stack and check it through the proxy
+        working-directory: deploy
+        run: |
+          export FDRIVE_VERSION=smoke FDRIVE_HTTP_BIND=127.0.0.1
+          FDRIVE_MASTER_KEY=$(openssl rand -base64 32)
+          POSTGRES_PASSWORD=$(openssl rand -hex 32)
+          export FDRIVE_MASTER_KEY POSTGRES_PASSWORD
+          # compose.yaml names the images by owner; a fork's prefix differs.
+          sed "s#ghcr.io/fredrikburmester/fdrive#$PREFIX#" compose.yaml > compose.smoke.yaml
+          # Only the core stack runs here. The runner's DNS takes seconds to fail
+          # names no container holds, which pushes the API's health response past
+          # its healthcheck timeout, so the absent workers resolve to its loopback.
+          printf '%s\n' 'services:' '  api:' '    extra_hosts:' \
+            '      - "indexer:127.0.0.1"' '      - "ocr:127.0.0.1"' '      - "tika:127.0.0.1"' \
+            '      - "embed:127.0.0.1"' '      - "image-embed:127.0.0.1"' '      - "onlyoffice:127.0.0.1"' \
+            > compose.smoke-workers.yaml
+          stack=(-f compose.smoke.yaml -f compose.smoke-workers.yaml)
+          if ! docker compose "${stack[@]}" up -d --wait --wait-timeout 300 proxy; then
+            docker compose "${stack[@]}" ps
+            docker compose "${stack[@]}" logs --tail=100 api web proxy
+            exit 1
+          fi
+          # The backup worker has no healthcheck, which --wait refuses; it is
+          # checked for still running once the checks below are done.
+          docker compose "${stack[@]}" up -d backup
+          curl -fsS http://127.0.0.1:8090/api/v1/health
+          echo
+          curl -fsS -o /dev/null -w 'web: HTTP %{http_code}\n' http://127.0.0.1:8090/login
+          about=$(curl -fsS http://127.0.0.1:8090/api/v1/about)
+          echo "$about"
+          [[ $about == *"\"version\":\"$GITHUB_SHA\""* ]]
+          docker compose "${stack[@]}" exec -T api node --input-type=module-typescript < wait-ready.ts
+          backup=$(docker compose "${stack[@]}" ps --format '{{.State}}' backup)
+          if [[ $backup != running ]]; then
+            docker compose "${stack[@]}" logs --tail=100 backup
+            echo "::error::The backup worker is ${backup:-gone}, not running"
+            exit 1
+          fi
+
+  merge:
+    name: Publish ${{ matrix.image }}
+    needs: [plan, build, embed-arm64, smoke]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.images) }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the multi-platform image
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.plan.outputs.prefix }}-${{ matrix.image }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          DESCRIPTION: ${{ matrix.description }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          if [[ ${#sources[@]} -ne 2 ]]; then
+            echo "::error::Expected an amd64 and an arm64 build of $IMAGE, found ${#sources[@]}"
+            exit 1
+          fi
+          args=(
+            --annotation "index:org.opencontainers.image.source=$SOURCE"
+            --annotation "index:org.opencontainers.image.description=$DESCRIPTION"
+            --annotation "index:org.opencontainers.image.licenses=AGPL-3.0-only"
+          )
+          for tag in $TAGS; do args+=(--tag "$IMAGE:$tag"); done
+          docker buildx imagetools create "${args[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$IMAGE:${TAGS%% *}"
+      - name: Check that anyone can pull it
+        env:
+          IMAGE: ${{ needs.plan.outputs.prefix }}-${{ matrix.image }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          OWNER: ${{ github.repository_owner }}
+        # GHCR creates every new package as private and has no API to change that,
+        # so the first publish of each image needs one click by the owner.
+        run: |
+          repository=${IMAGE#ghcr.io/}
+          status=000
+          if token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repository:pull" | jq -er .token); then
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              "https://ghcr.io/v2/$repository/manifests/${TAGS%% *}")
+          fi
+          if [[ $status != 200 ]]; then
+            echo "::warning title=${IMAGE#*/*/} is private::Installations cannot pull it (HTTP $status). Make it public once under Package settings > Change visibility: https://github.com/users/$OWNER/packages/container/${IMAGE#*/*/}/settings"
+          fi
+
+  release:
+    name: GitHub release
+    needs: [plan, merge]
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag already exists; its images were republished."
+            exit 0
+          fi
+          # The compose file attached to a release names that release, so an
+          # installation without git keeps running it until the next download.
+          assets="$RUNNER_TEMP/assets"
+          mkdir -p "$assets"
+          sed "s/FDRIVE_VERSION:-latest}/FDRIVE_VERSION:-$VERSION}/g" deploy/compose.yaml > "$assets/compose.yaml"
+          if grep -q 'FDRIVE_VERSION:-latest}' "$assets/compose.yaml" || ! grep -q "FDRIVE_VERSION:-$VERSION}" "$assets/compose.yaml"; then
+            echo "::error::Could not pin deploy/compose.yaml to $VERSION"
+            exit 1
+          fi
+          cp deploy/compose.sftpgo.yaml deploy/init-env.sh "$assets/"
+
+          args=(--verify-tag --title "fdrive $VERSION" --generate-notes)
+          previous=$({ git tag --list 'v*' | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+'; echo "$tag"; } \
+            | sort -uV | grep -B1 -Fx "$tag" | grep -vFx "$tag" || true)
+          if [[ -n $previous ]]; then args+=(--notes-start-tag "$previous"); fi
+          if [[ $PRERELEASE == true ]]; then
+            args+=(--prerelease --latest=false)
+          else
+            args+=(--latest)
+          fi
+          gh release create "$tag" "${args[@]}" "$assets"/*

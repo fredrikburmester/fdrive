@@ -12,9 +12,18 @@ import type { ConfigKeyDef } from "../../apps/api/src/config-keys.ts";
  */
 export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
+    key: "FDRIVE_VERSION",
+    description:
+      "Release to run, for example 0.3.1. Unset follows the newest release and main follows the main branch's edge images; update.sh checks out the matching source and pulls the matching images.",
+    default: "latest",
+    example: "0.3.1",
+    secret: false,
+    subsystem: "core",
+  },
+  {
     key: "FDRIVE_BUILD_REVISION",
     description:
-      "Git commit baked into the API image; update.sh sets it automatically after pulling.",
+      "Git commit a source build (compose.build.yaml) bakes into the API image; update.sh sets it automatically after checking out.",
     default: null,
     example: "0123456789abcdef0123456789abcdef01234567",
     secret: false,
@@ -100,7 +109,7 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_INDEX_UID",
     description:
-      "Host uid/gid the indexer and OCR containers run as, matching SFTPGo's so 700 folders stay readable.",
+      "Host uid/gid the indexer runs as, matching SFTPGo's so 700 folders stay readable; its thumbnail and log volumes are owned by it too.",
     default: "1000",
     example: "1000",
     secret: false,

@@ -4,6 +4,11 @@ name: fdrive
 # somewhere reachable from `api` (see README.md and
 # compose.sftpgo-network.example.yaml). Only people who have no SFTPGo yet
 # should add compose.sftpgo.yaml on top of this file.
+#
+# fdrive's own images are published by .github/workflows/images.yml for amd64
+# and arm64. FDRIVE_VERSION picks the release: update.sh sets it to the release
+# it checked out, a pinned value in .env wins, and "main" follows the edge build.
+# compose.build.yaml builds the same images from this checkout instead.
 
 # Shared json-file log rotation for every service below: without a limit,
 # a long-running container's logs grow unbounded on the host disk.
@@ -15,13 +20,12 @@ x-logging: &default-logging
 
 services:
   proxy:
-    image: caddy:2@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
+    # Pinned Caddy with deploy/Caddyfile baked in (deploy/Dockerfile.proxy).
+    image: ghcr.io/fredrikburmester/fdrive-proxy:${FDRIVE_VERSION:-latest}
     ports:
       # Reach onboarding from another device using the server's IP address.
       # Set FDRIVE_HTTP_BIND=127.0.0.1 for an explicitly local-only deployment.
       - "${FDRIVE_HTTP_BIND:-0.0.0.0}:${FDRIVE_HTTP_PORT:-8090}:80"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       web:
         condition: service_healthy
@@ -47,12 +51,7 @@ services:
     logging: *default-logging
 
   web:
-    build:
-      context: ..
-      dockerfile: apps/web/Dockerfile
-      args:
-        API_INTERNAL_URL: http://api:3001
-        FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}
+    image: ghcr.io/fredrikburmester/fdrive-web:${FDRIVE_VERSION:-latest}
     environment:
       API_INTERNAL_URL: http://api:3001
     restart: unless-stopped
@@ -64,11 +63,7 @@ services:
     logging: *default-logging
 
   api:
-    build:
-      context: ..
-      dockerfile: apps/api/Dockerfile
-      args:
-        FDRIVE_BUILD_REVISION: ${FDRIVE_BUILD_REVISION:-}
+    image: ghcr.io/fredrikburmester/fdrive-api:${FDRIVE_VERSION:-latest}
     environment: &api-environment
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
@@ -101,7 +96,8 @@ services:
 
       # ONLYOFFICE is bundled in this stack. The owner enables it and chooses
       # the browser-facing origin in onboarding. Explicit overrides support
-      # an externally managed Office installation.
+      # an externally managed Office installation, whose origin the browser
+      # CSP allows only in a web image built by compose.build.yaml.
       FDRIVE_OFFICE_PRODUCT: ${FDRIVE_OFFICE_PRODUCT:-onlyoffice}
       FDRIVE_OFFICE_URL: ${FDRIVE_OFFICE_URL:-http://onlyoffice}
       FDRIVE_WOPI_URL: ${FDRIVE_WOPI_URL:-http://api:3001/wopi}
@@ -144,9 +140,7 @@ services:
     logging: *default-logging
 
   backup:
-    build:
-      context: ..
-      dockerfile: apps/api/Dockerfile
+    image: ghcr.io/fredrikburmester/fdrive-api:${FDRIVE_VERSION:-latest}
     command: ["node", "dist/main.js", "backup", "worker"]
     environment:
       <<: *api-environment
@@ -232,12 +226,11 @@ services:
     logging: *default-logging
 
   indexer:
-    build:
-      context: ../services/indexer
-      dockerfile: Dockerfile
-      args:
-        INDEXER_UID: ${FDRIVE_INDEX_UID:-1000}
-        INDEXER_GID: ${FDRIVE_INDEX_UID:-1000}
+    image: ghcr.io/fredrikburmester/fdrive-indexer:${FDRIVE_VERSION:-latest}
+    # The same uid/gid as SFTPGo, so folders kept at mode 700 stay readable. Set
+    # at runtime, so the published image serves any uid; the image's own user is
+    # 1000, the uid of SFTPGo's official image.
+    user: "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}"
     environment:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       # Legacy operator mounts keep their conventional root. Managed mode
@@ -294,9 +287,7 @@ services:
   # roots (the indexer only needs read-only) and its own state directory for
   # kept originals; the API's System page talks to it over `FDRIVE_OCR_URL`.
   ocr:
-    build:
-      context: ../services/ocr
-      dockerfile: Dockerfile
+    image: ghcr.io/fredrikburmester/fdrive-ocr:${FDRIVE_VERSION:-latest}
     environment:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       INDEX_ROOTS: sftpgo=/roots/sftpgo
@@ -326,9 +317,7 @@ services:
 
   tika:
     init: true
-    build:
-      context: ..
-      dockerfile: deploy/runtime/Dockerfile.tika
+    image: ghcr.io/fredrikburmester/fdrive-tika:${FDRIVE_VERSION:-latest}
     environment:
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
       FDRIVE_RUNTIME_FEATURES: textSearch,searchOcr,semanticSearch
@@ -347,12 +336,10 @@ services:
 
   embed:
     init: true
-    # Pinned to an explicit version (not :cpu-latest) plus digest, see
-    # deploy/REFERENCE.md's pins table.
-    build:
-      context: ..
-      dockerfile: deploy/runtime/Dockerfile.tei
-    platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
+    # Wraps upstream TEI, pinned to an explicit version plus digest. Upstream
+    # ships amd64 only, so the published arm64 variant is built from TEI's pinned
+    # source and runs natively on ARM hosts.
+    image: ghcr.io/fredrikburmester/fdrive-embed:${FDRIVE_VERSION:-latest}
     command: ["text-embeddings-router", "--model-id", "intfloat/multilingual-e5-small"]
     environment:
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
@@ -393,9 +380,7 @@ services:
   # dependency: this service is stateless.
   image-embed:
     init: true
-    build:
-      context: ..
-      dockerfile: deploy/runtime/Dockerfile.image-embed
+    image: ghcr.io/fredrikburmester/fdrive-image-embed:${FDRIVE_VERSION:-latest}
     environment:
       IMAGE_EMBED_PORT: "8012"
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
@@ -421,9 +406,7 @@ services:
   # no Docker socket or Compose profile is involved.
   onlyoffice:
     init: true
-    build:
-      context: ..
-      dockerfile: deploy/office/Dockerfile.onlyoffice
+    image: ghcr.io/fredrikburmester/fdrive-onlyoffice:${FDRIVE_VERSION:-latest}
     environment:
       WOPI_ENABLED: "true"
       JWT_ENABLED: "true"
