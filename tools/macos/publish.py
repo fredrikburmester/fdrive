@@ -43,33 +43,26 @@ def read_manifest(directory):
     return manifest
 
 
-def release_asset_id(pages, tag, filename):
-    # The numeric REST asset ID is returned by the release API, not gh's GraphQL node ID.
-    # Drafts are absent from the releases/tags endpoint, so find the release in the listing.
-    for release in (item for page in pages for item in page):
-        if release["tag_name"] == tag:
-            return next(asset["id"] for asset in release["assets"] if asset["name"] == filename)
-    raise ValueError(f"Release {tag} not found")
+def release_notes(version):
+    version_value(version)
+    return (f"FDrive for Mac {version}, an early release. Requires macOS 26 or later on Apple silicon.\n\n"
+            "Download the DMG, move FDrive to Applications, then connect to your fdrive HTTPS server. "
+            "Files download when opened, and locations you allow as read and write accept saves. "
+            "Free to try for 7 days, then a one-time license.\n\n"
+            "App and DMG are Developer ID signed, notarized and stapled. "
+            "SHA256SUMS contains the final DMG checksum.\n")
 
 
-def render_cask(repo, version, digest, asset_id):
+def render_cask(repo, version, digest):
     repository_value(repo)
     version_value(version)
-    if not re.fullmatch(r"[a-f0-9]{64}", digest) or not isinstance(asset_id, int) or asset_id <= 0:
-        raise ValueError("Invalid release asset metadata")
+    if not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("Invalid DMG checksum")
     return f'''cask "fdrive" do
   version "{version}"
   sha256 "{digest}"
 
-  # Private releases use GitHub's authenticated asset endpoint. The ordinary URL
-  # works without a token after the source repository becomes public.
-  if ENV["HOMEBREW_GITHUB_API_TOKEN"].to_s.empty?
-    url "https://github.com/{repo}/releases/download/macos-v#{{version}}/fdrive-#{{version}}-arm64.dmg"
-  else
-    url "https://api.github.com/repos/{repo}/releases/assets/{asset_id}",
-        header: ["Accept: application/octet-stream",
-                 "Authorization: Bearer #{{ENV.fetch("HOMEBREW_GITHUB_API_TOKEN")}}"]
-  end
+  url "https://github.com/{repo}/releases/download/macos-v#{{version}}/fdrive-#{{version}}-arm64.dmg"
   name "FDrive"
   desc "Browse remote storage in Finder with downloads on demand"
   homepage "https://github.com/{repo}"
@@ -114,7 +107,7 @@ def propose_cask(repo, version, cask):
             print(gh("pr", "create", "--repo", repo, "--head", branch, "--base", base,
                      "--title", f"chore(macos): update fdrive cask to {version}", "--body",
                      f"Install the signed, notarized macos-v{version} release through Homebrew. "
-                     "The cask pins the final DMG checksum and supports authenticated private downloads. "
+                     "The cask pins the final DMG checksum. "
                      "The release workflow verified both the app and DMG before publishing."))
         except subprocess.CalledProcessError:
             print("Cask branch saved; GitHub did not allow the PR to be created. Open it here:")
@@ -130,21 +123,14 @@ def publish(repo, directory):
     probe = subprocess.run(["gh", "release", "view", tag, "--repo", repo], capture_output=True)
     if probe.returncode == 0:
         raise ValueError("Release already exists. Use a new version; use --cask-only to repair a cask PR")
-    notes = (f"Native macOS development preview {version}. Requires macOS 26+ and Apple silicon.\n\n"
-             "Download the DMG, move FDrive to Applications, then connect to your fdrive HTTPS server. "
-             "Finder access is read-only; files download when opened.\n\n"
-             "App and DMG are Developer ID signed, notarized and stapled. "
-             "Broader beta qualification is ongoing. SHA256SUMS contains the final DMG checksum.\n")
     command = ["release", "create", tag, "--repo", repo, "--verify-tag", "--draft",
-               "--title", f"FDrive for Mac {version}", "--notes", notes]
+               "--title", f"FDrive for Mac {version}", "--notes", release_notes(version)]
     if version.startswith("0."):
         command.append("--prerelease")
     gh(*command)
     gh("release", "upload", tag, "--repo", repo, directory / manifest["filename"],
        directory / "SHA256SUMS", directory / "release.json")
-    releases = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases"))
-    asset_id = release_asset_id(releases, tag, manifest["filename"])
-    cask = render_cask(repo, version, manifest["sha256"], asset_id)
+    cask = render_cask(repo, version, manifest["sha256"])
     cask_path = directory / "fdrive.rb"
     cask_path.write_text(cask)
     gh("release", "upload", tag, "--repo", repo, cask_path)
