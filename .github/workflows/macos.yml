@@ -1,4 +1,4 @@
-# Opt-in: hosted macOS minutes are substantially more expensive than Linux minutes.
+# Opt-in, for changes to the native app: an unsigned build plus Swift tests on a macOS runner.
 name: macOS native
 
 on:

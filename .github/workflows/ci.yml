@@ -1,20 +1,18 @@
-# Actions budget: this is a private repository on GitHub's free plan, which
-# includes 2000 hosted minutes a month. In the 30 days to 2026-09-12 the repo
-# billed ~2500 minutes and hit the spending limit: every run of the previous
-# single workflow cost ~30 minutes across seven jobs, 60 % of runs were
-# push-to-main duplicates of the pull request run for the same commit, and
-# rapid pushes stacked instead of cancelling. Keep that in mind before adding
-# triggers or jobs here.
+# The repository is public, so standard hosted runners cost nothing; the split
+# below keeps pull request feedback fast rather than saving minutes. (It was a
+# private repository until 2026-09-23 and hit its minutes limit on 2026-09-12.)
 #
-# This workflow is the cheap default gate: lint, typecheck and unit coverage on
-# pull requests, roughly 8 billed minutes a run. Docs-only changes skip it and a
-# newer push cancels the previous run. Everything heavier is opt-in:
-#   - `Python services` runs only when services/indexer or services/ocr change;
+# This workflow is the default gate: lint, typecheck and unit coverage on pull
+# requests, roughly 8 minutes a run. Docs-only changes skip it and a newer push
+# cancels the previous run. Everything heavier is opt-in or path-filtered:
+#   - `Python services` runs only when a Python service changes;
+#   - `Images` builds the deployment images when an image definition changes,
+#     and publishes them from main and from release tags;
 #   - `CI (full)` runs integration, browser, Python and image builds when a PR
 #     carries the `ci:full` label or when dispatched by hand;
 #   - `Performance budgets` and `Real Office editors` are manual only.
-# Nothing runs on push to main: run `gh workflow run CI --ref main` (or the
-# full suite) after a direct commit you want checked.
+# This workflow does not run on push to main: run `gh workflow run CI --ref main`
+# (or the full suite) after a direct commit you want checked.
 name: CI
 
 on:

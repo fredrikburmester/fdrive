@@ -1,5 +1,5 @@
-# The complete suite: everything the old single CI workflow ran, ~30 billed
-# minutes a run (see the budget note in ci.yml). Opt in per pull request by
+# The complete suite: everything the old single CI workflow ran, ~30 runner
+# minutes a run (see the note in ci.yml). Opt in per pull request by
 # adding the `ci:full` label (the label event starts it and every later push
 # keeps it running), or dispatch it by hand for any ref:
 #   gh workflow run "CI (full)" --ref main
@@ -75,10 +75,11 @@ jobs:
           path: apps/web/playwright-report
           retention-days: 7
 
-  # The images an operator actually builds. `check` type-checks the sources, but
-  # nothing else here runs `next build` or exercises the Dockerfiles' build
-  # context, so a break that only surfaces during the image build reached
-  # self-hosters as a failed `./update.sh` with no attribution to upstream.
+  # The web and api images. `check` type-checks the sources, but nothing else
+  # here runs `next build` or exercises the Dockerfiles' build context, and the
+  # `Images` workflow builds them for a pull request only when a Dockerfile
+  # changes. Without this, a break that only surfaces in the image build is
+  # first seen when main fails to publish.
   images:
     name: Deployment images
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')

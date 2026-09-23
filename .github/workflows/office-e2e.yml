@@ -1,7 +1,7 @@
 name: Real Office editors
 
-# Manual only since 2026-09-12: the nightly schedule alone cost ~35 billed
-# minutes a day on a 2000-minute monthly budget (see ci.yml). Dispatch it for a
+# Manual only since 2026-09-12, when a nightly run of ~35 minutes did not fit
+# the then-private repository's minutes budget (see ci.yml). Dispatch it for a
 # branch that touches the Office integration:
 #   gh workflow run "Real Office editors" --ref <branch>
 on:
