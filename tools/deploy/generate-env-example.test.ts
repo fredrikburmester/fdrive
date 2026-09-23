@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { ConfigKeyDef, Subsystem } from "../../apps/api/src/config-keys.ts";
 import {
   applyComposePassthroughBlock,
-  applyPreflightKnownKeysBlock,
   COMPOSE_PASSTHROUGH_EXCLUDED_KEYS,
   ENV_EXAMPLE_EXCLUDED_KEYS,
   groupBySubsystem,
@@ -14,7 +13,6 @@ import {
   renderComposePassthroughLines,
   renderEnvExample,
   renderEnvExampleEntry,
-  renderKnownFdriveKeysBashArray,
   renderQuickstartEnvExample,
 } from "./generate-env-example.ts";
 
@@ -92,7 +90,7 @@ describe("renderEnvExample", () => {
     expect(rendered).toContain("FDRIVE_MASTER_KEY");
     expect(rendered).toContain("POSTGRES_PASSWORD");
     expect(rendered).toContain("SFTPGO_URL");
-    expect(rendered).not.toContain("FDRIVE_PROFILES");
+    expect(rendered).not.toContain("FDRIVE_DATA_DIR");
   });
 
   it("points the quick-start reader at the resource limits it deliberately omits", () => {
@@ -202,46 +200,6 @@ describe("knownFdriveKeys", () => {
   });
 });
 
-describe("renderKnownFdriveKeysBashArray", () => {
-  it("renders an empty array literal for no keys", () => {
-    expect(renderKnownFdriveKeysBashArray([])).toEqual(["KNOWN_FDRIVE_KEYS=(", ")"]);
-  });
-
-  it("renders one quoted, four-space-indented line per key", () => {
-    expect(renderKnownFdriveKeysBashArray(["FDRIVE_A", "FDRIVE_B"])).toEqual([
-      "KNOWN_FDRIVE_KEYS=(",
-      '    "FDRIVE_A"',
-      '    "FDRIVE_B"',
-      ")",
-    ]);
-  });
-});
-
-describe("applyPreflightKnownKeysBlock", () => {
-  const source = [
-    "#!/bin/bash",
-    "# BEGIN GENERATED KNOWN FDRIVE KEYS (tools/deploy/generate-env-example.ts)",
-    "KNOWN_FDRIVE_KEYS=(",
-    ")",
-    "# END GENERATED KNOWN FDRIVE KEYS",
-    "echo done",
-  ].join("\n");
-
-  it("replaces the array lines between the markers", () => {
-    const updated = applyPreflightKnownKeysBlock(source, [
-      "KNOWN_FDRIVE_KEYS=(",
-      '    "FDRIVE_A"',
-      ")",
-    ]);
-    expect(updated).toContain('"FDRIVE_A"');
-    expect(updated).toContain("echo done");
-  });
-
-  it("throws when the markers are missing", () => {
-    expect(() => applyPreflightKnownKeysBlock("no markers", [])).toThrow(/markers/);
-  });
-});
-
 describe("COMPOSE_PASSTHROUGH_EXCLUDED_KEYS and ENV_EXAMPLE_EXCLUDED_KEYS", () => {
   it("both only reference real CONFIG_KEYS keys", async () => {
     const { CONFIG_KEYS } = await import("../../apps/api/src/config-keys.ts");
@@ -266,31 +224,16 @@ describe("generated file diff", () => {
     const regenerated = applyComposePassthroughBlock(committed, renderComposePassthroughLines());
     expect(committed).toBe(regenerated);
   });
-
-  it("deploy/preflight.sh's known-keys array matches knownFdriveKeys() right now", () => {
-    const committed = readFileSync(join(deployDir, "preflight.sh"), "utf-8");
-    const regenerated = applyPreflightKnownKeysBlock(
-      committed,
-      renderKnownFdriveKeysBashArray(knownFdriveKeys()),
-    );
-    expect(committed).toBe(regenerated);
-  });
 });
 
 describe("compose interpolation", () => {
-  // deploy/.env feeds every compose file update.sh passes to docker compose,
-  // so a `${FDRIVE_*}` reference in one of them is a key an operator is meant
-  // to set there and preflight.sh must accept it. compose.dev.yaml is left
-  // out: `pnpm dev:env` drives it, not deploy/.env.
-  const composeFiles = [
-    "compose.yaml",
-    "compose.build.yaml",
-    "compose.arm64.yaml",
-    "compose.sftpgo.yaml",
-    "compose.office.collabora.yaml",
-  ];
+  // .env next to compose.yaml feeds every compose file an installation lists
+  // in COMPOSE_FILE, so a `${FDRIVE_*}` reference in one of them is a key an
+  // operator is meant to set there and must be documented. compose.dev.yaml is
+  // left out: `pnpm dev:env` drives it, not an installation's .env.
+  const composeFiles = ["compose.yaml", "compose.sftpgo.yaml", "compose.office.collabora.yaml"];
 
-  it.each(composeFiles)("every FDRIVE_* key %s interpolates is a known preflight key", (file) => {
+  it.each(composeFiles)("every FDRIVE_* key %s interpolates is a documented key", (file) => {
     const source = readFileSync(join(deployDir, file), "utf-8");
     const referenced = new Set(
       [...source.matchAll(/\$\{(FDRIVE_[A-Z0-9_]+)/g)]

@@ -11,8 +11,7 @@
 # per image then tags the multi-platform image, only when every build succeeded
 # and the core stack started from this commit's images, so a channel never mixes
 # images from two commits or moves to a stack that cannot start.
-# deploy/compose.yaml pulls these images; deploy/compose.build.yaml builds the
-# same Dockerfiles locally.
+# deploy/compose.yaml pulls these images.
 name: Images
 
 on:
@@ -95,8 +94,7 @@ jobs:
               ;;
           esac
 
-          # The images a deployment runs. deploy/compose.yaml names each one, and
-          # deploy/compose.build.yaml builds the same context and Dockerfile.
+          # The images a deployment runs. deploy/compose.yaml names each one.
           images='[
             {"image": "api", "context": ".", "file": "apps/api/Dockerfile",
              "description": "fdrive API server and backup worker"},
@@ -210,7 +208,7 @@ jobs:
       contents: read
       packages: write
     env:
-      # Keep in step with deploy/build-arm64-runtime.sh and tools/perf/tei-runtime.ts.
+      # Keep in step with tools/perf/tei-runtime.ts.
       TEI_REVISION: 4150561d42c495fe95f2aebb57fbb602c13ff4e6
     steps:
       - uses: actions/checkout@v4

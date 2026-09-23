@@ -14,26 +14,9 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_VERSION",
     description:
-      "Release to run, for example 0.3.1. Unset follows the newest release and main follows the main branch's edge images; update.sh checks out the matching source and pulls the matching images.",
+      "Release to run, for example 0.3.1. Unset follows the newest release and main follows the main branch's edge images.",
     default: "latest",
     example: "0.3.1",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_BUILD_REVISION",
-    description:
-      "Git commit a source build (compose.build.yaml) bakes into the API image; update.sh sets it automatically after checking out.",
-    default: null,
-    example: "0123456789abcdef0123456789abcdef01234567",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_READY_TIMEOUT_SECONDS",
-    description: "Maximum seconds update.sh waits for enabled subsystems to finish starting.",
-    default: "1200",
-    example: "1800",
     secret: false,
     subsystem: "core",
   },
@@ -50,24 +33,6 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     description: "Host directory holding Postgres data, OCR state, and the embedding model cache.",
     default: "./data",
     example: "./data",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_COMPOSE_FILES",
-    description:
-      "Extra compose files update.sh should pass with -f, space separated (for example compose.sftpgo-network.yaml).",
-    default: null,
-    example: "compose.sftpgo-network.yaml",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_PROFILES",
-    description:
-      "Optional-overlay profiles update.sh should pass with --profile, space separated (for example collabora).",
-    default: null,
-    example: "collabora",
     secret: false,
     subsystem: "core",
   },

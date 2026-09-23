@@ -62,10 +62,6 @@ docker compose -f deploy/compose.dev.yaml --profile index up -d
 
 Restart the API server (`pnpm --filter @fdrive/api dev`) so it connects to the local indexer and embedding services.
 
-On ARM64, run `./deploy/build-arm64-runtime.sh` once and add `-f deploy/compose.arm64.yaml`
-after `deploy/compose.dev.yaml` for a native embedding runtime instead of an emulated one. The
-performance harness selects the same runtime automatically on ARM64 hosts.
-
 ---
 
 ## Trying the S3 Provider Locally (Optional)

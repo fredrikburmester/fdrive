@@ -11,11 +11,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   applyComposePassthroughBlock,
-  applyPreflightKnownKeysBlock,
-  knownFdriveKeys,
   renderApiEnvExample,
   renderComposePassthroughLines,
-  renderKnownFdriveKeysBashArray,
   renderQuickstartEnvExample,
 } from "./generate-env-example.ts";
 
@@ -24,7 +21,6 @@ function main(): void {
   const deployDir = join(scriptDir, "..", "..", "deploy");
   const envExamplePath = join(deployDir, ".env.example");
   const composePath = join(deployDir, "compose.yaml");
-  const preflightPath = join(deployDir, "preflight.sh");
 
   writeFileSync(
     join(deployDir, "..", "apps", "api", ".env.example"),
@@ -41,14 +37,6 @@ function main(): void {
   );
   writeFileSync(composePath, updatedCompose, "utf-8");
   console.log(`Updated the generated block in ${composePath}`);
-
-  const preflightSource = readFileSync(preflightPath, "utf-8");
-  const updatedPreflight = applyPreflightKnownKeysBlock(
-    preflightSource,
-    renderKnownFdriveKeysBashArray(knownFdriveKeys()),
-  );
-  writeFileSync(preflightPath, updatedPreflight, "utf-8");
-  console.log(`Updated the generated block in ${preflightPath}`);
 }
 
 main();
