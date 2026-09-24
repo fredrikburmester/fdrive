@@ -69,6 +69,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.
   Resolve paths a model writes against storage (`ai/tools/stored-paths.ts`) before comparing
   or creating anything.
+- `brew upgrade` swaps the Mac app's bundle without quitting the running app. Finder launches
+  the new extension on demand, so its migrations apply while the app keeps running the old
+  code. The owner saw fixes that "did not work" for hours. On an "updated but still broken"
+  report, compare the running executable's inode (`lsof -p <pid>`) with the file on disk before
+  debugging.
 - Zod 4's `z.iso.datetime()` rejects `+00:00` offsets unless `{ offset: true }`; Python emits
   offsets.
 - AI Elements (Vercel's shadcn registry) is written for the AI SDK and Radix: `npx shadcn add

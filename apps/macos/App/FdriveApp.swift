@@ -6,6 +6,8 @@ import FdriveKit
 @main
 struct FdriveApp: App {
     @StateObject private var model = AppModel()
+    /// After a restart for an update, the window stays as the previous copy left it.
+    private static let showsLocations = RelaunchMarker().takeShowsLocations()
     var body: some Scene {
         Window("FDrive", id: "locations") {
             LocationsView(model: model).frame(minWidth: 560, minHeight: 460)
@@ -13,7 +15,7 @@ struct FdriveApp: App {
                 // A translucent panel: Liquid Glass controls float over the blurred desktop.
                 .containerBackground(.thinMaterial, for: .window)
         }.defaultSize(width: 640, height: 520)
-            .defaultLaunchBehavior(.presented)
+            .defaultLaunchBehavior(Self.showsLocations ? .presented : .suppressed)
             .restorationBehavior(.disabled)
             .windowStyle(.hiddenTitleBar)
             .windowBackgroundDragBehavior(.enabled)
@@ -436,6 +438,12 @@ final class AppModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var refreshOperation: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
+    private var updateTask: Task<Void, Never>?
+    private var updateWatch = Bundle.main.infoDictionary.flatMap(AppBuild.init(info:)).map(UpdateWatch.init(running:))
+    /// An installed build this copy could not launch; the user was asked to reopen FDrive instead.
+    private var failedUpdate: AppBuild?
+    /// Set once a restart is under way, so no refresh starts behind it.
+    private var relaunching = false
     private var disconnecting = Set<String>()
     /// Per location, when an automatic refresh may next run: after a failure's backoff, or
     /// after a slow success paced by `nextAutomaticRefresh`.
@@ -457,6 +465,36 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 await self?.refresh(quiet: true)
             }
+        }
+        updateTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                await self?.relaunchIfUpdated()
+            }
+        }
+    }
+    /// Restart into a copy installed over this one. Waits while the user is working in FDrive
+    /// or a pairing, license change or disconnect is under way; a refresh is simply cancelled.
+    private func relaunchIfUpdated() async {
+        var idle: Bool { !NSApp.isActive && !pairing && !licensing && disconnecting.isEmpty }
+        guard !relaunching, let installed = updateWatch?.check(installed: AppBuild.installed(at: Bundle.main.bundleURL)),
+              installed != failedUpdate, idle else { return }
+        relaunching = true
+        refreshOperation?.cancel(); await refreshOperation?.value
+        // The user may have started something while the refresh wound down; try again later.
+        guard idle else { relaunching = false; return }
+        let marker = RelaunchMarker()
+        marker.save(showingLocations: NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix("locations") == true && $0.isVisible })
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.activates = false
+        configuration.addsToRecentItems = false
+        do {
+            _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+            NSApp.terminate(nil)
+        } catch {
+            marker.clear(); relaunching = false; failedUpdate = installed
+            notice = "FDrive \(installed.version) is installed. Quit and reopen FDrive to use it."
         }
     }
     /// Revalidates a purchase when due and notices the trial ending while the app runs.
@@ -667,7 +705,7 @@ final class AppModel: ObservableObject {
     /// status, since a large location's background pass runs for minutes, and it steps aside for
     /// a refresh the person asks for rather than making them wait for it.
     func refresh(automatic: Bool = false, quiet: Bool = false) async {
-        guard !refreshing, !(automatic && pairing), !(quiet && refreshOperation != nil) else { return }
+        guard !refreshing, !relaunching, !(automatic && pairing), !(quiet && refreshOperation != nil) else { return }
         if !quiet { refreshing = true }
         defer { if !quiet { refreshing = false } }
         if let running = refreshOperation { running.cancel(); await running.value }
