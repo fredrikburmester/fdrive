@@ -249,6 +249,31 @@ it("takes files dropped from a listing as chips and lets them be removed", async
   expect(useChatPanelStore.getState().chips).toEqual(["/Docs"]);
 });
 
+it("folds more than ten chips into one badge that lists, trims and clears them", async () => {
+  const paths = Array.from({ length: 12 }, (_, i) => `/Inbox/f${i}.pdf`);
+  act(() => addToChat(paths));
+  renderPanel();
+  const attached = await screen.findByRole("group", { name: "Attached to the next message" });
+  expect(attached.textContent).toContain("12 items");
+  expect(screen.queryByText("f0.pdf")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "12 items" }));
+  const list = await screen.findByRole("list", { name: "Attached items" });
+  expect(list.querySelectorAll("li")).toHaveLength(12);
+  fireEvent.click(screen.getByRole("button", { name: "Remove f0.pdf" }));
+  expect(useChatPanelStore.getState().chips).toEqual(paths.slice(1));
+  expect(await screen.findByRole("button", { name: "11 items" })).toBeTruthy();
+
+  // Back at ten, every chip shows on its own again.
+  fireEvent.click(screen.getByRole("button", { name: "Remove f1.pdf" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: /items$/ })).toBeNull());
+  expect(attached.querySelectorAll('[data-slot="badge"]')).toHaveLength(10);
+
+  act(() => addToChat(["/Inbox/extra.pdf"]));
+  fireEvent.click(screen.getByRole("button", { name: "Remove all" }));
+  expect(useChatPanelStore.getState().chips).toEqual([]);
+});
+
 it("applies a card, switches chats from the menu, and closes", async () => {
   setChatPanelOpen(true);
   setCurrentChatId("c1");

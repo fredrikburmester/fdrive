@@ -255,6 +255,7 @@ function ChatPanelBody({ onClose }: { onClose: () => void }) {
       <ChatComposer
         chips={chips}
         onRemoveChip={removeChip}
+        onClearChips={clearChips}
         status={status}
         closed={state === "closed"}
         onSend={(text) => sendText(text, chips)}
