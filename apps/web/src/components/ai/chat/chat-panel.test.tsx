@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { Chat } from "@fdrive/contracts";
+import { ApiClientError, type Chat } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
     cancelChat: vi.fn(),
     actOnChat: vi.fn(),
     moveMany: vi.fn(),
+    stat: vi.fn(),
+    list: vi.fn(),
   },
   push: vi.fn(),
   pathname: "/files/Inbox",
@@ -94,6 +96,15 @@ function chat(patch: Partial<Chat> = {}): Chat {
     ],
     ...patch,
   };
+}
+
+function entry(path: string, kind: "file" | "dir") {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return { name, path, kind, size: 0, modifiedAt: "2026-09-18T10:00:00.000Z", ext: "", mime: null };
+}
+
+function notFound() {
+  return new ApiClientError("not_found", "That item could not be found.", 404);
 }
 
 function renderPanel() {
@@ -208,8 +219,9 @@ it("shows the transcript with tool rows and links, sends typed messages, and can
   expect(await screen.findByText("Read a.txt")).toBeTruthy();
   const link = await screen.findByRole("link", { name: "/Inbox/a.txt" });
   expect(link.getAttribute("href")).toBe("/files/Inbox?select=a.txt");
+  mocks.client.stat.mockResolvedValue(entry("/Inbox/a.txt", "file"));
   fireEvent.click(link);
-  expect(mocks.push).toHaveBeenCalledWith("/files/Inbox?select=a.txt");
+  await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/files/Inbox?select=a.txt"));
 
   const textarea = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(textarea, { target: { value: "More?" } });
@@ -225,6 +237,48 @@ it("shows the transcript with tool rows and links, sends typed messages, and can
   expect(screen.getByText("Answering…")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await waitFor(() => expect(mocks.client.cancelChat).toHaveBeenCalledWith("c1"));
+});
+
+it("opens a path the assistant wrote in code, finding its stored spelling, and says when it is missing", async () => {
+  setChatPanelOpen(true);
+  setCurrentChatId("c1");
+  const stored = "/Work/Va\u0308stervik Energi";
+  mocks.client.chat.mockResolvedValue(
+    chat({
+      messages: [
+        {
+          id: "m2",
+          role: "assistant",
+          parts: [
+            { kind: "text", text: "See `/Work/Västervik Energi` and `/Norrköping Airport`." },
+          ],
+          references: [],
+          location: null,
+          createdAt: "2026-09-18T10:00:01.000Z",
+        },
+      ],
+    }),
+  );
+  mocks.client.stat.mockImplementation(async (path: string) => {
+    if (path === "/Work") return entry("/Work", "dir");
+    throw notFound();
+  });
+  mocks.client.list.mockResolvedValue({ path: "/Work", entries: [entry(stored, "dir")] });
+  renderPanel();
+
+  fireEvent.click(await screen.findByRole("link", { name: "/Work/Västervik Energi" }));
+  await waitFor(() =>
+    expect(mocks.push).toHaveBeenCalledWith(
+      `/files/Work/${encodeURIComponent("Va\u0308stervik Energi")}`,
+    ),
+  );
+  expect(mocks.client.list).toHaveBeenCalledWith("/Work");
+
+  fireEvent.click(screen.getByRole("link", { name: "/Norrköping Airport" }));
+  await waitFor(() =>
+    expect(mocks.error).toHaveBeenCalledWith("Could not find /Norrköping Airport."),
+  );
+  expect(mocks.push).toHaveBeenCalledTimes(1);
 });
 
 it("takes files dropped from a listing as chips and lets them be removed", async () => {

@@ -6,6 +6,7 @@ import { MessageSquareIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { MouseEvent } from "react";
 import { useMemo } from "react";
+import { toast } from "sonner";
 import {
   Conversation,
   ConversationContent,
@@ -30,8 +31,11 @@ import {
   isThinking,
   knownPaths,
   linkifyPaths,
+  pathForHref,
   userText,
 } from "@/lib/ai/chat";
+import { apiClient } from "@/lib/api/client";
+import { locatePath } from "@/lib/files/locate";
 import { ChatActionCard } from "./chat-action-card";
 
 export interface ChatTranscriptProps {
@@ -63,7 +67,26 @@ export function ChatTranscript({
     const href = anchor.getAttribute("href");
     if (href === null || !href.startsWith("/")) return;
     event.preventDefault();
-    router.push(href as Parameters<typeof router.push>[0]);
+    void follow(href);
+  }
+
+  /** A path the assistant wrote may spell accents differently from storage, or not exist: find it first. */
+  async function follow(href: string) {
+    let target = href;
+    try {
+      const path = pathForHref(href);
+      if (path !== null) {
+        const found = await locatePath(apiClient, path);
+        if (found === null) {
+          toast.error(`Could not find ${path}.`);
+          return;
+        }
+        target = hrefForPath(found.path, found.kind === "dir" ? "dir" : "file");
+      }
+    } catch {
+      // Storage could not answer; the folder view says why.
+    }
+    router.push(target as Parameters<typeof router.push>[0]);
   }
 
   if (chat === null || chat.messages.length === 0) {
