@@ -418,6 +418,7 @@ final class AppModel: ObservableObject {
     @Published var notice: String?
     @Published var pairing = false
     @Published var pairCode: String?
+    /// A refresh the person asked for is running. Background refreshes never set it.
     @Published var refreshing = false
     /// Framework-side state of each location's domain, refreshed with the location.
     @Published var health: [String: LocationHealth] = [:]
@@ -436,7 +437,9 @@ final class AppModel: ObservableObject {
     private var refreshOperation: Task<Void, Never>?
     private var wakeTask: Task<Void, Never>?
     private var disconnecting = Set<String>()
-    private var retryAfter: [String: Date] = [:]
+    /// Per location, when an automatic refresh may next run: after a failure's backoff, or
+    /// after a slow success paced by `nextAutomaticRefresh`.
+    private var automaticAfter: [String: Date] = [:]
     private var failures: [String: Int] = [:]
     init() {
         do { locations = try NativeEnvironment.store().load() } catch { self.report(error) }
@@ -445,14 +448,14 @@ final class AppModel: ObservableObject {
             await self?.resumePairing()
             while !Task.isCancelled {
                 await self?.checkLicense()
-                await self?.refresh(automatic: true)
+                await self?.refresh(automatic: true, quiet: true)
                 try? await Task.sleep(for: .seconds(60))
             }
         }
         wakeTask = Task { [weak self] in
             for await _ in NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification) {
                 guard !Task.isCancelled else { return }
-                await self?.refresh()
+                await self?.refresh(quiet: true)
             }
         }
     }
@@ -660,15 +663,20 @@ final class AppModel: ObservableObject {
             NSWorkspace.shared.open(catalog.recoveryDirectory)
         } catch { self.report(error) }
     }
-    func refresh(automatic: Bool = false) async {
-        guard !refreshing, !(automatic && pairing) else { return }
-        refreshing = true
-        let operation = Task { await refreshLocations(automatic: automatic) }
+    /// Only a refresh the person asked for shows progress. A quiet one keeps each location's last
+    /// status, since a large location's background pass runs for minutes, and it steps aside for
+    /// a refresh the person asks for rather than making them wait for it.
+    func refresh(automatic: Bool = false, quiet: Bool = false) async {
+        guard !refreshing, !(automatic && pairing), !(quiet && refreshOperation != nil) else { return }
+        if !quiet { refreshing = true }
+        defer { if !quiet { refreshing = false } }
+        if let running = refreshOperation { running.cancel(); await running.value }
+        let operation = Task { await refreshLocations(automatic: automatic, visible: !quiet) }
         refreshOperation = operation
         await operation.value
-        refreshOperation = nil; refreshing = false
+        if refreshOperation == operation { refreshOperation = nil }
     }
-    private func refreshLocations(automatic: Bool) async {
+    private func refreshLocations(automatic: Bool, visible: Bool) async {
         guard license.allowsAccess else { pauseLocations(); return }
         // Ask the framework once, before any location: a stale or misplaced copy fails for all alike,
         // including while there is nothing connected yet.
@@ -681,7 +689,8 @@ final class AppModel: ObservableObject {
         }
         for saved in locations where !saved.disconnecting {
             if Task.isCancelled { return }
-            if automatic, let retry = retryAfter[saved.id], retry > Date() { continue }
+            if automatic, let due = automaticAfter[saved.id], due > Date() { continue }
+            let started = Date(), shown = status[saved.id]
             do {
                 let store = try NativeEnvironment.store()
                 let domainHealth = locationHealth(try await NativeEnvironment.domainState(saved.id))
@@ -708,7 +717,7 @@ final class AppModel: ObservableObject {
                     domain.supportsSyncingTrash = current.capabilities?.trash == true
                     try await NSFileProviderManager.add(domain)
                 }
-                status[saved.id] = "Refreshing"
+                if visible { status[saved.id] = "Refreshing" }
                 // Judge the unanswered signal now: a healthy daemon answered it long ago.
                 let callback = try await catalog.lastCallback()
                 if domainHealth == .ready,
@@ -731,13 +740,18 @@ final class AppModel: ObservableObject {
                     lastCallback: answer.at, callbackRevision: answer.revision)
                 let pending = try await catalog.pendingWrites().filter { $0.result == nil }
                 status[saved.id] = pending.isEmpty ? (current.readOnly ? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
-                retryAfter[saved.id] = nil; failures[saved.id] = nil
+                automaticAfter[saved.id] = nextAutomaticRefresh(finished: Date(), took: Date().timeIntervalSince(started))
+                failures[saved.id] = nil
             } catch {
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    // Whatever cancelled it may have set a status of its own since.
+                    if status[saved.id] == "Refreshing" { status[saved.id] = shown }
+                    return
+                }
                 status[saved.id] = error.localizedDescription
                 let count = min((failures[saved.id] ?? 0) + 1, 5)
                 failures[saved.id] = count
-                retryAfter[saved.id] = Date().addingTimeInterval(min(60 * pow(2, Double(count)), 900))
+                automaticAfter[saved.id] = Date().addingTimeInterval(min(60 * pow(2, Double(count)), 900))
             }
         }
     }
