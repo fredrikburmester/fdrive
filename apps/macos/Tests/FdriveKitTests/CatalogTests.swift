@@ -150,3 +150,44 @@ private func fixture() throws -> (Catalog, URL) {
     #expect(try await catalog.revision() == revision)
     #expect(try await catalog.children("root").map(\.id) == first.map(\.id))
 }
+
+@Test func refreshQueriesUseIndexesInNewAndUpgradedCatalogs() async throws {
+    let (_, url) = try fixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    // A new connection each time: a connection plans with the schema it loaded first.
+    func plan(_ sql: String) -> String {
+        var database: OpaquePointer?, statement: OpaquePointer?
+        defer { sqlite3_finalize(statement); sqlite3_close(database) }
+        guard sqlite3_open(url.path, &database) == SQLITE_OK,
+              sqlite3_prepare_v2(database, "EXPLAIN QUERY PLAN " + sql, -1, &statement, nil) == SQLITE_OK else { return "" }
+        var steps: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW { steps.append(String(cString: sqlite3_column_text(statement, 3))) }
+        return steps.joined(separator: "; ")
+    }
+    let queries = [(Catalog.itemByRemoteId, "item_remote_id"), (Catalog.pruneDeletedItems, "item_deleted_revision")]
+    for (sql, index) in queries { #expect(plan(sql).contains("USING INDEX \(index)")) }
+    // Catalogs saved by 0.4.1 and earlier have neither index; opening one adds them.
+    var database: OpaquePointer?
+    #expect(sqlite3_open(url.path, &database) == SQLITE_OK)
+    #expect(sqlite3_exec(database, "DROP INDEX item_remote_id; DROP INDEX item_deleted_revision", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(database)
+    for (sql, _) in queries { #expect(plan(sql).contains("SCAN items")) }
+    _ = try Catalog(url: url, title: "Test")
+    for (sql, index) in queries { #expect(plan(sql).contains("USING INDEX \(index)")) }
+}
+
+@Test(.timeLimit(.minutes(1))) func tenThousandEntriesWithServerIdsRefreshWithoutRescanning() async throws {
+    let (catalog, url) = try fixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let entries = (0..<10_000).map { index in
+        var entry = RemoteEntry(path: "/file-\(index)", name: "file-\(index)", kind: "file")
+        entry.id = "remote-\(index)"
+        return entry
+    }
+    try await catalog.reconcile(entries, folder: "/")
+    let revision = try await catalog.revision()
+    let first = try await catalog.children("root")
+    try await catalog.reconcile(entries.reversed(), folder: "/")
+    #expect(try await catalog.revision() == revision)
+    #expect(try await catalog.children("root").map(\.id) == first.map(\.id))
+}
