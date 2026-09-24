@@ -143,6 +143,17 @@ public func enumerationStale(lastCallback: Date?, signalled: Date?, now: Date, i
     guard let lastCallback else { return true }
     return lastCallback < signalled
 }
+/// The signal Finder still has to answer. Only a signal carrying revisions newer than the last
+/// callback needs one: with nothing new, the daemon may skip enumeration and so record no callback.
+/// The earliest unanswered signal is kept, so frequent refreshes cannot keep postponing the verdict.
+public func unansweredSignal(previous: Date?, signalled: Date, revision: Int64,
+                             lastCallback: Date?, callbackRevision: Int64?) -> Date? {
+    guard let lastCallback else { return previous ?? signalled }
+    if let previous, lastCallback < previous { return previous }
+    // A heartbeat from before revisions were recorded proves nothing either way; wait for the next.
+    guard let callbackRevision else { return nil }
+    return revision > callbackRevision ? signalled : nil
+}
 public struct Listing: Codable, Sendable { public let entries: [RemoteEntry]; public let nextCursor: String? }
 public struct ContentVersion: Codable, Sendable { public let path: String; public let version: String; public let size: Int64 }
 public struct Versions: Codable, Sendable { public let items: [ContentVersion] }

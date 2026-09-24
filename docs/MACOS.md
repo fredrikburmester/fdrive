@@ -416,9 +416,10 @@ and multi-gigabyte transfer behavior still need the release rehearsal listed in 
 
 Never modify File Provider's databases or `~/Library/CloudStorage` internals. Diagnose through
 the app status, `fileproviderctl dump se.burmester.fdrive.mac.fileprovider -l`, and unified
-logs for `FdriveFileProvider`. The "Finder has not responded" warning means the extension has
-not run a callback since the app last signalled it: check the `fileproviderctl` output and
-logs for the daemon rather than the server. Native registration/opening issues are distinct from API
+logs for `FdriveFileProvider`. The "Finder has not responded" warning means the app signalled changes newer than the
+extension's last callback and, two minutes later, the extension still has not run one: check the
+`fileproviderctl` output and logs for the daemon rather than the server. A location with nothing
+new is never flagged, because the daemon may skip enumeration for it. Native registration/opening issues are distinct from API
 connectivity. `getUserVisibleURL` is security-scoped and must remain scoped through Finder
 launch. Local metadata-only callbacks return canonical attributes; rejected remote
 writes use File Provider's persistent `cannotSynchronize` error, avoiding transient retry loops.

@@ -268,14 +268,19 @@ public actor Catalog {
         }
     }
     /// Extension heartbeat. No revision bump: anchors and change enumeration are unaffected.
+    /// The revision it saw tells the app whether a later signal carried anything new.
     public func recordCallback(error: String? = nil) throws {
-        try execute("INSERT INTO state VALUES ('lastCallbackAt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [String(Date().timeIntervalSince1970)])
-        try execute("INSERT INTO state VALUES ('lastCallbackError',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [error ?? ""])
+        try execute("""
+            INSERT INTO state VALUES ('lastCallbackAt',?),('lastCallbackError',?),
+              ('lastCallbackRevision',(SELECT value FROM state WHERE key='revision'))
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, [String(Date().timeIntervalSince1970), error ?? ""])
     }
-    public func lastCallback() throws -> (at: Date?, error: String?) {
+    public func lastCallback() throws -> (at: Date?, error: String?, revision: Int64?) {
         let at = try rows("SELECT value FROM state WHERE key='lastCallbackAt'").first?.first.flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
         let error = try rows("SELECT value FROM state WHERE key='lastCallbackError'").first?.first
-        return (at, error?.isEmpty == false ? error : nil)
+        let revision = try rows("SELECT value FROM state WHERE key='lastCallbackRevision'").first?.first.flatMap { Int64($0) }
+        return (at, error?.isEmpty == false ? error : nil, revision)
     }
     public func configure(_ capabilities: WriteCapabilities) throws {
         try transaction {

@@ -58,9 +58,33 @@ private func gapFixture() throws -> (Catalog, ConnectionStore, URL) {
     #expect(recorded.at.map { abs($0.timeIntervalSinceNow) < 5 } == true && recorded.error == "Listing failed")
     try await catalog.recordCallback()
     #expect(try await catalog.lastCallback().error == nil)
+    #expect(try await catalog.lastCallback().revision == revision)
     // The heartbeat never manufactures a change for Finder to re-enumerate.
     #expect(try await catalog.revision() == revision)
     #expect(try await catalog.changes(since: revision).items.isEmpty)
+}
+
+// A quiet location: Finder may skip enumeration when a signal carries nothing new.
+@Test func onlySignalsCarryingNewRevisionsAwaitAnAnswer() {
+    let start = Date(timeIntervalSince1970: 1_800_000_000)
+    let later = start.addingTimeInterval(300)
+    // Nothing published since Finder last called back: nothing to wait for.
+    #expect(unansweredSignal(previous: nil, signalled: start, revision: 7, lastCallback: start.addingTimeInterval(-600), callbackRevision: 7) == nil)
+    #expect(unansweredSignal(previous: nil, signalled: start, revision: 8, lastCallback: start.addingTimeInterval(-600), callbackRevision: 7) == start)
+    // A domain that never called back is still owed its first enumeration.
+    #expect(unansweredSignal(previous: nil, signalled: start, revision: 0, lastCallback: nil, callbackRevision: nil) == start)
+    #expect(unansweredSignal(previous: start, signalled: later, revision: 0, lastCallback: nil, callbackRevision: nil) == start)
+    // An unanswered signal is not reset by later refreshes, with or without new changes.
+    #expect(unansweredSignal(previous: start, signalled: later, revision: 8, lastCallback: start.addingTimeInterval(-1), callbackRevision: 7) == start)
+    #expect(unansweredSignal(previous: start, signalled: later, revision: 9, lastCallback: start.addingTimeInterval(-1), callbackRevision: 7) == start)
+    // Once answered, only newer changes start a new wait.
+    #expect(unansweredSignal(previous: start, signalled: later, revision: 8, lastCallback: start.addingTimeInterval(5), callbackRevision: 8) == nil)
+    #expect(unansweredSignal(previous: start, signalled: later, revision: 9, lastCallback: start.addingTimeInterval(5), callbackRevision: 8) == later)
+    // A heartbeat recorded before revisions were stored waits for the next callback.
+    #expect(unansweredSignal(previous: nil, signalled: start, revision: 8, lastCallback: start.addingTimeInterval(-600), callbackRevision: nil) == nil)
+    // End to end: a quiet location never turns stale, however long refreshes take.
+    let quiet = unansweredSignal(previous: nil, signalled: start, revision: 7, lastCallback: start.addingTimeInterval(-600), callbackRevision: 7)
+    #expect(!enumerationStale(lastCallback: start.addingTimeInterval(-600), signalled: quiet, now: start.addingTimeInterval(3600)))
 }
 
 private final class Exchange: @unchecked Sendable {
