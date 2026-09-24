@@ -428,7 +428,8 @@ final class AppModel: ObservableObject {
     @Published var licensing = false
     /// A problem with this copy of FDrive rather than with any one location.
     @Published var installationNotice: String?
-    private var signalledAt: [String: Date] = [:]
+    /// Per location, the earliest signal that carried changes Finder has not yet fetched.
+    private var unansweredSignals: [String: Date] = [:]
     private var pairingTask: Task<Void, Never>?
     private var licenseWork: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
@@ -708,10 +709,10 @@ final class AppModel: ObservableObject {
                     try await NSFileProviderManager.add(domain)
                 }
                 status[saved.id] = "Refreshing"
-                // Judge the previous signal now: a healthy daemon answered it long ago.
+                // Judge the unanswered signal now: a healthy daemon answered it long ago.
                 let callback = try await catalog.lastCallback()
                 if domainHealth == .ready,
-                   enumerationStale(lastCallback: callback.at, signalled: signalledAt[saved.id], now: Date()) {
+                   enumerationStale(lastCallback: callback.at, signalled: unansweredSignals[saved.id], now: Date()) {
                     warnings[saved.id] = "Finder has not responded to this location's updates. See Troubleshooting in the macOS guide."
                 } else { warnings.removeValue(forKey: saved.id) }
                 try await refreshCatalog(catalog, client: client) {
@@ -724,7 +725,10 @@ final class AppModel: ObservableObject {
                         }
                     }
                 }
-                signalledAt[saved.id] = Date()
+                let signalled = Date(), answer = try await catalog.lastCallback()
+                unansweredSignals[saved.id] = unansweredSignal(
+                    previous: unansweredSignals[saved.id], signalled: signalled, revision: try await catalog.revision(),
+                    lastCallback: answer.at, callbackRevision: answer.revision)
                 let pending = try await catalog.pendingWrites().filter { $0.result == nil }
                 status[saved.id] = pending.isEmpty ? (current.readOnly ? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
                 retryAfter[saved.id] = nil; failures[saved.id] = nil
