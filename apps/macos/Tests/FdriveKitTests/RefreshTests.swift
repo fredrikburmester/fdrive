@@ -139,3 +139,13 @@ private func refreshFixture() throws -> (Catalog, URL) {
     #expect(await client.listed.isEmpty)
     #expect(await signals.changes.isEmpty)
 }
+
+@Test func slowRefreshesAreSpacedOutAndQuickOnesStayDueEveryMinute() {
+    let finished = Date(timeIntervalSince1970: 1_800_000_000)
+    // A small location is due again before the next one-minute tick.
+    #expect(nextAutomaticRefresh(finished: finished, took: 1) == finished.addingTimeInterval(4))
+    // The owner's 1,675-folder location took three minutes and restarted a minute later.
+    #expect(nextAutomaticRefresh(finished: finished, took: 180) == finished.addingTimeInterval(720))
+    #expect(nextAutomaticRefresh(finished: finished, took: 3_600) == finished.addingTimeInterval(900))
+    #expect(nextAutomaticRefresh(finished: finished, took: -5) == finished)
+}

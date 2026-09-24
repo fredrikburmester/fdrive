@@ -22,6 +22,13 @@ public func refreshLocationMetadata(
     return updated
 }
 
+/// The next automatic refresh waits four times as long as this one took, at most 15 minutes.
+/// A refresh re-lists every browsed folder, one request each: a location with thousands of them
+/// would otherwise keep its server busy most of the time. Small ones stay due every minute.
+public func nextAutomaticRefresh(finished: Date, took duration: TimeInterval) -> Date {
+    finished.addingTimeInterval(min(max(0, duration) * 4, 900))
+}
+
 public protocol CatalogRefreshClient: Sendable {
     func list(_ path: String) async throws -> [RemoteEntry]
     func versions(_ paths: [String]) async throws -> [ContentVersion]

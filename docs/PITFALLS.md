@@ -57,6 +57,10 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Sidebar Favorites, Recents, and Tags sections always render once their query resolves (a muted
   one-line placeholder replaces the list while empty); only a still-loading query renders nothing.
   A fresh dev database shows all three sections with their empty-state copy, not their absence.
+- The Mac app's refresh lists every folder Finder has browsed, one request each. On a
+  1,700-folder SFTPGo location a pass took three minutes and restarted after 60 seconds, so a
+  spinner shown for every pass looked stuck while the server took seven requests a second.
+  Background work stays silent, and its pace follows what it costs.
 - Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
   file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
   first, list only after it reports `bad_request`.
