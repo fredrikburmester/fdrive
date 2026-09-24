@@ -3,11 +3,10 @@
 The source repository also acts as the Homebrew tap, and the cask downloads the versioned DMG
 from its public GitHub release. No second repository or access token is needed.
 
-GitHub Actions is enabled. `tools/macos/cut-release.sh` below is the usual way to publish: it
-builds and signs on this Mac, then pushes the tag and publishes. That tag also starts the
-**macOS release** workflow, which skips the build when the tag is already published or when
-its run number would not exceed the last published build number, because File Provider
-refuses to upgrade to a lower build.
+Pushing a `macos-vX.Y.Z` tag publishes a release: the **macOS release** workflow builds,
+signs, notarizes and publishes it, then proposes the cask update. Each build takes the next
+number after the last published Mac release's build, because File Provider refuses to
+upgrade to a lower build, and releases run one at a time so two tags can't share a number.
 
 ## Apple and GitHub setup
 
@@ -115,11 +114,13 @@ link. Publication starts as a draft until every asset has been uploaded. An exis
 never overwritten; use a new version after a partial failed publication or remove only the
 failed draft yourself. `--cask-only` repairs a failed cask PR without rebuilding or replacing a
 checksummed DMG. Merge the generated cask PR to make the new version available through the tap.
+The run summary shows the release and the cask PR, or the link to open it.
 PRs created with `GITHUB_TOKEN` don't automatically trigger other Actions workflows; validate
 the cask during release and review its pinned URL/hash.
 
-For a local signed release, first save a notarization profile using Apple's secure local
-Keychain (`xcrun notarytool store-credentials fdrive-notary`), then run:
+If the workflow can't sign, release from a Mac instead. First save a notarization profile using
+Apple's secure local Keychain (`xcrun notarytool store-credentials fdrive-notary`), then build
+with the next build number after the last published release's:
 
 ```sh
 python3 tools/macos/release.py release \
@@ -135,22 +136,12 @@ settings. Outputs are under the specified directory; install the DMG only after 
 reports success. First-time Developer ID provisioning or restricted Apple capabilities may
 require additional account setup; an unsigned archive does not verify that setup.
 
-Publish a local build the same way: push the `macos-vX.Y.Z` tag for the commit you built,
-then run the publisher on its artifacts and merge the cask PR:
+Then push the `macos-vX.Y.Z` tag for the commit you built, cancel the workflow run it starts
+(`gh run cancel`), run the publisher on the artifacts and merge the cask PR:
 
 ```sh
 python3 tools/macos/publish.py --repo fredrikburmester/fdrive \
   --artifacts .fdrive-workflow/release-0.1.0/artifacts
-```
-
-`tools/macos/cut-release.sh` runs those three steps as one command from a checkout of the
-merged commit. It reads the team, license organization and purchase URL from the repository
-variables, finds the two Developer ID profiles Xcode has installed by name, refuses a dirty
-tree, a commit that is not on `main`, an existing tag or a build number at or below the last
-published release's, and tags only after the signed build succeeded:
-
-```sh
-tools/macos/cut-release.sh 0.1.0 1            # add --dry-run to see the commands first
 ```
 
 ## Install or upgrade with Homebrew
