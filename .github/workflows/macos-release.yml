@@ -13,46 +13,48 @@ on:
 permissions:
   contents: read
 
+# Releases run one at a time, so each numbers its build after the one published
+# before it. GitHub keeps only one waiting run per group, so push one tag at a time.
 concurrency:
-  group: macos-release-${{ github.ref }}
+  group: macos-release
   cancel-in-progress: false
 
 jobs:
-  # tools/macos/cut-release.sh builds, tags and publishes a release from the
-  # owner's Mac, and the tag it pushes starts this workflow as well. The Mac's
-  # build numbers also run ahead of this workflow's run numbers, and File
-  # Provider refuses to upgrade to a lower build. A tag push therefore builds
-  # only when this run could publish a release nobody has published yet.
-  gate:
-    if: github.event_name == 'push'
+  # File Provider refuses to upgrade to a lower build, so every build takes the
+  # next number after the last published Mac release's build.
+  plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      proceed: ${{ steps.gate.outputs.proceed }}
+      proceed: ${{ steps.plan.outputs.proceed }}
+      build: ${{ steps.plan.outputs.build }}
     steps:
-      - id: gate
+      - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ $GITHUB_EVENT_NAME == push ]] && gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::$GITHUB_REF_NAME is already published; nothing to build."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
             | { grep '^macos-v' || true; } | grep -vFx "$GITHUB_REF_NAME" | sort -V | tail -n 1)
           build=0
           if [[ -n $previous ]]; then
             build=$(gh release download "$previous" --repo "$GITHUB_REPOSITORY" --pattern release.json --output - | jq -r .build)
+            if [[ ! $build =~ ^[0-9]+$ ]]; then
+              echo "::error::$previous has no build number in its release.json"
+              exit 1
+            fi
           fi
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            echo "::notice::$GITHUB_REF_NAME is already published; nothing to build."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          elif (( GITHUB_RUN_NUMBER <= build )); then
-            echo "::notice::Build $GITHUB_RUN_NUMBER would not be above build $build of $previous, so File Provider would refuse the upgrade. tools/macos/cut-release.sh publishes this tag from the Mac instead."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "::notice::Build $((build + 1)) follows build $build of ${previous:-no earlier release}."
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "build=$((build + 1))" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: gate
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || needs.gate.outputs.proceed == 'true') }}
+    needs: plan
+    if: needs.plan.outputs.proceed == 'true'
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -94,9 +96,10 @@ jobs:
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
           MACOS_LICENSE_ORGANIZATION: ${{ vars.MACOS_LICENSE_ORGANIZATION }}
           MACOS_PURCHASE_URL: ${{ vars.MACOS_PURCHASE_URL }}
+          FDRIVE_RELEASE_BUILD: ${{ needs.plan.outputs.build }}
         run: |
           python3 tools/macos/release.py release \
-            --version "$FDRIVE_RELEASE_VERSION" --build "$GITHUB_RUN_NUMBER" \
+            --version "$FDRIVE_RELEASE_VERSION" --build "$FDRIVE_RELEASE_BUILD" \
             --team "$MACOS_TEAM_ID" --keychain "$FDRIVE_SIGNING_KEYCHAIN" \
             --app-profile "$RUNNER_TEMP/fdrive-signing/app.provisionprofile" \
             --extension-profile "$RUNNER_TEMP/fdrive-signing/extension.provisionprofile" \
@@ -146,4 +149,9 @@ jobs:
         if: steps.existing.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/macos/publish.py --repo "$GITHUB_REPOSITORY" --artifacts release-artifacts
+        # The run summary shows the release and the cask PR, or the link to open it
+        # when the repository does not let Actions create pull requests.
+        run: |
+          set -o pipefail
+          python3 tools/macos/publish.py --repo "$GITHUB_REPOSITORY" --artifacts release-artifacts \
+            | tee -a "$GITHUB_STEP_SUMMARY"
