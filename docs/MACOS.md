@@ -40,7 +40,11 @@ not use (older than the installed app, run from a disk image, or missing its ext
 in the window footer and disables Add Server, Reconnect and Disconnect.
 
 The app refreshes browsed folders and materialized files every 60 seconds, on wake,
-after pairing and on manual Refresh. The extension records a heartbeat in the shared
+after pairing and on manual Refresh. A refresh lists each browsed folder separately, so a
+location's next automatic one waits four times as long as its last one took, up to 15 minutes:
+a location with 1,700 browsed folders took three minutes per pass. Only Refresh, pairing and
+license activation show progress; background refreshes keep each location's last status, and
+Refresh replaces one already running. The extension records a heartbeat in the shared
 catalog on every enumeration and download callback; if Finder has not answered a signalled
 refresh within two intervals while the domain is enabled, the location shows a warning that
 Finder, not the server, is unresponsive. Nothing is restarted automatically. Failures back off to 15 minutes independently per
