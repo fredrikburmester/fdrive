@@ -43,6 +43,8 @@ public actor Catalog {
           value BLOB NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS live_path ON items(path) WHERE deleted=0;
         CREATE INDEX IF NOT EXISTS item_parent ON items(parent,deleted);
+        CREATE INDEX IF NOT EXISTS item_remote_id ON items(json_extract(value,'$.entry.id'));
+        CREATE INDEX IF NOT EXISTS item_deleted_revision ON items(revision) WHERE deleted=1;
         CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS listings (path TEXT PRIMARY KEY, token TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL, localId TEXT NOT NULL, value TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
@@ -93,6 +95,11 @@ public actor Catalog {
         return rows
     }
     private func decode(_ value: String) throws -> CatalogItem { try JSONDecoder().decode(CatalogItem.self, from: Data(value.utf8)) }
+    /// A refresh runs the first for every listed entry and the second in every transaction, so
+    /// each must match its index (`item_remote_id`, `item_deleted_revision`). A scan reads every
+    /// item, and on a large location a refresh then keeps a core busy for minutes.
+    static let itemByRemoteId = "SELECT value FROM items WHERE json_extract(value,'$.entry.id')=?"
+    static let pruneDeletedItems = "DELETE FROM items WHERE deleted=1 AND revision<=?"
     public func item(_ id: String) throws -> CatalogItem {
         guard let row = try rows("SELECT value FROM items WHERE id=? AND deleted=0", [id]).first else { throw DriveError.missing }
         return try decode(row[0])
@@ -136,7 +143,7 @@ public actor Catalog {
         do {
             let value = try action()
             let floor = max(0, try revision() - retainedRevisions)
-            try execute("DELETE FROM items WHERE deleted=1 AND revision<=?", [String(floor)])
+            try execute(Self.pruneDeletedItems, [String(floor)])
             try execute("DELETE FROM departures WHERE revision<=?", [String(floor)])
             try execute("UPDATE state SET value=MAX(CAST(value AS INTEGER),CAST(? AS INTEGER)) WHERE key='retainedRevision'", [String(floor)])
             try execute("COMMIT"); return value
@@ -195,7 +202,7 @@ public actor Catalog {
             }
             for entry in entries {
                 let found: CatalogItem?
-                if let remoteId = entry.id, let row = try rows("SELECT value FROM items WHERE json_extract(value,'$.entry.id')=?", [remoteId]).first {
+                if let remoteId = entry.id, let row = try rows(Self.itemByRemoteId, [remoteId]).first {
                     found = try decode(row[0])
                 } else { do { found = try itemAt(entry.path) } catch DriveError.missing { found = nil } }
                 if var current = found {
