@@ -20,6 +20,13 @@ Extensions › File Providers) with an **Open System Settings** button; one whos
 missing or disconnected asks for Reconnect. Server refresh continues for disabled locations
 so re-enabling shows current data.
 
+An upgrade replaces the app bundle under the running app, which would otherwise keep running
+the old code while Finder starts the new extension. Every 30 seconds the app reads the
+installed version from disk. After it has seen the same newer (or older) build twice, it
+launches the installed copy and quits, keeping the locations window open or closed as it was.
+It waits while FDrive is the active app or a pairing, license change or disconnect is under
+way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
+
 Each selected server/account/identity gets its own domain, token and metadata database.
 SFTPGo and WebDAV adapters run on the fdrive server; the Mac does not implement either
 protocol. Switching the web app's active login cannot retarget a native location.
