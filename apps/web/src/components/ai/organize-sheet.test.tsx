@@ -95,7 +95,7 @@ const done = run({
 });
 
 /** The file browser's side of the sheet: opens it for a selection and shows the closed-sheet status. */
-function Harness({ onMoved }: { onMoved?: () => void }) {
+function Harness({ onMoved, assist = false }: { onMoved?: () => void; assist?: boolean }) {
   const organize = useOrganize();
   return (
     <>
@@ -108,12 +108,17 @@ function Harness({ onMoved }: { onMoved?: () => void }) {
       <output data-testid="status">
         {organize.status === null ? "" : `${organize.status.state}:${organize.status.count}`}
       </output>
-      <OrganizeSheet organize={organize} provider="anthropic" {...(onMoved ? { onMoved } : {})} />
+      <OrganizeSheet
+        organize={organize}
+        provider="anthropic"
+        assist={assist}
+        {...(onMoved ? { onMoved } : {})}
+      />
     </>
   );
 }
 
-function renderSheet(props: { onMoved?: () => void } = {}) {
+function renderSheet(props: { onMoved?: () => void; assist?: boolean } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -149,12 +154,53 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function reachReview() {
-  mocks.client.organizeRun.mockResolvedValue(done);
+async function reachReview(result: OrganizeRun = done) {
+  mocks.client.organizeRun.mockResolvedValue(result);
   fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "  by type " } });
   fireEvent.click(screen.getByRole("button", { name: "Suggest moves" }));
   await screen.findByText("Receipts go to Finance and photos to Photos.");
 }
+
+it("says TypeSafe sees the names too when the assist is on", () => {
+  renderSheet({ assist: true });
+
+  expect(screen.getByText(/also go to TypeSafe/)).toBeTruthy();
+});
+
+it("says nothing about TypeSafe when the assist is off", () => {
+  renderSheet();
+
+  expect(screen.queryByText(/also go to TypeSafe/)).toBeNull();
+});
+
+it("leaves a doubted suggestion unchecked and says why", async () => {
+  const doubted = run({
+    state: "done",
+    proposal: {
+      ...(done.proposal as NonNullable<OrganizeRun["proposal"]>),
+      suggestions: [
+        {
+          path: "/inbox/receipt.pdf",
+          kind: "file",
+          destination: "/Photos",
+          target: "/Photos/receipt.pdf",
+          reason: "A grocery receipt.",
+          newFolder: false,
+          conflict: false,
+          uncertain: true,
+        },
+      ],
+    },
+  });
+  renderSheet();
+
+  await reachReview(doubted);
+
+  expect(screen.getByText("A second look was not sure this belongs here.")).toBeTruthy();
+  expect(
+    screen.getByRole("checkbox", { name: "Move receipt.pdf" }).getAttribute("aria-checked"),
+  ).toBe("false");
+});
 
 it("lets the person keep file contents and other file names from the assistant", async () => {
   window.localStorage.removeItem("fdrive.organize.share");

@@ -181,6 +181,8 @@ describe("System AI settings", () => {
       model: "claude-opus-5",
       baseUrl: null,
       hasApiKey: true,
+      assist: false,
+      hasAssistKey: false,
     },
   };
 

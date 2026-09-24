@@ -26,6 +26,9 @@ export interface ResolvedAiConfig {
   readonly organize: boolean;
   /** Whether the chat panel is offered. */
   readonly chat: boolean;
+  /** Whether TypeSafe assists Organize. Needs `assistApiKey` to do anything. */
+  readonly assist: boolean;
+  readonly assistApiKey: string | null;
 }
 
 export interface AiSettingsService {
@@ -54,6 +57,10 @@ const StoredAiSettings = z.preprocess(
     baseUrl: z.string().nullable(),
     /** Base64 of the sealed key. */
     apiKey: z.string().nullable(),
+    /** Added with the TypeSafe assist; rows saved before it have neither. */
+    assist: z.boolean().default(false),
+    /** Base64 of the sealed TypeSafe key. */
+    assistApiKey: z.string().nullable().default(null),
   }),
 );
 
@@ -67,6 +74,8 @@ const DEFAULTS: StoredAiSettings = {
   model: DEFAULT_AI_MODEL.anthropic,
   baseUrl: null,
   apiKey: null,
+  assist: false,
+  assistApiKey: null,
 };
 
 /**
@@ -78,7 +87,14 @@ function keyContext(provider: AiProvider, baseUrl: string | null): string {
   return `ai-api-key:${provider}:${baseUrl ?? ""}`;
 }
 
-function publicView(stored: StoredAiSettings, hasApiKey: boolean): AiSettings {
+/** The assist only ever talks to TypeSafe, so its key is bound to that one address. */
+const ASSIST_KEY_CONTEXT = "ai-assist-key:typesafe";
+
+function publicView(
+  stored: StoredAiSettings,
+  hasApiKey: boolean,
+  hasAssistKey: boolean,
+): AiSettings {
   return {
     revision: stored.revision,
     organize: stored.organize,
@@ -87,6 +103,8 @@ function publicView(stored: StoredAiSettings, hasApiKey: boolean): AiSettings {
     model: stored.model,
     baseUrl: stored.baseUrl,
     hasApiKey,
+    assist: stored.assist,
+    hasAssistKey,
   };
 }
 
@@ -121,6 +139,17 @@ export function createAiSettingsService(deps: {
     }
   }
 
+  function openAssistKey(stored: StoredAiSettings): string | null {
+    if (stored.assistApiKey === null) return null;
+    try {
+      return Buffer.from(
+        deps.secrets.open(Buffer.from(stored.assistApiKey, "base64"), ASSIST_KEY_CONTEXT),
+      ).toString("utf8");
+    } catch {
+      return null;
+    }
+  }
+
   function resolve(stored: StoredAiSettings): ResolvedAiConfig {
     return {
       provider: stored.provider,
@@ -129,6 +158,8 @@ export function createAiSettingsService(deps: {
       apiKey: openKey(stored),
       organize: stored.organize,
       chat: stored.chat,
+      assist: stored.assist,
+      assistApiKey: openAssistKey(stored),
     };
   }
 
@@ -140,7 +171,7 @@ export function createAiSettingsService(deps: {
     async configuration() {
       const stored = (await read()).value;
       // Reports a key only when it still opens, so a rotated master key asks for the key again.
-      return publicView(stored, openKey(stored) !== null);
+      return publicView(stored, openKey(stored) !== null, openAssistKey(stored) !== null);
     },
 
     async update(input) {
@@ -171,6 +202,22 @@ export function createAiSettingsService(deps: {
           "bad_request",
           "Enter an Anthropic API key before turning Organize or Chat on.",
         );
+      // The assist key has one address, so it is only dropped when asked for.
+      const assistApiKey =
+        input.assistApiKey === undefined
+          ? openAssistKey(current.value) !== null
+            ? current.value.assistApiKey
+            : null
+          : input.assistApiKey === null
+            ? null
+            : Buffer.from(
+                deps.secrets.seal(Buffer.from(input.assistApiKey, "utf8"), ASSIST_KEY_CONTEXT),
+              ).toString("base64");
+      if (input.assist && assistApiKey === null)
+        throw new ApiHttpError(
+          "bad_request",
+          "Enter a TypeSafe API key before turning the assist on.",
+        );
       const next: StoredAiSettings = {
         revision: input.revision + 1,
         organize: input.organize,
@@ -179,6 +226,8 @@ export function createAiSettingsService(deps: {
         model: input.model,
         baseUrl: input.baseUrl,
         apiKey,
+        assist: input.assist,
+        assistApiKey,
       };
       if (!(await deps.settings.compareAndSet(AI_SETTINGS_KEY, current.raw, next)))
         throw new ApiHttpError(
@@ -191,8 +240,10 @@ export function createAiSettingsService(deps: {
         provider: next.provider,
         model: next.model,
         apiKeyChanged: input.apiKey !== undefined || !sameAddress,
+        assist: next.assist,
+        assistKeyChanged: input.assistApiKey !== undefined,
       });
-      return publicView(next, next.apiKey !== null);
+      return publicView(next, next.apiKey !== null, next.assistApiKey !== null);
     },
 
     async resolved() {

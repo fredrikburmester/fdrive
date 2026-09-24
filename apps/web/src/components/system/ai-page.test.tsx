@@ -40,6 +40,8 @@ const claude: AiSettings = {
   model: "claude-opus-5",
   baseUrl: null,
   hasApiKey: true,
+  assist: false,
+  hasAssistKey: false,
 };
 
 function withSettings(configuration: AiSettings) {
@@ -132,11 +134,34 @@ it("saves a new model and key from the settings sheet", () => {
       model: "claude-sonnet-5",
       baseUrl: null,
       apiKey: "sk-ant-new",
+      assist: false,
     },
     expect.anything(),
   );
   mocks.mutate.mock.calls[0]?.[1].onSuccess();
   expect(mocks.success).toHaveBeenCalledWith("AI settings saved.");
+});
+
+it("saves a TypeSafe key and turns the assist on with it", () => {
+  render(<AiSystemPage />);
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.change(screen.getByLabelText("TypeSafe API key"), { target: { value: "ts-1" } });
+  fireEvent.click(screen.getByRole("switch", { name: "TypeSafe assist" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(mocks.mutate).toHaveBeenCalledWith(
+    expect.objectContaining({ assist: true, assistApiKey: "ts-1" }),
+    expect.anything(),
+  );
+});
+
+it("blocks turning the assist on without a TypeSafe key", () => {
+  render(<AiSystemPage />);
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("switch", { name: "TypeSafe assist" }));
+
+  expect(screen.getByText("Enter a TypeSafe API key to turn the assist on.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
 });
 
 it("removes a saved key only when asked, and then blocks turning Anthropic on", () => {
