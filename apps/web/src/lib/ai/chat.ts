@@ -1,7 +1,7 @@
 import type { Chat, ChatActionProposal, ChatPart, ChatState } from "@fdrive/contracts";
-import { baseName, extensionOf, parentPath } from "@fdrive/core";
-import { pathToHref } from "@/lib/files/path-url";
-import { revealTarget } from "@/lib/files/reveal";
+import { baseName, extensionOf, joinPath, parentPath } from "@fdrive/core";
+import { pathFromFilesPathname, pathToHref } from "@/lib/files/path-url";
+import { parseSelectParam, revealTarget } from "@/lib/files/reveal";
 
 /** Starter prompts for an empty chat. */
 export const CHAT_SUGGESTIONS = [
@@ -20,24 +20,47 @@ export function hrefForPath(path: string, kind: "file" | "dir" | "unknown" = "un
     : pathToHref(path);
 }
 
+/** The path a browse link leads to, the selected item included; `null` for any other link. */
+export function pathForHref(href: string): string | null {
+  const url = new URL(href, "http://fdrive.invalid");
+  const folder = pathFromFilesPathname(url.pathname);
+  if (folder === null) return null;
+  const selected = parseSelectParam(url.search);
+  return selected === null ? folder : joinPath(folder, selected);
+}
+
 const PATH_PATTERN = /(^|[\s(["'`])(\/[^\s)"'`<>*]+?)(?=[.,;:!?)\]"'`*]*(?:\s|$))/g;
+
+/** A code span holding nothing but one absolute path; its backticks bound the path, so it may contain spaces. */
+const CODE_PATH_PATTERN = /^` ?(\/(?!\/)[^`\n*]*?)(\/?) ?`$/;
+
+/** A markdown link destination: parentheses are escaped so a name like "Report (final).pdf" cannot end it early. */
+function linkTarget(path: string, kind: "dir" | "unknown" = "unknown"): string {
+  return hrefForPath(path, kind).replaceAll("(", "%28").replaceAll(")", "%29");
+}
 
 /**
  * Turns the absolute paths in an assistant's markdown into links to the
- * file browser, when they are paths the chat knows (references, cards,
- * tool results). Text already inside a markdown link or code span is left
- * alone.
+ * file browser. A code span holding just a path always becomes a link,
+ * since the model writes drive paths that way. A bare path in prose has
+ * no clear end, so it is linked only when the chat knows it (references,
+ * cards, tool results). Fenced blocks and existing links are left alone.
  */
 export function linkifyPaths(markdown: string, known: ReadonlySet<string>): string {
-  if (known.size === 0) return markdown;
-  // Protect code spans, fenced blocks and existing links from rewriting.
+  // Protect code spans, fenced blocks and existing links from the prose rewrite.
   const protectedSpans = /(```[\s\S]*?```|`[^`\n]*`|\[[^\]]*\]\([^)]*\))/g;
   return markdown
     .split(protectedSpans)
     .map((segment, index) => {
-      if (index % 2 === 1) return segment;
+      if (index % 2 === 1) {
+        const match = CODE_PATH_PATTERN.exec(segment);
+        if (match === null) return segment;
+        const [, path = "/", slash] = match;
+        return `[${segment}](${linkTarget(path, slash === "" ? "unknown" : "dir")})`;
+      }
+      if (known.size === 0) return segment;
       return segment.replace(PATH_PATTERN, (match, lead: string, path: string) =>
-        known.has(path) ? `${lead}[${path}](${hrefForPath(path)})` : match,
+        known.has(path) ? `${lead}[${path}](${linkTarget(path)})` : match,
       );
     })
     .join("");

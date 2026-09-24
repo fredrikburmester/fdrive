@@ -8,6 +8,7 @@ import { uploadFiles } from "./support/upload.js";
 
 const AI_URL = "/api/v1/system/ai";
 const HEADERS = { "x-requested-with": "fdrive" };
+const DECOMPOSED_FOLDER = "A\u030Arsbesked";
 
 function panel(page: Page): Locator {
   return page.getByRole("complementary", { name: "Chat" });
@@ -58,6 +59,8 @@ test("chat follows the person between folders, takes dropped files, reads them, 
       { name: "shopping.txt", mimeType: "text/plain", contents: "milk, eggs" },
     ]);
     await expect(listing(page).getByText("shopping.txt", { exact: true })).toBeVisible();
+    // Named the way macOS stores it: "A" plus a combining ring, where the assistant writes "Å".
+    await createFolder(page, DECOMPOSED_FOLDER);
 
     // Add the selection to the chat: the panel opens with both files ready to attach.
     await listing(page).getByText("invoice-2024.txt", { exact: true }).click();
@@ -84,11 +87,29 @@ test("chat follows the person between folders, takes dropped files, reads them, 
     await page.reload();
     await expect(panel(page).getByText("is a shopping list", { exact: false })).toBeVisible();
 
-    // Following a citation lands in the folder with the file selected.
+    // Following a citation lands in the folder with the file selected (the browser then drops `select`).
     await panel(page)
       .getByRole("link", { name: `/${sandbox}/invoice-2024.txt` })
       .click();
-    await expect(page).toHaveURL(new RegExp(`/files/${sandbox}\\?select=invoice-2024\\.txt$`));
+    await expect(page).toHaveURL(new RegExp(`/files/${sandbox}(\\?select=invoice-2024\\.txt)?$`));
+    await expect(
+      listing(page).getByRole("checkbox", { name: "Select invoice-2024.txt" }),
+    ).toBeChecked();
+
+    // Paths written as code are links too, and find the stored spelling of accented names.
+    await panel(page)
+      .getByRole("link", { name: `/${sandbox}/Årsbesked` })
+      .click();
+    await expect(page).toHaveURL(
+      new RegExp(`/files/${sandbox}/${encodeURIComponent(DECOMPOSED_FOLDER)}$`),
+    );
+    await panel(page)
+      .getByRole("link", { name: `/${sandbox}/shopping.txt` })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/files/${sandbox}(\\?select=shopping\\.txt)?$`));
+    await expect(
+      listing(page).getByRole("checkbox", { name: "Select shopping.txt" }),
+    ).toBeChecked();
 
     // Dropping a file from the listing attaches it.
     await listing(page).getByText("shopping.txt", { exact: true }).dragTo(panel(page));

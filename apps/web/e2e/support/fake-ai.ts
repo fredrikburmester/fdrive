@@ -39,7 +39,8 @@ function attachedPaths(messages: readonly ChatMessage[]): string[] {
 
 /**
  * The chat script: reads the first attached file when asked what files are
- * about, proposes a move into a `Notes` folder next to the file, drafts a
+ * about and answers with paths in prose and in code (one written with a
+ * single-character "Å"), proposes a move into a `Notes` folder next to the file, drafts a
  * professional version as a new text file, and answers a duplicate
  * question in words. After a tool result it confirms in one line.
  */
@@ -50,10 +51,12 @@ function chatReply(messages: readonly ChatMessage[]) {
       ?.tool_calls?.[0];
     const name = call?.function.name ?? "";
     const paths = attachedPaths(messages);
-    if (name === "read_file")
+    if (name === "read_file") {
+      const first = paths[0] ?? "/";
       return textReply(
-        `${paths[0] ?? "That file"} is an invoice for 2024; ${paths[1] ?? "the other"} is a shopping list.`,
+        `${first} is an invoice for 2024; \`${paths[1] ?? "/"}\` is a shopping list. Tax papers go in \`${first.slice(0, first.lastIndexOf("/"))}/Årsbesked\`.`,
       );
+    }
     if (name === "move_items") return textReply("Moved them into Notes.");
     if (name === "write_text_file") return textReply("Saved the professional version next to it.");
     return textReply("Done.");

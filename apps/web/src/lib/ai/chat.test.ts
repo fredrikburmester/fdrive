@@ -7,6 +7,7 @@ import {
   isThinking,
   knownPaths,
   linkifyPaths,
+  pathForHref,
   pendingActions,
   proposalPaths,
   userText,
@@ -57,18 +58,48 @@ describe("hrefForPath", () => {
 describe("linkifyPaths", () => {
   const known = new Set(["/Inbox/a.txt", "/Docs", "/Docs/readme.md"]);
 
-  it("links known paths and leaves unknown ones, links and code alone", () => {
+  it("links known paths in prose and leaves unknown ones, links and fenced blocks alone", () => {
     expect(linkifyPaths("See /Inbox/a.txt and /Other/x.txt.", known)).toBe(
       "See [/Inbox/a.txt](/files/Inbox?select=a.txt) and /Other/x.txt.",
     );
     expect(linkifyPaths("Folder: /Docs (two files).", known)).toBe(
       "Folder: [/Docs](/files/Docs) (two files).",
     );
-    expect(linkifyPaths("`/Docs` and [x](/Docs) stay", known)).toBe("`/Docs` and [x](/Docs) stay");
+    expect(linkifyPaths("[x](/Docs) and [`/Docs`](/Docs) stay", known)).toBe(
+      "[x](/Docs) and [`/Docs`](/Docs) stay",
+    );
     expect(linkifyPaths("```\n/Docs\n```\n/Docs", known)).toBe(
       "```\n/Docs\n```\n[/Docs](/files/Docs)",
     );
     expect(linkifyPaths("Nothing here", new Set())).toBe("Nothing here");
+  });
+
+  it("links any path written as code, spaces and parentheses included", () => {
+    expect(linkifyPaths("`/Work/Enra Digital` is full of `._` files", new Set())).toBe(
+      "[`/Work/Enra Digital`](/files/Work/Enra%20Digital) is full of `._` files",
+    );
+    expect(linkifyPaths("Open `/Work/Report (final).pdf`.", new Set())).toBe(
+      "Open [`/Work/Report (final).pdf`](/files/Work?select=Report%20%28final%29.pdf).",
+    );
+    // A trailing slash marks a folder even when the name has a dot.
+    expect(linkifyPaths("`/Work/v1.2/` and `/`", new Set())).toBe(
+      "[`/Work/v1.2/`](/files/Work/v1.2) and [`/`](/files)",
+    );
+    expect(linkifyPaths("`//host/share`, `/Work/*.pdf`, `ls /Work`", new Set())).toBe(
+      "`//host/share`, `/Work/*.pdf`, `ls /Work`",
+    );
+  });
+});
+
+describe("pathForHref", () => {
+  it("reads the folder and the selected item back from a browse link", () => {
+    expect(pathForHref(hrefForPath("/Work/Enra Digital"))).toBe("/Work/Enra Digital");
+    expect(pathForHref(hrefForPath("/Work/Report (final).pdf"))).toBe("/Work/Report (final).pdf");
+    expect(pathForHref("/files/Work?select=Report%20%28final%29.pdf")).toBe(
+      "/Work/Report (final).pdf",
+    );
+    expect(pathForHref("/files")).toBe("/");
+    expect(pathForHref("/favorites")).toBeNull();
   });
 });
 
