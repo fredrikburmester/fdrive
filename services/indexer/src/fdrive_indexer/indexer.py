@@ -299,9 +299,7 @@ def process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_res
         if unchanged:
             if manifest_status.startswith("excluded") and exclusion_still_applies(ctx, rel_path, st.st_size):
                 return False
-            if not should_retry_unchanged(
-                manifest_status, ext_of(os.path.basename(rel_path)), ctx.feature_configuration().values
-            ):
+            if not should_retry_unchanged(manifest_status, ctx.feature_configuration().values):
                 return False
         was_new = manifest_row is None
         same_version = (
@@ -334,18 +332,20 @@ def exclusion_still_applies(ctx: RootContext, rel_path: str, size: int) -> bool:
     return (is_pdf(ext) or is_tika(ext)) and size > ctx.cfg.text_max_bytes
 
 
-def should_retry_unchanged(status: str, ext: str, features: FeatureValues) -> bool:
-    """Whether a feature transition makes this unchanged manifest row actionable."""
-    from .chunking import is_image, is_pdf
+def should_retry_unchanged(status: str, features: FeatureValues) -> bool:
+    """Whether a feature transition makes this unchanged manifest row actionable.
 
+    Each status here must stop matching once the retry has run, or every scan
+    repeats it: `no_text` used to match while OCR was on and re-OCR'd every
+    text-less photo on every scan. OCR found nothing in a `no_text` row; a file
+    OCR skipped is `disabled:search_ocr`.
+    """
     if status == "excluded:image_dir":
         return features.text_search and features.search_ocr
     if status == "disabled:text" or status.startswith("excluded"):
         return features.text_search
     if status == "disabled:search_ocr":
         return features.text_search and features.search_ocr
-    if status == "no_text":
-        return features.text_search and features.search_ocr and (is_image(ext) or is_pdf(ext))
     return status == "partial" and features.semantic_search
 
 
@@ -371,11 +371,12 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
     sha = known_sha256 or sha256_of(abs_path)
     file_id = db.upsert_file(conn, ctx.root_id, rel_path, name, ext, st.st_size, st.st_mtime_ns, sha, mime)
 
-    from .chunking import is_image, is_textual
+    from .chunking import is_image, is_pdf, is_textual
 
     features = ctx.feature_configuration().values
     if only_feature == "textSearch":
         features = replace(features, semantic_search=False, thumbnails=False, image_search=False)
+    awaits_ocr = False
     if not features.text_search:
         status, text = "disabled:text", None
     elif is_image(ext) and not features.search_ocr:
@@ -386,6 +387,9 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
         status, text = "excluded:prefix", None
     else:
         text, status = ctx.extractor.extract(abs_path, rel_path, ext, st.st_size, search_ocr=features.search_ocr)
+        if status == "no_text" and is_pdf(ext) and not features.search_ocr:
+            # A PDF without a text layer is only text-less once OCR has read it.
+            status, awaits_ocr = "disabled:search_ocr", True
 
     chars = 0
     error = None
@@ -432,8 +436,9 @@ def _process_file(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_re
     db.update_file_status(conn, file_id, status, chars, error)
 
     if features.text_search:
+        # A PDF that awaits OCR was still read, which settles an earlier text failure.
         failures.report(ctx, rel_path, "textSearch", log, error if status == "error" else None,
-                        skipped=status in ("excluded", "none") or status.startswith("disabled:"))
+                        skipped=status in ("excluded", "none") or status.startswith("disabled:"), resolves=awaits_ocr)
     if features.semantic_search:
         failures.report(ctx, rel_path, "semanticSearch", log,
                         semantic_error if status == "partial" and error != "embed:unavailable" else None,
@@ -623,16 +628,22 @@ def backfill_media(ctx: RootContext, abs_path: str, rel_path: str, st: os.stat_r
 
 
 def media_derivatives_missing(
-    ctx: RootContext, rel_path: str, size_bytes: int, key: str | None, image_embedded: bool, include_existing: bool = False
+    ctx: RootContext, rel_path: str, size_bytes: int, key: str | None, image_embedded: bool, include_existing: bool = False,
+    thumbnail_failed: bool = False,
 ) -> bool:
     """Whether a live file needs enabled, durable media output rebuilt.
 
-    This predicate makes work survive an indexer restart and a failed first
+    This predicate makes work survive an indexer restart and an interrupted first
     attempt: derivative files and image-embedding rows are the durable state,
     while ``_backfill_media`` merely accelerates a feature transition. During
     that transition, ``include_existing`` refreshes manifest rows for eligible
-    thumbnail files already on disk. ``key`` and ``image_embedded`` come from the
-    scan's manifest snapshot; the job rechecks both before doing any work.
+    thumbnail files already on disk. ``key``, ``image_embedded`` and
+    ``thumbnail_failed`` come from the scan's manifest snapshot; the job rechecks
+    the first two before doing any work.
+
+    A failed thumbnail leaves no file behind, so its unresolved failure stands in
+    for it: a changed file, a feature transition or a retry from System tries
+    again, and rescans do not.
     """
     features = ctx.feature_configuration().values
     if not features.internal_thumbnails or key is None:
@@ -642,7 +653,9 @@ def media_derivatives_missing(
         return False
     can_generate = within_size_budget(size_bytes, ctx.cfg.thumb_max_bytes)
     thumbnail_paths = [os.path.join(ctx.cfg.thumbs_dir, thumb_storage_path(key, size)) for size in SIZES]
-    if can_generate and (include_existing or any(not os.path.exists(path) for path in thumbnail_paths)):
+    if can_generate and (
+        include_existing or (not thumbnail_failed and any(not os.path.exists(path) for path in thumbnail_paths))
+    ):
         return True
     return features.image_search and is_image_candidate(ext) and not image_embedded and os.path.exists(thumbnail_paths[0])
 
@@ -961,7 +974,8 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
             n += 1
             unseen.discard(rel_path)
             prev = manifest.get(rel_path)
-            unchanged = prev is not None and prev[0] == st.st_size and prev[1] == st.st_mtime_ns and prev[3] is None
+            # A pending row still needs its text, so media-only work must not stand in for it.
+            unchanged = unchanged_in_db(None if prev is None else prev[:4], st)
             ctx.maybe_refresh_features()
             if not ctx.feature_configuration().values.indexer_enabled:
                 traversal_complete = False
@@ -972,10 +986,11 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
                 unchanged
                 and prev is not None
                 and media_derivatives_missing(
-                    ctx, rel_path, st.st_size, prev[4], prev[5], include_existing=ctx.needs_media_backfill()
+                    ctx, rel_path, st.st_size, prev[4], prev[5], include_existing=ctx.needs_media_backfill(),
+                    thumbnail_failed=prev[6],
                 )
             )
-            retry_unchanged = prev is not None and should_retry_unchanged(prev[2], ext_of(os.path.basename(rel_path)), features)
+            retry_unchanged = prev is not None and should_retry_unchanged(prev[2], features)
             if prev is not None and prev[2].startswith("excluded") and exclusion_still_applies(ctx, rel_path, st.st_size):
                 retry_unchanged = False
             if unchanged and prev is not None and prev[2] == "partial" and features.semantic_search:
@@ -984,7 +999,7 @@ def _scan_once(ctx: RootContext, operations: dict[str, Operation]) -> dict[str, 
                 submit(abs_path, rel_path, st)
             elif media_needed:
                 submit(abs_path, rel_path, st, False, True)
-            elif unchanged and prev is not None and prev[2] != "pending":
+            elif unchanged:
                 # Includes disabled:* rows: retry_unchanged already found nothing to do,
                 # and a job would only repeat that check for every image on every scan.
                 continue

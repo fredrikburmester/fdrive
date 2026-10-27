@@ -52,6 +52,10 @@ def build_context(cfg: Config, conn_dsn: str, name: str, abs_path: str) -> RootC
         # and treating it as one re-runs the media backfill over every file on disk.
         features=resolve_features(db.read_settings(conn)),
     )
+    if not ctx.feature_configuration().values.search_ocr:
+        moved = db.mark_pdfs_skipped_by_ocr(conn, root_id)
+        if moved:
+            log(f"[{name}] {moved} PDFs without a text layer will be read once OCR is enabled")
     ctx.feature_refresh_seconds = cfg.settings_refresh_seconds
     ctx.feature_refresher = refresh_features
     ctx.local.conn = conn

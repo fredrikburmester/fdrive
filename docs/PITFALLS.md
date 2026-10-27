@@ -33,6 +33,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.
+- A scan's retry rule for unchanged files must stop matching once it has run. `no_text` rows
+  matched for as long as OCR was on, so every 2.5-hour scan re-OCR'd about 14,000 text-less
+  photos for six weeks. A failed attempt needs a durable record too: a missing thumbnail looks
+  the same before and after a failure. With no file changes, a second scan should report
+  `0 (re)indexed`.
 - `NOT IN (SELECT ...)` stays linear only while Postgres can hash the subquery within
   `work_mem`. The scan sweep sent every seen path and went quadratic between 120,000 and
   150,000 files; at 200,000 it ran past ten minutes. Diff large sets in the worker, or use

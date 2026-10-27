@@ -169,8 +169,9 @@ def test_feature_enable_retries_unchanged_ocr_and_semantic_candidates() -> None:
     text_and_ocr = FeatureValues(False, True, True, False, False, False)
     text_and_semantic = FeatureValues(False, True, False, True, False, False)
 
-    assert should_retry_unchanged("disabled:search_ocr", ".jpg", text_and_ocr)
-    assert should_retry_unchanged("excluded:image_dir", ".jpg", text_and_ocr)
-    assert should_retry_unchanged("no_text", ".pdf", text_and_ocr)
-    assert should_retry_unchanged("partial", ".txt", text_and_semantic)
-    assert not should_retry_unchanged("no_text", ".pdf", text_and_semantic)
+    assert should_retry_unchanged("disabled:search_ocr", text_and_ocr)
+    assert should_retry_unchanged("excluded:image_dir", text_and_ocr)
+    assert should_retry_unchanged("partial", text_and_semantic)
+    assert not should_retry_unchanged("disabled:search_ocr", text_and_semantic)
+    # OCR already read a no_text row and found nothing; retrying it repeated OCR on every scan.
+    assert not should_retry_unchanged("no_text", text_and_ocr)

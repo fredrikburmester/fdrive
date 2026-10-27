@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -1126,6 +1127,75 @@ def test_rescan_leaves_unchanged_disabled_rows_alone_until_their_feature_is_enab
     assert admitted == ["photo.jpg"]
 
 
+class _TextLessExtractor:
+    """Finds no text in anything: a photo, or a scanned PDF without a text layer."""
+
+    def __init__(self, root: str) -> None:
+        self.root = root
+        self.calls: list[tuple[str, bool]] = []
+
+    def extract(self, abs_path: str, rel_path: str, ext: str, size: int, *, search_ocr: bool = False) -> tuple[str | None, str]:
+        self.calls.append((rel_path, search_ocr))
+        return None, "no_text"
+
+
+def _text_less_scan_context(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, search_ocr: bool
+) -> tuple[indexer.RootContext, _TextLessExtractor]:
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    extractor = _TextLessExtractor(ctx.name)
+    ctx.extractor = extractor  # type: ignore[assignment]
+    ctx.features = FeatureConfiguration(7, FeatureValues(False, True, search_ocr, False, False, False))
+    (tmp_path / "photo.jpg").write_bytes(b"photo")
+    (tmp_path / "scan.pdf").write_bytes(b"scan")
+    return ctx, extractor
+
+
+def _text_statuses(ctx: indexer.RootContext) -> dict[str, str]:
+    return {path: row[2] for path, row in db.get_manifest(ctx.conn(), ctx.root_id).items()}
+
+
+def test_rescan_does_not_repeat_ocr_that_found_no_text(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx, extractor = _text_less_scan_context(postgres_dsn, monkeypatch, tmp_path, search_ocr=True)
+
+    assert indexer.scan_once(ctx)["changed"] == 2
+    assert indexer.scan_once(ctx)["changed"] == 0
+
+    assert sorted(extractor.calls) == [("photo.jpg", True), ("scan.pdf", True)]
+    assert _text_statuses(ctx) == {"photo.jpg": "no_text", "scan.pdf": "no_text"}
+
+
+def test_turning_search_ocr_off_and_on_reads_skipped_images_and_pdfs_once(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx, extractor = _text_less_scan_context(postgres_dsn, monkeypatch, tmp_path, search_ocr=False)
+    ocr_off = FeatureValues(False, True, False, False, False, False)
+    ocr_on = FeatureValues(False, True, True, False, False, False)
+    ctx.conn().execute(
+        "INSERT INTO idx.processing_failures (root_id, path, feature, code, message, operation_id) "
+        "VALUES (%s, 'scan.pdf', 'textSearch', 'error', 'an earlier version failed', 'op')",
+        (ctx.root_id,),
+    )
+
+    indexer.scan_once(ctx)
+    # Only the PDF's text layer is read; an image needs OCR for any text.
+    assert extractor.calls == [("scan.pdf", False)]
+    assert _text_statuses(ctx) == {"photo.jpg": "disabled:search_ocr", "scan.pdf": "disabled:search_ocr"}
+    assert _unresolved_failures(ctx) == set()
+
+    ctx.set_features(FeatureConfiguration(8, ocr_on))
+    assert indexer.scan_once(ctx)["changed"] == 2
+    ctx.set_features(FeatureConfiguration(9, ocr_off))
+    indexer.scan_once(ctx)
+    ctx.set_features(FeatureConfiguration(10, ocr_on))
+    assert indexer.scan_once(ctx)["changed"] == 0
+
+    assert sorted(extractor.calls[1:]) == [("photo.jpg", True), ("scan.pdf", True)]
+    assert _text_statuses(ctx) == {"photo.jpg": "no_text", "scan.pdf": "no_text"}
+
+
 def test_scan_classifies_unchanged_media_from_the_manifest(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1260,6 +1330,53 @@ def test_failed_deferred_image_embedding_keeps_media_backfill_pending(
     monkeypatch.setattr(indexer, "embed_images", lambda *_a: ([[0.1] * 1024], "model-a"))
     indexer.scan_once(ctx)
     assert ctx.needs_media_backfill() is False
+
+
+def _undecodable_thumbnails(attempts: list[str]) -> Callable[..., list[object]]:
+    """A thumbnail generator that cannot decode its source, such as an encrypted folder's ciphertext."""
+
+    def generate(abs_path: str, *_a: object, on_error: Callable[[str], None], **_k: object) -> list[object]:
+        attempts.append(os.path.basename(abs_path))
+        on_error("UnidentifiedImageError: cannot identify image file")
+        return []
+
+    return generate
+
+
+def test_failed_thumbnail_is_not_retried_until_the_file_changes(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _image_scan_context(postgres_dsn, monkeypatch, tmp_path, ("photo.jpg",))
+    ctx.features = FeatureConfiguration(7, FeatureValues(True, False, False, False, False, False))
+    attempts: list[str] = []
+    monkeypatch.setattr(indexer, "generate_thumbnails", _undecodable_thumbnails(attempts))
+
+    assert indexer.scan_once(ctx)["errors"] == 1
+    assert indexer.scan_once(ctx)["errors"] == 0
+    assert attempts == ["photo.jpg"]
+    assert _unresolved_failures(ctx) == {("photo.jpg", "thumbnails")}
+
+    (Path(ctx.abs_path) / "photo.jpg").write_bytes(b"a different photo")
+    indexer.scan_once(ctx)
+    assert attempts == ["photo.jpg", "photo.jpg"]
+
+
+def test_pending_row_is_reprocessed_even_while_its_thumbnail_fails(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx = _image_scan_context(postgres_dsn, monkeypatch, tmp_path, ("photo.jpg",))
+    ctx.features = FeatureConfiguration(7, FeatureValues(True, True, False, False, False, False))
+    st = (Path(ctx.abs_path) / "photo.jpg").stat()
+    # A worker stopped between writing the row and its status.
+    db.upsert_file(ctx.conn(), ctx.root_id, "photo.jpg", "photo.jpg", ".jpg", st.st_size, st.st_mtime_ns, "sha", None)
+    attempts: list[str] = []
+    monkeypatch.setattr(indexer, "generate_thumbnails", _undecodable_thumbnails(attempts))
+
+    indexer.scan_once(ctx)
+    indexer.scan_once(ctx)
+
+    assert _text_statuses(ctx) == {"photo.jpg": "disabled:search_ocr"}
+    assert attempts == ["photo.jpg"]
 
 
 def test_image_embedding_stage_survives_errors_and_drops_queued_work_when_abandoned(
