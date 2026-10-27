@@ -37,8 +37,8 @@ follows filesai's rules exactly:
 
 | Extension group | How | Notes |
 | --- | --- | --- |
-| `.pdf` | pymupdf, page by page | Encrypted PDFs and pages beyond `MAX_PDF_PAGES` are skipped. Under 40 characters of text counts as `no_text` (the nightly OCR job in `services/ocr` fills these in later). |
-| Images (`.jpg`, `.png`, `.tif`, `.heic`, `.heif`, …) | Tesseract OCR | Only under paths matching `indexer.ocr_image_globs` (see Settings below); everything else is `excluded:image_dir`. |
+| `.pdf` | pymupdf, page by page | Encrypted PDFs and pages beyond `MAX_PDF_PAGES` are skipped. With `searchOcr` on, pages without a text layer are OCR'd. Under 40 characters of text counts as `no_text`, or `disabled:search_ocr` while OCR is off (the nightly OCR job in `services/ocr` fills these in later). |
+| Images (`.jpg`, `.png`, `.tif`, `.heic`, `.heif`, …) | Tesseract OCR | Only under paths matching `indexer.ocr_image_globs` (see Settings below); everything else is `excluded:image_dir`. With `searchOcr` off they are `disabled:search_ocr`. |
 | Plain text / code (`.txt`, `.md`, `.py`, …) | Read directly, multiple encodings tried | Capped at `PLAIN_TEXT_CAP` characters. |
 | Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, …) | Apache Tika | Requires the `tika` service. |
 | Anything else | Not extracted | `text_status = 'none'`. |
@@ -58,7 +58,9 @@ written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 `app.thumbnails`, keyed by the file's sha256 so identical files never generate
 the same thumbnail twice. Thumbnail failures are logged once and never fail the
 file's own indexing; the image-embedding pass that follows skips a file whose
-256px thumbnail was never written without logging a second error for it.
+256px thumbnail was never written without logging a second error for it. Scans
+do not retry a failed thumbnail until the file changes or thumbnails are turned
+on again; System can retry it sooner.
 
 The api serves this same cache twice: `GET /api/v1/thumb` for the logged-in
 file browser, and `GET /api/v1/public/shares/:id/thumb` for a public share's
@@ -133,7 +135,8 @@ admission lock (only one heavy background pass runs at a time).
 | `pending` | Row exists, not yet processed by this cycle. |
 | `indexed` | Text extracted, chunked, and (if the embedding service was reachable) embedded. |
 | `partial` | Text extracted and chunked, but embedding failed; retried on the next scan. |
-| `no_text` | Extraction ran but found too little text to be useful (e.g. a scanned PDF). |
+| `no_text` | Extraction, including OCR for images and PDFs, found too little text to be useful. Not retried until the file changes. |
+| `disabled` | Skipped while a feature was off: `disabled:text` (`textSearch`), `disabled:search_ocr` (`searchOcr`, for images and PDFs without a text layer). Turning the feature on processes each row once. |
 | `empty` | The file itself is empty. |
 | `none` | Extension is not one the indexer knows how to extract. |
 | `excluded` | Skipped by a rule: `excluded:prefix` (`indexer.text_exclude_globs`), `excluded:image_dir` (outside `indexer.ocr_image_globs`), `excluded:too_big`. |

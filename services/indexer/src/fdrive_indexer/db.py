@@ -13,6 +13,7 @@ from typing import Any
 import psycopg
 from pgvector.psycopg import register_vector
 
+from .chunking import PDF_EXTS
 from .events import Event, to_json
 from .stats import RootStats
 
@@ -88,18 +89,39 @@ def get_manifest(conn: psycopg.Connection, root_id: int) -> dict[str, tuple[int,
         return {r[0]: (r[1], r[2], r[3], r[4]) for r in cur.fetchall()}
 
 
-def scan_manifest(conn: psycopg.Connection, root_id: int) -> dict[str, tuple[int, int, str, Any, str | None, bool]]:
-    """`get_manifest` plus each row's content key and whether that key has an image
-    embedding, so a scan can decide which unchanged files need media work without a
-    query per file. The result is a snapshot: workers recheck before writing."""
+def scan_manifest(conn: psycopg.Connection, root_id: int) -> dict[str, tuple[int, int, str, Any, str | None, bool, bool]]:
+    """`get_manifest` plus each row's content key, whether that key has an image
+    embedding, and whether its last thumbnail attempt failed, so a scan can decide
+    which unchanged files need media work without a query per file. The result is
+    a snapshot: workers recheck before writing."""
     with conn.cursor() as cur:
         cur.execute(
-            'SELECT f.path, f.size, f.mtime_ns, f.text_status, f.deleted_at, f.sha256, e.content_key IS NOT NULL '
+            'SELECT f.path, f.size, f.mtime_ns, f.text_status, f.deleted_at, f.sha256, e.content_key IS NOT NULL, '
+            "p.id IS NOT NULL "
             'FROM "idx"."files" f LEFT JOIN "app"."image_embeddings" e ON e.content_key = f.sha256 '
+            'LEFT JOIN "idx"."processing_failures" p ON p.root_id = f.root_id AND p.path = f.path '
+            "AND p.feature = 'thumbnails' AND p.resolved_at IS NULL "
             "WHERE f.root_id = %s",
             (root_id,),
         )
-        return {r[0]: (r[1], r[2], r[3], r[4], r[5], bool(r[6])) for r in cur.fetchall()}
+        return {r[0]: (r[1], r[2], r[3], r[4], r[5], bool(r[6]), bool(r[7])) for r in cur.fetchall()}
+
+
+def mark_pdfs_skipped_by_ocr(conn: psycopg.Connection, root_id: int) -> int:
+    """Record `no_text` PDFs as `disabled:search_ocr`, for a root whose OCR is off.
+
+    A PDF without a text layer used to be stored as `no_text` whether or not OCR
+    had read it, so an old `no_text` PDF may never have been OCR'd. While OCR is
+    off nothing writes `no_text` for a PDF any more, so this moves only those
+    older rows, and enabling OCR reads each once. Returns how many rows it moved.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE \"idx\".\"files\" SET text_status = 'disabled:search_ocr' "
+            "WHERE root_id = %s AND text_status = 'no_text' AND ext = ANY(%s) AND deleted_at IS NULL",
+            (root_id, sorted(PDF_EXTS)),
+        )
+        return cur.rowcount
 
 
 def upsert_file(

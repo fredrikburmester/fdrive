@@ -36,6 +36,35 @@ def test_build_context_upserts_root_and_wires_extractor(
     assert ctx.feature_configuration().values.indexer_enabled is False
 
 
+@pytest.mark.parametrize("search_ocr", [False, True])
+def test_build_context_marks_old_text_less_pdfs_for_ocr_only_while_it_is_off(
+    postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, search_ocr: bool
+) -> None:
+    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    cfg = Config()
+    values = {
+        "thumbnails": False,
+        "textSearch": True,
+        "searchOcr": search_ocr,
+        "semanticSearch": False,
+        "imageSearch": False,
+        "pdfOcr": False,
+    }
+    with db.connect(postgres_dsn) as conn:
+        conn.execute(
+            'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
+            (FEATURES_KEY, Json({"version": 1, "revision": 4, "values": values})),
+        )
+        file_id = db.upsert_file(conn, db.upsert_root(conn, "sftpgo"), "scan.pdf", "scan.pdf", ".pdf", 1, 1, "sha", None)
+        db.update_file_status(conn, file_id, "no_text", 0, None)
+
+    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+
+    # With OCR on, the old retry rule already OCR'd every no_text PDF.
+    expected = "no_text" if search_ocr else "disabled:search_ocr"
+    assert db.get_manifest(ctx.conn(), ctx.root_id)["scan.pdf"][2] == expected
+
+
 def test_refresh_features_requires_explicit_persisted_selection(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

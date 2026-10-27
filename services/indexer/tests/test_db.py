@@ -120,10 +120,52 @@ def test_scan_manifest_includes_content_key_and_image_embedding_presence(db_conn
 
     # Identical content at two paths shares one embedding row without duplicating either path.
     assert manifest == {
-        "embedded.jpg": (10, 1, "pending", None, "sha-embedded", True),
-        "copy.jpg": (10, 2, "pending", None, "sha-embedded", True),
-        "plain.jpg": (20, 3, "pending", None, "sha-plain", False),
+        "embedded.jpg": (10, 1, "pending", None, "sha-embedded", True, False),
+        "copy.jpg": (10, 2, "pending", None, "sha-embedded", True, False),
+        "plain.jpg": (20, 3, "pending", None, "sha-plain", False, False),
     }
+
+
+def test_scan_manifest_flags_only_unresolved_thumbnail_failures(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    other_root = db.upsert_root(db_conn, "photos")
+    for path in ("failed.jpg", "resolved.jpg", "embedding.jpg", "elsewhere.jpg"):
+        db.upsert_file(db_conn, root_id, path, path, ".jpg", 1, 1, f"sha-{path}", None)
+    db_conn.execute(
+        "INSERT INTO idx.processing_failures (root_id, path, feature, code, message, operation_id, resolved_at) VALUES "
+        "(%s, 'failed.jpg', 'thumbnails', 'E', 'm', 'op', NULL), (%s, 'resolved.jpg', 'thumbnails', 'E', 'm', 'op', now()), "
+        "(%s, 'embedding.jpg', 'imageSearch', 'E', 'm', 'op', NULL), (%s, 'elsewhere.jpg', 'thumbnails', 'E', 'm', 'op', NULL)",
+        (root_id, root_id, root_id, other_root),
+    )
+
+    manifest = db.scan_manifest(db_conn, root_id)
+
+    assert {path: row[6] for path, row in manifest.items()} == {
+        "failed.jpg": True, "resolved.jpg": False, "embedding.jpg": False, "elsewhere.jpg": False
+    }
+
+
+def test_mark_pdfs_skipped_by_ocr_moves_only_live_text_less_pdfs(db_conn: psycopg.Connection) -> None:
+    root_id = db.upsert_root(db_conn, "sftpgo")
+    other_root = db.upsert_root(db_conn, "photos")
+    rows = {
+        (root_id, "scan.pdf", ".pdf", "no_text"),
+        (root_id, "photo.jpg", ".jpg", "no_text"),
+        (root_id, "text.pdf", ".pdf", "indexed"),
+        (root_id, "gone.pdf", ".pdf", "no_text"),
+        (other_root, "other.pdf", ".pdf", "no_text"),
+    }
+    for root, path, ext, status in rows:
+        file_id = db.upsert_file(db_conn, root, path, path, ext, 1, 1, "sha", None)
+        db.update_file_status(db_conn, file_id, status, 0, None)
+    db.mark_deleted(db_conn, root_id, "gone.pdf", is_dir=False)
+
+    assert db.mark_pdfs_skipped_by_ocr(db_conn, root_id) == 1
+    assert {path: row[2] for path, row in db.get_manifest(db_conn, root_id).items()} == {
+        "scan.pdf": "disabled:search_ocr", "photo.jpg": "no_text", "text.pdf": "indexed", "gone.pdf": "no_text"
+    }
+    assert db.get_manifest(db_conn, other_root)["other.pdf"][2] == "no_text"
+    assert db.mark_pdfs_skipped_by_ocr(db_conn, root_id) == 0
 
 
 def test_upsert_file_conflict_updates_row(db_conn: psycopg.Connection) -> None:
