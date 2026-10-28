@@ -28,6 +28,8 @@ export interface DesktopRepo {
     identityId: string,
     items: readonly { path: string; kind: string }[],
   ): Promise<DesktopItemRecord[]>;
+  /** Live rows at these paths, read without registering anything. */
+  lookup(identityId: string, paths: readonly string[]): Promise<DesktopItemRecord[]>;
   item(identityId: string, id: string): Promise<DesktopItemRecord | null>;
   at(identityId: string, path: string): Promise<DesktopItemRecord | null>;
   children(identityId: string, path: string): Promise<DesktopItemRecord[]>;
@@ -151,6 +153,13 @@ export function createDesktopRepo(db: Db): DesktopRepo {
             found.set(created.path, created);
         return ordered(found);
       });
+    },
+    async lookup(identityId, paths) {
+      if (!paths.length) return [];
+      return db
+        .select()
+        .from(desktopItems)
+        .where(and(live(identityId), inArray(desktopItems.path, [...new Set(paths)])));
     },
     async item(identityId, id) {
       return (

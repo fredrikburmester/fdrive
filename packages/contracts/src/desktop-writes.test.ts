@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import { DesktopPairApproval } from "./desktop.js";
 import {
+  DesktopFolderCheckRequest,
+  DesktopFolderCheckResponse,
   DesktopFolderRequest,
   DesktopName,
   DesktopUploadRequest,
@@ -46,4 +48,22 @@ it("requires a digest and explicit null base for zero-byte uploads", () => {
     { ...request, sha256: "not-a-hash" },
   ])
     expect(DesktopUploadRequest.safeParse(invalid).success).toBe(false);
+});
+
+it("bounds folder checks to unique, valid folders and known answers", () => {
+  const folder = (index: number) => ({ path: `/folder-${index}`, token: "v1:token" });
+  expect(DesktopFolderCheckRequest.parse({ folders: [folder(1)] }).folders).toHaveLength(1);
+  for (const invalid of [
+    { folders: [] },
+    { folders: Array.from({ length: 201 }, (_, index) => folder(index)) },
+    { folders: [folder(1), folder(1)] },
+    { folders: [{ path: "relative", token: "t" }] },
+    { folders: [{ path: "/a", token: "" }] },
+    { folders: [{ path: "/a", token: "t".repeat(129) }] },
+    { folders: [{ ...folder(1), extra: true }] },
+  ])
+    expect(DesktopFolderCheckRequest.safeParse(invalid).success).toBe(false);
+  expect(
+    DesktopFolderCheckResponse.safeParse({ folders: [{ path: "/a", status: "renamed" }] }).success,
+  ).toBe(false);
 });
