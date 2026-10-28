@@ -196,6 +196,11 @@ it("registers many desktop paths at once, parents first, without the lock when a
     expect(left?.[2]?.id).toBe(left?.[3]?.id);
     expect(new Set(right?.map((item) => item.id))).toEqual(new Set(left?.map((item) => item.id)));
     expect(await a.ensure(identity.id, "/å🚀_%/a", "dir")).toEqual(left?.[1]);
+    // Lookups read live rows only and never register a path.
+    expect(await b.lookup(identity.id, [])).toEqual([]);
+    expect(await b.lookup(identity.id, ["/å🚀_%/a", "/å🚀_%/a", "/never"])).toEqual([left?.[1]]);
+    expect(await b.at(identity.id, "/never")).toBeNull();
+    expect(await b.lookup(other.id, ["/å🚀_%/a"])).toEqual([]);
     const isolated = await b.ensureMany(other.id, listing);
     expect(isolated.map((item) => item.id)).not.toContain(left?.[0]?.id);
     await expect(

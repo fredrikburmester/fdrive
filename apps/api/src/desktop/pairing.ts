@@ -156,6 +156,8 @@ export function createDesktopPairing(deps: DesktopDeps) {
         deps.maxUploadBytes ?? DESKTOP_MAX_UPLOAD_BYTES,
       ),
       ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
+      // Folder checks are served by the same write service that reports availability.
+      ...(deps.writeAvailability ? { listingChecks: true as const } : {}),
     };
   }
   async function issue(pair: Pair): Promise<IssuedCredential[]> {

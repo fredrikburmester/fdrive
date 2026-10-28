@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CanonicalUuid } from "./canonical-uuid.ts";
-import { DesktopEntry, DesktopLocation } from "./desktop.ts";
+import { DesktopEntry, DesktopLocation, DesktopPath } from "./desktop.ts";
 
 /** Protocol 1 stays read-only for installed clients. */
 export const DESKTOP_WRITE_API = "/api/v2/desktop";
@@ -22,6 +22,8 @@ export const DesktopWriteLocation = DesktopLocation.extend({
   capabilities: DesktopWriteCapabilities,
   maxUploadBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   writeUnavailableReason: z.string().optional(),
+  /** The server answers folder checks, so a refresh lists only folders that changed. */
+  listingChecks: z.literal(true).optional(),
 });
 export const DesktopWriteCredential = z.object({
   token: z.string(),
@@ -59,9 +61,28 @@ export const DesktopWriteEntry = DesktopEntry.extend({
   capabilities: DesktopWriteCapabilities,
   trashed: z.boolean(),
 });
+/** Names one complete folder listing; a later check compares it with the folder now. */
+export const DesktopListingToken = z.string().min(1).max(128);
 export const DesktopWriteListing = z.object({
   entries: z.array(DesktopWriteEntry),
   nextCursor: z.string().nullable(),
+  /** Only on a complete single-page listing outside Trash. */
+  token: DesktopListingToken.optional(),
+});
+export const DesktopFolderCheckRequest = z.strictObject({
+  folders: z
+    .array(z.strictObject({ path: DesktopPath, token: DesktopListingToken }))
+    .min(1)
+    .max(200)
+    .refine(
+      (folders) => new Set(folders.map((folder) => folder.path)).size === folders.length,
+      "Duplicate folder",
+    ),
+});
+export const DesktopFolderState = z.enum(["unchanged", "changed", "missing", "forbidden"]);
+/** Answers a leading part of the request when time runs out; the client asks again. */
+export const DesktopFolderCheckResponse = z.object({
+  folders: z.array(z.object({ path: DesktopPath, status: DesktopFolderState })),
 });
 const OperationId = CanonicalUuid;
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -133,6 +154,9 @@ export const DesktopWriteErrorCode = z.enum([
 ]);
 export type DesktopWriteLocation = z.infer<typeof DesktopWriteLocation>;
 export type DesktopWriteEntry = z.infer<typeof DesktopWriteEntry>;
+export type DesktopFolderState = z.infer<typeof DesktopFolderState>;
+export type DesktopFolderCheck = z.infer<typeof DesktopFolderCheckRequest>["folders"][number];
+export type DesktopFolderCheckResponse = z.infer<typeof DesktopFolderCheckResponse>;
 export type DesktopWriteCredential = z.infer<typeof DesktopWriteCredential>;
 export type DesktopWriteCapabilities = z.infer<typeof DesktopWriteCapabilities>;
 export type DesktopUploadRequest = z.infer<typeof DesktopUploadRequest>;

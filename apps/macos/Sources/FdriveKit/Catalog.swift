@@ -26,7 +26,7 @@ public actor Catalog {
         sqlite3_busy_timeout(connection, 10_000)
         var version: OpaquePointer?
         sqlite3_prepare_v2(connection, "PRAGMA user_version", -1, &version, nil)
-        let supported = sqlite3_step(version) == SQLITE_ROW && sqlite3_column_int(version, 0) <= 3
+        let supported = sqlite3_step(version) == SQLITE_ROW && sqlite3_column_int(version, 0) <= 4
         sqlite3_finalize(version)
         guard supported else {
             throw DriveError.database("This metadata store requires a newer version of fdrive.")
@@ -47,10 +47,11 @@ public actor Catalog {
         CREATE INDEX IF NOT EXISTS item_deleted_revision ON items(revision) WHERE deleted=1;
         CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS listings (path TEXT PRIMARY KEY, token TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS folder_tokens (path TEXT PRIMARY KEY, token TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL, localId TEXT NOT NULL, value TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS departures (id TEXT NOT NULL, parent TEXT NOT NULL, revision INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS departure_revision ON departures(revision);
-        PRAGMA user_version=3;
+        PRAGMA user_version=4;
         COMMIT;
         """
         guard sqlite3_exec(connection, schema, nil, nil, nil) == SQLITE_OK else {
@@ -114,6 +115,11 @@ public actor Catalog {
     public func all() throws -> [CatalogItem] { try rows("SELECT value FROM items WHERE deleted=0 ORDER BY path").map { try decode($0[0]) } }
     public func folders() throws -> [String] { try rows("SELECT path FROM folders ORDER BY path").map { $0[0] } }
     public func hasListing(_ path: String) throws -> Bool { !(try rows("SELECT path FROM folders WHERE path=?", [path])).isEmpty }
+    /// The server's token for each folder whose local children still match that listing.
+    public func folderTokens() throws -> [String: String] {
+        Dictionary(uniqueKeysWithValues: try rows("SELECT path,token FROM folder_tokens").map { ($0[0], $0[1]) })
+    }
+    private func forgetToken(_ path: String) throws { try execute("DELETE FROM folder_tokens WHERE path=?", [path]) }
     public func generation() throws -> String { try rows("SELECT value FROM state WHERE key='generation'")[0][0] }
     public func revision() throws -> Int64 { Int64(try rows("SELECT value FROM state WHERE key='revision'")[0][0]) ?? 0 }
     /// Rename only the domain root's display metadata; preserve the catalog and cached items.
@@ -161,7 +167,9 @@ public actor Catalog {
         }
     }
     /// Only complete listings enter this transaction. A timeout cannot turn a folder empty.
-    public func reconcile(_ entries: [RemoteEntry], folder: String, listing: String? = nil) throws {
+    /// `token` names this exact listing; it is kept only when every entry was applied, so a
+    /// later check that finds the same token proves the folder's children are current.
+    public func reconcile(_ entries: [RemoteEntry], folder: String, listing: String? = nil, token: String? = nil) throws {
         try transaction {
             if let listing, try rows("SELECT token FROM listings WHERE path=?", [folder]).first?.first != listing { return }
             let parent = try itemAt(folder)
@@ -191,13 +199,15 @@ public actor Catalog {
                 return false
             }
             let knownItems = removed.isEmpty ? [] : try all()
+            var skipped = false
             for removedItem in removed {
-                if pendingIds.contains(removedItem.id) { continue }
+                if pendingIds.contains(removedItem.id) { skipped = true; continue }
                 for descendant in knownItems where descendant.entry.path == removedItem.entry.path || descendant.entry.path.hasPrefix(removedItem.entry.path + "/") {
-                    if pendingIds.contains(descendant.id) { continue }
+                    if pendingIds.contains(descendant.id) { skipped = true; continue }
                     try execute("UPDATE items SET deleted=1,revision=? WHERE id=?", [String(try next()), descendant.id])
                     try execute("DELETE FROM folders WHERE path=?", [descendant.entry.path])
                     try execute("DELETE FROM listings WHERE path=?", [descendant.entry.path])
+                    try forgetToken(descendant.entry.path)
                 }
             }
             for entry in entries {
@@ -206,7 +216,7 @@ public actor Catalog {
                     found = try decode(row[0])
                 } else { do { found = try itemAt(entry.path) } catch DriveError.missing { found = nil } }
                 if var current = found {
-                    if pendingIds.contains(current.id) { continue }
+                    if pendingIds.contains(current.id) { skipped = true; continue }
                     if current.entry != entry || (try? self.item(current.id)) == nil {
                         if current.entry.size != entry.size || current.entry.modifiedAt != entry.modifiedAt {
                             current.contentVersion = UUID().uuidString
@@ -222,6 +232,9 @@ public actor Catalog {
                 }
             }
             try execute("INSERT OR IGNORE INTO folders VALUES (?)", [folder])
+            if let token, !skipped {
+                try execute("INSERT INTO folder_tokens VALUES (?,?) ON CONFLICT(path) DO UPDATE SET token=excluded.token", [folder, token])
+            } else { try forgetToken(folder) }
         }
     }
     public func downloaded(_ id: String, hash: String, size: Int64, expectedVersion: String? = nil) throws -> CatalogItem {
@@ -394,6 +407,9 @@ public actor Catalog {
             // synchronized save as an edit by another application.
             result.localModificationDate = pending.localModificationDate ?? previous?.localModificationDate
             try save(result)
+            // This write changed both parents locally; their next listing must come from the server.
+            try forgetToken(parentPath(entry.path))
+            if let previous { try forgetToken(parentPath(previous.entry.path)) }
             if let previous, previous.entry.path != entry.path, previous.entry.kind == "dir" {
                 for var child in try all() where child.entry.path.hasPrefix(previous.entry.path + "/") {
                     let oldPath = child.entry.path
@@ -405,11 +421,13 @@ public actor Catalog {
                         try execute("DELETE FROM folders WHERE path=?", [oldPath])
                         try execute("INSERT OR IGNORE INTO folders VALUES (?)", [child.entry.path])
                     }
+                    try forgetToken(oldPath); try forgetToken(child.entry.path)
                 }
                 if try hasListing(previous.entry.path) {
                     try execute("DELETE FROM folders WHERE path=?", [previous.entry.path])
                     try execute("INSERT OR IGNORE INTO folders VALUES (?)", [entry.path])
                 }
+                try forgetToken(previous.entry.path); try forgetToken(entry.path)
             }
             try execute("DELETE FROM listings")
             var finished = pending; finished.result = result; finished.error = nil
