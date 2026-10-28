@@ -1,6 +1,7 @@
 import {
   CanonicalUuid,
   DESKTOP_API,
+  DesktopFolderCheckRequest,
   DesktopFolderRequest,
   DesktopMoveRequest,
   DesktopPairApproval,
@@ -243,6 +244,11 @@ export function registerDesktopRoutes(
           c.req.query("cursor"),
         ),
       );
+    });
+    v2.post(`${base}/checks`, async (c) => {
+      const auth = await principal(c, true);
+      const body = await parseBody(DesktopFolderCheckRequest, c);
+      return c.json(await writeService().check(auth.principal, body.folders, c.req.raw.signal));
     });
     v2.get(`${base}/entry`, async (c) =>
       c.json(await writeService().stat((await principal(c, true)).principal, path(c))),

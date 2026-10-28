@@ -30,6 +30,11 @@ export function memoryRepo() {
         found.set(path, await repo.ensure(identityId, path, kind));
       return list.map(({ path }) => found.get(path) as DesktopItemRecord);
     },
+    async lookup(identityId, paths) {
+      return [...items.values()].filter(
+        (item) => item.identityId === identityId && !item.deletedAt && paths.includes(item.path),
+      );
+    },
     async item(identityId, id) {
       const value = items.get(id);
       return value?.identityId === identityId && !value.deletedAt ? { ...value } : null;

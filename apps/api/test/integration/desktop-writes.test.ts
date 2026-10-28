@@ -155,6 +155,22 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
       entries: Array<{ path: string }>;
     };
     expect(listing.entries.map((e) => e.path)).toEqual(["/save.txt"]);
+    // A listing's token checks unchanged until storage changes underneath it.
+    const check = async (path: string, token: string) =>
+      (
+        (await json(`${base}/checks`, { folders: [{ path, token }] })) as {
+          folders: Array<{ status: string }>;
+        }
+      ).folders[0]?.status;
+    const { token: rootToken } = (await json(`${base}/entries?path=/`)) as { token: string };
+    expect(await check("/", rootToken)).toBe("unchanged");
+    expect(await check("/gone", rootToken)).toBe("missing");
+    const outside = new URL("outside.txt", dav.baseUrl);
+    expect((await fetch(outside, { method: "PUT", headers: upstreamHeaders, body: "x" })).ok).toBe(
+      true,
+    );
+    expect(await check("/", rootToken)).toBe("changed");
+    expect((await fetch(outside, { method: "DELETE", headers: upstreamHeaders })).ok).toBe(true);
     expect((await call(`${base}/entry?path=/.fdrive-desktop`)).status).toBe(403);
     // Case folding is enforced even when the upstream filesystem is case sensitive.
     const collision = await upload("SAVE.txt", "collision");
@@ -340,6 +356,11 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
           await fetch(new URL("restored.txt", dav.baseUrl), { headers: upstreamHeaders })
         ).text(),
       ).toBe("peer after rename");
+      // Another process, or this one restarted, derives the same token.
+      const { token } = (await json(`${base}/entries?path=/`)) as { token: string };
+      await composed.close();
+      composed = await composeApp(config, pino({ level: "silent" }));
+      expect(await check("/", token)).toBe("unchanged");
     } finally {
       await database.close();
     }

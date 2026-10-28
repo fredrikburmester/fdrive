@@ -399,11 +399,8 @@ private struct TrashRecoveryView: View {
                 base: WriteVersion(content: item.contentVersion, metadata: item.metadataVersion),
                 contents: nil, progress: Progress(totalUnitCount: -1))
             let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
-            if let manager = NSFileProviderManager(for: domain) {
-                for id: NSFileProviderItemIdentifier in [.workingSet, .trashContainer, .rootContainer] {
-                    try await manager.signalEnumerator(for: id)
-                }
-            }
+            // Replicated domains ignore every container but the working set.
+            if let manager = NSFileProviderManager(for: domain) { try await manager.signalEnumerator(for: .workingSet) }
             await load()
         } catch { self.error = error.localizedDescription }
     }
@@ -724,15 +721,10 @@ final class AppModel: ObservableObject {
                    enumerationStale(lastCallback: callback.at, signalled: unansweredSignals[saved.id], now: Date()) {
                     warnings[saved.id] = "Finder has not responded to this location's updates. See Troubleshooting in the macOS guide."
                 } else { warnings.removeValue(forKey: saved.id) }
-                try await refreshCatalog(catalog, client: client) {
+                try await refreshCatalog(catalog, client: client, checks: current.listingChecks == true) {
+                    // Replicated domains ignore every container but the working set.
                     let domain = NSFileProviderDomain(identifier: .init(updated.id), displayName: updated.title)
-                    if let manager = NSFileProviderManager(for: domain) {
-                        try await manager.signalEnumerator(for: .workingSet)
-                        for folder in try await catalog.folders() {
-                            let item = try await catalog.itemAt(folder)
-                            try await manager.signalEnumerator(for: NativeEnvironment.id(item.id))
-                        }
-                    }
+                    if let manager = NSFileProviderManager(for: domain) { try await manager.signalEnumerator(for: .workingSet) }
                 }
                 let signalled = Date(), answer = try await catalog.lastCallback()
                 unansweredSignals[saved.id] = unansweredSignal(
@@ -740,7 +732,8 @@ final class AppModel: ObservableObject {
                     lastCallback: answer.at, callbackRevision: answer.revision)
                 let pending = try await catalog.pendingWrites().filter { $0.result == nil }
                 status[saved.id] = pending.isEmpty ? (current.readOnly ? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
-                automaticAfter[saved.id] = nextAutomaticRefresh(finished: Date(), took: Date().timeIntervalSince(started))
+                automaticAfter[saved.id] = nextAutomaticRefresh(finished: Date(), took: Date().timeIntervalSince(started),
+                                                                folders: try await catalog.folders().count)
                 failures[saved.id] = nil
             } catch {
                 if Task.isCancelled {

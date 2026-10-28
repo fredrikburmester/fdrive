@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DesktopEntry } from "@fdrive/contracts";
-import { isUnderPath, normalizePath } from "@fdrive/core";
+import { type FileEntry, isUnderPath, normalizePath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
@@ -15,6 +15,11 @@ interface Snapshot {
   expires: number;
   entries: DesktopEntry[];
 }
+
+/** Entries per listing page; a folder with more never gets a listing token. */
+export const DESKTOP_PAGE_SIZE = 500;
+/** Lists one upstream folder; a caller may share listings across ancestor walks. */
+export type DesktopLister = (path: string) => Promise<FileEntry[]>;
 
 export { DESKTOP_INTERNAL_ROOT };
 export function createDesktopFiles(
@@ -39,9 +44,27 @@ export function createDesktopFiles(
       throw new ApiHttpError("forbidden", "Path is not available to this connection");
     return path;
   }
+  /** What this connection may see of a folder's upstream listing, in path order. */
+  function visible(principal: Principal, live: readonly FileEntry[]): DesktopEntry[] {
+    return live
+      .filter((item) => allowed(principal, normalizePath(item.path), item.kind === "dir"))
+      .map((item) => ({
+        path: normalizePath(item.path),
+        name: item.name,
+        kind: item.kind,
+        size: item.size,
+        modifiedAt: item.modifiedAt.toISOString(),
+        readable: item.kind === "file" || item.kind === "dir",
+      }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }
   // Do not follow a symlink inside a folder grant. The adapters expose entry kinds in
   // listings, whereas HTTP stat can describe the symlink's target as an ordinary file.
-  async function entry(principal: Principal, path: string): Promise<DesktopEntry> {
+  async function entry(
+    principal: Principal,
+    path: string,
+    list: DesktopLister = (parent) => principal.storage.list(parent),
+  ): Promise<DesktopEntry> {
     if (path === "/") {
       await runStorageCall(async () => {
         await (principal.storage.probeDirectoryRead?.("/") ?? principal.storage.list("/"));
@@ -61,7 +84,7 @@ export function createDesktopFiles(
     let result: DesktopEntry | undefined;
     for (let i = 0; i < parts.length; i++) {
       const current = `${parent}/${parts[i]}`;
-      const entries = await runStorageCall(() => principal.storage.list(parent || "/"));
+      const entries = await runStorageCall(() => list(parent || "/"));
       const found = entries.find((candidate) => normalizePath(candidate.path) === current);
       if (!found) throw new ApiHttpError("not_found", "Item no longer exists");
       if ((i < parts.length - 1 && found.kind !== "dir") || found.kind === "symlink")
@@ -105,7 +128,7 @@ export function createDesktopFiles(
         id = match[1] as string;
         offset = Number(match[2]);
         snapshot = existing;
-        if (offset >= snapshot.entries.length || offset % 500 !== 0)
+        if (offset >= snapshot.entries.length || offset % DESKTOP_PAGE_SIZE !== 0)
           throw new ApiHttpError("bad_request", "Invalid folder continuation");
         await runStorageCall(async () => {
           await (principal.storage.probeDirectoryRead?.(path) ?? principal.storage.list(path));
@@ -120,25 +143,25 @@ export function createDesktopFiles(
           tokenKey,
           path,
           expires: deps.clock().getTime() + 120_000,
-          entries: live
-            .filter((item) => allowed(principal, normalizePath(item.path), item.kind === "dir"))
-            .map((item) => ({
-              path: normalizePath(item.path),
-              name: item.name,
-              kind: item.kind,
-              size: item.size,
-              modifiedAt: item.modifiedAt.toISOString(),
-              readable: item.kind === "file" || item.kind === "dir",
-            }))
-            .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+          entries: visible(principal, live),
         };
         snapshots.set(id, snapshot);
       }
-      const end = offset + 500;
+      const end = offset + DESKTOP_PAGE_SIZE;
       const entries = snapshot.entries.slice(offset, end);
       const nextCursor = end < snapshot.entries.length ? `${id}:${end}` : null;
       if (nextCursor === null) snapshots.delete(id);
       return { entries, nextCursor };
+    },
+    /**
+     * A whole folder with live access proven, for a folder check. No snapshot: checks
+     * must not use up the listing capacity that paged listings share. Null when the
+     * path is no longer a folder.
+     */
+    async folder(principal: Principal, raw: string, list: DesktopLister) {
+      const path = authorize(principal, raw, true);
+      if ((await entry(principal, path, list)).kind !== "dir") return null;
+      return { path, entries: visible(principal, await runStorageCall(() => list(path))) };
     },
     async content(principal: Principal, raw: string, signal: AbortSignal) {
       const path = authorize(principal, raw);

@@ -91,7 +91,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                 let result = try await coordinator.perform(
                     route: directory ? "folders" : "uploads", localId: nil, templateKey: templateKey,
                     parentId: parentId, name: name, base: nil, contents: url, progress: progress, modificationDate: modificationDate)
-                await signalChanges(parents: [parentId])
+                await signalChanges()
                 handler.value(ProviderItem(result), [], false, nil)
             } catch { handler.value(nil, [], false, NativeEnvironment.error(error)) }
         }
@@ -121,7 +121,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     let result = try await WriteCoordinator(catalog: repository, client: client).perform(
                         route: hasContents ? "uploads" : "moves", localId: id, templateKey: id,
                         parentId: parentId, name: name, base: base, contents: newContents, progress: progress, keepBoth: keepBoth, modificationDate: modificationDate)
-                    await signalChanges(parents: [previous.parentId, parentId])
+                    await signalChanges()
                     handler.value(ProviderItem(result), [], false, nil)
                 } catch { handler.value(nil, [], false, NativeEnvironment.error(error)) }
             }
@@ -144,10 +144,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                                   userInfo: [NSLocalizedDescriptionKey: "Permanent deletion is disabled. Use Move to Trash to retain a recoverable copy."]))
         return Progress(totalUnitCount: 0)
     }
-    private func signalChanges(parents: [String]) async {
+    /// A replicated extension is only heard through the working set; other containers are ignored.
+    private func signalChanges() async {
         guard let manager = NSFileProviderManager(for: domain) else { return }
         try? await manager.signalEnumerator(for: .workingSet)
-        for parent in Set(parents) { try? await manager.signalEnumerator(for: NativeEnvironment.id(parent)) }
     }
     func materializedItemsDidChange(completionHandler: @escaping () -> Void) {
         guard let (repository, _) = try? connection(), let manager = NSFileProviderManager(for: domain) else {

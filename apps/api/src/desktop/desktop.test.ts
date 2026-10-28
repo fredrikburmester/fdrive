@@ -69,6 +69,28 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
   expect((await call("/operations/invalid")).status).toBe(400);
   expect((await call("/operations/" + randomUUID())).status).toBe(404);
   expect((await call("/entries?path=/")).status).toBe(200);
+  // Folder checks: advertised, answered from a listing's token, and strictly bounded.
+  expect(await (await call("/location")).json()).toMatchObject({ listingChecks: true });
+  const { token: rootToken } = (await (await call("/entries?path=/")).json()) as { token: string };
+  expect(
+    await (await call("/checks", { folders: [{ path: "/", token: rootToken }] })).json(),
+  ).toEqual({ folders: [{ path: "/", status: "unchanged" }] });
+  for (const folders of [
+    [],
+    Array.from({ length: 201 }, (_, index) => ({ path: `/f${index}`, token: "t" })),
+    [
+      { path: "/", token: "t" },
+      { path: "/", token: "t" },
+    ],
+    [{ path: "relative", token: "t" }],
+  ])
+    expect((await call("/checks", { folders })).status).toBe(400);
+  const anonymous = await f.app.request(`${base}/checks`, {
+    method: "POST",
+    headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
+    body: JSON.stringify({ folders: [{ path: "/", token: rootToken }] }),
+  });
+  expect(anonymous.status).toBe(401);
   expect((await call("/entry?path=/docs/a.txt")).status).toBe(200);
   expect(await (await call("/content?path=/docs/a.txt")).text()).toBe("alpha");
   // A rejected ID is refused outright rather than costing the caller its bytes.
