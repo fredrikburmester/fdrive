@@ -16,12 +16,15 @@ import type { ChatService } from "./chat/service.ts";
 import type { AiModel } from "./model.ts";
 import type { OrganizeService } from "./organize/service.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "./settings.ts";
+import { createTypeSafeClient, type TypeSafeClient } from "./typesafe.ts";
 
 export interface AiRoutesDeps {
   readonly settings: AiSettingsService;
   readonly organize: OrganizeService;
   readonly chat: ChatService;
   readonly modelFor: (config: ResolvedAiConfig) => AiModel;
+  /** Builds the TypeSafe client the connection check uses when the assist is on. */
+  readonly typeSafeFor?: (apiKey: string) => TypeSafeClient;
   /** How long the connection check may take. Default 15 seconds. */
   readonly testTimeoutMs?: number;
 }
@@ -78,10 +81,25 @@ export function registerAiRoutes(
           message: "Save a provider, model and key first.",
         }),
       );
+    const timeoutMs = deps.testTimeoutMs ?? 15_000;
     const result = await deps
       .modelFor(config)
-      .ping(AbortSignal.timeout(deps.testTimeoutMs ?? 15_000))
+      .ping(AbortSignal.timeout(timeoutMs))
       .catch(() => ({ ok: false, message: "The connection check did not finish in time." }));
-    return c.json(AiConnectionTestResponse.parse(result));
+    // The assist is a second service with its own key, so a check that passed
+    // the provider still has to say whether TypeSafe answers.
+    if (!result.ok || !config.assist || config.assistApiKey === null)
+      return c.json(AiConnectionTestResponse.parse(result));
+    const assist = await (
+      deps.typeSafeFor ?? ((key: string) => createTypeSafeClient({ apiKey: key }))
+    )(config.assistApiKey)
+      .ping(AbortSignal.timeout(timeoutMs))
+      .catch(() => ({ ok: false, message: "The TypeSafe check did not finish in time." }));
+    return c.json(
+      AiConnectionTestResponse.parse({
+        ok: assist.ok,
+        message: `${result.message} ${assist.message}`,
+      }),
+    );
   });
 }

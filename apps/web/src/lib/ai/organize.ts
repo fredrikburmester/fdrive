@@ -29,8 +29,9 @@ export function withDestination(
   destination: string,
 ): OrganizeSuggestion {
   if (destination === suggestion.destination) return suggestion;
+  const { uncertain: _doubted, ...rest } = suggestion;
   return {
-    ...suggestion,
+    ...rest,
     destination,
     target: joinPath(destination, baseName(suggestion.path)),
     newFolder: false,
@@ -58,11 +59,15 @@ export function groupSuggestions(suggestions: readonly OrganizeSuggestion[]): Su
     );
 }
 
-/** The paths checked when a proposal first opens: everything except known conflicts. */
+/**
+ * The paths checked when a proposal first opens: everything except known
+ * conflicts and the destinations the assist doubted. Both are left for the
+ * person to look at rather than applied by default.
+ */
 export function initiallyChecked(proposal: OrganizeProposal): Set<string> {
   return new Set(
     proposal.suggestions
-      .filter((suggestion) => !suggestion.conflict)
+      .filter((suggestion) => !suggestion.conflict && suggestion.uncertain !== true)
       .map((suggestion) => suggestion.path),
   );
 }

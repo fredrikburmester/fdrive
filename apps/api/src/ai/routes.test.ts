@@ -16,6 +16,7 @@ import type { AiModel } from "./model.ts";
 import type { OrganizeService } from "./organize/service.ts";
 import { registerAiRoutes } from "./routes.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "./settings.ts";
+import type { TypeSafeClient } from "./typesafe.ts";
 
 const WRITE_HEADERS = { "content-type": "application/json", "x-requested-with": "fdrive" };
 
@@ -36,6 +37,8 @@ const CONFIGURATION: AiSettings = {
   model: "claude-opus-5",
   baseUrl: null,
   hasApiKey: true,
+  assist: false,
+  hasAssistKey: false,
 };
 
 const SAVED: ResolvedAiConfig = {
@@ -45,6 +48,8 @@ const SAVED: ResolvedAiConfig = {
   apiKey: "sk-ant-1",
   organize: true,
   chat: true,
+  assist: false,
+  assistApiKey: null,
 };
 
 function buildApp(
@@ -52,6 +57,7 @@ function buildApp(
     isAdmin?: boolean;
     saved?: ResolvedAiConfig | null;
     ping?: AiModel["ping"];
+    assistPing?: TypeSafeClient["ping"];
     testTimeoutMs?: number;
   } = {},
 ) {
@@ -63,7 +69,12 @@ function buildApp(
     isAdmin: options.isAdmin ?? false,
   };
   const organize = {
-    status: vi.fn(async () => ({ provider: "anthropic" as const, organize: true, chat: true })),
+    status: vi.fn(async () => ({
+      provider: "anthropic" as const,
+      organize: true,
+      chat: true,
+      assist: false,
+    })),
     start: vi.fn(async () => RUN),
     get: vi.fn(() => RUN),
     cancel: vi.fn(() => ({ ...RUN, state: "cancelled" as const })),
@@ -76,6 +87,12 @@ function buildApp(
   } satisfies AiSettingsService;
   const ping = vi.fn(options.ping ?? (async () => ({ ok: true, message: "Connected." })));
   const modelFor = vi.fn((_config: ResolvedAiConfig): AiModel => ({ start: vi.fn(), ping }));
+  const assistPing = vi.fn(
+    options.assistPing ?? (async () => ({ ok: true, message: "Connected to TypeSafe." })),
+  );
+  const typeSafeFor = vi.fn(
+    (_apiKey: string): TypeSafeClient => ({ systemOne: vi.fn(), ping: assistPing }),
+  );
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
@@ -92,10 +109,11 @@ function buildApp(
         organize,
         chat: {} as ChatService,
         modelFor,
+        typeSafeFor,
         ...(options.testTimeoutMs !== undefined ? { testTimeoutMs: options.testTimeoutMs } : {}),
       }),
   });
-  return { app, principal, organize, settings, modelFor, ping };
+  return { app, principal, organize, settings, modelFor, ping, typeSafeFor, assistPing };
 }
 
 describe("AI routes", () => {
@@ -104,7 +122,12 @@ describe("AI routes", () => {
       const { app } = buildApp({ isAdmin: false });
       const response = await app.request(ROUTES.ai.status);
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ provider: "anthropic", organize: true, chat: true });
+      expect(await response.json()).toEqual({
+        provider: "anthropic",
+        organize: true,
+        chat: true,
+        assist: false,
+      });
     });
 
     it("starts a run for the caller with the parsed request", async () => {
@@ -193,6 +216,7 @@ describe("AI routes", () => {
         revision: 1,
         organize: true,
         chat: true,
+        assist: false,
         provider: "anthropic",
         model: "claude-sonnet-5",
         baseUrl: null,
@@ -258,6 +282,57 @@ describe("AI routes", () => {
       });
       expect(built.modelFor).toHaveBeenCalledWith(SAVED);
       expect(built.ping.mock.calls[0]?.[0]).toBeInstanceOf(AbortSignal);
+    });
+
+    describe("with the assist on", () => {
+      const WITH_ASSIST: ResolvedAiConfig = { ...SAVED, assist: true, assistApiKey: "ts-key" };
+
+      it("checks TypeSafe too and reports both", async () => {
+        const built = buildApp({ isAdmin: true, saved: WITH_ASSIST });
+
+        expect(await check(built.app)).toEqual({
+          ok: true,
+          message: "Connected. Connected to TypeSafe.",
+        });
+        expect(built.typeSafeFor).toHaveBeenCalledWith("ts-key");
+      });
+
+      it("fails the whole check when only TypeSafe refuses", async () => {
+        const built = buildApp({
+          isAdmin: true,
+          saved: WITH_ASSIST,
+          assistPing: async () => ({ ok: false, message: "TypeSafe rejected the API key." }),
+        });
+
+        expect(await check(built.app)).toEqual({
+          ok: false,
+          message: "Connected. TypeSafe rejected the API key.",
+        });
+      });
+
+      it("does not reach TypeSafe when the provider itself failed", async () => {
+        const built = buildApp({
+          isAdmin: true,
+          saved: WITH_ASSIST,
+          ping: async () => ({ ok: false, message: "Anthropic rejected the API key." }),
+        });
+
+        expect(await check(built.app)).toEqual({
+          ok: false,
+          message: "Anthropic rejected the API key.",
+        });
+        expect(built.typeSafeFor).not.toHaveBeenCalled();
+      });
+
+      it("leaves TypeSafe alone when the assist has no key", async () => {
+        const built = buildApp({
+          isAdmin: true,
+          saved: { ...SAVED, assist: true, assistApiKey: null },
+        });
+
+        expect(await check(built.app)).toEqual({ ok: true, message: "Connected." });
+        expect(built.typeSafeFor).not.toHaveBeenCalled();
+      });
     });
 
     it("reports a check that fails or runs out of time", async () => {
