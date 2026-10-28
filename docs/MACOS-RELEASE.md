@@ -157,7 +157,8 @@ brew tap fredrikburmester/fdrive https://github.com/fredrikburmester/fdrive.git
 brew install --cask fredrikburmester/fdrive/fdrive
 ```
 
-Quit FDrive before upgrading:
+FDrive restarts into the upgraded copy within a minute, once you are not using its window.
+Versions up to 0.4.2 don't, so quit those before upgrading:
 
 ```sh
 brew update
