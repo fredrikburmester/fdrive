@@ -22,6 +22,14 @@ export function memoryRepo() {
       items.set(result.id, result);
       return result;
     },
+    async ensureMany(identityId, list) {
+      const found = new Map<string, DesktopItemRecord>();
+      for (const { path, kind } of [...list].sort(
+        (a, b) => a.path.split("/").length - b.path.split("/").length,
+      ))
+        found.set(path, await repo.ensure(identityId, path, kind));
+      return list.map(({ path }) => found.get(path) as DesktopItemRecord);
+    },
     async item(identityId, id) {
       const value = items.get(id);
       return value?.identityId === identityId && !value.deletedAt ? { ...value } : null;
