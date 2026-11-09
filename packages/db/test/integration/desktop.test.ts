@@ -154,3 +154,104 @@ it("coordinates desktop identities and operation receipts across independent Pos
     await container.stop();
   }
 });
+
+it("registers many desktop paths at once, parents first, without the lock when all exist", {
+  timeout: 180_000,
+}, async () => {
+  const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
+  const first = createDb(container.getConnectionUri());
+  const second = createDb(container.getConnectionUri());
+  try {
+    await migrate(first.db);
+    const repos = createRepos(first.db);
+    const account = await repos.accounts.create({ displayName: "Desktop" });
+    const provider = await repos.providers.ensure({
+      type: "webdav",
+      baseUrl: "http://desktop.test/dav",
+    });
+    const identity = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "alice",
+    });
+    const other = await repos.identities.create({
+      accountId: account.id,
+      providerId: provider.id,
+      externalUsername: "bob",
+    });
+    const a = createDesktopRepo(first.db),
+      b = createDesktopRepo(second.db);
+    expect(await a.ensureMany(identity.id, [])).toEqual([]);
+    const listing = [
+      { path: "/å🚀_%/b", kind: "file" },
+      { path: "/å🚀_%/a", kind: "dir" },
+      { path: "/å🚀_%", kind: "dir" },
+      { path: "/å🚀_%", kind: "dir" },
+    ];
+    const [left, right] = await Promise.all([
+      a.ensureMany(identity.id, listing),
+      b.ensureMany(identity.id, [...listing].reverse()),
+    ]);
+    expect(left?.map((item) => item.path)).toEqual(listing.map((item) => item.path));
+    expect(left?.[2]?.id).toBe(left?.[3]?.id);
+    expect(new Set(right?.map((item) => item.id))).toEqual(new Set(left?.map((item) => item.id)));
+    expect(await a.ensure(identity.id, "/å🚀_%/a", "dir")).toEqual(left?.[1]);
+    const isolated = await b.ensureMany(other.id, listing);
+    expect(isolated.map((item) => item.id)).not.toContain(left?.[0]?.id);
+    await expect(
+      a.ensureMany(identity.id, [
+        { path: "/x", kind: "file" },
+        { path: "/x", kind: "dir" },
+      ]),
+    ).rejects.toThrow("Conflicting");
+
+    // A fully registered listing reads without taking the identity lock.
+    const locked = await second.pool.connect();
+    try {
+      await locked.query("begin");
+      await locked.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+        JSON.stringify(["desktop-items", identity.id]),
+      ]);
+      expect((await a.ensureMany(identity.id, listing)).map((item) => item.id)).toEqual(
+        left?.map((item) => item.id),
+      );
+    } finally {
+      await locked.query("rollback");
+      locked.release();
+    }
+
+    // A folder previously registered as a file retires its subtree before its children
+    // are matched, so every returned row stays live.
+    await a.ensure(identity.id, "/swap", "file");
+    const swapped = await a.ensureMany(identity.id, [
+      { path: "/swap/child", kind: "file" },
+      { path: "/swap", kind: "dir" },
+    ]);
+    for (const item of swapped) expect(await b.item(identity.id, item.id)).toEqual(item);
+    expect(swapped[0]?.path).toBe("/swap/child");
+    const replaced = await a.ensureMany(identity.id, [
+      { path: "/swap/child", kind: "dir" },
+      { path: "/swap/other", kind: "file" },
+    ]);
+    expect(replaced[0]?.id).not.toBe(swapped[0]?.id);
+    expect(await b.item(identity.id, swapped[0]?.id as string)).toBeNull();
+    expect((await b.children(identity.id, "/swap")).map((item) => item.path).sort()).toEqual([
+      "/swap/child",
+      "/swap/other",
+    ]);
+    // Several replaced paths retire outermost first, whatever order they arrive in.
+    const inner = await a.ensure(identity.id, "/deep/inner", "dir");
+    const outer = await a.ensure(identity.id, "/deep", "file");
+    const both = await a.ensureMany(identity.id, [
+      { path: "/deep/inner", kind: "file" },
+      { path: "/deep", kind: "dir" },
+    ]);
+    expect(both.map((item) => item.id)).not.toContain(inner.id);
+    expect(both.map((item) => item.id)).not.toContain(outer.id);
+    for (const item of both) expect(await b.item(identity.id, item.id)).toEqual(item);
+  } finally {
+    await first.close();
+    await second.close();
+    await container.stop();
+  }
+});

@@ -264,11 +264,35 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     entry: DesktopEntry,
     content?: string,
   ): Promise<DesktopWriteEntry> {
-    const item = await repo.ensure(principal.identityId, entry.path, entry.kind);
-    const parent =
-      entry.path === "/"
-        ? item
-        : await repo.ensure(principal.identityId, parentPath(entry.path), "dir");
+    return (await decorateMany(principal, [entry], content))[0] as DesktopWriteEntry;
+  }
+  /** Registers the entries and their parents in one registry call, parents first. */
+  async function decorateMany(
+    principal: Principal,
+    entries: readonly DesktopEntry[],
+    content?: string,
+  ): Promise<DesktopWriteEntry[]> {
+    const rows = await repo.ensureMany(principal.identityId, [
+      ...entries.map(({ path, kind }) => ({ path, kind })),
+      ...entries.map(({ path }) => ({ path: path === "/" ? path : parentPath(path), kind: "dir" })),
+    ]);
+    return entries.map((entry, index) =>
+      present(
+        principal,
+        entry,
+        rows[index] as DesktopItemRecord,
+        rows[entries.length + index] as DesktopItemRecord,
+        content,
+      ),
+    );
+  }
+  function present(
+    principal: Principal,
+    entry: DesktopEntry,
+    item: DesktopItemRecord,
+    parent: DesktopItemRecord,
+    content?: string,
+  ): DesktopWriteEntry {
     const metadata = hash([
       item.metadataVersion,
       entry.path,
@@ -315,7 +339,20 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       parent = next;
     }
   }
-  async function trashEntry(principal: Principal, path: string): Promise<DesktopEntry> {
+  /** Shares upstream listings across the ancestor walks of one request. */
+  function sharedListings(principal: Principal) {
+    const listings = new Map<string, ReturnType<StorageProvider["list"]>>();
+    return (path: string) => {
+      const listing = listings.get(path) ?? principal.storage.list(path);
+      listings.set(path, listing);
+      return listing;
+    };
+  }
+  async function trashEntry(
+    principal: Principal,
+    path: string,
+    list = (parent: string) => principal.storage.list(parent),
+  ): Promise<DesktopEntry> {
     const root = trashRoot(principal);
     if (!isUnderPath(root, path)) throw new ApiHttpError("forbidden", "Invalid recovery path");
     const top = `${root}/${path.slice(root.length + 1).split("/")[0]}`;
@@ -332,9 +369,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     let result: DesktopEntry | undefined;
     for (const name of path.slice(1).split("/")) {
       const next = `${parent === "/" ? "" : parent}/${name}`;
-      const entry = (await runStorageCall(() => principal.storage.list(parent))).find(
-        (entry) => entry.path === next,
-      );
+      const entry = (await runStorageCall(() => list(parent))).find((entry) => entry.path === next);
       if (!entry) throw new ApiHttpError("not_found", "Trashed item no longer exists");
       if (entry.kind === "symlink" || (next !== path && entry.kind !== "dir"))
         throw new ApiHttpError("forbidden", "Unsupported recovery path");
@@ -587,27 +622,28 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       const physical = physicalTrashPath(principal, path);
       if (path === DESKTOP_TRASH || physical) {
         if (cursor) throw new ApiHttpError("conflict", "Refresh Trash to restart the listing");
+        const list = sharedListings(principal);
         const items = physical
           ? await runStorageCall(async () =>
-              principal.storage.list((await trashEntry(principal, physical)).path),
+              list((await trashEntry(principal, physical, list)).path),
             )
           : await repo.children(principal.identityId, trashRoot(principal));
         if (items.length > 100_000)
           throw new ApiHttpError("rate_limited", "Trash listing capacity reached");
-        const entries: DesktopWriteEntry[] = [];
+        const entries: DesktopEntry[] = [];
         for (const item of items) {
           try {
-            entries.push(await decorate(principal, await trashEntry(principal, item.path)));
+            entries.push(await trashEntry(principal, item.path, list));
           } catch (error) {
             if (!(error instanceof ApiHttpError && ["not_found", "forbidden"].includes(error.kind)))
               throw error;
           }
         }
-        return { entries, nextCursor: null };
+        return { entries: await decorateMany(principal, entries), nextCursor: null };
       }
       const result = await files.list(principal, path, tokenKey, cursor);
       return {
-        entries: await Promise.all(result.entries.map((entry) => decorate(principal, entry))),
+        entries: await decorateMany(principal, result.entries),
         nextCursor: result.nextCursor,
       };
     },

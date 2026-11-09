@@ -1112,6 +1112,56 @@ it("bounds Trash listings and surfaces upstream failures instead of returning an
   });
 });
 
+it("registers a listing in one call and never returns ids its own registration retired", async () => {
+  const f = await fixture();
+  // A folder last seen as a file must be replaced before its children are matched.
+  const stale = await f.repo.ensure(f.principal.identityId, "/folder", "file");
+  const ensureMany = vi.spyOn(f.repo, "ensureMany");
+  const [child] = (await f.service.list(f.principal, "/folder", "token")).entries;
+  expect(ensureMany).toHaveBeenCalledTimes(1);
+  const folder = required(await f.repo.at(f.principal.identityId, "/folder"));
+  expect(folder.id).not.toBe(stale.id);
+  expect(child?.parentId).toBe(folder.id);
+  expect(await f.repo.item(f.principal.identityId, required(child).id)).not.toBeNull();
+  expect((await f.service.list(f.principal, "/folder", "token")).entries).toEqual([child]);
+  ensureMany.mockClear();
+  expect((await f.service.list(f.principal, "/", "token")).entries.map((e) => e.path)).toEqual([
+    "/folder",
+    "/old.txt",
+  ]);
+  expect(ensureMany).toHaveBeenCalledTimes(1);
+});
+
+it("lists each Trash ancestor upstream once per request", async () => {
+  const f = await fixture();
+  for (const path of ["/old.txt", "/folder"]) {
+    const original = await f.service.stat(f.principal, path);
+    const move = {
+      kind: "move" as const,
+      operationId: randomUUID(),
+      itemId: original.id,
+      parentId: "trash",
+      name: original.name,
+      base: {
+        ...original.version,
+        content: path === "/old.txt" ? sha("old") : original.version.content,
+      },
+    };
+    await f.service.prepare(f.principal, move);
+    await f.service.commit(f.principal, move.operationId);
+  }
+  const list = vi.spyOn(f.storage, "list");
+  const trashed = (await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries;
+  expect(trashed).toHaveLength(2);
+  const listed = list.mock.calls.map(([path]) => path);
+  expect(new Set(listed).size).toBe(listed.length);
+  list.mockClear();
+  const folder = required(trashed.find((entry) => entry.kind === "dir"));
+  expect((await f.service.list(f.principal, folder.path, "token")).entries).toHaveLength(1);
+  const nested = list.mock.calls.map(([path]) => path);
+  expect(new Set(nested).size).toBe(nested.length);
+});
+
 it("cancels an active body even when stream cancellation fails and preserves its original error", async () => {
   const f = await fixture();
   const request = {

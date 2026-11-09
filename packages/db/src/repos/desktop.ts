@@ -23,6 +23,11 @@ export interface DesktopRetention {
 }
 export interface DesktopRepo {
   ensure(identityId: string, path: string, kind: string): Promise<DesktopItemRecord>;
+  /** `ensure` for many paths in one transaction; rows return in input order. */
+  ensureMany(
+    identityId: string,
+    items: readonly { path: string; kind: string }[],
+  ): Promise<DesktopItemRecord[]>;
   item(identityId: string, id: string): Promise<DesktopItemRecord | null>;
   at(identityId: string, path: string): Promise<DesktopItemRecord | null>;
   children(identityId: string, path: string): Promise<DesktopItemRecord[]>;
@@ -88,29 +93,63 @@ const op = (identityId: string, accountId: string, id: string) =>
     eq(desktopOperations.id, id),
   );
 
+const depth = (path: string) => path.split("/").length;
+
 export function createDesktopRepo(db: Db): DesktopRepo {
   const repo: DesktopRepo = {
     async ensure(identityId, path, kind) {
+      return (await repo.ensureMany(identityId, [{ path, kind }]))[0] as DesktopItemRecord;
+    },
+    async ensureMany(identityId, items) {
+      const kinds = new Map<string, string>();
+      for (const { path, kind } of items) {
+        if ((kinds.get(path) ?? kind) !== kind) throw Error("Conflicting desktop item kinds");
+        kinds.set(path, kind);
+      }
+      if (!kinds.size) return [];
+      const paths = [...kinds.keys()];
+      const read = async (from: Pick<Db, "select">) =>
+        new Map(
+          (
+            await from
+              .select()
+              .from(desktopItems)
+              .where(and(live(identityId), inArray(desktopItems.path, paths)))
+          ).map((item) => [item.path, item]),
+        );
+      const ordered = (found: Map<string, DesktopItemRecord>) =>
+        items.map(({ path }) => found.get(path) as DesktopItemRecord);
+      // Unique live paths make one committed read safe without the lock when every row exists.
+      const current = await read(db);
+      if (paths.every((path) => current.get(path)?.kind === kinds.get(path)))
+        return ordered(current);
       return db.transaction(async (tx) => {
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["desktop-items", identityId])},0))`,
         );
-        const [existing] = await tx
-          .select()
-          .from(desktopItems)
-          .where(and(live(identityId), eq(desktopItems.path, path)));
-        if (existing?.kind === kind) return existing;
-        if (existing)
+        let found = await read(tx);
+        // Retire a replaced folder's subtree before its children are matched, so no
+        // returned row belongs to a subtree this call retires.
+        const replaced = paths
+          .filter((path) => {
+            const item = found.get(path);
+            return item && item.kind !== kinds.get(path);
+          })
+          .sort((a, b) => depth(a) - depth(b));
+        for (const path of replaced)
           await tx
             .update(desktopItems)
             .set({ deletedAt: new Date() })
             .where(and(live(identityId), prefix(path)));
-        const [created] = await tx
-          .insert(desktopItems)
-          .values({ identityId, path, kind })
-          .returning();
-        if (!created) throw Error("Desktop item insertion returned no row");
-        return created;
+        if (replaced.length) found = await read(tx);
+        const missing = paths.filter((path) => !found.has(path));
+        if (missing.length)
+          for (const created of await tx
+            .insert(desktopItems)
+            .values(missing.map((path) => ({ identityId, path, kind: kinds.get(path) as string })))
+            .returning())
+            found.set(created.path, created);
+        return ordered(found);
       });
     },
     async item(identityId, id) {
