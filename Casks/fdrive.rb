@@ -1,6 +1,6 @@
 cask "fdrive" do
-  version "0.4.3"
-  sha256 "57b4a89556bea6a055f7dbde67975ebdd5b083ae72a26fddda6d80a743f823e5"
+  version "0.4.4"
+  sha256 "1b9a695fdc05a2f1617d4395b90f9395aa5d8261c9f5a3eca7915813c3e9e317"
 
   url "https://github.com/fredrikburmester/fdrive/releases/download/macos-v#{version}/fdrive-#{version}-arm64.dmg"
   name "FDrive"
