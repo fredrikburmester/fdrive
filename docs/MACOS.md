@@ -40,9 +40,13 @@ not use (older than the installed app, run from a disk image, or missing its ext
 in the window footer and disables Add Server, Reconnect and Disconnect.
 
 The app refreshes browsed folders and materialized files every 60 seconds, on wake,
-after pairing and on manual Refresh. A refresh lists each browsed folder separately, so a
-location's next automatic one waits four times as long as its last one took, up to 15 minutes:
-a location with 1,700 browsed folders took three minutes per pass. Only Refresh, pairing and
+after pairing and on manual Refresh. When the server advertises `listingChecks`, a refresh
+sends each browsed folder's listing token in batches of 100 and lists only the folders the
+server reports changed, plus Trash and folders without a token; otherwise it lists every
+browsed folder separately. Every pass still reads each browsed folder on the server, so a
+location's next automatic one waits four times as long as its last one took and at least a
+fifth of a second per browsed folder, up to 15 minutes: a 1,700-folder location refreshes about
+every six minutes, where listing it took three minutes per pass. Only Refresh, pairing and
 license activation show progress; background refreshes keep each location's last status, and
 Refresh replaces one already running. The extension records a heartbeat in the shared
 catalog on every enumeration and download callback; if Finder has not answered a signalled
@@ -354,7 +358,8 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `POST /pairings/:id/cancel` | App secret; cancels issuance and revokes unconfirmed credentials |
 | `POST /pairings/:id/confirm` | App secret; the bundle is stored on the Mac and survives expiry |
 | `GET /location` | Desktop bearer; current identity/provider and readonly protocol |
-| `GET /entries?path=&cursor=` | Authorized, bounded metadata snapshot |
+| `GET /entries?path=&cursor=` | Authorized, bounded metadata snapshot; protocol 2 adds a `token` to a complete single-page listing outside Trash |
+| `POST /checks` | Protocol 2: up to 200 `{path, token}` pairs; answers `unchanged`, `changed`, `missing` or `forbidden` per folder, and only a leading part when its 30-second budget runs out |
 | `GET /entry?path=` | Current entry, with ancestor/symlink checks |
 | `GET /content?path=` | Original streamed bytes; no MCP size cap |
 | `POST /versions` | Hash up to 16 authorized files for cache validation |
@@ -388,7 +393,9 @@ tombstones, a generation and revision anchors. WAL and transactions serialize ap
 writes. Listing reservations prevent an older concurrent network response overwriting a
 newer snapshot. Only complete valid listings reconcile; failures never imply deletion.
 
-Schema v3 migrates v1/v2 in place. Metadata edits preserve IDs; an observed removal tombstones
+Schema v4 migrates v1–v3 in place. A folder's token is kept only when its listing was applied
+in full; any listing without one, a skipped pending write and the app's own writes to the
+folder clear it, so `unchanged` always means the catalog matches the server. Metadata edits preserve IDs; an observed removal tombstones
 the item and known descendants, and a later recreation receives a new ID. External moves
 appear as removal plus addition. Path-only backends cannot prove a delete/recreate or rename
 that occurred entirely between observations. With protocol 2 server handles, a changed

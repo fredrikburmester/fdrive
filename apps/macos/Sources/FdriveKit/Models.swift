@@ -75,6 +75,8 @@ public struct Location: Codable, Sendable, Equatable {
     public var capabilities: WriteCapabilities? = nil
     public var maxUploadBytes: Int64? = nil
     public var writeUnavailableReason: String? = nil
+    /// The server answers folder checks, so a refresh lists only folders that changed.
+    public var listingChecks: Bool? = nil
 }
 public struct Credential: Codable, Sendable {
     public let token: String
@@ -154,7 +156,15 @@ public func unansweredSignal(previous: Date?, signalled: Date, revision: Int64,
     guard let callbackRevision else { return nil }
     return revision > callbackRevision ? signalled : nil
 }
-public struct Listing: Codable, Sendable { public let entries: [RemoteEntry]; public let nextCursor: String? }
+public struct Listing: Codable, Sendable {
+    public let entries: [RemoteEntry]; public let nextCursor: String?
+    /// Present only on a complete single-page listing.
+    public var token: String? = nil
+}
+public struct FolderCheck: Codable, Sendable, Equatable { public let path: String; public let token: String }
+public enum FolderState: String, Codable, Sendable { case unchanged, changed, missing, forbidden }
+public struct FolderStatus: Codable, Sendable, Equatable { public let path: String; public let status: FolderState }
+struct FolderChecks: Codable, Sendable { let folders: [FolderStatus] }
 public struct ContentVersion: Codable, Sendable { public let path: String; public let version: String; public let size: Int64 }
 public struct Versions: Codable, Sendable { public let items: [ContentVersion] }
 

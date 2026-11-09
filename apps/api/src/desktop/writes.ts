@@ -6,7 +6,10 @@ import { Readable } from "node:stream";
 import type {
   DesktopBaseVersion,
   DesktopEntry,
+  DesktopFolderCheck,
+  DesktopFolderCheckResponse,
   DesktopFolderRequest,
+  DesktopFolderState,
   DesktopMoveRequest,
   DesktopOperationProgress,
   DesktopOperationResult,
@@ -17,6 +20,7 @@ import type {
 import {
   isStorageError,
   isUnderPath,
+  normalizePath,
   parentPath,
   StorageError,
   type StorageProvider,
@@ -32,7 +36,12 @@ import type { Principal } from "../auth/principal.js";
 import { withIdempotentMkdir } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
-import { createDesktopFiles, DESKTOP_INTERNAL_ROOT } from "./files.js";
+import {
+  createDesktopFiles,
+  DESKTOP_INTERNAL_ROOT,
+  DESKTOP_PAGE_SIZE,
+  type DesktopLister,
+} from "./files.js";
 import type { DesktopDeps } from "./pairing.js";
 import { missingPublishGates, type PublishGate } from "./publish-gate.js";
 
@@ -101,6 +110,12 @@ export interface DesktopWriteDeps
 /** A commit that has not progressed for this long is treated as abandoned by its process. */
 export const DESKTOP_COMMIT_STALL_MS = 15 * 60_000;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+/** Names a complete listing exactly as the client received it. */
+const listingToken = (entries: readonly DesktopWriteEntry[]) => `v1:${hash(entries)}`;
+/** A folder check answers what it finished by then; the client sends the rest again. */
+export const DESKTOP_CHECK_BUDGET_MS = 30_000;
+/** Orders a folder's descendants straight after it, so ancestor listings stay reusable. */
+const treeOrder = (path: string) => path.replaceAll("/", "\u0000");
 function fail(code: string, message: string): never {
   throw new ApiHttpError("conflict", message, { code });
 }
@@ -342,11 +357,17 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   /** Shares upstream listings across the ancestor walks of one request. */
   function sharedListings(principal: Principal) {
     const listings = new Map<string, ReturnType<StorageProvider["list"]>>();
-    return (path: string) => {
+    const list: DesktopLister = (path) => {
       const listing = listings.get(path) ?? principal.storage.list(path);
       listings.set(path, listing);
       return listing;
     };
+    /** Keeps only what a walk to `path` or below can reuse: one chain of ancestors. */
+    const retainAncestors = (path: string) => {
+      for (const key of listings.keys())
+        if (key !== path && !isUnderPath(key, path)) listings.delete(key);
+    };
+    return { list, retainAncestors };
   }
   async function trashEntry(
     principal: Principal,
@@ -381,6 +402,41 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       parent = next;
     }
     return result as DesktopEntry;
+  }
+  async function checkFolder(
+    principal: Principal,
+    folder: DesktopFolderCheck,
+    list: DesktopLister,
+  ): Promise<DesktopFolderState> {
+    const path = normalizePath(folder.path);
+    // Trash entries come from the registry as much as from storage; always relist them.
+    if (path === DESKTOP_TRASH || isUnderPath(DESKTOP_TRASH, path)) return "changed";
+    try {
+      const listing = await files.folder(principal, path, list);
+      if (!listing) return "missing";
+      if (listing.entries.length > DESKTOP_PAGE_SIZE) return "changed";
+      const rows = new Map(
+        (
+          await repo.lookup(principal.identityId, [
+            listing.path,
+            ...listing.entries.map((entry) => entry.path),
+          ])
+        ).map((row) => [row.path, row]),
+      );
+      const parent = rows.get(listing.path);
+      if (parent?.kind !== "dir") return "changed";
+      const entries: DesktopWriteEntry[] = [];
+      for (const entry of listing.entries) {
+        const item = rows.get(entry.path);
+        if (item?.kind !== entry.kind) return "changed";
+        entries.push(present(principal, entry, item, parent));
+      }
+      return listingToken(entries) === folder.token ? "unchanged" : "changed";
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.kind === "not_found") return "missing";
+      if (error instanceof ApiHttpError && error.kind === "forbidden") return "forbidden";
+      throw error;
+    }
   }
   function physicalTrashPath(principal: Principal, path: string) {
     if (!isUnderPath(DESKTOP_TRASH, path)) return null;
@@ -622,7 +678,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       const physical = physicalTrashPath(principal, path);
       if (path === DESKTOP_TRASH || physical) {
         if (cursor) throw new ApiHttpError("conflict", "Refresh Trash to restart the listing");
-        const list = sharedListings(principal);
+        const { list } = sharedListings(principal);
         const items = physical
           ? await runStorageCall(async () =>
               list((await trashEntry(principal, physical, list)).path),
@@ -642,10 +698,38 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         return { entries: await decorateMany(principal, entries), nextCursor: null };
       }
       const result = await files.list(principal, path, tokenKey, cursor);
+      const entries = await decorateMany(principal, result.entries);
       return {
-        entries: await decorateMany(principal, result.entries),
+        entries,
         nextCursor: result.nextCursor,
+        ...(!cursor && result.nextCursor === null ? { token: listingToken(entries) } : {}),
       };
+    },
+    /**
+     * Which folders still match the listing their token names, so the client lists only
+     * the rest. Read-only: entries the registry has not seen make a folder changed, and
+     * the listing that follows registers them.
+     */
+    async check(
+      principal: Principal,
+      folders: readonly DesktopFolderCheck[],
+      signal: AbortSignal,
+    ): Promise<DesktopFolderCheckResponse> {
+      const started = deps.clock().getTime();
+      const listings = sharedListings(principal);
+      const results: DesktopFolderCheckResponse["folders"] = [];
+      for (const folder of [...folders].sort((a, b) =>
+        treeOrder(a.path) < treeOrder(b.path) ? -1 : 1,
+      )) {
+        signal.throwIfAborted();
+        if (results.length && deps.clock().getTime() - started >= DESKTOP_CHECK_BUDGET_MS) break;
+        listings.retainAncestors(normalizePath(folder.path));
+        results.push({
+          path: folder.path,
+          status: await checkFolder(principal, folder, listings.list),
+        });
+      }
+      return { folders: results };
     },
     async stat(principal: Principal, path: string): Promise<DesktopWriteEntry> {
       if (path === DESKTOP_TRASH)

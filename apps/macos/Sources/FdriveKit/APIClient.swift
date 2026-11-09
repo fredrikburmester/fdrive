@@ -134,16 +134,20 @@ public struct APIClient: Sendable {
         guard (result.protocolVersion == 1 && result.readOnly) || (result.protocolVersion == 2 && result.capabilities != nil) else { throw DriveError.server("Update fdrive for Mac to connect to this server.") }
         return result
     }
-    public func list(_ rawPath: String) async throws -> [RemoteEntry] {
+    public func list(_ rawPath: String) async throws -> [RemoteEntry] { try await snapshot(rawPath).entries }
+    /// A whole folder and, when it came back in one page, the token a later check compares.
+    public func snapshot(_ rawPath: String) async throws -> (entries: [RemoteEntry], token: String?) {
         let path = try canonicalPath(rawPath)
         var result: [RemoteEntry] = []
         var cursor: String?
+        var token: String?
         var seen = Set<String>()
         repeat {
             try Task.checkCancellation()
             var query = [URLQueryItem(name: "path", value: path)]
             if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
             let page: Listing = try await send("entries", query: query)
+            if cursor == nil && page.nextCursor == nil { token = page.token }
             for entry in page.entries {
                 guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == path,
                       entry.hasValidListingName,
@@ -156,7 +160,18 @@ public struct APIClient: Sendable {
             }
             cursor = page.nextCursor
         } while cursor != nil
-        return result
+        return (result, token)
+    }
+    /// Which of these folders changed since their token was issued. The server may answer
+    /// only a leading part of a large batch; the caller sends the rest again.
+    public func checks(_ folders: [FolderCheck]) async throws -> [FolderStatus] {
+        let result: FolderChecks = try await send("checks", body: JSONEncoder().encode(["folders": folders]))
+        let requested = Set(folders.map(\.path))
+        guard !result.folders.isEmpty, Set(result.folders.map(\.path)).count == result.folders.count,
+              result.folders.allSatisfy({ requested.contains($0.path) }) else {
+            throw DriveError.server("Invalid folder check response.")
+        }
+        return result.folders
     }
     public func stat(_ path: String) async throws -> RemoteEntry {
         try await send("entry", query: [.init(name: "path", value: try canonicalPath(path))])

@@ -2259,3 +2259,152 @@ it("reserves the action and paths history will need before the native write star
   // The receipt says this was a restore, so history does not read it as a plain move.
   expect(f.effectContext.mock.calls.at(-1)?.[1]).toMatchObject({ restored: true, trash: false });
 });
+
+const files = (parent: string, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    name: `f${index}`,
+    path: `${parent}/f${index}`,
+    kind: "file" as const,
+    size: 1,
+    modifiedAt: new Date(0),
+    ext: "",
+  }));
+
+it("names complete listings with a token that only their contents and access change", async () => {
+  const f = await fixture();
+  const first = await f.service.list(f.principal, "/", "token");
+  expect(first.token).toMatch(/^v1:[0-9a-f]{64}$/);
+  // Another process derives the same token from the same folder and registry.
+  expect((await createDesktopWrites(f.deps).list(f.principal, "/", "token")).token).toBe(
+    first.token,
+  );
+  await f.raw.upload("/new.txt", body("new"));
+  const added = await f.service.list(f.principal, "/", "token");
+  expect(added.token).not.toBe(first.token);
+  const item = required(await f.repo.at(f.principal.identityId, "/new.txt"));
+  await f.repo.update(f.principal.identityId, item.id, {});
+  const updated = await f.service.list(f.principal, "/", "token");
+  expect(updated.token).not.toBe(added.token);
+  const readOnly = { ...f.principal, tokenAccess: { mode: "read" as const, paths: ["/"] } };
+  expect((await f.service.list(readOnly, "/", "token")).token).not.toBe(updated.token);
+  // Neither Trash nor a folder that needs more than one page carries one.
+  expect((await f.service.list(f.principal, DESKTOP_TRASH, "token")).token).toBeUndefined();
+  const list = f.storage.list.bind(f.storage);
+  vi.spyOn(f.storage, "list").mockImplementation(async (path) =>
+    path === "/folder" ? files("/folder", 501) : list(path),
+  );
+  const page = await f.service.list(f.principal, "/folder", "token");
+  expect(page.token).toBeUndefined();
+  const rest = await f.service.list(f.principal, "/folder", "token", required(page.nextCursor));
+  expect(rest.nextCursor).toBeNull();
+  expect(rest.token).toBeUndefined();
+});
+
+it("checks folders against their tokens without registering or relisting anything", async () => {
+  const f = await fixture();
+  await f.raw.mkdir("/folder/sub");
+  const tokens = new Map<string, string>();
+  for (const path of ["/", "/folder", "/folder/sub"])
+    tokens.set(path, required((await f.service.list(f.principal, path, "token")).token));
+  const ask = (...paths: string[]) =>
+    paths.map((path) => ({ path, token: tokens.get(path) ?? "v1:other" }));
+  const signal = new AbortController().signal;
+  const list = vi.spyOn(f.storage, "list");
+  const ensureMany = vi.spyOn(f.repo, "ensureMany");
+  expect(await f.service.check(f.principal, ask("/folder/sub", "/", "/folder"), signal)).toEqual({
+    folders: [
+      { path: "/", status: "unchanged" },
+      { path: "/folder", status: "unchanged" },
+      { path: "/folder/sub", status: "unchanged" },
+    ],
+  });
+  // Each folder and ancestor is read upstream once.
+  const listed = list.mock.calls.map(([path]) => path);
+  expect(listed.sort()).toEqual(["/", "/folder", "/folder/sub"]);
+  // Changed content and unregistered entries both read as changed, and stay unregistered.
+  await f.raw.upload("/folder/child", body("changed"), { overwrite: true });
+  await f.raw.upload("/folder/sub/new.txt", body("new"));
+  expect(
+    (await f.service.check(f.principal, ask("/folder", "/folder/sub"), signal)).folders,
+  ).toEqual([
+    { path: "/folder", status: "changed" },
+    { path: "/folder/sub", status: "changed" },
+  ]);
+  expect(await f.repo.at(f.principal.identityId, "/folder/sub/new.txt")).toBeNull();
+  expect(ensureMany).not.toHaveBeenCalled();
+  // A folder whose registry row is gone is listed again.
+  await f.repo.remove(f.principal.identityId, "/folder/sub");
+  expect((await f.service.check(f.principal, ask("/folder/sub"), signal)).folders).toEqual([
+    { path: "/folder/sub", status: "changed" },
+  ]);
+  expect(
+    (
+      await f.service.check(
+        f.principal,
+        ["/", "/old.txt", "/gone", "/.fdrive-desktop/x"].map((path) => ({ path, token: "v1:x" })),
+        signal,
+      )
+    ).folders,
+  ).toEqual([
+    { path: "/", status: "changed" },
+    { path: "/.fdrive-desktop/x", status: "forbidden" },
+    { path: "/gone", status: "missing" },
+    { path: "/old.txt", status: "missing" },
+  ]);
+  // Trash is always relisted, without touching storage.
+  list.mockClear();
+  expect(
+    (
+      await f.service.check(
+        f.principal,
+        [DESKTOP_TRASH, `${DESKTOP_TRASH}/item`].map((path) => ({ path, token: "v1:x" })),
+        signal,
+      )
+    ).folders.map((folder) => folder.status),
+  ).toEqual(["changed", "changed"]);
+  expect(list).not.toHaveBeenCalled();
+});
+
+it("bounds folder checks by size, time and access, and fails on upstream outages", async () => {
+  const f = await fixture();
+  const tokens = new Map<string, string>();
+  for (const path of ["/", "/folder"])
+    tokens.set(path, required((await f.service.list(f.principal, path, "token")).token));
+  const ask = (...paths: string[]) =>
+    paths.map((path) => ({ path, token: tokens.get(path) ?? "v1:other" }));
+  const signal = new AbortController().signal;
+  const list = f.storage.list.bind(f.storage);
+  const spy = vi.spyOn(f.storage, "list");
+  spy.mockImplementation(async (path) => (path === "/folder" ? files("/folder", 501) : list(path)));
+  expect((await f.service.check(f.principal, ask("/folder"), signal)).folders).toEqual([
+    { path: "/folder", status: "changed" },
+  ]);
+  spy.mockImplementation(async (path) =>
+    (await list(path)).map((item) =>
+      item.path === "/folder" ? { ...item, kind: "symlink" } : item,
+    ),
+  );
+  expect((await f.service.check(f.principal, ask("/folder"), signal)).folders).toEqual([
+    { path: "/folder", status: "forbidden" },
+  ]);
+  spy.mockRejectedValue(new StorageError("upstream_unavailable", "Offline"));
+  await expect(f.service.check(f.principal, ask("/folder"), signal)).rejects.toThrow("Offline");
+  spy.mockImplementation(list);
+  // Past its time budget a check answers what it finished; at least one folder.
+  const ticking = (step: number) => {
+    let now = 0;
+    return () => {
+      now += step;
+      return new Date(now);
+    };
+  };
+  const slow = createDesktopWrites({ ...f.deps, clock: ticking(20_000) });
+  expect((await slow.check(f.principal, ask("/", "/folder"), signal)).folders).toHaveLength(2);
+  const slower = createDesktopWrites({ ...f.deps, clock: ticking(40_000) });
+  expect((await slower.check(f.principal, ask("/", "/folder"), signal)).folders).toEqual([
+    { path: "/", status: "unchanged" },
+  ]);
+  const aborted = new AbortController();
+  aborted.abort();
+  await expect(f.service.check(f.principal, ask("/"), aborted.signal)).rejects.toThrow();
+});
