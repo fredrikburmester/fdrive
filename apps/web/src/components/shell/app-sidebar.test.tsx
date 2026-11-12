@@ -92,6 +92,12 @@ it("orders navigation as Files tree, metadata sections, then Shares and Trash at
   expect(isBefore(sharesLink, trashLink)).toBe(true);
 });
 
+it("links the fdrive wordmark to the root of Files", async () => {
+  renderSidebar();
+  const wordmark = await screen.findByRole("link", { name: "fdrive" });
+  expect(wordmark.getAttribute("href")).toBe("/files");
+});
+
 it("hides Trash when no linked login has one", async () => {
   renderSidebar(withCapabilities({ trash: false }));
   await screen.findByRole("link", { name: "Shares" });
