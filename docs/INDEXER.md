@@ -10,12 +10,12 @@ four rotated files, 10 MiB each, alongside stdout. Deployment mounts a persisten
 volume there; standalone workers must configure a writable directory to retain these logs.
 
 > [!TIP]
-> **Looking to configure or use search in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the Python indexing service.
+> **Looking to configure or use search in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the indexing service.
 
-`services/indexer` is a Python service that walks and watches one or more disk
-roots, keeps `idx.files` / `idx.chunks` current, and generates thumbnails. It is
-the direct port of filesai's `indexer.py` / `watcher.py` / `extract.py`, extended
-for multiple roots, thumbnails, and change events. It never creates or migrates
+`services/indexer` is a Rust program (`fdrive-indexer`) that walks and watches one or
+more disk roots, keeps `idx.files` / `idx.chunks` current, and generates thumbnails. It
+replaced a Python service of the same behaviour and keeps its HTTP API, database writes,
+events and thumbnail layout, so existing index data stays valid. It never creates or migrates
 its own schema: `packages/db`'s Drizzle migrations own `idx.*` and
 `app.thumbnails` / `app.settings`, and the indexer waits for `idx.schema_version`
 to report the version it expects before doing anything else.
@@ -37,7 +37,7 @@ follows filesai's rules exactly:
 
 | Extension group | How | Notes |
 | --- | --- | --- |
-| `.pdf` | pymupdf, page by page | Encrypted PDFs and pages beyond `MAX_PDF_PAGES` are skipped. With `searchOcr` on, pages without a text layer are OCR'd. Under 40 characters of text counts as `no_text`, or `disabled:search_ocr` while OCR is off (the nightly OCR job in `services/ocr` fills these in later). |
+| `.pdf` | MuPDF, page by page | Encrypted PDFs and pages beyond `MAX_PDF_PAGES` are skipped. With `searchOcr` on, pages without a text layer are OCR'd. Under 40 characters of text counts as `no_text`, or `disabled:search_ocr` while OCR is off (the nightly OCR job in `services/ocr` fills these in later). |
 | Images (`.jpg`, `.png`, `.tif`, `.heic`, `.heif`, …) | Tesseract OCR | Only under paths matching `indexer.ocr_image_globs` (see Settings below); everything else is `excluded:image_dir`. With `searchOcr` off they are `disabled:search_ocr`. |
 | Plain text / code (`.txt`, `.md`, `.py`, …) | Read directly, multiple encodings tried | Capped at `PLAIN_TEXT_CAP` characters. |
 | Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, …) | The `ml` service's extraction unit | Formats it does not read (iWork, legacy Visio, Publisher, WordPerfect) are `error:unsupported`; see the [ML server](../services/ml/README.md). |
@@ -72,7 +72,7 @@ password itself (one upstream share-root listing per password, cached for 60
 seconds) before it will serve a thumbnail, since SFTPGo only checks a share's
 password when it is actually asked to serve file bytes.
 
-`POST /thumbnails/rebuild` (`thumb_rebuild.py`) is a separate, thumbnail-only
+`POST /thumbnails/rebuild` (`maintenance.rs`) is a separate, thumbnail-only
 pass for when the WebP files themselves need regenerating, for example after
 changing thumbnail sizes or quality, without paying the cost of a full
 reindex (re-extraction and re-embedding). It walks `idx.files` rather than the
@@ -90,7 +90,8 @@ over the `THUMB_MAX_MB` limit are skipped with a reason. Videos without a video 
 are skipped too; ffprobe has read those files, so the skip also resolves an earlier
 thumbnail failure. Activity `processed` includes those skips, and `skipped` counts them
 separately; generation errors include the number of sizes available in the worker log.
-JPEGs over Pillow's pixel limit, such as camera panoramas, decode at a reduced scale.
+Sources over 178.9 million pixels (twice Pillow's limit, which the Python indexer used) are
+refused, except a JPEG whose reduced-scale decode fits, such as a camera panorama.
 
 ### Image embeddings (optional)
 
@@ -104,7 +105,7 @@ Absent `IMAGE_EMBED_URL`, this is entirely off: no error, `GET /stats`
 reports `image_embeddings: 0`, matching how OCR degrades without its own
 service.
 
-The pass follows thumbnail generation (`indexer.py`'s `embed_thumbnail`,
+The pass follows thumbnail generation (`indexer.rs`'s `embed_thumbnail`,
 called once a thumbnail is written). Retries embed inline. A scan hands
 embeddings to a thread of its own, and watcher changes share one long-lived
 thread per root, because the model runs one inference at a time and waiting
@@ -117,7 +118,7 @@ vector). A file already embedded by the currently configured model is
 skipped; one embedded by a different (stale) model is always re-embedded, so
 a model change self-heals as files are next touched.
 
-`POST /image-embeddings/rebuild` (`image_embed_rebuild.py`) is the bulk
+`POST /image-embeddings/rebuild` (`maintenance.rs`) is the bulk
 backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ root?,
 path?, force? }`, batched against the unit at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
 requests per call. Without `force`, only images with no row at all are
@@ -267,48 +268,36 @@ The dev `ml` service is built from `services/ml` on first start, which
 takes several minutes, and downloads its models (about 3.1 GB) into a named
 volume the first time a unit loads.
 
-## Migrating from filesai
-
-`scripts/import_filesai.py` copies `files` and `chunks` from an old filesai
-Postgres database into the new schema under one root, so nothing needs to be
-re-extracted or re-embedded (the embedding model is unchanged):
-
-```sh
-python scripts/import_filesai.py \
-  --source "host=old-db port=5432 dbname=filesai user=filesai password=..." \
-  --target "$DATABASE_URL" \
-  --root sftpgo
-```
-
-It maps `files.path` (relative to filesai's single root) straight across,
-upserts the target root by name first, and carries `embedding` values over
-unchanged (a `NULL` embedding stays `NULL`, so a `partial` row picks up right
-where it left off on the next scan). It is idempotent: running it twice against
-the same source and target is a no-op the second time, because it upserts on
-`(root_id, path)`.
-
 ## Testing
 
-Pure modules (`paths.py`, `chunking.py`, `rules.py`, `events.py`, `thumbs.py`,
-`settings.py`, `stats.py`) have no I/O and are covered at 100%. I/O modules
-(`db.py`, `extract.py`, `thumbs_io.py`, `indexer.py`, `thumb_rebuild.py`,
-`server.py`, `main.py`) are tested against a real Postgres via
-`testcontainers`, with the repo's own `packages/db/drizzle/*.sql` migrations
-applied in a fixture, and a `tmp_path` directory tree (with a real small PNG
-and PDF for the thumbnail tests) standing in for a root.
+```sh
+cd services/indexer
+cargo fmt --all --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo llvm-cov --locked --fail-under-lines 95 --ignore-filename-regex 'src/main\.rs'
+```
 
-`watcher.py` calls `ctypes.CDLL("libc.so.6")` at import time, so it only works
-on Linux; its tests are `skipif(sys.platform != "linux")`. To run the full
-suite including those tests on a non-Linux machine:
+Pure modules (`paths`, `chunking`, `rules`, `events`, `thumbs`, `settings`, `features`,
+`backoff`, `activity`, `jobs`) carry unit tests. Everything that touches the database runs in
+`tests/` against a real Postgres started with `testcontainers`: the repository's
+`packages/db/drizzle/*.sql` migrations are applied once to a template database, and each test
+clones a fresh database from it. A fake `ml` server stands in for embeddings and document
+extraction. Images, PDFs and videos are generated at test time; the CMYK and lossless JPEGs
+in `tests/fixtures` are the only binary fixtures. Set `FDRIVE_TEST_DATABASE_URL` to use an
+existing Postgres instead of Docker.
+
+The watcher uses inotify and only works on Linux; on macOS it compiles to a stub that
+reports it is unavailable. To run the whole suite, including the watcher tests, from a
+non-Linux machine:
 
 ```sh
 services/indexer/scripts/test-in-docker.sh
 ```
 
-This builds the service's own Docker image and runs pytest inside it (a real
-Linux environment), using the host's Docker socket so `testcontainers` can
-start its own Postgres. CI runs the same suite natively on `ubuntu-latest`,
-where inotify is already available, in the `indexer` job.
+It runs `cargo test` in a `rust` container with the host's Docker socket, so
+`testcontainers` can start Postgres. CI runs the same checks natively on `ubuntu-latest` in
+the `Indexer` workflow. OCR tests skip themselves where `tesseract` is not installed, and video
+tests where `ffmpeg` is not.
 
 ## Clearing derived data
 

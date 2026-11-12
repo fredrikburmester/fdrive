@@ -87,7 +87,7 @@ Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdri
 | SFTPGo SFTP | `52022` | SFTP service for external client testing |
 | MinIO S3 API | `59000` | Local S3 bucket `fdrive` (when `s3` profile is up) |
 | MinIO console | `59001` | MinIO web console (`minio-root` / `minio-root-password`) |
-| Indexer HTTP | `58010` | Python indexer (when `index` profile is up) |
+| Indexer HTTP | `58010` | Indexer (when `index` profile is up) |
 | ML server | `58012` | Text embeddings (`/text`), image embeddings (`/image`) and document extraction (`/extract`), when `index` profile is up |
 
 ---
