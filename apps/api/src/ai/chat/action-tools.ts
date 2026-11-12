@@ -272,6 +272,12 @@ async function occupied(storage: DriveToolsDeps["principal"]["storage"], target:
   }
 }
 
+/** A rename keeps its folder, so the only way into the Trash is taking the Trash folder's own name. */
+function isTrashPath(deps: DriveToolsDeps, target: string): boolean {
+  const trashPath = trashPathOf(deps);
+  return trashPath !== null && (target === trashPath || isUnderPath(trashPath, target));
+}
+
 function depth(path: string): number {
   return path.split("/").length;
 }
@@ -318,6 +324,8 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
             );
           if (alreadyNamed(path, name)) continue;
           const target = changeBaseName(path, name);
+          if (isTrashPath(deps, target))
+            throw new AiToolError(`${path} cannot be named ${name}: that is the Trash.`);
           const stat = await statItem(deps, path);
           const conflict = targets.has(target) || (await occupied(deps.principal.storage, target));
           targets.add(target);
@@ -341,7 +349,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           if (!allowed.has(rename.path) || items.some((item) => item.path === rename.path))
             continue;
           const name = cleanName(rename.name);
-          if (name === null)
+          if (name === null || isTrashPath(deps, changeBaseName(rename.path, name)))
             invalid.push({
               path: rename.path,
               ok: false,

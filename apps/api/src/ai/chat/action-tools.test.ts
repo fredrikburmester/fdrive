@@ -370,6 +370,34 @@ describe("rename_items", () => {
     ).rejects.toThrow(/not referenced/);
   });
 
+  it("never lets an item take the Trash folder's name, proposed or typed", async () => {
+    const { verify, apply, storage } = setup({
+      trash: true,
+      referenced: ["/"],
+      files: { "/notes.txt": "a" },
+    });
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/notes.txt", name: ".Trash", reason: "r" }],
+      }),
+    ).rejects.toThrow("/notes.txt cannot be named .Trash: that is the Trash.");
+
+    const proposal = await verify("rename_items", {
+      summary: "s",
+      renames: [{ path: "/notes.txt", name: "ideas.txt", reason: "r" }],
+    });
+    expect(
+      await apply("rename_items", proposal, { renames: [{ path: "/notes.txt", name: ".Trash" }] }),
+    ).toEqual({
+      outcome: "Renamed 0 of 1 items.",
+      results: [{ path: "/notes.txt", ok: false, message: '".Trash" is not a usable name.' }],
+      toolResult: 'Could not rename /notes.txt: ".Trash" is not a usable name.',
+    });
+    await expect(storage.stat("/notes.txt")).resolves.toBeDefined();
+    await expect(storage.stat("/.Trash")).rejects.toMatchObject({ kind: "not_found" });
+  });
+
   it("passes on storage failures while checking whether a name is taken", async () => {
     const { verify, storage } = setup();
     vi.spyOn(storage, "statFile").mockRejectedValueOnce(
