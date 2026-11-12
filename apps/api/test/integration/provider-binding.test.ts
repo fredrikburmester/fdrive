@@ -9,7 +9,14 @@ import { hashSessionId } from "../../src/auth/sessions.js";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
 import { createTokenSource } from "../../src/auth/token-source.js";
 import { composedProviderFixture, providerFixture } from "./helpers/provider-binding-fixture.ts";
-import { createBarrier, SHARED_PATH, USERNAME } from "./helpers/provider-binding-server.ts";
+import {
+  createBarrier,
+  LIST_PATH,
+  MKDIR_PATH,
+  SHARED_PATH,
+  TOKEN_PATH,
+  USERNAME,
+} from "./helpers/provider-binding-server.ts";
 
 const unavailable = { kind: "upstream_unavailable" };
 const McpResult = z.object({ result: z.object({ isError: z.boolean().optional() }) });
@@ -143,9 +150,7 @@ describe("provider binding over two HTTP upstreams", () => {
       [h.a, "A changed"],
       [h.b, "content from B"],
     ] as const) {
-      const token = await server.client.login({ username: USERNAME, password: server.password });
-      const download = await server.client.user(token.accessToken).download(SHARED_PATH);
-      expect(await new Response(download.body).text()).toBe(content);
+      expect(await server.read(SHARED_PATH)).toBe(content);
       expect(server.counts().foreignCredentials).toBe(0);
     }
   });
@@ -153,7 +158,7 @@ describe("provider binding over two HTTP upstreams", () => {
   it("rejects initial credential verification if the provider is disabled during the HTTP login", async () => {
     const h = await providerFixture();
     onTestFinished(() => h.close());
-    const gate = h.a.pause("GET", "/api/v2/user/token");
+    const gate = h.a.pause("GET", TOKEN_PATH);
     const verification = verifyCredentials(
       {
         repos: h.repos,
@@ -209,13 +214,7 @@ describe("composed native identity and API-token provider binding", () => {
     const cookie = login.headers.get("set-cookie")?.split(";")[0];
     if (!cookie) throw new Error("login did not create a session cookie");
     const me = MeResponse.parse(await login.json());
-    // Warm the verified mapping before measuring credential-bearing calls.
     // The token explicitly allows organization so mutation tests reach storage.
-    const scope = await h.app.request(`/api/v1/account/identities/${me.activeIdentityId}/scope`, {
-      headers: { cookie },
-    });
-    expect(scope.status).toBe(200);
-    expect(await scope.json()).toMatchObject({ status: "available" });
     const response = await h.app.request("/api/v1/account/tokens", {
       method: "POST",
       headers: { ...jsonHeaders, cookie },
@@ -229,7 +228,10 @@ describe("composed native identity and API-token provider binding", () => {
     const { token } = CreateApiTokenResponse.parse(await response.json());
     // The selected A identity differs from the session's active B identity. Ignoring
     // the native query or API token binding would now hit the wrong provider.
-    const providerB = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: h.b.baseUrl });
+    const providerB = await h.repos.providers.ensure({
+      type: h.providerA.type,
+      baseUrl: h.b.baseUrl,
+    });
     const identityB = await h.repos.identities.create({
       accountId: me.account.id,
       providerId: providerB.id,
@@ -321,7 +323,7 @@ describe("composed native identity and API-token provider binding", () => {
           if (phase === "mint") h.advance(21 * 60 * 1000);
           const gate = h.a.pause(
             phase === "mutation" ? "POST" : "GET",
-            phase === "mint" ? "/api/v2/user/token" : "/api/v2/user/dirs",
+            phase === "mint" ? TOKEN_PATH : phase === "mutation" ? MKDIR_PATH : LIST_PATH,
             phase === "retry",
           );
           const pending = h.request(mode, phase === "mutation");

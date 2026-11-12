@@ -1,32 +1,48 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { buildSftpgoDump } from "@fdrive/testkit";
+import { type LocalStorageFixture, startLocalStorage } from "@fdrive/testkit";
 import { expect, vi } from "vitest";
 
 const exec = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url));
+/** Where every container sees the local folder, as `FDRIVE_INDEX_ROOTS`' `indexerPath` would. */
+const ROOT_IN_CONTAINER = "/roots/files";
 
 async function command(program: string, args: string[], timeout = 30_000): Promise<string> {
   const result = await exec(program, args, { timeout, maxBuffer: 8 * 1024 * 1024 });
   return result.stdout.trim();
 }
 
-/** All resources have a unique name. No dev containers or host data are reused. */
-export class SftpIndexerStack {
+/** Lets every uid read `path` and, for folders, enter it: the indexer runs as uid 1000. */
+async function openForReading(path: string): Promise<void> {
+  const entries = await readdir(path, { withFileTypes: true });
+  await chmod(path, 0o755);
+  for (const entry of entries) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) await openForReading(child);
+    else await chmod(child, 0o644);
+  }
+}
+
+/**
+ * A local folder on this machine, a migrated-to Postgres and the real
+ * indexer watching that folder, the way a deployment mounts its files folder
+ * into the indexer. All resources have a unique name. No dev containers or
+ * host data are reused.
+ */
+export class LocalIndexerStack {
   private readonly prefix = `fdrive-rename-${randomUUID()}`;
   private readonly containers: string[] = [];
   private directory = "";
-  private sftpPort = "";
   private networkCreated = false;
-  private volumeCreated = false;
   private imageCreated = false;
+  storage: LocalStorageFixture | undefined;
   connectionString = "";
-  sftpgoUrl = "";
 
   private docker(args: string[], timeout?: number): Promise<string> {
     return command("docker", args, timeout);
@@ -55,44 +71,35 @@ export class SftpIndexerStack {
     return value;
   }
 
+  /** The local folder, for the storage the listener checks moves against. */
+  get folder(): LocalStorageFixture {
+    if (this.storage === undefined) throw new Error("the local folder has not been laid out");
+    return this.storage;
+  }
+
   async startDatabaseAndStorage(): Promise<void> {
     this.directory = await mkdtemp(join(tmpdir(), "fdrive-rename-"));
-    await command("ssh-keygen", [
-      "-t",
-      "ed25519",
-      "-N",
-      "",
-      "-f",
-      join(this.directory, "key"),
-      "-q",
-    ]);
-    const publicKey = (await readFile(join(this.directory, "key.pub"), "utf8")).trim();
-    const dump = buildSftpgoDump(
-      ["alice", "alice-other"].map((username) => ({
+    // `mkdtemp` creates 0700 folders. Containers read these as another uid:
+    // on a Linux host (CI) they could not, and Docker Desktop's file sharing
+    // masks that on macOS.
+    await chmod(this.directory, 0o755);
+    this.storage = await startLocalStorage({
+      users: ["alice", "alice-other"].map((username) => ({
         username,
         password: "disposable-test-password",
-        permissions: { "/": ["*"] },
       })),
-      [],
-      { dataDir: "/srv/sftpgo/data" },
-    );
-    await writeFile(
-      join(this.directory, "seed.json"),
-      JSON.stringify({
-        ...dump,
-        users: dump.users.map((user) => ({ ...user, public_keys: [publicKey] })),
-      }),
-    );
-    // `mkdtemp` creates a 0700 directory. The seed is bind-mounted into the
-    // SFTPGo container, which reads it as uid 1000: on a Linux host (CI) it
-    // could not open the file, loaded no users, and every login answered 401.
-    // Docker Desktop's file sharing masked this on macOS.
-    await chmod(this.directory, 0o755);
-    await chmod(join(this.directory, "seed.json"), 0o644);
+      files: {
+        alice: {
+          "/docs/top.dat": "first",
+          "/docs/nested/child.dat": "nested",
+          "/docs-other/keep.dat": "sibling",
+        },
+        "alice-other": { "/docs/top.dat": "other user" },
+      },
+    });
+    await openForReading(this.storage.root);
     await this.docker(["network", "create", this.prefix]);
     this.networkCreated = true;
-    await this.docker(["volume", "create", this.prefix]);
-    this.volumeCreated = true;
     await this.run("db", [
       "-p",
       "127.0.0.1::5432",
@@ -119,63 +126,6 @@ export class SftpIndexerStack {
       { timeout: 60_000, interval: 100 },
     );
     this.connectionString = `postgres://fdrive:disposable-test-password@127.0.0.1:${await this.port("db", 5432)}/fdrive`;
-    await this.run("sftp", [
-      "-p",
-      "127.0.0.1::2022",
-      "-p",
-      "127.0.0.1::8080",
-      "-v",
-      `${this.prefix}:/srv/sftpgo/data`,
-      "-v",
-      `${this.directory}:/seed:ro`,
-      "-e",
-      "SFTPGO_LOADDATA_FROM=/seed/seed.json",
-      "-e",
-      "SFTPGO_LOADDATA_MODE=0",
-      "drakkan/sftpgo:v2.7.5",
-    ]);
-    this.sftpPort = await this.port("sftp", 2022);
-    this.sftpgoUrl = `http://127.0.0.1:${await this.port("sftp", 8080)}`;
-    await vi.waitFor(
-      async () => {
-        const response = await fetch(`${this.sftpgoUrl}/healthz`, {
-          signal: AbortSignal.timeout(2_000),
-        });
-        expect(response.status).toBe(200);
-      },
-      { timeout: 60_000, interval: 100 },
-    );
-    await this.docker([
-      "exec",
-      "--user",
-      "root",
-      `${this.prefix}-sftp`,
-      "sh",
-      "-c",
-      "mkdir -p /srv/sftpgo/data/alice/docs/nested /srv/sftpgo/data/alice/docs-other /srv/sftpgo/data/alice-other/docs; " +
-        "printf 'first' > /srv/sftpgo/data/alice/docs/top.dat; " +
-        "printf 'nested' > /srv/sftpgo/data/alice/docs/nested/child.dat; " +
-        "printf 'sibling' > /srv/sftpgo/data/alice/docs-other/keep.dat; " +
-        "printf 'other user' > /srv/sftpgo/data/alice-other/docs/top.dat; " +
-        "chown -R 1000:1000 /srv/sftpgo/data",
-    ]);
-    // Pin the host key from this newly created loopback-only test server.
-    await vi.waitFor(
-      async () => {
-        const hostKey = await command("ssh-keyscan", [
-          "-T",
-          "5",
-          "-t",
-          "rsa,ecdsa,ed25519",
-          "-p",
-          this.sftpPort,
-          "127.0.0.1",
-        ]);
-        expect(hostKey).not.toBe("");
-        await writeFile(join(this.directory, "known_hosts"), `${hostKey}\n`);
-      },
-      { timeout: 30_000, interval: 100 },
-    );
   }
 
   async startIndexer(): Promise<void> {
@@ -193,6 +143,7 @@ export class SftpIndexerStack {
         "HTTPServer(('0.0.0.0', 8080), Health).serve_forever()",
       ].join("\n"),
     );
+    await chmod(join(this.directory, "embed-health.py"), 0o644);
     await this.run("embed", [
       "-v",
       `${this.directory}:/fixture:ro`,
@@ -200,13 +151,22 @@ export class SftpIndexerStack {
       "python",
       "/fixture/embed-health.py",
     ]);
+    // Writers outside fdrive (rsync, Syncthing, a shell) change the folder in
+    // place; this container is one, sharing the folder with the indexer.
+    await this.run("writer", [
+      "-v",
+      `${this.folder.root}:${ROOT_IN_CONTAINER}`,
+      this.prefix,
+      "sleep",
+      "infinity",
+    ]);
     await this.run("indexer", [
       "-v",
-      `${this.prefix}:/roots/sftpgo:ro`,
+      `${this.folder.root}:${ROOT_IN_CONTAINER}:ro`,
       "-e",
       "DATABASE_URL=postgres://fdrive:disposable-test-password@db:5432/fdrive",
       "-e",
-      "INDEX_ROOTS=sftpgo=/roots/sftpgo",
+      `INDEX_ROOTS=files=${ROOT_IN_CONTAINER}`,
       "-e",
       "EMBED_URL=http://embed:8080",
       "-e",
@@ -225,26 +185,16 @@ export class SftpIndexerStack {
     );
   }
 
+  /** Renames alice's `/docs` to `/renamed` on disk, outside fdrive. */
   async renameDirectory(): Promise<void> {
-    const batch = join(this.directory, "rename.batch");
-    await writeFile(batch, 'rename "/docs" "/renamed"\nls "/renamed/nested/child.dat"\n');
-    await command("sftp", [
-      "-q",
-      "-b",
-      batch,
-      "-P",
-      this.sftpPort,
-      "-i",
-      join(this.directory, "key"),
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      `UserKnownHostsFile=${join(this.directory, "known_hosts")}`,
-      "alice@127.0.0.1",
+    await this.docker([
+      "exec",
+      "--user",
+      "root",
+      `${this.prefix}-writer`,
+      "mv",
+      `${ROOT_IN_CONTAINER}/alice/docs`,
+      `${ROOT_IN_CONTAINER}/alice/renamed`,
     ]);
   }
 
@@ -261,10 +211,10 @@ export class SftpIndexerStack {
       this.containers.map((name) => this.docker(["rm", "-f", "-v", name])),
     );
     const cleanup = await Promise.allSettled([
-      ...(this.volumeCreated ? [this.docker(["volume", "rm", this.prefix])] : []),
       ...(this.networkCreated ? [this.docker(["network", "rm", this.prefix])] : []),
       ...(this.imageCreated ? [this.docker(["image", "rm", this.prefix])] : []),
       ...(this.directory ? [rm(this.directory, { recursive: true, force: true })] : []),
+      ...(this.storage ? [this.storage.stop()] : []),
     ]);
     const errors = [...results, ...cleanup].filter((result) => result.status === "rejected");
     if (errors.length)

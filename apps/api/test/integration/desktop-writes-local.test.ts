@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,28 +8,30 @@ import {
   DesktopWritePairResult,
   MeResponse,
 } from "@fdrive/contracts";
-import { startPostgres, startSftpgo } from "@fdrive/testkit";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 /**
- * One unmodified SFTPGo, the shape a self-hoster actually runs. No lease exists
- * anywhere: publication is qualified only by fdrive's per-identity lock and the
- * destination recheck. Proves the default contract is reachable end to end, and that a writer
- * arriving over a protocol fdrive does not mediate — WebDAV, while fdrive drives the
- * REST API — is refused rather than silently overwritten.
+ * The deployment's local folder, the shape a self-hoster actually runs. No lease
+ * exists anywhere: publication is qualified only by fdrive's per-identity lock and
+ * the destination recheck. Proves the default contract is reachable end to end, and
+ * that a writer fdrive does not mediate — a program writing to the folder on disk,
+ * as rsync or Syncthing would — is refused rather than silently overwritten.
  */
-it("publishes on stock SFTPGo with no configuration and refuses an out-of-band change", {
+it("publishes on the local folder with no configuration and refuses an out-of-band change", {
   timeout: 300_000,
 }, async () => {
   const postgres = await startPostgres();
-  const sftpgo = await startSftpgo({ files: { alice: {} } });
-  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-stock-writes-"));
+  const storage = await startLocalStorage({ files: {} });
+  await seedLocalUsers(postgres.connectionString, storage);
+  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-local-writes-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
-    SFTPGO_URL: sftpgo.baseUrl,
+    FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
     FDRIVE_DESKTOP_STATE_DIR: stateDir,
@@ -57,25 +59,19 @@ it("publishes on stock SFTPGo with no configuration and refuses an out-of-band c
   const base = "/api/v2/desktop";
   const sha = (value: string) => createHash("sha256").update(value).digest("hex");
   const credential = { username: "alice", password: "alice-password" };
-  const webdav = (path: string, method: string, body?: string) =>
-    fetch(`${sftpgo.webdavUrl}${path}`, {
-      method,
-      headers: {
-        authorization: `Basic ${Buffer.from(`${credential.username}:${credential.password}`).toString("base64")}`,
-      },
-      ...(body === undefined ? {} : { body }),
-    });
+  /** Alice's copy of `path` on disk, read and written outside fdrive. */
+  const onDisk = storage.path.bind(null, "alice");
   try {
     const login = await call("/api/v1/auth/login", { credential });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
 
-    // The deployment's own SFTPGo is already registered and needs nothing set on it.
+    // The deployment's own folder is already registered and needs nothing set on it.
     const listed = (await json("/api/v1/admin/providers")) as {
-      providers: { id: string; baseUrl: string }[];
+      providers: { id: string; type: string }[];
     };
-    const existing = listed.providers.find((p) => p.baseUrl === sftpgo.baseUrl);
-    if (!existing) throw Error("Expected the configured SFTPGo provider");
+    const existing = listed.providers.find((p) => p.type === "local");
+    if (!existing) throw Error("Expected the deployment's local folder");
     const linked = await call("/api/v1/account/identities", {
       providerId: existing.id,
       credential,
@@ -97,7 +93,7 @@ it("publishes on stock SFTPGo with no configuration and refuses an out-of-band c
     if (pair.status !== "connected") throw Error("Expected connected credentials");
     const writable = pair.credentials.find((c) => c.location.providerId === existing.id);
     if (!writable) throw Error("Missing write credential");
-    // Stock SFTPGo, no lease, yet the Mac app is granted writes.
+    // The local folder, no lease, yet the Mac app is granted writes.
     expect(writable.location.capabilities.create).toBe(true);
     cookie = "";
     bearer = `Bearer ${writable.token}`;
@@ -136,11 +132,11 @@ it("publishes on stock SFTPGo with no configuration and refuses an out-of-band c
     const first = DesktopWriteEntry.parse(
       ((await created.json()) as { item: unknown }).item as object,
     );
-    expect(await (await webdav("/stock.txt", "GET")).text()).toBe("first");
+    expect(await readFile(onDisk("/stock.txt"), "utf8")).toBe("first");
 
     const replaced = await publish("stock.txt", "second", first, "first");
     expect(replaced.status, await replaced.clone().text()).toBe(200);
-    expect(await (await webdav("/stock.txt", "GET")).text()).toBe("second");
+    expect(await readFile(onDisk("/stock.txt"), "utf8")).toBe("second");
     const second = DesktopWriteEntry.parse(
       ((await replaced.json()) as { item: unknown }).item as object,
     );
@@ -150,14 +146,14 @@ it("publishes on stock SFTPGo with no configuration and refuses an out-of-band c
     // The refusal here is `checkBase`'s, taken before the serialized section: the
     // change lands before the commit starts. The in-section proofs need a write
     // that lands mid-commit, which `optimistic-publish.test.ts` injects with hooks.
-    expect((await webdav("/stock.txt", "PUT", "written over WebDAV")).ok).toBe(true);
+    await writeFile(onDisk("/stock.txt"), "written on disk");
     const refused = await publish("stock.txt", "third", second, "second");
     expect(refused.status).toBe(409);
-    expect(await (await webdav("/stock.txt", "GET")).text()).toBe("written over WebDAV");
+    expect(await readFile(onDisk("/stock.txt"), "utf8")).toBe("written on disk");
   } finally {
     await composed.close?.();
     await rm(stateDir, { recursive: true, force: true });
-    await sftpgo.stop();
+    await storage.stop();
     await postgres.stop();
   }
 });

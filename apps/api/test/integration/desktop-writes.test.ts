@@ -9,20 +9,22 @@ import {
   MeResponse,
 } from "@fdrive/contracts";
 import { createDb, createDesktopEffectsRepo, createRepos } from "@fdrive/db";
-import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
+import { startApacheWebdav, startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 it("publishes complete files under a real WebDAV lease with durable replay and conflict protection", async () => {
   const postgres = await startPostgres();
-  const sftpgo = await startSftpgo();
+  const storage = await startLocalStorage();
+  await seedLocalUsers(postgres.connectionString, storage);
   const dav = await startApacheWebdav();
   const stateDir = await mkdtemp(join(tmpdir(), "fdrive-desktop-test-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
-    SFTPGO_URL: sftpgo.baseUrl,
+    FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
     FDRIVE_DESKTOP_STATE_DIR: stateDir,
@@ -86,8 +88,8 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     const writable = pair.credentials.find((c) => c.location.providerId === provider.id);
     if (!writable) throw Error("Missing write credential");
     expect(writable.location.capabilities.create).toBe(true);
-    // The deployment's stock SFTPGo login in the same pairing writes too, under the
-    // default contract, with nothing configured on its row.
+    // The deployment's local login in the same pairing writes too, with nothing
+    // configured on its row.
     expect(pair.credentials.find((c) => c !== writable)?.location.readOnly).toBe(false);
     cookie = "";
     bearer = `Bearer ${writable.token}`;
@@ -367,7 +369,7 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
   } finally {
     await composed.close();
     await dav.stop();
-    await sftpgo.stop();
+    await storage.stop();
     await postgres.stop();
     await rm(stateDir, { recursive: true, force: true });
   }

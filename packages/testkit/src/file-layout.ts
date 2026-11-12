@@ -1,41 +1,28 @@
-/** The key in SEED_FILES whose content belongs to the shared folder, not a user's home. */
-const SHARED_FILES_KEY = "@shared";
-
-/** The SEED_FOLDERS entry that "@shared" content is mapped under. */
-const SHARED_FOLDER_NAME = "shared";
+import type { SeedFiles } from "./seed-data.js";
 
 export interface SeedFileLayoutOptions {
+  /** The folder every home lives under, as `<dataDir>/<owner>`. */
   readonly dataDir: string;
 }
 
 export interface SeededFile {
+  /** Where the file lives: on disk for a local folder, or inside a container. */
   readonly containerPath: string;
   readonly content: string;
 }
 
 /**
  * Maps the SEED_FILES structure (owner -> virtual path -> content) onto
- * absolute paths inside the SFTPGo container. Pure: no filesystem access.
- * The "@shared" owner maps under the mapped path of the "shared" folder
- * (dataDir/_folders/shared/...); every other owner maps under its own home
- * directory (dataDir/<owner>/...).
+ * absolute paths below `dataDir`, each owner's files under its own home
+ * (`dataDir/<owner>/...`): the layout of the local folder. Pure: no
+ * filesystem access.
  */
-export function seedFileLayout(
-  files: Readonly<Record<string, Record<string, string>>>,
-  opts: SeedFileLayoutOptions,
-): SeededFile[] {
+export function seedFileLayout(files: SeedFiles, opts: SeedFileLayoutOptions): SeededFile[] {
   const result: SeededFile[] = [];
-
   for (const [owner, pathToContent] of Object.entries(files)) {
-    const base =
-      owner === SHARED_FILES_KEY
-        ? `${opts.dataDir}/_folders/${SHARED_FOLDER_NAME}`
-        : `${opts.dataDir}/${owner}`;
-
     for (const [virtualPath, content] of Object.entries(pathToContent)) {
-      result.push({ containerPath: `${base}${virtualPath}`, content });
+      result.push({ containerPath: `${opts.dataDir}/${owner}${virtualPath}`, content });
     }
   }
-
   return result;
 }

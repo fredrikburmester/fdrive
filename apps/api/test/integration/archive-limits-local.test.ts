@@ -1,9 +1,10 @@
-import { startPostgres, startSftpgo } from "@fdrive/testkit";
-import type { Logger } from "pino";
+import { existsSync } from "node:fs";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 function zipContent(content: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -17,30 +18,26 @@ function zipContent(content: string): Promise<Buffer> {
   });
 }
 
-describe("archive expansion limits against real SFTPGo", () => {
+describe("archive expansion limits against a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
-  let sftp: Awaited<ReturnType<typeof startSftpgo>>;
+  let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let cookie: string;
 
   beforeAll(async () => {
-    [postgres, sftp] = await Promise.all([
+    [postgres, storage] = await Promise.all([
       startPostgres(),
-      startSftpgo({
-        users: [{ username: "alice", password: "alice-pass", permissions: { "/": ["*"] } }],
-        folders: [],
-        files: {},
-      }),
+      startLocalStorage({ users: [{ username: "alice", password: "alice-pass" }], files: {} }),
     ]);
-    const noop = () => undefined;
+    await seedLocalUsers(postgres.connectionString, storage);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
-        SFTPGO_URL: sftp.baseUrl,
+        FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 17).toString("base64"),
         FDRIVE_JOB_MAX_BYTES: "1000",
       }),
-      { info: noop, warn: noop, error: noop } as unknown as Logger,
+      silentLogger(),
     );
     const login = await composed.app.request("/api/v1/auth/login", {
       method: "POST",
@@ -54,7 +51,7 @@ describe("archive expansion limits against real SFTPGo", () => {
 
   afterAll(async () => {
     await composed?.close();
-    await sftp?.stop();
+    await storage?.stop();
     await postgres?.stop();
   }, 180_000);
 
@@ -101,5 +98,6 @@ describe("archive expansion limits against real SFTPGo", () => {
       headers: { cookie },
     });
     expect(output.status).toBe(404);
+    expect(existsSync(storage.path("alice", "/oversized/note.txt"))).toBe(false);
   });
 });

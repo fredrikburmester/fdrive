@@ -7,19 +7,24 @@ import {
   MeResponse,
   ProvidersResponse,
 } from "@fdrive/contracts";
-import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
+import { startApacheWebdav, startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
-it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validators and revocation", async () => {
+it("pairs a local folder and Apache WebDAV with isolated streaming reads, validators and revocation", async () => {
   const postgres = await startPostgres();
-  const sftpgo = await startSftpgo({ files: { alice: { "/same.txt": "alpha" } } });
+  const storage = await startLocalStorage({
+    users: [{ username: "alice", password: "alice-password" }],
+    files: { alice: { "/same.txt": "alpha" } },
+  });
+  await seedLocalUsers(postgres.connectionString, storage);
   const dav = await startApacheWebdav();
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
-    SFTPGO_URL: sftpgo.baseUrl,
+    FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
   });
@@ -242,7 +247,7 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
         })
       ).text(),
     ).toBe("delta");
-    // Environment admin rights belong to the original SFTPGo login, not the linked DAV login.
+    // Environment admin rights belong to the original local login, not the linked DAV login.
     expect(
       (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
         .status,
@@ -260,7 +265,7 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
   } finally {
     await composed.close();
     await dav.stop();
-    await sftpgo.stop();
+    await storage.stop();
     await postgres.stop();
   }
 });

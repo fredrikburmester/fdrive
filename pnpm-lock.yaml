@@ -77,9 +77,6 @@ importers:
       '@fdrive/s3':
         specifier: workspace:*
         version: link:../../packages/s3
-      '@fdrive/sftpgo':
-        specifier: workspace:*
-        version: link:../../packages/sftpgo
       '@fdrive/webdav':
         specifier: workspace:*
         version: link:../../packages/webdav
@@ -509,28 +506,6 @@ importers:
       '@smithy/fetch-http-handler':
         specifier: 5.8.0
         version: 5.8.0
-    devDependencies:
-      '@fdrive/config':
-        specifier: workspace:*
-        version: link:../config
-      '@fdrive/testkit':
-        specifier: workspace:*
-        version: link:../testkit
-      '@vitest/coverage-v8':
-        specifier: ^5.0.0
-        version: 5.0.0(vitest@5.0.0)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(jsdom@30.0.1(@noble/hashes@2.4.0))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
-
-  packages/sftpgo:
-    dependencies:
-      '@fdrive/core':
-        specifier: workspace:*
-        version: link:../core
     devDependencies:
       '@fdrive/config':
         specifier: workspace:*

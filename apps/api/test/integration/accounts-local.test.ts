@@ -1,8 +1,6 @@
 import { AccountFavoritesResponse, MeResponse, ROUTES } from "@fdrive/contracts";
-import { parseHomeTemplate, scopesFor } from "@fdrive/core";
 import { createDb, createRepos } from "@fdrive/db";
-import { createMemoryStorage, startPostgres, startSftpgo } from "@fdrive/testkit";
-import type { Logger } from "pino";
+import { createMemoryStorage, startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hashSessionId } from "../../src/auth/sessions.js";
 import { composeApp } from "../../src/composition.js";
@@ -11,25 +9,24 @@ import { officeActor } from "../../src/office/auth.ts";
 import { createResolveTokenPrincipal } from "../../src/tokens/principal.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
 import { officeHarness } from "../fixtures/office/harness.ts";
+import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
 const hashCookie = (cookie: string) => hashSessionId(cookie.slice("fdrive_session=".length));
-describe("accounts against real PostgreSQL and SFTPGo", () => {
+describe("accounts against real PostgreSQL and a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
-  let sftp: Awaited<ReturnType<typeof startSftpgo>>;
+  let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let database: ReturnType<typeof createDb>;
   let repos: ReturnType<typeof createRepos>;
   beforeAll(async () => {
-    [postgres, sftp] = await Promise.all([
+    [postgres, storage] = await Promise.all([
       startPostgres(),
-      startSftpgo({
+      startLocalStorage({
         users: ["alice", "bob", "carol", "dave"].map((username) => ({
           username,
           password: `${username}-pass`,
-          permissions: { "/": ["*"] },
         })),
-        folders: [],
         files: Object.fromEntries(
           ["alice", "bob", "carol", "dave"].map((username) => [
             username,
@@ -38,21 +35,20 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
         ),
       }),
     ]);
+    await seedLocalUsers(postgres.connectionString, storage);
     const config = loadConfig({
       DATABASE_URL: postgres.connectionString,
-      SFTPGO_URL: sftp.baseUrl,
+      FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
     });
-    const noop = () => undefined;
-    const logger = { info: noop, warn: noop, error: noop } as unknown as Logger;
-    composed = await composeApp(config, logger);
+    composed = await composeApp(config, silentLogger());
     database = createDb(postgres.connectionString);
     repos = createRepos(database.db);
   }, 180000);
   afterAll(async () => {
     await composed?.close();
     await database?.close();
-    await sftp?.stop();
+    await storage?.stop();
     await postgres?.stop();
   }, 180000);
   async function call(
@@ -100,28 +96,27 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
       tokenHash: hashApiToken(raw),
       expiresAt: null,
     });
-    const storage = createMemoryStorage();
+    const memory = createMemoryStorage();
     const tokenPrincipal = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
       identities: repos.identities,
       clock: () => new Date(),
-      storageFactory: async () => storage,
+      storageFactory: async () => memory,
     });
     expect(await tokenPrincipal(raw)).not.toBeNull();
     const office = await officeHarness();
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: sftp.baseUrl });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const officeDeps = {
       ...office.deps,
       repos,
       clock: () => new Date(),
       location: async (identity: { externalUsername: string }) => ({
         providerId: provider.id,
-        scopes: scopesFor({
-          template: parseHomeTemplate("sftpgo:/{username}"),
-          username: identity.externalUsername,
-        }),
+        scopes: [
+          { rootName: "files", fsPrefix: `/${identity.externalUsername}`, virtualPrefix: "/" },
+        ],
       }),
-      storageFactory: async () => storage,
+      storageFactory: async () => memory,
     };
     expect(
       (await officeActor(officeDeps, hashCookie(b.cookie), b.me.activeIdentityId)).identity.id,
@@ -216,7 +211,7 @@ describe("accounts against real PostgreSQL and SFTPGo", () => {
       ),
     ]);
     expect(responses.every((response) => [200, 401].includes(response.status))).toBe(true);
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: sftp.baseUrl });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const identity = await repos.identities.findByProviderUsername(provider.id, "carol");
     expect(identity?.accountId).toBe(d.me.account.id);
     for (const response of responses)

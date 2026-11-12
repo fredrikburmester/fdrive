@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   EntryResponse,
   ListResponse,
@@ -9,12 +10,12 @@ import {
   TrashStatusResponse,
 } from "@fdrive/contracts";
 import { createDb, createRepos } from "@fdrive/db";
-import { startPostgres, startSftpgo } from "@fdrive/testkit";
-import type { Logger } from "pino";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { trashSettingsKey } from "../../src/trash/settings.js";
+import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const TRASH_PATH = "/.trash";
 
@@ -22,57 +23,50 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 
 /**
  * Exercises the trash routes (`/api/v1/trash/*`) plus the `fs/delete` and
- * `fs/list` interactions with a trash, against a real SFTPGo container
- * seeded with the Event Manager recycle-folder rule described in
- * `docs/DEVELOPMENT.md`. Follows `accounts-sftp.test.ts`'s composition
- * pattern: one shared Postgres and SFTPGo container, one composed app with
+ * `fs/list` interactions with a trash, against a real local folder, whose
+ * Trash is fdrive's own: a delete moves the item into the recycle folder
+ * (`<home>/.trash/.fdrive-move-v1`). Follows `accounts-local.test.ts`'s
+ * composition pattern: one Postgres, one local folder, one composed app with
  * provider-bound Trash settings persisted, and plain `app.request` calls per user.
  */
-describe("trash against real PostgreSQL and SFTPGo", () => {
+describe("trash against real PostgreSQL and a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
-  let sftp: Awaited<ReturnType<typeof startSftpgo>>;
+  let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
-    [postgres, sftp] = await Promise.all([
+    [postgres, storage] = await Promise.all([
       startPostgres(),
-      startSftpgo({
-        users: ["alice", "carol"].map((username) => ({
-          username,
-          password: `${username}-pass`,
-          permissions: { "/": ["*"] },
-        })),
-        folders: [],
+      startLocalStorage({
+        users: ["alice", "carol"].map((username) => ({ username, password: `${username}-pass` })),
         files: {},
-        trash: { path: TRASH_PATH },
       }),
     ]);
+    await seedLocalUsers(postgres.connectionString, storage);
     const config = loadConfig({
       DATABASE_URL: postgres.connectionString,
-      SFTPGO_URL: sftp.baseUrl,
+      FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
     });
-    const noop = () => undefined;
-    const logger = { info: noop, warn: noop, error: noop } as unknown as Logger;
-    composed = await composeApp(config, logger);
+    composed = await composeApp(config, silentLogger());
     database = createDb(postgres.connectionString);
     const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: sftp.baseUrl });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     await repos.settings.set(trashSettingsKey(provider.id), {
       providerId: provider.id,
       revision: 1,
       enabled: true,
       path: TRASH_PATH,
       retentionHours: 72,
-      rulesConfirmed: true,
+      rulesConfirmed: false,
     });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
     await database?.close();
-    await sftp?.stop();
+    await storage?.stop();
     await postgres?.stop();
   }, 180000);
 
@@ -150,21 +144,26 @@ describe("trash against real PostgreSQL and SFTPGo", () => {
     );
     expect(status).toEqual({ available: true, path: TRASH_PATH, retentionHours: 72 });
 
-    // 2. delete a file and a directory whose names contain spaces, Unicode,
-    // and a literal "%20" (not a URL-encoded space).
+    // 2. delete files whose names contain spaces, Unicode, and a literal
+    // "%20" (not a URL-encoded space), the last from inside a folder, then
+    // the folder itself, which goes to the trash as one item.
     const spacedName = "My Report (final).txt";
     const unicodeName = "héllo wörld 名前.txt";
     const percentName = "literal%20name.txt";
     await upload(aliceCookie, `/${spacedName}`, "spaced content");
     await upload(aliceCookie, `/${unicodeName}`, "unicode content");
     await upload(aliceCookie, `/A Folder/${percentName}`, "percent content");
+    await upload(aliceCookie, "/A Folder/kept-inside.txt", "inside the folder");
 
     await deleteItem(aliceCookie, `/${spacedName}`, "file");
     await deleteItem(aliceCookie, `/${unicodeName}`, "file");
+    await deleteItem(aliceCookie, `/A Folder/${percentName}`, "file");
     await deleteItem(aliceCookie, "/A Folder", "dir");
+    expect(existsSync(storage.path("alice", "/A Folder"))).toBe(false);
+    expect(existsSync(storage.path("alice", `${TRASH_PATH}/.fdrive-move-v1`))).toBe(true);
 
     // 3. the trash list parses originalPath, name, and deletedAt correctly
-    // for every deleted item, including the folder's file.
+    // for every deleted item, the folder included.
     const afterDeletes = await listTrash(aliceCookie);
     expect(afterDeletes.truncated).toBe(false);
     const byName = new Map(afterDeletes.entries.map((entry) => [entry.name, entry]));
@@ -180,6 +179,8 @@ describe("trash against real PostgreSQL and SFTPGo", () => {
       originalPath: `/A Folder/${percentName}`,
       name: percentName,
     });
+    expect(byName.get("A Folder")).toMatchObject({ originalPath: "/A Folder", name: "A Folder" });
+    expect(afterDeletes.entries).toHaveLength(4);
     for (const entry of afterDeletes.entries) {
       expect(new Date(entry.deletedAt).toString()).not.toBe("Invalid Date");
     }
@@ -256,7 +257,7 @@ describe("trash against real PostgreSQL and SFTPGo", () => {
     );
 
     // 10. empty alice's trash entirely; her remaining entries (the
-    // percent-named file) are gone, but carol's trash is untouched.
+    // percent-named file and the folder) are gone, but carol's trash is untouched.
     const emptyRes = await call(ROUTES.trash.empty, { method: "POST", cookie: aliceCookie });
     expect(emptyRes.status).toBe(200);
     const aliceTrashAfterEmpty = await listTrash(aliceCookie);

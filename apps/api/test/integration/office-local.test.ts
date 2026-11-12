@@ -1,66 +1,34 @@
 import type { StorageProvider } from "@fdrive/core";
-import { createSftpgoClient, createSftpgoStorageProvider } from "@fdrive/sftpgo";
-import { type SftpgoContainer, startSftpgo } from "@fdrive/testkit";
+import { createLocalStorage } from "@fdrive/local";
+import { startLocalStorage } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { z } from "zod";
 import { type OfficeHarness, officeHarness } from "../fixtures/office/harness.ts";
 
-// Isolated fixture administration configures a shared home. Application requests
-// below use only each user's own credentials, including the read-only identity.
-describe("WOPI over real SFTPGo storage", () => {
-  let container: SftpgoContainer | undefined;
+// The harness maps every login to one folder, so each user's storage below is
+// the same real folder on disk. The reader is held to viewing by Office's
+// edit policy, never by the storage.
+describe("WOPI over a real local folder", () => {
+  let storage: Awaited<ReturnType<typeof startLocalStorage>> | undefined;
   let h: OfficeHarness;
   const storages = new Map<string, StorageProvider>();
   beforeAll(async () => {
-    container = await startSftpgo({
-      users: [
-        { username: "alice", password: "alice-pass", permissions: { "/": ["*"] } },
-        { username: "bob", password: "bob-pass", permissions: { "/": ["*"] } },
-        { username: "reader", password: "reader-pass", permissions: { "/": ["list", "download"] } },
-      ],
-      folders: [],
+    storage = await startLocalStorage({
+      users: [{ username: "alice", password: "alice-pass" }],
       files: { alice: { "/a.docx": "original", "/empty.docx": "" } },
     });
-    const tokenResponse = await fetch(`${container.baseUrl}/api/v2/token`, {
-      headers: {
-        Authorization: `Basic ${Buffer.from("admin:admin-password-for-tests").toString("base64")}`,
-      },
-    });
-    expect(tokenResponse.ok).toBe(true);
-    const admin = z
-      .object({ access_token: z.string() })
-      .parse(await tokenResponse.json()).access_token;
-    for (const username of ["bob", "reader"]) {
-      const userResponse = await fetch(`${container.baseUrl}/api/v2/users/${username}`, {
-        headers: { Authorization: `Bearer ${admin}` },
-      });
-      expect(userResponse.ok).toBe(true);
-      const user = z.record(z.string(), z.unknown()).parse(await userResponse.json());
-      const updated = await fetch(`${container.baseUrl}/api/v2/users/${username}`, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...user, home_dir: "/srv/sftpgo/data/alice" }),
-      });
-      expect(updated.ok).toBe(true);
-    }
-    const client = createSftpgoClient({ baseUrl: container.baseUrl });
     for (const username of ["alice", "bob", "reader"]) {
-      const token = await client.login({ username, password: `${username}-pass` });
-      storages.set(
-        username,
-        createSftpgoStorageProvider({ client, withToken: async (fn) => fn(token.accessToken) }),
-      );
+      storages.set(username, createLocalStorage({ home: storage.path("alice") }));
     }
     h = await officeHarness({
       storageForUser: (username) => {
-        const storage = storages.get(username);
-        if (storage === undefined) throw new Error("Unknown test user");
-        return storage;
+        const found = storages.get(username);
+        if (found === undefined) throw new Error("Unknown test user");
+        return found;
       },
     });
   }, 180000);
   afterAll(async () => {
-    await container?.stop();
+    await storage?.stop();
   }, 180000);
   it("shares UUID and lock across two credentials, streams saved bytes, permits readonly view", async () => {
     const a = await h.open();

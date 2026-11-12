@@ -1,4 +1,3 @@
-import { parseHomeTemplate, scopesFor } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
 import { createMemoryStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
@@ -44,7 +43,7 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
     const indexQueries = createIndexQueries(db);
 
     try {
-      const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://x" });
+      const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
       const account = await repos.accounts.create({ displayName: "Alice" });
       const identity = await repos.identities.create({
         accountId: account.id,
@@ -54,7 +53,7 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
       const tag = await repos.tags.create(account.id, { name: "Work", color: null });
       await repos.fileTags.setTags(identity.id, "/a.txt", [tag.id]);
 
-      const [root] = await db.insert(schema.roots).values({ name: "sftpgo" }).returning();
+      const [root] = await db.insert(schema.roots).values({ name: "files" }).returning();
       if (root === undefined) {
         throw new Error("expected the root insert to return a row");
       }
@@ -65,7 +64,6 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
       bus.subscribe({ identityId: identity.id }, (event) => received.push(event));
 
       const storage = createMemoryStorage({ "/b.txt": "moved contents" });
-      const homeTemplate = parseHomeTemplate("sftpgo:/{username}");
       const listener = createIndexerListener({
         createClient: () => createPgNotificationClient(postgres.connectionString),
         identities: repos.identities,
@@ -77,11 +75,10 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
         configuredMappingsFor: async (id) => ({
           available: true,
           providerId: id.providerId,
-          homeTemplateRaw: "sftpgo:/{username}",
-          scopes: scopesFor({ template: homeTemplate, username: id.externalUsername }),
+          scopes: [{ rootName: "files", fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
         }),
         storageForIdentity: async () => storage,
-        indexRootNames: new Set(["sftpgo"]),
+        indexRootNames: new Set(["files"]),
         clock: () => new Date(),
         logger: createSilentLogger(),
       });
@@ -90,7 +87,7 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
       try {
         const payload = JSON.stringify({
           kind: "moved",
-          root: "sftpgo",
+          root: "files",
           path: "alice/a.txt",
           target_path: "alice/b.txt",
           at: new Date().toISOString(),

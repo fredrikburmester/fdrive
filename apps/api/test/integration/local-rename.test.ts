@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
-import { parseHomeTemplate, type StorageProvider, scopesFor } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
-import { createSftpgoClient, createSftpgoStorageProvider } from "@fdrive/sftpgo";
+import { createLocalStorage } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type BusEvent, createEventBus } from "../../src/events/bus.js";
@@ -10,16 +10,14 @@ import {
   createPgNotificationClient,
 } from "../../src/events/indexer-listener.js";
 import { createMetadataService } from "../../src/metadata/service.js";
-import { SftpIndexerStack } from "./helpers/sftp-indexer-stack.js";
-
-const SFTP_PASSWORD = "disposable-test-password";
+import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
 function byPath<T extends { path: string }>(items: T[]): T[] {
   return items.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-describe("external SFTP directory rename through the real indexer", () => {
-  const stack = new SftpIndexerStack();
+describe("a folder renamed on disk outside fdrive, through the real indexer", () => {
+  const stack = new LocalIndexerStack();
   let connection: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
@@ -54,7 +52,7 @@ describe("external SFTP directory rename through the real indexer", () => {
     const { db } = connection;
     const repos = createRepos(db);
     const metadata = createMetadataService(repos);
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: stack.sftpgoUrl });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const alice = await repos.accounts.create({ displayName: "Alice" });
     const other = await repos.accounts.create({ displayName: "Alice Other" });
     const identity = await repos.identities.create({
@@ -112,24 +110,15 @@ describe("external SFTP directory rename through the real indexer", () => {
     const warnings: string[] = [];
     bus.subscribe({ identityId: identity.id }, (event) => received.push(event));
     bus.subscribe({ identityId: otherIdentity.id }, (event) => otherReceived.push(event));
-    const homeTemplate = parseHomeTemplate("sftpgo:/{username}");
-    // Live storage per identity, against the real SFTPGo container: the
+    // Live storage per identity, over the same folder on disk: the
     // listener's live-read check before announcing a move destination must
     // pass against the identity's actual storage, not a stub.
-    const sftpgoClient = createSftpgoClient({ baseUrl: stack.sftpgoUrl, fetch: globalThis.fetch });
     const storageByIdentityId = new Map<string, StorageProvider>();
     for (const [id, username] of [
       [identity.id, "alice"],
       [otherIdentity.id, "alice-other"],
     ] as const) {
-      const token = await sftpgoClient.login({ username, password: SFTP_PASSWORD });
-      storageByIdentityId.set(
-        id,
-        createSftpgoStorageProvider({
-          client: sftpgoClient,
-          withToken: async (fn) => fn(token.accessToken),
-        }),
-      );
+      storageByIdentityId.set(id, createLocalStorage({ home: stack.folder.path(username) }));
     }
     const listener = createIndexerListener({
       createClient: () => createPgNotificationClient(stack.connectionString),
@@ -142,15 +131,14 @@ describe("external SFTP directory rename through the real indexer", () => {
       configuredMappingsFor: async (id) => ({
         available: true,
         providerId: id.providerId,
-        homeTemplateRaw: "sftpgo:/{username}",
-        scopes: scopesFor({ template: homeTemplate, username: id.externalUsername }),
+        scopes: [{ rootName: "files", fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
       }),
       storageForIdentity: async (id) => {
         const storage = storageByIdentityId.get(id);
         if (storage === undefined) throw new Error(`no storage seeded for identity ${id}`);
         return storage;
       },
-      indexRootNames: new Set(["sftpgo"]),
+      indexRootNames: new Set(["files"]),
       clock: () => new Date(),
       logger: { warn: (_data, message) => warnings.push(message) },
     });
@@ -167,7 +155,7 @@ describe("external SFTP directory rename through the real indexer", () => {
         .toMatchObject([{ identityId: identity.id, paths: ["/docs"], targetPaths: ["/renamed"] }]);
       const elapsed = performance.now() - started;
       expect(elapsed).toBeLessThan(10_000);
-      console.info(`SFTP rename -> indexer -> API metadata: ${Math.round(elapsed)} ms`);
+      console.info(`rename on disk -> indexer -> API metadata: ${Math.round(elapsed)} ms`);
       const rename = (path: string) =>
         path === "/docs" || path.startsWith("/docs/")
           ? `/renamed${path.slice("/docs".length)}`

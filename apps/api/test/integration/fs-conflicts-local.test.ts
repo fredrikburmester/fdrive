@@ -1,3 +1,4 @@
+import { rename } from "node:fs/promises";
 import {
   EntryResponse,
   MeResponse,
@@ -6,13 +7,12 @@ import {
   TrashListResponse,
 } from "@fdrive/contracts";
 import { createDb, createRepos } from "@fdrive/db";
-import { createSftpgoClient } from "@fdrive/sftpgo";
-import { startPostgres, startSftpgo } from "@fdrive/testkit";
-import type { Logger } from "pino";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { trashSettingsKey } from "../../src/trash/settings.js";
+import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const TRASH_PATH = "/.trash";
 
@@ -21,56 +21,48 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 /**
  * Exercises the fs and trash routes' conflict guard (`requireTargetFree`
  * in `fs/routes.ts`, and the same check inside `@fdrive/core`'s
- * `createRecycleFolderTrash.restore`) against a real SFTPGo container.
- * These are the cases where the container's own move/copy would otherwise
- * silently destroy whatever already sits at the target (see
- * `packages/sftpgo`'s fake, fixed to match the container's verified
- * behaviour): the routes must reject them with 409 before ever calling the
- * provider. Follows `trash-sftp.test.ts`'s composition pattern: one shared
- * Postgres and SFTPGo container, one composed app with
- * provider-bound Trash settings persisted, and plain `app.request` calls.
+ * `createRecycleFolderTrash.restore`) against a real local folder, where a
+ * plain `rename` would silently replace whatever already sits at the
+ * target: the routes must reject these with 409 and leave the target as it
+ * was. Follows `trash-local.test.ts`'s composition pattern: one Postgres,
+ * one local folder, one composed app with provider-bound Trash settings
+ * persisted, and plain `app.request` calls.
  */
-describe("fs and trash conflict guards against a real SFTPGo container", () => {
+describe("fs and trash conflict guards against a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
-  let sftp: Awaited<ReturnType<typeof startSftpgo>>;
+  let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
-    [postgres, sftp] = await Promise.all([
+    [postgres, storage] = await Promise.all([
       startPostgres(),
-      startSftpgo({
-        users: [{ username: "alice", password: "alice-pass", permissions: { "/": ["*"] } }],
-        folders: [],
-        files: {},
-        trash: { path: TRASH_PATH },
-      }),
+      startLocalStorage({ users: [{ username: "alice", password: "alice-pass" }], files: {} }),
     ]);
+    await seedLocalUsers(postgres.connectionString, storage);
     const config = loadConfig({
       DATABASE_URL: postgres.connectionString,
-      SFTPGO_URL: sftp.baseUrl,
+      FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
     });
-    const noop = () => undefined;
-    const logger = { info: noop, warn: noop, error: noop } as unknown as Logger;
-    composed = await composeApp(config, logger);
+    composed = await composeApp(config, silentLogger());
     database = createDb(postgres.connectionString);
     const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: sftp.baseUrl });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     await repos.settings.set(trashSettingsKey(provider.id), {
       providerId: provider.id,
       revision: 1,
       enabled: true,
       path: TRASH_PATH,
       retentionHours: 72,
-      rulesConfirmed: true,
+      rulesConfirmed: false,
     });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
     await database?.close();
-    await sftp?.stop();
+    await storage?.stop();
     await postgres?.stop();
   }, 180000);
 
@@ -222,15 +214,12 @@ describe("fs and trash conflict guards against a real SFTPGo container", () => {
     expect(saved.status).toBe(200);
 
     // Bypass application mutation hooks to model temporary provider visibility.
-    const client = createSftpgoClient({ baseUrl: sftp.baseUrl });
-    const token = await client.login({ username: "alice", password: "alice-pass" });
-    const user = client.user(token.accessToken);
-    await user.move("/pinned-view", "/temporarily-hidden-view");
+    await rename(storage.path("alice", "/pinned-view"), storage.path("alice", "/hidden-view"));
     const missing = await call("/api/v1/folder-views?path=/pinned-view", { cookie });
     expect(missing.status).toBe(200);
     expect(await missing.json()).toEqual({ view: null });
 
-    await user.move("/temporarily-hidden-view", "/pinned-view");
+    await rename(storage.path("alice", "/hidden-view"), storage.path("alice", "/pinned-view"));
     const returned = await call("/api/v1/folder-views?path=/pinned-view", { cookie });
     expect(returned.status).toBe(200);
     expect(await returned.json()).toEqual({

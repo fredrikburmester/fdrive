@@ -82,7 +82,7 @@ export async function toRedirectError(response: Response): Promise<WebdavError> 
 
 /** `url` with every percent-encoding's hex digits in uppercase, as `buildUrl` writes them. */
 function upperPercentEncodings(url: string): string {
-  return url.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase());
+  return url.replace(/%[0-9a-f]{2}/gi, (encoding) => encoding.toUpperCase());
 }
 
 /**

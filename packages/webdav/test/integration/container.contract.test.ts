@@ -4,14 +4,14 @@ import {
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
-import { describeStorageProvider, type SeedUser, startSftpgo } from "@fdrive/testkit";
+import { type ApacheWebdavContainer, startApacheWebdav } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWebdavClient } from "../../src/client.js";
 import { webdavModule } from "../../src/module.js";
 import { probeConnection } from "../../src/probe.js";
 import { createWebdavStorageProvider } from "../../src/storage-provider.js";
 
-type Container = Awaited<ReturnType<typeof startSftpgo>>;
+type Login = ApacheWebdavContainer["users"][number];
 
 function text(body: ReadableStream<Uint8Array>): Promise<string> {
   return new Response(body).text();
@@ -26,14 +26,14 @@ async function kindOf(promise: Promise<unknown>): Promise<string | null> {
   }
 }
 
-function userNamed(container: Container, username: string): SeedUser {
+function userNamed(container: ApacheWebdavContainer, username: string): Login {
   const user = container.users.find((candidate) => candidate.username === username);
-  if (user === undefined) throw new Error(`seed user ${username} missing`);
+  if (user === undefined) throw new Error(`WebDAV user ${username} missing`);
   return user;
 }
 
-function storageFor(container: Container, user: SeedUser): StorageProvider {
-  const client = createWebdavClient({ baseUrl: container.webdavUrl });
+function storageFor(user: Login, baseUrl = user.baseUrl): StorageProvider {
+  const client = createWebdavClient({ baseUrl });
   return createWebdavStorageProvider({
     client,
     credential: async () => ({ username: user.username, password: user.password }),
@@ -41,34 +41,35 @@ function storageFor(container: Container, user: SeedUser): StorageProvider {
 }
 
 /**
- * The provider-neutral behavioural contract against a real class 1 server:
- * SFTPGo's own WebDAV binding, with the seeded users. What
- * `describeStorageProvider` proves on the fake must hold here too.
+ * The WebDAV provider against a real class 1 server with several logins:
+ * Apache mod_dav, each login confined to its own home and bob allowed to
+ * read only. `apache.contract.test.ts` runs the provider-neutral contract.
  */
-describe("WebDAV provider against SFTPGo's WebDAV binding", () => {
-  let container: Container;
+describe("WebDAV provider against Apache with several logins", () => {
+  let container: ApacheWebdavContainer;
 
   beforeAll(async () => {
-    container = await startSftpgo();
+    container = await startApacheWebdav({
+      users: [
+        { username: "alice", password: "alice-password" },
+        { username: "bob", password: "bob-password", readOnly: true },
+        { username: "carol", password: "carol-password" },
+      ],
+      files: { bob: { "/notes.txt": "bob's notes" } },
+    });
   }, 180_000);
 
   afterAll(async () => {
-    await container.stop();
+    await container?.stop();
   }, 180_000);
 
-  describeStorageProvider(
-    "SFTPGo WebDAV container",
-    () => ({ storage: storageFor(container, userNamed(container, "alice")) }),
-    { overwritesOnMove: true },
-  );
-
   it("probes the endpoint and authenticates through the module", async () => {
-    expect(await probeConnection(container.webdavUrl, { fetch: globalThis.fetch })).toEqual({
+    const alice = userNamed(container, "alice");
+    expect(await probeConnection(alice.baseUrl, { fetch: globalThis.fetch })).toEqual({
       ok: true,
       detail: "WebDAV endpoint is reachable and requires a login",
     });
-    const alice = userNamed(container, "alice");
-    const instance = { id: "sftpgo-dav", baseUrl: container.webdavUrl, config: {} };
+    const instance = { id: "apache-dav", baseUrl: alice.baseUrl, config: {} };
     expect(
       await webdavModule.authenticate(
         instance,
@@ -88,18 +89,27 @@ describe("WebDAV provider against SFTPGo's WebDAV binding", () => {
   });
 
   it("maps a write the server refuses to forbidden", async () => {
-    // bob may create inside /inbox but not at his root (see the testkit seed).
-    const bob = storageFor(container, userNamed(container, "bob"));
+    // bob may read his home but change nothing in it.
+    const bob = storageFor(userNamed(container, "bob"));
+    expect(await text((await bob.download("/notes.txt")).body)).toBe("bob's notes");
     expect(await kindOf(bob.mkdir("/denied-at-root"))).toBe("forbidden");
     expect(await kindOf(bob.upload("/denied.txt", new TextEncoder().encode("x")))).toBe(
       "forbidden",
     );
-    await expect(bob.mkdir(`/inbox/allowed-${Date.now().toString(36)}`)).resolves.toBeUndefined();
+    expect(await kindOf(bob.deleteFile("/notes.txt"))).toBe("forbidden");
+    expect(await text((await bob.download("/notes.txt")).body)).toBe("bob's notes");
+  });
+
+  it("refuses a login another login's home", async () => {
+    const alice = userNamed(container, "alice");
+    const carol = userNamed(container, "carol");
+    const intruder = storageFor(carol, alice.baseUrl);
+    expect(await kindOf(intruder.list("/"))).toBe("unauthorized");
   });
 
   it("keeps two logins on the same path apart", async () => {
-    const alice = storageFor(container, userNamed(container, "alice"));
-    const carol = storageFor(container, userNamed(container, "carol"));
+    const alice = storageFor(userNamed(container, "alice"));
+    const carol = storageFor(userNamed(container, "carol"));
     const path = `/same-path-${Date.now().toString(36)}`;
     await alice.upload(`${path}/only-alice.txt`, new TextEncoder().encode("alice"), {
       mkdirParents: true,
@@ -115,7 +125,7 @@ describe("WebDAV provider against SFTPGo's WebDAV binding", () => {
   });
 
   it("serves byte ranges and falls back to the whole body on a stale If-Range", async () => {
-    const alice = storageFor(container, userNamed(container, "alice"));
+    const alice = storageFor(userNamed(container, "alice"));
     const path = `/range-${Date.now().toString(36)}.txt`;
     await alice.upload(path, new TextEncoder().encode("0123456789"));
     const range = await alice.download(path, { range: { start: 2, end: 4 } });
@@ -131,7 +141,7 @@ describe("WebDAV provider against SFTPGo's WebDAV binding", () => {
   it("moves deletes into a recycle folder, restores them and purges them (the API's Trash for WebDAV)", async () => {
     // The module declares `trash: "move"`: the API storage factory wraps the
     // adapter exactly like this, with the recycle-folder view on top.
-    const storage = storageFor(container, userNamed(container, "alice"));
+    const storage = storageFor(userNamed(container, "alice"));
     const trashPath = `/.dav-trash-${Date.now().toString(36)}`;
     const wrapped = withMoveToTrash({ storage, trashPath, clock: () => new Date() });
     const trash = createRecycleFolderTrash({ storage: wrapped, trashPath, layout: "move" });
