@@ -1,4 +1,3 @@
-import type { SearchQuery, SearchResponse } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Identity, IdentityLinksRepo, Repos } from "@fdrive/db";
 import type { LoginLimiter } from "../auth/login-limiter.js";
@@ -25,5 +24,4 @@ export interface AccountsDeps extends VerifiedCredentialDeps {
   readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly storageForIdentity: (identity: Identity) => StorageProvider | Promise<StorageProvider>;
-  readonly searchForIdentity: (identity: Identity, query: SearchQuery) => Promise<SearchResponse>;
 }

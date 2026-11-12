@@ -2,7 +2,6 @@ import {
   AccountIdentityId,
   LinkIdentityRequest,
   ROUTES,
-  SearchQuery,
   SwitchIdentityRequest,
   UnlinkIdentityRequest,
 } from "@fdrive/contracts";
@@ -84,13 +83,5 @@ export function registerAccountsRoutes(
     if (c.req.query("identity") !== undefined)
       throw new ApiHttpError("bad_request", "account views do not accept identity filters");
     return c.json(await accountRepositoryCall(() => deps.views.favorites(input)));
-  });
-  groups.authed.get(withoutApiV1Prefix(ROUTES.account.search), async (c) => {
-    const input = accountContext(c);
-    if (c.req.query("identity") !== undefined)
-      throw new ApiHttpError("bad_request", "account views do not accept identity filters");
-    const query = SearchQuery.safeParse(c.req.query());
-    if (!query.success) throw new ApiHttpError("bad_request", "invalid query");
-    return c.json(await accountRepositoryCall(() => deps.views.search(input, query.data)));
   });
 }

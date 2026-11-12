@@ -5,11 +5,8 @@ import { SEARCH_TYPE_EXTENSIONS, type SearchChipState } from "./filters";
 export interface FilterVisualHitsOptions {
   readonly chips: SearchChipState;
   readonly currentFolder: string;
-  readonly shownItems: readonly {
-    readonly path: string;
-    readonly identityId?: string | undefined;
-  }[];
-  readonly activeIdentityId?: string | undefined;
+  /** Paths already shown under Files or Content matches. */
+  readonly shownPaths: readonly string[];
 }
 
 /**
@@ -35,23 +32,6 @@ export function isVisualFilteredLocally(chips: SearchChipState): boolean {
   return chips.folderOnly;
 }
 
-/**
- * Truthfully labels the visual matches section heading. When all logins are
- * selected, it explicitly notes that visual search covers the active login only.
- */
-export function visualMatchesHeading(
-  allLogins: boolean,
-  activeIdentityLabel?: string | undefined,
-): string {
-  if (allLogins) {
-    if (activeIdentityLabel) {
-      return `Visual matches (${activeIdentityLabel} only)`;
-    }
-    return "Visual matches (current login only)";
-  }
-  return "Visual matches";
-}
-
 function matchesImageType(ext: string): boolean {
   const normalized = ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
   return SEARCH_TYPE_EXTENSIONS.images.includes(normalized);
@@ -63,8 +43,7 @@ function matchesImageType(ext: string): boolean {
  * 1. Checks file type filter. If set to a non-image type, returns no hits.
  *    If set to images, validates the extension against image extensions.
  * 2. Checks folder boundary filter when folderOnly is active.
- * 3. Deduplicates against items already displayed in text results (Files and Content)
- *    matching the same path and identity.
+ * 3. Deduplicates against paths already displayed in text results (Files and Content).
  */
 export function filterVisualHits(
   hits: readonly ImageSearchHit[],
@@ -74,12 +53,7 @@ export function filterVisualHits(
     return [];
   }
 
-  const activeId = options.activeIdentityId ?? "";
-  const shownKeys = new Set<string>();
-  for (const item of options.shownItems) {
-    const itemId = item.identityId ?? activeId;
-    shownKeys.add(`${itemId}:${normalizePath(item.path)}`);
-  }
+  const shownPaths = new Set(options.shownPaths.map(normalizePath));
 
   const results: ImageSearchHit[] = [];
   for (const hit of hits) {
@@ -91,8 +65,7 @@ export function filterVisualHits(
       continue;
     }
 
-    const hitKey = `${activeId}:${normalizePath(hit.path)}`;
-    if (shownKeys.has(hitKey)) {
+    if (shownPaths.has(normalizePath(hit.path))) {
       continue;
     }
 

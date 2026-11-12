@@ -1,9 +1,7 @@
 import { z } from "zod";
 import { CanonicalUuid } from "./canonical-uuid.ts";
-import { FsEntry } from "./fs.ts";
 import { FavoriteItem } from "./metadata.ts";
 import { ProviderFieldValues } from "./providers.ts";
-import { SearchHit } from "./search.ts";
 
 export const AccountIdentityId = CanonicalUuid;
 /**
@@ -33,22 +31,3 @@ export const AccountFavoritesResponse = z.object({
   unavailableIdentityIds: z.array(AccountIdentityId),
 });
 export type AccountFavoritesResponse = z.infer<typeof AccountFavoritesResponse>;
-/**
- * Account-wide text search. `partial`, when true, means at least one identity
- * returned partial results or the account-wide result bound omitted matches.
- * Unavailable identities are reported separately in `unavailableIdentityIds`.
- */
-export const AccountSearchResponse = z.object({
-  query: z.string(),
-  sections: z.object({
-    folders: z.array(FsEntry.extend({ identityId: AccountIdentityId })).max(50),
-    files: z.array(SearchHit.extend({ identityId: AccountIdentityId })).max(50),
-    content: z.array(SearchHit.extend({ identityId: AccountIdentityId })).max(50),
-  }),
-  degraded: z.boolean(),
-  unavailable: z.boolean(),
-  partial: z.boolean().optional(),
-  tookMs: z.number().int().min(0),
-  unavailableIdentityIds: z.array(AccountIdentityId),
-});
-export type AccountSearchResponse = z.infer<typeof AccountSearchResponse>;
