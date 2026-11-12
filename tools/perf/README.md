@@ -10,15 +10,17 @@ Use Node 24, pnpm 10.11, Docker, and Chromium installed through
 work before a final measurement. The worker diagnostic may run under contention;
 only the primary's quiet full run is release evidence.
 
-The fixture starts disposable Postgres, SFTPGo, TEI CPU and the real indexer HTTP
-server. A unique disposable Docker data volume is populated once with `docker cp`
-from the deterministic temporary host fixture. It is mounted read-write in SFTPGo
-and read-only in the indexer. Direct/API baselines use this same volume. This avoids
-observed macOS bind-mount directory enumeration duplicates without application
-filtering or relaxed counts. Its
-background indexing workers are disabled; the real directory endpoint and normal
-API session authentication remain active. The fixture maps `sftpgo:/{username}`
-and must pass the production scope resolver when integrated. No auth is injected.
+The fixture starts disposable Postgres, TEI CPU and the real indexer HTTP server, and
+runs the API in process. The deterministic fixture is written once to a temporary host
+folder, which the API serves as its local storage (`FDRIVE_STORAGE_ROOT`, one home per
+user) and the indexer reads through a read-only bind mount as the root `files`. The
+`perf` and `forbidden` users are created directly in `app.local_users`. Its background
+indexing workers are disabled; the real directory endpoint and normal API session
+authentication remain active. No auth is injected. The direct download baseline is a
+bare Node HTTP server streaming the same file from disk, so the API route is compared
+with the same transport and no storage layer. On macOS, bind-mount directory
+enumeration has returned duplicates before; a listing count mismatch there points at
+the mount, not the API.
 
 The search dataset contains 25,000 files and chunks in the measured identity,
 plus a second identity's forbidden sentinels. Thirty-two realistic content
@@ -57,9 +59,9 @@ Measurements:
   timing; browser queue behavior is covered separately by functional tests.
 
 Timestamped JSON under ignored `tools/perf/results/` contains environment, raw
-samples, byte counts, failure reasons and every budget outcome. Cookies, JWTs and
-connection strings are excluded. Containers, child process groups and temporary
-files and the data volume are cleaned after completion or partial startup failure. The named
+samples, byte counts, failure reasons and every budget outcome. Cookies and
+connection strings are excluded. Containers, child process groups, servers and
+temporary files are cleaned after completion or partial startup failure. The named
 `fdrive-perf-models` Docker volume deliberately retains downloaded model assets.
 
 `pnpm test:perf:coverage` gates pure measurement validation, statistics, CLI,

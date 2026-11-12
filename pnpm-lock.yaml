@@ -20,9 +20,6 @@ importers:
       '@fdrive/db':
         specifier: workspace:*
         version: link:packages/db
-      '@fdrive/sftpgo':
-        specifier: workspace:*
-        version: link:packages/sftpgo
       '@fdrive/testkit':
         specifier: workspace:*
         version: link:packages/testkit

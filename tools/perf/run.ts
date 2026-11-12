@@ -107,7 +107,7 @@ async function main() {
           contentTemplates: 32,
           repeatedTemplateEmbeddings: true,
           downloadBytes: 512 * 1024 * 1024,
-          storage: "disposable Docker volume, shared SFTPGo RW and indexer RO",
+          storage: "temporary host folder, api local storage RW and indexer RO bind mount",
         },
         results,
         budgets,

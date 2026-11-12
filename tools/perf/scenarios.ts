@@ -81,14 +81,12 @@ export async function runDownloads(
   async function transfer(kind: "direct" | "api", record: boolean) {
     const direct = kind === "direct";
     const url = direct
-      ? `${stack.sftpgoBaseUrl}/api/v2/user/files?path=/big/large.bin`
+      ? `${stack.directBaseUrl}/big/large.bin`
       : `${stack.apiBaseUrl}/api/v1/fs/download?path=/big/large.bin`;
     const start = performance.now();
     const bytes = await drain(
       await fetch(url, {
-        headers: direct
-          ? { authorization: `Bearer ${stack.sftpgoToken}` }
-          : { cookie: stack.cookie },
+        headers: direct ? {} : { cookie: stack.cookie },
         signal: AbortSignal.timeout(180000),
       }),
       BIG_FILE_BYTES,
