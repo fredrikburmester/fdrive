@@ -1,48 +1,51 @@
-# Pinned by digest (digest recorded below) so a rebuild never
-# silently picks up a new base image without a deliberate bump here.
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+# Build context is this directory:
+#   docker build -t fdrive-indexer services/indexer
+#
+# Both bases are pinned by digest, the same ones services/ml uses, so a rebuild never
+# silently picks up a new base image.
+FROM rust:1.99.0-trixie@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90 AS build
 
+# MuPDF is compiled from source and linked statically; libheif and dav1d are linked from
+# Debian.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe \
-      ffmpeg \
-      libglib2.0-0 \
-      curl \
+      cmake clang libclang-dev pkg-config libheif-dev libdav1d-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-COPY pyproject.toml ./
+WORKDIR /src
+# rust-toolchain.toml stays out: the base image is the pinned toolchain.
+COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN pip install --no-cache-dir -e ".[dev]"
+RUN cargo build --release --locked --bin fdrive-indexer
 
-# Runs as a non-root user. The indexer only needs read access to the
-# bind-mounted SFTPGo root and read-write access to its thumbnail and log
-# volumes. deploy/compose.yaml starts the container as root with
-# FDRIVE_RUN_AS_UID set, and docker-entrypoint.sh gives those volumes to that
-# uid and drops to it before the indexer starts; any other start runs as the
-# user below from the first instruction. `scripts/test-in-docker.sh` mounts the host's
-# Docker socket for testcontainers; on a host where that socket is not
-# world-writable, run that script with `docker run --user root` to keep
-# using it, since this uid otherwise cannot reach the socket.
-# The indexer must read every file SFTPGo serves, including folders users keep at
-# mode 700, so it runs as the same uid/gid as the SFTPGo process (1000 in the
-# official image). Override at build time when your SFTPGo runs as another uid.
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
+
+# tesseract reads text from images and scanned PDF pages, ffmpeg takes video frames;
+# both run as separate programs. The libheif plugins decode HEIC (libde265) and AVIF
+# (dav1d). curl: the health check below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg \
+      libheif1 libheif-plugin-libde265 libheif-plugin-dav1d libdav1d7 \
+      ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# The indexer must read every file SFTPGo serves, including folders kept at mode 700, so
+# it runs as SFTPGo's uid/gid (1000 in the official image). deploy/compose.yaml starts
+# the container as root with FDRIVE_RUN_AS_UID set; docker-entrypoint.sh hands the
+# thumbnail and log volumes to that uid and drops to it before the indexer starts.
 ARG INDEXER_UID=1000
 ARG INDEXER_GID=1000
-RUN addgroup --gid "${INDEXER_GID}" indexer && \
-    adduser --uid "${INDEXER_UID}" --gid "${INDEXER_GID}" --no-create-home --disabled-password --gecos "" indexer && \
-    chown -R indexer:indexer /app
+RUN groupadd --gid "${INDEXER_GID}" indexer \
+    && useradd --uid "${INDEXER_UID}" --gid "${INDEXER_GID}" --no-create-home indexer
 
-ENV PYTHONUNBUFFERED=1
+COPY --from=build /src/target/release/fdrive-indexer /usr/local/bin/fdrive-indexer
+COPY docker-entrypoint.sh /usr/local/bin/fdrive-entrypoint
 
 EXPOSE 8010
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fs http://localhost:8010/health || exit 1
 
-COPY docker-entrypoint.sh /usr/local/bin/fdrive-entrypoint
-
 USER indexer
 
 ENTRYPOINT ["fdrive-entrypoint"]
-CMD ["python", "-m", "fdrive_indexer.main"]
+CMD ["fdrive-indexer"]

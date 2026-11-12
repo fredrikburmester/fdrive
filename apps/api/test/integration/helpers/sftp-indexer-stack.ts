@@ -179,27 +179,10 @@ export class SftpIndexerStack {
   }
 
   async startIndexer(): Promise<void> {
-    await this.docker(["build", "-t", this.prefix, join(repoRoot, "services/indexer")], 600_000);
+    // A first build compiles MuPDF from source, which takes several minutes.
+    await this.docker(["build", "-t", this.prefix, join(repoRoot, "services/indexer")], 1_800_000);
     this.imageCreated = true;
-    // Binary fixtures need no extraction or embedding. Only the startup health dependency is stubbed.
-    await writeFile(
-      join(this.directory, "embed-health.py"),
-      [
-        "from http.server import BaseHTTPRequestHandler, HTTPServer",
-        "class Health(BaseHTTPRequestHandler):",
-        "    def do_GET(self):",
-        "        self.send_response(200 if self.path == '/health' else 404)",
-        "        self.end_headers()",
-        "HTTPServer(('0.0.0.0', 8080), Health).serve_forever()",
-      ].join("\n"),
-    );
-    await this.run("embed", [
-      "-v",
-      `${this.directory}:/fixture:ro`,
-      this.prefix,
-      "python",
-      "/fixture/embed-health.py",
-    ]);
+    // Binary fixtures need no extraction or embedding, so no ml service is started.
     await this.run("indexer", [
       "-v",
       `${this.prefix}:/roots/sftpgo:ro`,
@@ -207,8 +190,6 @@ export class SftpIndexerStack {
       "DATABASE_URL=postgres://fdrive:disposable-test-password@db:5432/fdrive",
       "-e",
       "INDEX_ROOTS=sftpgo=/roots/sftpgo",
-      "-e",
-      "EMBED_URL=http://embed:8080",
       "-e",
       "SCAN_INTERVAL_SECONDS=3600",
       "-e",

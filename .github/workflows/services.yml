@@ -5,7 +5,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - 'services/indexer/**'
       - 'services/ocr/**'
       - 'services/runtime/**'
       - '.github/workflows/services.yml'
@@ -28,7 +27,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Indexer (Python), service: indexer, module: fdrive_indexer }
           - { name: OCR (Python), service: ocr, module: fdrive_ocr }
           - { name: Python (runtime), service: runtime, module: fdrive_runtime }
     defaults:
@@ -39,13 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install indexer system dependencies
-        if: matrix.service == 'indexer'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe ffmpeg
       - run: python -m pip install -e '.[dev]'
       - run: ruff check src tests $([[ -d scripts ]] && echo scripts)
       - run: mypy src $([[ -d scripts ]] && echo scripts)
       - run: pytest -q --cov=${{ matrix.module }} --cov-report=term-missing --cov-fail-under=95
-      - name: Linux inotify tests
-        if: matrix.service == 'indexer'
-        run: bash scripts/test-in-docker.sh

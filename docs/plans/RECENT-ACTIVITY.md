@@ -93,7 +93,7 @@ server, so bindings, restore and purge stay scoped to their storage identity.
 
 ## Provider-specific Unknown-event reconciliation
 
-The SFTPGo input already exists: Linux [inotify watcher](../../services/indexer/src/fdrive_indexer/watcher.py)
+The SFTPGo input already exists: Linux [inotify watcher](../../services/indexer/src/watcher.rs)
 → indexer `created/changed/deleted/moved` → PostgreSQL `idx_events` →
 [indexer-listener.ts](../../apps/api/src/events/indexer-listener.ts). The listener maps both
 endpoints, handles unique SHA-256 metadata relinks, and checks live read authority before
@@ -168,7 +168,7 @@ moves, denial/outage/partial listing, duplicate observations and resolution afte
 Prove no observer reveals others' activity or raw physical paths. Aggregate 1,000 repeated
 reads with accurate counts and retry deduplication; a write splits revision groups. Confirm
 native hydration/cached-open limits and Office coauthor attribution. Run affected application,
-integration/browser and native/Office checks; `python indexer` if its code changes, plus
+integration/browser and native/Office checks; `indexer` checks if its code changes, plus
 `workflow`. Full branching/export and million-event qualification remain slice 4.
 
 ### Slice 4 — Journey navigation and large-history qualification
