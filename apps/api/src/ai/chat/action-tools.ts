@@ -1,5 +1,18 @@
-import type { ChatActionEdits, ChatActionProposal, ChatActionResult } from "@fdrive/contracts";
-import { baseName, isStorageError, isUnderPath, normalizePath, parentPath } from "@fdrive/core";
+import type {
+  ChatActionEdits,
+  ChatActionProposal,
+  ChatActionResult,
+  MoveManyResult,
+} from "@fdrive/contracts";
+import {
+  baseName,
+  changeBaseName,
+  isSafeSegment,
+  isStorageError,
+  isUnderPath,
+  normalizePath,
+  parentPath,
+} from "@fdrive/core";
 import { z } from "zod";
 import type { ActivityCallContext } from "../../activity/fs-context.js";
 import { recordActivity } from "../../activity/fs-context.js";
@@ -134,21 +147,7 @@ function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
           { items, createParents: true },
           activityContext(deps),
         );
-        const mapped: ChatActionResult[] = results.map((result) =>
-          result.ok
-            ? {
-                path: result.path,
-                ok: true,
-                target: result.target,
-                ...(result.warning ? { message: result.warning } : {}),
-              }
-            : {
-                path: result.path,
-                ok: false,
-                target: result.target,
-                message: result.error.message,
-              },
-        );
+        const mapped = movedResults(results);
         const moved = mapped.filter((result) => result.ok).length;
         return {
           outcome:
@@ -231,6 +230,157 @@ function trashItemsTool(deps: ChatActionToolsDeps): ActionTool {
               result.ok
                 ? `Trashed ${result.path}`
                 : `Could not trash ${result.path}: ${result.message}`,
+            )
+            .join("\n"),
+        };
+      },
+    },
+  );
+}
+
+/** A name the model or the person typed, as one usable path segment. */
+function cleanName(raw: string): string | null {
+  const name = raw.trim();
+  return isSafeSegment(name) ? name : null;
+}
+
+/** Whether the item already reads as `name`; macOS stores accents as separate marks, models write one character. */
+function alreadyNamed(path: string, name: string): boolean {
+  return baseName(path).normalize("NFC") === name.normalize("NFC");
+}
+
+function movedResults(results: readonly MoveManyResult[]): ChatActionResult[] {
+  return results.map((result) =>
+    result.ok
+      ? {
+          path: result.path,
+          ok: true,
+          target: result.target,
+          ...(result.warning ? { message: result.warning } : {}),
+        }
+      : { path: result.path, ok: false, target: result.target, message: result.error.message },
+  );
+}
+
+async function occupied(storage: DriveToolsDeps["principal"]["storage"], target: string) {
+  try {
+    await requireUnoccupiedTarget(storage, target);
+    return false;
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "conflict") return true;
+    throw error;
+  }
+}
+
+function depth(path: string): number {
+  return path.split("/").length;
+}
+
+function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
+  const { focus } = deps;
+  const schema = z.object({
+    summary: z.string().max(300).describe("One sentence the person reads above the card."),
+    renames: z
+      .array(
+        z.object({
+          path: z.string().describe(`A ${focus.adjective} item's current path.`),
+          name: z
+            .string()
+            .describe(
+              "Its new name only, without a folder, e.g. 2024-03 Invoice Acme.pdf. Keep a file's extension unless the person asked to change it.",
+            ),
+          reason: z.string().max(200).describe("One short sentence shown next to the item."),
+        }),
+      )
+      .min(1)
+      .max(MAX_ACTION_ITEMS),
+  });
+  return defineActionTool(
+    "rename_items",
+    `Proposes new names for ${focus.adjective} files and folders; each stays in its folder. The person reviews the card, can change the names, and applies it; nothing is renamed before that. A name that is already taken in the folder is marked and left out unless the person picks another.`,
+    schema,
+    {
+      activity: (args) =>
+        args.renames.length === 1
+          ? `Proposed renaming ${baseName(args.renames[0]?.path ?? "")}`
+          : `Proposed renaming ${args.renames.length} items`,
+      async verify(args) {
+        const items: Extract<ChatActionProposal, { kind: "rename" }>["items"] = [];
+        const targets = new Set<string>();
+        for (const rename of args.renames) {
+          const path = await referencedArg(deps, rename.path);
+          if (path === "/") throw new AiToolError("The drive root cannot be renamed.");
+          if (items.some((seen) => seen.path === path)) continue;
+          const name = cleanName(rename.name);
+          if (name === null)
+            throw new AiToolError(
+              `"${rename.name}" is not a usable name for ${path}: give a name without "/", not a path.`,
+            );
+          if (alreadyNamed(path, name)) continue;
+          const target = changeBaseName(path, name);
+          const stat = await statItem(deps, path);
+          const conflict = targets.has(target) || (await occupied(deps.principal.storage, target));
+          targets.add(target);
+          items.push({ path, kind: stat.kind, name, reason: rename.reason, conflict });
+        }
+        if (items.length === 0)
+          throw new AiToolError("Nothing to rename: every item already has the proposed name.");
+        return { kind: "rename", summary: args.summary, items };
+      },
+      async apply(proposal, edits) {
+        if (proposal.kind !== "rename") throw new Error("not a rename proposal");
+        const allowed = new Set(proposal.items.map((item) => item.path));
+        const chosen =
+          edits?.renames ??
+          proposal.items
+            .filter((item) => !item.conflict)
+            .map((item) => ({ path: item.path, name: item.name }));
+        const invalid: ChatActionResult[] = [];
+        const items: { path: string; target: string }[] = [];
+        for (const rename of chosen) {
+          if (!allowed.has(rename.path) || items.some((item) => item.path === rename.path))
+            continue;
+          const name = cleanName(rename.name);
+          if (name === null)
+            invalid.push({
+              path: rename.path,
+              ok: false,
+              message: `"${rename.name}" is not a usable name.`,
+            });
+          else if (!alreadyNamed(rename.path, name))
+            items.push({ path: rename.path, target: changeBaseName(rename.path, name) });
+        }
+        if (items.length === 0 && invalid.length === 0)
+          return {
+            outcome: "Nothing was renamed.",
+            results: [],
+            toolResult: "The person kept no renames.",
+          };
+        // Deepest first, so renaming a folder never strands a rename of something inside it.
+        items.sort((a, b) => depth(b.path) - depth(a.path));
+        const results =
+          items.length === 0
+            ? []
+            : await moveMany(
+                deps.fs,
+                deps.principal,
+                { items },
+                activityContext(deps),
+                "file.rename",
+              );
+        const mapped = [...movedResults(results), ...invalid];
+        const renamed = mapped.filter((result) => result.ok).length;
+        return {
+          outcome:
+            renamed === mapped.length
+              ? `Renamed ${renamed} ${renamed === 1 ? "item" : "items"}.`
+              : `Renamed ${renamed} of ${mapped.length} items.`,
+          results: mapped,
+          toolResult: mapped
+            .map((result) =>
+              result.ok
+                ? `Renamed ${result.path} to ${result.target}`
+                : `Could not rename ${result.path}: ${result.message}`,
             )
             .join("\n"),
         };
@@ -394,6 +544,14 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
   );
 }
 
+/** The tool that applies each kind of card. */
+export const ACTION_TOOL_NAMES: Record<ChatActionProposal["kind"], string> = {
+  move: "move_items",
+  rename: "rename_items",
+  trash: "trash_items",
+  write: "write_text_file",
+};
+
 /**
  * The chat's write tools. Trash is only offered where the login's storage
  * has a configured Trash, so nothing a chat proposes is unrecoverable.
@@ -402,6 +560,7 @@ export function createChatActionTools(deps: ChatActionToolsDeps): ActionTool[] {
   const trashable = deps.principal.storage.trash !== undefined && trashPathOf(deps) !== null;
   return [
     moveItemsTool(deps),
+    renameItemsTool(deps),
     ...(trashable ? [trashItemsTool(deps)] : []),
     writeTextFileTool(deps),
   ];

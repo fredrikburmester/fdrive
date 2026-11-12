@@ -153,6 +153,87 @@ it("lets the person keep some items out of a trash card", async () => {
   );
 });
 
+const RENAME: ActionPart = {
+  kind: "action",
+  id: "r1",
+  state: "pending",
+  proposal: {
+    kind: "rename",
+    summary: "Clearer names.",
+    items: [
+      {
+        path: "/Inbox/a.txt",
+        kind: "file",
+        name: "greeting.txt",
+        reason: "Hello.",
+        conflict: false,
+      },
+      { path: "/Inbox/b.txt", kind: "file", name: "notes.txt", reason: "Notes.", conflict: true },
+      { path: "/Inbox/Old", kind: "dir", name: "Archive", reason: "What it is.", conflict: false },
+    ],
+  },
+};
+
+it("applies a rename card with the kept items and the names the person typed", async () => {
+  const { onAct } = renderCard(RENAME);
+  const card = screen.getByRole("region", { name: "Clearer names." });
+  // The taken name starts unchecked; typing another one keeps the item.
+  expect(within(card).getByText("Something with this name is already there.")).toBeTruthy();
+  expect(within(card).getByRole("button", { name: "Rename 2 items" })).toBeTruthy();
+  fireEvent.change(within(card).getByRole("textbox", { name: "New name for b.txt" }), {
+    target: { value: " shopping.txt " },
+  });
+  expect(within(card).queryByText("Something with this name is already there.")).toBeNull();
+  expect(within(card).getByRole("button", { name: "Rename 3 items" })).toBeTruthy();
+
+  // A name that cannot be used is said so and left out; an unchecked item is too.
+  fireEvent.change(within(card).getByRole("textbox", { name: "New name for a.txt" }), {
+    target: { value: "sub/greeting.txt" },
+  });
+  expect(within(card).getByText("Enter a name without a slash.")).toBeTruthy();
+  fireEvent.click(within(card).getByRole("checkbox", { name: "Rename Old" }));
+  fireEvent.click(within(card).getByRole("button", { name: "Rename 1 item" }));
+
+  await waitFor(() => expect(onAct).toHaveBeenCalledTimes(1));
+  expect(onAct).toHaveBeenCalledWith("r1", {
+    decision: "apply",
+    edits: { renames: [{ path: "/Inbox/b.txt", name: "shopping.txt" }] },
+  } satisfies ChatActionRequest);
+});
+
+it("cannot apply a rename card with nothing kept, and undoes applied renames", async () => {
+  renderCard(RENAME);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Rename a.txt" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Rename Old" }));
+  expect(screen.getByRole("button", { name: "Rename 0 items" })).toHaveProperty("disabled", true);
+
+  cleanup();
+  mocks.client.moveMany.mockResolvedValue({
+    results: [{ ok: true, path: "/Inbox/greeting.txt", target: "/Inbox/a.txt" }],
+  });
+  renderCard({
+    ...RENAME,
+    state: "applied",
+    outcome: "Renamed 1 of 2 items.",
+    results: [
+      { path: "/Inbox/a.txt", ok: true, target: "/Inbox/greeting.txt" },
+      { path: "/Inbox/b.txt", ok: false, target: "/Inbox/notes.txt", message: "taken" },
+    ],
+  });
+  expect(screen.getByText("Renamed 1 of 2 items.")).toBeTruthy();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() => expect(mocks.client.moveMany).toHaveBeenCalled());
+  expect(mocks.client.moveMany.mock.calls[0]?.[0]).toMatchObject({
+    items: [{ path: "/Inbox/greeting.txt", target: "/Inbox/a.txt" }],
+  });
+  await waitFor(() => expect(mocks.success).toHaveBeenCalledWith("Renamed back."));
+
+  cleanup();
+  renderCard({ ...RENAME, state: "declined", outcome: "Not applied." });
+  expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+});
+
 it("shows a draft, lets the name change for a new file, and explains a replace", async () => {
   const { onAct } = renderCard({
     kind: "action",

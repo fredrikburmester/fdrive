@@ -422,7 +422,8 @@ async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Respons
 /**
  * Moves items in order, continuing past failures, never overwriting, and
  * reports each outcome. Used by `POST /fs/move-many` and by AI chat when a
- * move card is applied. With `createParents`, missing target folders are
+ * move or rename card is applied; a rename card passes `file.rename` so the
+ * activity reads as one. With `createParents`, missing target folders are
  * created after the source was checked, so a move that cannot happen leaves
  * no empty folder behind.
  */
@@ -431,6 +432,7 @@ export async function moveMany(
   principal: Principal,
   body: MoveManyRequest,
   context: ActivityCallContext = { source: "api" },
+  action: "file.move" | "file.rename" = "file.move",
 ): Promise<MoveManyResult[]> {
   const results: MoveManyResult[] = [];
   const batchId = context.batchId ?? randomUUID();
@@ -476,7 +478,7 @@ export async function moveMany(
             ...context,
             producerOperationId: `${operationBase}:${results.length}`,
             batchId,
-            action: "file.move",
+            action,
             requested: { path, targetPath: target, ...provenance },
             before: {
               path,

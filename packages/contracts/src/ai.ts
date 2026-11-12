@@ -198,6 +198,23 @@ export const ChatTrashProposal = z.object({
   items: z.array(z.object({ path: z.string(), kind: z.enum(["file", "dir"]), reason: z.string() })),
 });
 
+/** Referenced items to give a new name, each staying in its folder. */
+export const ChatRenameProposal = z.object({
+  kind: z.literal("rename"),
+  summary: z.string(),
+  items: z.array(
+    z.object({
+      path: z.string(),
+      kind: z.enum(["file", "dir"]),
+      /** The proposed name, without a folder. */
+      name: z.string(),
+      reason: z.string(),
+      /** Something in the folder already has the proposed name. */
+      conflict: z.boolean(),
+    }),
+  ),
+});
+
 /** A text file to create next to a referenced item, or a referenced text file to replace. */
 export const ChatWriteProposal = z.object({
   kind: z.literal("write"),
@@ -212,6 +229,7 @@ export const ChatWriteProposal = z.object({
 export const ChatActionProposal = z.discriminatedUnion("kind", [
   ChatMoveProposal,
   ChatTrashProposal,
+  ChatRenameProposal,
   ChatWriteProposal,
 ]);
 
@@ -225,7 +243,7 @@ export type ChatActionState = z.infer<typeof ChatActionState>;
 export const ChatActionResult = z.object({
   path: z.string(),
   ok: z.boolean(),
-  /** Where the item ended up, for moves and writes. */
+  /** Where the item ended up, for moves, renames and writes. */
   target: z.string().optional(),
   message: z.string().optional(),
 });
@@ -335,6 +353,11 @@ export const ChatActionEdits = z.strictObject({
     .optional(),
   /** Items to trash; only proposal items count. */
   paths: z.array(z.string()).max(500).optional(),
+  /** Renames to make, by item path and new name; only proposal items count. */
+  renames: z
+    .array(z.object({ path: z.string(), name: z.string() }))
+    .max(500)
+    .optional(),
   /** Another name or place for a written file. */
   path: chatPath.optional(),
   mode: z.enum(["create", "replace"]).optional(),

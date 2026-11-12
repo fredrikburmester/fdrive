@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChatActionProposal } from "@fdrive/contracts";
-import type { StorageProvider, TrashProvider } from "@fdrive/core";
+import { StorageError, type StorageProvider, type TrashProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
@@ -89,9 +89,14 @@ const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 describe("createChatActionTools", () => {
   it("offers trash only where the login has a Trash", () => {
-    expect(setup().tools.map((tool) => tool.spec.name)).toEqual(["move_items", "write_text_file"]);
+    expect(setup().tools.map((tool) => tool.spec.name)).toEqual([
+      "move_items",
+      "rename_items",
+      "write_text_file",
+    ]);
     expect(setup({ trash: true }).tools.map((tool) => tool.spec.name)).toEqual([
       "move_items",
+      "rename_items",
       "trash_items",
       "write_text_file",
     ]);
@@ -178,6 +183,204 @@ describe("move_items", () => {
         moves: [{ path: "/Inbox/a.txt", destination: "/Inbox", reason: "r" }],
       }),
     ).rejects.toThrow(/^Nothing could be proposed: \/Inbox\/a\.txt: /);
+  });
+});
+
+describe("rename_items", () => {
+  it("verifies new names in place and renames the ones the person kept, with their edits", async () => {
+    const { verify, apply, storage, events, activity, tool } = setup({
+      referenced: ["/Inbox", "/Docs"],
+    });
+    expect(
+      tool("rename_items").activity({
+        summary: "",
+        renames: [{ path: "/Inbox/a.txt", name: "b.txt", reason: "" }],
+      }),
+    ).toBe("Proposed renaming a.txt");
+    expect(
+      tool("rename_items").activity({
+        summary: "",
+        renames: [
+          { path: "/Inbox/a.txt", name: "b.txt", reason: "" },
+          { path: "/Inbox/scan.pdf", name: "c.pdf", reason: "" },
+        ],
+      }),
+    ).toBe("Proposed renaming 2 items");
+
+    const proposal = await verify("rename_items", {
+      summary: "Clearer names.",
+      renames: [
+        { path: "/Inbox/a.txt", name: " greeting.txt ", reason: "Says hello." },
+        { path: "/Inbox/scan.pdf", name: "2024 scan.pdf", reason: "Dated." },
+        { path: "/Inbox/a.txt", name: "again.txt", reason: "Repeated." },
+        { path: "/Docs/readme.md", name: "taken.txt", reason: "Name in use." },
+        { path: "/Docs/taken.txt", name: "taken.txt", reason: "Already right." },
+        { path: "/Docs", name: "Documents", reason: "Spelled out." },
+      ],
+    });
+    expect(proposal).toEqual({
+      kind: "rename",
+      summary: "Clearer names.",
+      items: [
+        {
+          path: "/Inbox/a.txt",
+          kind: "file",
+          name: "greeting.txt",
+          reason: "Says hello.",
+          conflict: false,
+        },
+        {
+          path: "/Inbox/scan.pdf",
+          kind: "file",
+          name: "2024 scan.pdf",
+          reason: "Dated.",
+          conflict: false,
+        },
+        {
+          path: "/Docs/readme.md",
+          kind: "file",
+          name: "taken.txt",
+          reason: "Name in use.",
+          conflict: true,
+        },
+        { path: "/Docs", kind: "dir", name: "Documents", reason: "Spelled out.", conflict: false },
+      ],
+    });
+
+    // The folder is renamed after the file inside it, whatever order the card lists them in.
+    const outcome = await apply("rename_items", proposal, {
+      renames: [
+        { path: "/Docs", name: "Documents" },
+        { path: "/Inbox/a.txt", name: "hello.txt" },
+        { path: "/Docs/readme.md", name: "intro.md" },
+        { path: "/Inbox/scan.pdf", name: "scan.pdf" },
+        { path: "/Docs/taken.txt", name: "not-proposed.txt" },
+      ],
+    });
+    expect(outcome).toEqual({
+      outcome: "Renamed 3 items.",
+      results: [
+        { path: "/Inbox/a.txt", ok: true, target: "/Inbox/hello.txt" },
+        { path: "/Docs/readme.md", ok: true, target: "/Docs/intro.md" },
+        { path: "/Docs", ok: true, target: "/Documents" },
+      ],
+      toolResult: [
+        "Renamed /Inbox/a.txt to /Inbox/hello.txt",
+        "Renamed /Docs/readme.md to /Docs/intro.md",
+        "Renamed /Docs to /Documents",
+      ].join("\n"),
+    });
+    await expect(storage.stat("/Inbox/hello.txt")).resolves.toBeDefined();
+    await expect(storage.stat("/Documents/intro.md")).resolves.toBeDefined();
+    await expect(storage.stat("/Documents/taken.txt")).resolves.toBeDefined();
+    await expect(storage.stat("/Inbox/scan.pdf")).resolves.toBeDefined();
+    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["move"]);
+    expect(activity.operations.map((operation) => [operation.action, operation.source])).toEqual([
+      ["file.rename", "ai"],
+      ["file.rename", "ai"],
+      ["file.rename", "ai"],
+    ]);
+    expect(activity.operations.every((o) => o.requested.conversationId === CONVERSATION)).toBe(
+      true,
+    );
+  });
+
+  it("leaves taken names out by default and reports names that cannot be used or are taken", async () => {
+    const { verify, apply, storage } = setup({ referenced: ["/Inbox", "/Docs"] });
+    const proposal = await verify("rename_items", {
+      summary: "s",
+      renames: [
+        { path: "/Docs/readme.md", name: "taken.txt", reason: "r" },
+        { path: "/Inbox/a.txt", name: "same.txt", reason: "r" },
+        { path: "/Inbox/scan.pdf", name: "same.txt", reason: "r" },
+      ],
+    });
+    expect(proposal).toMatchObject({
+      items: [{ conflict: true }, { conflict: false }, { conflict: true }],
+    });
+
+    expect(await apply("rename_items", proposal)).toEqual({
+      outcome: "Renamed 1 item.",
+      results: [{ path: "/Inbox/a.txt", ok: true, target: "/Inbox/same.txt" }],
+      toolResult: "Renamed /Inbox/a.txt to /Inbox/same.txt",
+    });
+    const forced = await apply("rename_items", proposal, {
+      renames: [
+        { path: "/Docs/readme.md", name: "taken.txt" },
+        { path: "/Inbox/scan.pdf", name: "nested/scan.pdf" },
+      ],
+    });
+    expect(forced.outcome).toBe("Renamed 0 of 2 items.");
+    expect(forced.results).toMatchObject([
+      { path: "/Docs/readme.md", ok: false, target: "/Docs/taken.txt" },
+      { path: "/Inbox/scan.pdf", ok: false, message: '"nested/scan.pdf" is not a usable name.' },
+    ]);
+    expect(forced.toolResult).toContain(
+      'Could not rename /Inbox/scan.pdf: "nested/scan.pdf" is not a usable name.',
+    );
+    await expect(storage.stat("/Docs/readme.md")).resolves.toBeDefined();
+    expect(await apply("rename_items", proposal, { renames: [] })).toEqual({
+      outcome: "Nothing was renamed.",
+      results: [],
+      toolResult: "The person kept no renames.",
+    });
+  });
+
+  it("refuses the root, the Trash, paths as names, unreferenced items and proposals that change nothing", async () => {
+    const { verify } = setup({
+      trash: true,
+      referenced: ["/"],
+      files: { "/Inbox/a.txt": "a", "/Inbox/A\u030Arsbesked.txt": "b" },
+    });
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/", name: "Drive", reason: "r" }],
+      }),
+    ).rejects.toThrow(/root/);
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/.Trash/x", name: "y", reason: "r" }],
+      }),
+    ).rejects.toThrow(/Trash/);
+    for (const name of ["/Docs/a.txt", "..", "  "])
+      await expect(
+        verify("rename_items", {
+          summary: "s",
+          renames: [{ path: "/Inbox/a.txt", name, reason: "r" }],
+        }),
+      ).rejects.toThrow(/is not a usable name for \/Inbox\/a\.txt/);
+    // The stored name has "A" plus a combining ring; the same name written with "Å" is no rename.
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [
+          { path: "/Inbox/a.txt", name: "a.txt", reason: "r" },
+          { path: "/Inbox/\u00C5rsbesked.txt", name: "\u00C5rsbesked.txt", reason: "r" },
+        ],
+      }),
+    ).rejects.toThrow(/^Nothing to rename/);
+    const narrow = setup({ referenced: ["/Docs"] });
+    await expect(
+      narrow.verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/Inbox/a.txt", name: "b.txt", reason: "r" }],
+      }),
+    ).rejects.toThrow(/not referenced/);
+  });
+
+  it("passes on storage failures while checking whether a name is taken", async () => {
+    const { verify, storage } = setup();
+    vi.spyOn(storage, "statFile").mockRejectedValueOnce(
+      new StorageError("upstream_unavailable", "storage is down"),
+    );
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/Inbox/a.txt", name: "b.txt", reason: "r" }],
+      }),
+    ).rejects.toMatchObject({ kind: "upstream_unavailable" });
   });
 });
 

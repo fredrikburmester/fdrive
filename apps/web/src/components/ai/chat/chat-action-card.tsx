@@ -7,7 +7,7 @@ import type {
   ChatActionRequest,
   ChatPart,
 } from "@fdrive/contracts";
-import { baseName, extensionOf, joinPath } from "@fdrive/core";
+import { baseName, extensionOf, isSafeSegment, joinPath } from "@fdrive/core";
 import { CheckIcon, FolderIcon, FolderInputIcon, LoaderCircle, Undo2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -86,6 +86,16 @@ export function ChatActionCard({ chat, part, busy, onAct }: ChatActionCardProps)
             setCount(kept);
           }}
         />
+      ) : part.proposal.kind === "rename" ? (
+        <RenameBody
+          proposal={part.proposal}
+          part={part}
+          editable={pending && !busy}
+          onChange={(next, kept) => {
+            setEdits(next);
+            setCount(kept);
+          }}
+        />
       ) : (
         <WriteBody
           proposal={part.proposal}
@@ -125,6 +135,8 @@ function defaultCount(part: ActionPart): number {
       return part.proposal.suggestions.filter((item) => !item.conflict).length;
     case "trash":
       return part.proposal.items.length;
+    case "rename":
+      return part.proposal.items.filter((item) => !item.conflict).length;
     case "write":
       return 1;
   }
@@ -149,6 +161,48 @@ function ResultList({ part }: { part: ActionPart }) {
   );
 }
 
+/** Puts an applied card's moved or renamed items back, for the login that applied it. */
+function UndoButton({ part, verb }: { part: ActionPart; verb: "move" | "rename" }) {
+  const moveMany = useMoveMany();
+  if (part.state !== "applied" || !(part.results ?? []).some((result) => result.ok)) return null;
+
+  async function undo() {
+    const applied = summarizeMoves(
+      (part.results ?? [])
+        .filter((result) => result.ok)
+        .map((result) => ({
+          ok: true as const,
+          path: result.path,
+          target: result.target ?? result.path,
+        })),
+    );
+    const request = undoMoves(applied.moved);
+    if (request === null) return;
+    try {
+      const response = await moveMany.mutateAsync(request);
+      const outcome = summarizeMoves(response.results);
+      if (outcome.failed.length > 0)
+        toast.error(`Could not ${verb} ${outcome.failed.length} items back.`);
+      else toast.success(verb === "move" ? "Moved back." : "Renamed back.");
+    } catch (error) {
+      toast.error(describeFsError(error, `Could not ${verb} the items back.`));
+    }
+  }
+
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      className="self-start"
+      disabled={moveMany.isPending}
+      onClick={() => void undo()}
+    >
+      <Undo2Icon />
+      Undo
+    </Button>
+  );
+}
+
 interface BodyProps<P> {
   readonly proposal: P;
   readonly part: ActionPart;
@@ -162,7 +216,6 @@ function MoveBody({ proposal, part, editable, onChange }: BodyProps<MoveProposal
   );
   const [destinations, setDestinations] = useState<ReadonlyMap<string, string>>(new Map());
   const [editing, setEditing] = useState<string | null>(null);
-  const moveMany = useMoveMany();
   const suggestions = useMemo(
     () =>
       proposal.suggestions.map((item) => {
@@ -197,45 +250,11 @@ function MoveBody({ proposal, part, editable, onChange }: BodyProps<MoveProposal
     update(updated, destinations);
   }
 
-  async function undo() {
-    const applied = summarizeMoves(
-      (part.results ?? [])
-        .filter((result) => result.ok)
-        .map((result) => ({
-          ok: true as const,
-          path: result.path,
-          target: result.target ?? result.path,
-        })),
-    );
-    const request = undoMoves(applied.moved);
-    if (request === null) return;
-    try {
-      const response = await moveMany.mutateAsync(request);
-      const outcome = summarizeMoves(response.results);
-      if (outcome.failed.length > 0)
-        toast.error(`Could not move ${outcome.failed.length} items back.`);
-      else toast.success("Moved back.");
-    } catch (error) {
-      toast.error(describeFsError(error, "Could not move the items back."));
-    }
-  }
-
   if (part.state !== "pending") {
     return (
       <div className="flex flex-col gap-2">
         <ResultList part={part} />
-        {part.state === "applied" && (part.results ?? []).some((result) => result.ok) ? (
-          <Button
-            variant="outline"
-            size="xs"
-            className="self-start"
-            disabled={moveMany.isPending}
-            onClick={() => void undo()}
-          >
-            <Undo2Icon />
-            Undo
-          </Button>
-        ) : null}
+        <UndoButton part={part} verb="move" />
       </div>
     );
   }
@@ -383,6 +402,98 @@ function TrashBody({
               </p>
               {item.reason ? (
                 <p className="line-clamp-2 text-muted-foreground text-xs">{item.reason}</p>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function RenameBody({
+  proposal,
+  part,
+  editable,
+  onChange,
+}: BodyProps<Extract<ActionPart["proposal"], { kind: "rename" }>>) {
+  const [checked, setChecked] = useState<ReadonlySet<string>>(
+    () => new Set(proposal.items.filter((item) => !item.conflict).map((item) => item.path)),
+  );
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
+
+  if (part.state !== "pending") {
+    return (
+      <div className="flex flex-col gap-2">
+        <ResultList part={part} />
+        <UndoButton part={part} verb="rename" />
+      </div>
+    );
+  }
+
+  function update(nextChecked: ReadonlySet<string>, nextNames: ReadonlyMap<string, string>) {
+    setChecked(nextChecked);
+    setNames(nextNames);
+    const renames = proposal.items
+      .filter((item) => nextChecked.has(item.path))
+      .map((item) => ({ path: item.path, name: (nextNames.get(item.path) ?? item.name).trim() }))
+      .filter((rename) => isSafeSegment(rename.name));
+    onChange({ renames }, renames.length);
+  }
+
+  function toggle(path: string, next: boolean) {
+    const updated = new Set(checked);
+    if (next) updated.add(path);
+    else updated.delete(path);
+    update(updated, names);
+  }
+
+  return (
+    <ul className="flex flex-col">
+      {proposal.items.map((item) => {
+        const current = baseName(item.path);
+        const name = names.get(item.path) ?? item.name;
+        const kept = checked.has(item.path);
+        return (
+          <li key={item.path} className="flex items-start gap-2 py-1">
+            <Checkbox
+              className="mt-0.5"
+              aria-label={`Rename ${current}`}
+              checked={kept}
+              disabled={!editable}
+              onCheckedChange={(next) => toggle(item.path, next)}
+            />
+            <FileIcon
+              className="mt-0.5"
+              kind={item.kind}
+              ext={item.kind === "dir" ? "" : extensionOf(current)}
+              mime={null}
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <p className="truncate text-muted-foreground text-xs" title={item.path}>
+                {current}
+              </p>
+              <Input
+                aria-label={`New name for ${current}`}
+                className="h-7 font-mono text-xs"
+                value={name}
+                disabled={!editable}
+                onChange={(event) =>
+                  update(
+                    new Set(checked).add(item.path),
+                    new Map(names).set(item.path, event.target.value),
+                  )
+                }
+              />
+              {item.reason ? (
+                <p className="line-clamp-2 text-muted-foreground text-xs">{item.reason}</p>
+              ) : null}
+              {kept && !isSafeSegment(name.trim()) ? (
+                <p className="text-destructive text-xs">Enter a name without a slash.</p>
+              ) : item.conflict && name === item.name ? (
+                <p className="text-destructive text-xs">
+                  Something with this name is already there.
+                </p>
               ) : null}
             </div>
           </li>

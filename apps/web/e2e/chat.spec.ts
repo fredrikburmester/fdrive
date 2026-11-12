@@ -30,7 +30,7 @@ async function send(page: Page, text: string): Promise<void> {
   await box.press("Enter");
 }
 
-test("chat follows the person between folders, takes dropped files, reads them, moves and rewrites them through cards", async ({
+test("chat follows the person between folders, takes dropped files, reads them, moves, rewrites and renames them through cards", async ({
   page,
 }) => {
   test.setTimeout(150_000);
@@ -141,10 +141,24 @@ test("chat follows the person between folders, takes dropped files, reads them, 
       listing(page).getByText("shopping-professional.txt", { exact: true }),
     ).toBeVisible();
 
+    // A rename card: the person changes the proposed name before applying.
+    await listing(page).getByText("shopping.txt", { exact: true }).dragTo(panel(page));
+    await send(page, "Rename this to say what it is");
+    const renameCard = panel(page).getByRole("region", { name: "A name that says what it is." });
+    const newName = renameCard.getByRole("textbox", { name: "New name for shopping.txt" });
+    await expect(newName).toHaveValue("groceries.txt");
+    await newName.fill("grocery-list.txt");
+    await renameCard.getByRole("button", { name: "Rename 1 item" }).click();
+    await expect(renameCard.getByText("Applied")).toBeVisible();
+    await expect(panel(page).getByText("It has its new name.")).toBeVisible();
+    await expect(listing(page).getByText("grocery-list.txt", { exact: true })).toBeVisible();
+    await expect(listing(page).getByText("shopping.txt", { exact: true })).toBeHidden();
+
     // The assistant was offered chat's tools, not Organize's.
     const offered = fakeAi.requests[0]?.tools?.map((tool) => tool.function.name) ?? [];
     expect(offered).toContain("read_file");
     expect(offered).toContain("move_items");
+    expect(offered).toContain("rename_items");
     expect(offered).not.toContain("submit_suggestions");
 
     await panel(page).getByRole("button", { name: "Close chat" }).click();

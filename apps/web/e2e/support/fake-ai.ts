@@ -41,8 +41,9 @@ function attachedPaths(messages: readonly ChatMessage[]): string[] {
  * The chat script: reads the first attached file when asked what files are
  * about and answers with paths in prose and in code (one written with a
  * single-character "Å"), proposes a move into a `Notes` folder next to the file, drafts a
- * professional version as a new text file, and answers a duplicate
- * question in words. After a tool result it confirms in one line.
+ * professional version as a new text file, renames the attached files to
+ * `groceries` (keeping each extension), and answers a duplicate question in
+ * words. After a tool result it confirms in one line.
  */
 function chatReply(messages: readonly ChatMessage[]) {
   const last = messages.at(-1);
@@ -59,6 +60,7 @@ function chatReply(messages: readonly ChatMessage[]) {
     }
     if (name === "move_items") return textReply("Moved them into Notes.");
     if (name === "write_text_file") return textReply("Saved the professional version next to it.");
+    if (name === "rename_items") return textReply("It has its new name.");
     return textReply("Done.");
   }
   const question = (last?.content ?? "").toLowerCase();
@@ -77,6 +79,15 @@ function chatReply(messages: readonly ChatMessage[]) {
         path,
         destination: `${folder}/Notes`,
         reason: "It is a note.",
+      })),
+    });
+  if (question.includes("rename"))
+    return toolCall("call-rename", "rename_items", {
+      summary: "A name that says what it is.",
+      renames: paths.map((path) => ({
+        path,
+        name: `groceries${path.slice(path.lastIndexOf("."))}`,
+        reason: "It is a grocery list.",
       })),
     });
   if (question.includes("rewrite"))

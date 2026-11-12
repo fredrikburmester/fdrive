@@ -91,6 +91,11 @@ export function proposalPaths(proposal: ChatActionProposal): string[] {
       return proposal.suggestions.flatMap((item) => [item.path, item.destination, item.target]);
     case "trash":
       return proposal.items.map((item) => item.path);
+    case "rename":
+      return proposal.items.flatMap((item) => [
+        item.path,
+        joinPath(parentPath(item.path), item.name),
+      ]);
     case "write":
       return [proposal.path];
   }
@@ -117,6 +122,8 @@ export function applyLabel(proposal: ChatActionProposal, count: number): string 
       return `Move ${itemCount(count)}`;
     case "trash":
       return `Trash ${itemCount(count)}`;
+    case "rename":
+      return `Rename ${itemCount(count)}`;
     case "write":
       return proposal.mode === "create" ? "Create file" : "Replace file";
   }

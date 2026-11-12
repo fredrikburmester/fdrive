@@ -125,6 +125,17 @@ describe("buildHistory", () => {
               expectedSha256: null,
             },
           },
+          {
+            kind: "action",
+            id: "a4",
+            state: "failed",
+            outcome: "Renamed 0 of 1 items.",
+            proposal: {
+              kind: "rename",
+              summary: "s",
+              items: [{ path: "/x", kind: "file", name: "y", reason: "r", conflict: false }],
+            },
+          },
           { kind: "error", message: "Stopped." },
         ]),
       ],
@@ -138,6 +149,7 @@ describe("buildHistory", () => {
         "[Proposed to move 0 items; applied: Moved 2 items..]",
         "[Proposed to move 1 items to Trash; still waiting for the person.]",
         "[Proposed to create /n.md; declined by the person.]",
+        "[Proposed to rename 1 items; failed: Renamed 0 of 1 items..]",
         "[The reply stopped: Stopped.]",
       ].join("\n"),
     );
