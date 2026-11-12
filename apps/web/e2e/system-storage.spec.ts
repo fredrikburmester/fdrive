@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
+import { otherLoopback, webdavUrl } from "./support/local-folder.js";
 
 /** The labels this spec creates; anything left over from an aborted run is removed first. */
 const SPARE_LABELS = ["Second", "Second renamed"];
@@ -31,30 +32,20 @@ async function removeSpareProviders(page: Page): Promise<void> {
 }
 
 /**
- * The same SFTPGo server spelled with the other loopback name, so the new
- * row's `(type, baseUrl)` pair does not collide with the seeded one while
- * still pointing at a server the probe can actually reach.
+ * alice's WebDAV server spelled with the other loopback name, so the new
+ * row's `(type, baseUrl)` pair does not collide with the rows the WebDAV
+ * specs add while still pointing at a server the probe can actually reach.
  */
-function otherSpelling(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.hostname === "127.0.0.1") {
-    url.hostname = "localhost";
-  } else if (url.hostname === "localhost") {
-    url.hostname = "127.0.0.1";
-  } else {
-    throw new Error(`unexpected e2e SFTPGo host: ${url.hostname}`);
-  }
-  return url.origin;
+function spareAddress(): string {
+  return otherLoopback(webdavUrl());
 }
 
 test("cleanup removes a spare provider left by an interrupted run", async ({ page }) => {
   await removeSpareProviders(page);
-  const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
-  if (seeded === undefined) throw new Error("missing environment provider");
   try {
     const response = await page.request.post("/api/v1/admin/providers", {
       headers: { "x-requested-with": "fdrive" },
-      data: { type: "sftpgo", label: "Second", baseUrl: otherSpelling(seeded.baseUrl) },
+      data: { type: "webdav", label: "Second", baseUrl: spareAddress() },
     });
     expect(response.ok()).toBe(true);
     expect((await listProviders(page)).some((provider) => provider.label === "Second")).toBe(true);
@@ -72,8 +63,8 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
 }) => {
   await removeSpareProviders(page);
   const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
-  expect(seeded, "the e2e stack seeds an SFTPGO_URL-managed provider").toBeDefined();
-  const address = otherSpelling((seeded as ProviderRow).baseUrl);
+  expect(seeded, "the e2e stack seeds the FDRIVE_STORAGE_ROOT folder").toBeDefined();
+  const address = spareAddress();
   const cards = page.getByRole("main").locator('[data-slot="card"]');
 
   try {
@@ -86,11 +77,13 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
 
     await page.getByRole("button", { name: "Add provider" }).click();
     const dialog = page.getByRole("dialog");
+    // Only storage at an address can be added: the local folder is the deployment's.
+    await dialog.getByLabel("Type").click();
+    await expect(page.getByRole("option", { name: /Local folder/ })).toHaveCount(0);
+    await page.getByRole("option", { name: "WebDAV", exact: true }).click();
     // The closed Type trigger shows the type's label, not its raw value.
-    await expect(dialog.getByLabel("Type")).toHaveText(/SFTPGo/);
-    await expect(dialog.getByLabel("Type")).not.toContainText("sftpgo");
-    await expect(dialog.getByLabel("Home template")).toHaveValue("");
-    await expect(dialog.getByText(/replaced by each person/)).toBeVisible();
+    await expect(dialog.getByLabel("Type")).toHaveText(/WebDAV/);
+    await expect(dialog.getByLabel("Type")).not.toContainText("webdav");
     await dialog.getByLabel("Name").fill("Second");
     await dialog.getByLabel("Address").fill(address);
     await dialog.getByRole("button", { name: "Add", exact: true }).click();
@@ -106,7 +99,7 @@ test("alice (admin) can add, test, rename, disable and remove a storage provider
     await expect(second.getByText("Reachable", { exact: true })).toBeVisible();
 
     await second.getByRole("button", { name: "Edit Second" }).click();
-    await expect(dialog.getByLabel("Home template")).toHaveValue("");
+    await expect(dialog.getByLabel("Address")).toHaveValue(address);
     await dialog.getByLabel("Name").fill("Second renamed");
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(dialog).toBeHidden();

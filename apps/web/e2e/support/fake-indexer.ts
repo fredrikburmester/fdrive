@@ -1,8 +1,10 @@
-import { execFile } from "node:child_process";
+import type { Dirent } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { promisify } from "node:util";
+import { join } from "node:path";
 
-const execFileAsync = promisify(execFile);
+/** The one root the fake indexes: the local folder, as `FDRIVE_INDEX_ROOTS` names it. */
+const ROOT_NAME = "files";
 
 /**
  * The indexer's own internal HTTP API is snake_case, matching what Python's
@@ -15,8 +17,8 @@ const execFileAsync = promisify(execFile);
  */
 const HEALTH_BODY = {
   ok: true,
-  roots: ["sftpgo"],
-  watcher: { sftpgo: true },
+  roots: [ROOT_NAME],
+  watcher: { [ROOT_NAME]: true },
   embed_ok: true,
   schema_version: 1,
 };
@@ -24,7 +26,7 @@ const HEALTH_BODY = {
 const STATS_BODY = {
   roots: [
     {
-      root: "sftpgo",
+      root: ROOT_NAME,
       counts_by_status: { excluded: 3, none: 1, error: 1, indexed: 10, no_text: 1 },
       chunks: 10,
       chunks_embedded: 10,
@@ -43,8 +45,7 @@ const STATS_BODY = {
   errors_sample: [
     {
       path: "alice/docs/report.pdf",
-      error:
-        "FileDataError: Failed to open file '/roots/sftpgo/alice/docs/report.pdf' as type pdf.",
+      error: "FileDataError: Failed to open file '/roots/files/alice/docs/report.pdf' as type pdf.",
     },
   ],
   // No rebuild has run in this static fixture; matches a real indexer that
@@ -93,14 +94,14 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /**
- * Where `GET /directory` reads from: the disposable SFTPGo container's data
- * directory, listed through `docker exec` so the answer reflects the real
- * filesystem including everything specs create during the run. Attached by
- * `global-setup.ts` once the container exists (see `attachStorage`).
+ * Where `GET /directory` reads from: the local folder the API serves
+ * (`FDRIVE_STORAGE_ROOT`), listed straight from the host's disk so the
+ * answer reflects the real filesystem including everything specs create
+ * during the run. Attached by `global-setup.ts` once the folder exists (see
+ * `attachStorage`).
  */
 export interface DirectorySource {
-  readonly containerId: string;
-  readonly dataDir: string;
+  readonly root: string;
 }
 
 const MAX_DIRECTORY_ENTRIES = 10000;
@@ -132,54 +133,28 @@ function directoryParts(path: string): string[] | null {
   return parts.some((part) => part === "" || part === "." || part === "..") ? null : parts;
 }
 
-const FIND_KINDS: Record<string, "file" | "dir" | "symlink"> = {
-  f: "file",
-  d: "dir",
-  l: "symlink",
-};
+function kindOf(entry: Dirent): "file" | "dir" | "symlink" | "other" {
+  if (entry.isSymbolicLink()) return "symlink";
+  if (entry.isDirectory()) return "dir";
+  if (entry.isFile()) return "file";
+  return "other";
+}
 
-async function listContainerDirectory(
+async function listDirectory(
   source: DirectorySource,
   parts: readonly string[],
 ): Promise<{ status: number; body: unknown }> {
-  const directory = [source.dataDir, ...parts].join("/");
-  let stdout: string;
+  let entries: Dirent[];
   try {
-    const result = await execFileAsync(
-      "docker",
-      [
-        "exec",
-        source.containerId,
-        "find",
-        directory,
-        "-mindepth",
-        "1",
-        "-maxdepth",
-        "1",
-        "-printf",
-        "%y\t%f\n",
-      ],
-      { maxBuffer: 16 * 1024 * 1024 },
-    );
-    stdout = result.stdout;
+    entries = await readdir(join(source.root, ...parts), { withFileTypes: true });
   } catch (error) {
-    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
-    if (stderr.includes("No such file")) {
-      return { status: 404, body: { error: "directory unavailable" } };
-    }
-    if (stderr.includes("Not a directory")) {
-      return { status: 400, body: { error: "directory unavailable" } };
-    }
+    const code = (error as { code?: unknown }).code;
+    if (code === "ENOENT") return { status: 404, body: { error: "directory unavailable" } };
+    if (code === "ENOTDIR") return { status: 400, body: { error: "directory unavailable" } };
     return { status: 503, body: { error: "directory unavailable" } };
   }
-  const items = stdout
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const tab = line.indexOf("\t");
-      const kind = FIND_KINDS[line.slice(0, tab)] ?? "other";
-      return { name: line.slice(tab + 1), kind };
-    })
+  const items = entries
+    .map((entry) => ({ name: entry.name, kind: kindOf(entry) }))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const overflow = items.length > MAX_DIRECTORY_ENTRIES;
   return { status: 200, body: { items: items.slice(0, MAX_DIRECTORY_ENTRIES), overflow } };
@@ -199,13 +174,13 @@ async function handleDirectory(
   if (parts === null || root.length === 0) {
     return { status: 400, body: { error: "invalid directory query" } };
   }
-  if (root !== "sftpgo") {
+  if (root !== ROOT_NAME) {
     return { status: 404, body: { error: "unknown root" } };
   }
   if (source === null) {
     return { status: 503, body: { error: "directory unavailable" } };
   }
-  return listContainerDirectory(source, parts);
+  return listDirectory(source, parts);
 }
 
 async function handleRequest(
@@ -257,7 +232,7 @@ async function handleRequest(
 
 export interface FakeIndexer {
   readonly baseUrl: string;
-  /** Points `GET /directory` at the SFTPGo container's real data directory. */
+  /** Points `GET /directory` at the local folder on the host. */
   attachStorage(source: DirectorySource): void;
   stop(): Promise<void>;
 }
@@ -269,7 +244,7 @@ export interface FakeIndexer {
  * "configured and reachable" rendering without a real Python sidecar. Fixed
  * fixtures only: every request gets the same `GET /health` / `GET /stats`
  * body, matching the shape from the bug report this fixes (one root,
- * `sftpgo`, 10 indexed files, one extraction error).
+ * `files`, 10 indexed files, one extraction error).
  */
 export function startFakeIndexer(): Promise<FakeIndexer> {
   return new Promise((resolveStart, rejectStart) => {

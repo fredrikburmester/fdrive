@@ -3,7 +3,7 @@ import type { SeedUser } from "@fdrive/testkit";
 
 /** Shares have disposable owners, independent of other browser suites. */
 export const SHARE_USERS: readonly SeedUser[] = [
-  { username: "share_owner", password: "share-owner-test-password", permissions: { "/": ["*"] } },
+  { username: "share_owner", password: "share-owner-test-password" },
 ];
 export const SHARE_FILES = {
   share_owner: {

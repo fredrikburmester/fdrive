@@ -1,7 +1,8 @@
 import { expect, type FrameLocator, type Page, test } from "@playwright/test";
 import { loginAs } from "../e2e/support/login";
 import { editorDiagnostics } from "./diagnostics";
-import { createDocument, documentLoaded, observeOfficeReady } from "./editor-ui";
+import { createDocument, documentLoaded, observeOfficeReady, sharedOfficeHref } from "./editor-ui";
+import { OFFICE_TEAM_FOLDER } from "./fixture-config";
 import { fixtureState } from "./state";
 import { storedText } from "./storage";
 
@@ -44,6 +45,8 @@ for (const [kind, filename] of [
 ] as const) {
   test(`writers coedit and save ${kind}`, async ({ page, browser }) => {
     const state = await fixtureState();
+    // alice's team folder, which bob reaches under Shared with me.
+    const stored = `/${OFFICE_TEAM_FOLDER}/${filename}`;
     await loginAs(page, "alice", "alice-password");
     const bobContext = await browser.newContext({ baseURL: state.webUrl });
     try {
@@ -56,7 +59,7 @@ for (const [kind, filename] of [
       const aliceOpened = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/api/v1/office/open",
       );
-      const editor = await createDocument(page, kind, filename);
+      const editor = await createDocument(page, kind, filename, "ooxml", OFFICE_TEAM_FOLDER);
       const aliceDescriptor = (await (await aliceOpened).json()) as { fileId: string };
       await typeMarker(page, editor, kind, "ALICE_WRITER_MARKER", 1);
       await expect
@@ -64,7 +67,7 @@ for (const [kind, filename] of [
           async () => {
             if (await editor.locator("#id-toolbar-btn-save").isEnabled())
               await editor.locator("#id-toolbar-btn-save").click();
-            return (await storedText(state, `/${filename}`)).includes("ALICE_WRITER_MARKER");
+            return (await storedText(state, stored)).includes("ALICE_WRITER_MARKER");
           },
           { timeout: 90_000, intervals: [1000, 3000, 5000] },
         )
@@ -74,7 +77,9 @@ for (const [kind, filename] of [
       const bobOpened = bob.waitForResponse(
         (response) => new URL(response.url()).pathname === "/api/v1/office/open",
       );
-      await bob.goto(`/office/${bobMe.activeIdentityId}/${encodeURIComponent(filename)}?mode=edit`);
+      await bob.goto(
+        sharedOfficeHref(bobMe.activeIdentityId, OFFICE_TEAM_FOLDER, filename, "edit"),
+      );
       const bobDescriptor = (await (await bobOpened).json()) as { fileId: string };
       expect(bobDescriptor.fileId).toBe(aliceDescriptor.fileId);
       const bobEditor = bob
@@ -86,7 +91,7 @@ for (const [kind, filename] of [
           async () => {
             if (await bobEditor.locator("#id-toolbar-btn-save").isEnabled())
               await bobEditor.locator("#id-toolbar-btn-save").click();
-            const saved = await storedText(state, `/${filename}`);
+            const saved = await storedText(state, stored);
             return saved.includes("BOB_WRITER_MARKER") && saved.includes("ALICE_WRITER_MARKER");
           },
           { timeout: 90_000, intervals: [1000, 3000, 5000] },
@@ -100,7 +105,7 @@ for (const [kind, filename] of [
           async () => {
             if (await editor.locator("#id-toolbar-btn-save").isEnabled())
               await editor.locator("#id-toolbar-btn-save").click();
-            const xml = await storedText(state, `/${filename}`);
+            const xml = await storedText(state, stored);
             return ["ALICE_WRITER_MARKER", "ALICE_AFTER_BOB", "BOB_WRITER_MARKER"].every((marker) =>
               xml.includes(marker),
             );
@@ -117,9 +122,9 @@ for (const [kind, filename] of [
       await expect(
         editor.getByText("The file cannot be accessed right now.", { exact: false }),
       ).toBeHidden();
-      expect((await storedText(state, `/${filename}`)).includes("BOB_WRITER_MARKER")).toBe(true);
+      expect((await storedText(state, stored)).includes("BOB_WRITER_MARKER")).toBe(true);
     } catch (error) {
-      const saved = await storedText(state, `/${filename}`);
+      const saved = await storedText(state, stored);
       console.log("Writer persisted markers", {
         alice: saved.includes("ALICE_WRITER_MARKER"),
         bob: saved.includes("BOB_WRITER_MARKER"),

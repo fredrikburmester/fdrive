@@ -1,16 +1,18 @@
 import { expect, type Page } from "@playwright/test";
 import { editorExceptionSummary } from "./diagnostics";
 import { fixtureState } from "./state";
+/** Creates a document in `folder` (a folder at the top of the login's files) or at the top. */
 export async function createDocument(
   page: Page,
   kind: string,
   filename: string,
   format: "ooxml" | "odf" = "ooxml",
+  folder?: string,
 ) {
   const state = await fixtureState();
   if (state.product === "onlyoffice") await observeOfficeReady(page, state.officeUrl);
   await page.bringToFront();
-  await page.goto("/files");
+  await page.goto(folder === undefined ? "/files" : `/files/${encodeURIComponent(folder)}`);
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: kind, exact: true }).click();
   if (format === "odf") {
@@ -25,6 +27,20 @@ export async function createDocument(
   return page
     .frameLocator('iframe[title="Office document"]')
     .frameLocator('iframe[name="frameEditor"]');
+}
+
+/**
+ * The editor address for `filename` in alice's team folder as another login
+ * reaches it: under Shared with me, where alice's grant puts it.
+ */
+export function sharedOfficeHref(
+  identityId: string,
+  folder: string,
+  filename: string,
+  mode: "view" | "edit",
+): string {
+  const path = ["Shared with me", folder, filename].map(encodeURIComponent).join("/");
+  return `/office/${identityId}/${path}?mode=${mode}`;
 }
 
 export async function observeOfficeReady(page: Page, origin: string): Promise<void> {

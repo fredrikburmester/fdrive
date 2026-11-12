@@ -1,4 +1,6 @@
-import { SEED_FILES, SEED_USERS } from "@fdrive/testkit";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { SEED_FILES, SEED_USERS, startMinio } from "@fdrive/testkit";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { Client } from "pg";
 import { type RunningEnvironment, startEnvironment } from "./support/environment.js";
@@ -8,16 +10,15 @@ import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
-// Isolated SFTPGo fixture with recycle rules. Enable fdrive Trash through onboarding.
+// An isolated, fresh installation: enable fdrive's own Trash through onboarding.
 // One sequential scenario avoids starting additional Docker stacks per worker.
-const TRASH_PATH = "/.trash";
 
 function trashRow(page: Page, name: string): Locator {
   return page.locator("table tbody tr").filter({ hasText: name });
 }
 
 /** The Trash settings block of one storage server's row on System > Storage. */
-function trashSettings(page: Page, providerType: "sftpgo" | "webdav" | "s3"): Locator {
+function trashSettings(page: Page, providerType: "local" | "webdav" | "s3"): Locator {
   return page.locator(`[data-testid="provider-trash"][data-provider-type="${providerType}"]`);
 }
 
@@ -38,9 +39,14 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
     await expect(page.getByRole("switch", { name: label })).toBeVisible();
     await page.getByRole("button", { name: "Skip this feature" }).click();
   }
+  // fdrive moves deleted files into a folder of the home itself: no server
+  // rule to configure and confirm first.
+  await expect(
+    page.getByText("Restore deleted files that fdrive moved into a recycle folder."),
+  ).toBeVisible();
   await page.getByRole("switch", { name: "Enable Trash" }).click();
-  await expect(page.getByRole("button", { name: "Save and continue" })).toBeDisabled();
-  await page.getByRole("checkbox", { name: /I configured and tested/ }).check();
+  await expect(page.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
+  await expect(page.getByLabel("Trash folder")).not.toHaveValue("");
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByLabel("Server address")).not.toHaveValue("");
   await page.getByRole("button", { name: "Save and continue" }).click();
@@ -117,6 +123,8 @@ test.describe("trash available", () => {
 
   let environment: RunningEnvironment | undefined;
   let webBaseUrl = "";
+  /** Containers a scenario started for itself, stopped with the environment. */
+  const scenarioStops: Array<() => Promise<void>> = [];
 
   test.beforeAll(async () => {
     // `describe.configure({ timeout })` covers tests, not this hook, which
@@ -124,17 +132,20 @@ test.describe("trash available", () => {
     test.setTimeout(300_000);
     const apiPort = await getFreePort(E2E_HOST);
     const webPort = await getFreePort(E2E_HOST);
+    // No S3 bucket here: the S3 scenario starts its own, so a missing MinIO
+    // image fails that scenario alone.
     environment = await startEnvironment({
       apiPort,
       webPort,
       skipStatePersist: true,
-      s3: true,
-      sftpgoOptions: { users: SEED_USERS, files: SEED_FILES, trash: { path: TRASH_PATH } },
+      webdav: true,
+      storage: { users: SEED_USERS, files: SEED_FILES },
     });
     webBaseUrl = environment.webBaseUrl;
   });
 
   test.afterAll(async () => {
+    for (const stop of scenarioStops) await stop().catch(() => undefined);
     await environment?.stop();
   });
 
@@ -156,6 +167,11 @@ test.describe("trash available", () => {
 
     await moveToTrash(page, fileName);
     await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
+    // fdrive moved it into the home's own Trash folder, which the listing hides.
+    await expect(listing(page).getByText(".trash", { exact: true })).toHaveCount(0);
+    const home = join(environment?.storageRoot ?? "", "alice");
+    expect(await readdir(home)).not.toContain(fileName);
+    expect(await readdir(home)).toContain(".trash");
 
     // It appears on /trash with its original folder.
     await page.goto(`${webBaseUrl}/trash`);
@@ -267,20 +283,20 @@ test.describe("trash available", () => {
     // Settings apply live: disabling removes Trash without restarting the API.
     // Each storage server's Trash lives on its own row under System > Storage.
     await page.goto(`${webBaseUrl}/system/storage`);
-    const sftpgoTrash = trashSettings(page, "sftpgo");
-    await sftpgoTrash.getByRole("switch", { name: "Enable Trash" }).click();
-    await sftpgoTrash.getByRole("button", { name: "Save Trash settings" }).click();
+    const localTrash = trashSettings(page, "local");
+    await localTrash.getByRole("switch", { name: "Enable Trash" }).click();
+    await localTrash.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeHidden();
     await page.reload();
-    await expect(sftpgoTrash.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
+    await expect(localTrash.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
   });
 
   test("a WebDAV login gets a Trash that fdrive fills itself: enable, move, restore", async ({
     page,
   }) => {
-    // An environment admin (`FDRIVE_ADMIN_USERS`) is one only on the SFTPGo
+    // An environment admin (`FDRIVE_ADMIN_USERS`) is one only on the local
     // login, and the Trash settings belong to the active login's row. Give
     // alice's account the owner-wide grant the setup claim would have made,
     // so she stays admin after switching to the WebDAV login.
@@ -303,11 +319,10 @@ test.describe("trash available", () => {
     } finally {
       await db.end();
     }
-    const url = new URL(environment?.sftpgoWebdavUrl ?? "");
-    url.hostname = E2E_HOST;
+    if (environment?.webdav === undefined) throw new Error("environment missing its WebDAV server");
     const created = await page.request.post(`${webBaseUrl}/api/v1/admin/providers`, {
       headers,
-      data: { type: "webdav", label: "webdav-trash", baseUrl: url.origin },
+      data: { type: "webdav", label: "webdav-trash", baseUrl: environment.webdav.url },
     });
     expect(created.ok(), await created.text()).toBe(true);
     const row = (await created.json()) as { id: string };
@@ -329,7 +344,7 @@ test.describe("trash available", () => {
     });
     expect(switched.ok(), await switched.text()).toBe(true);
 
-    // The form knows this provider moves deleted files itself: no SFTPGo rule to confirm.
+    // The form knows this provider moves deleted files itself: no server rule to confirm.
     // It sits on the WebDAV server's own row, whichever login the tab browses as.
     await page.goto(`${webBaseUrl}/system/storage`);
     const davTrash = trashSettings(page, "webdav");
@@ -400,8 +415,10 @@ test.describe("trash available", () => {
     } finally {
       await db.end();
     }
-    if (environment?.s3 === undefined) throw new Error("environment missing its S3 bucket");
-    const url = new URL(environment.s3.url);
+    // Its own bucket, started here so a missing MinIO image fails this scenario alone.
+    const minio = await startMinio();
+    scenarioStops.push(() => minio.stop());
+    const url = new URL(minio.baseUrl);
     url.hostname = E2E_HOST;
     const created = await page.request.post(`${webBaseUrl}/api/v1/admin/providers`, {
       headers,
@@ -414,8 +431,8 @@ test.describe("trash available", () => {
       data: {
         providerId: row.id,
         credential: {
-          username: environment.s3.key.accessKeyId,
-          password: environment.s3.key.secretAccessKey,
+          username: minio.writer.accessKeyId,
+          password: minio.writer.secretAccessKey,
         },
         currentCredential: { password: "alice-password" },
       },
@@ -443,13 +460,13 @@ test.describe("trash available", () => {
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();
 
-    // Shares stays in the sidebar for alice's SFTPGo login; with the S3
+    // Shares stays in the sidebar for alice's local login; with the S3
     // login active the page states the limit instead of failing to load.
     await page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Shares" }).click();
     await expect(page.getByText("Shares aren't available for this login")).toBeVisible();
     await expect(
       page.getByText(
-        "s3-trash is on storage that can't create share links. Switch to a login on SFTPGo storage to see its links.",
+        "s3-trash is on storage that can't create share links. Switch to a login on local storage to see its links.",
       ),
     ).toBeVisible();
 

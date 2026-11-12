@@ -1,5 +1,7 @@
+import { rename } from "node:fs/promises";
 import { ActivityFileResponse, PersonalActivityResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
+import { homePath } from "./support/local-folder.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -116,8 +118,6 @@ test("upload completion leads to a durable journey, copies branch and exports ke
 test("external disappearance and rediscovery preserve uncertainty and separate replacement identity", async ({
   page,
 }) => {
-  const root = process.env.E2E_SFTPGO_WEBDAV_URL;
-  if (!root) throw Error("missing disposable SFTPGo WebDAV endpoint");
   const path = `/${uniqueName("outside-fdrive")}.txt`;
   const destination = `${path}.moved`;
   const headers = { "x-requested-with": "fdrive" };
@@ -136,16 +136,9 @@ test("external disappearance and rediscovery preserve uncertainty and separate r
     (event) => event.action === "file.upload" && event.stage === "outcome",
   )?.fileId;
   expect(id).toBeTruthy();
-  const base = root.endsWith("/") ? root : `${root}/`;
+  // A writer outside fdrive (the host, rsync) moves the file on disk.
   async function externalMove(from: string, to: string) {
-    const result = await page.request.fetch(new URL(from.slice(1), base).href, {
-      method: "MOVE",
-      headers: {
-        authorization: `Basic ${Buffer.from("alice:alice-password").toString("base64")}`,
-        destination: new URL(to.slice(1), base).href,
-      },
-    });
-    expect(result.ok(), await result.text()).toBe(true);
+    await rename(homePath("alice", from), homePath("alice", to));
   }
   await externalMove(path, destination);
   expect((await page.request.post(`/api/v1/activity/files/${id}/recheck`, { headers })).ok()).toBe(

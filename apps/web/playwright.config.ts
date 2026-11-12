@@ -13,8 +13,8 @@ import { getAliceStorageStatePath, getWebBaseUrl } from "./e2e/support/paths.js"
 // graph) but calling the getters directly makes that not matter either way.
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? getWebBaseUrl();
 
-// `globalSetup` owns the whole stack's lifecycle (Postgres, SFTPGo, the API,
-// and the web app), since it has several independently-started parts;
+// `globalSetup` owns the whole stack's lifecycle (Postgres, the local folder,
+// WebDAV, the API, and the web app), since it has several independently-started parts;
 // Playwright's built-in `webServer` option only manages one process.
 export default defineConfig({
   testDir: "./e2e",

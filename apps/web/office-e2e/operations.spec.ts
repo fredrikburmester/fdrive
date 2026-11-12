@@ -65,9 +65,7 @@ test("editor rename and Save Copy As reach real storage", async ({ page }) => {
   expect(
     (await storedText(state, "/Renamed Å %20.docx")).includes("OPERATIONS_PERSISTED_MARKER"),
   ).toBe(true);
-  await expect(storedBytes(state, "/Operations.docx")).rejects.toThrow(
-    "Storage download failed: 404",
-  );
+  await expect(storedBytes(state, "/Operations.docx")).rejects.toThrow("Stored file missing");
   const renamedResponse = await page.request.post("/api/v1/office/open", {
     headers: { "x-requested-with": "fdrive" },
     data: { path: "/Renamed Å %20.docx", mode: "view" },
