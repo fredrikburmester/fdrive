@@ -1,7 +1,7 @@
 "use client";
 
 import { baseName } from "@fdrive/core";
-import { FilesIcon, XIcon } from "lucide-react";
+import { FilesIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import {
   PromptInput,
   PromptInputBody,
@@ -27,6 +27,8 @@ import {
 export const MAX_CHIPS_SHOWN = 10;
 
 export interface ChatComposerProps {
+  /** The folder in view, which the assistant may use with the next message. */
+  readonly folder: string;
   /** Paths waiting to be attached to the next message. */
   readonly chips: readonly string[];
   readonly onRemoveChip: (path: string) => void;
@@ -38,8 +40,9 @@ export interface ChatComposerProps {
   readonly onStop: () => void;
 }
 
-/** The message box: the chips of what will be attached, the text, and send or stop. */
+/** The message box: the open folder and the chips of what will be attached, the text, and send or stop. */
 export function ChatComposer({
+  folder,
   chips,
   onRemoveChip,
   onClearChips,
@@ -56,33 +59,27 @@ export function ChatComposer({
         </p>
       ) : null}
       <PromptInput onSubmit={(text) => onSend(text)} aria-label="Message">
-        {chips.length > 0 ? (
-          <PromptInputHeader aria-label="Attached to the next message">
-            {chips.length > MAX_CHIPS_SHOWN ? (
-              <AttachedSummary chips={chips} onRemove={onRemoveChip} onClear={onClearChips} />
-            ) : (
-              chips.map((path) => (
-                <Badge
-                  key={path}
-                  variant="secondary"
-                  className="max-w-full gap-1 pr-1"
-                  title={path}
-                >
-                  <ChipIcon path={path} />
-                  <span className="truncate">{baseName(path)}</span>
-                  <RemoveButton path={path} onRemove={onRemoveChip} />
-                </Badge>
-              ))
-            )}
-          </PromptInputHeader>
-        ) : null}
+        <PromptInputHeader aria-label="Attached to the next message">
+          <FolderChip path={folder} />
+          {chips.length > MAX_CHIPS_SHOWN ? (
+            <AttachedSummary chips={chips} onRemove={onRemoveChip} onClear={onClearChips} />
+          ) : (
+            chips.map((path) => (
+              <Badge key={path} variant="secondary" className="max-w-full gap-1 pr-1" title={path}>
+                <ChipIcon path={path} />
+                <span className="truncate">{baseName(path)}</span>
+                <RemoveButton path={path} onRemove={onRemoveChip} />
+              </Badge>
+            ))
+          )}
+        </PromptInputHeader>
         <PromptInputBody>
           <PromptInputTextarea
             aria-label="Message"
             placeholder={
               chips.length > 0
                 ? "Ask about the attached items…"
-                : "Drop files here, or ask about the drive…"
+                : "Ask about this folder, or drop files here…"
             }
             disabled={closed}
           />
@@ -97,6 +94,20 @@ export function ChatComposer({
         </PromptInputFooter>
       </PromptInput>
     </div>
+  );
+}
+
+/** The open folder: always sent along, so it has no remove button. */
+function FolderChip({ path }: { path: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className="max-w-full gap-1"
+      title={`The assistant can use ${path} and everything in it`}
+    >
+      <FolderOpenIcon className="size-3 shrink-0" />
+      <span className="truncate">{path === "/" ? "Home" : baseName(path)}</span>
+    </Badge>
   );
 }
 

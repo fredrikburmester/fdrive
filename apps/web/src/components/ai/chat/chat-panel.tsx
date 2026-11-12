@@ -2,10 +2,10 @@
 
 import { ApiClientError, type ChatActionRequest } from "@fdrive/contracts";
 import { cn } from "cn";
-import { usePathname } from "next/navigation";
 import type { DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
+import { LiveActivity } from "@/components/activity/live-activity-dock";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { pendingActions } from "@/lib/ai/chat";
@@ -30,50 +30,69 @@ import {
 } from "@/lib/ai/chat-queries";
 import { useAiStatus } from "@/lib/ai/queries";
 import { getActiveDragPaths, readDraggedPaths, subscribeDragSession } from "@/lib/dnd";
-import { pathFromFilesPathname } from "@/lib/files/path-url";
 import { describeFsError } from "@/lib/files/queries";
-import { ChatActivity } from "./chat-activity";
-import { useChatShortcut } from "./chat-button";
+import { ChatBubble, useChatFolder, useChatShortcut } from "./chat-bubble";
 import { ChatComposer } from "./chat-composer";
 import { ChatHeader } from "./chat-header";
 import { ChatTranscript } from "./chat-transcript";
 
 /**
- * The chat panel: docked to the right of every shell page on wide screens,
- * a full-height sheet on narrow ones. It follows the person between pages,
- * accepts files and folders dragged from any listing, and shows the chat
- * the browser last had open. Rendered only while AI is set up.
+ * The chat: a bubble in the live activity dock at the bottom right that
+ * opens a floating panel above it on wide screens, a full-height sheet on
+ * narrow ones. The panel stays open between folders, accepts files and
+ * folders dragged from the listing, and shows the chat the browser last had
+ * open. The assistant works from the folder in view, so chat is offered only
+ * on folder pages, and only while AI is set up; it comes back open on the
+ * next folder page.
  */
 export function ChatPanel() {
   const { data: aiStatus } = useAiStatus();
-  const available = aiStatus?.chat === true;
+  const folder = useChatFolder();
+  const available = aiStatus?.chat === true && folder !== null;
   const [open, setOpen] = useChatPanelOpen();
   const [currentId] = useCurrentChatId();
   const isMobile = useIsMobile();
   useChatShortcut(available);
-  // The pill needs the chat's state even while the panel is closed.
+  // The bubble shows the chat's state while the panel is closed.
   const current = useChat(available && !open ? currentId : null);
 
   if (!available) return null;
-  if (!open)
-    return <ChatActivity state={current.data?.state ?? null} onOpen={() => setOpen(true)} />;
-  if (isMobile)
-    return (
-      <Sheet open onOpenChange={(next) => setOpen(next)}>
-        <SheetContent
-          side="right"
-          className="w-full gap-0 p-0 sm:max-w-full"
-          showCloseButton={false}
-        >
-          <SheetTitle className="sr-only">Chat</SheetTitle>
-          <ChatPanelBody onClose={() => setOpen(false)} />
-        </SheetContent>
-      </Sheet>
-    );
-  return <DockedPanel onClose={() => setOpen(false)} />;
+  return (
+    <>
+      {open && isMobile ? (
+        <Sheet open onOpenChange={(next) => setOpen(next)}>
+          <SheetContent
+            side="right"
+            className="w-full gap-0 p-0 sm:max-w-full"
+            showCloseButton={false}
+          >
+            <SheetTitle className="sr-only">Chat</SheetTitle>
+            <ChatPanelBody folder={folder} onClose={() => setOpen(false)} />
+          </SheetContent>
+        </Sheet>
+      ) : null}
+      <LiveActivity>
+        {open && !isMobile ? (
+          <FloatingPanel folder={folder} onClose={() => setOpen(false)} />
+        ) : null}
+        <ChatBubble
+          open={open}
+          state={current.data?.state ?? null}
+          onToggle={() => setOpen(!open)}
+        />
+      </LiveActivity>
+    </>
+  );
 }
 
-function DockedPanel({ onClose }: { onClose: () => void }) {
+interface PanelProps {
+  /** The folder in view: the assistant may use it and everything in it with the next message. */
+  readonly folder: string;
+  readonly onClose: () => void;
+}
+
+/** The panel above the bubble, as wide as the person dragged its left edge. */
+function FloatingPanel({ folder, onClose }: PanelProps) {
   const [width, setWidth] = useChatPanelWidth();
   const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -96,7 +115,9 @@ function DockedPanel({ onClose }: { onClose: () => void }) {
     <aside
       data-slot="chat-panel"
       aria-label="Chat"
-      className="relative flex h-svh shrink-0 flex-col border-l bg-background"
+      // Between the activity panel's `order-last` and the bubble; it gives way to the activity
+      // panel when both would not fit, down to its minimum height.
+      className="relative order-[10000] flex h-[min(36rem,calc(100svh-6.5rem))] min-h-80 max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl bg-background text-sm shadow-lg ring-1 ring-foreground/10"
       style={{ width }}
     >
       {/* biome-ignore lint/a11y/useSemanticElements: an <hr> cannot be dragged; this is a resize handle with the separator role WAI-ARIA gives it. */}
@@ -108,7 +129,7 @@ function DockedPanel({ onClose }: { onClose: () => void }) {
         aria-valuenow={width}
         aria-valuemin={MIN_CHAT_WIDTH}
         aria-valuemax={MAX_CHAT_WIDTH}
-        className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize hover:bg-border/60 focus-visible:bg-ring/40 focus-visible:outline-none"
+        className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-border/60 focus-visible:bg-ring/40 focus-visible:outline-none"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -117,17 +138,15 @@ function DockedPanel({ onClose }: { onClose: () => void }) {
           else if (event.key === "ArrowRight") setWidth(clampChatWidth(width - 16));
         }}
       />
-      <ChatPanelBody onClose={onClose} />
+      <ChatPanelBody folder={folder} onClose={onClose} />
     </aside>
   );
 }
 
-function ChatPanelBody({ onClose }: { onClose: () => void }) {
+function ChatPanelBody({ folder, onClose }: PanelProps) {
   const [currentId, setCurrentId] = useCurrentChatId();
   const chips = useChatPanelStore((state) => state.chips);
   const { addChips, removeChip, clearChips } = useChatPanelStore.getState();
-  const pathname = usePathname();
-  const location = pathFromFilesPathname(pathname);
   const chats = useChats();
   const chat = useChat(currentId);
   const create = useCreateChat();
@@ -152,7 +171,7 @@ function ChatPanelBody({ onClose }: { onClose: () => void }) {
         if (id !== currentId) setCurrentId(id);
         await send.mutateAsync({
           id,
-          request: { text, references: [...references], location },
+          request: { text, references: [...references], location: folder },
         });
         clearChips();
       } catch (error) {
@@ -160,7 +179,7 @@ function ChatPanelBody({ onClose }: { onClose: () => void }) {
         throw error;
       }
     },
-    [currentId, create, send, location, clearChips, setCurrentId],
+    [currentId, create, send, folder, clearChips, setCurrentId],
   );
 
   async function onAct(actionId: string, request: ChatActionRequest) {
@@ -253,6 +272,7 @@ function ChatPanelBody({ onClose }: { onClose: () => void }) {
         </p>
       ) : null}
       <ChatComposer
+        folder={folder}
         chips={chips}
         onRemoveChip={removeChip}
         onClearChips={clearChips}

@@ -49,8 +49,10 @@ references were attached with it, so "these files" means what was just dropped, 
 tools may still read anything referenced earlier in the chat. The rest of the drive is
 browsed the way Organize browses it (folder names, counts, search hits by folder).
 
-Each message also carries the person's current **location** (the folder open in the browser,
-or none on other pages) so "this folder" works without dropping it.
+Each message also carries the person's current **location**, the folder open in the browser.
+For that message it counts as referenced, with everything inside it, so "sort the files in this
+folder" works without dropping anything; it is not stored as a reference, so the next message
+from another folder no longer reaches it. Chat is offered only on folder pages.
 
 The Organize **Share with assistant** choices (`contents`, `otherFileNames`) apply unchanged,
 chosen per chat and remembered by the browser. Files are never uploaded to the provider; only
@@ -153,15 +155,16 @@ deltas, the OpenAI-compatible adapter adds `stream: true` parsing.
 
 ### UI
 
-- **Placement.** A panel mounted in the shell layout beside `SidebarInset`, not inside the
-  file browser, so navigating between folders, Favorites, Recents, Tags, Search and System
-  keeps it and its scroll position. Desktop: a resizable right column (a `resizable` shadcn
-  primitive, width remembered as `fdrive.chat.width`) that pushes content. Below the `md`
-  breakpoint: a full-height sheet. Open state and current chat id are `fdrive.chat.open` and
+- **Placement.** A bubble in the live activity dock's bottom-right corner, on folder pages
+  only, opening a floating panel above it (width remembered as `fdrive.chat.width`, dragged
+  by its left edge); uploads, jobs and Organize stack above the panel. It is mounted in the
+  shell layout, not inside the file browser, so moving between folders keeps it and its
+  scroll position, and it comes back open on the next folder page. Below the `md` breakpoint
+  the panel is a full-height sheet. Open state and current chat id are `fdrive.chat.open` and
   `fdrive.chat.current` in localStorage, read through the `useSyncExternalStore` preference
   hooks so every tab agrees; the store hydrates the transcript from the server on mount.
-- **Opening.** A header button (message icon, tooltip "Chat"), a keyboard shortcut next to the
-  search one, the selection bar's **Add to chat** (opens the panel with the selection
+- **Opening.** The bubble (message icon, tooltip "Chat with your files", items dragged from
+  the listing can be dropped on it), a keyboard shortcut next to the search one, the selection bar's **Add to chat** (opens the panel with the selection
   referenced) and the row context menu's **Add to chat**. Shown only while AI is available.
 - **Drop to reference.** The whole panel is a drop target for `application/x-fdrive-paths`
   (`readDraggedPaths`), with a highlighted "Drop to add to chat" state while an internal drag
@@ -192,8 +195,8 @@ deltas, the OpenAI-compatible adapter adds `stream: true` parsing.
   edits with new-file/replace toggle and file name. Stop while a turn runs, Retry after a
   failed turn, and the same failure copy as Organize (provider errors, session ended,
   refusal, cut off).
-- **Activity corner.** With the panel closed, a running turn or pending cards show the
-  Organize-style pill in the live activity dock, leading back to the panel.
+- **Activity corner.** With the panel closed, a running turn or pending cards widen the bubble
+  into an Organize-style pill ("Answering…", "Waiting for you"), leading back to the panel.
 - Organize stays as it is; its sheet is unchanged.
 
 ### Contracts and routes
@@ -236,11 +239,10 @@ Each step is one PR with the AGENTS.md checks; the earlier ones do not change wh
    and undo, polling `GET /ai/chats/:id` while a turn runs. e2e spec with a scripted fake
    (extend `e2e/support/fake-ai.ts` with chat scripts) covering: drop files from a listing,
    navigate to another folder and page with the panel open, reload and find the chat again,
-   summarize, duplicate check, trash, move and rewrite; a real dev app check. Open from the
-   browser check: the files toolbar decides inline versus overflow actions by viewport width
-   (`useIsMobile`), so with the panel docked on a ~1300px window the selection bar overflows
-   and the page scrolls sideways; it should follow the width the panel leaves (a container
-   query or measured width). Deleting a chat has no confirm step.
+   summarize, duplicate check, trash, move and rewrite; a real dev app check. The panel was
+   later moved from a docked right column into the activity dock as a bubble, which also
+   ended the selection bar overflowing beside the docked column. Open from the browser check:
+   deleting a chat has no confirm step.
 4. **Streaming.** SSE route and client, deltas in the transcript, OpenAI-compatible streaming,
    reconnect and cancel behavior in browser checks.
 5. **Docs.** Chat section in `docs/AI.md`, the data notice on System > AI describing what a

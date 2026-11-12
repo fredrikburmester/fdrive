@@ -142,22 +142,60 @@ afterEach(() => {
   localStorage.clear();
   useChatPanelStore.getState().clearChips();
   mocks.mobile = false;
+  mocks.pathname = "/files/Inbox";
 });
 
-it("stays hidden until AI is set up, and closed shows only a pill while something is happening", async () => {
+it("stays hidden until AI is set up, then opens and closes from the bubble, which says when something waits", async () => {
   mocks.client.aiStatus.mockResolvedValue({ provider: null, organize: false, chat: false });
   const { container } = renderPanel();
   await waitFor(() => expect(mocks.client.aiStatus).toHaveBeenCalled());
   expect(container.querySelector('[data-slot="chat-panel"]')).toBeNull();
+  expect(screen.queryByRole("button", { name: "Chat" })).toBeNull();
 
   cleanup();
   mocks.client.aiStatus.mockResolvedValue({ provider: "anthropic", organize: true, chat: true });
+  renderPanel();
+  const bubble = await screen.findByRole("button", { name: "Chat" });
+  expect(bubble.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(bubble);
+  expect(await screen.findByRole("complementary", { name: "Chat" })).toBeTruthy();
+  expect(bubble.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(bubble);
+  await waitFor(() => expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull());
+
+  cleanup();
   mocks.client.chat.mockResolvedValue(chat({ state: "awaiting_approval" }));
   setCurrentChatId("c1");
   renderPanel();
-  const pill = await screen.findByRole("button", { name: "Waiting for you" });
-  fireEvent.click(pill);
+  fireEvent.click(await screen.findByRole("button", { name: "Waiting for you" }));
   expect(await screen.findByRole("complementary", { name: "Chat" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+});
+
+it("attaches items dropped on the closed bubble and opens the panel with them", async () => {
+  renderPanel();
+  const bubble = await screen.findByRole("button", { name: "Chat" });
+  const dataTransfer = {
+    types: [INTERNAL_DND_TYPE],
+    getData: () => JSON.stringify(["/Inbox/b.txt"]),
+    setData: () => {},
+    dropEffect: "none",
+  };
+  // Nothing dragged from a listing: the bubble is no drop target.
+  fireEvent.dragOver(bubble, { dataTransfer });
+  expect(bubble.getAttribute("data-dropping")).toBeNull();
+  act(() => startDragSession(["/Inbox/b.txt"]));
+  fireEvent.dragOver(bubble, { dataTransfer });
+  expect(bubble.getAttribute("data-dropping")).toBe("true");
+  expect(dataTransfer.dropEffect).toBe("copy");
+  fireEvent.dragLeave(bubble);
+  expect(bubble.getAttribute("data-dropping")).toBeNull();
+  fireEvent.dragOver(bubble, { dataTransfer });
+  fireEvent.drop(bubble, { dataTransfer });
+  act(() => endDragSession());
+  expect(useChatPanelStore.getState().chips).toEqual(["/Inbox/b.txt"]);
+  const panel = await screen.findByRole("complementary", { name: "Chat" });
+  expect(panel.textContent).toContain("b.txt");
 });
 
 it("starts a chat from a suggestion with the attached chips and the current folder", async () => {
@@ -281,6 +319,55 @@ it("opens a path the assistant wrote in code, finding its stored spelling, and s
   expect(mocks.push).toHaveBeenCalledTimes(1);
 });
 
+it("shows the open folder the next message can use, Home at the root", async () => {
+  setChatPanelOpen(true);
+  renderPanel();
+  const attached = await screen.findByRole("group", { name: "Attached to the next message" });
+  expect(attached.textContent).toBe("Inbox");
+  expect(screen.getByTitle("The assistant can use /Inbox and everything in it")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Remove Inbox" })).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Message" }).getAttribute("placeholder")).toBe(
+    "Ask about this folder, or drop files here…",
+  );
+
+  cleanup();
+  mocks.pathname = "/files";
+  renderPanel();
+  expect(
+    (await screen.findByRole("group", { name: "Attached to the next message" })).textContent,
+  ).toBe("Home");
+});
+
+it("offers chat only on folder pages, keeping the panel open for the next one", async () => {
+  mocks.client.chat.mockResolvedValue(chat({ state: "awaiting_approval" }));
+  setCurrentChatId("c1");
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = () => (
+    <QueryClientProvider client={queryClient}>
+      <LiveActivityDock>
+        <ChatPanel />
+      </LiveActivityDock>
+    </QueryClientProvider>
+  );
+  const { rerender } = render(view());
+  // Closed in a folder: the bubble, saying a card waits.
+  expect(await screen.findByRole("button", { name: "Waiting for you" })).toBeTruthy();
+
+  mocks.pathname = "/system/ai";
+  rerender(view());
+  expect(screen.queryByRole("button", { name: "Waiting for you" })).toBeNull();
+  fireEvent.keyDown(window, { key: "k", shiftKey: true, metaKey: true });
+  expect(localStorage.getItem("fdrive.chat.open")).toBeNull();
+
+  // Open, then away from folders: the panel hides and comes back with the next folder.
+  act(() => setChatPanelOpen(true));
+  expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull();
+  mocks.pathname = "/files/Docs";
+  rerender(view());
+  expect(await screen.findByRole("complementary", { name: "Chat" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-expanded")).toBe("true");
+});
+
 it("takes files dropped from a listing as chips and lets them be removed", async () => {
   setChatPanelOpen(true);
   renderPanel();
@@ -318,10 +405,10 @@ it("folds more than ten chips into one badge that lists, trims and clears them",
   expect(useChatPanelStore.getState().chips).toEqual(paths.slice(1));
   expect(await screen.findByRole("button", { name: "11 items" })).toBeTruthy();
 
-  // Back at ten, every chip shows on its own again.
+  // Back at ten, every chip shows on its own again, next to the open folder.
   fireEvent.click(screen.getByRole("button", { name: "Remove f1.pdf" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: /items$/ })).toBeNull());
-  expect(attached.querySelectorAll('[data-slot="badge"]')).toHaveLength(10);
+  expect(attached.querySelectorAll('[data-slot="badge"]')).toHaveLength(11);
 
   act(() => addToChat(["/Inbox/extra.pdf"]));
   fireEvent.click(screen.getByRole("button", { name: "Remove all" }));
