@@ -160,7 +160,7 @@ describe("search startup retry decisions", () => {
     expect(isSearchUnsupported(status)).toBe(true);
     expect(isSearchStarting(status)).toBe(false);
     expect(searchUnavailableMessage(status)).toBe(
-      "Search is not available for this login. It needs indexed SFTPGo storage.",
+      "Search is not available for this login. It needs indexed local storage.",
     );
     // Across all linked logins the panel names each one itself, so no "this login" here.
     expect(searchUnavailableMessage(status, true)).toBe("Search is not available.");

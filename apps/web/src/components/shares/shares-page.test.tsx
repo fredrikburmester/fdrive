@@ -24,6 +24,9 @@ vi.mock("@/lib/shares/management", () => ({
     };
   },
 }));
+vi.mock("@/components/grants/shared-with-people-section", () => ({
+  SharedWithPeopleSection: () => <section aria-label="Shared with people" />,
+}));
 // The shell header needs the sidebar context and search wiring this page test does not exercise.
 vi.mock("@/components/shell/page-header", () => ({ PageHeader: () => <header /> }));
 
@@ -42,13 +45,13 @@ const share: ManagedShare = {
   updatedAt: "2026-01-01T00:00:00Z",
   presentation: "auto",
 };
-const sftpgo = makeIdentity({ id: "sftpgo", username: "ada", providerLabel: "Main" });
+const local = makeIdentity({ id: "local", username: "ada", providerLabel: "Main" });
 const s3 = makeIdentity({
   id: "s3",
   username: "0047483a71e6fd50000000001",
   providerType: "s3",
   providerLabel: "B2",
-  capabilities: { shares: false, office: false, index: false, scopeMapping: false },
+  capabilities: { shares: false, office: false, index: false },
 });
 
 beforeEach(() => {
@@ -60,7 +63,7 @@ afterEach(() => {
 });
 
 it("lists the active login's links when its storage can share", () => {
-  mocks.me = makeMe({ identities: [sftpgo, s3], activeIdentityId: "sftpgo" });
+  mocks.me = makeMe({ identities: [local, s3], activeIdentityId: "local" });
   render(<SharesPage />);
   expect(mocks.management).toHaveBeenCalledWith({ list: true });
   expect(screen.getByText("Quarterly report")).toBeTruthy();
@@ -68,7 +71,7 @@ it("lists the active login's links when its storage can share", () => {
 });
 
 it("states the limit for a files-only login instead of asking for a refusal", () => {
-  mocks.me = makeMe({ identities: [sftpgo, s3], activeIdentityId: "s3" });
+  mocks.me = makeMe({ identities: [local, s3], activeIdentityId: "s3" });
   mocks.query = { isPending: true, isError: false, error: null, data: undefined };
   render(<SharesPage />);
   expect(mocks.management).toHaveBeenCalledWith({ list: false });
@@ -89,7 +92,7 @@ it("assumes a sharing login until the account has loaded", () => {
 });
 
 it("shows a failed listing as an alert without an empty table beneath it", () => {
-  mocks.me = makeMe({ identities: [sftpgo], activeIdentityId: "sftpgo" });
+  mocks.me = makeMe({ identities: [local], activeIdentityId: "local" });
   mocks.query = {
     isPending: false,
     isError: true,
@@ -103,4 +106,17 @@ it("shows a failed listing as an alert without an empty table beneath it", () =>
   ).toBeTruthy();
   expect(screen.queryByRole("columnheader", { name: "Name" })).toBeNull();
   expect(screen.queryByText("No share links yet")).toBeNull();
+});
+
+it("lists folders shared with people when the login's storage shares between its users", () => {
+  mocks.me = makeMe({
+    identities: [makeIdentity({ id: "local", capabilities: { shareWithPeople: true } })],
+    activeIdentityId: "local",
+  });
+  const view = render(<SharesPage />);
+  expect(screen.getByRole("region", { name: "Shared with people" })).toBeTruthy();
+
+  mocks.me = makeMe({ identities: [local, s3], activeIdentityId: "s3" });
+  view.rerender(<SharesPage />);
+  expect(screen.queryByRole("region", { name: "Shared with people" })).toBeNull();
 });

@@ -31,7 +31,7 @@ function renderDialog(onCreated = vi.fn()) {
           {
             id: "22222222-2222-4222-8222-222222222222",
             username: "alice",
-            providerType: "sftpgo",
+            providerType: "local",
             providerLabel: "Work",
           },
           {

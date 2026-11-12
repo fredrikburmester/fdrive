@@ -10,10 +10,17 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   reset: vi.fn(),
   replace: vi.fn(),
+  setupMode: undefined as "local" | "provider" | undefined,
 }));
 vi.mock("@/lib/api/system-queries", () => ({
   useSystemFeatures: () => mocks.query(),
   useUpdateFeatures: () => mocks.update(),
+  useSetupStatus: () => ({
+    data:
+      mocks.setupMode === undefined
+        ? undefined
+        : { required: false, mode: mocks.setupMode, types: [] },
+  }),
 }));
 vi.mock("./office-feature-card", () => ({
   OfficeFeatureCard: () => <p>Office feature card</p>,
@@ -59,7 +66,7 @@ vi.mock("@/lib/api/auth-queries", () => ({
       account: { id: "a", displayName: null },
       activeIdentityId: "i",
       isAdmin: true,
-      identities: [{ id: "i", providerId: "p", providerLabel: "Primary", providerType: "sftpgo" }],
+      identities: [{ id: "i", providerId: "p", providerLabel: "Primary", providerType: "local" }],
     },
   }),
 }));
@@ -106,6 +113,7 @@ function mount(
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  mocks.setupMode = undefined;
 });
 describe("feature walkthrough", () => {
   it("includes separate search OCR and PDF conversion steps", () => {
@@ -154,7 +162,7 @@ describe("feature walkthrough", () => {
   it("resumes the saved feature step and persists its required dependency", () => {
     mount(2);
 
-    expect(screen.getByText("Step 6 of 13 · Search OCR")).toBeTruthy();
+    expect(screen.getByText("Step 5 of 12 · Search OCR")).toBeTruthy();
     fireEvent.click(screen.getByRole("switch", { name: "Enable search ocr" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
 
@@ -193,7 +201,7 @@ describe("feature walkthrough", () => {
 
   it("includes Trash before review without changing processing settings", () => {
     mount(6);
-    expect(screen.getByText("Step 10 of 13 · Trash")).toBeTruthy();
+    expect(screen.getByText("Step 9 of 12 · Trash")).toBeTruthy();
     expect(screen.getByText("Trash for Primary")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Trash settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
@@ -203,7 +211,7 @@ describe("feature walkthrough", () => {
   });
   it("asks for the server address after Trash and before Office", () => {
     mount(7);
-    expect(screen.getByText("Step 11 of 13 · Server address")).toBeTruthy();
+    expect(screen.getByText("Step 10 of 12 · Server address")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save and continue" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Address settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
@@ -213,16 +221,22 @@ describe("feature walkthrough", () => {
   });
   it("includes Office after the address and before review", () => {
     mount(8);
-    expect(screen.getByText("Step 12 of 13 · Office")).toBeTruthy();
+    expect(screen.getByText("Step 11 of 12 · Office")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Office settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 9, values: off }),
       expect.anything(),
     );
   });
+  it("counts the storage step when setup connected storage instead of a local folder", () => {
+    mocks.setupMode = "provider";
+    mount(8);
+    expect(screen.getByText("Step 12 of 13 · Office")).toBeTruthy();
+  });
   it("reviews the address alongside the other choices", () => {
+    mocks.setupMode = "local";
     mount(9);
-    expect(screen.getByText("Step 13 of 13 · Review")).toBeTruthy();
+    expect(screen.getByText("Step 12 of 12 · Review")).toBeTruthy();
     expect(screen.getByText("Address review")).toBeTruthy();
   });
   it("starts with features and hides storage work when everything is off", () => {
@@ -230,7 +244,6 @@ describe("feature walkthrough", () => {
     expect(screen.getByRole("switch", { name: "Enable thumbnails" })).toBeTruthy();
     expect(screen.queryByText("Check your storage")).toBeNull();
     expect(screen.queryByText("Advanced storage settings")).toBeNull();
-    expect(screen.queryByText("Inspect SFTPGo users")).toBeNull();
   });
 
   it("does not ask for storage configuration even when processing has been enabled", () => {
@@ -239,9 +252,9 @@ describe("feature walkthrough", () => {
       false,
       [
         {
-          name: "sftpgo",
-          sftpgoPath: "/data",
-          indexerPath: "/roots/sftpgo",
+          name: "files",
+          storagePath: "/data",
+          indexerPath: "/roots/files",
           processing: { indexReadable: true, pdfReadable: false, pdfWritable: false },
         },
       ],

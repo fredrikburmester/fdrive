@@ -99,7 +99,7 @@ export function OfficeSystemPage() {
 
           <SystemSection
             title="Editors"
-            description="SFTPGo usernames allowed to open documents for editing."
+            description="Usernames allowed to open documents for editing."
             contentClassName="flex-row flex-wrap gap-2"
           >
             {editors.length === 0 ? (

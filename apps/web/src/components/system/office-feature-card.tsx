@@ -61,8 +61,8 @@ export function OfficeFeatureCard({ disabled = false }: { disabled?: boolean }) 
               />
             </Field>
             <FieldDescription>
-              Documents stay in SFTPGo. No processing storage mount is needed. The bundled editor
-              uses additional memory while enabled.
+              Documents stay in your storage. No processing storage mount is needed. The bundled
+              editor uses additional memory while enabled.
             </FieldDescription>
             <FieldDescription>
               Editing permission and the list of editors live on the Office page.

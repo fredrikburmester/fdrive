@@ -61,15 +61,15 @@ const CONFIGURED_FIXTURE: SystemIndexerResponse = {
   reachable: true,
   health: {
     ok: true,
-    roots: ["sftpgo"],
-    watcher: { sftpgo: true },
+    roots: ["files"],
+    watcher: { files: true },
     embedOk: true,
     schemaVersion: 1,
   },
   stats: {
     roots: [
       {
-        root: "sftpgo",
+        root: "files",
         countsByStatus: { excluded: 3, none: 1, error: 1, indexed: 10, no_text: 1 },
         chunks: 10,
         chunksEmbedded: 10,
@@ -89,7 +89,7 @@ const CONFIGURED_FIXTURE: SystemIndexerResponse = {
       {
         path: "alice/docs/report.pdf",
         error:
-          "FileDataError: Failed to open file '/roots/sftpgo/alice/docs/report.pdf' as type pdf.",
+          "FileDataError: Failed to open file '/roots/files/alice/docs/report.pdf' as type pdf.",
       },
     ],
   },
@@ -158,7 +158,7 @@ describe("IndexerPage", () => {
       expect(screen.getByText(status)).toBeTruthy();
       expect(screen.getAllByText(String(count)).length).toBeGreaterThan(0);
     }
-    expect(screen.getAllByText("sftpgo").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("files").length).toBeGreaterThan(0);
   });
 
   it("renders the last scan summary", async () => {
@@ -285,11 +285,11 @@ describe("IndexerPage", () => {
       fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
       expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", true);
       fireEvent.click(screen.getByLabelText("Root"));
-      fireEvent.click(await screen.findByRole("option", { name: "sftpgo" }));
-      expect(screen.getByLabelText("Root").textContent).toContain("sftpgo");
+      fireEvent.click(await screen.findByRole("option", { name: "files" }));
+      expect(screen.getByLabelText("Root").textContent).toContain("files");
       expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", false);
       fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
-      expect(mutate).toHaveBeenCalledWith({ root: "sftpgo" }, expect.anything());
+      expect(mutate).toHaveBeenCalledWith({ root: "files" }, expect.anything());
       expect(error.mock.calls.flat().join(" ")).not.toMatch(/uncontrolled/i);
     } finally {
       error.mockRestore();

@@ -1,38 +1,58 @@
+import type { ProviderField } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
 import {
-  canCompleteAccountStep,
   canLeaveConnectionStep,
   canLeaveTokenStep,
+  connectionStepError,
+  connectionTestKey,
   nextSetupStep,
   previousSetupStep,
   SETUP_STEPS,
+  type SetupConnectionDraft,
 } from "./setup-flow";
 
+const DRAFT: SetupConnectionDraft = {
+  type: "s3",
+  label: "Media",
+  baseUrl: "https://s3.example.com/media",
+  config: { region: " eu-west-1 " },
+};
+
+const REGION: ProviderField = { name: "region", label: "Region", kind: "text", required: true };
+
 describe("SETUP_STEPS", () => {
-  it("is token, connection, account in order", () => {
-    expect(SETUP_STEPS).toEqual(["token", "connection", "account"]);
+  it("asks a local folder only for the token and the owner's account", () => {
+    expect(SETUP_STEPS.local).toEqual(["token", "account"]);
+  });
+
+  it("connects storage between the token and the account without a local folder", () => {
+    expect(SETUP_STEPS.provider).toEqual(["token", "connection", "account"]);
   });
 });
 
 describe("nextSetupStep", () => {
-  it("advances through every step", () => {
-    expect(nextSetupStep("token")).toBe("connection");
-    expect(nextSetupStep("connection")).toBe("account");
+  it("goes straight from the token to the account for a local folder", () => {
+    expect(nextSetupStep("local", "token")).toBe("account");
+    expect(nextSetupStep("local", "account")).toBeNull();
   });
 
-  it("returns null after the last step", () => {
-    expect(nextSetupStep("account")).toBeNull();
+  it("advances through every provider step", () => {
+    expect(nextSetupStep("provider", "token")).toBe("connection");
+    expect(nextSetupStep("provider", "connection")).toBe("account");
+    expect(nextSetupStep("provider", "account")).toBeNull();
   });
 });
 
 describe("previousSetupStep", () => {
   it("returns null before the first step", () => {
-    expect(previousSetupStep("token")).toBeNull();
+    expect(previousSetupStep("local", "token")).toBeNull();
+    expect(previousSetupStep("provider", "token")).toBeNull();
   });
 
-  it("goes back through every step", () => {
-    expect(previousSetupStep("connection")).toBe("token");
-    expect(previousSetupStep("account")).toBe("connection");
+  it("goes back through the mode's own steps", () => {
+    expect(previousSetupStep("local", "account")).toBe("token");
+    expect(previousSetupStep("provider", "account")).toBe("connection");
+    expect(previousSetupStep("provider", "connection")).toBe("token");
   });
 });
 
@@ -47,51 +67,75 @@ describe("canLeaveTokenStep", () => {
   });
 });
 
-describe("canLeaveConnectionStep", () => {
-  it("is false without a test result", () => {
-    expect(canLeaveConnectionStep("http://sftpgo:8080", null, null)).toBe(false);
-  });
-
-  it("is false when the test result failed", () => {
+describe("connectionTestKey", () => {
+  it("ignores the name, surrounding spaces and blank optional fields", () => {
     expect(
-      canLeaveConnectionStep(
-        "http://sftpgo:8080",
-        { ok: false, detail: "unreachable" },
-        "http://sftpgo:8080",
-      ),
-    ).toBe(false);
+      connectionTestKey({
+        ...DRAFT,
+        label: "Renamed",
+        baseUrl: ` ${DRAFT.baseUrl} `,
+        config: { region: "eu-west-1", prefix: "" },
+      }),
+    ).toBe(connectionTestKey(DRAFT));
   });
 
-  it("is false when the base url is not http(s)", () => {
-    expect(canLeaveConnectionStep("not-a-url", { ok: true, detail: "ok" }, "not-a-url")).toBe(
-      false,
-    );
-  });
-
-  it("is false when the tested url does not match the current one (stale pass)", () => {
-    expect(
-      canLeaveConnectionStep("http://sftpgo:8080", { ok: true, detail: "ok" }, "http://other:8080"),
-    ).toBe(false);
-  });
-
-  it("is true with a passing, matching test result", () => {
-    expect(
-      canLeaveConnectionStep(
-        "http://sftpgo:8080",
-        { ok: true, detail: "ok" },
-        "http://sftpgo:8080",
-      ),
-    ).toBe(true);
+  it("changes with the type, the address or the configuration", () => {
+    const key = connectionTestKey(DRAFT);
+    expect(connectionTestKey({ ...DRAFT, type: "webdav" })).not.toBe(key);
+    expect(connectionTestKey({ ...DRAFT, baseUrl: "https://other.example.com/" })).not.toBe(key);
+    expect(connectionTestKey({ ...DRAFT, config: { region: "us-east-1" } })).not.toBe(key);
   });
 });
 
-describe("canCompleteAccountStep", () => {
-  it("is false with a missing username or password", () => {
-    expect(canCompleteAccountStep("", "hunter2")).toBe(false);
-    expect(canCompleteAccountStep("alice", "")).toBe(false);
+describe("connectionStepError", () => {
+  it("asks for a type first", () => {
+    expect(connectionStepError([], { ...DRAFT, type: "" })).toBe("Choose a storage type.");
   });
 
-  it("is true with both present", () => {
-    expect(canCompleteAccountStep("alice", "hunter2")).toBe(true);
+  it("names the first missing piece of the form", () => {
+    expect(connectionStepError([], { ...DRAFT, label: " " })).toBe(
+      "Enter a name for this storage.",
+    );
+    expect(connectionStepError([], { ...DRAFT, baseUrl: "s3.example.com" })).toBe(
+      "Enter the address as an http(s) URL.",
+    );
+    expect(connectionStepError([REGION], { ...DRAFT, config: {} })).toBe("Enter region.");
+  });
+
+  it("is null for a complete form", () => {
+    expect(connectionStepError([REGION], DRAFT)).toBeNull();
+  });
+});
+
+describe("canLeaveConnectionStep", () => {
+  const passed = { ok: true, detail: "ok" };
+
+  it("is false without a test result", () => {
+    expect(canLeaveConnectionStep([REGION], DRAFT, null, null)).toBe(false);
+  });
+
+  it("is false when the test failed", () => {
+    expect(
+      canLeaveConnectionStep(
+        [REGION],
+        DRAFT,
+        { ok: false, detail: "unreachable" },
+        connectionTestKey(DRAFT),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when the form is incomplete, even after a pass", () => {
+    const draft = { ...DRAFT, label: "" };
+    expect(canLeaveConnectionStep([REGION], draft, passed, connectionTestKey(draft))).toBe(false);
+  });
+
+  it("is false when the pass belongs to an address edited since (stale pass)", () => {
+    const tested = connectionTestKey({ ...DRAFT, baseUrl: "https://old.example.com/media" });
+    expect(canLeaveConnectionStep([REGION], DRAFT, passed, tested)).toBe(false);
+  });
+
+  it("is true with a passing test of exactly what is typed", () => {
+    expect(canLeaveConnectionStep([REGION], DRAFT, passed, connectionTestKey(DRAFT))).toBe(true);
   });
 });

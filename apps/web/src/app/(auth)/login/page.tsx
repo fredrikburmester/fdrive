@@ -8,8 +8,8 @@ import { LoginForm } from "./login-form";
 /**
  * Loads the enabled providers and their credential forms from the public
  * `/providers` endpoint. Never throws: an unreachable API returns no
- * providers, and the form then falls back to the SFTPGo-shaped default
- * fields and lets the server pick its only enabled provider, rather than
+ * providers, and the form then falls back to the default username and
+ * password fields and lets the server pick its only enabled provider, rather than
  * breaking the login page.
  */
 export async function resolveLoginProviders(

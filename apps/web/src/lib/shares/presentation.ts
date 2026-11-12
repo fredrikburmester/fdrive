@@ -31,7 +31,7 @@ export function galleryEntries<T extends PresentationEntry>(entries: readonly T[
 export interface PresentationOptions {
   /**
    * True when the share carries a download limit. Every gallery tile is a real download
-   * through the public route and SFTPGo counts each one against that limit, so a limited
+   * through the public route and fdrive counts each one against that limit, so a limited
    * link is never shown as a gallery: previews would silently exhaust it.
    */
   readonly downloadLimited?: boolean;

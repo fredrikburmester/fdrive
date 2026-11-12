@@ -32,8 +32,8 @@ const NONE_REVEALED: ReadonlySet<string> = new Set();
  * The login form: the chosen provider's credential fields, rendered from
  * the API's own field list. With several enabled providers a picker sits
  * above the fields; with one, the subtitle names it. Without any (the API
- * could not be reached while rendering the page) the SFTPGo-shaped
- * defaults render and the server picks its only enabled provider.
+ * could not be reached while rendering the page) the default username and
+ * password fields render and the server picks its only enabled provider.
  */
 export function LoginForm({ providers, destination }: LoginFormProps) {
   const [providerId, setProviderId] = useState<string | null>(null);

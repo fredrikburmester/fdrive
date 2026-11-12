@@ -84,9 +84,8 @@ describe("share forms", () => {
       expect(() => shareRequest({ ...fields, maxDownloads }, [file], false)).toThrow(
         "whole number",
       );
-    // SFTPGo keeps the limit in a 32-bit `max_tokens` column on its PostgreSQL and
-    // MySQL providers, so the form stops just past signed 32-bit rather than at
-    // the far larger safe-integer ceiling.
+    // The contract caps the limit at signed 32-bit (`MAX_SHARE_DOWNLOADS`), so the
+    // form stops just past it rather than at the far larger safe-integer ceiling.
     for (const maxDownloads of ["2147483648", "999999999999999999"])
       expect(() => shareRequest({ ...fields, maxDownloads }, [file], false)).toThrow("too large");
     expect(shareRequest({ ...fields, maxDownloads: "2147483647" }, [file], false)).toMatchObject({

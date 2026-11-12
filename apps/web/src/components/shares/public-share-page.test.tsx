@@ -62,9 +62,10 @@ afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
-it("stores supplied password without claiming verification or probing file downloads; Office stays download-only", async () => {
+it("says an accepted password was accepted without probing file downloads; Office stays download-only", async () => {
   const { queryClient } = setup();
   await screen.findByText("Shared document");
+  expect(screen.getByText("Enter the password supplied with this link.")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
   calls.metadata.mockResolvedValue({ ...metadata, credentialPresent: true });
   fireEvent.change(screen.getByLabelText("Share password"), { target: { value: "wrong-input" } });
@@ -73,7 +74,7 @@ it("stores supplied password without claiming verification or probing file downl
   expect(calls.password).toHaveBeenCalledWith(id, "wrong-input");
   expect(calls.entries).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
-  expect(screen.queryByText(/verified|unlocked|accepted/i)).toBeNull();
+  expect(screen.getByText("Password accepted. Enter another to replace it.")).toBeTruthy();
   expect((screen.getByLabelText("Share password") as HTMLInputElement).value).toBe("");
   expect(
     JSON.stringify(
@@ -263,6 +264,17 @@ it("a single-file archive share shows Peek beside its download button", async ()
   fireEvent.click(screen.getByRole("button", { name: "Peek" }));
   await screen.findByRole("region", { name: "Archive entries for bundle.tar.gz" });
   expect(calls.archiveEntries).toHaveBeenCalledWith(id, "/");
+});
+
+it("shows the server's refusal of a wrong password and keeps the files hidden", async () => {
+  calls.password.mockRejectedValue(new Error("Share password required or incorrect"));
+  setup();
+  await screen.findByText("Shared document");
+  fireEvent.change(screen.getByLabelText("Share password"), { target: { value: "nope" } });
+  fireEvent.click(screen.getByRole("button", { name: "Use password" }));
+  await screen.findByText("Share password required or incorrect");
+  expect(screen.getByText("Enter the password supplied with this link.")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Download" })).toBeNull();
 });
 
 it("names a withheld share generically and reports a password the server did not verify", async () => {

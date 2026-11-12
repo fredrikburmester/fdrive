@@ -133,6 +133,25 @@ describe("FileGrid", () => {
     expect(container.querySelector('[data-slot="listing-skeleton-grid"]')).not.toBeNull();
   });
 
+  it("says who shares a folder in Shared with me under its name", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const entries = [makeEntry("Trip", { path: "/Shared with me/Trip", kind: "dir" })];
+    const received = [
+      {
+        id: "00000000-0000-4000-8000-0000000000b1",
+        owner: "bob",
+        name: "Trip",
+        path: "/Shared with me/Trip",
+        access: "write" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+
+    const { getByText } = renderGrid({ entries, received });
+
+    expect(getByText("bob · Can edit")).toBeTruthy();
+  });
+
   it("selects nothing when a pointer drags across several tiles", () => {
     window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
     const onEntryClick = vi.fn();

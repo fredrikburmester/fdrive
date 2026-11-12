@@ -4,6 +4,7 @@ import type { FsEntry, ManagedShare } from "@fdrive/contracts";
 import { Copy, Link2Off, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { EmptyState } from "@/components/files/empty-state";
+import { SharedWithPeopleSection } from "@/components/grants/shared-with-people-section";
 import { PageHeader } from "@/components/shell/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -44,14 +45,15 @@ import { ShareDialog } from "./share-dialog";
  * opens the page by address with a files-only login.
  */
 export function unavailableNote(login: string): string {
-  return `${login} is on storage that can't create share links. Switch to a login on SFTPGo storage to see its links.`;
+  return `${login} is on storage that can't create share links. Switch to a login on local storage to see its links.`;
 }
 
 export function SharesPage() {
   const me = useMe();
   const activeLogin = me.data?.identities.find((login) => login.id === me.data?.activeIdentityId);
-  // Before `me` answers, the default (an SFTPGo login) applies, as in Files.
+  // Before `me` answers, the default (a local-folder login) applies, as in Files.
   const canShare = capabilitiesFor(me.data).shares;
+  const canShareWithPeople = capabilitiesFor(me.data).shareWithPeople;
   const management = useShareManagement({ list: canShare });
   const [editing, setEditing] = useState<{ share: ManagedShare; entries: FsEntry[] } | null>(null);
   const [revoking, setRevoking] = useState<ManagedShare | null>(null);
@@ -205,6 +207,7 @@ export function SharesPage() {
             </TableBody>
           </Table>
         )}
+        {canShareWithPeople && <SharedWithPeopleSection />}
       </main>
       {editing && (
         <ShareDialog

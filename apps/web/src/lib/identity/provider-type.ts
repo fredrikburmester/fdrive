@@ -2,11 +2,12 @@ import type { ProviderType } from "@fdrive/contracts";
 
 /**
  * The product name of each provider type, for copy that names the kind of
- * server a login belongs to ("Connected to SFTPGo at ..."). The row's own
- * `label` names the specific server; this names the software.
+ * server a login belongs to ("Connected to WebDAV at ..."). The row's own
+ * `label` names the specific server; this names the software. The local
+ * folder is fdrive's own storage, so its accounts are fdrive accounts.
  */
 export const PROVIDER_TYPE_LABELS: Readonly<Record<ProviderType, string>> = {
-  sftpgo: "SFTPGo",
+  local: "fdrive",
   webdav: "WebDAV",
   s3: "S3",
 };

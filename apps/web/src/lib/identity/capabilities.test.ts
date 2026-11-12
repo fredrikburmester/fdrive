@@ -22,7 +22,7 @@ const me: MeResponse = {
       id: "one",
       username: "ada",
       providerId: "00000000-0000-4000-8000-000000000001",
-      providerType: "sftpgo",
+      providerType: "local",
       providerLabel: "Main",
       capabilities: { ...allCapabilities(true), trash: false },
     },
@@ -30,7 +30,7 @@ const me: MeResponse = {
       id: "two",
       username: "bob",
       providerId: "00000000-0000-4000-8000-000000000002",
-      providerType: "sftpgo",
+      providerType: "local",
       providerLabel: "Other",
       capabilities: { ...allCapabilities(false), trash: true },
     },
@@ -50,8 +50,12 @@ describe("capabilitiesFor", () => {
     expect(capabilitiesFor(me, "missing")).toBe(DEFAULT_CAPABILITIES);
   });
 
-  it("defaults to everything an SFTPGo login can do except Trash", () => {
-    expect(DEFAULT_CAPABILITIES).toEqual({ ...allCapabilities(true), trash: false });
+  it("defaults to everything a local-folder login can do except Trash and sharing with people", () => {
+    expect(DEFAULT_CAPABILITIES).toEqual({
+      ...allCapabilities(true),
+      trash: false,
+      shareWithPeople: false,
+    });
   });
 });
 
@@ -104,34 +108,41 @@ describe("isFilesOnly", () => {
   it("is true only when search, shares and Office are all missing", () => {
     expect(isFilesOnly({ ...allCapabilities(false), trash: true, atomicMove: true })).toBe(true);
     expect(isFilesOnly(allCapabilities(true))).toBe(false);
-    // SFTPGo without an index root still shares and opens Office files.
-    expect(isFilesOnly({ ...allCapabilities(true), index: false, scopeMapping: false })).toBe(
-      false,
-    );
+    // Storage without an index root can still share and open Office files.
+    expect(isFilesOnly({ ...allCapabilities(true), index: false })).toBe(false);
   });
 });
 
 describe("storageNote", () => {
-  it("leads with files only and names every SFTPGo-built feature when the storage has none", () => {
+  it("leads with files only and names search, shares and Office when the storage has none", () => {
     expect(storageNote({ ...allCapabilities(false), trash: true })).toBe(
-      "Files only. Search and thumbnails, shares and Office work with SFTPGo storage, not here.",
+      "Files only. Search and thumbnails, share links, sharing with people and Office aren't available on this storage.",
     );
   });
 
   it("names only what the storage lacks once a feature is added to it", () => {
     // A backend that gained shares: the note shrinks by itself, and no longer says files only.
     expect(storageNote({ ...allCapabilities(false), trash: true, shares: true })).toBe(
-      "Search and thumbnails and Office work with SFTPGo storage, not here.",
+      "Search and thumbnails, sharing with people and Office aren't available on this storage.",
+    );
+    expect(storageNote({ ...allCapabilities(true), shareWithPeople: false })).toBe(
+      "Sharing with people isn't available on this storage.",
     );
     expect(storageNote({ ...allCapabilities(true), office: false })).toBe(
-      "Office works with SFTPGo storage, not here.",
+      "Office isn't available on this storage.",
     );
     expect(storageNote({ ...allCapabilities(true), shares: false })).toBe(
-      "Shares work with SFTPGo storage, not here.",
+      "Share links aren't available on this storage.",
+    );
+    expect(storageNote({ ...allCapabilities(true), index: false })).toBe(
+      "Search and thumbnails aren't available on this storage.",
+    );
+    expect(storageNote({ ...allCapabilities(true), index: false, shares: false })).toBe(
+      "Search and thumbnails and share links aren't available on this storage.",
     );
   });
 
-  it("says nothing for storage with every SFTPGo-built feature, whatever else it lacks", () => {
+  it("says nothing for storage with search, shares and Office, whatever else it lacks", () => {
     expect(storageNote(allCapabilities(true))).toBeNull();
     expect(storageNote({ ...allCapabilities(true), zip: false, trash: false })).toBeNull();
   });

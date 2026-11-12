@@ -10,35 +10,18 @@ import { CAPABILITY_KEYS, type CapabilityKey } from "@/lib/identity/capabilities
 
 /** Human-readable label for where a provider's address comes from. */
 export function connectionSourceLabel(managedByEnv: boolean): string {
-  return managedByEnv ? "Environment (locked)" : "Settings";
+  return managedByEnv ? "Deployment (locked)" : "Settings";
 }
 
-/**
- * True when `value` looks like a usable home template: `<root>:<path>`
- * with a lowercase root name and a path starting with `/`. This is a
- * cheap client-side sanity check only; the API is the source of truth and
- * validates with `parseHomeTemplate` from `@fdrive/core`.
- */
-export function isPlausibleHomeTemplate(value: string): boolean {
-  const separatorIndex = value.indexOf(":");
-  if (separatorIndex <= 0) {
-    return false;
-  }
-  const root = value.slice(0, separatorIndex);
-  const path = value.slice(separatorIndex + 1);
-  return /^[a-z0-9][a-z0-9_-]*$/.test(root) && path.startsWith("/");
-}
+/** What System > Storage says in place of an address for the deployment's own folder. */
+export const LOCAL_FOLDER_NOTE = "Folder on this server, set by FDRIVE_STORAGE_ROOT.";
 
 /**
- * Builds the one-line preview of what a home template resolves to for a
- * given username, e.g. "alice -> sftpgo:/alice". Falls back to the
- * placeholder username "alice" when `username` is blank, so the preview is
- * never empty while the setup form's account fields are still unfilled.
+ * True for a provider reached at an address. The local folder has none
+ * (`baseUrl` is empty), so its forms leave the address out entirely.
  */
-export function homeTemplatePreview(template: string, username: string): string {
-  const resolvedUsername = username.trim().length > 0 ? username.trim() : "alice";
-  const resolvedPath = template.replaceAll("{username}", resolvedUsername);
-  return `${resolvedUsername} → ${resolvedPath}`;
+export function hasAddress(provider: Pick<AdminProvider, "baseUrl">): boolean {
+  return provider.baseUrl.length > 0;
 }
 
 /** The provider form's fields as edited, before they become a create or update request. */
@@ -87,24 +70,23 @@ export function normalizeProviderConfig(
 /**
  * The first reason this draft cannot be saved, as a sentence to show under
  * the form, or `null` when it is ready. The API validates the same things;
- * this only keeps the button honest before a round trip.
+ * this only keeps the button honest before a round trip. `addressRequired`
+ * is false for the local folder, whose form has no address.
  */
 export function providerFormError(
   fields: readonly ProviderField[],
   draft: ProviderDraft,
+  addressRequired = true,
 ): string | null {
   const nameError = providerNameError(draft.label);
   if (nameError !== null) return nameError;
-  if (!isHttpUrl(draft.baseUrl.trim())) {
-    return "Enter the address as an http(s) URL, such as http://sftpgo:8080.";
+  if (addressRequired && !isHttpUrl(draft.baseUrl.trim())) {
+    return "Enter the address as an http(s) URL.";
   }
   for (const field of fields) {
     const value = (draft.config[field.name] ?? "").trim();
     if (field.required && value.length === 0) {
       return `Enter ${field.label.toLowerCase()}.`;
-    }
-    if (field.name === "homeTemplate" && value.length > 0 && !isPlausibleHomeTemplate(value)) {
-      return 'The home template is written as "<root>:<path>".';
     }
   }
   return null;
@@ -151,7 +133,7 @@ export function providerUpdatePatch(
  */
 export function providerAddressLock(provider: AdminProvider): string | null {
   if (provider.managedByEnv) {
-    return "Set by the deployment. Remove SFTPGO_URL to manage the address here.";
+    return "Set by the deployment, so it cannot change here.";
   }
   if (provider.identityCount > 0) {
     return "Logins already use this server. Add a new provider for another address.";
@@ -180,8 +162,8 @@ export function providerAddressHint(type: string): { example: string; descriptio
       };
     default:
       return {
-        example: "http://sftpgo:8080",
-        description: "Where fdrive reaches this server, such as http://sftpgo:8080.",
+        example: "https://storage.example.com/",
+        description: "Where fdrive reaches this storage, such as https://storage.example.com/.",
       };
   }
 }
@@ -189,7 +171,7 @@ export function providerAddressHint(type: string): { example: string; descriptio
 /** Why this provider cannot be removed, or `null` when it can. */
 export function providerRemoveBlock(provider: AdminProvider): string | null {
   if (provider.managedByEnv) {
-    return "Set by the deployment. Remove SFTPGO_URL to manage this server here.";
+    return "Set by the deployment with FDRIVE_STORAGE_ROOT, so it cannot be removed here.";
   }
   if (provider.identityCount > 0) {
     return "Logins still use this server. Remove them first, or leave it disabled.";

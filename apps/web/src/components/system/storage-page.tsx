@@ -1,6 +1,6 @@
 "use client";
 
-import { type AdminProvider, type AdminProviderType, ApiClientError } from "@fdrive/contracts";
+import { type AdminProvider, ApiClientError } from "@fdrive/contracts";
 import { Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { ProviderIcon } from "@/components/identity/provider-icon";
@@ -30,6 +30,8 @@ import { providerTypeLabel } from "@/lib/identity/provider-type";
 import {
   connectionSourceLabel,
   enabledCapabilities,
+  hasAddress,
+  LOCAL_FOLDER_NOTE,
   missingCapabilities,
   providerRemoveBlock,
 } from "@/lib/system/connection";
@@ -45,8 +47,6 @@ type Confirmation =
 
 interface ProviderRowProps {
   readonly provider: AdminProvider;
-  /** The matching entry of `types`, `undefined` for a type this build does not know. */
-  readonly type: AdminProviderType | undefined;
   /** True when turning this row off would leave no enabled provider at all. */
   readonly lastEnabled: boolean;
   readonly onEdit: (provider: AdminProvider) => void;
@@ -54,14 +54,15 @@ interface ProviderRowProps {
 }
 
 /** One configured provider: what it is, whether fdrive can reach it, and what it can do. */
-function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: ProviderRowProps) {
+function ProviderRow({ provider, lastEnabled, onEdit, onConfirm }: ProviderRowProps) {
   const test = useAdminTestProvider();
   const update = useAdminUpdateProvider();
   const reachable = test.data?.ok ?? provider.reachable;
   const removeBlock = providerRemoveBlock(provider);
-  const capabilities = type === undefined ? [] : enabledCapabilities(type.capabilities);
-  const missing = type === undefined ? [] : missingCapabilities(type.capabilities);
-  const note = type === undefined ? null : storageNote(type.capabilities);
+  const { capabilities } = provider;
+  const supported = enabledCapabilities(capabilities);
+  const missing = missingCapabilities(capabilities);
+  const note = storageNote(capabilities);
 
   return (
     <SystemSection
@@ -71,7 +72,11 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
           <ProviderIcon type={provider.type} />
           {providerTypeLabel(provider.type)}
           <span aria-hidden="true">·</span>
-          <span className="font-mono text-xs">{provider.baseUrl}</span>
+          {hasAddress(provider) ? (
+            <span className="font-mono text-xs">{provider.baseUrl}</span>
+          ) : (
+            <span>{LOCAL_FOLDER_NOTE}</span>
+          )}
         </span>
       }
       actions={
@@ -144,10 +149,10 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
         <span className="text-muted-foreground">Logins</span>
         <span className="font-medium">{provider.identityCount}</span>
       </div>
-      {capabilities.length > 0 ? (
+      {supported.length > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5 text-sm">
           <span className="text-muted-foreground">Supports</span>
-          {capabilities.map((key) => (
+          {supported.map((key) => (
             <Badge key={key} variant="secondary">
               {CAPABILITY_LABELS[key]}
             </Badge>
@@ -169,7 +174,7 @@ function ProviderRow({ provider, type, lastEnabled, onEdit, onConfirm }: Provide
       {update.isError ? (
         <p className="text-sm text-destructive">{describeApiError(update.error)}</p>
       ) : null}
-      {type?.capabilities.trash ? (
+      {capabilities.trash ? (
         <div
           className="flex flex-col gap-3 border-t pt-4"
           data-testid="provider-trash"
@@ -262,7 +267,6 @@ export function StoragePage() {
         <ProviderRow
           key={provider.id}
           provider={provider}
-          type={types.find((entry) => entry.type === provider.type)}
           lastEnabled={provider.enabled && enabledCount === 1}
           onEdit={(target) => setDialog({ provider: target })}
           onConfirm={setConfirmation}

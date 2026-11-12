@@ -32,6 +32,9 @@ export const OFFICE_PAGE: SystemPageLink = { href: "/system/office" as Route, la
 /** AI keeps its own settings record too, and lives in the same group. */
 export const AI_PAGE: SystemPageLink = { href: "/system/ai" as Route, label: "AI" };
 
+/** The local folder's users; an installation-wide page beside Storage. */
+export const USERS_PAGE: SystemPageLink = { href: "/system/users" as Route, label: "Users" };
+
 /**
  * What a System page's settings apply to. Everything under System is
  * installation-wide except the per-server settings on Storage (the servers

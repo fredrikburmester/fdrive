@@ -34,7 +34,7 @@ export function isSearchStarting(status: SearchStatusResponse | undefined): bool
 
 /**
  * True when the active login's storage is not indexed at all: files-only
- * storage (S3, WebDAV), or SFTPGo without an index root. No waiting or
+ * storage (S3, WebDAV), or a local folder without an index root. No waiting or
  * remapping changes that, so the copy says what search needs instead.
  */
 export function isSearchUnsupported(status: SearchStatusResponse | undefined): boolean {
@@ -60,7 +60,7 @@ export function searchUnavailableMessage(
 ): string {
   if (isSearchStarting(status)) return "Search is starting… Retrying automatically.";
   if (isSearchUnsupported(status) && !allLogins) {
-    return "Search is not available for this login. It needs indexed SFTPGo storage.";
+    return "Search is not available for this login. It needs indexed local storage.";
   }
   return "Search is not available.";
 }

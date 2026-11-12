@@ -4,6 +4,8 @@ import type {
   AdminProviderCreateRequest,
   AdminProviderTestRequest,
   AdminProviderUpdateRequest,
+  AdminUserCreateRequest,
+  AdminUserUpdateRequest,
   FeaturesUpdateRequest,
   IndexerClearRequest,
   IndexerReindexRequest,
@@ -13,6 +15,7 @@ import type {
   OcrOriginalRestoreRequest,
   OcrSettingsUpdateRequest,
   SetupCompleteRequest,
+  SetupTestRequest,
   SystemActivityId,
 } from "@fdrive/contracts";
 import {
@@ -50,7 +53,11 @@ export function useUpdateFeatures() {
   });
 }
 
-/** Whether setup is required and whether `SFTPGO_URL` is set by environment. Powers `/setup`. */
+/**
+ * Whether setup is required, whether it creates an account on the local
+ * folder or connects storage, and the storage types it can connect.
+ * Powers `/setup` and the walkthrough's step count.
+ */
 export function useSetupStatus() {
   return useQuery({
     queryKey: queryKeys.setup.status(),
@@ -58,11 +65,11 @@ export function useSetupStatus() {
   });
 }
 
-/** Probes a candidate SFTPGo base URL during setup, using the one-time setup token. */
+/** Probes a candidate storage during setup, using the one-time setup token. */
 export function useSetupTest() {
   return useMutation({
-    mutationFn: ({ token, baseUrl }: { token: string; baseUrl: string }) =>
-      apiClient.setupTest(token, baseUrl),
+    mutationFn: ({ token, request }: { token: string; request: SetupTestRequest }) =>
+      apiClient.setupTest(token, request),
   });
 }
 
@@ -143,6 +150,46 @@ export const useAdminDeleteProvider = () =>
     (id: string) => apiClient.adminDeleteProvider(id),
     queryKeys.admin.providers(),
     queryKeys.providers.list(),
+  );
+
+/** The local folder's users for System > Users; `available` is false without a local folder. */
+export function useAdminUsers() {
+  return useQuery({
+    queryKey: queryKeys.admin.users(),
+    queryFn: () => apiClient.adminUsers(),
+  });
+}
+
+/** Adds a local user and refreshes the list. */
+export const useAdminCreateUser = () =>
+  useInvalidatingMutation(
+    "users",
+    false,
+    (input: AdminUserCreateRequest) => apiClient.adminCreateUser(input),
+    queryKeys.admin.users(),
+  );
+
+/** Resets a local user's password, disables or enables them, or changes the administrator flag. */
+export const useAdminUpdateUser = () =>
+  useInvalidatingMutation(
+    "users",
+    false,
+    ({ username, patch }: { username: string; patch: AdminUserUpdateRequest }) =>
+      apiClient.adminUpdateUser(username, patch),
+    queryKeys.admin.users(),
+  );
+
+/**
+ * Removes a local user and their login; their files stay in the folder. The
+ * provider list is refreshed too, since its login counts include theirs.
+ */
+export const useAdminDeleteUser = () =>
+  useInvalidatingMutation(
+    "users",
+    false,
+    (username: string) => apiClient.adminDeleteUser(username),
+    queryKeys.admin.users(),
+    queryKeys.admin.providers(),
   );
 
 /** Probes a saved provider (by id) or an unsaved candidate, without saving anything. */

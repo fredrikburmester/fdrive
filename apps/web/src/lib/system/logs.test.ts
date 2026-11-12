@@ -8,14 +8,14 @@ const ENTRIES: SystemLogEntry[] = [
     at: "2026-09-09T10:20:30.000Z",
     level: "warn",
     message: "Index clear requested",
-    data: { root: "sftpgo" },
+    data: { root: "files" },
     source: "api",
   },
   {
     id: "scan:1",
     at: "2026-09-09T10:00:00.000Z",
     level: "info",
-    message: "Scan of sftpgo finished: 16 seen, 0 changed, 0 deleted",
+    message: "Scan of files finished: 16 seen, 0 changed, 0 deleted",
     source: "indexer",
   },
 ];
@@ -23,8 +23,8 @@ const ENTRIES: SystemLogEntry[] = [
 describe("formatLogLines", () => {
   it("emits the ISO time, a padded level, the message and one-line data", () => {
     expect(formatLogLines(ENTRIES)).toEqual([
-      '2026-09-09T10:20:30.000Z  WARN   Index clear requested  {"root":"sftpgo"}',
-      "2026-09-09T10:00:00.000Z  INFO   Scan of sftpgo finished: 16 seen, 0 changed, 0 deleted",
+      '2026-09-09T10:20:30.000Z  WARN   Index clear requested  {"root":"files"}',
+      "2026-09-09T10:00:00.000Z  INFO   Scan of files finished: 16 seen, 0 changed, 0 deleted",
     ]);
   });
 

@@ -5,47 +5,66 @@ import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 
-/** The note for storage with none of the features fdrive builds on SFTPGo. */
+/** The note for storage with none of the features only full storage has. */
 const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
-const PRIMARY: AdminProvider = {
+/** The deployment's own folder: no address, pinned, and never an addable type. */
+const FOLDER: AdminProvider = {
   id: "00000000-0000-4000-8000-000000000009",
-  type: "sftpgo",
-  label: "Primary",
-  baseUrl: "http://sftpgo:8080",
-  config: { homeTemplate: "sftpgo:/{username}" },
+  type: "local",
+  label: "Local folder",
+  baseUrl: "",
+  config: {},
   enabled: true,
   managedByEnv: true,
   identityCount: 2,
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
   createdAt: "2026-01-01T00:00:00.000Z",
+  capabilities: allCapabilities(true),
+};
+/** What WebDAV can do: files, Trash, zip and atomic moves. */
+const WEBDAV_CAPABILITIES = {
+  ...allCapabilities(false),
+  trash: true,
+  zip: true,
+  atomicMove: true,
+};
+const S3_CAPABILITIES = { ...allCapabilities(false), trash: true };
+const PRIMARY: AdminProvider = {
+  ...FOLDER,
+  id: "00000000-0000-4000-8000-00000000000b",
+  type: "webdav",
+  label: "Primary",
+  baseUrl: "https://dav.example.com/",
+  config: { prefix: "/files" },
+  managedByEnv: false,
+  capabilities: WEBDAV_CAPABILITIES,
 };
 const SPARE: AdminProvider = {
   ...PRIMARY,
   id: "00000000-0000-4000-8000-00000000000a",
   label: "Spare",
-  baseUrl: "http://spare:8080",
+  baseUrl: "https://spare.example.com/",
   config: {},
   enabled: false,
-  managedByEnv: false,
   identityCount: 0,
   reachable: false,
 };
-const SFTPGO_TYPE: AdminProviderType = {
-  type: "sftpgo",
-  label: "SFTPGo",
+const WEBDAV_TYPE: AdminProviderType = {
+  type: "webdav",
+  label: "WebDAV",
   configFields: [
     {
-      name: "homeTemplate",
-      label: "Home template",
+      name: "prefix",
+      label: "Folder prefix",
       kind: "text",
       required: false,
-      help: 'Written as "<root>:<path>".',
+      help: "The folder under the address that holds people's files.",
     },
   ],
   credentialFields: [],
-  capabilities: { ...allCapabilities(true), setModifiedAt: false },
+  capabilities: WEBDAV_CAPABILITIES,
 };
 
 const S3_TYPE: AdminProviderType = {
@@ -53,7 +72,7 @@ const S3_TYPE: AdminProviderType = {
   label: "S3",
   configFields: [],
   credentialFields: [],
-  capabilities: { ...allCapabilities(false), trash: true },
+  capabilities: S3_CAPABILITIES,
 };
 
 const mocks = vi.hoisted(() => ({
@@ -118,10 +137,9 @@ vi.mock("@/lib/api/system-queries", () => ({
   useAdminDeleteProvider: () => mocks.remove,
   useAdminTestProvider: () => mocks.test,
 }));
-
 const { StoragePage } = await import("./storage-page");
 
-function renderPage(providers: AdminProvider[], types: AdminProviderType[] = [SFTPGO_TYPE]) {
+function renderPage(providers: AdminProvider[], types: AdminProviderType[] = [WEBDAV_TYPE]) {
   mocks.providers = providers;
   mocks.types = types;
   return render(<StoragePage />);
@@ -167,10 +185,10 @@ it("lists each provider with its type, address, source, logins, and capabilities
 
   expect(screen.getByRole("heading", { name: "Storage" })).toBeTruthy();
   expect(screen.getByText("Primary")).toBeTruthy();
-  expect(screen.getByText("SFTPGo")).toBeTruthy();
-  expect(screen.getByText("http://sftpgo:8080")).toBeTruthy();
+  expect(screen.getByText("WebDAV")).toBeTruthy();
+  expect(screen.getByText("https://dav.example.com/")).toBeTruthy();
   expect(screen.getByText("Reachable")).toBeTruthy();
-  expect(screen.getByText("Environment (locked)")).toBeTruthy();
+  expect(screen.getByText("Settings")).toBeTruthy();
   expect(screen.getByText("2")).toBeTruthy();
   const supports = screen.getByText("Supports").parentElement as HTMLElement;
   expect(within(supports).getByText("Trash")).toBeTruthy();
@@ -178,35 +196,53 @@ it("lists each provider with its type, address, source, logins, and capabilities
   expect(within(supports).queryByText("Keeps modification times")).toBeNull();
   const missing = screen.getByText("Not available").parentElement as HTMLElement;
   expect(within(missing).getByText("Keeps modification times")).toBeTruthy();
-  // SFTPGo is the main storage: no files-only note.
-  expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
+  expect(screen.getByText(FILES_ONLY_NOTE)).toBeTruthy();
+});
+
+it("shows the local folder without an address, with what it can do and its own Trash", () => {
+  // The local folder is never an addable type: the row carries its own flags.
+  renderPage([FOLDER]);
+
+  expect(screen.getByText("Local folder")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "fdrive" })).toBeTruthy();
+  expect(screen.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeTruthy();
+  expect(screen.getByText("Deployment (locked)")).toBeTruthy();
+  const supports = screen.getByText("Supports").parentElement as HTMLElement;
+  for (const label of ["Search and thumbnails", "Shares", "Share with people", "Office", "Trash"]) {
+    expect(within(supports).getByText(label)).toBeTruthy();
+  }
+  expect(screen.queryByText("Not available")).toBeNull();
+  expect(screen.getByText("Trash form for Local folder")).toBeTruthy();
 });
 
 it("says plainly what files-only storage cannot do", () => {
   renderPage(
-    [{ ...SPARE, type: "s3", baseUrl: "http://minio:9000/media" }],
-    [SFTPGO_TYPE, S3_TYPE],
+    [
+      {
+        ...SPARE,
+        type: "s3",
+        baseUrl: "https://s3.example.com/media",
+        capabilities: S3_CAPABILITIES,
+      },
+    ],
+    [WEBDAV_TYPE, S3_TYPE],
   );
 
   const missing = screen.getByText("Not available").parentElement as HTMLElement;
-  for (const label of ["Search and thumbnails", "Shares", "Office", "Virtual folders"]) {
+  for (const label of ["Search and thumbnails", "Shares", "Share with people", "Office"]) {
     expect(within(missing).getByText(label)).toBeTruthy();
   }
   expect(screen.getByText(FILES_ONLY_NOTE)).toBeTruthy();
 });
 
 it("names only the missing features for storage that has some of them", () => {
-  const sharing: AdminProviderType = {
-    ...S3_TYPE,
-    type: "webdav",
-    label: "WebDAV",
-    capabilities: { ...S3_TYPE.capabilities, shares: true },
-  };
-  renderPage([{ ...SPARE, type: "webdav" }], [SFTPGO_TYPE, sharing]);
+  renderPage([{ ...SPARE, capabilities: { ...WEBDAV_CAPABILITIES, shares: true } }]);
 
   expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
   expect(
-    screen.getByText("Search and thumbnails and Office work with SFTPGo storage, not here."),
+    screen.getByText(
+      "Search and thumbnails, sharing with people and Office aren't available on this storage.",
+    ),
   ).toBeTruthy();
 });
 
@@ -219,13 +255,10 @@ it("warns in the add dialog as soon as a files-only type is chosen", () => {
 });
 
 it("keeps each server's Trash settings on its own row, and none for a type without Trash", () => {
-  const trashless: AdminProviderType = {
-    ...SFTPGO_TYPE,
-    type: "webdav",
-    label: "WebDAV",
-    capabilities: { ...allCapabilities(true), trash: false },
-  };
-  renderPage([PRIMARY, { ...SPARE, type: "webdav" }], [SFTPGO_TYPE, trashless]);
+  renderPage([
+    PRIMARY,
+    { ...SPARE, type: "s3", capabilities: { ...allCapabilities(true), trash: false } },
+  ]);
 
   expect(screen.getByText("Trash form for Primary")).toBeTruthy();
   expect(screen.queryByText("Trash form for Spare")).toBeNull();
@@ -249,7 +282,19 @@ it("refuses to remove a provider that logins still use, and says why", () => {
 
   const remove = screen.getByRole("button", { name: "Remove Primary" }) as HTMLButtonElement;
   expect(remove.disabled).toBe(true);
-  expect(screen.getByText(/Remove SFTPGO_URL to manage this server here/)).toBeTruthy();
+  expect(screen.getByText(/Logins still use this server/)).toBeTruthy();
+});
+
+it("never offers to remove the deployment's own folder", () => {
+  renderPage([{ ...FOLDER, identityCount: 0 }]);
+
+  const remove = screen.getByRole("button", { name: "Remove Local folder" }) as HTMLButtonElement;
+  expect(remove.disabled).toBe(true);
+  expect(
+    screen.getByText(
+      "Set by the deployment with FDRIVE_STORAGE_ROOT, so it cannot be removed here.",
+    ),
+  ).toBeTruthy();
 });
 
 it("removes an unused provider after a confirmation", () => {
@@ -286,22 +331,20 @@ it("adds a provider with its type, name, address, and configuration", () => {
   expect(
     screen.getByRole("combobox", { name: "Type" }).querySelector('[data-slot="select-value"]')
       ?.textContent,
-  ).toBe("SFTPGo");
+  ).toBe("WebDAV");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: " Second " } });
   fireEvent.change(screen.getByLabelText("Address"), {
-    target: { value: " http://second:8080 " },
+    target: { value: " https://second.example.com/ " },
   });
-  fireEvent.change(screen.getByLabelText("Home template"), {
-    target: { value: "sftpgo:/second/{username}" },
-  });
+  fireEvent.change(screen.getByLabelText("Folder prefix"), { target: { value: "/media" } });
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
   expect(mocks.create.mutate).toHaveBeenCalledWith(
     {
-      type: "sftpgo",
+      type: "webdav",
       label: "Second",
-      baseUrl: "http://second:8080",
-      config: { homeTemplate: "sftpgo:/second/{username}" },
+      baseUrl: "https://second.example.com/",
+      config: { prefix: "/media" },
     },
     expect.anything(),
   );
@@ -311,12 +354,14 @@ it("probes an unsaved candidate from the add dialog", () => {
   renderPage([PRIMARY]);
 
   fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
-  fireEvent.change(screen.getByLabelText("Address"), { target: { value: "http://second:8080" } });
+  fireEvent.change(screen.getByLabelText("Address"), {
+    target: { value: "https://second.example.com/" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Test" }));
 
   expect(mocks.test.mutate).toHaveBeenCalledWith({
-    type: "sftpgo",
-    baseUrl: "http://second:8080",
+    type: "webdav",
+    baseUrl: "https://second.example.com/",
     config: {},
   });
 });
@@ -326,39 +371,61 @@ it("keeps Add unavailable until the address is an http(s) URL", () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Add provider" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Second" } });
-  fireEvent.change(screen.getByLabelText("Address"), { target: { value: "second:8080" } });
+  fireEvent.change(screen.getByLabelText("Address"), { target: { value: "second.example.com" } });
 
   expect((screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByText(/Enter the address as an http\(s\) URL/)).toBeTruthy();
+  expect(screen.getByText("Enter the address as an http(s) URL.")).toBeTruthy();
 });
 
-it("locks the address of an env-managed provider and saves only what changed", () => {
+it("locks the address of a provider logins use and saves only what changed", () => {
   renderPage([PRIMARY]);
 
   fireEvent.click(screen.getByRole("button", { name: "Edit Primary" }));
   const address = screen.getByLabelText("Address") as HTMLInputElement;
   expect(address.readOnly).toBe(true);
   expect(
-    screen.getByText("Set by the deployment. Remove SFTPGO_URL to manage the address here."),
+    screen.getByText("Logins already use this server. Add a new provider for another address."),
   ).toBeTruthy();
 
-  fireEvent.change(screen.getByLabelText("Home template"), {
-    target: { value: "sftpgo:/homes/{username}" },
-  });
+  fireEvent.change(screen.getByLabelText("Folder prefix"), { target: { value: "/homes" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   expect(mocks.update.mutate).toHaveBeenCalledWith(
-    { id: PRIMARY.id, patch: { config: { homeTemplate: "sftpgo:/homes/{username}" } } },
+    { id: PRIMARY.id, patch: { config: { prefix: "/homes" } } },
     expect.anything(),
   );
 });
 
-it("explains that logins pin the address of a provider the deployment does not own", () => {
-  renderPage([{ ...SPARE, identityCount: 3 }]);
+it("only renames the local folder, which has no address or type to change", () => {
+  renderPage([FOLDER]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit Local folder" }));
+  const dialog = screen.getByRole("dialog");
+  expect(
+    within(dialog).getByText(
+      "Folder on this server, set by FDRIVE_STORAGE_ROOT. Only its name can change here.",
+    ),
+  ).toBeTruthy();
+  expect(within(dialog).queryByLabelText("Address")).toBeNull();
+  expect(within(dialog).queryByRole("combobox", { name: "Type" })).toBeNull();
+
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Home" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+  expect(mocks.update.mutate).toHaveBeenCalledWith(
+    { id: FOLDER.id, patch: { label: "Home" } },
+    expect.anything(),
+  );
+});
+
+it("leaves an unused provider's address editable", () => {
+  renderPage([SPARE]);
 
   fireEvent.click(screen.getByRole("button", { name: "Edit Spare" }));
+  const address = screen.getByLabelText("Address") as HTMLInputElement;
+  expect(address.readOnly).toBe(false);
   expect(
-    screen.getByText("Logins already use this server. Add a new provider for another address."),
+    screen.getByText("The WebDAV URL people's files live under, such as https://dav.example.com/."),
   ).toBeTruthy();
 });
 

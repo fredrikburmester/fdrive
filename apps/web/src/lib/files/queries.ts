@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { accountTransition } from "@/lib/account/transition";
 import { queryKeys as apiQueryKeys } from "@/lib/api/keys";
+import { sharedFolderRefusal } from "@/lib/grants/format";
 import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
 import { shouldShowSkeleton } from "./tree";
 import { reachableExpandedDirs } from "./tree-rows";
@@ -71,10 +72,16 @@ export function affectedListKeys(input: AffectedListKeysInput): ListQueryKey[] {
   return Array.from(dirs, (dir) => queryKeys.fs.list(dir));
 }
 
-/** The message shown in a toast for a failed fs mutation. */
+/**
+ * The message shown in a toast for a failed fs mutation: the server's own,
+ * except a refusal around a folder shared with this login, which gets a
+ * sentence that says what the person cannot do there.
+ */
 export function describeFsError(error: unknown, fallback: string): string {
   if (error instanceof ApiClientError) {
-    return error.message;
+    return (
+      (error.kind === "forbidden" ? sharedFolderRefusal(error.message) : null) ?? error.message
+    );
   }
   return fallback;
 }

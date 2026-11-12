@@ -1,6 +1,12 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  OfficeStatusResponse,
+  ProviderCapabilities,
+  ReceivedGrant,
+  Tag,
+} from "@fdrive/contracts";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useTreeChildren } from "@/lib/files/queries";
 import { resolveRowClick } from "@/lib/files/row-click";
@@ -29,6 +35,7 @@ import { type ClickModifierKeys, FileList } from "./file-list";
 
 const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
 const EMPTY_TAGS: readonly Tag[] = [];
+const EMPTY_RECEIVED: readonly ReceivedGrant[] = [];
 
 export interface VirtualFileListingProps {
   readonly entries: readonly FsEntry[];
@@ -47,6 +54,8 @@ export interface VirtualFileListingProps {
   readonly showReveal?: boolean | undefined;
   /** What the active login's storage can do, for every row's context menu. */
   readonly capabilities?: ProviderCapabilities | undefined;
+  /** The folders others share with the active login, for every row's context menu. */
+  readonly received?: readonly ReceivedGrant[] | undefined;
 }
 
 /**
@@ -67,6 +76,7 @@ export function VirtualFileListing({
   hideArchive = false,
   showReveal = false,
   capabilities = DEFAULT_CAPABILITIES,
+  received = EMPTY_RECEIVED,
 }: VirtualFileListingProps) {
   const [viewMode] = useDefaultView();
   const [rowClickAction] = useRowClickAction();
@@ -180,6 +190,7 @@ export function VirtualFileListing({
     hideArchive,
     showReveal,
     capabilities,
+    received,
   };
 
   if (viewMode === "grid") {

@@ -1,5 +1,6 @@
-import { FEATURE_IDS, type FeatureId } from "@fdrive/contracts";
+import { FEATURE_IDS, type FeatureId, type SetupMode } from "@fdrive/contracts";
 import { FEATURE_DESCRIPTIONS } from "./features";
+import { SETUP_STEPS } from "./setup-flow";
 
 export type WalkthroughStep =
   | { readonly kind: "feature"; readonly id: FeatureId; readonly label: string }
@@ -26,16 +27,20 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
 ];
 
 /**
- * How many wizard steps come before the walkthrough (claim, SFTPGo,
- * administrator), so walkthrough step 0 is presented as "Step 4".
+ * How many wizard steps come before the walkthrough in `mode`: claim and
+ * account for a local folder, plus connecting storage without one.
  */
-export const WALKTHROUGH_STEP_OFFSET = 3;
+export function walkthroughOffset(mode: SetupMode): number {
+  return SETUP_STEPS[mode].length;
+}
 
-/** Total number of steps a fresh install walks through, wizard included. */
-export const WALKTHROUGH_TOTAL = WALKTHROUGH_STEP_OFFSET + WALKTHROUGH_STEPS.length;
+/** Total number of steps a fresh install in `mode` walks through, wizard included. */
+export function walkthroughTotal(mode: SetupMode): number {
+  return walkthroughOffset(mode) + WALKTHROUGH_STEPS.length;
+}
 
-/** The "Step 6 of 13 · Search OCR" caption for a walkthrough step index. */
-export function walkthroughLabel(step: number): string {
+/** The "Step 5 of 12 · Search OCR" caption for a walkthrough step index. */
+export function walkthroughLabel(step: number, mode: SetupMode): string {
   const label = WALKTHROUGH_STEPS[step]?.label ?? "Features";
-  return `Step ${step + WALKTHROUGH_STEP_OFFSET + 1} of ${WALKTHROUGH_TOTAL} · ${label}`;
+  return `Step ${step + walkthroughOffset(mode) + 1} of ${walkthroughTotal(mode)} · ${label}`;
 }
