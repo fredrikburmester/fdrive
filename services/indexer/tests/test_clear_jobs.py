@@ -26,7 +26,7 @@ def test_index_scope_preserves_other_data(postgres_dsn, monkeypatch, tmp_path):
     with ctx.conn().cursor() as cur:
         cur.execute("INSERT INTO app.accounts DEFAULT VALUES RETURNING id")
         account = cur.fetchone()[0]
-        cur.execute("INSERT INTO app.providers(type, base_url) VALUES ('sftpgo', 'http://clear.test') RETURNING id")
+        cur.execute("INSERT INTO app.providers(type, base_url) VALUES ('files', 'http://clear.test') RETURNING id")
         provider = cur.fetchone()[0]
         cur.execute(
             "INSERT INTO app.identities(account_id, provider_id, external_username) VALUES (%s, %s, 'one') RETURNING id",

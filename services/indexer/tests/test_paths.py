@@ -1,6 +1,7 @@
 from fdrive_indexer.paths import (
     ext_of,
     is_junk_name,
+    is_partial_upload,
     is_skip_dir,
     is_under,
     parent_dir,
@@ -33,6 +34,16 @@ def test_is_junk_name_ordinary() -> None:
     assert is_junk_name("report.pdf", frozenset({".DS_Store"})) is False
 
 
+def test_is_junk_name_unfinished_upload() -> None:
+    assert is_junk_name(".fdrive-partial-00ff00ff00ff00ff", frozenset()) is True
+
+
+def test_is_partial_upload_needs_the_exact_shape() -> None:
+    assert is_partial_upload(".fdrive-partial-00ff00ff00ff00ff") is True
+    assert is_partial_upload(".fdrive-partial-00ff00ff00ff00f") is False
+    assert is_partial_upload(".fdrive-partial-00ff00ff00ff00ffx") is False
+
+
 def test_is_skip_dir_true() -> None:
     assert is_skip_dir("node_modules", frozenset({"node_modules", ".git"})) is True
 
@@ -42,7 +53,7 @@ def test_is_skip_dir_false() -> None:
 
 
 def test_root_relative_key() -> None:
-    assert root_relative_key("sftpgo", "Photos/a.png") == "sftpgo/Photos/a.png"
+    assert root_relative_key("files", "Photos/a.png") == "files/Photos/a.png"
 
 
 def test_parent_dir_nested() -> None:

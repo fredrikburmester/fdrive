@@ -83,14 +83,14 @@ def _make_client(ctx: RootContext, watcher: object | None = None, schema_version
 
 
 def test_health_ok(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx, watcher=object())
     resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["roots"] == ["sftpgo"]
-    assert body["watcher"] == {"sftpgo": True}
+    assert body["roots"] == ["files"]
+    assert body["watcher"] == {"files": True}
     assert body["embed_ok"] is False  # embed.invalid is unreachable
     assert body["schema_version"] == 1
 
@@ -116,7 +116,7 @@ def test_storage_diagnostics_reports_missing_or_readable_roots(tmp_path: Path) -
 
 
 def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.update_file_status(ctx.conn(), file_id, "indexed", 5, None)
     db.insert_chunks(ctx.conn(), file_id, ["hello"], [[0.1] * 384])
@@ -126,7 +126,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
     resp = client.get("/stats")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["roots"][0]["root"] == "sftpgo"
+    assert body["roots"][0]["root"] == "files"
     assert body["roots"][0]["counts_by_status"] == {"indexed": 1}
     assert body["thumbnails"] == 1
     assert body["image_embeddings"] == 1
@@ -166,7 +166,7 @@ def test_stats_reports_counts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch
 def test_stats_reports_running_image_embedding_rebuild(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     client.app.state.server_state.image_embed_rebuild_job.try_start(3)
     resp = client.get("/stats")
@@ -176,7 +176,7 @@ def test_stats_reports_running_image_embedding_rebuild(
 
 
 def test_stats_reports_running_thumbnail_rebuild(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     client.app.state.server_state.thumbnail_job.try_start(3)
     resp = client.get("/stats")
@@ -186,10 +186,10 @@ def test_stats_reports_running_thumbnail_rebuild(postgres_dsn: str, monkeypatch:
 
 
 def test_extract_returns_text_for_known_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     (tmp_path / "readme.md").write_text("hello world this is a long enough markdown body")
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo", "path": "readme.md"})
+    resp = client.post("/extract", json={"root": "files", "path": "readme.md"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "indexed"
@@ -197,33 +197,33 @@ def test_extract_returns_text_for_known_root(postgres_dsn: str, monkeypatch: pyt
 
 
 def test_extract_respects_offset_and_max_chars(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     (tmp_path / "readme.md").write_text("0123456789abcdefghij")
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo", "path": "readme.md", "offset": 2, "max_chars": 5})
+    resp = client.post("/extract", json={"root": "files", "path": "readme.md", "offset": 2, "max_chars": 5})
     body = resp.json()
     assert body["text"] == "23456"
     assert body["total_chars"] == 20
 
 
 def test_extract_missing_root_or_path_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo"})
+    resp = client.post("/extract", json={"root": "files"})
     assert resp.status_code == 400
 
 
 def test_extract_unknown_root_is_404(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/extract", json={"root": "unknown", "path": "a.txt"})
     assert resp.status_code == 404
 
 
 def test_extract_path_escaping_root_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo", "path": "../../etc/passwd"})
+    resp = client.post("/extract", json={"root": "files", "path": "../../etc/passwd"})
     assert resp.status_code == 400
 
 
@@ -235,9 +235,9 @@ def test_extract_rejects_leaf_symlink(
     outside = tmp_path / "outside.txt"
     outside.write_text("outside secret")
     (root / "leak.txt").symlink_to(outside)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(root))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(root))
 
-    resp = _make_client(ctx).post("/extract", json={"root": "sftpgo", "path": "leak.txt"})
+    resp = _make_client(ctx).post("/extract", json={"root": "files", "path": "leak.txt"})
 
     assert resp.status_code == 400
     assert resp.json() == {"error": "path unavailable"}
@@ -252,9 +252,9 @@ def test_extract_rejects_ancestor_symlink(
     outside.mkdir()
     (outside / "secret.txt").write_text("outside secret")
     (root / "linked").symlink_to(outside, target_is_directory=True)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(root))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(root))
 
-    resp = _make_client(ctx).post("/extract", json={"root": "sftpgo", "path": "linked/secret.txt"})
+    resp = _make_client(ctx).post("/extract", json={"root": "files", "path": "linked/secret.txt"})
 
     assert resp.status_code == 400
     assert resp.json() == {"error": "path unavailable"}
@@ -314,35 +314,35 @@ def test_descriptor_path_keeps_office_extraction_working(tmp_path: Path, monkeyp
 
 
 def test_extract_missing_file_is_404(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo", "path": "missing.txt"})
+    resp = client.post("/extract", json={"root": "files", "path": "missing.txt"})
     assert resp.status_code == 404
 
 
 def test_extract_non_textual_extension_returns_none_status(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     (tmp_path / "app.bin").write_bytes(b"x")
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo", "path": "app.bin"})
+    resp = client.post("/extract", json={"root": "files", "path": "app.bin"})
     body = resp.json()
     assert body == {"text": None, "status": "none"}
 
 
 def test_extract_no_text_status_returns_null_text(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     (tmp_path / "empty.txt").write_bytes(b"")
     client = _make_client(ctx)
-    resp = client.post("/extract", json={"root": "sftpgo", "path": "empty.txt"})
+    resp = client.post("/extract", json={"root": "files", "path": "empty.txt"})
     body = resp.json()
     assert body["text"] is None
     assert body["status"] == "empty"
 
 
 def test_reindex_whole_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.update_file_status(ctx.conn(), file_id, "indexed", 5, None)
     event = threading.Event()
@@ -354,42 +354,42 @@ def test_reindex_whole_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, 
         schema_version=lambda: 1,
     )
     client = TestClient(server.create_app(state))
-    resp = client.post("/reindex", json={"root": "sftpgo"})
+    resp = client.post("/reindex", json={"root": "files"})
     assert resp.status_code == 200
     assert resp.json() == {"count": 1}
     assert event.is_set() is True
 
 
 def test_reindex_subtree(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     f1 = db.upsert_file(ctx.conn(), ctx.root_id, "dir/a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     f2 = db.upsert_file(ctx.conn(), ctx.root_id, "other.txt", "other.txt", ".txt", 1, 1, "sha2", None)
     db.update_file_status(ctx.conn(), f1, "indexed", 1, None)
     db.update_file_status(ctx.conn(), f2, "indexed", 1, None)
     client = _make_client(ctx)
-    resp = client.post("/reindex", json={"root": "sftpgo", "path": "dir"})
+    resp = client.post("/reindex", json={"root": "files", "path": "dir"})
     assert resp.json() == {"count": 1}
 
 
 def test_reindex_without_wake_event_registered(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     state = server.ServerState(
         contexts={ctx.name: ctx}, watchers={}, wake_events={}, conn_factory=ctx.conn, schema_version=lambda: 1
     )
     client = TestClient(server.create_app(state))
-    resp = client.post("/reindex", json={"root": "sftpgo"})
+    resp = client.post("/reindex", json={"root": "files"})
     assert resp.status_code == 200
 
 
 def test_reindex_missing_root_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/reindex", json={})
     assert resp.status_code == 400
 
 
 def test_reindex_unknown_root_is_404(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/reindex", json={"root": "unknown"})
     assert resp.status_code == 404
@@ -399,13 +399,13 @@ def test_reindex_with_thumbnails_true_also_queues_rebuild(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     st = png.stat()
     db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
     client = _make_client(ctx)
-    resp = client.post("/reindex", json={"root": "sftpgo", "thumbnails": True})
+    resp = client.post("/reindex", json={"root": "files", "thumbnails": True})
     assert resp.status_code == 200
     assert resp.json() == {"count": 1}
     assert db.thumbnails_count(ctx.conn()) == 2
@@ -414,13 +414,13 @@ def test_reindex_with_thumbnails_true_also_queues_rebuild(
 def test_reindex_without_thumbnails_flag_does_not_touch_thumbnails(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     st = png.stat()
     db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
     client = _make_client(ctx)
-    resp = client.post("/reindex", json={"root": "sftpgo"})
+    resp = client.post("/reindex", json={"root": "files"})
     assert resp.status_code == 200
     assert db.thumbnails_count(ctx.conn()) == 0
 
@@ -428,22 +428,22 @@ def test_reindex_without_thumbnails_flag_does_not_touch_thumbnails(
 def test_reindex_thumbnails_true_ignored_when_rebuild_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     client.app.state.server_state.thumbnail_job.try_start(1)
-    resp = client.post("/reindex", json={"root": "sftpgo", "thumbnails": True})
+    resp = client.post("/reindex", json={"root": "files", "thumbnails": True})
     assert resp.status_code == 200
 
 
 def test_thumbnails_rebuild_specific_root(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     st = png.stat()
     db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
     client = _make_client(ctx)
-    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
+    resp = client.post("/thumbnails/rebuild", json={"root": "files"})
     assert resp.status_code == 202
     assert resp.json() == {"started": True, "total": None}
     assert db.thumbnails_count(ctx.conn()) == 2
@@ -451,7 +451,7 @@ def test_thumbnails_rebuild_specific_root(postgres_dsn: str, monkeypatch: pytest
 
 def test_thumbnails_rebuild_all_roots_no_body(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     st = png.stat()
@@ -464,7 +464,7 @@ def test_thumbnails_rebuild_all_roots_no_body(postgres_dsn: str, monkeypatch: py
 
 def test_thumbnails_rebuild_unknown_root_is_ignored(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": "unknown"})
     assert resp.status_code == 202
@@ -475,7 +475,7 @@ def test_thumbnails_rebuild_force_and_path_are_forwarded(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(thumb_rebuild_module.threading, "Thread", _SyncThread)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     (tmp_path / "keep").mkdir()
     (tmp_path / "skip").mkdir()
     keep_png, skip_png = tmp_path / "keep" / "a.png", tmp_path / "skip" / "b.png"
@@ -485,7 +485,7 @@ def test_thumbnails_rebuild_force_and_path_are_forwarded(
         st = p.stat()
         db.upsert_file(ctx.conn(), ctx.root_id, rel, p.name, ".png", st.st_size, st.st_mtime_ns, rel, "image/png")
     client = _make_client(ctx)
-    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": "keep", "force": True})
+    resp = client.post("/thumbnails/rebuild", json={"root": "files", "path": "keep", "force": True})
     assert resp.status_code == 202
     assert resp.json() == {"started": True, "total": None}
     assert db.thumbnails_count(ctx.conn()) == 2
@@ -494,37 +494,37 @@ def test_thumbnails_rebuild_force_and_path_are_forwarded(
 def test_thumbnails_rebuild_returns_409_when_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     client.app.state.server_state.thumbnail_job.try_start(1)
-    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo"})
+    resp = client.post("/thumbnails/rebuild", json={"root": "files"})
     assert resp.status_code == 409
 
 
 def test_thumbnails_rebuild_invalid_root_type_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/thumbnails/rebuild", json={"root": 123})
     assert resp.status_code == 400
 
 
 def test_thumbnails_rebuild_invalid_path_type_is_400(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
-    resp = client.post("/thumbnails/rebuild", json={"root": "sftpgo", "path": 123})
+    resp = client.post("/thumbnails/rebuild", json={"root": "files", "path": 123})
     assert resp.status_code == 400
 
 
 def test_image_embeddings_rebuild_not_configured_reports_zero(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     st = png.stat()
     db.upsert_file(ctx.conn(), ctx.root_id, "a.png", "a.png", ".png", st.st_size, st.st_mtime_ns, "sha1", "image/png")
     client = _make_client(ctx)
-    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
+    resp = client.post("/image-embeddings/rebuild", json={"root": "files"})
     assert resp.status_code == 202
     assert resp.json() == {"started": True, "total": None}
 
@@ -532,7 +532,7 @@ def test_image_embeddings_rebuild_not_configured_reports_zero(
 def test_image_embeddings_rebuild_invalid_root_type_is_400(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/image-embeddings/rebuild", json={"root": 123})
     assert resp.status_code == 400
@@ -541,16 +541,16 @@ def test_image_embeddings_rebuild_invalid_root_type_is_400(
 def test_image_embeddings_rebuild_invalid_path_type_is_400(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
-    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo", "path": 123})
+    resp = client.post("/image-embeddings/rebuild", json={"root": "files", "path": 123})
     assert resp.status_code == 400
 
 
 def test_image_embeddings_rebuild_unknown_root_is_ignored(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     resp = client.post("/image-embeddings/rebuild", json={"root": "unknown"})
     assert resp.status_code == 202
@@ -560,10 +560,10 @@ def test_image_embeddings_rebuild_unknown_root_is_ignored(
 def test_image_embeddings_rebuild_returns_409_when_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     client.app.state.server_state.image_embed_rebuild_job.try_start(1)
-    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
+    resp = client.post("/image-embeddings/rebuild", json={"root": "files"})
     assert resp.status_code == 409
 
 
@@ -572,7 +572,7 @@ def test_image_embeddings_rebuild_runs_end_to_end(postgres_dsn: str, monkeypatch
     from fdrive_indexer.image_embed import ImageEmbedHealth
 
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     monkeypatch.setenv("IMAGE_EMBED_URL", "http://image-embed.invalid")
     ctx.cfg.image_embed_url = "http://image-embed.invalid"
     png = tmp_path / "a.png"
@@ -586,48 +586,48 @@ def test_image_embeddings_rebuild_runs_end_to_end(postgres_dsn: str, monkeypatch
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: health)
     monkeypatch.setattr(image_embed_rebuild, "embed_images", lambda data, url, batch: ([[0.1] * 1024 for _ in data], "model-a"))
     client = _make_client(ctx)
-    resp = client.post("/image-embeddings/rebuild", json={"root": "sftpgo"})
+    resp = client.post("/image-embeddings/rebuild", json={"root": "files"})
     assert resp.status_code == 202
     assert resp.json() == {"started": True, "total": None}
     assert db.image_embedding_model(ctx.conn(), "sha1") == "model-a"
 
 
 def test_directory_endpoint(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     target = tmp_path / "文 space%20"
     target.mkdir()
     (target / "a.txt").touch()
-    response = client.get("/directory", params={"root": "sftpgo", "path": "/文 space%20"})
+    response = client.get("/directory", params={"root": "files", "path": "/文 space%20"})
     assert response.status_code == 200
     assert response.json() == {"items": [{"name": "a.txt", "kind": "file"}], "overflow": False}
     for query in [
         "",
-        "root=sftpgo",
-        "root=sftpgo&path=/&extra=a",
-        "root=sftpgo&path=/&path=/",
-        "root=sftpgo&root=sftpgo&path=/",
-        "root=sftpgo&path=%2F..%2F",
-        "root=sftpgo&path=%2F%2e%2e",
-        "root=sftpgo&path=%2Fa%2F%2Fb",
-        "root=sftpgo&path=%2Fa%5Cb",
-        "root=sftpgo&path=%2F%00",
+        "root=files",
+        "root=files&path=/&extra=a",
+        "root=files&path=/&path=/",
+        "root=files&root=files&path=/",
+        "root=files&path=%2F..%2F",
+        "root=files&path=%2F%2e%2e",
+        "root=files&path=%2Fa%2F%2Fb",
+        "root=files&path=%2Fa%5Cb",
+        "root=files&path=%2F%00",
     ]:
         assert client.get("/directory?" + query).status_code == 400
     assert client.get("/directory?root=missing&path=/").status_code == 404
-    assert client.get("/directory?root=sftpgo&path=/missing").status_code == 404
-    assert client.get("/directory", params={"root": "sftpgo", "path": "/文 space%20/a.txt"}).status_code == 400
+    assert client.get("/directory?root=files&path=/missing").status_code == 404
+    assert client.get("/directory", params={"root": "files", "path": "/文 space%20/a.txt"}).status_code == 400
     (tmp_path / "link").symlink_to(target)
-    assert client.get("/directory?root=sftpgo&path=/link").status_code == 400
+    assert client.get("/directory?root=files&path=/link").status_code == 400
     literal = tmp_path / "%2e%2e"
     literal.mkdir()
-    assert client.get("/directory?root=sftpgo&path=/%252e%252e").status_code == 200
+    assert client.get("/directory?root=files&path=/%252e%252e").status_code == 200
 
 
 def test_directory_offloads_and_sanitizes_errors(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import errno
 
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     client = _make_client(ctx)
     for code, expected in [(errno.EACCES, 403), (errno.EPERM, 403), (errno.ELOOP, 400), (errno.EIO, 503)]:
 
@@ -637,7 +637,7 @@ def test_directory_offloads_and_sanitizes_errors(postgres_dsn: str, monkeypatch:
             raise OSError(error_code, str(tmp_path / "private"))
 
         monkeypatch.setattr(server, "list_directory", fail)
-        response = client.get("/directory?root=sftpgo&path=/")
+        response = client.get("/directory?root=files&path=/")
         assert response.status_code == expected
         assert response.json() == {"error": "directory unavailable"}
 
@@ -674,7 +674,7 @@ def test_rebuild_acknowledges_before_discovery(
 ) -> None:
     import threading
 
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "sftpgo", str(tmp_path))
+    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
     ctx.cfg.image_embed_url = "http://image-embed.invalid"
     client = _make_client(ctx)
     job = getattr(client.app.state.server_state, job_name)
@@ -694,12 +694,12 @@ def test_rebuild_acknowledges_before_discovery(
     monkeypatch.setattr(job, "finish", finish)
     monkeypatch.setattr(image_embed_rebuild, "rebuild_image_embeddings", lambda *args, **kwargs: 0)
     try:
-        response = client.post(endpoint, json={"root": "sftpgo"})
+        response = client.post(endpoint, json={"root": "files"})
         assert response.status_code == 202
         assert response.json() == {"started": True, "total": None}
         assert entered.wait(2)
         assert job.activity_snapshot("thumbnailRebuild", ["thumbnails"])["total"] is None
-        assert client.post(endpoint, json={"root": "sftpgo"}).status_code == 409
+        assert client.post(endpoint, json={"root": "files"}).status_code == 409
     finally:
         release.set()
         assert finished.wait(5)

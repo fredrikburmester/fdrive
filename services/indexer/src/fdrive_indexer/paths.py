@@ -5,6 +5,11 @@ strings or booleans out, so it is trivially testable without a real directory tr
 from __future__ import annotations
 
 import posixpath
+import re
+
+# fdrive's local storage streams each upload into a file named like this beside its
+# target and publishes it under the real name only once complete (packages/local).
+_PARTIAL_UPLOAD = re.compile(r"\.fdrive-partial-[0-9a-f]{16}")
 
 
 def ext_of(name: str) -> str:
@@ -16,9 +21,14 @@ def ext_of(name: str) -> str:
     return ext
 
 
+def is_partial_upload(name: str) -> bool:
+    """An upload fdrive's local storage is still writing; it gets its real name when done."""
+    return _PARTIAL_UPLOAD.fullmatch(name) is not None
+
+
 def is_junk_name(name: str, skip_names: frozenset[str]) -> bool:
-    """AppleDouble sidecar files and OS junk files that are never worth indexing."""
-    return name.startswith("._") or name in skip_names
+    """AppleDouble sidecars, OS junk files and unfinished uploads: never worth indexing."""
+    return name.startswith("._") or name in skip_names or is_partial_upload(name)
 
 
 def is_skip_dir(name: str, skip_dirs: frozenset[str]) -> bool:

@@ -11,14 +11,14 @@ filesai's `done.tsv` lines look like:
 The key is `<size>_<mtime_seconds>|<path>`; `mtime_seconds` has only
 second-precision, while `idx.ocr_log` keys on `mtime_ns`. This importer scales
 seconds to nanoseconds (multiplying by 1e9), which usually matches exactly if
-the file has not moved since (most filesystems that back SFTPGo report a whole
-number of seconds when filesai's `stat -c '%s_%Y'` last ran). If a file's real
+the file has not moved since (most filesystems that back the files folder report a
+whole number of seconds when filesai's `stat -c '%s_%Y'` last ran). If a file's real
 mtime carries sub-second precision, the imported key will not match on the
 first pass, so that one file gets reprocessed once, which is safe: OCR is
 idempotent and refuses PDFs that already have text.
 
 Usage:
-    python scripts/import-done-tsv.py done.tsv --root sftpgo \\
+    python scripts/import-done-tsv.py done.tsv --root files \\
         --database-url "$DATABASE_URL"
 
 Idempotent: rows are inserted `ON CONFLICT ... DO NOTHING` on the same unique
@@ -85,7 +85,7 @@ def parse_lines(lines: list[str]) -> list[DoneRow]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("tsv_path", help="path to filesai's done.tsv")
-    parser.add_argument("--root", required=True, help="root name as configured in INDEX_ROOTS, e.g. sftpgo")
+    parser.add_argument("--root", required=True, help="root name as configured in INDEX_ROOTS, e.g. files")
     parser.add_argument("--database-url", required=True, help="psycopg DSN for the fdrive database")
     args = parser.parse_args(argv)
 

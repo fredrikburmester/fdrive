@@ -16,7 +16,7 @@ COPY src ./src
 RUN pip install --no-cache-dir -e ".[dev]"
 
 # Runs as a non-root user. The indexer only needs read access to the
-# bind-mounted SFTPGo root and read-write access to its thumbnail and log
+# bind-mounted files folder and read-write access to its thumbnail and log
 # volumes. deploy/compose.yaml starts the container as root with
 # FDRIVE_RUN_AS_UID set, and docker-entrypoint.sh gives those volumes to that
 # uid and drops to it before the indexer starts; any other start runs as the
@@ -24,9 +24,9 @@ RUN pip install --no-cache-dir -e ".[dev]"
 # Docker socket for testcontainers; on a host where that socket is not
 # world-writable, run that script with `docker run --user root` to keep
 # using it, since this uid otherwise cannot reach the socket.
-# The indexer must read every file SFTPGo serves, including folders users keep at
-# mode 700, so it runs as the same uid/gid as the SFTPGo process (1000 in the
-# official image). Override at build time when your SFTPGo runs as another uid.
+# The indexer must read every file in the files folder, including folders kept at
+# mode 700, so it runs as the uid/gid that owns them: FDRIVE_RUN_AS_UID in
+# deploy/compose.yaml, the same uid the API and OCR write as (1000 by default).
 ARG INDEXER_UID=1000
 ARG INDEXER_GID=1000
 RUN addgroup --gid "${INDEXER_GID}" indexer && \

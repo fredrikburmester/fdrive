@@ -4,7 +4,7 @@ from fdrive_ocr.rules import is_candidate_pdf, is_excluded, is_too_big, root_rel
 
 
 def test_root_relative_key() -> None:
-    assert root_relative_key("sftpgo", "docs/a.pdf") == "sftpgo/docs/a.pdf"
+    assert root_relative_key("files", "docs/a.pdf") == "files/docs/a.pdf"
 
 
 def test_is_excluded_matches_glob() -> None:
@@ -12,43 +12,43 @@ def test_is_excluded_matches_glob() -> None:
     # "Photos/**" (filesai's original, root-relative default) only excludes
     # paths under a root literally named "Photos"; excluding a subdirectory of
     # some other root needs a pattern that spells out the root, e.g.
-    # "sftpgo/*/Photos/**". See docs/OCR.md.
+    # "files/*/Photos/**". See docs/OCR.md.
     assert is_excluded("Photos", "2020/a.pdf", ["Photos/**"]) is True
-    assert is_excluded("sftpgo", "alice/Photos/a.pdf", ["sftpgo/*/Photos/**"]) is True
+    assert is_excluded("files", "alice/Photos/a.pdf", ["files/*/Photos/**"]) is True
 
 
 def test_is_excluded_no_match() -> None:
-    assert is_excluded("sftpgo", "docs/a.pdf", ["Photos/**"]) is False
-    assert is_excluded("sftpgo", "Photos/2020/a.pdf", ["Photos/**"]) is False
+    assert is_excluded("files", "docs/a.pdf", ["Photos/**"]) is False
+    assert is_excluded("files", "Photos/2020/a.pdf", ["Photos/**"]) is False
 
 
 def test_is_excluded_empty_globs() -> None:
-    assert is_excluded("sftpgo", "docs/a.pdf", []) is False
+    assert is_excluded("files", "docs/a.pdf", []) is False
 
 
 def test_is_excluded_none_include_globs_behaves_like_no_restriction() -> None:
-    assert is_excluded("sftpgo", "docs/a.pdf", [], None) is False
+    assert is_excluded("files", "docs/a.pdf", [], None) is False
 
 
 def test_include_globs_restricts_to_matching_paths() -> None:
-    assert is_excluded("sftpgo", "fredrik/report.pdf", [], ["sftpgo/fredrik/**"]) is False
-    assert is_excluded("sftpgo", "alice/report.pdf", [], ["sftpgo/fredrik/**"]) is True
+    assert is_excluded("files", "fredrik/report.pdf", [], ["files/fredrik/**"]) is False
+    assert is_excluded("files", "alice/report.pdf", [], ["files/fredrik/**"]) is True
 
 
 def test_include_globs_still_applies_exclude_globs_on_top() -> None:
     # Included by OCR_INCLUDE_GLOBS, but still excluded by an explicit exclude glob.
     assert (
-        is_excluded("sftpgo", "fredrik/Photos/a.pdf", ["sftpgo/*/Photos/**"], ["sftpgo/fredrik/**"])
+        is_excluded("files", "fredrik/Photos/a.pdf", ["files/*/Photos/**"], ["files/fredrik/**"])
         is True
     )
     assert (
-        is_excluded("sftpgo", "fredrik/docs/a.pdf", ["sftpgo/*/Photos/**"], ["sftpgo/fredrik/**"])
+        is_excluded("files", "fredrik/docs/a.pdf", ["files/*/Photos/**"], ["files/fredrik/**"])
         is False
     )
 
 
 def test_empty_include_globs_list_behaves_like_no_restriction() -> None:
-    assert is_excluded("sftpgo", "docs/a.pdf", [], []) is False
+    assert is_excluded("files", "docs/a.pdf", [], []) is False
 
 
 def test_is_too_big_over_cap() -> None:

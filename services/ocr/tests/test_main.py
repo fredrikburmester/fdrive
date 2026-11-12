@@ -50,8 +50,8 @@ def test_log_prints_a_timestamped_line(capsys: pytest.CaptureFixture[str]) -> No
 def test_build_targets_upserts_roots(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        targets = main.build_targets(conn, {"sftpgo": str(tmp_path), "photos": str(tmp_path)})
-        assert {t.name for t in targets} == {"sftpgo", "photos"}
+        targets = main.build_targets(conn, {"files": str(tmp_path), "photos": str(tmp_path)})
+        assert {t.name for t in targets} == {"files", "photos"}
         assert all(t.root_id > 0 for t in targets)
     finally:
         conn.close()
@@ -63,14 +63,14 @@ def test_build_targets_upserts_roots(postgres_dsn: str, tmp_path: Path) -> None:
 def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path: Path) -> None:
     _set_pdf_ocr(postgres_dsn)
     conn = db.connect(postgres_dsn)
-    root_id = db.upsert_root(conn, "sftpgo")
+    root_id = db.upsert_root(conn, "files")
     conn.close()
     target_dir = tmp_path / "root"
     target_dir.mkdir()
     (target_dir / "a.pdf").write_bytes(b"HASTEXT\n")
     from fdrive_ocr.runner import RootTarget
 
-    targets = [RootTarget(name="sftpgo", root_id=root_id, abs_path=str(target_dir))]
+    targets = [RootTarget(name="files", root_id=root_id, abs_path=str(target_dir))]
     lock = RunLock()
     logs: list[str] = []
     ran = main.run_once(
@@ -84,7 +84,7 @@ def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path:
 def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> None:
     _set_pdf_ocr(postgres_dsn)
     conn = db.connect(postgres_dsn)
-    root_id = db.upsert_root(conn, "sftpgo")
+    root_id = db.upsert_root(conn, "files")
     conn.close()
     target_dir = tmp_path / "root"
     (target_dir / "fredrik").mkdir(parents=True)
@@ -93,7 +93,7 @@ def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> No
     (target_dir / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
     from fdrive_ocr.runner import RootTarget
 
-    targets = [RootTarget(name="sftpgo", root_id=root_id, abs_path=str(target_dir))]
+    targets = [RootTarget(name="files", root_id=root_id, abs_path=str(target_dir))]
     lock = RunLock()
     logs: list[str] = []
     main.run_once(
@@ -105,7 +105,7 @@ def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> No
         30,
         2,
         logs.append,
-        include_globs=("sftpgo/fredrik/**",),
+        include_globs=("files/fredrik/**",),
     )
     conn = db.connect(postgres_dsn)
     try:
@@ -430,7 +430,7 @@ def test_main_stays_live_when_no_roots_configured(postgres_dsn: str, monkeypatch
 
 def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: None)
     with pytest.raises(SystemExit) as exc_info:
         main.main()
@@ -439,7 +439,7 @@ def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pyte
 
 def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("OCR_PORT", "0")
     monkeypatch.setenv("OCR_RUN_ON_START", "false")
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))

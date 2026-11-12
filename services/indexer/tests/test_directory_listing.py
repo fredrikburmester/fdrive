@@ -23,7 +23,7 @@ def test_invalid_paths(path: str) -> None:
 def test_valid_paths_and_queries() -> None:
     assert directory_parts("/") == []
     assert directory_parts("/文 space/literal%20/%2F/%2e%2e") == ["文 space", "literal%20", "%2F", "%2e%2e"]
-    assert directory_query([("path", "/"), ("root", "sftpgo")]) == ("sftpgo", "/")
+    assert directory_query([("path", "/"), ("root", "files")]) == ("files", "/")
 
 
 @pytest.mark.parametrize(

@@ -14,8 +14,8 @@ from fdrive_indexer.settings import (
 DEFAULTS = Settings(
     scan_interval_seconds=900,
     workers=4,
-    text_exclude_globs=("sftpgo/Photos/*",),
-    ocr_image_globs=("sftpgo/Documents/*",),
+    text_exclude_globs=("files/Photos/*",),
+    ocr_image_globs=("files/Documents/*",),
     tesseract_langs="swe+eng",
 )
 
@@ -55,15 +55,15 @@ def test_resolve_settings_bool_is_not_treated_as_int() -> None:
 
 
 def test_resolve_settings_glob_list_override() -> None:
-    raw = {TEXT_EXCLUDE_GLOBS_KEY: ["sftpgo/Videos/*", "sftpgo/Raw/*"]}
+    raw = {TEXT_EXCLUDE_GLOBS_KEY: ["files/Videos/*", "files/Raw/*"]}
     result = resolve_settings(raw, DEFAULTS)
-    assert result.text_exclude_globs == ("sftpgo/Videos/*", "sftpgo/Raw/*")
+    assert result.text_exclude_globs == ("files/Videos/*", "files/Raw/*")
 
 
 def test_resolve_settings_glob_list_as_json_string() -> None:
-    raw = {OCR_IMAGE_GLOBS_KEY: json.dumps(["sftpgo/Scans/*"])}
+    raw = {OCR_IMAGE_GLOBS_KEY: json.dumps(["files/Scans/*"])}
     result = resolve_settings(raw, DEFAULTS)
-    assert result.ocr_image_globs == ("sftpgo/Scans/*",)
+    assert result.ocr_image_globs == ("files/Scans/*",)
 
 
 def test_resolve_settings_glob_list_invalid_falls_back() -> None:

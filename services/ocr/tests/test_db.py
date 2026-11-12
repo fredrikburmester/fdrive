@@ -78,8 +78,8 @@ def test_wait_for_schema_version_times_out(postgres_dsn: str) -> None:
 def test_upsert_root_is_idempotent(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        first = db.upsert_root(conn, "sftpgo")
-        second = db.upsert_root(conn, "sftpgo")
+        first = db.upsert_root(conn, "files")
+        second = db.upsert_root(conn, "files")
         assert first == second
     finally:
         conn.close()
@@ -96,7 +96,7 @@ def test_read_settings_empty(postgres_dsn: str) -> None:
 def test_record_ocr_log_and_done_keys(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
+        root_id = db.upsert_root(conn, "files")
         db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "has_text", None)
         assert db.done_keys(conn, root_id) == {("a.pdf", 100, 111)}
     finally:
@@ -106,7 +106,7 @@ def test_record_ocr_log_and_done_keys(postgres_dsn: str) -> None:
 def test_record_ocr_log_upserts_on_conflict(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
+        root_id = db.upsert_root(conn, "files")
         db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "failed", "boom")
         db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "ocred", None)
         with conn.cursor() as cur:

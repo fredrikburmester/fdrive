@@ -194,13 +194,13 @@ def test_extract_tika_raises_for_server_error(tmp_path: Path, monkeypatch: pytes
 
 def _make_extractor(tmp_path: Path, **overrides: object) -> extract.Extractor:
     kwargs = dict(
-        root="sftpgo",
+        root="files",
         text_max_bytes=1_000_000,
         image_max_bytes=1_000_000,
         max_pdf_pages=600,
         plain_text_cap=300_000,
         tesseract_langs="eng",
-        ocr_image_globs=["sftpgo/Documents/*"],
+        ocr_image_globs=["files/Documents/*"],
         tika_url="http://tika:9998",
         normalize=normalize,
     )
@@ -248,7 +248,7 @@ def test_extractor_uses_non_rewriting_pdf_ocr_only_when_enabled(tmp_path: Path, 
 def test_extractor_image_outside_ocr_dirs_excluded(tmp_path: Path) -> None:
     p = tmp_path / "photo.png"
     p.write_bytes(b"x")
-    extractor = _make_extractor(tmp_path, ocr_image_globs=["sftpgo/Documents/*"])
+    extractor = _make_extractor(tmp_path, ocr_image_globs=["files/Documents/*"])
     text, status = extractor.extract(str(p), "Photos/photo.png", ".png", 10)
     assert status == "excluded:image_dir"
     assert text is None
@@ -304,7 +304,7 @@ def test_extract_pdf_ocr_keeps_native_pages_and_reads_scanned_pages(tmp_path: Pa
 def test_extractor_image_too_big(tmp_path: Path) -> None:
     p = tmp_path / "scan.png"
     p.write_bytes(b"x")
-    extractor = _make_extractor(tmp_path, ocr_image_globs=["sftpgo/*"], image_max_bytes=0)
+    extractor = _make_extractor(tmp_path, ocr_image_globs=["files/*"], image_max_bytes=0)
     text, status = extractor.extract(str(p), "scan.png", ".png", 100)
     assert status == "excluded:too_big"
     assert text is None
@@ -338,7 +338,7 @@ def test_extractor_image_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     import pytesseract
 
     monkeypatch.setattr(pytesseract, "image_to_string", lambda *a, **k: "ocr text through the extractor class")
-    extractor = _make_extractor(tmp_path, ocr_image_globs=["sftpgo/Documents/*"])
+    extractor = _make_extractor(tmp_path, ocr_image_globs=["files/Documents/*"])
     text, status = extractor.extract(str(img), "Documents/scan.png", ".png", img.stat().st_size)
     assert status == "indexed"
     assert text is not None
@@ -378,8 +378,8 @@ def test_extractor_missing_file_returns_error(tmp_path: Path) -> None:
 
 def test_extractor_excluded_by_prefix(tmp_path: Path) -> None:
     extractor = _make_extractor(tmp_path)
-    assert extractor.excluded_by_prefix("Videos/movie.mp4", ["sftpgo/Videos/*"]) is True
-    assert extractor.excluded_by_prefix("Docs/a.txt", ["sftpgo/Videos/*"]) is False
+    assert extractor.excluded_by_prefix("Videos/movie.mp4", ["files/Videos/*"]) is True
+    assert extractor.excluded_by_prefix("Docs/a.txt", ["files/Videos/*"]) is False
 
 
 def test_embed_passages_batches(monkeypatch: pytest.MonkeyPatch) -> None:

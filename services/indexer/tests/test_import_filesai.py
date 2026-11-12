@@ -187,7 +187,7 @@ def test_main_runs_end_to_end_against_fake_psycopg(import_filesai: ModuleType, m
     fake_psycopg.connect = fake_connect  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
 
-    exit_code = import_filesai.main(["--source", "src-dsn", "--target", "tgt-dsn", "--root", "sftpgo"])
+    exit_code = import_filesai.main(["--source", "src-dsn", "--target", "tgt-dsn", "--root", "files"])
     assert exit_code == 0
     assert len(conns) == 2
     assert conns[1].committed is True  # target connection committed
