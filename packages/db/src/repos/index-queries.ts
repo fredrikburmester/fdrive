@@ -121,6 +121,30 @@ export interface FilenameHit {
   readonly similarity: number;
 }
 
+/**
+ * How a query weights a file by its age: `1` for a file modified at `now`,
+ * falling by half of what is left above `floor` every `halfLifeDays`.
+ */
+export interface RecencyDecay {
+  readonly now: Date;
+  readonly halfLifeDays: number;
+  readonly floor: number;
+}
+
+/** Options for `IndexQueries.fulltext`. */
+export interface FulltextOptions {
+  /** Weights each chunk's rank by its file's age; by rank alone when absent. */
+  readonly recency?: RecencyDecay;
+  /** A stricter `to_tsquery('simple', ...)` expression; chunks matching it sort ahead of the rest. */
+  readonly preferTsquery?: string;
+}
+
+/** Options for `IndexQueries.filename`. */
+export interface FilenameOptions {
+  /** Weights each name's similarity by its file's age; by similarity alone when absent. */
+  readonly recency?: RecencyDecay;
+}
+
 /** The total live bytes and file count under one directory, see `IndexQueries.subtreeSize`. */
 export interface SubtreeSize {
   readonly bytes: number;
@@ -232,13 +256,20 @@ export interface IndexQueries {
     scopePrefixes: readonly ScopePrefix[],
     tsquery: string,
     limit: number,
+    options?: FulltextOptions,
   ): Promise<ContentHit[]>;
-  /** Files whose path contains any of `words`, or whose name is trigram-similar to `query`. */
+  /**
+   * Files whose path contains any of `words`, or whose name is trigram-similar
+   * to `query`: most words in the name first, then most words in the path,
+   * then most similar name. An accent matches whether the stored name holds
+   * it as one character or as a letter plus a combining mark.
+   */
   filename(
     scopePrefixes: readonly ScopePrefix[],
     words: readonly string[],
     query: string,
     limit: number,
+    options?: FilenameOptions,
   ): Promise<FilenameHit[]>;
   /** Loads files by id, in no particular order; missing ids are skipped. */
   filesByIds(ids: readonly number[]): Promise<IndexedFile[]>;
@@ -406,6 +437,27 @@ function movePathScopeCondition(
   return sql`(${sql.join(parts, sql` OR `)})`;
 }
 
+const NS_PER_DAY = 86_400_000_000_000;
+
+/** `RecencyDecay` as a SQL factor over `idx.files.mtime_ns`; `1` when no decay is asked for. */
+function recencyFactor(recency: RecencyDecay | undefined) {
+  if (recency === undefined) {
+    return sql`1`;
+  }
+  const nowNs = BigInt(recency.now.getTime()) * 1_000_000n;
+  const ageDays = sql`greatest(${nowNs}::bigint - ${files.mtimeNs}, 0)::double precision / ${NS_PER_DAY}::double precision`;
+  return sql`(${recency.floor}::double precision + ${1 - recency.floor}::double precision * power(0.5::double precision, ${ageDays} / ${recency.halfLifeDays}::double precision))`;
+}
+
+/**
+ * `text` as typed and as macOS stores it: an accented letter is one
+ * character when composed and a letter plus a combining mark when not, and
+ * the two never compare equal in SQL. One entry when they are the same.
+ */
+function accentForms(text: string): string[] {
+  return Array.from(new Set([text.normalize("NFC"), text.normalize("NFD")]));
+}
+
 const SNIPPET_LENGTH = 300;
 
 /** Chunks `fileTextPrefix` reads at most; a prefix is meant to be short. */
@@ -431,11 +483,15 @@ export function createIndexQueries(db: Db): IndexQueries {
       return rows;
     },
 
-    async fulltext(scopePrefixes, tsquery, limit) {
+    async fulltext(scopePrefixes, tsquery, limit, options = {}) {
       if (tsquery.length === 0) {
         return [];
       }
-      const rank = sql<number>`ts_rank_cd(${chunks.tsv}, to_tsquery('simple', ${tsquery}))`;
+      const rank = sql<number>`ts_rank_cd(${chunks.tsv}, to_tsquery('simple', ${tsquery})) * ${recencyFactor(options.recency)}`;
+      const preferred =
+        options.preferTsquery === undefined || options.preferTsquery.length === 0
+          ? []
+          : [desc(sql`(${chunks.tsv} @@ to_tsquery('simple', ${options.preferTsquery}))`)];
       const rows = await db
         .select({
           fileId: chunks.fileId,
@@ -450,30 +506,42 @@ export function createIndexQueries(db: Db): IndexQueries {
             sql`${chunks.tsv} @@ to_tsquery('simple', ${tsquery})`,
           ),
         )
-        .orderBy(desc(rank))
+        .orderBy(...preferred, desc(rank))
         .limit(limit);
       return rows;
     },
 
-    async filename(scopePrefixes, words, query, limit) {
+    async filename(scopePrefixes, words, query, limit, options = {}) {
       if (words.length === 0) {
         return [];
       }
-      const likePatterns = words.map((word) => `%${escapeLikePattern(word)}%`);
-      const hitsExpr = sql.join(
-        likePatterns.map(
-          (pattern) =>
-            sql`(CASE WHEN ${files.path} ILIKE ${pattern} ESCAPE '\\' THEN 1 ELSE 0 END)`,
-        ),
-        sql` + `,
+      const wordPatterns = words.map((word) =>
+        accentForms(word).map((form) => `%${escapeLikePattern(form)}%`),
       );
+      const contains = (column: typeof files.path | typeof files.name, patterns: string[]) =>
+        sql`(${sql.join(
+          patterns.map((pattern) => sql`${column} ILIKE ${pattern} ESCAPE '\\'`),
+          sql` OR `,
+        )})`;
+      const hitsIn = (column: typeof files.path | typeof files.name) =>
+        sql<number>`(${sql.join(
+          wordPatterns.map(
+            (patterns) => sql`(CASE WHEN ${contains(column, patterns)} THEN 1 ELSE 0 END)`,
+          ),
+          sql` + `,
+        )})`;
+      const queryForms = accentForms(query);
+      const similarity = sql<number>`greatest(${sql.join(
+        queryForms.map((form) => sql`similarity(${files.name}, ${form})`),
+        sql`, `,
+      )})`;
       // Parenthesized as a whole for the same reason as `scopeCondition`:
       // this OR expression is one argument to `and()` below, which does not
       // parenthesize individual arguments.
       const matchCondition = sql`(${sql.join(
         [
-          ...likePatterns.map((pattern) => sql`${files.path} ILIKE ${pattern} ESCAPE '\\'`),
-          sql`${files.name} % ${query}`,
+          ...wordPatterns.map((patterns) => contains(files.path, patterns)),
+          ...queryForms.map((form) => sql`${files.name} % ${form}`),
         ],
         sql` OR `,
       )})`;
@@ -481,12 +549,18 @@ export function createIndexQueries(db: Db): IndexQueries {
       const rows = await db
         .select({
           fileId: files.id,
-          hits: sql<number>`(${hitsExpr})`.as("hits"),
-          similarity: sql<number>`similarity(${files.name}, ${query})`.as("similarity"),
+          hits: hitsIn(files.path).as("hits"),
+          similarity: similarity.as("similarity"),
         })
         .from(files)
         .where(and(scopeCondition(scopePrefixes), isNull(files.deletedAt), matchCondition))
-        .orderBy(sql`hits DESC`, sql`similarity DESC`)
+        // A word in the name says more than the same word in a folder above
+        // it, which every file in that folder shares.
+        .orderBy(
+          desc(hitsIn(files.name)),
+          sql`hits DESC`,
+          desc(sql`${similarity} * ${recencyFactor(options.recency)}`),
+        )
         .limit(limit);
 
       return rows.map((row) => ({

@@ -72,6 +72,14 @@ async function insertRoot(name: string): Promise<number> {
   return row.id;
 }
 
+const NOW = new Date("2026-11-12T00:00:00.000Z");
+const RECENCY = { now: NOW, halfLifeDays: 180, floor: 0.4 };
+
+/** `mtime_ns` for a file modified `days` before `now`. */
+function daysBeforeNs(now: Date, days: number): bigint {
+  return BigInt(now.getTime() - days * 86_400_000) * 1_000_000n;
+}
+
 interface InsertFileOptions {
   readonly size?: number;
   readonly mtimeNs?: bigint;
@@ -284,9 +292,97 @@ describe("index-queries", () => {
 
       expect(results[0]?.fileId).toBe(strong.id);
     });
+
+    it("sorts chunks holding every preferred word ahead of a denser partial match", async () => {
+      const rootId = await insertRoot("primary");
+      const partial = await insertFile(rootId, "alice/plans.md");
+      await insertChunk(partial.id, 0, "plan plan plan plan plan plan");
+      const both = await insertFile(rootId, "alice/course.md");
+      await insertChunk(both.id, 0, "a plan for the microlearning course");
+
+      const results = await queries.fulltext(
+        [{ rootId, fsPrefix: "/" }],
+        "plan:*|microlearning:*",
+        10,
+        { preferTsquery: "plan:*&microlearning:*" },
+      );
+
+      expect(results.map((r) => r.fileId)).toEqual([both.id, partial.id]);
+    });
+
+    it("sorts the recently modified of two equal matches first when weighting by age", async () => {
+      const rootId = await insertRoot("primary");
+      const old = await insertFile(rootId, "alice/old.md", { mtimeNs: daysBeforeNs(NOW, 2000) });
+      await insertChunk(old.id, 0, "quarterly numbers");
+      const recent = await insertFile(rootId, "alice/recent.md", {
+        mtimeNs: daysBeforeNs(NOW, 2),
+      });
+      await insertChunk(recent.id, 0, "quarterly numbers");
+
+      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10, {
+        recency: RECENCY,
+      });
+
+      expect(results.map((r) => r.fileId)).toEqual([recent.id, old.id]);
+    });
   });
 
   describe("filename", () => {
+    it("sorts a word in the name ahead of the same word in a folder above", async () => {
+      const rootId = await insertRoot("primary");
+      // Nearly the query by spelling, but the word itself is only in its folder.
+      const inFolder = await insertFile(rootId, "alice/report/repor.pdf");
+      const inName = await insertFile(rootId, "alice/misc/report-2024-final-draft-v2.pdf");
+
+      const results = await queries.filename([{ rootId, fsPrefix: "/" }], ["report"], "report", 10);
+
+      expect(results.map((r) => r.fileId)).toEqual([inName.id, inFolder.id]);
+    });
+
+    it("matches an accent stored as a letter plus a combining mark", async () => {
+      const rootId = await insertRoot("primary");
+      const stored = "alice/Plan mikrolärande.md".normalize("NFD");
+      const file = await insertFile(rootId, stored);
+      const other = await insertFile(rootId, "alice/Plan.md");
+
+      const results = await queries.filename(
+        [{ rootId, fsPrefix: "/" }],
+        ["plan", "mikrolärande"],
+        "Plan mikrolärande",
+        10,
+      );
+
+      expect(results.map((r) => [r.fileId, r.hits])).toEqual([
+        [file.id, 2],
+        [other.id, 1],
+      ]);
+      expect(results[0]?.similarity).toBeGreaterThan(0.9);
+    });
+
+    it("sorts the recently modified of two equal names first when weighting by age", async () => {
+      const rootId = await insertRoot("primary");
+      const old = await insertFile(rootId, "alice/2019/report.pdf", {
+        mtimeNs: daysBeforeNs(NOW, 2000),
+      });
+      const recent = await insertFile(rootId, "alice/2026/report.pdf", {
+        mtimeNs: daysBeforeNs(NOW, 2),
+      });
+      const future = await insertFile(rootId, "alice/skewed/report.pdf", {
+        mtimeNs: daysBeforeNs(NOW, -30),
+      });
+
+      const results = await queries.filename(
+        [{ rootId, fsPrefix: "/" }],
+        ["report"],
+        "report",
+        10,
+        { recency: RECENCY },
+      );
+
+      // A clock-skewed future time counts as now, the most recent a file can be.
+      expect(results.map((r) => r.fileId)).toEqual([future.id, recent.id, old.id]);
+    });
+
     it("finds a file whose path contains a query word", async () => {
       const rootId = await insertRoot("primary");
       const file = await insertFile(rootId, "alice/docs/report.pdf");

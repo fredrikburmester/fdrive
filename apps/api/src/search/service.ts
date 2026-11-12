@@ -8,8 +8,13 @@ import {
   isUnderPath,
   matchesSearchFilters,
   mimeFromExtension,
+  NAME_MATCH_BOOST,
+  nameMatch,
   parentPath,
   queryWords,
+  RECENCY_FLOOR,
+  RECENCY_HALF_LIFE_DAYS,
+  recencyWeight,
   type Scope,
   type SearchFilters,
   toPrefixTsQuery,
@@ -162,13 +167,16 @@ async function deriveFolders(input: DeriveFoldersInput): Promise<FsEntry[]> {
 }
 
 /**
- * Builds the fdrive hybrid search service: the same ranking as filesai's
- * `mcp_server.search` (semantic top 60, full-text prefix `tsquery` top 60,
- * filename word hits plus trigram similarity top 25, reciprocal rank fusion
- * k=60), scoped to `input.scopes` (already verified by the caller), with
- * every candidate round-tripped (`roundTripVirtualPath`) and live-read
- * checked (`input.authorizer`) before it can contribute to hits, snippets,
- * thumbnail flags, or derived folders.
+ * Builds the fdrive hybrid search service. Candidates come from three
+ * bounded signals (semantic top 60, full-text prefix `tsquery` top 60,
+ * filename word hits plus trigram similarity top 25) fused by reciprocal
+ * rank (k=60). A file whose name answers the query (`nameMatch`) is then
+ * lifted above every result found by content alone, and every score is
+ * weighted by the file's age (`recencyWeight`), so of two similar matches
+ * the recently modified one comes first. Scoped to `input.scopes` (already
+ * verified by the caller), with every candidate round-tripped
+ * (`roundTripVirtualPath`) and live-read checked (`input.authorizer`) before
+ * it can contribute to hits, snippets, thumbnail flags, or derived folders.
  */
 export function createSearchService(deps: SearchServiceDeps): SearchService {
   return {
@@ -268,15 +276,28 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
 
       const words = queryWords(input.query);
       const tsquery = toPrefixTsQuery(input.query);
+      // The keyword queries weight by age themselves: their fanout is cut
+      // before ranking here, and a common word would otherwise fill it with
+      // old files before a recent one is ever seen.
+      const recency = {
+        now: startedAt,
+        halfLifeDays: RECENCY_HALF_LIFE_DAYS,
+        floor: RECENCY_FLOOR,
+      };
 
       const fulltextPipeline = primeFanout(
         tsquery.length > 0
-          ? deps.indexQueries.fulltext(prefixes, tsquery, CONTENT_FANOUT_LIMIT)
+          ? deps.indexQueries.fulltext(prefixes, tsquery, CONTENT_FANOUT_LIMIT, {
+              recency,
+              preferTsquery: toPrefixTsQuery(input.query, "all"),
+            })
           : Promise.resolve<ContentHit[]>([]),
       );
       const filenamePromise =
         words.length > 0
-          ? deps.indexQueries.filename(prefixes, words, input.query, FILENAME_FANOUT_LIMIT)
+          ? deps.indexQueries.filename(prefixes, words, input.query, FILENAME_FANOUT_LIMIT, {
+              recency,
+            })
           : Promise.resolve<FilenameHit[]>([]);
       const embeddingPromise =
         deps.embedClient !== null && features?.semanticSearch !== false
@@ -331,13 +352,26 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         });
       }
 
-      const ranked = Array.from(scoreById.entries()).sort((a, b) => b[1] - a[1]);
-
-      const neededIds = Array.from(
-        new Set([...ranked.map(([id]) => id), ...filenameRows.map((row) => row.fileId)]),
-      );
-      const loadedFiles = await deps.indexQueries.filesByIds(neededIds);
+      const loadedFiles = await deps.indexQueries.filesByIds(Array.from(scoreById.keys()));
       const fileById = new Map(loadedFiles.map((file) => [file.id, file]));
+
+      // The fused score says how well a file matched; its name and age
+      // decide what the caller most likely meant. A candidate with no
+      // caller-visible path keeps its fused score and is dropped below.
+      const ranked = Array.from(scoreById.entries())
+        .map(([id, fused]): [number, number] => {
+          const file = fileById.get(id);
+          const virtualPath = file === undefined ? null : virtualPathFor(file);
+          if (file === undefined || virtualPath === null) {
+            return [id, fused];
+          }
+          const boost =
+            NAME_MATCH_BOOST[
+              nameMatch(input.query, { name: file.name, folder: parentPath(virtualPath) })
+            ];
+          return [id, (boost + fused) * recencyWeight(dateFromMtimeNs(file.mtimeNs), startedAt)];
+        })
+        .sort((a, b) => b[1] - a[1]);
 
       // Start folder probes first so the request-local authorization
       // semaphore does not queue them behind every ranked file probe.
@@ -404,7 +438,12 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
 
       const accessibleHits = resolvedHits.filter((hit): hit is SearchHit => hit !== null);
       const files = accessibleHits.slice(0, input.limit);
-      const content = files.filter((hit) => hit.snippets.length > 0).slice(0, MAX_CONTENT_HITS);
+      // Taken from every accessible hit, not from `files`: name matches rank
+      // first and can fill the limit, which must not hide what the content
+      // signals found.
+      const content = accessibleHits
+        .filter((hit) => hit.snippets.length > 0)
+        .slice(0, MAX_CONTENT_HITS);
 
       return {
         query: input.query,

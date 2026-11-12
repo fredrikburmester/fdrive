@@ -45,6 +45,14 @@ describe("toPrefixTsQuery", () => {
   it("drops a single unicode letter as shorter than two characters", () => {
     expect(toPrefixTsQuery("faktura ö")).toBe("faktura:*");
   });
+
+  it("keeps an accent typed as a letter plus a combining mark", () => {
+    expect(toPrefixTsQuery("överföring".normalize("NFD"))).toBe("överföring:*");
+  });
+
+  it("joins words with & when every one must match", () => {
+    expect(toPrefixTsQuery("invoice, report!", "all")).toBe("invoice:*&report:*");
+  });
 });
 
 describe("queryWords", () => {
@@ -78,5 +86,9 @@ describe("queryWords", () => {
 
   it("handles unicode letters", () => {
     expect(queryWords("Rapport Övning")).toEqual(["rapport", "övning"]);
+  });
+
+  it("keeps a word whole when its accent is a letter plus a combining mark", () => {
+    expect(queryWords("Övning".normalize("NFD"))).toEqual(["övning"]);
   });
 });

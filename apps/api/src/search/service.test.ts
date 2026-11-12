@@ -1,4 +1,4 @@
-import type { Scope } from "@fdrive/core";
+import { NAME_MATCH_BOOST, recencyWeight, type Scope } from "@fdrive/core";
 import type { ContentHit, FilenameHit, IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -261,6 +261,169 @@ describe("createSearchService: search - query concurrency", () => {
   });
 });
 
+/** `mtimeNs` for a file modified `days` before `NOW`. */
+function daysAgoNs(days: number): bigint {
+  return BigInt(NOW.getTime() - days * 86_400_000) * 1_000_000n;
+}
+
+describe("createSearchService: search - ranking", () => {
+  it("puts a file named after the query above one both content signals found", async () => {
+    // Stored the way macOS writes it: "a" plus a combining mark, not "ä".
+    const storedName = "Plan mikrolärande.md".normalize("NFD");
+    const named = makeFile({
+      id: 1,
+      path: `alice/work/${storedName}`,
+      name: storedName,
+      ext: ".md",
+      mtimeNs: daysAgoNs(0),
+    });
+    const lab = makeFile({
+      id: 2,
+      path: "alice/uni/Lab-3-project-planning.pdf",
+      name: "Lab-3-project-planning.pdf",
+      ext: ".pdf",
+      mtimeNs: daysAgoNs(0),
+    });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [{ fileId: 2, snippet: "create a project plan" }],
+      fulltext: async () => [{ fileId: 2, snippet: "create a project plan" }],
+      filename: async () => [
+        { fileId: 2, hits: 1, similarity: 0.3 },
+        { fileId: 1, hits: 1, similarity: 0.2 },
+      ],
+      filesByIds: async () => [named, lab],
+    });
+    const embedClient: EmbedClient = { embed: async () => [0.1] };
+    const service = createSearchService(buildDeps({ indexQueries, embedClient }));
+
+    const result = await service.search(baseInput({ query: "Plan mikrolärande" }));
+
+    expect(result.sections.files.map((hit) => hit.name)).toEqual([
+      storedName,
+      "Lab-3-project-planning.pdf",
+    ]);
+  });
+
+  it("puts the recently modified file first when two match alike", async () => {
+    const old = makeFile({ id: 1, path: "alice/a/budget.xlsx", name: "budget.xlsx", ext: ".xlsx" });
+    const recent = makeFile({
+      id: 2,
+      path: "alice/b/budget.xlsx",
+      name: "budget.xlsx",
+      ext: ".xlsx",
+      mtimeNs: daysAgoNs(3),
+    });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () => [
+        { fileId: 1, hits: 1, similarity: 1 },
+        { fileId: 2, hits: 1, similarity: 1 },
+      ],
+      filesByIds: async () => [old, recent],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput({ query: "budget" }));
+
+    expect(result.sections.files.map((hit) => hit.path)).toEqual([
+      "/b/budget.xlsx",
+      "/a/budget.xlsx",
+    ]);
+  });
+
+  it("lets a recent content match overtake an old one that ranked higher", async () => {
+    const old = makeFile({ id: 1, path: "alice/old.md", name: "old.md", mtimeNs: daysAgoNs(2000) });
+    const recent = makeFile({ id: 2, path: "alice/new.md", name: "new.md", mtimeNs: daysAgoNs(1) });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [
+        { fileId: 1, snippet: "the budget for 2020" },
+        { fileId: 2, snippet: "the budget for this year" },
+      ],
+      filename: async () => [],
+      filesByIds: async () => [old, recent],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput({ query: "budget" }));
+
+    expect(result.sections.files.map((hit) => hit.name)).toEqual(["new.md", "old.md"]);
+  });
+
+  it("keeps an old file named after the query above a recent content match", async () => {
+    const named = makeFile({
+      id: 1,
+      path: "alice/budget.xlsx",
+      name: "budget.xlsx",
+      ext: ".xlsx",
+      mtimeNs: daysAgoNs(4000),
+    });
+    const mention = makeFile({
+      id: 2,
+      path: "alice/notes.md",
+      name: "notes.md",
+      ext: ".md",
+      mtimeNs: daysAgoNs(0),
+    });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [{ fileId: 2, snippet: "see the budget" }],
+      filename: async () => [{ fileId: 1, hits: 1, similarity: 1 }],
+      filesByIds: async () => [named, mention],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput({ query: "budget" }));
+
+    expect(result.sections.files.map((hit) => hit.name)).toEqual(["budget.xlsx", "notes.md"]);
+  });
+
+  it("still lists content matches when name matches fill the limit", async () => {
+    const named = [1, 2].map((id) =>
+      makeFile({ id, path: `alice/${id}/budget.xlsx`, name: "budget.xlsx", ext: ".xlsx" }),
+    );
+    const mention = makeFile({ id: 3, path: "alice/notes.md", name: "notes.md", ext: ".md" });
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [{ fileId: 3, snippet: "see the budget" }],
+      filename: async () => named.map((file) => ({ fileId: file.id, hits: 1, similarity: 1 })),
+      filesByIds: async () => [...named, mention],
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput({ query: "budget", limit: 2 }));
+
+    expect(result.sections.files.map((hit) => hit.name)).toEqual(["budget.xlsx", "budget.xlsx"]);
+    expect(result.sections.content.map((hit) => hit.name)).toEqual(["notes.md"]);
+  });
+
+  it("asks the keyword queries to weight by age and to prefer chunks holding every word", async () => {
+    const fulltext = vi.fn<IndexQueries["fulltext"]>(async () => []);
+    const filename = vi.fn<IndexQueries["filename"]>(async () => []);
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ sftpgo: 1 }),
+      fulltext,
+      filename,
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    await service.search(baseInput({ query: "annual report" }));
+
+    const recency = { now: NOW, halfLifeDays: 180, floor: 0.4 };
+    expect(fulltext.mock.calls[0]?.[3]).toEqual({
+      recency,
+      preferTsquery: "annual:*&report:*",
+    });
+    expect(filename.mock.calls[0]?.[4]).toEqual({ recency });
+  });
+});
+
 describe("createSearchService: search - hits", () => {
   it("maps a filename-only hit to a virtual path, with an empty snippet list", async () => {
     const file = makeFile({ id: 10, path: "alice/report.pdf", name: "report.pdf", ext: ".pdf" });
@@ -322,8 +485,11 @@ describe("createSearchService: search - hits", () => {
     const result = await service.search(baseInput({ query: "report" }));
 
     expect(result.sections.files).toHaveLength(1);
-    // 1/(60+1) from semantic, plus filenameScore(1,1,1,60) from filename.
-    const expectedScore = 1 / 61 + ((0.6 + 0.4 * (1 / 1)) * 1.5) / 61;
+    // 1/(60+1) from semantic, plus filenameScore(1,1,1,60) from filename,
+    // lifted because the name is the query and weighted by the file's age.
+    const fused = 1 / 61 + ((0.6 + 0.4 * (1 / 1)) * 1.5) / 61;
+    const expectedScore =
+      (NAME_MATCH_BOOST.exact + fused) * recencyWeight(new Date("2025-03-01T00:00:00.000Z"), NOW);
     expect(result.sections.files[0]?.score).toBeCloseTo(expectedScore, 10);
   });
 

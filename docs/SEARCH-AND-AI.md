@@ -28,6 +28,16 @@ The configured local services extract document text and build search vectors and
 previews. SigLIP visual search embeds generated thumbnails and text queries in the same
 vector space. This is distinct from the planned perceptual similar-image comparison.
 
+Results are ordered by what the query most likely meant, then by age. A file whose name is
+the query comes first, then one whose name holds every query word, then one whose name and
+folders hold them between them; all of these rank above a file found by its content alone.
+Words match from their start, ignoring case, punctuation and how accents are encoded, so a
+name macOS stored with decomposed accents matches the same word typed normally. Every score
+is then weighted by modification time: full weight today, falling toward 40% with a half-life
+of 180 days. A recent file therefore beats an older one that matched about as well, and an
+old file still surfaces when it matches clearly better. The constants live in
+[ranking.ts](../packages/core/src/search/ranking.ts).
+
 Index-backed results require verified mappings to mounted storage and live read permission.
 Remote or unmapped storage can still be browsed, but does not automatically gain search or
 thumbnails. For account-wide queries, text may span linked identities while visual results
