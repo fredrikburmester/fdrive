@@ -12,10 +12,10 @@ added or picked, and each missing feature is its own capability flag, so one can
 later without the others; see
 [Storage beside the local folder](STORAGE-PROVIDERS.md#storage-beside-the-local-folder).
 
-Verified against a real server in CI (SFTPGo's own WebDAV binding, see
-`packages/webdav/test/integration`) and against an in-memory protocol fake in unit tests
-(`src/fake/server.ts`, also used by API and web tests). Nextcloud, ownCloud, Apache `mod_dav`
-and nginx `ngx_http_dav_module` are intended targets but not part of CI; see the limitations.
+Verified against a real server in CI (Apache `httpd:2.4` with `mod_dav`, one home per user,
+see `packages/webdav/test/integration`) and against an in-memory protocol fake in unit tests
+(`src/fake/server.ts`, also used by API and web tests). Nextcloud, ownCloud and nginx
+`ngx_http_dav_module` are intended targets but not part of CI; see the limitations.
 
 Not implemented: Digest or OAuth authentication, share links
 ([owned shares](plans/OWNED-SHARES.md) are not enabled for WebDAV), a remote index walker,
@@ -36,7 +36,7 @@ templates. The extension points are those in [the provider guide](STORAGE-PROVID
 | Redirects | `redirect: "manual"`; only a stat PROPFIND 301/308 to the exact same URL plus `/` is retried | Other redirects fail as `upstream_unavailable`. The one retry uses a locally constructed same-origin collection URL; operators enter the final endpoint URL. |
 | Capabilities | `zip` false, `setModifiedAt` false, `atomicMove` true, `trash` true, `shares` false, `office` false, `index` false | Only `MOVE` is a native single operation. No standard mtime setter; `X-OC-Mtime` is sent on upload as best effort but not advertised. |
 | Trash | `"move"` strategy | WebDAV has no recycle bin, so the API storage factory moves deleted files into the configured folder itself (`withMoveToTrash`) and the recycle-folder view lists, restores and purges them. See [Trash](TRASH.md). |
-| Real backend in CI | SFTPGo's WebDAV binding plus Apache `httpd:2.4` | Provider conformance and a real collection-redirect regression; credentials/data are test-only. |
+| Real backend in CI | Apache `httpd:2.4` with `mod_dav`, single and multi-user | Provider conformance and a real collection-redirect regression; credentials/data are test-only. |
 
 ## Protocol mapping
 

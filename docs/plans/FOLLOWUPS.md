@@ -16,7 +16,7 @@ completed work or claims of newly reproduced runtime failures.
 | System settings live dev verification | Historical P9 handoff records automated checks but no real dev-stack pass | Exercise General, Users, feature settings, Office and event log against the running dev stack; record actual evidence |
 
 The provider-binding integration gap and Phase 5 strict performance gap are closed. Provider binding uses two HTTP servers
-backed by SFTPGo fakes; do not describe that as two containerized upstream implementations.
+backed by a small token-minting fake; do not describe that as two containerized upstream implementations.
 No new benchmark or browser run was performed during this documentation audit.
 
 Security reports follow [SECURITY.md](../../SECURITY.md); do not track them here.
