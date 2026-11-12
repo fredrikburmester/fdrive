@@ -40,14 +40,14 @@ follows filesai's rules exactly:
 | `.pdf` | pymupdf, page by page | Encrypted PDFs and pages beyond `MAX_PDF_PAGES` are skipped. With `searchOcr` on, pages without a text layer are OCR'd. Under 40 characters of text counts as `no_text`, or `disabled:search_ocr` while OCR is off (the nightly OCR job in `services/ocr` fills these in later). |
 | Images (`.jpg`, `.png`, `.tif`, `.heic`, `.heif`, …) | Tesseract OCR | Only under paths matching `indexer.ocr_image_globs` (see Settings below); everything else is `excluded:image_dir`. With `searchOcr` off they are `disabled:search_ocr`. |
 | Plain text / code (`.txt`, `.md`, `.py`, …) | Read directly, multiple encodings tried | Capped at `PLAIN_TEXT_CAP` characters. |
-| Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, …) | Apache Tika | Requires the `tika` service. |
+| Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, …) | The `ml` service's extraction unit | Formats it does not read (iWork, legacy Visio, Publisher, WordPerfect) are `error:unsupported`; see the [ML server](../services/ml/README.md). |
 | Anything else | Not extracted | `text_status = 'none'`. |
 
 Text is chunked 1200 characters with a 200 character overlap
 (`CHUNK_CHARS` / `CHUNK_OVERLAP`), capped at `MAX_CHUNKS_PER_FILE` (400) except
 spreadsheets, which cap at 40: a few dozen chunks capture the labels in a
 spreadsheet without drowning search results in numeric noise. Chunks are
-embedded with the `passage:` prefix against a TEI server
+embedded with the `passage:` prefix by the `ml` service's text unit
 (`intfloat/multilingual-e5-small`, 384 dimensions, the same model filesai used,
 so an imported index needs no re-embedding).
 
@@ -94,21 +94,21 @@ JPEGs over Pillow's pixel limit, such as camera panoramas, decode at a reduced s
 
 ### Image embeddings (optional)
 
-When `IMAGE_EMBED_URL` is set (the `services/image-embed` sidecar, a SigLIP 2
-CLIP-style model, `google/siglip2-large-patch16-256` by default, 1024
+When `IMAGE_EMBED_URL` is set (the `ml` service's image unit, a SigLIP 2
+CLIP-style model, `google/siglip2-large-patch16-256`, 1024
 dimensions), the indexer embeds the **256px thumbnail** it already wrote for
 every image file (never the original) and stores the vector in
 `app.image_embeddings`, keyed by the file's sha256 (`content_key`, the same
 key `app.thumbnails` uses) so two copies of one photo are embedded once.
 Absent `IMAGE_EMBED_URL`, this is entirely off: no error, `GET /stats`
 reports `image_embeddings: 0`, matching how OCR degrades without its own
-sidecar.
+service.
 
 The pass follows thumbnail generation (`indexer.py`'s `embed_thumbnail`,
 called once a thumbnail is written). Retries embed inline. A scan hands
 embeddings to a thread of its own, and watcher changes share one long-lived
-thread per root, because the sidecar runs one inference at a time and waiting
-inline would pace every worker, and every later change, at the model's speed. Before writing anything, it checks the sidecar's `GET /health`
+thread per root, because the model runs one inference at a time and waiting
+inline would pace every worker, and every later change, at the model's speed. Before writing anything, it checks the unit's `GET /health`
 against the column's fixed dimension (1024) and an `"ok"` status, reusing a
 passing answer for 30 seconds; on a
 mismatch it logs an error naming both numbers and skips embedding for that
@@ -119,7 +119,7 @@ a model change self-heals as files are next touched.
 
 `POST /image-embeddings/rebuild` (`image_embed_rebuild.py`) is the bulk
 backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ root?,
-path?, force? }`, batched against the sidecar at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
+path?, force? }`, batched against the unit at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
 requests per call. Without `force`, only images with no row at all are
 filled in; a row from a different model is left alone. With `force`, a
 stale-model row is also re-embedded and overwritten, the deliberate "replace
@@ -212,22 +212,22 @@ a published port in the non-dev compose file.
 
 ## Image embeddings
 
-`services/image-embed` is a separate sidecar that turns images and search queries into
-SigLIP 2 vectors. Its activation is managed through persisted feature settings. See the
-[service reference](../services/image-embed/README.md) for the model and bounded HTTP contract:
-1024-dimensional, L2-normalized vectors; image records are keyed by content sha256.
+The image unit of [`services/ml`](../services/ml/README.md) turns images and search queries
+into SigLIP 2 vectors. Its activation is managed through persisted feature settings. See that
+README for the model and bounded HTTP contract: 1024-dimensional, L2-normalized vectors; image
+records are keyed by content sha256.
 
-The sidecar itself has no database access and does no indexing: it only
+The server itself has no database access and does no indexing: it only
 embeds bytes or text it is handed and normalizes the result. The indexer
 reads it, when `IMAGE_EMBED_URL` is configured, the same way it reads the
-text `embed` and `tika` services: after a thumbnail is written for a file,
+text embedding and extraction units: after a thumbnail is written for a file,
 POST the 256 px WebP to `POST /embed/image` and upsert the returned vector
 under the file's sha256 in `app.image_embeddings`. As with OCR and text
 embedding, an unconfigured `IMAGE_EMBED_URL` simply turns the feature off;
 nothing errors and nothing blocks indexing.
 
-`services/image-embed`'s own `README.md` documents its HTTP contract
-(`/health`, `/embed/image`, `/embed/text`), config, and testing approach in
+The `services/ml` README documents the HTTP contract (`/image/health`,
+`/image/embed/image`, `/image/embed/text`), config, and testing approach in
 full; it is not repeated here.
 
 ## Compose
@@ -256,23 +256,16 @@ environment's seeded SFTPGo data (the `fdrive-dev-sftpgo-data` named volume,
 read-only) so the indexer sees exactly what the `dev` user's SFTPGo account
 sees. Two things differ from the production-shaped compose file because the
 api there runs on the host with `tsx watch` instead of in the compose
-network: `embed` publishes its port on the host (58081 by default, override
-with `FDRIVE_DEV_EMBED_PORT`) so `FDRIVE_EMBED_URL` in `apps/api/.env.dev`
-can reach it directly, and `THUMBS_DIR` is bind-mounted to a host directory
+network: `ml` publishes its port on the host (58012 by default, override
+with `FDRIVE_DEV_ML_PORT`) so `FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL`
+and `FDRIVE_TIKA_URL` in `apps/api/.env.dev` can reach its units directly,
+and `THUMBS_DIR` is bind-mounted to a host directory
 (`deploy/dev/.data/thumbs` by default, override with
 `FDRIVE_DEV_THUMBS_DIR`) rather than a named volume, so the host api process
 can read the generated WebP files at the path `FDRIVE_THUMBS_DIR` names.
-`image-embed` follows the same host-published pattern (58012 by default,
-override with `FDRIVE_DEV_IMAGE_EMBED_PORT`) for the generated
-`FDRIVE_IMAGE_EMBED_URL` in `apps/api/.env.dev`; the dev `indexer` service
-already points `IMAGE_EMBED_URL` at it (`http://image-embed:8012`) so the
-image embedding pass works as soon as `services/indexer` reads that
-variable.
-
-The `embed` service's image (`ghcr.io/huggingface/text-embeddings-inference`)
-ships `amd64` only; on an Apple Silicon Mac, `platform: linux/amd64` in the
-compose file runs it under Docker Desktop's emulation, which works but is
-slower to start (the model download and warmup take roughly a minute).
+The dev `ml` service is built from `services/ml` on first start, which
+takes several minutes, and downloads its models (about 3.1 GB) into a named
+volume the first time a unit loads.
 
 ## Migrating from filesai
 
@@ -357,5 +350,5 @@ thread-local database connection. These actions do not pause normal indexing.
 
 `IMAGE_EMBED_REQUEST_BATCH_SIZE` controls how many thumbnails the indexer sends per
 HTTP request (default 8); its former `IMAGE_EMBED_BATCH_SIZE` name remains a fallback
-alias. The image-embed service's own `IMAGE_EMBED_BATCH_SIZE` controls inference
-microbatches, independently of the request size.
+alias. The `ml` service embeds the images of a request one at a time, whatever
+the request size.

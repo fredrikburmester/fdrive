@@ -85,36 +85,36 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_EMBED_RUNTIME_URL",
     description:
-      "Optional controller base URL; unset probes the worker directly without controller revision checks.",
+      "Optional base URL whose /runtime reports the text embedding unit's status; unset probes the worker directly without revision checks.",
     default: null,
-    example: "http://embed:8099",
+    example: "http://ml:8080/text",
     secret: false,
     subsystem: "search",
   },
   {
     key: "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
     description:
-      "Optional controller base URL; unset probes the worker directly without controller revision checks.",
+      "Optional base URL whose /runtime reports the image embedding unit's status; unset probes the worker directly without revision checks.",
     default: null,
-    example: "http://image-embed:8013",
+    example: "http://ml:8080/image",
     secret: false,
     subsystem: "imageSearch",
   },
   {
     key: "FDRIVE_TIKA_RUNTIME_URL",
     description:
-      "Optional controller base URL; unset probes the worker directly without controller revision checks.",
+      "Optional base URL whose /runtime reports the document extraction unit's status; unset probes the worker directly without revision checks.",
     default: null,
-    example: "http://tika:9997",
+    example: "http://ml:8080/extract",
     secret: false,
     subsystem: "index",
   },
   {
     key: "FDRIVE_TIKA_URL",
     description:
-      "Tika base URL for direct readiness probes when no runtime controller is configured.",
+      "Base URL of the document extraction unit of the ml service, probed directly when no runtime URL is configured.",
     default: null,
-    example: "http://tika:9998",
+    example: "http://ml:8080/extract",
     secret: false,
     subsystem: "index",
   },
@@ -341,17 +341,19 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   },
   {
     key: "FDRIVE_EMBED_URL",
-    description: "Base URL of the TEI embeddings service. Unset disables semantic search.",
+    description:
+      "Base URL of the text embedding unit of the ml service. Unset disables semantic search.",
     default: null,
-    example: "http://embed:80",
+    example: "http://ml:8080/text",
     secret: false,
     subsystem: "search",
   },
   {
     key: "FDRIVE_IMAGE_EMBED_URL",
-    description: "Base URL of the SigLIP image-embedding sidecar. Unset disables image search.",
+    description:
+      "Base URL of the image embedding unit of the ml service. Unset disables image search.",
     default: null,
-    example: "http://image-embed:8012",
+    example: "http://ml:8080/image",
     secret: false,
     subsystem: "imageSearch",
   },

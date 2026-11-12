@@ -86,12 +86,14 @@ services:
       NODE_ENV: production
       FDRIVE_OCR_URL: http://ocr:8011
       FDRIVE_INDEXER_URL: http://indexer:8010
-      FDRIVE_EMBED_URL: http://embed:80
-      FDRIVE_IMAGE_EMBED_URL: http://image-embed:8012
-      FDRIVE_EMBED_RUNTIME_URL: ${FDRIVE_EMBED_RUNTIME_URL:-http://embed:8099}
-      FDRIVE_IMAGE_EMBED_RUNTIME_URL: ${FDRIVE_IMAGE_EMBED_RUNTIME_URL:-http://image-embed:8013}
-      FDRIVE_TIKA_RUNTIME_URL: ${FDRIVE_TIKA_RUNTIME_URL:-http://tika:9997}
-      FDRIVE_TIKA_URL: ${FDRIVE_TIKA_URL:-http://tika:9998}
+      # The ml service answers for all three under its own path prefixes, and
+      # each prefix also serves the status document the *_RUNTIME_URL names.
+      FDRIVE_EMBED_URL: http://ml:8080/text
+      FDRIVE_IMAGE_EMBED_URL: http://ml:8080/image
+      FDRIVE_EMBED_RUNTIME_URL: ${FDRIVE_EMBED_RUNTIME_URL:-http://ml:8080/text}
+      FDRIVE_IMAGE_EMBED_RUNTIME_URL: ${FDRIVE_IMAGE_EMBED_RUNTIME_URL:-http://ml:8080/image}
+      FDRIVE_TIKA_RUNTIME_URL: ${FDRIVE_TIKA_RUNTIME_URL:-http://ml:8080/extract}
+      FDRIVE_TIKA_URL: ${FDRIVE_TIKA_URL:-http://ml:8080/extract}
 
       # ONLYOFFICE is bundled in this stack. The owner enables it and chooses
       # the browser-facing origin in onboarding. Keep these defaults: the
@@ -235,11 +237,13 @@ services:
       # is selected, and the fallback mount keeps an install without storage
       # safe.
       INDEX_ROOTS: sftpgo=/roots/sftpgo
-      TIKA_URL: http://tika:9998
-      EMBED_URL: http://embed:80
+      # Document extraction, text embeddings and image embeddings are the
+      # three units of the ml service.
+      TIKA_URL: http://ml:8080/extract
+      EMBED_URL: http://ml:8080/text
       # Optional, like OCR: unset means the indexer never embeds
       # thumbnails and image search reports not_configured.
-      IMAGE_EMBED_URL: http://image-embed:8012
+      IMAGE_EMBED_URL: http://ml:8080/image
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       INDEXER_LOG_DIR: /logs
@@ -313,88 +317,31 @@ services:
     pids_limit: 512
     logging: *default-logging
 
-  tika:
+  # One server for text embeddings, image embeddings and document text
+  # extraction (services/ml). It reads the owner's feature settings from the
+  # api and keeps a model in memory only while a feature that needs it is on.
+  # It has no database access and no storage mounts: it only ever sees the
+  # bytes the indexer or the api hands it, and writes nothing but the model
+  # files it downloads on first use (about 3.1 GB with every feature on).
+  ml:
     init: true
-    image: ghcr.io/fredrikburmester/fdrive-tika:${FDRIVE_VERSION:-latest}
+    image: ghcr.io/fredrikburmester/fdrive-ml:${FDRIVE_VERSION:-latest}
     environment:
       FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
-      FDRIVE_RUNTIME_FEATURES: textSearch,searchOcr,semanticSearch
-      FDRIVE_RUNTIME_PORT: "9997"
-      FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:9998/version
-      # The JVM sizes its heap and its GC threads from what it can see. Under a
-      # container memory limit it sees the limit; with none it sees the host.
-      JAVA_TOOL_OPTIONS: ${FDRIVE_TIKA_JAVA_OPTS:-}
-    mem_limit: ${FDRIVE_TIKA_MEMORY:-0}
-    cpus: ${FDRIVE_TIKA_CPUS:-0}
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    cap_drop: [ALL]
-    pids_limit: 512
-    logging: *default-logging
-
-  embed:
-    init: true
-    # Wraps upstream TEI, pinned to an explicit version plus digest. Upstream
-    # ships amd64 only, so the published arm64 variant is built from TEI's pinned
-    # source and runs natively on ARM hosts.
-    image: ghcr.io/fredrikburmester/fdrive-embed:${FDRIVE_VERSION:-latest}
-    command: ["text-embeddings-router", "--model-id", "intfloat/multilingual-e5-small"]
-    environment:
-      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
-      FDRIVE_RUNTIME_FEATURES: semanticSearch
-      FDRIVE_RUNTIME_PORT: "8099"
-      FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:80/health
-      # TEI sizes both pools from the host's visible core count: one tokenization
-      # worker per core, plus the RAYON_NUM_THREADS=8 baked into the upstream
-      # image. On a 12-core host that is 19 threads and enough load to make the
-      # host itself unreachable while every container still reports healthy,
-      # because mem_limit bounds memory and nothing bounds CPU. Keep the default
-      # below the core count of a small host so indexing never costs the operator
-      # their shell; raise FDRIVE_EMBED_THREADS on a dedicated machine.
-      RAYON_NUM_THREADS: ${FDRIVE_EMBED_THREADS:-4}
-      TOKENIZATION_WORKERS: ${FDRIVE_EMBED_THREADS:-4}
+      # One pool for every model together. Unbounded, model inference takes
+      # every core and can make a small host unreachable while each container
+      # still reports healthy; raise it on a dedicated machine.
+      FDRIVE_ML_THREADS: ${FDRIVE_ML_THREADS:-4}
     volumes:
-      - ${FDRIVE_DATA_DIR:-./data}/models:/data
-    mem_limit: ${FDRIVE_EMBED_MEMORY:-4g}
-    # A hard cap on top of the thread counts. 0 means no limit, and the value
+      - fdrive-ml-models:/models
+    mem_limit: ${FDRIVE_ML_MEMORY:-6g}
+    # A hard cap on top of the thread count. 0 means no limit, and the value
     # must not exceed the host's core count, so this stays opt-in via .env.
-    cpus: ${FDRIVE_EMBED_CPUS:-0}
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    # Binds :80 as root; verified this image does not need
-    # CAP_NET_BIND_SERVICE added back to do so (unlike caddy, whose binary
-    # carries a file capability that requires it even for root; this
-    # server's own bind call does not).
-    cap_drop: [ALL]
-    pids_limit: 512
-    logging: *default-logging
-
-  # SigLIP 2 image/text embedding sidecar for image search (see
-  # services/image-embed/README.md), same `index` profile as the
-  # indexer. Talks to the api over FDRIVE_IMAGE_EMBED_URL, and to the indexer
-  # (which embeds each thumbnail as it is generated) over IMAGE_EMBED_URL.
-  # The named volume at /models caches the downloaded model weights across
-  # restarts, matching the indexer's HF_HOME convention. No database
-  # dependency: this service is stateless.
-  image-embed:
-    init: true
-    image: ghcr.io/fredrikburmester/fdrive-image-embed:${FDRIVE_VERSION:-latest}
-    environment:
-      IMAGE_EMBED_PORT: "8012"
-      FDRIVE_WORKER_TOKEN: ${POSTGRES_PASSWORD}
-      FDRIVE_RUNTIME_FEATURES: imageSearch
-      FDRIVE_RUNTIME_PORT: "8013"
-      FDRIVE_RUNTIME_READY_URL: http://127.0.0.1:8012/health
-      # Same reasoning as `embed` above: unset, torch takes every core.
-      IMAGE_EMBED_THREADS: ${FDRIVE_IMAGE_EMBED_THREADS:-4}
-      OMP_NUM_THREADS: ${FDRIVE_IMAGE_EMBED_THREADS:-4}
-    volumes:
-      - fdrive-image-embed-models:/models
-    mem_limit: ${FDRIVE_IMAGE_EMBED_MEMORY:-6g}
-    cpus: ${FDRIVE_IMAGE_EMBED_CPUS:-0}
+    cpus: ${FDRIVE_ML_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    read_only: true
     pids_limit: 512
     logging: *default-logging
 
@@ -435,5 +382,5 @@ volumes:
   fdrive-desktop:
   fdrive-indexer-logs:
   fdrive-thumbs:
-  fdrive-image-embed-models:
+  fdrive-ml-models:
   office_onlyoffice_data:

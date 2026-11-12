@@ -65,6 +65,17 @@ describe("runtimeFailure", () => {
   });
 });
 
+it("keeps a runtime URL's path, so each unit of one server has its own document", async () => {
+  const seen: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    seen.push(String(input));
+    return Response.json({ status: "ready" });
+  };
+  await fetchRuntimeStatus("http://ml:8080/text", null, fetchImpl);
+  await fetchRuntimeStatus("http://ml:8080/image/?x=1#y", null, fetchImpl);
+  expect(seen).toEqual(["http://ml:8080/text/runtime", "http://ml:8080/image/runtime"]);
+});
+
 it("preserves an explicit controller URL's published port", async () => {
   let seen = "";
   await fetchRuntimeStatus("http://127.0.0.1:58099", null, async (url) => {

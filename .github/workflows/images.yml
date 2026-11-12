@@ -29,7 +29,6 @@ on:
       - 'deploy/Dockerfile.proxy'
       - 'deploy/compose.yaml'
       - 'deploy/wait-ready.ts'
-      - 'deploy/runtime/**'
       - 'deploy/office/Dockerfile.onlyoffice'
       - 'deploy/office/onlyoffice-*.sh'
       - 'services/**'
@@ -106,22 +105,15 @@ jobs:
              "description": "fdrive indexer: text extraction, thumbnails and search indexing"},
             {"image": "ocr", "context": "services/ocr", "file": "services/ocr/Dockerfile",
              "description": "fdrive searchable PDF conversion with OCRmyPDF"},
-            {"image": "tika", "context": ".", "file": "deploy/runtime/Dockerfile.tika",
-             "description": "Apache Tika text extraction, started by fdrive on demand"},
-            {"image": "embed", "context": ".", "file": "deploy/runtime/Dockerfile.tei",
-             "description": "Text embeddings for semantic search, started by fdrive on demand"},
-            {"image": "image-embed", "context": ".", "file": "deploy/runtime/Dockerfile.image-embed",
-             "description": "SigLIP 2 image embeddings for image search, started by fdrive on demand"},
+            {"image": "ml", "context": "services/ml", "file": "services/ml/Dockerfile",
+             "description": "Text embeddings, image embeddings and document text extraction, loaded while their features are on"},
             {"image": "onlyoffice", "context": ".", "file": "deploy/office/Dockerfile.onlyoffice",
              "description": "ONLYOFFICE Document Server, started by fdrive on demand"}
           ]'
           platforms='["amd64"]'
           if [[ $publish == true ]]; then platforms='["amd64", "arm64"]'; fi
-          # Upstream TEI publishes amd64 only, so the arm64 embed image is built
-          # from source by its own job below.
           builds=$(jq -c --argjson platforms "$platforms" '
             [.[] as $image | $platforms[] as $platform
-             | select(($image.image == "embed" and $platform == "arm64") | not)
              | $image + {platform: $platform,
                          runner: (if $platform == "arm64" then "ubuntu-24.04-arm" else "ubuntu-24.04" end)}]
           ' <<< "$images")
@@ -196,83 +188,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  embed-arm64:
-    name: embed (arm64)
-    needs: plan
-    if: needs.plan.outputs.publish == 'true'
-    runs-on: ubuntu-24.04-arm
-    # A first build of the upstream Rust source takes most of this; later runs
-    # reuse the published base and take a minute.
-    timeout-minutes: 120
-    permissions:
-      contents: read
-      packages: write
-    env:
-      # Keep in step with tools/perf/tei-runtime.ts.
-      TEI_REVISION: 4150561d42c495fe95f2aebb57fbb602c13ff4e6
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: base
-        name: Look for the native TEI base
-        env:
-          PREFIX: ${{ needs.plan.outputs.prefix }}
-        run: |
-          image="$PREFIX-tei-arm64:${TEI_REVISION::12}"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          if docker buildx imagetools inspect "$image" > /dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Free disk space
-        if: steps.base.outputs.exists == 'false'
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-      - name: Build the native TEI base from its pinned source
-        if: steps.base.outputs.exists == 'false'
-        uses: docker/build-push-action@v6
-        with:
-          context: https://github.com/huggingface/text-embeddings-inference.git#${{ env.TEI_REVISION }}
-          file: Dockerfile-arm64
-          target: http
-          platforms: linux/arm64
-          tags: ${{ steps.base.outputs.image }}
-          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          push: true
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/runtime/Dockerfile.tei-arm64
-          platforms: linux/arm64
-          build-args: TEI_BASE=${{ steps.base.outputs.image }}
-          labels: |
-            org.opencontainers.image.title=fdrive-embed
-            org.opencontainers.image.description=Text embeddings for semantic search, started by fdrive on demand
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.plan.outputs.version }}
-            org.opencontainers.image.licenses=AGPL-3.0-only
-          outputs: type=image,name=${{ needs.plan.outputs.prefix }}-embed,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=embed-arm64
-          cache-to: type=gha,mode=max,scope=embed-arm64
-      - env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/digests"
-          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: digests-embed-arm64
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
   # The builds above prove each image builds, not that the stack runs: an API
   # image once built cleanly and then failed to resolve a module at startup.
   # Start the core stack from this commit's images through the real compose
@@ -326,8 +241,8 @@ jobs:
           # names no container holds, which pushes the API's health response past
           # its healthcheck timeout, so the absent workers resolve to its loopback.
           printf '%s\n' 'services:' '  api:' '    extra_hosts:' \
-            '      - "indexer:127.0.0.1"' '      - "ocr:127.0.0.1"' '      - "tika:127.0.0.1"' \
-            '      - "embed:127.0.0.1"' '      - "image-embed:127.0.0.1"' '      - "onlyoffice:127.0.0.1"' \
+            '      - "indexer:127.0.0.1"' '      - "ocr:127.0.0.1"' '      - "ml:127.0.0.1"' \
+            '      - "onlyoffice:127.0.0.1"' \
             > compose.smoke-workers.yaml
           stack=(-f compose.smoke.yaml -f compose.smoke-workers.yaml)
           if ! docker compose "${stack[@]}" up -d --wait --wait-timeout 300 proxy; then
@@ -358,7 +273,7 @@ jobs:
 
   merge:
     name: Publish ${{ matrix.image }}
-    needs: [plan, build, embed-arm64, smoke]
+    needs: [plan, build, smoke]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

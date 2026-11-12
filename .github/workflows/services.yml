@@ -7,7 +7,6 @@ on:
     paths:
       - 'services/indexer/**'
       - 'services/ocr/**'
-      - 'services/image-embed/**'
       - 'services/runtime/**'
       - '.github/workflows/services.yml'
   workflow_call:
@@ -31,7 +30,6 @@ jobs:
         include:
           - { name: Indexer (Python), service: indexer, module: fdrive_indexer }
           - { name: OCR (Python), service: ocr, module: fdrive_ocr }
-          - { name: Python (image-embed), service: image-embed, module: fdrive_image_embed }
           - { name: Python (runtime), service: runtime, module: fdrive_runtime }
     defaults:
       run:

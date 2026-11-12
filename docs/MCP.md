@@ -79,7 +79,8 @@ changes can shift pages. Trash listing scans at most 10,000 provider entries and
 File reads, uploads and text replacements are capped at **4 MiB**. The server enforces the cap
 on streamed bytes, not only reported file size. `read_file_text` pages the extracted text;
 source files still must fit the byte cap. Document extraction requires `FDRIVE_INDEXER_URL`
-and appropriate processing dependencies (Tika for Office, configured OCR for images/scans).
+and appropriate processing dependencies (the ml service for Office documents, configured OCR
+for images/scans).
 The internal `/extract-content` endpoint accepts bounded bytes already read through the
 provider, writes a temporary extraction file, removes it afterward, and never takes a
 filesystem path. It also works when no index roots are mounted. Extraction status describes

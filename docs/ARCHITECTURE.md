@@ -14,6 +14,10 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - The Python indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
   OCR may write to mounted originals. Browser file operations use provider credentials.
   See [indexer](INDEXER.md), [OCR](OCR.md) and [search](SEARCH-AND-AI.md).
+- Model inference and office-document text extraction run in the Rust
+  [ML server](../services/ml/README.md). It has no database access and no storage mounts: the
+  indexer and the API hand it bytes or text over HTTP, so parsing a hostile file cannot reach
+  anyone's storage. It loads a model only while a feature that needs it is enabled.
 - Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
   tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
 - fdrive is an SFTPGo client first. SFTPGo, WebDAV and S3 storage adapters ship, and every
@@ -81,7 +85,8 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
 ## UI and runtime decisions
 
 - Feature activation is persisted through onboarding/System settings. Optional processing
-  begins disabled; runtime controllers expose starting, ready and failed states.
+  begins disabled; the ml service and the Office controller expose starting, ready and failed
+  states.
 - System pages are installation-wide and independent of the active login; Storage is the one
   page with per-server settings (each provider row carries its own Trash), and every page header
   states its scope.

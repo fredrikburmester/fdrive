@@ -44,10 +44,11 @@ describe("buildWebEnvLocal", () => {
 describe("buildDevSearchEnv", () => {
   it("builds every search, OCR, and thumbnails key under the given repo root", () => {
     const additions = buildDevSearchEnv("/repo");
-    expect(additions.FDRIVE_EMBED_URL).toBe("http://127.0.0.1:58081");
+    expect(additions.FDRIVE_EMBED_URL).toBe("http://127.0.0.1:58012/text");
     expect(additions.FDRIVE_INDEXER_URL).toBe("http://127.0.0.1:58010");
     expect(additions.FDRIVE_OCR_URL).toBe("http://127.0.0.1:58011");
-    expect(additions.FDRIVE_IMAGE_EMBED_URL).toBe("http://127.0.0.1:58012");
+    expect(additions.FDRIVE_IMAGE_EMBED_URL).toBe("http://127.0.0.1:58012/image");
+    expect(additions.FDRIVE_TIKA_URL).toBe("http://127.0.0.1:58012/extract");
     expect(additions.FDRIVE_ADMIN_USERS).toBe("dev");
     expect(additions.FDRIVE_THUMBS_DIR).toBe(join("/repo", "deploy", "dev", ".data", "thumbs"));
     expect(JSON.parse(additions.FDRIVE_INDEX_ROOTS ?? "")).toEqual([
@@ -239,11 +240,9 @@ it("derives URLs from the same port overrides as dev compose", () => {
     FDRIVE_DEV_API_PORT: "3301",
     FDRIVE_DEV_DB_PORT: "55433",
     FDRIVE_DEV_SFTPGO_HTTP_PORT: "58083",
-    FDRIVE_DEV_EMBED_PORT: "59081",
+    FDRIVE_DEV_ML_PORT: "59081",
     FDRIVE_DEV_INDEXER_HTTP_PORT: "59010",
     FDRIVE_DEV_OCR_HTTP_PORT: "59011",
-    FDRIVE_DEV_IMAGE_EMBED_PORT: "59012",
-    FDRIVE_DEV_TIKA_PORT: "59999",
   };
   const api = buildApiEnvDev("key", env);
   expect(api).toContain("PORT=3301");
@@ -251,11 +250,11 @@ it("derives URLs from the same port overrides as dev compose", () => {
   expect(api).toContain("SFTPGO_URL=http://127.0.0.1:58083");
   expect(buildWebEnvLocal(env)).toContain("127.0.0.1:3301");
   expect(buildDevSearchEnv("/repo", env)).toMatchObject({
-    FDRIVE_EMBED_URL: "http://127.0.0.1:59081",
+    FDRIVE_EMBED_URL: "http://127.0.0.1:59081/text",
     FDRIVE_INDEXER_URL: "http://127.0.0.1:59010",
     FDRIVE_OCR_URL: "http://127.0.0.1:59011",
-    FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:59012",
-    FDRIVE_TIKA_URL: "http://127.0.0.1:59999",
+    FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:59081/image",
+    FDRIVE_TIKA_URL: "http://127.0.0.1:59081/extract",
   });
   expect(() => buildWebEnvLocal({ FDRIVE_DEV_API_PORT: "bad" })).toThrow("TCP port");
 });

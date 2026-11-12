@@ -656,13 +656,13 @@ export async function composeApp(
   // The fan-out is cached for HEALTH_PROBE_TTL_MS and shared between
   // concurrent requests, so anonymous health polling cannot be turned into
   // load at the sidecars.
-  // A worker that is down is asked one more question through its bundled
-  // controller (`GET /runtime` on the controller's status port): a controller
-  // that answers "failed" turns the entry from `unreachable` into `failed`
-  // with the controller's fixed reason, so a worker the controller gave up
-  // on is self-diagnosing from this endpoint rather than looking like a
-  // network problem. The controller is only consulted when the worker itself
-  // did not answer, so a healthy stack costs no extra request.
+  // A worker that is down is asked one more question through its status
+  // document (`GET /runtime` below a unit of the ml service, or on the Office
+  // controller's status port): an answer of "failed" turns the entry from
+  // `unreachable` into `failed` with the document's fixed reason, so a worker
+  // that gave up starting is self-diagnosing from this endpoint rather than
+  // looking like a network problem. The document is only consulted when the
+  // worker itself did not answer, so a healthy stack costs no extra request.
   const controllerVerdict = async (
     reachable: boolean,
     controllerUrl: string | null,
@@ -698,7 +698,7 @@ export async function composeApp(
         : controllerVerdict(
             searchStatus.healthy,
             forConfig.fdriveEmbedRuntimeUrl ?? forConfig.fdriveEmbedUrl ?? null,
-            forConfig.fdriveEmbedRuntimeUrl ? null : "8099",
+            null,
           ),
       // A sidecar that answered but is still loading its model is treated as
       // unreachable here: it cannot yet serve an embedding, so it is not
@@ -708,7 +708,7 @@ export async function composeApp(
         : controllerVerdict(
             imageSearchResult.ok && imageSearchResult.data.status === "ok",
             forConfig.fdriveImageEmbedRuntimeUrl ?? forConfig.fdriveImageEmbedUrl ?? null,
-            forConfig.fdriveImageEmbedRuntimeUrl ? null : "8013",
+            null,
           ),
       officeReachable === null
         ? null

@@ -75,7 +75,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Index profile: indexer, tika, embed. Opt in with `--profile index` so a
+  # Index profile: indexer, ml, ocr. Opt in with `--profile index` so a
   # plain `docker compose -f compose.dev.yaml up -d` stays fast. Mounts the same
   # named volume sftpgo writes its seed files into (read-only), so the indexer
   # sees exactly what the dev SFTPGo user sees. Thumbnails are bind-mounted to
@@ -89,13 +89,11 @@ services:
     environment:
       DATABASE_URL: postgres://fdrive:fdrive-dev@db:5432/fdrive
       INDEX_ROOTS: sftpgo=/roots/sftpgo
-      TIKA_URL: http://tika:9998
-      EMBED_URL: http://embed:80
-      # Optional, like OCR: set so a local dev stack exercises the image
-      # embedding pass once services/indexer reads it (image-embed-db
-      # chunk); unset means the feature reports not_configured, same as
-      # every other optional sidecar.
-      IMAGE_EMBED_URL: http://image-embed:8012
+      # The three units of the ml service below.
+      TIKA_URL: http://ml:8080/extract
+      EMBED_URL: http://ml:8080/text
+      # Optional, like OCR: unset means the feature reports not_configured.
+      IMAGE_EMBED_URL: http://ml:8080/image
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       SCAN_INTERVAL_SECONDS: "30"
@@ -113,32 +111,28 @@ services:
       sftpgo:
         condition: service_healthy
 
-  tika:
-    image: apache/tika:3.2.1.0
-    ports:
-      - "127.0.0.1:${FDRIVE_DEV_TIKA_PORT:-59998}:9998"
+  # One server for document text extraction, text embeddings and image
+  # embeddings (services/ml), same `index` profile as the indexer. Published
+  # on the host so the api dev server (running with `tsx watch` on the host,
+  # not in this compose stack) reaches each unit under its path prefix,
+  # matching FDRIVE_TIKA_URL, FDRIVE_EMBED_URL and FDRIVE_IMAGE_EMBED_URL in
+  # apps/api/.env.dev. Every unit is always on here: production instead
+  # follows the owner's feature settings (FDRIVE_WORKER_TOKEN). The named
+  # volume keeps the downloaded models (about 3.1 GB) across restarts.
+  ml:
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
     profiles: [index]
-
-  # Published on the host so the api dev server (running with `tsx watch` on
-  # the host, not in this compose stack) can reach it directly for semantic
-  # search, matching FDRIVE_EMBED_URL in apps/api/.env.dev.
-  embed:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
-    platform: linux/amd64 # this image ships amd64 only; emulated on arm64 hosts
-    profiles: [index]
-    command: ["--model-id", "intfloat/multilingual-e5-small"]
     environment:
-      # Match compose.yaml: unset, TEI takes a tokenization worker per core on
-      # top of the image's RAYON_NUM_THREADS=8.
-      RAYON_NUM_THREADS: ${FDRIVE_EMBED_THREADS:-4}
-      TOKENIZATION_WORKERS: ${FDRIVE_EMBED_THREADS:-4}
+      FDRIVE_ML_STATIC_UNITS: text,image,extract
+      # Match compose.yaml: unset, model inference takes every core.
+      FDRIVE_ML_THREADS: ${FDRIVE_ML_THREADS:-4}
     ports:
-      - "${FDRIVE_DEV_EMBED_PORT:-58081}:80"
+      - "127.0.0.1:${FDRIVE_DEV_ML_PORT:-58012}:8080"
     volumes:
-      - fdrive-dev-embed-models:/data
-    mem_limit: 4g
-    # The emulated amd64 TEI image is the first casualty of memory pressure (exit 137);
-    # come back on its own instead of leaving search "Unreachable" until someone notices.
+      - fdrive-dev-ml-models:/models
+    mem_limit: 6g
     restart: unless-stopped
 
   # Nightly OCR pass, same `index` profile as the indexer. Mounts the dev
@@ -171,34 +165,6 @@ services:
         condition: service_healthy
       sftpgo:
         condition: service_healthy
-
-  # SigLIP 2 image/text embedding sidecar for image search (see
-  # services/image-embed/README.md), same `index` profile as the
-  # indexer. Published on the host, like `embed` above, so the api dev
-  # server (running with `tsx watch` on the host) can reach it directly once
-  # FDRIVE_IMAGE_EMBED_URL is wired up. The named volume at /models caches
-  # the downloaded model weights across restarts, matching the indexer's
-  # HF_HOME convention. No database dependency: this service is stateless.
-  image-embed:
-    build:
-      context: ../services/image-embed
-      dockerfile: Dockerfile
-    profiles: [index]
-    environment:
-      IMAGE_EMBED_PORT: "8012"
-      IMAGE_EMBED_THREADS: ${FDRIVE_IMAGE_EMBED_THREADS:-4}
-      OMP_NUM_THREADS: ${FDRIVE_IMAGE_EMBED_THREADS:-4}
-    ports:
-      - "${FDRIVE_DEV_IMAGE_EMBED_PORT:-58012}:8012"
-    volumes:
-      - fdrive-dev-image-embed-models:/models
-    mem_limit: 6g
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:8012/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
 
   # A local S3 target for the S3 provider: MinIO with one bucket and one
   # read-write key, prepared by the `mc` client the image ships. Add it under
@@ -242,6 +208,5 @@ volumes:
   fdrive-dev-pgdata:
   fdrive-dev-sftpgo-data:
   fdrive-dev-minio-data:
-  fdrive-dev-embed-models:
   fdrive-dev-ocr-state:
-  fdrive-dev-image-embed-models:
+  fdrive-dev-ml-models:

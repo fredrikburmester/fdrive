@@ -72,25 +72,26 @@ export function buildWebEnvLocal(env: DevEnv = {}): string {
 /**
  * The dev environment's search, OCR, and thumbnails config, keyed by the
  * `FDRIVE_*` variable name (see `apps/api/src/config.ts`). Matches
- * `deploy/compose.dev.yaml`'s `embed`, `indexer`, and `ocr` published ports
- * and bind-mounted thumbnails directory: 127.0.0.1:58081, 127.0.0.1:58010,
- * 127.0.0.1:58011, the image-embed sidecar at 127.0.0.1:58012, and `deploy/dev/.data/thumbs` under `repoRoot`
- * respectively. `dev` is granted admin in the dev environment so the System
+ * `deploy/compose.dev.yaml`'s `ml`, `indexer`, and `ocr` published ports
+ * and bind-mounted thumbnails directory: 127.0.0.1:58012 (one prefix per
+ * unit of the ml service), 127.0.0.1:58010, 127.0.0.1:58011, and
+ * `deploy/dev/.data/thumbs` under `repoRoot` respectively. `dev` is granted admin in the dev environment so the System
  * pages are reachable without extra setup. Trash is enabled through onboarding;
  * `tools/dev/generate-seed.ts` seeds its prerequisite SFTPGo recycle rule.
  */
 export function buildDevSearchEnv(repoRoot: string, env: DevEnv = {}): Record<string, string> {
+  const ml = `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_ML_PORT", 58012)}`;
   return {
     FDRIVE_INDEX_ROOTS: JSON.stringify([
       { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
     ]),
-    FDRIVE_EMBED_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_EMBED_PORT", 58081)}`,
+    FDRIVE_EMBED_URL: `${ml}/text`,
     FDRIVE_THUMBS_DIR: join(repoRoot, "deploy", "dev", ".data", "thumbs"),
     FDRIVE_INDEXER_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_INDEXER_HTTP_PORT", 58010)}`,
     FDRIVE_OCR_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_OCR_HTTP_PORT", 58011)}`,
-    FDRIVE_IMAGE_EMBED_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_IMAGE_EMBED_PORT", 58012)}`,
+    FDRIVE_IMAGE_EMBED_URL: `${ml}/image`,
     FDRIVE_ADMIN_USERS: "dev",
-    FDRIVE_TIKA_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_TIKA_PORT", 59998)}`,
+    FDRIVE_TIKA_URL: `${ml}/extract`,
   };
 }
 

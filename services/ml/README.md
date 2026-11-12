@@ -65,8 +65,48 @@ An existing index needs no re-embedding:
   vector and a vector never depends on the rest of a request.
 
 Quantized arithmetic is not bit-identical across CPU families: the same image embedded on ARM
-and on x86 gave vectors with a cosine of 0.98. Measurements are in the
-[plan](../../docs/plans/ML-SERVER.md).
+and on x86 gave vectors with a cosine of 0.98. See [measurements](#measurements).
+
+## Measurements
+
+Taken on 2026-11-12. Open questions from them are in the
+[follow-ups](../../docs/plans/ML-SERVER.md).
+
+Against the services this server replaced, on the same inputs:
+
+| Unit | Result |
+| --- | --- |
+| Text | Cosine similarity 1.00000000 with TEI `cpu-1.9.2` on eight multilingual inputs, one of them 1,205 tokens cut to 512. Largest element difference 5.1e-07. |
+| Image, full-precision vision tower | 13 thumbnails in the indexer's format (256 px WebP): cosine at least 0.999999 with the Python service, so decoding, resizing and tokenizing match it. Ten queries: cosine 1.000000. |
+| Extraction | Word for word the same as Tika 3.2.1 on the generated `.doc`, `.docx`, `.pptx`, `.rtf` and `.xlsx` fixtures. On 190 Apache POI sample documents, 86% of the distinct words Tika returns. All 1,541 files of that corpus extract or fail cleanly. |
+
+On Linux arm64 in Docker with four threads the image unit takes 179 ms per image and 135 ms per
+query and holds 1.65 GiB of private memory. The Python service took 500 ms and 185 ms. The
+image is 215 MB, against 1.63 GB for `image-embed`, 938 MB for TEI and 546 MB for Tika.
+
+The image model was chosen on 1,000 photos from the Crossmodal-3600 set, prepared as the
+indexer prepares them, each searched for with its first English and its first Swedish caption.
+"First hit" is how often the right photo comes back first; the margin of error is about 1.5
+points. Speed and memory are from an Apple M-series CPU with four threads.
+
+| Image model | First hit, English | First hit, Swedish | Per image | Memory |
+| --- | --- | --- | --- | --- |
+| SigLIP 2 large, as the Python service ran it | 66.8% | 56.6% | 461 ms | 3.0 GB |
+| Large, queries lowercased | 71.3% | 66.9% | 461 ms | 3.0 GB |
+| Large, 8-bit vision tower, queries lowercased, one image per call (shipped) | 69.5% | 66.0% | 184 ms | 2.1 GB |
+| Base patch 16, queries lowercased | 72.1% | 63.4% | 132 ms | 2.0 GB |
+| Base patch 32, queries lowercased | 70.4% | 62.1% | 35 ms | 1.7 GB |
+| So400m, queries lowercased | 71.5% | 68.8% | 806 ms | 3.9 GB |
+
+- Lowercasing queries is worth 4 points in English and 10 in Swedish and changes no stored
+  vector.
+- An index holding half full-precision and half 8-bit vectors scored 71.2% and 66.6%, the same
+  as either alone. Nothing in fdrive compares image vectors with each other.
+- 8-bit text towers are unusable: Swedish first hits fall from 57% to 14% on the large model.
+  So are the 8-bit vision towers of the base and So400m models (51% and 14%).
+- The 8-bit tower picks its number ranges from everything in one inference call: the same
+  image alone and in a batch of eight gave vectors with a cosine of 0.97. Search quality is
+  the same either way, and one image per call costs 13% of the speed.
 
 ## Document formats
 
@@ -106,6 +146,12 @@ real-model probes, which download the models:
 ```sh
 cargo test --release --test models -- --ignored
 ```
+
+They compare against recorded vectors in `tests/reference`: text against what
+text-embeddings-inference produced, images against this server on an ARM CPU, since the 8-bit
+vision tower computes slightly differently per CPU family. `CI (full)` runs them on its amd64
+runner. After a deliberate model change, record the image vectors again with
+`FDRIVE_ML_WRITE_REFERENCE=1`.
 
 Run it locally with every unit on:
 

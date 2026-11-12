@@ -30,7 +30,7 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   },
   {
     key: "FDRIVE_DATA_DIR",
-    description: "Host directory holding Postgres data, OCR state, and the embedding model cache.",
+    description: "Host directory holding Postgres data and OCR state.",
     default: "./data",
     example: "./data",
     secret: false,
@@ -162,25 +162,16 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   },
   // Processing worker thread counts and opt-in resource caps
   // (deploy/REFERENCE.md, "Processing Worker Resource Limits"). compose.yaml
-  // interpolates these straight into each sidecar's environment or its
+  // interpolates these straight into each worker's environment or its
   // cpus:/mem_limit:, so they never reach the api and live only here.
   {
-    key: "FDRIVE_EMBED_THREADS",
+    key: "FDRIVE_ML_THREADS",
     description:
-      "Thread count for the text embedding sidecar (TEI's RAYON_NUM_THREADS and TOKENIZATION_WORKERS); raise on a dedicated machine.",
+      "Thread count shared by every model in the ml service (text and image embeddings); raise on a dedicated machine.",
     default: "4",
     example: "8",
     secret: false,
     subsystem: "search",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_THREADS",
-    description:
-      "Thread count for the SigLIP image embedding sidecar (IMAGE_EMBED_THREADS and OMP_NUM_THREADS); raise on a dedicated machine.",
-    default: "4",
-    example: "8",
-    secret: false,
-    subsystem: "imageSearch",
   },
   {
     key: "FDRIVE_INDEXER_CPUS",
@@ -200,67 +191,22 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "index",
   },
   {
-    key: "FDRIVE_TIKA_CPUS",
+    key: "FDRIVE_ML_CPUS",
     description:
-      "Hard CPU cap for the tika text extraction container (Docker cpus:); 0 means no limit, and Docker refuses a value above the host's core count.",
-    default: "0",
-    example: "2",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_TIKA_MEMORY",
-    description:
-      "Hard memory cap for the tika text extraction container (Docker mem_limit); 0 means no limit, and the JVM then sizes its heap from host RAM.",
-    default: "0",
-    example: "2g",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_TIKA_JAVA_OPTS",
-    description:
-      "Extra JVM options for the tika container (passed as JAVA_TOOL_OPTIONS), for an explicit -Xmx when FDRIVE_TIKA_MEMORY is unset.",
-    default: null,
-    example: "-Xmx1g",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_EMBED_CPUS",
-    description:
-      "Hard CPU cap for the text embedding sidecar (Docker cpus:); 0 means no limit, and Docker refuses a value above the host's core count.",
+      "Hard CPU cap for the ml service (Docker cpus:); 0 means no limit, and Docker refuses a value above the host's core count.",
     default: "0",
     example: "2",
     secret: false,
     subsystem: "search",
   },
   {
-    key: "FDRIVE_EMBED_MEMORY",
+    key: "FDRIVE_ML_MEMORY",
     description:
-      "Hard memory cap for the text embedding sidecar (Docker mem_limit); 0 means no limit.",
-    default: "4g",
-    example: "2g",
-    secret: false,
-    subsystem: "search",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_CPUS",
-    description:
-      "Hard CPU cap for the image embedding sidecar (Docker cpus:); 0 means no limit, and Docker refuses a value above the host's core count.",
-    default: "0",
-    example: "2",
-    secret: false,
-    subsystem: "imageSearch",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_MEMORY",
-    description:
-      "Hard memory cap for the image embedding sidecar (Docker mem_limit); 0 means no limit.",
+      "Hard memory cap for the ml service (Docker mem_limit); 0 means no limit. Image search alone needs about 3g.",
     default: "6g",
-    example: "3g",
+    example: "4g",
     secret: false,
-    subsystem: "imageSearch",
+    subsystem: "search",
   },
   {
     key: "FDRIVE_OCR_CPUS",

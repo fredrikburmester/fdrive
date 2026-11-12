@@ -7,6 +7,11 @@
 //! ```
 //!
 //! Files are kept in `FDRIVE_ML_MODELS_DIR` (default `target/models`).
+//!
+//! `tests/reference` holds vectors to compare against: the text ones came
+//! from text-embeddings-inference, the image ones from this server on an
+//! Apple M-series CPU. Regenerate the image ones after a deliberate model
+//! change with `FDRIVE_ML_WRITE_REFERENCE=1`.
 
 use std::path::PathBuf;
 
@@ -25,12 +30,42 @@ fn runtime(tokio: &tokio::runtime::Runtime) -> Runtime {
     Runtime::new(hub, 4, tokio.handle().clone()).unwrap()
 }
 
-fn solid_png(color: [u8; 3]) -> Vec<u8> {
+fn png(image: &image::RgbImage) -> Vec<u8> {
     let mut bytes = Vec::new();
-    image::RgbImage::from_pixel(64, 64, image::Rgb(color))
+    image
         .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
         .unwrap();
     bytes
+}
+
+fn solid_png(color: [u8; 3]) -> Vec<u8> {
+    png(&image::RgbImage::from_pixel(64, 64, image::Rgb(color)))
+}
+
+/// Two generated pictures with structure for the model to respond to: one
+/// already at the model's size, one that has to be resized.
+fn reference_images() -> Vec<Vec<u8>> {
+    let weave = image::RgbImage::from_fn(256, 256, |x, y| {
+        image::Rgb([
+            ((x * 3 + y * 5) % 256) as u8,
+            ((x * x / 7 + y) % 256) as u8,
+            ((x ^ y) % 256) as u8,
+        ])
+    });
+    let sunset = image::RgbImage::from_fn(320, 200, |x, y| {
+        image::Rgb([(x * 255 / 319) as u8, (y * 255 / 199) as u8, 128])
+    });
+    vec![png(&weave), png(&sunset)]
+}
+
+fn reference(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/reference")
+        .join(name)
+}
+
+fn recorded_vectors(value: &serde_json::Value) -> Vec<Vec<f32>> {
+    serde_json::from_value(value.clone()).unwrap()
 }
 
 #[test]
@@ -51,6 +86,18 @@ fn text_model_ranks_the_matching_passage_first() {
             .all(|vector| vector.len() == 384 && vector.iter().all(|value| value.is_finite()))
     );
     assert!(cosine(&vectors[0], &vectors[1]) > cosine(&vectors[0], &vectors[2]));
+
+    // The vectors text-embeddings-inference gave for the same inputs.
+    let recorded: serde_json::Value = serde_json::from_slice(&std::fs::read(reference("text.json")).unwrap()).unwrap();
+    let inputs: Vec<String> = serde_json::from_value(recorded["inputs"].clone()).unwrap();
+    for (ours, theirs) in embedder
+        .embed(&inputs, true)
+        .unwrap()
+        .iter()
+        .zip(recorded_vectors(&recorded["vectors"]))
+    {
+        assert!(cosine(ours, &theirs) > 0.9999, "cosine {}", cosine(ours, &theirs));
+    }
 
     // 600 words is far past 512 tokens: refused whole, embedded when cut.
     let long = vec!["passage: ".to_string() + &"word ".repeat(600)];
@@ -79,4 +126,29 @@ fn image_model_puts_queries_and_images_in_one_space() {
     // Capital letters must not change what a query finds.
     let cased = embedder.embed_texts(&["A Red Square".to_string()]).unwrap();
     assert!(cosine(&cased[0], &texts[0]) > 0.9999);
+
+    let pictures = reference_images();
+    let started = std::time::Instant::now();
+    let embedded = embedder.embed_images(&pictures).unwrap();
+    println!(
+        "{:.0} ms per image",
+        started.elapsed().as_secs_f64() * 1000.0 / pictures.len() as f64
+    );
+    if std::env::var_os("FDRIVE_ML_WRITE_REFERENCE").is_some() {
+        let recorded = serde_json::json!({
+            "source": format!("fdrive-ml on {} {}", std::env::consts::ARCH, std::env::consts::OS),
+            "images": ["weave", "sunset"],
+            "vectors": embedded,
+        });
+        std::fs::write(reference("image.json"), serde_json::to_string(&recorded).unwrap()).unwrap();
+        return;
+    }
+    // The 8-bit tower does not compute the same on every CPU family: across
+    // ARM and x86 the same photo came out with a cosine of about 0.98. A
+    // result far below that means this CPU's code path loses precision.
+    let recorded: serde_json::Value = serde_json::from_slice(&std::fs::read(reference("image.json")).unwrap()).unwrap();
+    for (ours, theirs) in embedded.iter().zip(recorded_vectors(&recorded["vectors"])) {
+        println!("cosine with the recorded vector: {:.4}", cosine(ours, &theirs));
+        assert!(cosine(ours, &theirs) > 0.9, "cosine {}", cosine(ours, &theirs));
+    }
 }

@@ -59,8 +59,8 @@ or necessarily purge previously cached results. A rule-preview UI remains in the
 ## Developer references
 
 - [Indexer](INDEXER.md) and [OCR](OCR.md): settings, processing and internal endpoints.
-- [Image embedding service](../services/image-embed/README.md): model, bounded HTTP contract
-  and model-free unit-test setup.
+- [ML server](../services/ml/README.md): the text and image embedding models, document
+  extraction, the bounded HTTP contract and the model-free unit-test setup.
 - [Scoping](SCOPING.md): mapping and authorization requirements for every consumer.
 - [AI organize](AI.md): the language-model feature, which reads index excerpts but runs no
   local model.
