@@ -2,7 +2,7 @@
 
 System → Backups protects one installation, including every account. Only the setup owner,
 using a browser session and fresh storage authentication, can manage or download backups.
-Provider administrator access and MCP/desktop bearer tokens do not grant backup access.
+Other administrators and MCP/desktop bearer tokens do not grant backup access.
 
 ## Configure
 
@@ -22,11 +22,15 @@ source directories. Missing or unreadable recovery sources appear as coverage ga
 1. Open System → Backups and authenticate again.
 2. Create and download a recovery key. Paste the saved key to prove it can decrypt a challenge.
    The private key is generated in the browser; scheduled backups use only its public recipient.
-3. Optionally add S3/B2 or a connected fileserver destination. Adding it tests create, read and
-   delete permissions using a uniquely named probe. Use a private bucket or directory and
-   dedicated credentials. Keep those credentials outside fdrive too. A fileserver destination
-   needs a password that signs in unattended: one-time codes are dropped before the credential
-   is verified and saved, so an account that requires them cannot be used for scheduled copies.
+3. Optionally add S3/B2 or a connected fileserver destination: the local files folder, or a
+   WebDAV or S3 storage added under System → Storage. Adding it tests create, read and delete
+   permissions using a uniquely named probe. Use a private bucket or directory and dedicated
+   credentials. Keep those credentials outside fdrive too. A fileserver destination needs a
+   password that signs in unattended: one-time codes are dropped before the credential is
+   verified and saved, so an account that requires them cannot be used for scheduled copies. A
+   local folder destination is checked against fdrive's own users like a sign-in, so a
+   disabled or removed user, or a changed password, stops its copies. It sits on the same host as the installation,
+   so copy it off the host with the rest of the files folder.
    A bucket with default Object Lock retention keeps the probe object; fdrive never asks for a
    retention bypass. The destination is saved and the kept object's name and deadline are shown
    on its card and recorded in the event log.
@@ -46,8 +50,8 @@ browsing identity. Its objects live beneath `<private directory>/.fdrive-backups
 The normal fdrive storage API hides that namespace and rejects ancestor archive/mutation
 operations that would include it. Server ACLs remain the boundary against other clients and
 aliases; ciphertext encryption protects its contents. The fileserver's own rules still apply
-to that directory: an SFTPGo Trash rule, for example, keeps deleted probes and pruned archives
-under its `.trash` folder until its own retention removes them.
+to that directory, such as a server-side recycle bin that keeps deleted probes and pruned
+archives until its own retention removes them.
 
 Copies use one encrypted archive per snapshot. Each transfer is read back in full and checked
 with SHA-256 before a completion marker is published. Multipart failures are aborted; retries
@@ -89,10 +93,10 @@ newest configuration and history are still protected while coverage stays report
 The explicit table registry is in `packages/backup/src/registry.ts`. A capture fails on an
 unclassified application/index table, including tables introduced by a future migration.
 
-- Accounts, identities, providers, credentials, settings, tags, favorites, folder views,
-  recents, AI chats (transcripts and references), share metadata (an owned share's password
-  hash included, so it restores fully; a native row only names the share SFTPGo keeps),
-  activity, stable Office/native file IDs and native recovery receipts.
+- Accounts, identities, providers, local users (password hashes included) and the folders
+  they share with each other, credentials, settings, tags, favorites, folder views, recents,
+  AI chats (transcripts and references), share metadata (password hashes included, so links
+  restore fully), activity, stable Office/native file IDs and native recovery receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
 - Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
   native local/remote recovery material, retained logs and configured external source mounts.
@@ -101,8 +105,9 @@ unclassified application/index table, including tables introduced by a future mi
   credential envelopes can be resealed on a replacement installation.
 
 Indexes, extracted chunks, thumbnails, embeddings, sessions, provider token caches and WOPI
-locks are omitted. Original user files, fileserver permissions/users/Trash/shares, unsaved
-external editor state and device-only edits require their own backups. A configuration ZIP
+locks are omitted. Original user files (the files folder, Trash included), WebDAV/S3 server
+users and permissions, unsaved external editor state and device-only edits require their own
+backups. A configuration ZIP
 protects only the version uploaded.
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
@@ -134,8 +139,11 @@ Existing output files are never overwritten.
 
 An offline S3 destination file contains `type: "s3"`, `endpoint`, `region`, `bucket`, `prefix`,
 `pathStyle`, `accessKeyId` and `secretAccessKey`. Use the **full installation-specific prefix**
-shown in System → Backups. A fileserver file contains `type: "sftpgo"` or `"webdav"`, original
+shown in System → Backups. A fileserver file contains `type: "webdav"` or `"s3"`, original
 provider `id`, `baseUrl`, `config`, authenticated `username`, full `prefix` and `credential`.
+A local folder destination needs no destination file: its archives are plain files under
+`<files folder>/<username>/<prefix>/`, named `<snapshot ID>.fdrive.age`. Copy one from there
+and pass it to `inspect` or `restore` directly.
 
 ```sh
 node dist/main.js backup list --destination-file destination.json
@@ -238,7 +246,8 @@ private recovery key.
 ### Measured costs
 
 Local observations from `packages/backup/test/integration/benchmark.test.ts` and the WebDAV and
-SFTPGo destination test on a developer Mac with loopback containers; not performance promises.
+SFTPGo destination test (before SFTPGo was removed) on a developer Mac with loopback containers;
+not performance promises.
 
 | Fixture | Encrypted archive | Capture | Writer pause | Peak RSS (capture / restore) | Fresh restore |
 | --- | --- | --- | --- | --- | --- |

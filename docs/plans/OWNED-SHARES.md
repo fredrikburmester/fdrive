@@ -1,9 +1,31 @@
 # fdrive-owned shares
 
+## Status (2026-11-12)
+
+Owned shares are the only shares. SFTPGo is gone, so `ShareStrategy` is `"owned" | "none"`,
+the local folder (`packages/local`) declares `owned`, and the native path is deleted:
+SFTPGo share objects, `sftpgo_share_id`, the password form of the credential cookie, the
+thumbnail password cache and the suffix-range peek adapter. Migration `0017_local_storage`
+kept every SFTPGo link at its address as an owned row; a protected one holds the hash
+`locked$sftpgo`, which matches no password, so it stays locked until its owner sets a new one.
+
+Steps 1 to 6 below are done, with one change: archives use the storage's own `zip` instead
+of a new walk over `yazl`. An archive counts one download and is held to two at a time per
+link, an hour, and `FDRIVE_JOB_MAX_BYTES` (`apps/api/src/shares/zip-limits.ts`). It is
+refused when the storage has no `zip`, when the owner's Trash lies inside a shared folder,
+and when two shared paths would land on the same name; new multi-path shares are refused
+on that last rule too.
+
+Open: steps 7 and 8 (S3 and WebDAV have no `zip`, so their links would serve everything but
+archives) and server-side gallery gating for unindexed storage. The rest of this page is the
+plan as written, with SFTPGo as the starting point.
+
+## Original plan (2026-09-18)
+
 A proposed feature for S3 and WebDAV logins, and the provider seam that lets a storage type
-opt into it. Not started. Builds on [provider development](../STORAGE-PROVIDERS.md) and the
-current [share implementation](../../apps/api/src/shares/). Reviewed once against the source
-on 2026-09-18; the review's findings are folded in below.
+opt into it. Builds on [provider development](../STORAGE-PROVIDERS.md) and the
+[share implementation](../../apps/api/src/shares/). Reviewed once against the source on
+2026-09-18; the review's findings are folded in below.
 
 ## Outcome
 
@@ -13,10 +35,11 @@ archive peek, zip and upload-only links. fdrive serves the link itself through t
 storage. A storage type says how it shares with one word on its module, and the share routes,
 the web app and the schema never learn which type backs a link.
 
-## Current behavior
+## Behavior when proposed
 
-Shares are SFTPGo share objects. `createShare` creates one upstream with the owner's JWT and
-`app.shares` keeps a row whose `sftpgoShareId` points at it. The share service refuses any
+Shares were SFTPGo share objects; the present tense below is that state. `createShare`
+creates one upstream with the owner's JWT and `app.shares` keeps a row whose `sftpgoShareId`
+points at it. The share service refuses any
 other provider type with `unsupported` (`owner()` in `apps/api/src/shares/service.ts`), so the
 S3 and WebDAV modules keep `capabilities.shares` false and the web states the limit wherever
 such storage is added, picked or browsed.

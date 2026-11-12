@@ -10,11 +10,11 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
 | [macOS writes](MACOS-WRITES.md) | Retention, recovery administration and native write beta qualification |
-| [Stock storage writes](STOCK-SFTPGO-WRITES.md) | Finder writes on unmodified SFTPGo via fdrive-side serialization |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
 | [AI chat](AI-CHAT.md) | A docked, persistent chat panel that files are dropped into, with approval-gated tools, building on AI organize |
 | [Personal activity](RECENT-ACTIVITY.md) | A durable personal history answering where an upload went and what has happened to a file since, with [events](RECENT-ACTIVITY-EVENTS.md), [schema](RECENT-ACTIVITY-SCHEMA.md) and [coverage](RECENT-ACTIVITY-COVERAGE.md) |
-| [Owned shares](OWNED-SHARES.md) | Proposed fdrive-served share links for S3 and WebDAV behind a per-module share strategy |
+| [Owned shares](OWNED-SHARES.md) | fdrive-served share links: done for the local folder; S3, WebDAV and gallery gating remain |
+| [Local storage](LOCAL-STORAGE.md) | fdrive serves a folder on its own disk with its own users, replacing SFTPGo: decisions and what comes later |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
 
 These are a backlog, not a claim that an agent is working on every item.

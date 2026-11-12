@@ -47,9 +47,9 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   step exists for that. Scope-check with the review script and read the gate lines.
 - Two parallel chunks editing one shared file (`composition.ts`, `config.ts`, `client.ts`,
   `app-sidebar.tsx`) always conflict; serialize them or plan for the conflict-resolution agent.
-- e2e-only assumptions hide dev-only failures: the e2e stack has fakes that differ from the dev
-  wiring (lazy SFTPGo client, host-run API). Click through the pane after merging anything that
-  touches jobs, SSE, or the connection store.
+- e2e-only assumptions hide dev-only failures: the e2e stack's wiring differs from the dev
+  stack's. Click through the pane after merging anything that touches jobs, SSE, or the
+  connection store.
 - Turbopack cannot resolve `./x.js` specifiers to `.ts` sources; workspace packages use `.ts`
   import specifiers with `rewriteRelativeImportExtensions`. Production images build workspace
   packages first (`pnpm --filter <app>... run build`).
@@ -63,14 +63,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   one-line placeholder replaces the list while empty); only a still-loading query renders nothing.
   A fresh dev database shows all three sections with their empty-state copy, not their absence.
 - The Mac app's refresh listed every folder Finder has browsed, one request each. On a
-  1,700-folder SFTPGo location a pass took three minutes and restarted after 60 seconds, so a
+  1,700-folder location a pass took three minutes and restarted after 60 seconds, so a
   spinner shown for every pass looked stuck while the server took seven requests a second, each
   running two registry transactions per entry behind one lock. Background work stays silent,
   its pace follows what it costs, and it asks which folders changed (`POST /checks`) before
   listing any.
-- Real SFTPGo v2.7.5 drops the TCP connection on `GET /api/v2/user/dirs` for a path that is a
-  file (the in-memory fake answers 400). Never call `list` on a path of unknown kind; `statFile`
-  first, list only after it reports `bad_request`.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
   "o" plus a combining mark, while models (and most typing) produce one character. A model
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.
@@ -102,10 +99,13 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 ## Product scope
 
 - A new storage backend brings file operations, not features. Search, thumbnails, embeddings,
-  folder sizes, shares and Office were built on SFTPGo's files sitting on a disk the indexer
-  reads and on SFTPGo's native share links, so the WebDAV and S3 adapters arrived with none of
-  them and read as a lesser product until the copy said why (2026-09). fdrive is an SFTPGo
-  client first: say so plainly, keep every feature behind a capability flag rather than a type
-  name, derive the limit copy from the flags, and add a feature to another backend one flag at
-  a time once fdrive can provide it without a local disk. Do not add a backend expecting the
-  features to come with it.
+  folder sizes, shares and Office are built on files sitting on a disk the indexer reads, so
+  the WebDAV and S3 adapters arrived with none of them and read as a lesser product until the
+  copy said why (2026-09). Say so plainly, keep every feature behind a capability flag rather
+  than a type name, derive the limit copy from the flags, and add a feature to another backend
+  one flag at a time once fdrive can provide it without a local disk. Do not add a backend
+  expecting the features to come with it.
+- Storage fdrive does not own caps what fdrive can promise. On SFTPGo it could not share
+  between users or create a file only when the name was free, and every deployment ran a
+  second server with its own users. Owning the folder and the users (2026-11) made both
+  possible.

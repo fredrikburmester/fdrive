@@ -1,7 +1,7 @@
 # FDrive for Mac
 
 The native companion provides Finder locations on macOS 26+ (Apple silicon), with optional
-writes on qualified Apache WebDAV or, under a weaker contract, stock SFTPGo.
+writes on every storage type (see [write configuration](#write-configuration-and-recovery)).
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
 the first hosted release, Homebrew installation and tests on another Mac.
 
@@ -28,8 +28,8 @@ It waits while FDrive is the active app or a pairing, license change or disconne
 way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
 
 Each selected server/account/identity gets its own domain, token and metadata database.
-SFTPGo and WebDAV adapters run on the fdrive server; the Mac does not implement either
-protocol. Switching the web app's active login cannot retarget a native location.
+The storage adapters (the local folder, WebDAV, S3) run on the fdrive server; the Mac talks
+only to the fdrive API. Switching the web app's active login cannot retarget a native location.
 
 Browsing retrieves directory metadata without fetching original file contents to the Mac.
 Opening, Quick Look, copying out and other applications' reads fetch contents on demand.
@@ -126,17 +126,18 @@ stops its server refresh while paused.
 Writes need an explicit **Read and write** pairing grant and persistent server recovery storage
 (`FDRIVE_DESKTOP_STATE_DIR`). The deployment Compose file mounts the `fdrive-desktop` volume at
 `/var/lib/fdrive/desktop`. Multiple API processes must share this filesystem and the same
-PostgreSQL database. Nothing is set per storage server: every storage type, including stock
-SFTPGo and S3, accepts Mac writes under the default contract below.
+PostgreSQL database. Nothing is set per storage server: every storage type, including the
+local folder and S3, accepts Mac writes under the default contract below.
 
 **Default contract, every storage.** fdrive serializes Mac writes against each other through a
 per-identity PostgreSQL lock and, holding it, snapshots the destination, digests that snapshot
 against the version the Mac edited, and only then replaces the file. A change made at any
 earlier point is refused as a conflict with the pending copy preserved, and the replaced version
-is kept as a backup under `/.fdrive-desktop`. No stock storage can fence a concurrent writer
-itself: SFTPGo 2.7.5 ignores conditional upload headers and its REST API bypasses WebDAV locks,
-and S3 has no rename at all, so on S3 the publishing step is a server-side copy that replaces the
-target object atomically before the staged copy is removed.
+is kept as a backup under `/.fdrive-desktop`. Only Apache WebDAV's locks (below) can fence a
+concurrent writer at the storage: anything on the host (rsync, SMB, Syncthing, the OCR service)
+can write the local folder, and S3 has no rename at all, so on S3 the publishing step is a
+server-side copy that replaces the target object atomically before the staged copy is
+removed.
 
 That lock covers Mac writes only. The web app, Collabora and the OCR service write the volume
 directly and do not take it: for each of them publication *is* the transfer, and holding an
@@ -422,7 +423,7 @@ refresh hashes only materialized files on the server, one batch at a time per id
 detects different bytes even when size/mtime are unchanged. It **rereads those files from the
 storage provider each refresh**, which can be expensive for large media or metered storage.
 No originals are sent to the Mac by validation, but upstream bandwidth remains a beta tuning
-gate. SFTPGo/WebDAV currently supply no common strong validator through the storage port.
+gate. The storage port supplies no common strong validator.
 
 Downloads use URLSession temporary files, then the manager-provided transfer directory.
 A free-space preflight (file size plus 512 MiB headroom) refuses downloads and saves that

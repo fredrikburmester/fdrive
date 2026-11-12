@@ -35,7 +35,6 @@ or the fraction of the entire library successfully indexed.
 | Features | Spinner while any feature is preparing, stopping or processing, or a feature update is pending. Tooltip lists active features; no aggregate percentage. |
 | General | Spinner during its settings saves. |
 | Storage | Spinner during provider tests, saves or removal. |
-| Shared folders | Spinner during mapping actions. |
 | Thumbnails | Automatic generation/backfill, explicit rebuild and cache clear. |
 | Full-text search | Discovery/indexing, extraction (including search OCR), reindex and index clear. |
 | Semantic search | Text embedding/backfill, reembed and runtime preparation. Reembed currently starts full re-extraction, so show that waiting phase too. |

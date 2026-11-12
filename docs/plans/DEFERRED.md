@@ -30,16 +30,16 @@ person who owns it, needs virtual-path to root/fs-path resolution through the
 and would put a destructive action behind a non-admin surface. Deliberately not built with
 the admin inventory; a future proposal must settle authorization before the UI.
 
-Native mobile apps, OIDC, SFTPGo administration, comments and collaboration outside Office
-remain outside the current product scope. Old alternative folder-view designs and the
+Native mobile apps, OIDC, comments and collaboration outside Office remain outside the
+current product scope. Old alternative folder-view designs and the
 application-owned Trash proposal were superseded, not deferred.
 
-## Features on storage beside SFTPGo
+## Features on storage beside the local folder
 
-fdrive is an SFTPGo client first. WebDAV and S3 get ordinary file management and
-fdrive-performed Trash; search, thumbnails, embeddings, folder sizes, shares and Office stay
-on SFTPGo because the indexer reads a mounted disk and share links are SFTPGo's own. Nothing
-blocks adding them later: each is a capability flag the UI and API already honour, and the
+WebDAV and S3 get ordinary file management and fdrive-performed Trash; search, thumbnails,
+embeddings, folder sizes, share links, sharing with people and Office stay on the local
+folder because the indexer reads a mounted disk and only there does fdrive keep both the users
+and the files. Nothing blocks adding most of them later: each is a capability flag the UI and API already honour, and the
 storage note derives from the flags. The pieces, when wanted, are a remote index walker that
 reads through the storage port instead of a disk root, with change detection by etag, size
 and mtime plus periodic rescans; fdrive-served share links ([Owned shares](OWNED-SHARES.md));

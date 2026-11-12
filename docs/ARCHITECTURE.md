@@ -12,7 +12,8 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
   schemas. Python services consume those schemas; they do not independently migrate them.
 - The Python indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
-  OCR may write to mounted originals. Browser file operations use provider credentials.
+  OCR may write to mounted originals. Browser file operations go through the login's provider:
+  the local folder on the API's own disk, or WebDAV/S3 with the login's stored credential.
   See [indexer](INDEXER.md), [OCR](OCR.md) and [search](SEARCH-AND-AI.md).
 - Model inference and office-document text extraction run in the Rust
   [ML server](../services/ml/README.md). It has no database access and no storage mounts: the
@@ -20,15 +21,17 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   anyone's storage. It loads a model only while a feature that needs it is enabled.
 - Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
   tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
-- fdrive is an SFTPGo client first. SFTPGo, WebDAV and S3 storage adapters ship, and every
-  login carries capability flags (`ProviderCapabilities`) that decide what the UI offers and
-  the API accepts; nothing keys on a type name. Search, thumbnails, folder sizes, shares and
-  Office are built on SFTPGo today: only its files sit on a disk the indexer reads, and only
-  it has native share links. WebDAV and S3 get ordinary file management plus what fdrive
-  performs itself (Trash), and the UI names the features each lacks where a storage is added
-  or picked. A feature reaches another backend by flipping its flag once its API and UI paths
-  work there, so the split is the current state, not a rule. SFTPGo stays independently
-  administered; fdrive does not need WebAdmin access, read its database or modify it.
+- fdrive serves a folder on its own disk (`FDRIVE_STORAGE_ROOT`, one home per user at
+  `<root>/<username>`, plain files) and keeps its own users. The local, WebDAV and S3 storage
+  adapters ship, and every login carries capability flags (`ProviderCapabilities`) that decide
+  what the UI offers and the API accepts; nothing keys on a type name. Search, thumbnails,
+  folder sizes, share links, sharing with people and Office are built on the local folder
+  today: only its files sit on a disk the indexer reads, and only there does fdrive keep both
+  the users and the files. WebDAV and S3 get ordinary file management plus Trash, and the UI
+  names the features each lacks where a storage is added or picked. A feature reaches another
+  backend by flipping its flag once its API and UI paths work there, so the split is the
+  current state, not a rule. Without `FDRIVE_STORAGE_ROOT`, setup connects WebDAV or S3
+  instead.
 
 ## Accounts and storage
 
@@ -40,20 +43,33 @@ credentials; browser identity selection and MCP tokens cannot retarget these dom
 A provider row identifies a configured backend instance; an identity is a login on that row;
 an account links identities. Sessions select an active identity. Credentials are encrypted
 and bound to their identity and provider, including during retries and background jobs.
-See [authentication](AUTH.md) and [adding providers](STORAGE-PROVIDERS.md).
+The local folder's row comes from the deployment (`deploymentManaged`) and cannot be added,
+re-addressed or removed in the UI. See [authentication](AUTH.md) and
+[adding providers](STORAGE-PROVIDERS.md).
+
+Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
+flag. Setup creates the first one and System > Users the rest; the local module's `admit`
+refuses a disabled user on every request, not only at sign-in. Folders shared between users
+are `app.local_grants` (owner, folder path, grantee, read or write), served by
+`/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's
+name, then `<name> (<owner>)` on a clash), confined to the owner's folder; a read-only grant
+refuses every change, and the grantee cannot rename, move or delete `Shared with me` or the
+shared folders themselves. A move between a user's files and a writable shared folder is one
+rename. Grants follow the owner's moves and deletes made through fdrive, and index scopes
+follow the grants ([scoping](SCOPING.md)).
 
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
 propagate renames; index paths must be translated through the identity's scopes. A path
-or content hash alone never grants another identity access. Provider-backed public shares
-are proxied by fdrive; only a module whose share strategy is `native` (SFTPGo) has them
-today. For a native share the upstream public share API remains the authority for file
-access; never fall back to the owner's file credentials when public access fails. For an
-owned share (a module whose strategy is `owned`) the owner's stored credential is the only
-way to the bytes, so the share reaches storage only through the identity storage factory,
-only inside its paths, and only for the operations its scope allows. Protected share metadata must not leak before authentication.
-Share passwords are never stored in clear: a native row holds nothing (SFTPGo keeps the
-password), an owned row holds only a hash in `password_hash`, which no share record
-projection returns; the public credential-cookie flow has separate protections. See the API's [share implementation](../apps/api/src/shares/).
+or content hash alone never grants another identity access. Public share links are fdrive's
+own: a module whose share strategy is `owned` (the local folder) keeps the share in
+`app.shares` and serves it through the owner's storage, which the share reaches only through
+the identity storage factory, only inside its paths, and only for the operations its scope
+allows. Trash, backup folders and `/Shared with me` are never reachable through a link.
+Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`.
+Protected share metadata must not leak before authentication. Share passwords are never
+stored in clear: a row holds only a scrypt hash in `password_hash`, which no share record
+projection returns; the public credential-cookie flow has separate protections. See the
+API's [share implementation](../apps/api/src/shares/).
 
 Linking an already-owned identity transfers that login and its metadata, not the source
 account's administrator rights or API tokens. Re-authentication and session revocation
@@ -70,10 +86,11 @@ the [activity schema and API](plans/RECENT-ACTIVITY-SCHEMA.md),
 ## Index authorization
 
 Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events, Office paths
-or MCP. Trusted configuration, directory consistency checks and live read authorization
-are separate requirements. Never substitute a guessed username/home template for verified
-index scopes. Providers without a supported local mapping retain ordinary provider operations,
-including explicitly scoped [MCP file tools](MCP.md).
+or MCP. Trusted configuration and live read authorization are separate requirements. Index
+scopes come from the provider's index root and the login's username, plus one per folder
+shared with it, never from a path a client sends. Providers without an index root (WebDAV,
+S3) retain ordinary provider operations, including explicitly scoped
+[MCP file tools](MCP.md).
 
 ## Office and recovery
 
@@ -139,9 +156,8 @@ thresholds and CI configuration are authoritative; do not copy historic phase ta
 
 ## Interface names and persistence
 
-Public share `usedDownloads` is the provider's consumed transfer-token count for a native
-share and fdrive's own counter for an owned one; `app.shares.views` is the legacy column
-name for both. Write shares count uploads;
+Public share `usedDownloads` is fdrive's own counter; `app.shares.views` is its legacy column
+name. Write shares count uploads;
 read shares count downloads and full-size previews. Thumbnail views do not consume
 that budget. Names remain compatible with existing clients and stored data.
 

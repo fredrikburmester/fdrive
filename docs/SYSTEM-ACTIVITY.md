@@ -12,7 +12,7 @@ label carries an "Admins only" caption and every System page header states its s
 shared copy from `lib/system/pages`. Scoping the sidebar to the active login made it disagree
 with the pages and was reverted.
 
-Features sits below Storage, with a separate expand/collapse button nesting Shared folders,
+Features sits below Storage, with a separate expand/collapse button nesting
 Thumbnails, Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label
 still opens the overview, whose activity remains visible when collapsed. General and Storage
 stay at the top level. Expansion is remembered in this browser; opening a feature
@@ -33,7 +33,7 @@ One admin-only React Query polls every five seconds, pauses interval polling in 
 and refetches on focus. Failed fetches remove stale percentages and show unknown status.
 Mutation metadata connects local saves/tests/jobs to their section. Accepted background
 requests bridge briefly to a fresh server observation; routine status fetches do not spin.
-General, Storage and Shared folders reflect this browser's pending mutations. Office reflects
+General and Storage reflect this browser's pending mutations. Office reflects
 startup/settings changes, not individual editor sessions.
 
 ## Worker accounting

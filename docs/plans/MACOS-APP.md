@@ -55,8 +55,8 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
 
 The current strong validator streams SHA-256 on the server for materialized files. A
 60-second refresh can reread every downloaded large file from remote storage. Measure
-SFTPGo/WebDAV bandwidth/latency, then tune the interval or introduce trustworthy provider
-validators before general beta use. Preserve same-size/same-mtime change detection. Do not
+local folder, WebDAV and S3 bandwidth/latency, then tune the interval or introduce trustworthy
+provider validators before general beta use. Preserve same-size/same-mtime change detection. Do not
 hash the remote tree or download originals to the Mac merely to enumerate metadata.
 
 Multi-process API deployments also need sticky routing or shared transient storage for
