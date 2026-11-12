@@ -106,12 +106,8 @@
           "tableFrom": "ai_chat_messages",
           "tableTo": "ai_chats",
           "schemaTo": "app",
-          "columnsFrom": [
-            "chat_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["chat_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -121,10 +117,7 @@
         "ai_chat_messages_chat_ordinal": {
           "name": "ai_chat_messages_chat_ordinal",
           "nullsNotDistinct": false,
-          "columns": [
-            "chat_id",
-            "ordinal"
-          ]
+          "columns": ["chat_id", "ordinal"]
         }
       },
       "policies": {},
@@ -197,12 +190,8 @@
           "tableFrom": "ai_chat_references",
           "tableTo": "ai_chats",
           "schemaTo": "app",
-          "columnsFrom": [
-            "chat_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["chat_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -211,12 +200,8 @@
           "tableFrom": "ai_chat_references",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -224,10 +209,7 @@
       "compositePrimaryKeys": {
         "ai_chat_references_chat_id_path_pk": {
           "name": "ai_chat_references_chat_id_path_pk",
-          "columns": [
-            "chat_id",
-            "path"
-          ]
+          "columns": ["chat_id", "path"]
         }
       },
       "uniqueConstraints": {},
@@ -315,12 +297,8 @@
           "tableFrom": "ai_chats",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -430,12 +408,8 @@
           "tableFrom": "api_tokens",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -444,12 +418,8 @@
           "tableFrom": "api_tokens",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -459,9 +429,7 @@
         "api_tokens_token_hash_unique": {
           "name": "api_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token_hash"
-          ]
+          "columns": ["token_hash"]
         }
       },
       "policies": {},
@@ -718,12 +686,8 @@
           "tableFrom": "backup_deliveries",
           "tableTo": "backup_runs",
           "schemaTo": "app",
-          "columnsFrom": [
-            "run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -733,10 +697,7 @@
         "backup_delivery_run_destination": {
           "name": "backup_delivery_run_destination",
           "nullsNotDistinct": false,
-          "columns": [
-            "run_id",
-            "destination_id"
-          ]
+          "columns": ["run_id", "destination_id"]
         }
       },
       "policies": {},
@@ -950,9 +911,7 @@
         "backup_runs_schedule_slot_unique": {
           "name": "backup_runs_schedule_slot_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "schedule_slot"
-          ]
+          "columns": ["schedule_slot"]
         }
       },
       "policies": {},
@@ -1008,12 +967,8 @@
           "tableFrom": "credentials",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1187,12 +1142,8 @@
           "tableFrom": "desktop_effects",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1201,12 +1152,8 @@
           "tableFrom": "desktop_effects",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1215,14 +1162,8 @@
           "tableFrom": "desktop_effects",
           "tableTo": "desktop_operations",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "operation_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "operation_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1333,12 +1274,8 @@
           "tableFrom": "desktop_items",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1454,12 +1391,8 @@
           "tableFrom": "desktop_operations",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1468,12 +1401,8 @@
           "tableFrom": "desktop_operations",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1481,10 +1410,7 @@
       "compositePrimaryKeys": {
         "desktop_operations_identity_id_id_pk": {
           "name": "desktop_operations_identity_id_id_pk",
-          "columns": [
-            "identity_id",
-            "id"
-          ]
+          "columns": ["identity_id", "id"]
         }
       },
       "uniqueConstraints": {},
@@ -1537,12 +1463,8 @@
           "tableFrom": "favorites",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1550,10 +1472,7 @@
       "compositePrimaryKeys": {
         "favorites_identity_id_path_pk": {
           "name": "favorites_identity_id_path_pk",
-          "columns": [
-            "identity_id",
-            "path"
-          ]
+          "columns": ["identity_id", "path"]
         }
       },
       "uniqueConstraints": {},
@@ -1614,12 +1533,8 @@
           "tableFrom": "file_tags",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1628,12 +1543,8 @@
           "tableFrom": "file_tags",
           "tableTo": "tags",
           "schemaTo": "app",
-          "columnsFrom": [
-            "tag_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["tag_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1641,11 +1552,7 @@
       "compositePrimaryKeys": {
         "file_tags_identity_id_path_tag_id_pk": {
           "name": "file_tags_identity_id_path_tag_id_pk",
-          "columns": [
-            "identity_id",
-            "path",
-            "tag_id"
-          ]
+          "columns": ["identity_id", "path", "tag_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1703,12 +1610,8 @@
           "tableFrom": "folder_views",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1716,10 +1619,7 @@
       "compositePrimaryKeys": {
         "folder_views_identity_id_path_pk": {
           "name": "folder_views_identity_id_path_pk",
-          "columns": [
-            "identity_id",
-            "path"
-          ]
+          "columns": ["identity_id", "path"]
         }
       },
       "uniqueConstraints": {},
@@ -1793,12 +1693,8 @@
           "tableFrom": "identities",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1807,12 +1703,8 @@
           "tableFrom": "identities",
           "tableTo": "providers",
           "schemaTo": "app",
-          "columnsFrom": [
-            "provider_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["provider_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1822,10 +1714,7 @@
         "identities_provider_id_external_username_unique": {
           "name": "identities_provider_id_external_username_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "provider_id",
-            "external_username"
-          ]
+          "columns": ["provider_id", "external_username"]
         }
       },
       "policies": {},
@@ -2050,12 +1939,8 @@
           "tableFrom": "office_files",
           "tableTo": "providers",
           "schemaTo": "app",
-          "columnsFrom": [
-            "provider_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["provider_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2132,10 +2017,7 @@
         "providers_type_base_url_unique": {
           "name": "providers_type_base_url_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "type",
-            "base_url"
-          ]
+          "columns": ["type", "base_url"]
         }
       },
       "policies": {},
@@ -2202,12 +2084,8 @@
           "tableFrom": "recents",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2215,10 +2093,7 @@
       "compositePrimaryKeys": {
         "recents_identity_id_path_pk": {
           "name": "recents_identity_id_path_pk",
-          "columns": [
-            "identity_id",
-            "path"
-          ]
+          "columns": ["identity_id", "path"]
         }
       },
       "uniqueConstraints": {},
@@ -2334,12 +2209,8 @@
           "tableFrom": "sessions",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2348,12 +2219,8 @@
           "tableFrom": "sessions",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "active_identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["active_identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2516,12 +2383,8 @@
           "tableFrom": "shares",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2652,12 +2515,8 @@
           "tableFrom": "tags",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2667,10 +2526,7 @@
         "tags_account_id_name_unique": {
           "name": "tags_account_id_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "account_id",
-            "name"
-          ]
+          "columns": ["account_id", "name"]
         }
       },
       "policies": {},
@@ -2724,10 +2580,7 @@
       "compositePrimaryKeys": {
         "thumbnails_content_key_size_pk": {
           "name": "thumbnails_content_key_size_pk",
-          "columns": [
-            "content_key",
-            "size"
-          ]
+          "columns": ["content_key", "size"]
         }
       },
       "uniqueConstraints": {},
@@ -2881,12 +2734,8 @@
           "tableFrom": "chunks",
           "tableTo": "files",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "file_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["file_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2962,12 +2811,8 @@
           "tableFrom": "events",
           "tableTo": "roots",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "root_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3169,12 +3014,8 @@
           "tableFrom": "files",
           "tableTo": "roots",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "root_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3184,10 +3025,7 @@
         "files_root_id_path_unique": {
           "name": "files_root_id_path_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "root_id",
-            "path"
-          ]
+          "columns": ["root_id", "path"]
         }
       },
       "policies": {},
@@ -3259,12 +3097,8 @@
           "tableFrom": "moves",
           "tableTo": "roots",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "root_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3358,12 +3192,8 @@
           "tableFrom": "ocr_log",
           "tableTo": "roots",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "root_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3373,12 +3203,7 @@
         "ocr_log_root_id_path_size_mtime_ns_unique": {
           "name": "ocr_log_root_id_path_size_mtime_ns_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "root_id",
-            "path",
-            "size",
-            "mtime_ns"
-          ]
+          "columns": ["root_id", "path", "size", "mtime_ns"]
         }
       },
       "policies": {},
@@ -3568,12 +3393,8 @@
           "tableFrom": "processing_failures",
           "tableTo": "roots",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "root_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3583,11 +3404,7 @@
         "processing_failures_root_path_feature_unique": {
           "name": "processing_failures_root_path_feature_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "root_id",
-            "path",
-            "feature"
-          ]
+          "columns": ["root_id", "path", "feature"]
         }
       },
       "policies": {},
@@ -3618,9 +3435,7 @@
         "roots_name_unique": {
           "name": "roots_name_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "name"
-          ]
+          "columns": ["name"]
         }
       },
       "policies": {},
@@ -3713,12 +3528,8 @@
           "tableFrom": "scans",
           "tableTo": "roots",
           "schemaTo": "idx",
-          "columnsFrom": [
-            "root_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3921,12 +3732,8 @@
           "tableFrom": "activity_event_subjects",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3935,14 +3742,8 @@
           "tableFrom": "activity_event_subjects",
           "tableTo": "activity_events",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id",
-            "event_id"
-          ],
-          "columnsTo": [
-            "owner_account_id",
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id", "event_id"],
+          "columnsTo": ["owner_account_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3951,14 +3752,8 @@
           "tableFrom": "activity_event_subjects",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3966,12 +3761,7 @@
       "compositePrimaryKeys": {
         "activity_event_subjects_event_id_identity_id_role_subject_ordinal_pk": {
           "name": "activity_event_subjects_event_id_identity_id_role_subject_ordinal_pk",
-          "columns": [
-            "event_id",
-            "identity_id",
-            "role",
-            "subject_ordinal"
-          ]
+          "columns": ["event_id", "identity_id", "role", "subject_ordinal"]
         }
       },
       "uniqueConstraints": {},
@@ -4323,12 +4113,8 @@
           "tableFrom": "activity_events",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4337,12 +4123,8 @@
           "tableFrom": "activity_events",
           "tableTo": "activity_storage_identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "identity_id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["identity_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4352,27 +4134,17 @@
         "activity_events_owner_id": {
           "name": "activity_events_owner_id",
           "nullsNotDistinct": false,
-          "columns": [
-            "owner_account_id",
-            "id"
-          ]
+          "columns": ["owner_account_id", "id"]
         },
         "activity_events_owner_sequence": {
           "name": "activity_events_owner_sequence",
           "nullsNotDistinct": false,
-          "columns": [
-            "owner_account_id",
-            "owner_sequence"
-          ]
+          "columns": ["owner_account_id", "owner_sequence"]
         },
         "activity_events_dedupe": {
           "name": "activity_events_dedupe",
           "nullsNotDistinct": false,
-          "columns": [
-            "owner_account_id",
-            "identity_id",
-            "idempotency_key"
-          ]
+          "columns": ["owner_account_id", "identity_id", "idempotency_key"]
         }
       },
       "policies": {},
@@ -4444,12 +4216,8 @@
           "tableFrom": "activity_export_reads",
           "tableTo": "activity_exports",
           "schemaTo": "app",
-          "columnsFrom": [
-            "export_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["export_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4458,12 +4226,8 @@
           "tableFrom": "activity_export_reads",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4471,11 +4235,7 @@
       "compositePrimaryKeys": {
         "activity_export_reads_owner_account_id_export_id_window_id_pk": {
           "name": "activity_export_reads_owner_account_id_export_id_window_id_pk",
-          "columns": [
-            "owner_account_id",
-            "export_id",
-            "window_id"
-          ]
+          "columns": ["owner_account_id", "export_id", "window_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4581,12 +4341,8 @@
           "tableFrom": "activity_exports",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4670,14 +4426,8 @@
           "tableFrom": "activity_file_bridges",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4685,11 +4435,7 @@
       "compositePrimaryKeys": {
         "activity_file_bridges_identity_id_namespace_external_id_pk": {
           "name": "activity_file_bridges_identity_id_namespace_external_id_pk",
-          "columns": [
-            "identity_id",
-            "namespace",
-            "external_id"
-          ]
+          "columns": ["identity_id", "namespace", "external_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4795,14 +4541,8 @@
           "tableFrom": "activity_file_locations",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4913,12 +4653,8 @@
           "tableFrom": "activity_files",
           "tableTo": "activity_storage_identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "identity_id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["identity_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -4928,10 +4664,7 @@
         "activity_files_identity_id_unique": {
           "name": "activity_files_identity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "identity_id",
-            "id"
-          ]
+          "columns": ["identity_id", "id"]
         }
       },
       "policies": {},
@@ -5111,12 +4844,8 @@
           "tableFrom": "activity_lineage",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5125,14 +4854,8 @@
           "tableFrom": "activity_lineage",
           "tableTo": "activity_events",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id",
-            "event_id"
-          ],
-          "columnsTo": [
-            "owner_account_id",
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id", "event_id"],
+          "columnsTo": ["owner_account_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5141,14 +4864,8 @@
           "tableFrom": "activity_lineage",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "source_identity_id",
-            "source_file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["source_identity_id", "source_file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -5157,14 +4874,8 @@
           "tableFrom": "activity_lineage",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "target_identity_id",
-            "target_file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["target_identity_id", "target_file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5281,12 +4992,8 @@
           "tableFrom": "activity_observation_state",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5295,14 +5002,8 @@
           "tableFrom": "activity_observation_state",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5490,12 +5191,8 @@
           "tableFrom": "activity_operations",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5504,12 +5201,8 @@
           "tableFrom": "activity_operations",
           "tableTo": "activity_storage_identities",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id"
-          ],
-          "columnsTo": [
-            "identity_id"
-          ],
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["identity_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5519,12 +5212,7 @@
         "activity_operations_dedupe": {
           "name": "activity_operations_dedupe",
           "nullsNotDistinct": false,
-          "columns": [
-            "owner_account_id",
-            "identity_id",
-            "source",
-            "producer_operation_id"
-          ]
+          "columns": ["owner_account_id", "identity_id", "source", "producer_operation_id"]
         }
       },
       "policies": {},
@@ -5650,12 +5338,8 @@
           "tableFrom": "activity_outbox",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5664,14 +5348,8 @@
           "tableFrom": "activity_outbox",
           "tableTo": "activity_events",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id",
-            "event_id"
-          ],
-          "columnsTo": [
-            "owner_account_id",
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id", "event_id"],
+          "columnsTo": ["owner_account_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5767,12 +5445,8 @@
           "tableFrom": "activity_read_receipts",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5781,12 +5455,8 @@
           "tableFrom": "activity_read_receipts",
           "tableTo": "activity_read_windows",
           "schemaTo": "app",
-          "columnsFrom": [
-            "window_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["window_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -5794,12 +5464,7 @@
       "compositePrimaryKeys": {
         "activity_read_receipts_owner_account_id_identity_id_context_hash_request_id_pk": {
           "name": "activity_read_receipts_owner_account_id_identity_id_context_hash_request_id_pk",
-          "columns": [
-            "owner_account_id",
-            "identity_id",
-            "context_hash",
-            "request_id"
-          ]
+          "columns": ["owner_account_id", "identity_id", "context_hash", "request_id"]
         }
       },
       "uniqueConstraints": {},
@@ -5959,12 +5624,8 @@
           "tableFrom": "activity_read_windows",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5973,14 +5634,8 @@
           "tableFrom": "activity_read_windows",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6137,12 +5792,8 @@
           "tableFrom": "activity_revisions",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -6151,14 +5802,8 @@
           "tableFrom": "activity_revisions",
           "tableTo": "activity_events",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id",
-            "event_id"
-          ],
-          "columnsTo": [
-            "owner_account_id",
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id", "event_id"],
+          "columnsTo": ["owner_account_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -6167,14 +5812,8 @@
           "tableFrom": "activity_revisions",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6266,12 +5905,8 @@
           "tableFrom": "activity_streams",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -6406,12 +6041,8 @@
           "tableFrom": "activity_trash_bindings",
           "tableTo": "accounts",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -6420,14 +6051,8 @@
           "tableFrom": "activity_trash_bindings",
           "tableTo": "activity_events",
           "schemaTo": "app",
-          "columnsFrom": [
-            "owner_account_id",
-            "event_id"
-          ],
-          "columnsTo": [
-            "owner_account_id",
-            "id"
-          ],
+          "columnsFrom": ["owner_account_id", "event_id"],
+          "columnsTo": ["owner_account_id", "id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -6436,14 +6061,8 @@
           "tableFrom": "activity_trash_bindings",
           "tableTo": "activity_files",
           "schemaTo": "app",
-          "columnsFrom": [
-            "identity_id",
-            "file_id"
-          ],
-          "columnsTo": [
-            "identity_id",
-            "id"
-          ],
+          "columnsFrom": ["identity_id", "file_id"],
+          "columnsTo": ["identity_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -6451,10 +6070,7 @@
       "compositePrimaryKeys": {
         "activity_trash_bindings_event_id_file_id_pk": {
           "name": "activity_trash_bindings_event_id_file_id_pk",
-          "columns": [
-            "event_id",
-            "file_id"
-          ]
+          "columns": ["event_id", "file_id"]
         }
       },
       "uniqueConstraints": {},

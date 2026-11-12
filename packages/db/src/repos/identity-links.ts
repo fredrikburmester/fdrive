@@ -20,7 +20,7 @@ import {
   validateSwitchActiveIdentity,
   validateUnlinkIdentity,
 } from "./identity-links-types.js";
-import type { Identity, Session, SettingsRepo } from "./types.js";
+import type { Identity, Session } from "./types.js";
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
