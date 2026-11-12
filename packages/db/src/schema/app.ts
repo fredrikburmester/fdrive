@@ -40,14 +40,33 @@ export const providers = appSchema.table(
     baseUrl: text("base_url").notNull(),
     /** Shown to users on the login page and in the login switcher. Defaults to the endpoint host. */
     label: text("label").notNull().default(""),
-    /** The provider module's `configFields` values (for SFTPGo: `homeTemplate`). */
+    /** The provider module's `configFields` values. */
     config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
     enabled: boolean("enabled").notNull().default(true),
-    /** True when the endpoint is pinned by environment (`SFTPGO_URL`) and cannot change at runtime. */
+    /** True when the deployment pins this row (`FDRIVE_STORAGE_ROOT`) and it cannot change at runtime. */
     managedByEnv: boolean("managed_by_env").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [unique("providers_type_base_url_unique").on(table.type, table.baseUrl)],
+);
+
+/**
+ * The users of the built-in local storage, which fdrive owns: one row per
+ * home folder `<FDRIVE_STORAGE_ROOT>/<username>`. Names are unique without
+ * regard to case, because the home folders may sit on a case-insensitive
+ * disk. A login (`identities`) on the local provider names one of these.
+ */
+export const localUsers = appSchema.table(
+  "local_users",
+  {
+    username: text("username").primaryKey(),
+    /** scrypt, in the share password format: `scrypt$N$r$p$salt$key`. */
+    passwordHash: text("password_hash").notNull(),
+    disabled: boolean("disabled").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("local_users_username_lower_unique").on(sql`lower(${table.username})`)],
 );
 
 export const accounts = appSchema.table("accounts", {
@@ -258,11 +277,9 @@ export const wopiLocks = appSchema.table(
 );
 
 /**
- * Public share links. A native row mirrors a share the backend keeps
- * (`sftpgo_share_id`); an owned row (`sftpgo_share_id` null) is one fdrive
- * serves itself, so its name, paths, expiry, limit and password hash are
- * authoritative here. The check constraint keeps the hash to owned rows and
- * `has_password` honest for them.
+ * Public share links, which fdrive serves itself through the owner's
+ * storage: the name, paths, expiry, limit and password hash here are
+ * authoritative. The check constraint keeps `has_password` honest.
  */
 export const shares = appSchema.table(
   "shares",
@@ -271,7 +288,6 @@ export const shares = appSchema.table(
     identityId: uuid("identity_id")
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
-    sftpgoShareId: text("sftpgo_share_id"),
     name: text("name").notNull(),
     description: text("description").notNull().default(""),
     scope: text("scope").notNull(),
@@ -282,18 +298,18 @@ export const shares = appSchema.table(
     /** Operator-chosen public page rendering: "auto" | "list" | "gallery" | "download". */
     presentation: text("presentation").notNull().default("auto"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
-    /** 0 is unlimited. Mirrored `max_tokens` for a native row. */
+    /** 0 is unlimited. */
     maxDownloads: integer("max_downloads").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-    /** Legacy name: cached SFTPGo used_tokens for a native row, fdrive's own count for an owned one. */
+    /** Legacy name: how many times the link has been used (downloads, or uploads for a write share). */
     views: integer("views").notNull().default(0),
   },
   (table) => [
-    unique("shares_identity_id_sftpgo_share_id_unique").on(table.identityId, table.sftpgoShareId),
+    index("shares_identity_id_idx").on(table.identityId),
     check(
       "shares_password_hash_kind",
-      sql`(${table.sftpgoShareId} is null and ${table.hasPassword} = (${table.passwordHash} is not null)) or (${table.sftpgoShareId} is not null and ${table.passwordHash} is null)`,
+      sql`${table.hasPassword} = (${table.passwordHash} is not null)`,
     ),
   ],
 );

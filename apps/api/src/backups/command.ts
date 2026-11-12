@@ -15,10 +15,11 @@ import {
 } from "@fdrive/backup";
 import { ProviderType } from "@fdrive/contracts";
 import { stripTransientFields } from "@fdrive/core";
-import { createDb, migrate } from "@fdrive/db";
+import { createDb, createRepos, migrate } from "@fdrive/db";
 import { z } from "zod";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
+import { deploymentModules } from "../local/modules.js";
 import { moduleFor } from "../providers/registry.js";
 import { createBackupModule, masterSecrets, rawBackupStorage } from "./module.js";
 import { recoveryIdentity, recoveryPreview, restoreOptions } from "./recovery.js";
@@ -50,7 +51,8 @@ const Review = z
   .object({
     snapshotId: z.uuid(),
     environmentFingerprint: z.string().length(64),
-    providers: z.array(z.object({ id: z.uuid(), baseUrl: z.url() }).strict()).min(1),
+    // The local folder's row has no URL; it is stored as its type name.
+    providers: z.array(z.object({ id: z.uuid(), baseUrl: z.string().min(1) }).strict()).min(1),
     ownerIdentityId: z.uuid(),
     credential: z.record(z.string(), z.string()),
     oldDeploymentStopped: z.literal(true),
@@ -62,6 +64,7 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
   if (input.environmentFingerprint !== environmentFingerprint(config))
     throw Error("Destination environment changed since review");
   const database = createDb(config.databaseUrl);
+  const modules = deploymentModules(config, createRepos(database.db));
   try {
     const store = new BackupStore(database.pool);
     const saved = (
@@ -97,7 +100,7 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
       ).rows[0];
       if (!provider || provider.base_url !== expected.baseUrl)
         throw Error("Provider binding changed; review source and destination before resuming");
-      const module = moduleFor(provider.type);
+      const module = moduleFor(provider.type, modules);
       if (!module) throw Error("Unsupported restored provider");
       if (provider.id === owner.provider_id) {
         const verified = await module.authenticate(
@@ -162,7 +165,7 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
           owner.provider_id,
         ])
       ).rows[0];
-      const ownerModule = ownerProvider && moduleFor(ownerProvider.type);
+      const ownerModule = ownerProvider && moduleFor(ownerProvider.type, modules);
       if (!ownerModule) throw Error("Restored owner provider is unavailable");
       const ownerSecret = seal(
         master,
@@ -249,6 +252,8 @@ export async function runBackupCommand(
     // `type: "s3"`; only the row carries an `id`, so the shape decides.
     const input =
       typeof raw === "object" && raw !== null && "id" in raw ? provider.parse(raw) : s3.parse(raw);
+    // Without a database there are no local users to check against: a backup
+    // in the local folder is read from the folder itself.
     const providerModule = "id" in input ? moduleFor(input.type) : null;
     if ("id" in input && !providerModule) throw Error("Unsupported destination provider");
     const destination = !("id" in input)
@@ -366,7 +371,13 @@ export async function runBackupCommand(
       await waitForStop();
       return;
     }
-    const module = createBackupModule({ ...config, fdriveBackupWorker: false });
+    // Local users live in the database, so a destination in the local folder
+    // is checked against them like a sign-in.
+    const users = createDb(config.databaseUrl, { max: 2 });
+    const module = createBackupModule(
+      { ...config, fdriveBackupWorker: false },
+      deploymentModules(config, createRepos(users.db)),
+    );
     try {
       await module.start();
       if (!module.enabled) throw Error("FDRIVE_BACKUP_STATE_DIR is required");
@@ -374,6 +385,7 @@ export async function runBackupCommand(
       await waitForStop();
     } finally {
       await module.close();
+      await users.close();
     }
     return;
   }

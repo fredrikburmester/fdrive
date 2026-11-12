@@ -81,9 +81,17 @@ import {
 } from "./providers.ts";
 import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
+  AdminUser,
+  type AdminUserCreateRequest,
+  AdminUsersResponse,
+  type AdminUserUpdateRequest,
+  type ChangePasswordRequest,
+} from "./users.ts";
+import {
   accountTokenRoute,
   adminProviderRoute,
   adminProviderTestRoute,
+  adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
@@ -117,6 +125,7 @@ import {
   SETUP_TOKEN_HEADER,
   type SetupCompleteRequest,
   SetupStatusResponse,
+  type SetupTestRequest,
 } from "./setup.ts";
 import {
   type CreateShareRequest,
@@ -291,6 +300,8 @@ export interface ApiClient {
   officeCreateDocument(req: OfficeCreateDocumentRequest): Promise<OfficeCreateDocumentResponse>;
   login(req: LoginRequest): Promise<MeResponse>;
   logout(): Promise<OkResponse>;
+  /** The active local login changes its own password; other sessions of the account end. */
+  changePassword(req: ChangePasswordRequest): Promise<OkResponse>;
   me(): Promise<MeResponse>;
   linkIdentity(input: LinkIdentityRequest): Promise<MeResponse>;
   unlinkIdentity(id: string, input: UnlinkIdentityRequest): Promise<MeResponse>;
@@ -335,7 +346,7 @@ export interface ApiClient {
   searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
   setupStatus(): Promise<SetupStatusResponse>;
-  setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse>;
+  setupTest(setupToken: string, req: SetupTestRequest): Promise<ConnectionTestResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
   /** Public: the enabled providers with their credential forms, for the login page. */
   providers(): Promise<ProvidersResponse>;
@@ -345,6 +356,11 @@ export interface ApiClient {
   adminDeleteProvider(id: string): Promise<OkResponse>;
   /** Probes a saved provider (`id`) or an unsaved candidate (`req`). */
   adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
+  adminUsers(): Promise<AdminUsersResponse>;
+  adminCreateUser(req: AdminUserCreateRequest): Promise<AdminUser>;
+  adminUpdateUser(username: string, patch: AdminUserUpdateRequest): Promise<AdminUser>;
+  /** Removes the user and their login; their files stay in the storage folder. */
+  adminDeleteUser(username: string): Promise<OkResponse>;
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
   systemActivity(): Promise<SystemActivityResponse>;
@@ -656,6 +672,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(ROUTES.auth.logout, OkResponse);
     },
 
+    changePassword(req: ChangePasswordRequest): Promise<OkResponse> {
+      return post(ROUTES.auth.password, OkResponse, { jsonBody: req });
+    },
+
     linkIdentity(input) {
       return post(ROUTES.account.identities, MeResponse, { jsonBody: input });
     },
@@ -846,9 +866,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return get(ROUTES.setup.status, SetupStatusResponse);
     },
 
-    setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse> {
+    setupTest(setupToken: string, req: SetupTestRequest): Promise<ConnectionTestResponse> {
       return post(ROUTES.setup.test, ConnectionTestResponse, {
-        jsonBody: { baseUrl },
+        jsonBody: req,
         extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
       });
     },
@@ -867,6 +887,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
       patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
     adminDeleteProvider: (id: string) => del(adminProviderRoute(id), OkResponse),
+    adminUsers: () => get(ROUTES.admin.users, AdminUsersResponse),
+    adminCreateUser: (req: AdminUserCreateRequest) =>
+      post(ROUTES.admin.users, AdminUser, { jsonBody: req }),
+    adminUpdateUser: (username: string, input: AdminUserUpdateRequest) =>
+      patch(adminUserRoute(username), AdminUser, { jsonBody: input }),
+    adminDeleteUser: (username: string) => del(adminUserRoute(username), OkResponse),
     adminTestProvider: (target: string | AdminProviderTestRequest) =>
       requestJson(
         ctx,

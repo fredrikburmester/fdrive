@@ -117,7 +117,6 @@ export type {
   ShareRecord,
   ShareRepo,
   ShareScope,
-  ShareUpsertInput,
 } from "./repos/shares-state.js";
 export {
   createMemoryShareRepo,
@@ -130,7 +129,6 @@ export {
   validateShareOwnedUpdate,
   validateShareOwnership,
   validateSharePath,
-  validateShareUpsert,
 } from "./repos/shares-state.js";
 export { createSystemEventRepo } from "./repos/system-events.js";
 export type {
@@ -159,6 +157,9 @@ export type {
   FolderViewSortKey,
   Identity,
   IdentityRepo,
+  LocalUser,
+  LocalUserPatch,
+  LocalUserRepo,
   MetadataPathRepo,
   Provider,
   ProviderRepo,

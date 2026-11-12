@@ -10,15 +10,25 @@ import {
 } from "@fdrive/core";
 import { createLocalStorage } from "./storage-provider.js";
 
-/** What checking a local user's password comes to. */
-export type LocalUserCheck = "ok" | "invalid" | "disabled";
+/**
+ * What checking a local user's password comes to. `ok` carries the name as
+ * stored, which a login may have typed in another case.
+ */
+export type LocalUserCheck =
+  | { readonly result: "ok"; readonly username: string }
+  | { readonly result: "invalid" | "disabled" };
+
+/** Whether a stored user may use their files right now. */
+export type LocalUserStatus = "active" | "disabled" | "missing";
 
 /**
  * The users of local storage. fdrive keeps them; the module only asks
- * whether a password is right, so it never learns how they are stored.
+ * whether a password is right and whether a user is still active, so it
+ * never learns how they are stored.
  */
 export interface LocalUsers {
   verify(username: string, password: string): Promise<LocalUserCheck>;
+  status(username: string): Promise<LocalUserStatus>;
 }
 
 export interface CreateLocalModuleOptions {
@@ -29,6 +39,11 @@ export interface CreateLocalModuleOptions {
    */
   readonly root: string;
   readonly users: LocalUsers;
+  /**
+   * The name of the index root the indexer reads `root` under, or `null`
+   * when this deployment does not index it.
+   */
+  readonly indexRoot?: string | null;
 }
 
 export const LOCAL_CREDENTIAL_FIELDS: readonly ProviderField[] = [
@@ -46,6 +61,11 @@ const USERNAME = /^[A-Za-z0-9][A-Za-z0-9._@~-]{0,254}$/;
 /** True when `username` can name a local user and their home folder. */
 export function isLocalUsername(username: string): boolean {
   return USERNAME.test(username);
+}
+
+function unavailable(error: unknown): StorageError {
+  if (isStorageError(error)) return error;
+  return new StorageError("upstream_unavailable", "local users are unavailable", { cause: error });
 }
 
 /** Checks that `root` is a folder this process can read and write. */
@@ -77,17 +97,29 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
       setModifiedAt: true,
       atomicMove: true,
       trash: true,
-      shares: false,
-      office: false,
-      index: false,
+      shares: true,
+      office: true,
+      index: true,
       scopeMapping: false,
     },
     // fdrive moves deleted files into the configured folder itself.
     trash: "move",
-    // Owned shares arrive with the streamed share zip; see the local storage plan.
-    shares: "none",
+    shares: "owned",
+    deploymentManaged: true,
+
+    indexRootName: () => options.indexRoot ?? null,
 
     probe: () => probeRoot(options.root),
+
+    async admit(_instance, externalUsername) {
+      let status: LocalUserStatus;
+      try {
+        status = await options.users.status(externalUsername);
+      } catch (error) {
+        throw unavailable(error);
+      }
+      if (status !== "active") throw new StorageError("forbidden", "this user may not sign in");
+    },
 
     async authenticate(_instance, credential, ctx) {
       const username = credential.username ?? ctx.expectedUsername;
@@ -95,21 +127,23 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
       if (username === undefined || !isLocalUsername(username) || password.length === 0) {
         throw new StorageError("unauthorized", "invalid username or password");
       }
-      if (ctx.expectedUsername !== undefined && username !== ctx.expectedUsername) {
-        throw new StorageError("unauthorized", "credential names a different user");
-      }
       let check: LocalUserCheck;
       try {
         check = await options.users.verify(username, password);
       } catch (error) {
-        if (isStorageError(error)) throw error;
-        throw new StorageError("upstream_unavailable", "local users are unavailable", {
-          cause: error,
-        });
+        throw unavailable(error);
       }
-      if (check === "disabled") throw new StorageError("forbidden", "this user may not sign in");
-      if (check !== "ok") throw new StorageError("unauthorized", "invalid username or password");
-      return { externalUsername: username };
+      if (check.result === "disabled") {
+        throw new StorageError("forbidden", "this user may not sign in");
+      }
+      if (check.result !== "ok") {
+        throw new StorageError("unauthorized", "invalid username or password");
+      }
+      // Re-authenticating a known login typed in another case is still that login.
+      if (ctx.expectedUsername !== undefined && check.username !== ctx.expectedUsername) {
+        throw new StorageError("unauthorized", "credential names a different user");
+      }
+      return { externalUsername: check.username };
     },
 
     createStorage(_instance, session) {

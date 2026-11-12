@@ -195,6 +195,7 @@ export {
   accountTokenRoute,
   adminProviderRoute,
   adminProviderTestRoute,
+  adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
@@ -250,7 +251,10 @@ export {
 export {
   ConnectionTestResponse,
   SETUP_TOKEN_HEADER,
+  SetupCompleteLocalRequest,
+  SetupCompleteProviderRequest,
   SetupCompleteRequest,
+  SetupMode,
   SetupStatusResponse,
   SetupTestRequest,
 } from "./setup.ts";
@@ -332,3 +336,4 @@ export {
   TrashStatusResponse,
   TrashStrategy,
 } from "./trash.ts";
+export * from "./users.ts";

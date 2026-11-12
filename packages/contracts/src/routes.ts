@@ -22,6 +22,8 @@ export const ROUTES = {
     logout: "/api/v1/auth/logout",
     /** GET: the signed-in account and its identities -> `MeResponse`. */
     me: "/api/v1/auth/me",
+    /** POST: the active local login changes its password -> `OkResponse`. */
+    password: "/api/v1/auth/password",
   },
   fs: {
     /** GET: list a directory -> `ListResponse`. */
@@ -150,7 +152,7 @@ export const ROUTES = {
   setup: {
     /** GET, public: whether setup is required -> `SetupStatusResponse`. */
     status: "/api/v1/setup/status",
-    /** POST, setup token required: probe a candidate SFTPGo -> `ConnectionTestResponse`. */
+    /** POST, setup token required: probe a candidate storage -> `ConnectionTestResponse`. */
     test: "/api/v1/setup/test",
     /** POST, setup token required: store the connection, create the admin account -> `MeResponse`. */
     complete: "/api/v1/setup/complete",
@@ -160,6 +162,8 @@ export const ROUTES = {
     providers: "/api/v1/admin/providers",
     /** POST, admin only: probe an unsaved candidate -> `ConnectionTestResponse`. */
     providersTest: "/api/v1/admin/providers/test",
+    /** GET, admin only: the local users -> `AdminUsersResponse`; POST: add one -> `AdminUser`. */
+    users: "/api/v1/admin/users",
   },
   system: {
     activity: "/api/v1/system/activity",
@@ -234,6 +238,11 @@ export const ROUTES = {
 export type Routes = typeof ROUTES;
 
 /** `PATCH`/`DELETE`, admin only: one configured provider. */
+/** `PATCH`/`DELETE`, admin only: one local user -> `AdminUser` / `OkResponse`. */
+export function adminUserRoute(username: string): string {
+  return `${ROUTES.admin.users}/${encodeURIComponent(username)}`;
+}
+
 export function adminProviderRoute(id: string): string {
   return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
 }

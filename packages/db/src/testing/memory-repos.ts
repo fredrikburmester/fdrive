@@ -21,6 +21,8 @@ import type {
   FolderViewRepo,
   Identity,
   IdentityRepo,
+  LocalUser,
+  LocalUserRepo,
   MetadataPathRepo,
   Provider,
   ProviderRepo,
@@ -133,6 +135,48 @@ function createMemoryProviderRepo(
         throw new ConflictError("provider is still used by identities");
       }
       byId.delete(id);
+    },
+  };
+}
+
+function createMemoryLocalUserRepo(): LocalUserRepo {
+  const byName = new Map<string, LocalUser>();
+  const key = (username: string) => username.toLowerCase();
+
+  return {
+    async get(username) {
+      return byName.get(key(username)) ?? null;
+    },
+    async list() {
+      return [...byName.values()].sort((a, b) =>
+        a.username < b.username ? -1 : a.username > b.username ? 1 : 0,
+      );
+    },
+    async count() {
+      return byName.size;
+    },
+    async create(input) {
+      if (byName.has(key(input.username))) throw new ConflictError("username already exists");
+      const now = new Date();
+      const user: LocalUser = {
+        username: input.username,
+        passwordHash: input.passwordHash,
+        disabled: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      byName.set(key(input.username), user);
+      return user;
+    },
+    async update(username, patch) {
+      const existing = byName.get(key(username));
+      if (existing === undefined) return null;
+      const updated: LocalUser = { ...existing, ...patch, updatedAt: new Date() };
+      byName.set(key(username), updated);
+      return updated;
+    },
+    async delete(username) {
+      byName.delete(key(username));
     },
   };
 }
@@ -310,6 +354,16 @@ function createMemorySessionRepo(): SessionRepo {
       let count = 0;
       for (const [idHash, session] of byIdHash.entries()) {
         if (session.expiresAt.getTime() <= now.getTime()) {
+          byIdHash.delete(idHash);
+          count += 1;
+        }
+      }
+      return count;
+    },
+    async deleteByAccount(accountId, exceptIdHash) {
+      let count = 0;
+      for (const [idHash, session] of byIdHash.entries()) {
+        if (session.accountId === accountId && idHash !== exceptIdHash) {
           byIdHash.delete(idHash);
           count += 1;
         }
@@ -1098,6 +1152,7 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     providers: createMemoryProviderRepo(ids, (providerId) =>
       identities.countByProviderSync(providerId),
     ),
+    localUsers: createMemoryLocalUserRepo(),
     accounts: createMemoryAccountRepo(ids),
     identities,
     credentials: createMemoryCredentialRepo(),

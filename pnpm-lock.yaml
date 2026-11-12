@@ -74,6 +74,9 @@ importers:
       '@fdrive/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@fdrive/local':
+        specifier: workspace:*
+        version: link:../../packages/local
       '@fdrive/s3':
         specifier: workspace:*
         version: link:../../packages/s3

@@ -2,12 +2,15 @@ import type { TrashSettings } from "@fdrive/contracts";
 import {
   createRecycleFolderTrash,
   isStorageError,
+  type ProviderInstance,
+  type ProviderModule,
   type RecycleFolderLayout,
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
 import { captureRecycleReceipt } from "../activity/trash.js";
 import { withoutBackupPaths } from "../backups/reserved-storage.js";
+import { ApiHttpError } from "../errors.js";
 import type { ProviderService } from "../providers/service.js";
 import type { TokenSource } from "./token-source.js";
 
@@ -99,6 +102,24 @@ export function unavailableStorage(error: Error): StorageProvider {
   };
 }
 
+/**
+ * Asks the module whether the login is still let in (a local user an
+ * administrator disabled is not), as `forbidden`, before any storage is built.
+ */
+async function admit(
+  module: ProviderModule,
+  instance: ProviderInstance,
+  externalUsername: string,
+): Promise<void> {
+  if (module.admit === undefined) return;
+  try {
+    await module.admit(instance, externalUsername);
+  } catch (error) {
+    if (isStorageError(error)) throw new ApiHttpError(error.kind, error.message);
+    throw error;
+  }
+}
+
 export interface CreateStorageFactoryDeps {
   readonly providers: Pick<ProviderService, "forIdentity">;
   readonly tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential">;
@@ -122,6 +143,7 @@ export function createIdentityStorageFactory(
 ): IdentityStorageFactory {
   return async (identityId) => {
     const { identity, module, instance } = await deps.providers.forIdentity(identityId);
+    await admit(module, instance, identity.externalUsername);
     const storage = withoutBackupPaths(
       module.createStorage(
         instance,
@@ -161,6 +183,7 @@ export function createPinnedStorageFactory(
     if (provider.id !== providerId) {
       throw new Error("identity is not bound to the requested provider");
     }
+    await admit(module, instance, identity.externalUsername);
     const token = await deps.tokenSource.get(identityId);
     return withoutBackupPaths(
       module.createStorage(

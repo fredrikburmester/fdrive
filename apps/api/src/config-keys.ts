@@ -167,11 +167,11 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "SFTPGO_URL",
+    key: "FDRIVE_STORAGE_ROOT",
     description:
-      "Base URL of the SFTPGo instance fdrive proxies; seeds and pins that storage provider at startup. Unset means setup happens through /setup.",
+      "Folder fdrive serves as its built-in storage, one home per user at <root>/<username>; fdrive keeps the users. Unset means storage is WebDAV or S3 added in System > Storage.",
     default: null,
-    example: "http://sftpgo:8080",
+    example: "/data",
     secret: false,
     subsystem: "core",
   },
@@ -182,14 +182,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     default: null,
     example: "change-me-32-random-bytes-base64==",
     secret: true,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_HOME_TEMPLATE",
-    description: "Maps an identity's username to its home path, e.g. sftpgo:/{username}.",
-    default: "sftpgo:/{username}",
-    example: "sftpgo:/{username}",
-    secret: false,
     subsystem: "core",
   },
   {
@@ -297,7 +289,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_ADMIN_USERS",
     description:
-      "Comma-separated SFTPGo usernames always treated as admins, in addition to account records.",
+      "Comma-separated local usernames always treated as admins, in addition to account records.",
     default: null,
     example: "alice,bob",
     secret: false,
@@ -324,9 +316,9 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_INDEX_ROOTS",
     description:
-      "JSON array of { name, sftpgoPath, indexerPath } mapping every indexed root. Unset disables search, thumbnails, and the Indexer page's per-root data.",
+      "JSON array of { name, storagePath, indexerPath } mapping every indexed root; storagePath is the folder's path in the API (FDRIVE_STORAGE_ROOT), indexerPath its path in the indexer. Unset disables search, thumbnails, and the Indexer page's per-root data.",
     default: null,
-    example: '[{"name":"sftpgo","sftpgoPath":"/srv/sftpgo/data","indexerPath":"/roots/sftpgo"}]',
+    example: '[{"name":"files","storagePath":"/data","indexerPath":"/data"}]',
     secret: false,
     subsystem: "index",
   },

@@ -97,6 +97,11 @@ import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
 import { registerProviderRoutes } from "./providers/routes.js";
+import { adoptSealedPasswords } from "./local/adopt.js";
+import { deploymentModules } from "./local/modules.js";
+import { registerLocalUserRoutes } from "./local/routes.js";
+import { createLocalUserService } from "./local/service.js";
+import { createLocalUserStore } from "./local/users.js";
 import { createProviderService, hostLabel } from "./providers/service.js";
 import { createSettingsMountMappingStore } from "./scoping/mount-mapping-store.ts";
 import { createSettingsScopeOverrideStore } from "./scoping/override-store.ts";
@@ -111,6 +116,7 @@ import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
+import { createScryptSharePasswords } from "./shares/passwords.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
 import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
@@ -140,9 +146,12 @@ import { readBuild } from "./version.js";
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
   readonly officeCanEdit?: OfficeDeps["canEdit"];
-  /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
+  /** Overrides the `fetch` implementation provider modules use; tests point this at fakes. */
   readonly fetch?: typeof globalThis.fetch;
-  /** Replaces the registry's provider modules by type, for fixtures that flip a module's strategies. */
+  /**
+   * Replaces this deployment's provider modules by type, for fixtures that
+   * flip a module's strategies. Defaults to `deploymentModules(config)`.
+   */
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
@@ -157,8 +166,8 @@ const HEALTH_PROBE_TTL_MS = 15_000;
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
  * (running migrations first when `config.fdriveAutoMigrate` is set), the
- * provider service (rows in `app.providers`, seeded from `SFTPGO_URL`, see
- * `src/providers/service.ts`), the event bus, the login rate limiter, the
+ * provider service (rows in `app.providers`; the local folder is pinned from
+ * `FDRIVE_STORAGE_ROOT`, see `src/providers/service.ts`), the event bus, the login rate limiter, the
  * auth module, the setup module (logging the one-time setup token while
  * setup is required), the admin provider routes, and the fs and events
  * route groups. Returns the resulting `Hono` app plus a `close` that ends
@@ -188,7 +197,9 @@ export async function composeApp(
   const repos = createRepos(db);
   const restored = await repos.settings.get("backup.restore.v1");
   if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
-  const backups = createBackupModule(config);
+  const passwords = createScryptSharePasswords();
+  const modules = deps.modules ?? deploymentModules(config, repos, passwords);
+  const backups = createBackupModule(config, modules);
   await backups.start();
 
   const activityPathLocks = createDb(config.databaseUrl, {
@@ -223,8 +234,8 @@ export async function composeApp(
     strategyFor: async (providerId) =>
       (await providerService.get(providerId))?.module.trash ?? "none",
   });
-  // Storage providers are rows: the SFTPGo named by `SFTPGO_URL` is seeded
-  // and pinned at startup. Every credential-bearing call resolves an
+  // Storage providers are rows: the local folder (`FDRIVE_STORAGE_ROOT`) is
+  // seeded and pinned at startup. Every credential-bearing call resolves an
   // identity's own row first, so nothing ever follows a configuration
   // change to another server.
   const providerService = createProviderService({
@@ -233,15 +244,37 @@ export async function composeApp(
     clock,
     eventLog,
     environment: {
-      sftpgoUrl: config.sftpgoUrl,
-      homeTemplate: config.fdriveHomeTemplate,
       indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
     },
     trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
-    ...(deps.modules === undefined ? {} : { modules: deps.modules }),
+    modules,
   });
-  if (!(await repos.settings.get("backup.recovery.v1")))
+  /** The local folder's pinned row, or `null` when the deployment serves none. */
+  const localProvider = async () =>
+    modules.local === undefined
+      ? null
+      : ((await providerService.list()).find(
+          (provider) => provider.type === modules.local?.type && provider.managedByEnv,
+        ) ?? null);
+  if (!(await repos.settings.get("backup.recovery.v1"))) {
     await providerService.seedFromEnvironment();
+    const local = await localProvider();
+    if (local !== null) {
+      const adopted = await adoptSealedPasswords({ repos, master, passwords }, local.id);
+      if (adopted.length > 0) {
+        logger.info({ users: adopted.length }, "local users created from existing logins");
+      }
+    }
+  }
+  const localUserStore = createLocalUserStore({ repo: repos.localUsers, passwords });
+  const localUsers = createLocalUserService({
+    repos,
+    store: localUserStore,
+    passwords,
+    master,
+    providerId: async () => (await localProvider())?.id ?? null,
+    eventLog,
+  });
 
   const featureService = createFeatureService({
     probeCacheMs: 2000,
@@ -635,7 +668,15 @@ export async function composeApp(
     authService: auth.service,
     accounts: repos.accounts,
     settings: repos.settings,
-    hasEnvUrl: config.sftpgoUrl !== undefined,
+    ...(modules.local === undefined
+      ? {}
+      : {
+          local: {
+            provider: localProvider,
+            userCount: () => repos.localUsers.count(),
+            users: localUsers,
+          },
+        }),
   });
 
   if ((await setupService.status()).required) {
@@ -953,6 +994,7 @@ export async function composeApp(
         config,
       });
       registerProviderRoutes(groups, { service: providerService });
+      registerLocalUserRoutes(groups, { service: localUsers });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
       // itself; see `fs/archive-routes.ts`'s `ArchiveRoutesDeps`) reaches

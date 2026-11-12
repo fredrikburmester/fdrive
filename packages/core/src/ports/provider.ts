@@ -48,26 +48,28 @@ export interface ProviderCapabilities {
   readonly office: boolean;
   /** Index-backed features (search, thumbnails, folder size) can apply. */
   readonly index: boolean;
-  /** Virtual folder mapping between provider paths and index roots applies. */
+  /**
+   * Virtual folder mapping between provider paths and index roots applies.
+   * No module sets it since the local folder replaced SFTPGo: a home is
+   * always `<root>/<username>`, so there is nothing to map.
+   */
   readonly scopeMapping: boolean;
 }
 
 /**
  * How deleted files reach the recycle folder: the provider does it itself
- * (`native`, SFTPGo's event rule), fdrive moves them on delete (`move`), or
+ * (`native`, a server-side rule), fdrive moves them on delete (`move`), or
  * there is no trash for this provider (`none`).
  */
 export type TrashStrategy = "native" | "move" | "none";
 
 /**
- * How public share links exist for a provider: the backend keeps its own
- * share objects and public API, which fdrive manages with the owner's token
- * and proxies to visitors (`native`, SFTPGo); fdrive keeps the share and
- * serves it through the module's storage (`owned`); or there are no shares
+ * How public share links exist for a provider: fdrive keeps the share and
+ * serves it through the module's storage (`owned`), or there are no shares
  * (`none`). `capabilities.shares` is the type-level summary and is true
  * exactly when this is not `none`.
  */
-export type ShareStrategy = "native" | "owned" | "none";
+export type ShareStrategy = "owned" | "none";
 
 /** One configured provider: a row of `app.providers` as the module sees it. */
 export interface ProviderInstance {
@@ -141,6 +143,12 @@ export interface ProviderModule {
   readonly trash: TrashStrategy;
   readonly shares: ShareStrategy;
   /**
+   * True when rows of this type exist only because the deployment
+   * configures them (the local folder, from `FDRIVE_STORAGE_ROOT`):
+   * administrators can neither add one nor change its address.
+   */
+  readonly deploymentManaged?: boolean;
+  /**
    * The name of the index root `instance`'s files live under, when the
    * deployment's indexer can read them at all; `null` when the instance
    * names no root or an unparsable one. Absent for providers the indexer
@@ -169,6 +177,13 @@ export interface ProviderModule {
     session: { readonly externalUsername: string; readonly credential: ProviderCredential },
     ctx: ProviderContext,
   ): Promise<ProviderToken>;
+  /**
+   * Throws `StorageError` of kind `forbidden` when the backend no longer
+   * lets `externalUsername` in, so a login that was disabled after it signed
+   * in stops working at once. Absent for backends that refuse such a user on
+   * every request by themselves.
+   */
+  admit?(instance: ProviderInstance, externalUsername: string): Promise<void>;
   createStorage(
     instance: ProviderInstance,
     session: StorageSession,

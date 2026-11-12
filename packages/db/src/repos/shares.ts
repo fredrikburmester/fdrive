@@ -8,12 +8,10 @@ import {
   type ShareRepo,
   shareEditableValues,
   shareListLimit,
-  shareStoredValues,
   validateShareId,
   validateShareInsert,
   validateShareOwnedUpdate,
   validateShareOwnership,
-  validateShareUpsert,
 } from "./shares-state.js";
 
 // The record projection: every column but the password hash, which only
@@ -31,17 +29,6 @@ function toShareRecord(row: RecordRow): ShareRecord {
 }
 export function createShareRepo(db: Db): ShareRepo {
   return {
-    async upsert(input) {
-      validateShareUpsert(input);
-      const values = shareStoredValues(input);
-      const [row] = await db
-        .insert(shares)
-        .values({ ...values, createdAt: input.at })
-        .onConflictDoUpdate({ target: [shares.identityId, shares.sftpgoShareId], set: values })
-        .returning(recordColumns);
-      if (!row) throw new Error("Share upsert returned no row");
-      return toShareRecord(row);
-    },
     async insert(input) {
       validateShareInsert(input);
       const [row] = await db
@@ -49,7 +36,6 @@ export function createShareRepo(db: Db): ShareRepo {
         .values({
           ...shareEditableValues(input),
           identityId: input.identityId,
-          sftpgoShareId: null,
           hasPassword: input.passwordHash !== null,
           passwordHash: input.passwordHash,
           createdAt: input.at,
@@ -70,9 +56,7 @@ export function createShareRepo(db: Db): ShareRepo {
             ? {}
             : { passwordHash: input.passwordHash, hasPassword: input.passwordHash !== null }),
         })
-        .where(
-          and(eq(shares.identityId, identityId), eq(shares.id, id), isNull(shares.sftpgoShareId)),
-        )
+        .where(and(eq(shares.identityId, identityId), eq(shares.id, id)))
         .returning(recordColumns);
       return row ? toShareRecord(row) : null;
     },
@@ -113,7 +97,7 @@ export function createShareRepo(db: Db): ShareRepo {
       const [row] = await db
         .select({ passwordHash: shares.passwordHash })
         .from(shares)
-        .where(and(eq(shares.id, id), isNull(shares.sftpgoShareId)));
+        .where(eq(shares.id, id));
       return row?.passwordHash ?? null;
     },
     async consume(id, now) {
@@ -126,7 +110,6 @@ export function createShareRepo(db: Db): ShareRepo {
         .where(
           and(
             eq(shares.id, id),
-            isNull(shares.sftpgoShareId),
             or(eq(shares.maxDownloads, 0), lt(shares.views, shares.maxDownloads)),
             or(isNull(shares.expiresAt), gt(shares.expiresAt, now)),
           ),

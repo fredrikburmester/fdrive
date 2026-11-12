@@ -178,6 +178,45 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
     });
 
+    describe("localUsers", () => {
+      it("creates, finds without regard to case and lists users by name", async () => {
+        const bob = await repos.localUsers.create({ username: "bob", passwordHash: "h1" });
+        await repos.localUsers.create({ username: "Alice", passwordHash: "h2" });
+
+        expect(bob).toMatchObject({ username: "bob", passwordHash: "h1", disabled: false });
+        expect(await repos.localUsers.get("ALICE")).toMatchObject({ username: "Alice" });
+        expect(await repos.localUsers.get("carol")).toBeNull();
+        expect((await repos.localUsers.list()).map((user) => user.username)).toEqual([
+          "Alice",
+          "bob",
+        ]);
+        expect(await repos.localUsers.count()).toBe(2);
+      });
+
+      it("refuses a name that is taken in another case", async () => {
+        await repos.localUsers.create({ username: "dave", passwordHash: "h" });
+        await expect(
+          repos.localUsers.create({ username: "DAVE", passwordHash: "h" }),
+        ).rejects.toBeInstanceOf(ConflictError);
+      });
+
+      it("updates the password and disabled flag, and deletes", async () => {
+        await repos.localUsers.create({ username: "erin", passwordHash: "old" });
+
+        const changed = await repos.localUsers.update("Erin", { passwordHash: "new" });
+        expect(changed).toMatchObject({ username: "erin", passwordHash: "new", disabled: false });
+        expect(await repos.localUsers.update("erin", { disabled: true })).toMatchObject({
+          passwordHash: "new",
+          disabled: true,
+        });
+        expect(await repos.localUsers.update("nobody", { disabled: true })).toBeNull();
+
+        await repos.localUsers.delete("ERIN");
+        await repos.localUsers.delete("ERIN");
+        expect(await repos.localUsers.get("erin")).toBeNull();
+      });
+    });
+
     describe("accounts", () => {
       it("creates an account with a display name", async () => {
         const account = await repos.accounts.create({ displayName: "Alice" });
@@ -477,6 +516,35 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(session.expiresAt).toEqual(expiresAt);
         expect(session.userAgent).toBe("vitest");
         expect(session.ip).toBe("127.0.0.1");
+      });
+
+      it("ends every session of an account but the one kept", async () => {
+        const account = await seedAccount();
+        const other = await seedAccount();
+        const expiresAt = new Date("2099-01-01T00:00:00.000Z");
+        const now = new Date("2026-01-01T00:00:00.000Z");
+        for (const [idHash, accountId] of [
+          ["keep", account.id],
+          ["end-1", account.id],
+          ["end-2", account.id],
+          ["other", other.id],
+        ] as const) {
+          await repos.sessions.create({
+            idHash,
+            accountId,
+            activeIdentityId: null,
+            expiresAt,
+            userAgent: null,
+            ip: null,
+          });
+        }
+
+        expect(await repos.sessions.deleteByAccount(account.id, "keep")).toBe(2);
+        expect(await repos.sessions.getByIdHash("keep", now)).not.toBeNull();
+        expect(await repos.sessions.getByIdHash("end-1", now)).toBeNull();
+        expect(await repos.sessions.deleteByAccount(account.id)).toBe(1);
+        expect(await repos.sessions.getByIdHash("keep", now)).toBeNull();
+        expect(await repos.sessions.getByIdHash("other", now)).not.toBeNull();
       });
 
       it("gets a session that has not expired", async () => {

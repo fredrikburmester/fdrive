@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { StorageError, type StorageSession } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, kindOf } from "../test/helpers.js";
-import { createLocalModule, isLocalUsername, type LocalUsers, probeRoot } from "./module.js";
+import {
+  createLocalModule,
+  isLocalUsername,
+  type LocalUserCheck,
+  type LocalUserStatus,
+  type LocalUsers,
+  probeRoot,
+} from "./module.js";
 
 const instance = { id: "p1", baseUrl: "http://local.invalid", config: {} };
 const ctx = { fetch: globalThis.fetch };
@@ -20,11 +27,19 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function users(result: Awaited<ReturnType<LocalUsers["verify"]>> | Error): LocalUsers {
+function users(
+  result: LocalUserCheck["result"] | Error,
+  status: LocalUserStatus | Error = "active",
+): LocalUsers {
   return {
-    verify: vi.fn(async () => {
+    verify: vi.fn(async (username: string): Promise<LocalUserCheck> => {
       if (result instanceof Error) throw result;
-      return result;
+      // The store keeps names in lower case, as a login may type them in any.
+      return result === "ok" ? { result, username: username.toLowerCase() } : { result };
+    }),
+    status: vi.fn(async () => {
+      if (status instanceof Error) throw status;
+      return status;
     }),
   };
 }
@@ -75,17 +90,55 @@ describe("createLocalModule", () => {
     expect(module).toMatchObject({
       type: "local",
       trash: "move",
-      shares: "none",
+      shares: "owned",
+      deploymentManaged: true,
       capabilities: {
         zip: true,
         setModifiedAt: true,
         atomicMove: true,
         trash: true,
-        shares: false,
+        shares: true,
+        office: true,
+        index: true,
+        scopeMapping: false,
       },
     });
     expect(module.capabilities.shares).toBe(module.shares !== "none");
     expect((await module.probe(instance, ctx)).ok).toBe(true);
+    expect(module.indexRootName?.(instance)).toBeNull();
+    expect(
+      createLocalModule({ root, users: users("ok"), indexRoot: "files" }).indexRootName?.(
+        instance,
+      ),
+    ).toBe("files");
+  });
+
+  it("signs in by the stored name, whatever case was typed", async () => {
+    const module = createLocalModule({ root, users: users("ok") });
+    await expect(
+      module.authenticate(instance, { username: "Alice", password: "pw" }, ctx),
+    ).resolves.toEqual({ externalUsername: "alice" });
+    await expect(
+      module.authenticate(
+        instance,
+        { username: "ALICE", password: "pw" },
+        { ...ctx, expectedUsername: "alice" },
+      ),
+    ).resolves.toEqual({ externalUsername: "alice" });
+  });
+
+  it("admits only active users", async () => {
+    await expect(
+      createLocalModule({ root, users: users("ok") }).admit?.(instance, "alice"),
+    ).resolves.toBeUndefined();
+    for (const status of ["disabled", "missing"] as const) {
+      const module = createLocalModule({ root, users: users("ok", status) });
+      expect(await kindOf(Promise.resolve(module.admit?.(instance, "alice")))).toBe("forbidden");
+    }
+    const down = createLocalModule({ root, users: users("ok", new Error("db down")) });
+    expect(await kindOf(Promise.resolve(down.admit?.(instance, "alice")))).toBe(
+      "upstream_unavailable",
+    );
   });
 
   it("signs in a user whose password checks out", async () => {

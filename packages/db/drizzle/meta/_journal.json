@@ -120,6 +120,13 @@
       "when": 1789807729585,
       "tag": "0016_personal_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794516997435,
+      "tag": "0017_local_storage",
+      "breakpoints": true
     }
   ]
 }

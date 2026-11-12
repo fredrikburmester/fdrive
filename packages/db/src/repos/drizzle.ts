@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import {
   accounts,
@@ -8,6 +8,7 @@ import {
   fileTags,
   folderViews,
   identities,
+  localUsers,
   providers,
   recents,
   sessions,
@@ -37,6 +38,8 @@ import type {
   FolderViewSort,
   Identity,
   IdentityRepo,
+  LocalUser,
+  LocalUserRepo,
   MetadataPathRepo,
   Provider,
   ProviderRepo,
@@ -388,6 +391,18 @@ function createSessionRepo(db: Db): SessionRepo {
     },
     async deleteExpired(now) {
       const deleted = await db.delete(sessions).where(lte(sessions.expiresAt, now)).returning();
+      return deleted.length;
+    },
+    async deleteByAccount(accountId, exceptIdHash) {
+      const deleted = await db
+        .delete(sessions)
+        .where(
+          and(
+            eq(sessions.accountId, accountId),
+            exceptIdHash === undefined ? undefined : ne(sessions.idHash, exceptIdHash),
+          ),
+        )
+        .returning({ idHash: sessions.idHash });
       return deleted.length;
     },
   };
@@ -977,10 +992,68 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
   };
 }
 
+function toLocalUser(row: typeof localUsers.$inferSelect): LocalUser {
+  return {
+    username: row.username,
+    passwordHash: row.passwordHash,
+    disabled: row.disabled,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+const sameName = (username: string) => eq(sql`lower(${localUsers.username})`, username.toLowerCase());
+
+export function createLocalUserRepo(db: Db): LocalUserRepo {
+  return {
+    async get(username) {
+      const [row] = await db.select().from(localUsers).where(sameName(username));
+      return row === undefined ? null : toLocalUser(row);
+    },
+    async list() {
+      const rows = await db.select().from(localUsers).orderBy(asc(localUsers.username));
+      return rows.map(toLocalUser);
+    },
+    async count() {
+      const [row] = await db.select({ value: count() }).from(localUsers);
+      return row?.value ?? 0;
+    },
+    async create(input) {
+      try {
+        const [row] = await db
+          .insert(localUsers)
+          .values({ username: input.username, passwordHash: input.passwordHash })
+          .returning();
+        if (row === undefined) throw new Error("local user insert returned no row");
+        return toLocalUser(row);
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ConflictError("username already exists");
+        throw error;
+      }
+    },
+    async update(username, patch) {
+      const [row] = await db
+        .update(localUsers)
+        .set({
+          ...(patch.passwordHash !== undefined ? { passwordHash: patch.passwordHash } : {}),
+          ...(patch.disabled !== undefined ? { disabled: patch.disabled } : {}),
+          updatedAt: sql`now()`,
+        })
+        .where(sameName(username))
+        .returning();
+      return row === undefined ? null : toLocalUser(row);
+    },
+    async delete(username) {
+      await db.delete(localUsers).where(sameName(username));
+    },
+  };
+}
+
 /** Builds every `Repos` interface as Drizzle queries against `db`. */
 export function createRepos(db: Db): Repos {
   return {
     providers: createProviderRepo(db),
+    localUsers: createLocalUserRepo(db),
     accounts: createAccountRepo(db),
     identities: createIdentityRepo(db),
     credentials: createCredentialRepo(db),

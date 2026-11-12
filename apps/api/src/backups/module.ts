@@ -27,7 +27,7 @@ import { isStorageError, stripTransientFields } from "@fdrive/core";
 import { Pool } from "pg";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
-import { moduleFor } from "../providers/registry.js";
+import { moduleFor, type ProviderModules } from "../providers/registry.js";
 
 /** Envelope codec for backup secrets and attachments under the installation master key. */
 export function masterSecrets(master: Uint8Array): SecretCodec {
@@ -68,7 +68,7 @@ export async function rawBackupStorage(
     context,
   );
 }
-export function createBackupModule(config: AppConfig) {
+export function createBackupModule(config: AppConfig, modules: ProviderModules) {
   const pool = new Pool({ connectionString: config.databaseUrl, max: 6 });
   pool.on("error", () => undefined);
   const gatePool = new Pool({ connectionString: config.databaseUrl, max: 16 });
@@ -118,7 +118,7 @@ export function createBackupModule(config: AppConfig) {
       JSON.stringify(current.config) !== JSON.stringify(record.config.providerConfig)
     )
       throw Error("Backup provider changed");
-    const module = moduleFor(current.type);
+    const module = moduleFor(current.type, modules);
     if (!module || typeof record.config.prefix !== "string")
       throw Error("Unsupported backup provider");
     const storage = await rawBackupStorage(
@@ -153,7 +153,7 @@ export function createBackupModule(config: AppConfig) {
           enabled: boolean;
         }>("select * from app.providers where id=$1", [input.providerId])
       ).rows[0];
-      const module = provider && moduleFor(provider.type);
+      const module = provider && moduleFor(provider.type, modules);
       if (!module || !provider?.enabled) throw Error("Storage provider is unavailable");
       const instance = { id: provider.id, baseUrl: provider.base_url, config: provider.config };
       // Scheduled backups sign in unattended, so verify exactly the credential that will be
@@ -326,7 +326,7 @@ export function createBackupModule(config: AppConfig) {
               [identityId],
             )
           ).rows[0];
-          const module = identity && moduleFor(identity.type);
+          const module = identity && moduleFor(identity.type, modules);
           if (!identity || !module) throw Error("Missing source credential");
           const credential = JSON.parse(
             Buffer.from(secrets.open(identity.ciphertext, identityId)).toString(),
