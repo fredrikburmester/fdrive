@@ -3,7 +3,6 @@ export {
   AccountFavoriteItem,
   AccountFavoritesResponse,
   AccountIdentityId,
-  AccountSearchResponse,
   LinkIdentityRequest,
   SwitchIdentityRequest,
   UnlinkIdentityRequest,

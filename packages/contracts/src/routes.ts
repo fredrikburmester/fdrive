@@ -220,7 +220,6 @@ export const ROUTES = {
     activeIdentity: "/api/v1/account/active-identity",
     /** GET: aggregated favorites across all identities linked to the account -> `AccountFavoritesResponse`. */
     favorites: "/api/v1/account/favorites",
-    search: "/api/v1/account/search",
     /**
      * GET: the caller's API tokens (never their secrets) -> `ApiTokensResponse`.
      * POST: create a token, shown once -> `CreateApiTokenResponse`.

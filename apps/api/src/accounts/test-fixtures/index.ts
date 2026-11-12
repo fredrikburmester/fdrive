@@ -1,4 +1,4 @@
-import { MeResponse, type SearchResponse } from "@fdrive/contracts";
+import { MeResponse } from "@fdrive/contracts";
 import type { ProviderModule } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFakeSftpgoServer, createSftpgoClient, createSftpgoModule } from "@fdrive/sftpgo";
@@ -83,13 +83,6 @@ export function accountsHarness(
     tokenSource,
     storageFactory,
   });
-  const emptySearch: SearchResponse = {
-    query: "report",
-    sections: { folders: [], files: [], content: [] },
-    degraded: false,
-    unavailable: false,
-    tookMs: 0,
-  };
   const deps: AccountsDeps = {
     repos,
     links,
@@ -101,7 +94,6 @@ export function accountsHarness(
     master,
     clock,
     storageForIdentity: (identity) => storageFactory(identity.id),
-    searchForIdentity: async () => emptySearch,
   };
   const service = createAccountsService(deps);
   const views = createAccountViews(deps);

@@ -2,7 +2,6 @@ import type { z } from "zod";
 import { AboutResponse } from "./about.ts";
 import {
   AccountFavoritesResponse,
-  AccountSearchResponse,
   type LinkIdentityRequest,
   type UnlinkIdentityRequest,
 } from "./accounts.ts";
@@ -296,7 +295,6 @@ export interface ApiClient {
   unlinkIdentity(id: string, input: UnlinkIdentityRequest): Promise<MeResponse>;
   switchIdentity(id: string): Promise<MeResponse>;
   accountFavorites(): Promise<AccountFavoritesResponse>;
-  accountSearch(query: string, opts?: ApiClientSearchOptions): Promise<AccountSearchResponse>;
   /** The identity's scope mapping and index-availability status; 404 for an unknown or unowned id. */
   identityScope(id: string): Promise<IdentityScopeResponse>;
   /** Admin + CSRF only: replaces the identity's scope override. `{ scopes: [] }` resets it to the template-derived home scope. */
@@ -684,18 +682,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     setMountMappings(body) {
       return put(ROUTES.system.mountMappings, MountMappingsResponse, { jsonBody: body });
-    },
-    accountSearch(query, opts) {
-      return get(ROUTES.account.search, AccountSearchResponse, {
-        query: {
-          q: query,
-          limit: opts?.limit === undefined ? undefined : String(opts.limit),
-          ext: opts?.ext,
-          folder: opts?.folder,
-          after: opts?.after,
-          before: opts?.before,
-        },
-      });
     },
 
     me(): Promise<MeResponse> {
