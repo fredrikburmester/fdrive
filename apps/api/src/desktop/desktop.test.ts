@@ -67,7 +67,7 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
   });
   expect((await f.request("/location", undefined, headers)).status).toBe(401);
   expect((await call("/operations/invalid")).status).toBe(400);
-  expect((await call("/operations/" + randomUUID())).status).toBe(404);
+  expect((await call(`/operations/${randomUUID()}`)).status).toBe(404);
   expect((await call("/entries?path=/")).status).toBe(200);
   // Folder checks: advertised, answered from a listing's token, and strictly bounded.
   expect(await (await call("/location")).json()).toMatchObject({ listingChecks: true });
@@ -184,8 +184,8 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
   const activity = activityFixture(clock);
   const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({
-    type: "sftpgo",
-    baseUrl: "https://sftpgo.invalid",
+    type: "webdav",
+    baseUrl: "https://files.invalid",
   });
   const secondProvider = await repos.providers.ensure({
     type: "webdav",
@@ -239,7 +239,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo.invalid" }],
+      providers: [{ type: "webdav", host: "files.invalid" }],
     }),
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
     registerRoutes: (groups) =>

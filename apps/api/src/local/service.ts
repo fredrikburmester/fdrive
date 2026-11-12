@@ -82,7 +82,11 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
     const existing = await repos.identities.findByProviderUsername(providerId, username);
     if (existing !== null) return existing;
     const account = await repos.accounts.create({ displayName: null });
-    return repos.identities.create({ accountId: account.id, providerId, externalUsername: username });
+    return repos.identities.create({
+      accountId: account.id,
+      providerId,
+      externalUsername: username,
+    });
   }
 
   async function view(providerId: string, user: LocalUser, viewer: UserViewer): Promise<AdminUser> {
@@ -154,7 +158,8 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
             : { passwordHash: await deps.passwords.hash(patch.password) }),
           ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
         })) ?? current;
-      if (patch.isAdmin !== undefined) await repos.accounts.setAdmin(identity.accountId, patch.isAdmin);
+      if (patch.isAdmin !== undefined)
+        await repos.accounts.setAdmin(identity.accountId, patch.isAdmin);
       // A new password or a disabled user ends every session that predates it.
       if (patch.password !== undefined || patch.disabled === true) {
         await endSessions(identity.accountId, viewer);

@@ -12,12 +12,11 @@ import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-si
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
 const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 
 function createTestLogger(): Logger {
@@ -100,7 +99,7 @@ describe("GET /api/v1/fs/folder-size", () => {
   it("sums the indexed bytes and files under the requested folder", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize: async () => ({ bytes: 4096, files: 3 }),
       }),
     });
@@ -120,7 +119,7 @@ describe("GET /api/v1/fs/folder-size", () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -138,10 +137,10 @@ describe("GET /api/v1/fs/folder-size", () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 0, files: 0 }));
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
-      scopes: [{ rootName: "sftpgo", fsPrefix: "/", virtualPrefix: "/" }],
+      scopes: [{ rootName: "files", fsPrefix: "/", virtualPrefix: "/" }],
     });
 
     await app.request("/api/v1/fs/folder-size?path=/");
@@ -154,7 +153,7 @@ describe("GET /api/v1/fs/folder-size", () => {
     const app = buildApp({
       trashPathForStorage: () => "/photos/.trash",
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -214,11 +213,11 @@ describe("GET /api/v1/fs/folder-size", () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
     const app = buildApp({
       scopes: [
-        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "sftpgo", fsPrefix: "/pool/trips", virtualPrefix: "/photos/trips" },
+        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "files", fsPrefix: "/pool/trips", virtualPrefix: "/photos/trips" },
       ],
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -251,12 +250,12 @@ describe("GET /api/v1/fs/folder-size", () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
     const app = buildApp({
       scopes: [
-        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
+        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
+        { rootName: "files", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
       ],
       trashPathForStorage: () => "/shared/.trash",
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -371,7 +370,7 @@ describe("GET /api/v1/fs/folder-size", () => {
 
   it("answers indexed: false when no verified scope covers the requested path", async () => {
     const app = buildApp({
-      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/photos" }],
+      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/photos" }],
     });
 
     const res = await app.request("/api/v1/fs/folder-size?path=/videos");
@@ -434,7 +433,7 @@ describe("GET /api/v1/fs/folder-size", () => {
   });
 
   it("checks the live read before ever querying the index", async () => {
-    const rootIdsByName = vi.fn(async () => ({ sftpgo: 1 }));
+    const rootIdsByName = vi.fn(async () => ({ files: 1 }));
     const app = buildApp({
       indexQueries: fakeIndexQueries({ rootIdsByName }),
       authorizeResult: { allowed: false, reason: "denied" },
@@ -458,7 +457,7 @@ describe("GET /api/v1/fs/folder-size", () => {
     };
     const deps: FolderSizeRoutesDeps = {
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize: async () => ({ bytes: 0, files: 0 }),
       }),
       resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }) },

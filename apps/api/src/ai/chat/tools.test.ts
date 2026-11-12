@@ -27,7 +27,7 @@ beforeEach(() => {
   vi.mocked(findFilesInScope).mockReset();
 });
 
-const SCOPES: readonly Scope[] = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
+const SCOPES: readonly Scope[] = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function indexedFile(id: number, path: string, extra: Partial<IndexedFile> = {}): IndexedFile {
   return {
@@ -83,7 +83,7 @@ function setup(
   );
   const mcp: McpToolDeps = {
     indexQueries: {
-      rootIdsByName: async () => ({ sftpgo: 1 }),
+      rootIdsByName: async () => ({ files: 1 }),
       fileByPath: async (_rootId: number, path: string) => FILES[path] ?? null,
       fileTextPrefix,
     } as unknown as IndexQueries,

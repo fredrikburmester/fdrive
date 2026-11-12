@@ -50,7 +50,7 @@ function fixture({
     principalResolver: async () => principal,
     connectionStatus: async () => ({
       required: setupRequired,
-      providers: setupRequired ? [] : [{ type: "sftpgo", host: "sftpgo" }],
+      providers: setupRequired ? [] : [{ type: "webdav", host: "dav.test" }],
     }),
     registerRoutes(groups) {
       registerFeatureAdmission(groups.authed, service);

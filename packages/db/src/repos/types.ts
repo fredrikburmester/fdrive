@@ -70,6 +70,40 @@ export interface LocalUserRepo {
   delete(username: string): Promise<void>;
 }
 
+export type LocalGrantAccess = "read" | "write";
+
+/** A folder one local user shares with another. */
+export interface LocalGrant {
+  readonly id: string;
+  readonly ownerUsername: string;
+  /** The folder in the owner's files, a canonical virtual path. */
+  readonly path: string;
+  readonly granteeUsername: string;
+  readonly access: LocalGrantAccess;
+  readonly createdAt: Date;
+}
+
+export interface LocalGrantRepo {
+  get(id: string): Promise<LocalGrant | null>;
+  /** What others share with `grantee`, oldest first. */
+  listReceived(grantee: string): Promise<LocalGrant[]>;
+  /** What `owner` shares, only the folder `path` when given, oldest first. */
+  listOwned(owner: string, path?: string): Promise<LocalGrant[]>;
+  /** Shares `path` with `grantee`, or changes the access of an existing share. */
+  put(input: {
+    ownerUsername: string;
+    path: string;
+    granteeUsername: string;
+    access: LocalGrantAccess;
+  }): Promise<LocalGrant>;
+  /** A no-op when the grant does not exist. */
+  delete(id: string): Promise<void>;
+  /** Follows the owner's move of `from` (and everything under it) to `to`. */
+  movePrefix(owner: string, from: string, to: string): Promise<void>;
+  /** Drops the grants of `path` and everything under it, after the owner deleted it. */
+  deletePrefix(owner: string, path: string): Promise<void>;
+}
+
 /** An fdrive user, created on first successful login. */
 export interface Account {
   readonly id: string;
@@ -513,6 +547,7 @@ export interface SystemEventRepo {
 export interface Repos {
   readonly providers: ProviderRepo;
   readonly localUsers: LocalUserRepo;
+  readonly localGrants: LocalGrantRepo;
   readonly accounts: AccountRepo;
   readonly identities: IdentityRepo;
   readonly credentials: CredentialRepo;

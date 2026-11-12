@@ -5,20 +5,25 @@ import { createProviderModules, type ProviderModules } from "../providers/regist
 import { createScryptSharePasswords, type SharePasswords } from "../shares/passwords.js";
 import { createLocalUserStore } from "./users.js";
 
+/** The index root name the local folder has when no configured root names it. */
+export const LOCAL_INDEX_ROOT = "files";
+
 /**
  * The index root the local folder is read under: the configured root whose
- * `storagePath` is the folder, else the only root there is. `null` when
- * the deployment indexes nothing.
+ * `storagePath` is the folder, else the only root there is, else `files`.
+ * A name is needed even when nothing is indexed: Office keys its documents
+ * by root and path. Search and thumbnails still need the root configured
+ * (`FDRIVE_INDEX_ROOTS`), so a default name enables nothing by itself.
  */
 export function localIndexRoot(
   roots: readonly IndexRootConfig[] | null,
   storageRoot: string,
-): string | null {
-  if (roots === null) return null;
+): string {
+  if (roots === null) return LOCAL_INDEX_ROOT;
   const folder = resolve(storageRoot);
   const named = roots.find((root) => resolve(root.storagePath) === folder);
   if (named !== undefined) return named.name;
-  return roots.length === 1 ? (roots[0]?.name ?? null) : null;
+  return roots.length === 1 ? (roots[0] as IndexRootConfig).name : LOCAL_INDEX_ROOT;
 }
 
 /**
@@ -28,7 +33,7 @@ export function localIndexRoot(
  */
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
-  repos: Pick<Repos, "localUsers">,
+  repos: Pick<Repos, "localUsers" | "localGrants">,
   passwords: SharePasswords = createScryptSharePasswords(),
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
@@ -36,7 +41,7 @@ export function deploymentModules(
   return createProviderModules({
     local: {
       root,
-      users: createLocalUserStore({ repo: repos.localUsers, passwords }),
+      users: createLocalUserStore({ repo: repos.localUsers, grants: repos.localGrants, passwords }),
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
     },
   });

@@ -68,7 +68,7 @@ export interface AppDeps {
   readonly principalResolver?: PrincipalResolver;
   /**
    * Reports whether fdrive setup is required and the enabled providers to
-   * show on `/about`. Defaults to "required, no providers", which is enough
+   * show on `/about`. Defaults to "set up, no providers", which is enough
    * for tests that do not exercise provider rows; `composeApp` wires the
    * real `ProviderService`-backed version.
    */
@@ -134,7 +134,7 @@ export function createApp(deps: AppDeps): AppHono {
   const clock = deps.clock ?? (() => new Date());
   const principalResolver: PrincipalResolver = deps.principalResolver ?? (async () => null);
   const connectionStatus: () => Promise<ConnectionStatus> =
-    deps.connectionStatus ?? (async () => ({ required: true, providers: [] }));
+    deps.connectionStatus ?? (async () => ({ required: false, providers: [] }));
   const app: AppHono = new Hono();
 
   app.use("*", requestIdMiddleware({ headerName: REQUEST_ID_HEADER }));

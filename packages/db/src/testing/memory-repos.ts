@@ -21,6 +21,8 @@ import type {
   FolderViewRepo,
   Identity,
   IdentityRepo,
+  LocalGrant,
+  LocalGrantRepo,
   LocalUser,
   LocalUserRepo,
   MetadataPathRepo,
@@ -177,6 +179,60 @@ function createMemoryLocalUserRepo(): LocalUserRepo {
     },
     async delete(username) {
       byName.delete(key(username));
+    },
+  };
+}
+
+function createMemoryLocalGrantRepo(ids: () => string): LocalGrantRepo {
+  const rows: LocalGrant[] = [];
+  const atOrUnder = (path: string, prefix: string) =>
+    path === prefix || path.startsWith(prefix === "/" ? "/" : `${prefix}/`);
+
+  return {
+    async get(id) {
+      return rows.find((row) => row.id === id) ?? null;
+    },
+    async listReceived(grantee) {
+      return rows.filter((row) => row.granteeUsername === grantee);
+    },
+    async listOwned(owner, path) {
+      return rows.filter(
+        (row) => row.ownerUsername === owner && (path === undefined || row.path === path),
+      );
+    },
+    async put(input) {
+      const at = rows.findIndex(
+        (row) =>
+          row.ownerUsername === input.ownerUsername &&
+          row.path === input.path &&
+          row.granteeUsername === input.granteeUsername,
+      );
+      const existing = rows[at];
+      if (existing !== undefined) {
+        const updated = { ...existing, access: input.access };
+        rows[at] = updated;
+        return updated;
+      }
+      const created: LocalGrant = { id: ids(), ...input, createdAt: new Date() };
+      rows.push(created);
+      return created;
+    },
+    async delete(id) {
+      const at = rows.findIndex((row) => row.id === id);
+      if (at >= 0) rows.splice(at, 1);
+    },
+    async movePrefix(owner, from, to) {
+      for (const [at, row] of rows.entries()) {
+        if (row.ownerUsername === owner && atOrUnder(row.path, from)) {
+          rows[at] = { ...row, path: `${to}${row.path.slice(from.length)}` };
+        }
+      }
+    },
+    async deletePrefix(owner, path) {
+      for (let at = rows.length - 1; at >= 0; at -= 1) {
+        const row = rows[at] as LocalGrant;
+        if (row.ownerUsername === owner && atOrUnder(row.path, path)) rows.splice(at, 1);
+      }
     },
   };
 }
@@ -1153,6 +1209,7 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
       identities.countByProviderSync(providerId),
     ),
     localUsers: createMemoryLocalUserRepo(),
+    localGrants: createMemoryLocalGrantRepo(ids),
     accounts: createMemoryAccountRepo(ids),
     identities,
     credentials: createMemoryCredentialRepo(),

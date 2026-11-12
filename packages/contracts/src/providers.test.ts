@@ -21,14 +21,19 @@ const CAPABILITIES = {
   shares: true,
   office: true,
   index: false,
-  scopeMapping: true,
+  shareWithPeople: false,
 };
 const FIELD = { name: "username", label: "Username", kind: "text", required: true };
 
 describe("provider contracts", () => {
   it("knows the registered provider types only", () => {
-    expect(ProviderType.safeParse("sftpgo").success).toBe(true);
-    expect(ProviderType.safeParse("gdrive").success).toBe(false);
+    for (const type of ["local", "webdav", "s3"]) {
+      expect(ProviderType.safeParse(type).success).toBe(true);
+    }
+    // SFTPGo was replaced by the local folder; its rows are no longer a type.
+    for (const type of ["sftpgo", "gdrive"]) {
+      expect(ProviderType.safeParse(type).success).toBe(false);
+    }
   });
 
   it("requires every capability flag", () => {
@@ -47,7 +52,7 @@ describe("provider contracts", () => {
     expect(ProviderField.safeParse({ ...FIELD, kind: "checkbox" }).success).toBe(false);
     const provider = {
       id: ID,
-      type: "sftpgo",
+      type: "webdav",
       label: "Home",
       credentialFields: [FIELD],
       capabilities: CAPABILITIES,
@@ -61,12 +66,13 @@ describe("provider contracts", () => {
   it("parses admin providers and the admin list", () => {
     const provider = {
       id: ID,
-      type: "sftpgo",
+      type: "webdav",
       label: "Home",
-      baseUrl: "http://sftpgo:8080",
-      config: { homeTemplate: "sftpgo:/{username}" },
+      baseUrl: "http://dav.test:8080",
+      config: { mode: "exclusive" },
       enabled: true,
       managedByEnv: false,
+      capabilities: CAPABILITIES,
       identityCount: 2,
       reachable: true,
       checkedAt: "2026-01-01T00:00:00.000Z",
@@ -75,12 +81,14 @@ describe("provider contracts", () => {
     expect(AdminProvider.parse(provider)).toEqual(provider);
     expect(AdminProvider.safeParse({ ...provider, baseUrl: "nope" }).success).toBe(false);
     expect(AdminProvider.safeParse({ ...provider, identityCount: -1 }).success).toBe(false);
+    // The type's flags tell System > Storage what each storage can do.
+    expect(AdminProvider.safeParse({ ...provider, capabilities: undefined }).success).toBe(false);
     const list = {
       providers: [provider],
       types: [
         {
-          type: "sftpgo",
-          label: "SFTPGo",
+          type: "webdav",
+          label: "WebDAV",
           configFields: [],
           credentialFields: [FIELD],
           capabilities: CAPABILITIES,
@@ -90,8 +98,27 @@ describe("provider contracts", () => {
     expect(AdminProvidersResponse.parse(list)).toEqual(list);
   });
 
+  it("shows the local folder with no endpoint, never another non-URL", () => {
+    const local = {
+      id: ID,
+      type: "local",
+      label: "Local folder",
+      baseUrl: "",
+      config: {},
+      enabled: true,
+      managedByEnv: true,
+      capabilities: { ...CAPABILITIES, shareWithPeople: true },
+      identityCount: 0,
+      reachable: true,
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    expect(AdminProvider.parse(local)).toEqual(local);
+    expect(AdminProvider.safeParse({ ...local, baseUrl: "local" }).success).toBe(false);
+  });
+
   it("normalizes names consistently for creates and label-only updates", () => {
-    const create = { type: "sftpgo", baseUrl: "http://sftpgo:8080" };
+    const create = { type: "webdav", baseUrl: "http://dav.test:8080" };
     expect(AdminProviderCreateRequest.parse({ ...create, label: "  Home storage  " }).label).toBe(
       "Home storage",
     );
@@ -106,7 +133,7 @@ describe("provider contracts", () => {
   });
 
   it("bounds the admin requests", () => {
-    const create = { type: "sftpgo", label: "Home", baseUrl: "http://sftpgo:8080" };
+    const create = { type: "webdav", label: "Home", baseUrl: "http://dav.test:8080" };
     expect(AdminProviderCreateRequest.parse(create)).toEqual(create);
     expect(AdminProviderCreateRequest.safeParse({ ...create, label: "" }).success).toBe(false);
     expect(AdminProviderCreateRequest.safeParse({ ...create, extra: 1 }).success).toBe(false);
@@ -119,8 +146,8 @@ describe("provider contracts", () => {
       config: { x: "y" },
     });
     expect(AdminProviderUpdateRequest.safeParse({ baseUrl: "nope" }).success).toBe(false);
-    expect(AdminProviderTestRequest.parse({ type: "sftpgo", baseUrl: "http://a" })).toEqual({
-      type: "sftpgo",
+    expect(AdminProviderTestRequest.parse({ type: "webdav", baseUrl: "http://a" })).toEqual({
+      type: "webdav",
       baseUrl: "http://a",
     });
     expect(AdminProviderTestRequest.safeParse({ baseUrl: "http://a" }).success).toBe(false);

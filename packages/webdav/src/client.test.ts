@@ -495,6 +495,29 @@ it("uses collection URLs for stat, copy, move and delete on a strict server", as
   expect(await kindOf(user.stat("/moved"))).toBe("not_found");
 });
 
+it("follows a collection redirect that spells its percent-encodings in lowercase", async () => {
+  const { server } = setup();
+  await server.fetch("http://webdav.test/%C3%85%20%2520/", {
+    method: "MKCOL",
+    headers: { authorization: `Basic ${Buffer.from("alice:secret").toString("base64")}` },
+  });
+  const requested: string[] = [];
+  const fetchApache: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    requested.push(url.pathname);
+    if (url.pathname === "/%C3%85%20%2520") {
+      // Apache's own spelling of the same collection URL.
+      return new Response(null, { status: 301, headers: { location: "/%c3%85%20%2520/" } });
+    }
+    return server.fetch(input, init);
+  };
+  const user = createWebdavClient({ baseUrl: "http://webdav.test/", fetch: fetchApache }).user(
+    ALICE,
+  );
+  expect((await user.stat("/Å %20")).kind).toBe("dir");
+  expect(requested).toEqual(["/%C3%85%20%2520", "/%C3%85%20%2520/"]);
+});
+
 it.each([403, 404, 500])(
   "rejects response-level and all-property %s failures within 207",
   async (status) => {

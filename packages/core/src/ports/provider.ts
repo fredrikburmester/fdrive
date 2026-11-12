@@ -46,14 +46,14 @@ export interface ProviderCapabilities {
   readonly shares: boolean;
   /** Office viewing and editing can be offered for this provider. */
   readonly office: boolean;
+  /**
+   * Folders can be shared with other users of the same storage, who see them
+   * under `Shared with me`: only where fdrive keeps both the users and the
+   * files (the local folder).
+   */
+  readonly shareWithPeople: boolean;
   /** Index-backed features (search, thumbnails, folder size) can apply. */
   readonly index: boolean;
-  /**
-   * Virtual folder mapping between provider paths and index roots applies.
-   * No module sets it since the local folder replaced SFTPGo: a home is
-   * always `<root>/<username>`, so there is nothing to map.
-   */
-  readonly scopeMapping: boolean;
 }
 
 /**
@@ -152,8 +152,9 @@ export interface ProviderModule {
    * The name of the index root `instance`'s files live under, when the
    * deployment's indexer can read them at all; `null` when the instance
    * names no root or an unparsable one. Absent for providers the indexer
-   * never reads. `index` and `scopeMapping` hold for an instance only when
-   * this names a configured root.
+   * never reads. `index` holds for an instance only when this names a
+   * configured root, and the API maps each login to `<root>/<username>`
+   * under it.
    */
   indexRootName?(instance: ProviderInstance): string | null;
   /** Checks that `instance` is reachable and looks like this kind of server. */

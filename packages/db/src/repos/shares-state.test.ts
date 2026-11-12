@@ -126,7 +126,10 @@ describe("share validation", () => {
       validateShareOwnedUpdate(identityId, identityId, { ...ownedUpdate, passwordHash: "" }),
     ).toThrow(TypeError);
     expect(() =>
-      validateShareOwnedUpdate(identityId, identityId, { ...ownedUpdate, at: new Date(Number.NaN) }),
+      validateShareOwnedUpdate(identityId, identityId, {
+        ...ownedUpdate,
+        at: new Date(Number.NaN),
+      }),
     ).toThrow(TypeError);
     expect(() => validateShareOwnedUpdate("bad", identityId, ownedUpdate)).toThrow(TypeError);
     expect(() => validateShareOwnedUpdate(identityId, "bad", ownedUpdate)).toThrow(TypeError);

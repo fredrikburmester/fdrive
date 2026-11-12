@@ -16,7 +16,6 @@ const MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: MASTER_KEY,
 };
 
@@ -25,7 +24,7 @@ function loadFullyConfiguredEnv(): AppConfig {
   return loadConfig({
     ...REQUIRED_ENV,
     FDRIVE_INDEX_ROOTS: JSON.stringify([
-      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+      { name: "files", storagePath: "/data", indexerPath: "/data" },
     ]),
     FDRIVE_INDEXER_URL: "http://indexer:8010",
     FDRIVE_EMBED_URL: "http://embed:80",
@@ -109,7 +108,7 @@ describe("subsystemsStatus", () => {
     const rootsOnly = loadConfig({
       ...REQUIRED_ENV,
       FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+        { name: "files", storagePath: "/data", indexerPath: "/data" },
       ]),
     });
     expect(subsystemsStatus(rootsOnly).index).toEqual({
@@ -120,7 +119,7 @@ describe("subsystemsStatus", () => {
     const both = loadConfig({
       ...REQUIRED_ENV,
       FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+        { name: "files", storagePath: "/data", indexerPath: "/data" },
       ]),
       FDRIVE_INDEXER_URL: "http://indexer:8010",
     });

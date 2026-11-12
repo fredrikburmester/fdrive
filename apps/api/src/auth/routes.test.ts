@@ -2,17 +2,18 @@ import { type ApiError, MeResponse, ROUTES } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeS3Server } from "@fdrive/s3";
-import { createFakeSftpgoServer, createSftpgoClient } from "@fdrive/sftpgo";
-import { createFakeWebdavServer } from "@fdrive/webdav";
+import { createFakeS3Server, s3Module } from "@fdrive/s3";
+import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
+import { localModuleFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
 import {
+  fakeProviderModule,
   memoryProviderService,
+  seedLocalProvider,
   seedS3Provider,
-  seedSftpgoProvider,
   seedWebdavProvider,
 } from "../providers/test-fixtures/index.ts";
 import { parseMasterKey } from "./crypto";
@@ -41,7 +42,6 @@ const FAKE_STORAGE: StorageProvider = {
 
 const REQUIRED_ENV: Record<string, string> = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://sftpgo.internal:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
   FDRIVE_SESSION_TTL_DAYS: "30",
   FDRIVE_COOKIE_SECURE: "auto",
@@ -69,33 +69,39 @@ function createClock(startMs: number) {
   };
 }
 
-function buildTestApp(opts: {
+/** The setup gate open: these tests exercise auth, not setup. */
+const READY = async () => ({ required: false, providers: [] });
+
+/** No request may leave these tests unless one names a fake server. */
+const offline: typeof globalThis.fetch = async (input) => {
+  throw new TypeError(`fetch failed: no network in tests (${String(input)})`);
+};
+
+const USERS = [
+  { username: "alice", password: "wonderland" },
+  { username: "bob", password: "builder" },
+];
+
+/** The auth routes over the deployment's local folder, pinned, with alice and bob. */
+async function buildTestApp(opts: {
   clockCtl: ReturnType<typeof createClock>;
   envOverrides?: Record<string, string>;
-  wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
 }) {
-  const server = createFakeSftpgoServer({
-    users: [
-      { username: "alice", password: "wonderland", permissions: { "/": ["*"] } },
-      { username: "bob", password: "builder", permissions: { "/": ["*"] } },
-    ],
-    now: opts.clockCtl.clock,
-  });
-  const fetchImpl = opts.wrapFetch ? opts.wrapFetch(server.fetch) : server.fetch;
   const repos: Repos = createMemoryRepos();
   const config = loadConfig({ ...REQUIRED_ENV, ...opts.envOverrides });
+  const local = localModuleFixture(repos);
+  await seedLocalUsers(repos, USERS);
   const providers = memoryProviderService(repos, {
-    fetch: fetchImpl,
+    fetch: offline,
     clock: opts.clockCtl.clock,
-    sftpgoUrl: config.sftpgoUrl,
+    modules: { local: local.module },
   });
-  // Memory repos settle in microtasks, well before the first request below.
-  void seedSftpgoProvider(repos, "http://sftpgo.internal:8080", { managedByEnv: true });
+  await providers.seedFromEnvironment();
   const authModule = createAuthModule({
     identityLinks: memoryIdentityOperations(repos),
     repos,
     providers,
-    fetch: fetchImpl,
+    fetch: offline,
     master: parseMasterKey(config.fdriveMasterKey),
     clock: opts.clockCtl.clock,
     config,
@@ -108,10 +114,11 @@ function buildTestApp(opts: {
     startedAt: new Date(0),
     clock: opts.clockCtl.clock,
     principalResolver: authModule.principalResolver,
+    connectionStatus: READY,
     registerRoutes: authModule.registerRoutes,
   });
 
-  return { app, repos, server, config, authModule, providers };
+  return { app, repos, users: local.users, config, authModule, providers };
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -131,7 +138,7 @@ function extractCookie(res: Response): string {
 }
 
 async function login(
-  app: ReturnType<typeof buildTestApp>["app"],
+  app: Awaited<ReturnType<typeof buildTestApp>>["app"],
   body: Record<string, unknown>,
   extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
@@ -154,20 +161,15 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("responds setup_required when no provider is configured", async () => {
-    // Exercises the auth service in isolation from the app-level setup gate
-    // (which derives its own status from `config.sftpgoUrl`, set in
-    // `REQUIRED_ENV`): the auth service sees no provider rows at all.
-    const server = createFakeSftpgoServer({
-      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
-      now: clockCtl.clock,
-    });
+    // The app-level setup gate is open, so the 503 comes from the auth
+    // service itself: it sees no provider rows at all.
     const repos: Repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
     const authModule = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
-      providers: memoryProviderService(repos, { fetch: server.fetch, clock: clockCtl.clock }),
-      fetch: server.fetch,
+      providers: memoryProviderService(repos, { fetch: offline, clock: clockCtl.clock }),
+      fetch: offline,
       master: parseMasterKey(config.fdriveMasterKey),
       clock: clockCtl.clock,
       config,
@@ -180,28 +182,30 @@ describe("auth routes: POST /auth/login", () => {
       startedAt: new Date(0),
       clock: clockCtl.clock,
       principalResolver: authModule.principalResolver,
+      connectionStatus: READY,
       registerRoutes: authModule.registerRoutes,
     });
 
     const res = await login(app, { username: "alice", password: "wonderland" });
 
     expect(res.status).toBe(503);
+    expect(await readJson<ApiError>(res)).toMatchObject({ error: { kind: "setup_required" } });
   });
 
   it("binds a setup candidate login to its own provider row even while that row is disabled", async () => {
-    const server = createFakeSftpgoServer({
-      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
-      now: clockCtl.clock,
+    const dav = createFakeWebdavServer({
+      users: [{ username: "alice", password: "wonderland" }],
+      origin: "http://candidate.test",
     });
     const repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
     const requests: string[] = [];
     const fetchImpl: typeof globalThis.fetch = async (url, init) => {
       requests.push(new URL(String(url)).host);
-      return server.fetch(url, init);
+      return dav.fetch(url, init);
     };
-    const active = await seedSftpgoProvider(repos, "http://active:8080", { managedByEnv: true });
-    const candidate = await seedSftpgoProvider(repos, "http://candidate:8080", { enabled: false });
+    const active = await seedWebdavProvider(repos, "http://active.test", { managedByEnv: true });
+    const candidate = await seedWebdavProvider(repos, "http://candidate.test", { enabled: false });
     const auth = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
@@ -224,14 +228,15 @@ describe("auth routes: POST /auth/login", () => {
     const identity = await repos.identities.get(result.me.activeIdentityId);
     if (identity === null) throw new Error("expected candidate identity");
 
-    expect(requests).toEqual(["candidate:8080"]);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((host) => host === "candidate.test")).toBe(true);
     expect(identity.providerId).toBe(candidate.id);
     expect((await repos.providers.get(active.id))?.enabled).toBe(true);
     expect((await repos.providers.get(candidate.id))?.enabled).toBe(false);
   });
 
   it("succeeds with correct credentials, returns MeResponse, and sets a non-Secure cookie over plain http", async () => {
-    const { app, server } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await login(app, { username: "alice", password: "wonderland" });
 
@@ -240,7 +245,7 @@ describe("auth routes: POST /auth/login", () => {
     expect(MeResponse.safeParse(body).success).toBe(true);
     expect(body).toMatchObject({
       account: { displayName: "alice" },
-      identities: [{ username: "alice", providerType: "sftpgo" }],
+      identities: [{ username: "alice", providerType: "local", providerLabel: "Local folder" }],
     });
 
     const setCookie = res.headers.get("set-cookie");
@@ -248,15 +253,10 @@ describe("auth routes: POST /auth/login", () => {
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Lax");
     expect(setCookie).not.toContain("Secure");
-
-    // Exactly one SFTPGo login per fdrive login: `authService.login` primes
-    // the token cache from its own `sftpgo.login` result rather than having
-    // `tokenSource.get` mint a second token right after.
-    expect(server.state.tokens.size).toBe(1);
   });
 
   it("rejects a non-canonical provider ID before repository access", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const res = await login(app, {
       providerId: "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
       credential: { username: "alice", password: "wonderland" },
@@ -266,23 +266,8 @@ describe("auth routes: POST /auth/login", () => {
     expect(await readJson<ApiError>(res)).toMatchObject({ error: { kind: "bad_request" } });
   });
 
-  it("mints exactly one SFTPGo token per fdrive login, reused by the first authenticated request", async () => {
-    const { app, server } = buildTestApp({ clockCtl });
-
-    const loginRes = await login(app, { username: "alice", password: "wonderland" });
-    const cookie = extractCookie(loginRes);
-    expect(server.state.tokens.size).toBe(1);
-
-    const meRes = await app.request(ROUTES.auth.me, { headers: { cookie } });
-    expect(meRes.status).toBe(200);
-
-    // `GET /auth/me` never touches storage, so it does not mint a token
-    // either; the count stays at the one from login.
-    expect(server.state.tokens.size).toBe(1);
-  });
-
   it("sets a Secure cookie when the request arrived over a forwarded https connection", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await login(
       app,
@@ -294,7 +279,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("returns 401 unauthorized for a wrong password", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await login(app, { username: "alice", password: "wrong-password" });
 
@@ -304,7 +289,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("returns 400 bad_request with zod issues for a malformed body", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await login(app, { username: "" });
 
@@ -315,7 +300,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("returns 400 bad_request for a body that is not valid JSON", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await app.request(ROUTES.auth.login, {
       method: "POST",
@@ -329,7 +314,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("rate limits after 5 failed attempts from the same ip and username", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     for (let i = 0; i < 5; i += 1) {
       const res = await login(app, { username: "alice", password: "wrong-password" });
@@ -344,7 +329,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("keeps usernames independent below the per-address bound, then blocks the whole address", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     for (let i = 0; i < 4; i += 1) {
       await login(app, { username: "alice", password: "wrong-password" });
@@ -369,7 +354,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("rejects a cross-site login POST via the CSRF guard", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await app.request(ROUTES.auth.login, {
       method: "POST",
@@ -381,7 +366,7 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("logs a second identity into the same account it was created under", async () => {
-    const { app, repos } = buildTestApp({ clockCtl });
+    const { app, repos } = await buildTestApp({ clockCtl });
 
     const first = await login(app, { username: "alice", password: "wonderland" });
     const firstBody = await readJson<MeResponse>(first);
@@ -401,7 +386,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("returns 200 with a valid session cookie", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
 
@@ -413,7 +398,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("returns 401 without a session cookie", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await app.request(ROUTES.auth.me);
 
@@ -421,7 +406,10 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("returns 401 once the session has expired", async () => {
-    const { app } = buildTestApp({ clockCtl, envOverrides: { FDRIVE_SESSION_TTL_DAYS: "1" } });
+    const { app } = await buildTestApp({
+      clockCtl,
+      envOverrides: { FDRIVE_SESSION_TTL_DAYS: "1" },
+    });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
 
@@ -432,7 +420,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("refuses and deletes a session older than FDRIVE_SESSION_MAX_AGE_DAYS even while it keeps sliding", async () => {
-    const { app, repos } = buildTestApp({
+    const { app, repos } = await buildTestApp({
       clockCtl,
       envOverrides: { FDRIVE_SESSION_TTL_DAYS: "30", FDRIVE_SESSION_MAX_AGE_DAYS: "2" },
     });
@@ -449,7 +437,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("slides the session expiry forward on access more than 5 minutes after the last one", async () => {
-    const { app, repos } = buildTestApp({
+    const { app, repos } = await buildTestApp({
       clockCtl,
       envOverrides: { FDRIVE_SESSION_TTL_DAYS: "1" },
     });
@@ -474,7 +462,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("does not slide the session expiry forward within the 5-minute threshold", async () => {
-    const { app, repos } = buildTestApp({ clockCtl });
+    const { app, repos } = await buildTestApp({ clockCtl });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
     const rawSessionId = cookie.split("=")[1];
@@ -493,19 +481,15 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("uses the identity header to act as another identity linked to the same account", async () => {
-    const { app, repos } = buildTestApp({ clockCtl });
+    const { app, repos } = await buildTestApp({ clockCtl });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
     const meBody = await readJson<MeResponse>(loginRes);
     const accountId = meBody.account.id;
 
-    // Link a second identity (a different SFTPGo login) to the same account
-    // by inserting it directly, the way a "link another identity" flow
-    // would once it exists.
-    const provider = await repos.providers.ensure({
-      type: "sftpgo",
-      baseUrl: "http://sftpgo.internal:8080",
-    });
+    // Link a second identity (another login on the local folder) to the
+    // same account by inserting it directly, as linking would.
+    const provider = await seedLocalProvider(repos);
     const secondIdentity = await repos.identities.create({
       accountId,
       providerId: provider.id,
@@ -522,7 +506,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("returns 403 for an identity header pointing at another account's identity", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const aliceLogin = await login(app, { username: "alice", password: "wonderland" });
     const aliceCookie = extractCookie(aliceLogin);
     const bobLogin = await login(app, { username: "bob", password: "builder" });
@@ -543,7 +527,7 @@ describe("auth routes: GET /auth/me", () => {
   });
 
   it("returns 403 for an identity header with an unknown identity id", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
 
@@ -563,7 +547,7 @@ describe("auth routes: POST /auth/logout", () => {
   });
 
   it("clears the cookie and a subsequent me is 401", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
 
@@ -587,7 +571,7 @@ describe("auth routes: POST /auth/logout", () => {
     // single trusted proxy's "https": both the cookie that is set and the
     // cookie that clears it must still be Secure, or logout leaves the
     // browser holding the session cookie it was meant to drop.
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const forwarded = { "x-forwarded-proto": "http, https" };
     const loginRes = await login(app, { username: "alice", password: "wonderland" }, forwarded);
     expect(loginRes.headers.get("set-cookie")).toContain("Secure");
@@ -605,7 +589,7 @@ describe("auth routes: POST /auth/logout", () => {
   });
 
   it("requires authentication to call logout at all", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await app.request(ROUTES.auth.logout, {
       method: "POST",
@@ -616,7 +600,7 @@ describe("auth routes: POST /auth/logout", () => {
   });
 
   it("rejects a cross-site logout POST via the CSRF guard", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
     const loginRes = await login(app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(loginRes);
 
@@ -647,6 +631,7 @@ describe("auth routes: POST /auth/logout", () => {
         storage: FAKE_STORAGE,
         isAdmin: false,
       }),
+      connectionStatus: READY,
       registerRoutes: (groups) => {
         registerAuthRoutes(groups, {
           service: { logout } as unknown as Parameters<typeof registerAuthRoutes>[1]["service"],
@@ -685,7 +670,7 @@ describe("auth routes: request ip extraction", () => {
   });
 
   it("uses the first hop of a comma-separated x-forwarded-for", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await login(
       app,
@@ -697,7 +682,7 @@ describe("auth routes: request ip extraction", () => {
   });
 
   it("falls back to x-real-ip when x-forwarded-for is absent", async () => {
-    const { app } = buildTestApp({ clockCtl });
+    const { app } = await buildTestApp({ clockCtl });
 
     const res = await login(
       app,
@@ -705,16 +690,6 @@ describe("auth routes: request ip extraction", () => {
       { "x-real-ip": "203.0.113.8" },
     );
 
-    expect(res.status).toBe(200);
-  });
-
-  it("passes an otp through to the SFTPGo login call", async () => {
-    const { app } = buildTestApp({ clockCtl });
-
-    const res = await login(app, { username: "alice", password: "wonderland", otp: "123456" });
-
-    // The fake SFTPGo server does not require TOTP for this seeded user, so
-    // an otp is simply accepted alongside the correct password.
     expect(res.status).toBe(200);
   });
 });
@@ -726,42 +701,28 @@ describe("auth routes: login upstream error mapping", () => {
     clockCtl = createClock(Date.now());
   });
 
-  it("maps a forbidden SFTPGo response to 403 with SFTPGo's detail", async () => {
-    const { app } = buildTestApp({
-      clockCtl,
-      wrapFetch: (fetch) => async (input, init) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/api/v2/user/token")) {
-          return new Response(JSON.stringify({ error: "account disabled" }), { status: 403 });
-        }
-        return fetch(input, init);
-      },
-    });
+  it("refuses a disabled user with 403 only once the password is right", async () => {
+    const { app, repos } = await buildTestApp({ clockCtl });
+    await repos.localUsers.update("alice", { disabled: true });
+
+    const wrong = await login(app, { username: "alice", password: "nope" });
+    expect(wrong.status).toBe(401);
 
     const res = await login(app, { username: "alice", password: "wonderland" });
-
     expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body).toMatchObject({ error: { kind: "forbidden", message: "account disabled" } });
+    expect(await res.json()).toMatchObject({ error: { kind: "forbidden", message: "forbidden" } });
   });
 
-  it("maps a network failure to upstream_unavailable", async () => {
-    const { app } = buildTestApp({
-      clockCtl,
-      wrapFetch: (fetch) => async (input, init) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url.includes("/api/v2/user/token")) {
-          throw new Error("connection refused");
-        }
-        return fetch(input, init);
-      },
-    });
+  it("maps users that cannot be read to upstream_unavailable", async () => {
+    const { app, users } = await buildTestApp({ clockCtl });
+    vi.spyOn(users, "verify").mockRejectedValueOnce(new Error("connection refused"));
 
     const res = await login(app, { username: "alice", password: "wonderland" });
 
     expect(res.status).toBe(502);
     const body = await res.json();
     expect(body).toMatchObject({ error: { kind: "upstream_unavailable" } });
+    expect(JSON.stringify(body)).not.toContain("connection refused");
   });
 });
 
@@ -773,7 +734,7 @@ describe("auth service: direct edge cases", () => {
   });
 
   it("me() throws internal when the account no longer exists", async () => {
-    const { authModule } = buildTestApp({ clockCtl });
+    const { authModule } = await buildTestApp({ clockCtl });
 
     await expect(
       authModule.service.me("00000000-0000-0000-0000-000000000000", "irrelevant"),
@@ -781,7 +742,7 @@ describe("auth service: direct edge cases", () => {
   });
 
   it("resolvePrincipal returns null (unauthorized) when the session has no active identity", async () => {
-    const { app, repos } = buildTestApp({ clockCtl });
+    const { app, repos } = await buildTestApp({ clockCtl });
     const account = await repos.accounts.create({ displayName: "no-identity" });
     const { generateSessionId, hashSessionId } = await import("./sessions.js");
     const rawSessionId = generateSessionId();
@@ -802,7 +763,7 @@ describe("auth service: direct edge cases", () => {
   });
 
   it("resolvePrincipal returns null (unauthorized) when the active identity no longer exists", async () => {
-    const { app, repos } = buildTestApp({ clockCtl });
+    const { app, repos } = await buildTestApp({ clockCtl });
     const account = await repos.accounts.create({ displayName: "dangling-identity" });
     const { generateSessionId, hashSessionId } = await import("./sessions.js");
     const rawSessionId = generateSessionId();
@@ -824,7 +785,7 @@ describe("auth service: direct edge cases", () => {
 });
 
 describe("auth service: principal.verifyAuthority", () => {
-  async function principalFor(h: ReturnType<typeof buildTestApp>, cookie: string) {
+  async function principalFor(h: Awaited<ReturnType<typeof buildTestApp>>, cookie: string) {
     const { Context } = await import("hono");
     const ctx = new Context(new Request("http://test/api/v1/fs/compress", { headers: { cookie } }));
     const principal = await h.authModule.service.resolvePrincipal(ctx);
@@ -835,7 +796,7 @@ describe("auth service: principal.verifyAuthority", () => {
   }
 
   it("holds while the session lives and turns false once it is logged out", async () => {
-    const h = buildTestApp({ clockCtl: createClock(Date.now()) });
+    const h = await buildTestApp({ clockCtl: createClock(Date.now()) });
     const cookie = extractCookie(await login(h.app, { username: "alice", password: "wonderland" }));
     const principal = await principalFor(h, cookie);
 
@@ -852,7 +813,7 @@ describe("auth service: principal.verifyAuthority", () => {
 
   it("turns false once the session passes its maximum age, even while it keeps sliding", async () => {
     const clockCtl = createClock(Date.now());
-    const h = buildTestApp({
+    const h = await buildTestApp({
       clockCtl,
       envOverrides: { FDRIVE_SESSION_TTL_DAYS: "30", FDRIVE_SESSION_MAX_AGE_DAYS: "2" },
     });
@@ -871,14 +832,11 @@ describe("auth service: principal.verifyAuthority", () => {
 
 describe("native safe-request identity selection", () => {
   it("selects an owned query identity for GET/HEAD without switching session", async () => {
-    const h = buildTestApp({ clockCtl: createClock(Date.now()) });
+    const h = await buildTestApp({ clockCtl: createClock(Date.now()) });
     const response = await login(h.app, { username: "alice", password: "wonderland" });
     const cookie = extractCookie(response);
     const me = await readJson<MeResponse>(response);
-    const provider = await h.repos.providers.ensure({
-      type: "sftpgo",
-      baseUrl: "http://sftpgo.internal:8080",
-    });
+    const provider = await seedLocalProvider(h.repos);
     const other = await h.repos.identities.create({
       accountId: me.account.id,
       providerId: provider.id,
@@ -936,7 +894,7 @@ describe("native safe-request identity selection", () => {
 });
 
 describe("auth routes: POST /auth/login through a WebDAV provider", () => {
-  it("binds the login to the WebDAV row, reports its capabilities and never touches SFTPGo", async () => {
+  it("binds the login to the WebDAV row, reports its capabilities and touches nothing else", async () => {
     const clockCtl = createClock(Date.now());
     const davUser = { username: "alice", password: "looking-glass" };
     const dav = createFakeWebdavServer({
@@ -944,19 +902,17 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
       origin: "http://dav.test",
       prefix: "/dav",
     });
-    const sftpgo = createFakeSftpgoServer({
-      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
-      now: clockCtl.clock,
-    });
     const hosts: string[] = [];
     const fetchImpl: typeof globalThis.fetch = async (url, init) => {
       const host = new URL(String(url)).host;
       hosts.push(host);
-      return host === "dav.test" ? dav.fetch(url, init) : sftpgo.fetch(url, init);
+      return dav.fetch(url, init);
     };
     const repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
-    await seedSftpgoProvider(repos, "http://sftpgo.internal:8080", { managedByEnv: true });
+    const local = localModuleFixture(repos);
+    await seedLocalUsers(repos, USERS);
+    await seedLocalProvider(repos);
     const row = await seedWebdavProvider(repos, "http://dav.test/dav", { label: "Team drive" });
     const authModule = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
@@ -964,7 +920,7 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
       providers: memoryProviderService(repos, {
         fetch: fetchImpl,
         clock: clockCtl.clock,
-        sftpgoUrl: config.sftpgoUrl,
+        modules: { local: local.module, webdav: webdavModule, s3: s3Module },
       }),
       fetch: fetchImpl,
       master: parseMasterKey(config.fdriveMasterKey),
@@ -979,6 +935,7 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
       startedAt: new Date(0),
       clock: clockCtl.clock,
       principalResolver: authModule.principalResolver,
+      connectionStatus: READY,
       registerRoutes: authModule.registerRoutes,
     });
 
@@ -1002,7 +959,6 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
         shares: false,
         office: false,
         index: false,
-        scopeMapping: false,
       },
     });
     expect(hosts.every((host) => host === "dav.test")).toBe(true);
@@ -1023,23 +979,21 @@ describe("auth routes: POST /auth/login through a WebDAV provider", () => {
 });
 
 describe("auth routes: POST /auth/login through an S3 provider", () => {
-  it("binds the login to the S3 row, reports its capabilities and never touches SFTPGo", async () => {
+  it("binds the login to the S3 row, reports its capabilities and touches nothing else", async () => {
     const clockCtl = createClock(Date.now());
     const key = { accessKeyId: "alice-key", secretAccessKey: "alice-secret" };
     const s3 = createFakeS3Server({ keys: [key], buckets: ["media"] });
-    const sftpgo = createFakeSftpgoServer({
-      users: [{ username: "alice", password: "wonderland", permissions: { "/": ["*"] } }],
-      now: clockCtl.clock,
-    });
     const hosts: string[] = [];
     const fetchImpl: typeof globalThis.fetch = async (url, init) => {
       const host = new URL(url instanceof Request ? url.url : String(url)).host;
       hosts.push(host);
-      return host === "s3.test" ? s3.fetch(url, init) : sftpgo.fetch(url, init);
+      return s3.fetch(url, init);
     };
     const repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
-    await seedSftpgoProvider(repos, "http://sftpgo.internal:8080", { managedByEnv: true });
+    const local = localModuleFixture(repos);
+    await seedLocalUsers(repos, USERS);
+    await seedLocalProvider(repos);
     const row = await seedS3Provider(repos, "http://s3.test/media/team", {
       label: "Photos",
       region: "eu-west-1",
@@ -1050,7 +1004,7 @@ describe("auth routes: POST /auth/login through an S3 provider", () => {
       providers: memoryProviderService(repos, {
         fetch: fetchImpl,
         clock: clockCtl.clock,
-        sftpgoUrl: config.sftpgoUrl,
+        modules: { local: local.module, webdav: webdavModule, s3: s3Module },
       }),
       fetch: fetchImpl,
       master: parseMasterKey(config.fdriveMasterKey),
@@ -1065,6 +1019,7 @@ describe("auth routes: POST /auth/login through an S3 provider", () => {
       startedAt: new Date(0),
       clock: clockCtl.clock,
       principalResolver: authModule.principalResolver,
+      connectionStatus: READY,
       registerRoutes: authModule.registerRoutes,
     });
 
@@ -1088,7 +1043,6 @@ describe("auth routes: POST /auth/login through an S3 provider", () => {
         shares: false,
         office: false,
         index: false,
-        scopeMapping: false,
       },
     });
     expect(hosts.every((host) => host === "s3.test")).toBe(true);
@@ -1102,5 +1056,96 @@ describe("auth routes: POST /auth/login through an S3 provider", () => {
       credential: { username: key.accessKeyId, password: "nope" },
     });
     expect(denied.status).toBe(401);
+  });
+});
+
+describe("auth: FDRIVE_ADMIN_USERS", () => {
+  it("makes a listed user an administrator on the storage the deployment pins", async () => {
+    const { app } = await buildTestApp({
+      clockCtl: createClock(Date.now()),
+      envOverrides: { FDRIVE_ADMIN_USERS: "alice" },
+    });
+
+    const alice = await readJson<MeResponse>(
+      await login(app, { username: "alice", password: "wonderland" }),
+    );
+    const bob = await readJson<MeResponse>(
+      await login(app, { username: "bob", password: "builder" }),
+    );
+
+    expect(alice.isAdmin).toBe(true);
+    expect(bob.isAdmin).toBe(false);
+  });
+
+  it("never names an administrator on storage an administrator added", async () => {
+    // The same username on WebDAV someone added later is another person.
+    const dav = createFakeWebdavServer({
+      users: [{ username: "alice", password: "looking-glass" }],
+      origin: "http://dav.test",
+    });
+    const repos = createMemoryRepos();
+    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ADMIN_USERS: "alice" });
+    const row = await seedWebdavProvider(repos, "http://dav.test");
+    const clockCtl = createClock(Date.now());
+    const authModule = createAuthModule({
+      identityLinks: memoryIdentityOperations(repos),
+      repos,
+      providers: memoryProviderService(repos, { fetch: dav.fetch, clock: clockCtl.clock }),
+      fetch: dav.fetch,
+      master: parseMasterKey(config.fdriveMasterKey),
+      clock: clockCtl.clock,
+      config,
+      storageFactory: async () => FAKE_STORAGE,
+    });
+
+    const result = await authModule.service.login({
+      providerId: row.id,
+      credential: { username: "alice", password: "looking-glass" },
+      userAgent: null,
+      ip: "127.0.0.1",
+    });
+
+    expect(result.me.isAdmin).toBe(false);
+  });
+});
+
+describe("auth: storage that mints a token while it signs in", () => {
+  it("primes that token, so the first request does not mint another", async () => {
+    const clockCtl = createClock(Date.parse("2026-09-01T00:00:00Z"));
+    const mint = vi.fn(async () => ({ token: "minted-later", expiresAt: new Date(8.64e15) }));
+    const module = fakeProviderModule({
+      authenticate: async (_instance, credential) => ({
+        externalUsername: credential.username ?? "",
+        token: { token: "from-sign-in", expiresAt: new Date(Date.parse("2026-09-01T01:00:00Z")) },
+      }),
+      mint,
+    });
+    const repos = createMemoryRepos();
+    const config = loadConfig(REQUIRED_ENV);
+    const row = await seedWebdavProvider(repos, "http://dav.test");
+    const authModule = createAuthModule({
+      identityLinks: memoryIdentityOperations(repos),
+      repos,
+      providers: memoryProviderService(repos, {
+        fetch: offline,
+        clock: clockCtl.clock,
+        modules: { webdav: module },
+      }),
+      fetch: offline,
+      master: parseMasterKey(config.fdriveMasterKey),
+      clock: clockCtl.clock,
+      config,
+      storageFactory: async () => FAKE_STORAGE,
+    });
+
+    const result = await authModule.service.login({
+      providerId: row.id,
+      credential: { username: "alice", password: "alice-pass" },
+      userAgent: null,
+      ip: "127.0.0.1",
+    });
+
+    expect(await authModule.tokenSource.get(result.me.activeIdentityId)).toBe("from-sign-in");
+    expect(mint).not.toHaveBeenCalled();
   });
 });

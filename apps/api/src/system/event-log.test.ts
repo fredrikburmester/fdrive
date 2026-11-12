@@ -33,7 +33,7 @@ describe("createSystemEventLog", () => {
     const { repo, appended } = fakeRepo();
     const log = createSystemEventLog({ repo, logger: { warn: vi.fn() } });
 
-    log.record("indexer", "info", "Reindex requested", { root: "sftpgo" });
+    log.record("indexer", "info", "Reindex requested", { root: "files" });
     log.record("ocr", "warn", "Index clear requested");
     await settle();
 
@@ -42,7 +42,7 @@ describe("createSystemEventLog", () => {
         subsystem: "indexer",
         level: "info",
         message: "Reindex requested",
-        data: { root: "sftpgo" },
+        data: { root: "files" },
       },
       { subsystem: "ocr", level: "warn", message: "Index clear requested" },
     ]);

@@ -9,16 +9,15 @@ import { startServer } from "../../../src/server.ts";
 import { fixtureOfficeAuthorizer } from "./seeded-permissions.ts";
 
 const config = loadConfig(process.env);
-if (!config.sftpgoUrl) throw new Error("Fixture storage URL missing");
+if (!config.fdriveStorageRoot) throw new Error("Fixture storage root missing");
 const { db, pool } = createDb(config.databaseUrl);
 let providerId: string;
 try {
   await migrate(db);
   const repos = createRepos(db);
-  const provider = await repos.providers.ensure({
-    type: "sftpgo",
-    baseUrl: config.sftpgoUrl,
-  });
+  // The row startup seeds for `FDRIVE_STORAGE_ROOT`, created first so the
+  // Office settings below can name it.
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   providerId = provider.id;
   await repos.settings.set("features.configuration", {
     version: 1,

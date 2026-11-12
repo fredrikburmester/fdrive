@@ -1,16 +1,20 @@
+import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it } from "vitest";
 import { accountsHarness } from "../accounts/test-fixtures/index.ts";
 import { createApp } from "../app.ts";
 import { createAuthModule } from "../auth/index.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
-import { fakeStorageProvider, fileEntry } from "../scoping/test-fixtures/index.ts";
 import { createSetupService } from "../setup/service.ts";
+import { fakeProviderModule, memoryProviderService } from "./test-fixtures/index.ts";
 
-it.each(["", "/"])("scopes env administrators with URL suffix %s", async (suffix) => {
-  const h = accountsHarness();
+/** A second storage beside the local folder that alice can also sign in to. */
+const SECOND = { webdav: fakeProviderModule() };
+
+it("scopes env administrators to the storage the deployment pins", async () => {
+  const h = accountsHarness({ modules: SECOND });
   await h.seeded;
   const second = await h.providers.create({
-    type: "sftpgo",
+    type: "webdav",
     label: "Second",
     baseUrl: "http://second.test",
   });
@@ -19,7 +23,7 @@ it.each(["", "/"])("scopes env administrators with URL suffix %s", async (suffix
     providers: h.providers,
     tokenSource: h.tokenSource,
     identityLinks: h.links,
-    config: { ...h.config, sftpgoUrl: `${h.config.sftpgoUrl}${suffix}` },
+    config: h.config,
     storageFactory: h.storageFactory,
     adminUsernames: ["alice"],
   });
@@ -50,7 +54,11 @@ it("keeps env setup complete and sessions usable after disabling its last provid
     authService: h.auth.service,
     accounts: h.repos.accounts,
     settings: h.repos.settings,
-    hasEnvUrl: true,
+    local: {
+      provider: async () => row,
+      userCount: () => h.repos.localUsers.count(),
+      users: { createOwner: async () => async () => {} },
+    },
   });
   const app = createApp({
     config: h.config,
@@ -76,46 +84,32 @@ it("keeps env setup complete and sessions usable after disabling its last provid
 });
 
 it("does not map a remote provider to the primary indexed scope by default", async () => {
-  const h = accountsHarness();
-  await h.seeded;
-  const second = await h.providers.create({
-    type: "sftpgo",
+  const repos = createMemoryRepos();
+  const providers = memoryProviderService(repos);
+  const second = await providers.create({
+    type: "webdav",
     label: "Remote",
     baseUrl: "http://remote.test",
   });
-  const account = await h.repos.accounts.create({ displayName: "Remote Alice" });
-  const identity = await h.repos.identities.create({
+  const account = await repos.accounts.create({ displayName: "Remote Alice" });
+  const identity = await repos.identities.create({
     accountId: account.id,
     providerId: second.id,
     externalUsername: "alice",
   });
-  const resolver = createScopeResolver({
-    providers: h.repos.providers,
-    clock: h.clock,
-    overrides: { get: async () => null, set: async () => {}, reset: async () => {} },
-    mountMappings: { get: async () => [], set: async () => {} },
-    indexRoots: [{ name: "sftpgo", sftpgoPath: "/primary-server-files", indexerPath: "/data" }],
-    storageForIdentity: async () =>
-      fakeStorageProvider({ list: async () => [fileEntry("report.txt")] }),
-    indexer: {
-      directory: async () => ({
-        ok: true,
-        data: { items: [{ name: "report.txt", kind: "file" }], overflow: false },
-      }),
-    },
-  });
+  const resolver = createScopeResolver({ providers, indexRootNames: ["files"] });
   expect(second.config).toEqual({});
-  expect(await resolver.verifiedIndexScopes(identity)).toMatchObject({
+  expect(await resolver.verifiedIndexScopes(identity)).toEqual({
     available: false,
     reason: "no_roots",
   });
 });
 
 it("refuses an endpoint update when the first identity appeared after the initial count", async () => {
-  const h = accountsHarness();
+  const h = accountsHarness({ modules: SECOND });
   await h.seeded;
   const second = await h.providers.create({
-    type: "sftpgo",
+    type: "webdav",
     label: "Second",
     baseUrl: "http://original.test",
   });
@@ -156,10 +150,10 @@ it("refuses an endpoint update when the first identity appeared after the initia
 it.each(["loginVerified", "linkVerified"] as const)(
   "serializes fixture provider updates with %s after verification",
   async (operation) => {
-    const h = accountsHarness();
+    const h = accountsHarness({ modules: SECOND });
     await h.seeded;
     const provider = await h.providers.create({
-      type: "sftpgo",
+      type: "webdav",
       label: "Race",
       baseUrl: "http://original.test",
     });

@@ -7,7 +7,6 @@ import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { buildIdentity } from "../scoping/test-fixtures/index.ts";
-import type { ScopeStatus } from "../scoping/types.ts";
 import type { ImageSearchService, ImageSearchServiceInput } from "./image-service.js";
 import {
   DEFAULT_SEARCH_LIMIT,
@@ -20,7 +19,6 @@ import type { SearchService, SearchServiceInput } from "./service.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -53,18 +51,6 @@ const EMPTY_IMAGE_RESPONSE: ImageSearchResponse = {
 
 const IDENTITY: Identity = buildIdentity({ id: "00000000-0000-4000-8000-0000000000a1" });
 
-const AVAILABLE_STATUS: ScopeStatus = {
-  status: "available",
-  reason: "ok",
-  usesOverride: false,
-  virtualPrefixes: ["/"],
-  unmappedMounts: [],
-  unverifiedPrefixes: [],
-  unindexedPrefixes: [],
-  warning: "warning",
-  isAdmin: false,
-};
-
 function notImplemented(): never {
   throw new Error("not used in this test");
 }
@@ -73,7 +59,6 @@ function fakeResolver(overrides: Partial<SearchRoutesDeps["resolver"]> = {}) {
   return {
     verifiedIndexScopes:
       overrides.verifiedIndexScopes ?? (async () => ({ available: true as const, scopes: [] })),
-    status: overrides.status ?? (async () => AVAILABLE_STATUS),
   };
 }
 
@@ -106,6 +91,7 @@ function buildApp(
     version: "1.0.0",
     startedAt: new Date("2024-06-01T00:00:00.000Z"),
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) =>
       registerSearchRoutes(groups, {
         ...(overrides.features === undefined ? {} : { features: overrides.features }),
@@ -193,7 +179,7 @@ describe("GET /api/v1/search", () => {
       received = input;
       return { ...EMPTY_RESPONSE, query: input.query };
     });
-    const scopes = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
+    const scopes = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
     const app = buildApp(fakeSearchService({ search }), {
       resolver: fakeResolver({ verifiedIndexScopes: async () => ({ available: true, scopes }) }),
     });
@@ -292,7 +278,7 @@ describe("GET /api/v1/search/images", () => {
       received = input;
       return { ...EMPTY_IMAGE_RESPONSE, query: input.query };
     });
-    const scopes = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
+    const scopes = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
     const app = buildApp(fakeSearchService(), {
       resolver: fakeResolver({ verifiedIndexScopes: async () => ({ available: true, scopes }) }),
       imageSearchService: fakeImageSearchService({ search }),
@@ -372,7 +358,7 @@ describe("GET /api/v1/search/images", () => {
 describe("GET /api/v1/search/status", () => {
   it("reports available when the resolver reports available", async () => {
     const app = buildApp(fakeSearchService(), {
-      resolver: fakeResolver({ status: async () => AVAILABLE_STATUS }),
+      resolver: fakeResolver(),
       semanticEnabled: true,
       imageSearchEnabled: true,
     });
@@ -387,7 +373,7 @@ describe("GET /api/v1/search/status", () => {
   it("reports unavailable when the resolver reports unavailable", async () => {
     const app = buildApp(fakeSearchService(), {
       resolver: fakeResolver({
-        status: async () => ({ ...AVAILABLE_STATUS, status: "unavailable", reason: "no_roots" }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
       }),
     });
 
@@ -397,14 +383,10 @@ describe("GET /api/v1/search/status", () => {
     expect(body).toEqual({ available: false, semantic: false, images: false, reason: "no_roots" });
   });
 
-  it("reports a transient indexer outage reason", async () => {
+  it("passes on why the login's storage is unavailable", async () => {
     const app = buildApp(fakeSearchService(), {
       resolver: fakeResolver({
-        status: async () => ({
-          ...AVAILABLE_STATUS,
-          status: "unavailable",
-          reason: "indexer_unreachable",
-        }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "provider_mismatch" }),
       }),
     });
 
@@ -414,7 +396,7 @@ describe("GET /api/v1/search/status", () => {
       available: false,
       semantic: false,
       images: false,
-      reason: "indexer_unreachable",
+      reason: "provider_mismatch",
     });
   });
 

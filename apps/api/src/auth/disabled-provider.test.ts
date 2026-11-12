@@ -36,3 +36,22 @@ it("keeps me and logout working for a login whose provider was disabled", async 
   expect(again.status).toBe(503);
   expect(await again.json()).toMatchObject({ error: { kind: "setup_required" } });
 });
+
+/**
+ * A disabled user is different: the folder no longer lets them in, so an
+ * existing session stops at once rather than lingering with failing files.
+ */
+it("refuses every request of a local user an administrator disabled after they signed in", async () => {
+  const h = accountsHarness();
+  const alice = await h.login();
+  expect((await h.call(ROUTES.auth.me, { cookie: alice.cookie })).status).toBe(200);
+
+  await h.repos.localUsers.update("alice", { disabled: true });
+
+  const me = await h.call(ROUTES.auth.me, { cookie: alice.cookie });
+  expect(me.status).toBe(403);
+  expect(await me.json()).toMatchObject({ error: { kind: "forbidden" } });
+
+  await h.repos.localUsers.update("alice", { disabled: false });
+  expect((await h.call(ROUTES.auth.me, { cookie: alice.cookie })).status).toBe(200);
+});

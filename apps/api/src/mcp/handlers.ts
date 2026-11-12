@@ -1032,7 +1032,7 @@ async function requireVerifiedScopes(
  *
  * Callers must hand the returned path to storage, never the argument they
  * passed in: admission is decided on the normalized, round-tripped path,
- * while `@fdrive/sftpgo` forwards whatever string it is given verbatim
+ * while a storage provider may forward whatever string it is given verbatim
  * (`assertValidPath` resolves no ".", ".." or repeated separator). Writing
  * through the raw argument would send a path that was never the one checked.
  */

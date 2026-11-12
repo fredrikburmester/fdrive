@@ -45,7 +45,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     listFiles: notImplemented,
     filesBySha256: notImplemented,
     rootIdsByName: async () => ({}),
-    directoriesWithFiles: async () => [],
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     fileTextPrefix: async () => "",
@@ -171,7 +170,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+      providers: [{ type: "webdav", host: "dav:8080" }],
     }),
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
@@ -208,8 +207,8 @@ describe("GET /system/indexer", () => {
   it("reports configured and reachable with health and stats when both succeed", async () => {
     const health = {
       ok: true,
-      roots: ["sftpgo"],
-      watcher: { sftpgo: true },
+      roots: ["files"],
+      watcher: { files: true },
       embedOk: true,
       schemaVersion: 1,
     };
@@ -320,7 +319,7 @@ describe("POST /system/indexer/reindex", () => {
     const res = await app.request("/api/v1/system/indexer/reindex", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo" }),
+      body: JSON.stringify({ root: "files" }),
     });
 
     expect(res.status).toBe(400);
@@ -356,7 +355,7 @@ describe("POST /system/indexer/reindex", () => {
     const res = await app.request("/api/v1/system/indexer/reindex", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo" }),
+      body: JSON.stringify({ root: "files" }),
     });
 
     expect(res.status).toBe(502);
@@ -365,7 +364,7 @@ describe("POST /system/indexer/reindex", () => {
   it("returns marked on success", async () => {
     const indexerClient = fakeIndexerClient({
       reindex: async (root, path) => {
-        expect(root).toBe("sftpgo");
+        expect(root).toBe("files");
         expect(path).toBe("folder");
         return { ok: true, data: { marked: 3 } };
       },
@@ -375,7 +374,7 @@ describe("POST /system/indexer/reindex", () => {
     const res = await app.request("/api/v1/system/indexer/reindex", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo", path: "folder" }),
+      body: JSON.stringify({ root: "files", path: "folder" }),
     });
     const body = IndexerActionResponse.parse(await res.json());
 
@@ -441,7 +440,7 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
   it("forwards root, path, and force", async () => {
     const indexerClient = fakeIndexerClient({
       thumbnailsRebuild: async (options) => {
-        expect(options).toEqual({ root: "sftpgo", path: "folder", force: true });
+        expect(options).toEqual({ root: "files", path: "folder", force: true });
         return { ok: true, data: { started: true, total: 2 } };
       },
     });
@@ -450,7 +449,7 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
     const res = await app.request("/api/v1/system/indexer/thumbnails/rebuild", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo", path: "folder", force: true }),
+      body: JSON.stringify({ root: "files", path: "folder", force: true }),
     });
 
     expect(res.status).toBe(202);
@@ -492,7 +491,7 @@ describe("GET /system/search", () => {
 
   it("reports index totals scoped to every configured root with fsPrefix /", async () => {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ sftpgo: 1, photos: 2 }),
+      rootIdsByName: async () => ({ files: 1, photos: 2 }),
       stats: async (scopePrefixes) => {
         expect(scopePrefixes).toEqual([
           { rootId: 1, fsPrefix: "/" },
@@ -510,13 +509,13 @@ describe("GET /system/search", () => {
         };
       },
     });
-    const { app } = buildApp({ deps: { indexQueries, indexRootNames: ["sftpgo", "photos"] } });
+    const { app } = buildApp({ deps: { indexQueries, indexRootNames: ["files", "photos"] } });
 
     const res = await app.request("/api/v1/system/search");
     const body = SystemSearchResponse.parse(await res.json());
 
     expect(body.configured).toBe(true);
-    expect(body.roots).toEqual(["sftpgo", "photos"]);
+    expect(body.roots).toEqual(["files", "photos"]);
     expect(body.index).toEqual({ files: 10, withText: 7, chunks: 40, embedded: 35 });
   });
 
@@ -528,7 +527,7 @@ describe("GET /system/search", () => {
         return { filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 };
       },
     });
-    const { app } = buildApp({ deps: { indexQueries, indexRootNames: ["sftpgo"] } });
+    const { app } = buildApp({ deps: { indexQueries, indexRootNames: ["files"] } });
 
     const res = await app.request("/api/v1/system/search");
     expect(res.status).toBe(200);
@@ -709,7 +708,7 @@ describe("POST /system/image-search/rebuild", () => {
   it("returns started and total on success, forwarding options", async () => {
     const indexerClient = fakeIndexerClient({
       imageEmbeddingsRebuild: async (options) => {
-        expect(options).toEqual({ root: "sftpgo", force: true });
+        expect(options).toEqual({ root: "files", force: true });
         return { ok: true, data: { started: true, total: 7 } };
       },
     });
@@ -718,7 +717,7 @@ describe("POST /system/image-search/rebuild", () => {
     const res = await app.request("/api/v1/system/image-search/rebuild", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo", force: true }),
+      body: JSON.stringify({ root: "files", force: true }),
     });
     const body = IndexerThumbnailsRebuildResponse.parse(await res.json());
 
@@ -764,7 +763,7 @@ describe("POST /system/image-search/clear", () => {
     const res = await app.request("/api/v1/system/image-search/clear", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo" }),
+      body: JSON.stringify({ root: "files" }),
     });
 
     expect(res.status).toBe(400);
@@ -808,7 +807,7 @@ describe("POST /system/image-search/clear", () => {
 
 describe("POST /system/search/reembed", () => {
   it("400s when the indexer is not configured", async () => {
-    const { app } = buildApp({ deps: { indexRootNames: ["sftpgo"] } });
+    const { app } = buildApp({ deps: { indexRootNames: ["files"] } });
 
     const res = await app.request("/api/v1/system/search/reembed", {
       method: "POST",
@@ -834,11 +833,11 @@ describe("POST /system/search/reembed", () => {
     const indexerClient = fakeIndexerClient({
       reindex: async (root) => {
         seenRoots.push(root);
-        return { ok: true, data: { marked: root === "sftpgo" ? 3 : 5 } };
+        return { ok: true, data: { marked: root === "files" ? 3 : 5 } };
       },
     });
     const { app } = buildApp({
-      deps: { indexerClient, indexRootNames: ["sftpgo", "photos"] },
+      deps: { indexerClient, indexRootNames: ["files", "photos"] },
     });
 
     const res = await app.request("/api/v1/system/search/reembed", {
@@ -848,19 +847,19 @@ describe("POST /system/search/reembed", () => {
     const body = SystemReembedResponse.parse(await res.json());
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ marked: 8, roots: ["sftpgo", "photos"] });
-    expect(seenRoots).toEqual(["sftpgo", "photos"]);
+    expect(body).toEqual({ marked: 8, roots: ["files", "photos"] });
+    expect(seenRoots).toEqual(["files", "photos"]);
   });
 
   it("502s as soon as one root fails", async () => {
     const indexerClient = fakeIndexerClient({
       reindex: async (root) =>
-        root === "sftpgo"
+        root === "files"
           ? { ok: true, data: { marked: 1 } }
           : { ok: false, reason: "unreachable", detail: "boom" },
     });
     const { app } = buildApp({
-      deps: { indexerClient, indexRootNames: ["sftpgo", "photos"] },
+      deps: { indexerClient, indexRootNames: ["files", "photos"] },
     });
 
     const res = await app.request("/api/v1/system/search/reembed", {
@@ -1015,7 +1014,7 @@ describe("POST /system/ocr/run", () => {
 describe("GET /system/ocr/originals", () => {
   const original = {
     id: "0123456789abcdef_scan.pdf",
-    root: "sftpgo",
+    root: "files",
     path: "docs/scan.pdf",
     size: 1024,
     keptAt: "2026-09-07T03:00:00.000Z",
@@ -1106,7 +1105,7 @@ describe("POST /system/ocr/originals/restore", () => {
   it("restores and records what it replaced", async () => {
     const restoreOriginal = vi.fn().mockResolvedValue({
       ok: true,
-      data: { restored: true, root: "sftpgo", path: "docs/scan.pdf", previousState: "ocred" },
+      data: { restored: true, root: "files", path: "docs/scan.pdf", previousState: "ocred" },
     });
     const { app, recorded } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
 
@@ -1118,7 +1117,7 @@ describe("POST /system/ocr/originals/restore", () => {
       subsystem: "ocr",
       level: "warn",
       message: "Original restored",
-      data: { id: "abc_scan.pdf", root: "sftpgo", path: "docs/scan.pdf", replaced: "ocred" },
+      data: { id: "abc_scan.pdf", root: "files", path: "docs/scan.pdf", replaced: "ocred" },
     });
   });
 
@@ -1128,7 +1127,7 @@ describe("POST /system/ocr/originals/restore", () => {
       reason: "unreachable",
       detail: "status 409",
       status: 409,
-      body: { error: "target_changed", state: "changed", root: "sftpgo", path: "docs/scan.pdf" },
+      body: { error: "target_changed", state: "changed", root: "files", path: "docs/scan.pdf" },
     });
     const { app, recorded } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
 
@@ -1191,7 +1190,7 @@ describe.each([
       reason: "unreachable",
       detail: "status 409",
       status: 409,
-      body: { error: reason, state: null, root: "sftpgo", path: "docs/scan.pdf" },
+      body: { error: reason, state: null, root: "files", path: "docs/scan.pdf" },
     });
     const { app } = buildApp({ deps: { ocrClient: fakeOcrClient({ restoreOriginal }) } });
 
@@ -1451,9 +1450,9 @@ describe.each([
 
 describe("clear scoping", () => {
   it.each([
-    { root: "sftpgo" },
-    { root: "sftpgo", path: "/" },
-    { root: "sftpgo", path: "/folder/file.pdf" },
+    { root: "files" },
+    { root: "files", path: "/" },
+    { root: "files", path: "/folder/file.pdf" },
   ])("forwards index scope %j", async (scope) => {
     const clearIndex = vi.fn().mockResolvedValue({ ok: true, data: { started: true } });
     const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ clearIndex }) } });
@@ -1492,7 +1491,7 @@ describe("clear scoping", () => {
         await app.request("/api/v1/system/thumbnails/clear", {
           method: "POST",
           headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-          body: '{"root":"sftpgo"}',
+          body: '{"root":"files"}',
         })
       ).status,
     ).toBe(400);
@@ -1566,7 +1565,7 @@ describe("GET /system/:subsystem/logs", () => {
       subsystem: "indexer",
       level: "warn",
       message: "newer",
-      data: { root: "sftpgo" },
+      data: { root: "files" },
     });
     await systemEvents.append({ subsystem: "ocr", level: "info", message: "other subsystem" });
 
@@ -1579,7 +1578,7 @@ describe("GET /system/:subsystem/logs", () => {
     expect(body.entries[0]).toMatchObject({
       level: "warn",
       source: "api",
-      data: { root: "sftpgo" },
+      data: { root: "files" },
     });
     expect(body.entries[1]?.data).toBeUndefined();
     expect(body.nextCursor).toBeUndefined();
@@ -1693,7 +1692,7 @@ describe("system routes: recorded events", () => {
     });
     const ocrClient = fakeOcrClient({ run: async () => ({ ok: true, data: { started: true } }) });
     const { app, recorded } = buildApp({
-      deps: { indexerClient, ocrClient, indexRootNames: ["sftpgo"] },
+      deps: { indexerClient, ocrClient, indexRootNames: ["files"] },
     });
     const post = (path: string, body?: unknown) =>
       app.request(path, {
@@ -1702,7 +1701,7 @@ describe("system routes: recorded events", () => {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
 
-    await post("/api/v1/system/indexer/reindex", { root: "sftpgo" });
+    await post("/api/v1/system/indexer/reindex", { root: "files" });
     await post("/api/v1/system/thumbnails/rebuild");
     await post("/api/v1/system/indexer/thumbnails/rebuild", {});
     await post("/api/v1/system/image-search/rebuild", {});
@@ -1723,8 +1722,8 @@ describe("system routes: recorded events", () => {
       ["thumbnails", "warn", "Thumbnail clear requested"],
       ["image-search", "warn", "Image embedding clear requested"],
     ]);
-    expect(recorded[0]?.data).toEqual({ root: "sftpgo" });
-    expect(recorded[5]?.data).toEqual({ roots: ["sftpgo"] });
+    expect(recorded[0]?.data).toEqual({ root: "files" });
+    expect(recorded[5]?.data).toEqual({ roots: ["files"] });
   });
 
   it("records an error for every sidecar action that fails", async () => {
@@ -1743,7 +1742,7 @@ describe("system routes: recorded events", () => {
     });
     const ocrClient = fakeOcrClient({ run: async () => failure });
     const { app, recorded } = buildApp({
-      deps: { indexerClient, ocrClient, indexRootNames: ["sftpgo"] },
+      deps: { indexerClient, ocrClient, indexRootNames: ["files"] },
     });
     const post = (path: string, body?: unknown) =>
       app.request(path, {
@@ -1752,7 +1751,7 @@ describe("system routes: recorded events", () => {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
 
-    await post("/api/v1/system/indexer/reindex", { root: "sftpgo" });
+    await post("/api/v1/system/indexer/reindex", { root: "files" });
     await post("/api/v1/system/thumbnails/rebuild");
     await post("/api/v1/system/indexer/thumbnails/rebuild", {});
     await post("/api/v1/system/image-search/rebuild", {});
@@ -1798,7 +1797,7 @@ it.each(["indexer/reindex", "search/reembed", "ocr/run"])(
     } as const;
     const { app } = buildApp({
       deps: {
-        indexRootNames: ["sftpgo"],
+        indexRootNames: ["files"],
         indexerClient: fakeIndexerClient({ reindex: async () => failure }),
         ocrClient: fakeOcrClient({
           health: async () => failure,
@@ -1810,7 +1809,7 @@ it.each(["indexer/reindex", "search/reembed", "ocr/run"])(
     const response = await app.request(`/api/v1/system/${route}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "sftpgo" }),
+      body: JSON.stringify({ root: "files" }),
     });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: { kind: "conflict" } });

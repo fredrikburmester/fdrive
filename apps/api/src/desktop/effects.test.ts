@@ -97,7 +97,7 @@ it("drains older saves before a new publication and blocks while recovery is pen
 it("captures trusted Office locations once, handling unmapped paths and ownership safely", async () => {
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "A" });
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://test" });
+  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://test" });
   const identity = await repos.identities.create({
     accountId: account.id,
     providerId: provider.id,
@@ -115,7 +115,6 @@ it("captures trusted Office locations once, handling unmapped paths and ownershi
     .mockResolvedValue({
       available: true,
       providerId: provider.id,
-      homeTemplateRaw: "root:/alice",
       scopes: [
         { rootName: "root", virtualPrefix: "/", fsPrefix: "/alice" },
         { rootName: "other", virtualPrefix: "/mount", fsPrefix: "/" },
@@ -141,7 +140,6 @@ it("captures trusted Office locations once, handling unmapped paths and ownershi
   mapping.mockResolvedValue({
     available: true,
     providerId: provider.id,
-    homeTemplateRaw: "root:/alice",
     scopes: [],
   });
   expect(await resolve(principal, move)).toMatchObject({ office: null });

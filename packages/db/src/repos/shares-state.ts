@@ -28,10 +28,7 @@ export interface ShareRecord {
  * `hasPassword`; `null` for an open share.
  */
 export interface ShareInsertInput
-  extends Omit<
-    ShareRecord,
-"id" | "createdAt" | "updatedAt" | "views" | "hasPassword"
-  > {
+  extends Omit<ShareRecord, "id" | "createdAt" | "updatedAt" | "views" | "hasPassword"> {
   readonly passwordHash: string | null;
   readonly at: Date;
 }

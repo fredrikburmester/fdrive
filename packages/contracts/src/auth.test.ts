@@ -10,7 +10,7 @@ const CAPABILITIES = {
   shares: true,
   office: true,
   index: true,
-  scopeMapping: true,
+  shareWithPeople: false,
 };
 
 describe("LoginRequest", () => {
@@ -52,8 +52,8 @@ describe("IdentitySummary", () => {
     id: VALID_UUID,
     username: "alice",
     providerId: VALID_UUID,
-    providerType: "sftpgo",
-    providerLabel: "Home SFTPGo",
+    providerType: "local",
+    providerLabel: "Local folder",
     capabilities: CAPABILITIES,
   };
 
@@ -80,8 +80,8 @@ describe("MeResponse", () => {
         id: VALID_UUID,
         username: "alice",
         providerId: VALID_UUID,
-        providerType: "sftpgo",
-        providerLabel: "Home SFTPGo",
+        providerType: "webdav",
+        providerLabel: "Home WebDAV",
         capabilities: CAPABILITIES,
       },
     ],

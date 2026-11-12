@@ -21,7 +21,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const results = await Promise.allSettled(
           ["first", "second"].map((label) =>
             repos.providers.create({
-              type: "sftpgo",
+              type: "webdav",
               baseUrl: "http://race",
               label,
               enabled: false,
@@ -44,7 +44,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       it("reports racing readdresses as conflicts and preserves the losing row", async () => {
         const rows = await Promise.all(
           ["a", "b"].map((host) =>
-            repos.providers.ensure({ type: "sftpgo", baseUrl: `http://${host}` }),
+            repos.providers.ensure({ type: "webdav", baseUrl: `http://${host}` }),
           ),
         );
         const results = await Promise.allSettled(
@@ -61,7 +61,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("looks up a provider by canonical UUID and rejects invalid IDs", async () => {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
+          type: "webdav",
           baseUrl: "http://provider",
         });
         expect(await repos.providers.get(provider.id)).toEqual(provider);
@@ -70,24 +70,24 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
       it("creates a provider on first ensure", async () => {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
 
-        expect(provider.type).toBe("sftpgo");
-        expect(provider.baseUrl).toBe("http://sftpgo:8080");
+        expect(provider.type).toBe("webdav");
+        expect(provider.baseUrl).toBe("http://dav.test:8080");
         expect(provider.id).toEqual(expect.any(String));
         expect(provider.createdAt).toBeInstanceOf(Date);
       });
 
       it("is idempotent for the same (type, baseUrl)", async () => {
         const first = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const second = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
 
         expect(second.id).toBe(first.id);
@@ -96,12 +96,12 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("creates a distinct provider for a different baseUrl", async () => {
         const first = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo-a:8080",
+          type: "webdav",
+          baseUrl: "http://dav-a:8080",
         });
         const second = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo-b:8080",
+          type: "webdav",
+          baseUrl: "http://dav-b:8080",
         });
 
         expect(second.id).not.toBe(first.id);
@@ -109,7 +109,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("creates a distinct provider for a different type", async () => {
         const first = await repos.providers.ensure({
-          type: "sftpgo",
+          type: "webdav",
           baseUrl: "http://same:8080",
         });
         const second = await repos.providers.ensure({
@@ -121,24 +121,24 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("defaults label, config, enabled and managedByEnv, and lists oldest first", async () => {
-        const first = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
-        const second = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://b" });
+        const first = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
+        const second = await repos.providers.ensure({ type: "webdav", baseUrl: "http://b" });
         expect(first).toMatchObject({ label: "", config: {}, enabled: true, managedByEnv: false });
         expect((await repos.providers.list()).map((row) => row.id)).toEqual([first.id, second.id]);
       });
 
       it("updates fields without touching the rest and keeps ensure from resetting them", async () => {
-        const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+        const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
         const updated = await repos.providers.update(provider.id, {
           label: "Home",
-          config: { homeTemplate: "sftpgo:/{username}" },
+          config: { region: "eu-north-1" },
           enabled: false,
           managedByEnv: true,
         });
         expect(updated).toMatchObject({
           id: provider.id,
           label: "Home",
-          config: { homeTemplate: "sftpgo:/{username}" },
+          config: { region: "eu-north-1" },
           enabled: false,
           managedByEnv: true,
         });
@@ -147,7 +147,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           baseUrl: "http://c",
           label: "Home",
         });
-        expect(await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://c" })).toMatchObject(
+        expect(await repos.providers.ensure({ type: "webdav", baseUrl: "http://c" })).toMatchObject(
           {
             id: provider.id,
             label: "Home",
@@ -160,8 +160,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("deletes an unused provider and refuses one that identities use", async () => {
-        const unused = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://unused" });
-        const used = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://used" });
+        const unused = await repos.providers.ensure({ type: "webdav", baseUrl: "http://unused" });
+        const used = await repos.providers.ensure({ type: "webdav", baseUrl: "http://used" });
         const account = await repos.accounts.create({ displayName: null });
         await repos.identities.create({
           accountId: account.id,
@@ -217,6 +217,70 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
     });
 
+    describe("localGrants", () => {
+      beforeEach(async () => {
+        for (const username of ["alice", "bob", "carol"]) {
+          await repos.localUsers.create({ username, passwordHash: "h" });
+        }
+      });
+
+      it("shares a folder, changes its access and lists both sides oldest first", async () => {
+        const first = await repos.localGrants.put({
+          ownerUsername: "alice",
+          path: "/Projects",
+          granteeUsername: "bob",
+          access: "read",
+        });
+        const second = await repos.localGrants.put({
+          ownerUsername: "carol",
+          path: "/Photos",
+          granteeUsername: "bob",
+          access: "write",
+        });
+        const changed = await repos.localGrants.put({
+          ownerUsername: "alice",
+          path: "/Projects",
+          granteeUsername: "bob",
+          access: "write",
+        });
+
+        expect(changed).toMatchObject({ id: first.id, access: "write" });
+        expect(await repos.localGrants.get(first.id)).toMatchObject({ access: "write" });
+        expect(await repos.localGrants.get("00000000-0000-0000-0000-000000000000")).toBeNull();
+        expect((await repos.localGrants.listReceived("bob")).map((grant) => grant.id)).toEqual([
+          first.id,
+          second.id,
+        ]);
+        expect(await repos.localGrants.listOwned("alice")).toHaveLength(1);
+        expect(await repos.localGrants.listOwned("alice", "/Projects")).toHaveLength(1);
+        expect(await repos.localGrants.listOwned("alice", "/Other")).toEqual([]);
+
+        await repos.localGrants.delete(first.id);
+        await repos.localGrants.delete(first.id);
+        expect(await repos.localGrants.listReceived("bob")).toHaveLength(1);
+      });
+
+      it("follows the owner's moves and deletes of a folder and what is under it", async () => {
+        for (const path of ["/A", "/A/inner", "/AB", "/B"]) {
+          await repos.localGrants.put({
+            ownerUsername: "alice",
+            path,
+            granteeUsername: "bob",
+            access: "read",
+          });
+        }
+        await repos.localGrants.movePrefix("alice", "/A", "/Moved/A");
+        expect(
+          (await repos.localGrants.listOwned("alice")).map((grant) => grant.path).sort(),
+        ).toEqual(["/AB", "/B", "/Moved/A", "/Moved/A/inner"]);
+        await repos.localGrants.deletePrefix("alice", "/Moved");
+        await repos.localGrants.deletePrefix("carol", "/B");
+        expect(
+          (await repos.localGrants.listOwned("alice")).map((grant) => grant.path).sort(),
+        ).toEqual(["/AB", "/B"]);
+      });
+    });
+
     describe("accounts", () => {
       it("creates an account with a display name", async () => {
         const account = await repos.accounts.create({ displayName: "Alice" });
@@ -267,8 +331,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("identities", () => {
       async function seedProviderAndAccount() {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Carol" });
         return { provider, account };
@@ -342,7 +406,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       it("lists every identity for an account, empty for an account with none", async () => {
         const { provider, account } = await seedProviderAndAccount();
         const otherProvider = await repos.providers.ensure({
-          type: "sftpgo",
+          type: "webdav",
           baseUrl: "http://other:8080",
         });
         const first = await repos.identities.create({
@@ -408,8 +472,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("credentials", () => {
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Erin" });
         return repos.identities.create({
@@ -702,8 +766,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Heidi" });
         const identity = await repos.identities.create({
@@ -857,15 +921,15 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("settings", () => {
       it("returns null for a key that was never set", async () => {
-        expect(await repos.settings.get("connection.sftpgo")).toBeNull();
+        expect(await repos.settings.get("connection.example")).toBeNull();
       });
 
       it("stores and retrieves a JSON value", async () => {
-        const value = { baseUrl: "http://sftpgo:8080", homeTemplate: "sftpgo:/{username}" };
+        const value = { baseUrl: "http://dav.test:8080", label: "Home" };
 
-        await repos.settings.set("connection.sftpgo", value);
+        await repos.settings.set("connection.example", value);
 
-        expect(await repos.settings.get("connection.sftpgo")).toEqual(value);
+        expect(await repos.settings.get("connection.example")).toEqual(value);
       });
 
       it("overwrites a value stored at the same key", async () => {
@@ -1034,8 +1098,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("fileTags", () => {
       async function seedIdentityAndTags() {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Liam" });
         const identity = await repos.identities.create({
@@ -1201,8 +1265,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("favorites", () => {
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Mona" });
         return repos.identities.create({
@@ -1335,8 +1399,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("folderViews", () => {
       async function seedIdentity(username = "nora") {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Nora" });
         return repos.identities.create({
@@ -1459,8 +1523,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("recents", () => {
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "sftpgo",
-          baseUrl: "http://sftpgo:8080",
+          type: "webdav",
+          baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Nora" });
         return repos.identities.create({
@@ -1585,7 +1649,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           subsystem: "indexer",
           level: "warn",
           message: "second",
-          data: { root: "sftpgo" },
+          data: { root: "files" },
         });
 
         const listed = await repos.systemEvents.list("indexer", { limit: 10 });
@@ -1595,7 +1659,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           subsystem: "indexer",
           level: "warn",
           source: "api",
-          data: { root: "sftpgo" },
+          data: { root: "files" },
         });
         expect(listed[0]?.at).toBeInstanceOf(Date);
         expect(listed[1]?.data).toBeNull();
@@ -1666,7 +1730,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       beforeEach(async () => {
         const account = await repos.accounts.create({ displayName: null });
-        const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+        const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
         identity = (
           await repos.identities.create({
             accountId: account.id,

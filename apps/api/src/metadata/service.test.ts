@@ -1,6 +1,6 @@
 import type { FsEntry } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMetadataService,
   DEFAULT_RECENTS_LIMIT,
@@ -404,7 +404,7 @@ describe("createMetadataService: AI chat references", () => {
     const repos = createMemoryRepos();
     const service = createMetadataService(repos);
     const account = await repos.accounts.create({ displayName: "Alice" });
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
     const identity = await repos.identities.create({
       accountId: account.id,
       providerId: provider.id,
@@ -445,5 +445,58 @@ describe("createMetadataService: AI chat references", () => {
     const service = createMetadataService(withoutChats);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
     await expect(service.onTrashed(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
+  });
+});
+
+describe("createMetadataService: followers", () => {
+  it("tells each follower about moves and deletes, in order, after its own records", async () => {
+    const repos = createMemoryRepos();
+    const calls: string[] = [];
+    const follower = (name: string) => ({
+      onMoved: vi.fn(async (identity: string, from: string, to: string, isDir: boolean) => {
+        calls.push(`${name} moved ${identity} ${from} ${to} ${isDir}`);
+      }),
+      onDeleted: vi.fn(async (identity: string, path: string, isDir: boolean) => {
+        calls.push(`${name} deleted ${identity} ${path} ${isDir}`);
+      }),
+    });
+    const movePrefix = vi.spyOn(repos.metadataPaths, "movePrefix");
+    const service = createMetadataService({
+      ...repos,
+      followers: [follower("grants"), follower("other")],
+    });
+
+    await service.onMoved(IDENTITY_ID, "/Projects", "/Work", true);
+    await service.onDeleted(IDENTITY_ID, "/Work", true);
+    // Trash is not a delete: a share of a trashed folder stays until it is gone for good.
+    await service.onTrashed(IDENTITY_ID, "/Other", true);
+
+    expect(movePrefix).toHaveBeenCalledWith(IDENTITY_ID, "/Projects", "/Work", true);
+    expect(calls).toEqual([
+      `grants moved ${IDENTITY_ID} /Projects /Work true`,
+      `other moved ${IDENTITY_ID} /Projects /Work true`,
+      `grants deleted ${IDENTITY_ID} /Work true`,
+      `other deleted ${IDENTITY_ID} /Work true`,
+    ]);
+  });
+
+  it("stops at a follower that fails, so the caller sees the failure", async () => {
+    const repos = createMemoryRepos();
+    const failure = new Error("grants unavailable");
+    const after = { onMoved: vi.fn(), onDeleted: vi.fn() };
+    const service = createMetadataService({
+      ...repos,
+      followers: [
+        {
+          onMoved: vi.fn().mockRejectedValue(failure),
+          onDeleted: vi.fn().mockRejectedValue(failure),
+        },
+        after,
+      ],
+    });
+    await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
+    await expect(service.onDeleted(IDENTITY_ID, "/b", true)).rejects.toBe(failure);
+    expect(after.onMoved).not.toHaveBeenCalled();
+    expect(after.onDeleted).not.toHaveBeenCalled();
   });
 });

@@ -4,17 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { captureSnapshot, inspectArchive, readBounded } from "@fdrive/backup";
-import { StorageError, type StorageSession } from "@fdrive/core";
+import { type ProviderModule, StorageError, type StorageSession } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createDb, migrate } from "@fdrive/db";
-import { createFakeSftpgoServer } from "@fdrive/sftpgo";
 import { SEED_USERS, startPostgres } from "@fdrive/testkit";
+import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { open, seal } from "../auth/crypto.js";
 import { type AppConfig, loadConfig } from "../config.js";
 import * as registry from "../providers/registry.js";
+import { createScryptSharePasswords } from "../shares/passwords.js";
 import { environmentFingerprint, resumeRecovery, runBackupCommand } from "./command.js";
 import { createBackupModule, rawBackupStorage } from "./module.js";
 import {
@@ -37,6 +38,25 @@ const databases: ReturnType<typeof createDb>[] = [];
 const closers: (() => Promise<void>)[] = [];
 let count = 0;
 let owner: string, identity: string, provider: string;
+const SOURCE_URL = "http://source.invalid";
+/**
+ * The real WebDAV module with a one-time code field, as a storage whose
+ * sign-in takes one declares it: backups must never keep such a code.
+ */
+const webdavWithOtp: ProviderModule = {
+  ...webdavModule,
+  credentialFields: [
+    ...webdavModule.credentialFields,
+    { name: "otp", label: "One-time code", kind: "otp", required: false, transient: true },
+  ],
+};
+/** The modules a deployment without a local folder has, as the API and worker build them. */
+function backupModule(settings: AppConfig) {
+  return createBackupModule(settings, {
+    ...registry.createProviderModules(),
+    webdav: webdavWithOtp,
+  });
+}
 async function fresh() {
   const name = `backup_api_${count++}`;
   await control.pool.query(`create database ${name}`);
@@ -63,14 +83,14 @@ beforeEach(async () => {
     FDRIVE_BACKUP_STATE_DIR: join(directory, "state"),
     FDRIVE_SETUP_TOKEN: "host-recovery-token-for-fixtures-only",
   });
-  module = createBackupModule(config);
+  module = backupModule(config);
   await module.start();
   owner = randomUUID();
   identity = randomUUID();
   provider = randomUUID();
   await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config) values($1,'sftpgo','Files','http://source.invalid','{}')",
-    [provider],
+    "insert into app.providers(id,type,label,base_url,config) values($1,'webdav','Files',$2,'{}')",
+    [provider, SOURCE_URL],
   );
   await source.pool.query("insert into app.accounts(id) values($1)", [owner]);
   await source.pool.query(
@@ -93,10 +113,10 @@ beforeEach(async () => {
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: owner }),
   ]);
-  const fake = createFakeSftpgoServer({
-    users: [...SEED_USERS],
-    folders: [],
-    files: { alice: { "/docs/readme": "source document" } },
+  const fake = createFakeWebdavServer({
+    origin: SOURCE_URL,
+    users: SEED_USERS.map(({ username, password }) => ({ username, password })),
+    files: { "/docs/readme": "source document" },
   });
   vi.stubGlobal("fetch", fake.fetch);
 });
@@ -265,7 +285,7 @@ it("boots only the isolated recovery API, requires host authorization, and resto
   const review = {
     snapshotId: inspection.header.id,
     environmentFingerprint: environmentFingerprint(restoredConfig),
-    providers: [{ id: provider, baseUrl: "http://source.invalid" }],
+    providers: [{ id: provider, baseUrl: SOURCE_URL }],
     ownerIdentityId: identity,
     credential: { username: "alice", password: "alice-password" },
     oldDeploymentStopped: true,
@@ -302,7 +322,7 @@ it("boots only the isolated recovery API, requires host authorization, and resto
       )
     ).rows[0].count,
   ).toBe(0);
-  const resumed = createBackupModule(restoredConfig);
+  const resumed = backupModule(restoredConfig);
   try {
     const rows = await resumed.store.attachments();
     const row = rows[0];
@@ -364,7 +384,7 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
     JSON.stringify({
       snapshotId: inspection.header.id,
       environmentFingerprint: outputs.at(-1),
-      providers: [{ id: provider, baseUrl: "http://source.invalid" }],
+      providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
       credential: { username: "alice", password: "alice-password" },
       oldDeploymentStopped: true,
@@ -376,7 +396,7 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
   expect((await rows(target.db.pool)).providers.every((row) => row.enabled === true)).toBe(true);
   // 3. Roll back: the old database, master key and state directory still serve as before.
   expect(await rows(source.pool)).toEqual(before);
-  const rolledBack = createBackupModule(config);
+  const rolledBack = backupModule(config);
   try {
     await rolledBack.start();
     expect(await rolledBack.store.configuration()).toMatchObject({
@@ -425,7 +445,7 @@ it("rehearses into a new installation identity without any provider contact or p
     sourceInstallationId: inspection.header.installationId,
     snapshotId: inspection.header.id,
     result: "passed",
-    tableCount: 45,
+    tableCount: 47,
     blobCount: 1,
   });
   expect(
@@ -440,7 +460,7 @@ it("rehearses into a new installation identity without any provider contact or p
     resumeRecovery(restoredConfig, {
       snapshotId: inspection.header.id,
       environmentFingerprint: environmentFingerprint(restoredConfig),
-      providers: [{ id: provider, baseUrl: "http://source.invalid" }],
+      providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
       credential: { password: "test" },
       oldDeploymentStopped: true,
@@ -512,9 +532,9 @@ it("pins provider backup credentials and keeps reserved ciphertext independently
       await secretFile(
         "provider-destination.json",
         JSON.stringify({
-          type: "sftpgo",
+          type: "webdav",
           id: provider,
-          baseUrl: "http://source.invalid",
+          baseUrl: SOURCE_URL,
           config: {},
           username: "alice",
           prefix: record.config.prefix,
@@ -570,7 +590,7 @@ it("records missing source coverage and preserves mount identities and staged re
   const desktop = join(directory, "desktop");
   await mkdir(desktop);
   await writeFile(join(desktop, "accepted"), "accepted bytes");
-  const configured = createBackupModule({
+  const configured = backupModule({
     ...config,
     fdriveDesktopStateDir: desktop,
     fdriveOcrUrl: "http://ocr.invalid",
@@ -647,7 +667,7 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
 });
 
 it("refreshes only the pinned storage identity and supports providers without bearer tokens", async () => {
-  const real = registry.moduleFor("sftpgo");
+  const real = registry.moduleFor("webdav");
   if (!real) throw Error("Provider missing");
   let session!: StorageSession;
   const storage = createMemoryStorage();
@@ -665,7 +685,7 @@ it("refreshes only the pinned storage identity and supports providers without be
       return storage;
     },
   };
-  const instance = { id: provider, baseUrl: "http://source.invalid", config: {} };
+  const instance = { id: provider, baseUrl: SOURCE_URL, config: {} };
   const credential = { password: "secret" };
   expect(await rawBackupStorage(providerModule, instance, credential, "alice")).toBe(storage);
   expect(await session.getCredential()).toEqual(credential);
@@ -719,9 +739,9 @@ it("discovers and fetches a completed fileserver copy with no database or applic
   const location = await secretFile(
     "destination.json",
     JSON.stringify({
-      type: "sftpgo",
+      type: "webdav",
       id: provider,
-      baseUrl: "http://source.invalid",
+      baseUrl: SOURCE_URL,
       config: {},
       username: "alice",
       prefix: record.config.prefix,
@@ -733,6 +753,18 @@ it("discovers and fetches a completed fileserver copy with no database or applic
   };
   const output: string[] = [];
   await expect(runBackupCommand(unavailable, ["list"])).rejects.toThrow("destination JSON");
+  // Offline there are no local users to sign in with: a copy in the local folder is read from disk.
+  const localLocation = await secretFile(
+    "local-destination.json",
+    JSON.stringify({
+      ...JSON.parse(await readFile(location, "utf8")),
+      type: "local",
+      baseUrl: "http://local.invalid",
+    }),
+  );
+  await expect(
+    runBackupCommand(unavailable, ["list", "--destination-file", localLocation]),
+  ).rejects.toThrow("Unsupported destination provider");
   await runBackupCommand(unavailable, ["list", "--destination-file", location], (value) =>
     output.push(value),
   );
@@ -774,7 +806,7 @@ it("discovers and fetches a completed fileserver copy with no database or applic
     JSON.stringify({
       snapshotId: id,
       environmentFingerprint: environmentFingerprint(restoredConfig),
-      providers: [{ id: provider, baseUrl: "http://source.invalid" }],
+      providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
       credential: { username: "alice", password: "alice-password" },
       oldDeploymentStopped: true,
@@ -791,7 +823,7 @@ it("captures native recovery bytes, preserves quarantined provenance, and report
   const storage = createMemoryStorage({
     [`/.fdrive-desktop/${identity}/trash/original`]: "recover me",
   });
-  const real = registry.moduleFor("sftpgo");
+  const real = registry.moduleFor("webdav");
   if (!real) throw Error("Provider missing");
   vi.spyOn(registry, "moduleFor").mockReturnValue({ ...real, createStorage: () => storage });
   await source.pool.query(
@@ -885,7 +917,7 @@ it("keeps the worker dormant during restore and releases process listeners on sh
   await expect(runBackupCommand(disabledConfig, ["worker"])).rejects.toThrow(
     "FDRIVE_BACKUP_STATE_DIR",
   );
-  const active = createBackupModule({ ...config, fdriveBackupWorker: true });
+  const active = backupModule({ ...config, fdriveBackupWorker: true });
   try {
     await active.start();
   } finally {
@@ -894,7 +926,7 @@ it("keeps the worker dormant during restore and releases process listeners on sh
 });
 
 it("refuses changed namespaces, recursive source mounts, and unavailable retained ZIPs", async () => {
-  const real = registry.moduleFor("sftpgo");
+  const real = registry.moduleFor("webdav");
   if (!real) throw Error("Provider missing");
   const storage = createMemoryStorage({ "/file": "ordinary" });
   const moduleFor = vi
@@ -934,13 +966,13 @@ it("refuses changed namespaces, recursive source mounts, and unavailable retaine
   if (!version) throw Error("No attachment");
   await rm(module.attachments.path(version));
   const client = await source.pool.connect();
-  const configured = createBackupModule({
+  const configured = backupModule({
     ...config,
     fdriveBackupSources: [{ kind: "ocr", path: directory }],
   });
   const alias = join(directory, "alias");
   await symlink(directory, alias);
-  const overlap = createBackupModule({
+  const overlap = backupModule({
     ...config,
     fdriveBackupSources: [{ kind: "ocr", path: alias }],
     fdriveIndexerUrl: "http://indexer.invalid",
@@ -992,7 +1024,7 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
   const review = {
     snapshotId: inspection.header.id,
     environmentFingerprint: environmentFingerprint(restoredConfig),
-    providers: [{ id: provider, baseUrl: "http://source.invalid" }],
+    providers: [{ id: provider, baseUrl: SOURCE_URL }],
     ownerIdentityId: identity,
     credential: { username: "alice", password: "alice-password" },
     oldDeploymentStopped: true,
@@ -1019,7 +1051,7 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
       ),
     ],
   );
-  const real = registry.moduleFor("sftpgo");
+  const real = registry.moduleFor("webdav");
   if (!real) throw Error("Provider missing");
   const lookup = vi.spyOn(registry, "moduleFor").mockReturnValue(null);
   await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow(
@@ -1078,6 +1110,78 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
   expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
     true,
   );
+});
+
+it("resumes a local-folder installation by checking the owner against its restored users", async () => {
+  const root = join(directory, "storage");
+  await mkdir(join(root, "alice"), { recursive: true });
+  const local = randomUUID();
+  await source.pool.query(
+    "insert into app.providers(id,type,label,base_url,config,managed_by_env) values($1,'local','','local','{}',true)",
+    [local],
+  );
+  await source.pool.query("update app.identities set provider_id=$1 where id=$2", [
+    local,
+    identity,
+  ]);
+  await source.pool.query(
+    "insert into app.local_users(username,password_hash) values('alice',$1)",
+    [await createScryptSharePasswords().hash("alice-password")],
+  );
+  const { file, inspection } = await snapshot();
+  const target = await fresh();
+  const restoredConfig = {
+    ...config,
+    databaseUrl: target.url,
+    fdriveStorageRoot: root,
+    fdriveBackupStateDir: join(directory, "restored-local"),
+  };
+  const keyFile = await secretFile("local-key", key);
+  await runBackupCommand(
+    restoredConfig,
+    [
+      "restore",
+      "--file",
+      file,
+      "--key-file",
+      keyFile,
+      "--snapshot",
+      inspection.header.id,
+      "--state-dir",
+      restoredConfig.fdriveBackupStateDir,
+    ],
+    () => {},
+  );
+  const review = {
+    snapshotId: inspection.header.id,
+    environmentFingerprint: environmentFingerprint(restoredConfig),
+    // The local folder's row has no URL: it is reviewed by its stored name.
+    providers: [{ id: local, baseUrl: "local" }],
+    ownerIdentityId: identity,
+    credential: { username: "alice", password: "alice-password" },
+    oldDeploymentStopped: true,
+    pathBindingsReviewed: true,
+  };
+  // Without the folder configured there are no local users to check the owner against.
+  const withoutFolder = { ...restoredConfig, fdriveStorageRoot: undefined };
+  await expect(resumeRecovery(withoutFolder, review)).rejects.toThrow(
+    "Unsupported restored provider",
+  );
+  await expect(
+    resumeRecovery(restoredConfig, {
+      ...review,
+      credential: { username: "alice", password: "wrong-password" },
+    }),
+  ).rejects.toMatchObject({ kind: "unauthorized" });
+  expect(
+    (await target.db.pool.query("select enabled from app.providers where id=$1", [local])).rows[0]
+      .enabled,
+  ).toBe(false);
+  await resumeRecovery(restoredConfig, review);
+  expect(
+    (await target.db.pool.query("select enabled from app.providers where id=$1", [local])).rows[0]
+      .enabled,
+  ).toBe(true);
 });
 
 it("clears expired recovery secrets and reports failed uploads and nonempty-target imports", async () => {
@@ -1167,7 +1271,7 @@ it("recovers legacy OCR original mappings from a configured OCR mount", async ()
   const root = join(directory, "ocr-root");
   await mkdir(join(root, "originals"), { recursive: true });
   await writeFile(join(root, "originals", "orphan.pdf"), "legacy original");
-  const configured = createBackupModule({
+  const configured = backupModule({
     ...config,
     fdriveBackupSources: [{ kind: "ocr", path: root }],
   });

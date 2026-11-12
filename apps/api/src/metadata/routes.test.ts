@@ -1,15 +1,12 @@
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import type { ActivityReadInput, ActivityReadsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import {
-  createFakeSftpgoServer,
-  createSftpgoClient,
-  createSftpgoStorageProvider,
-  type FakeSeed,
-  type WithToken,
-} from "@fdrive/sftpgo";
+import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ActivityAdmissionDeps, createActivityAdmission } from "../activity/admission.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
@@ -23,24 +20,42 @@ import { createMetadataService } from "./service.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
-const FULL_PERMS = ["*"];
+/** Setup is complete, so the setup gate lets every route through. */
+const READY = async () => ({ required: false, providers: [] });
+
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 
-const SEED: FakeSeed = {
-  users: [{ username: "alice", password: "secret", permissions: { "/": FULL_PERMS } }],
-  files: {
-    alice: {
-      "/hello.txt": "hello world",
-      "/dir/nested.txt": "nested contents",
-    },
-  },
+const FILES: Readonly<Record<string, string>> = {
+  "/hello.txt": "hello world",
+  "/dir/nested.txt": "nested contents",
 };
+
+const folders: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    folders.splice(0).map((folder) => rm(folder, { recursive: true, force: true })),
+  );
+});
+
+/** Alice's files in a fresh home folder on disk, the way the local folder serves them. */
+async function homeWith(files: Readonly<Record<string, string>>): Promise<StorageProvider> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-metadata-routes-")));
+  folders.push(root);
+  const home = join(root, "alice");
+  await mkdir(home, { recursive: true });
+  for (const [path, contents] of Object.entries(files)) {
+    const target = join(home, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+  return createLocalStorage({ home });
+}
 
 function createTestLogger(): Logger {
   const logger = {
@@ -56,15 +71,6 @@ function createTestLogger(): Logger {
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({ clock: () => new Date(CLOCK_ISO), bus: createEventBus() });
-}
-
-async function withTokenFor(
-  client: ReturnType<typeof createSftpgoClient>,
-  username: string,
-  password: string,
-): Promise<WithToken> {
-  const token = await client.login({ username, password });
-  return async (fn) => fn(token.accessToken);
 }
 
 function requestedWith(init: RequestInit = {}): RequestInit {
@@ -100,11 +106,8 @@ function activityReadsFixture(storage: StorageProvider) {
   return { reads, admit, recorded };
 }
 
-async function buildHarness(seed: FakeSeed = SEED, withActivity = false) {
-  const server = createFakeSftpgoServer(seed);
-  const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-  const withToken = await withTokenFor(client, "alice", "secret");
-  const storage = createSftpgoStorageProvider({ client, withToken });
+async function buildHarness(withActivity = false) {
+  const storage = await homeWith(FILES);
 
   const principal: Principal = {
     accountId: ACCOUNT_ID,
@@ -128,6 +131,7 @@ async function buildHarness(seed: FakeSeed = SEED, withActivity = false) {
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: READY,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         bus,
@@ -379,7 +383,7 @@ describe("recents", () => {
   });
 
   it("records an open as the caller's own history and reads the list back from it", async () => {
-    const { app, repos, activity } = await buildHarness(SEED, true);
+    const { app, repos, activity } = await buildHarness(true);
 
     const touch = await app.request(
       "/api/v1/recents/touch",
@@ -410,7 +414,7 @@ describe("recents", () => {
   });
 
   it("treats a retried report as the same gesture and rejects an expired one", async () => {
-    const { app, activity } = await buildHarness(SEED, true);
+    const { app, activity } = await buildHarness(true);
     const requestId = "00000000-0000-4000-8000-0000000000f1";
     const touch = (body: Record<string, unknown>) =>
       app.request(
@@ -432,7 +436,7 @@ describe("recents", () => {
   });
 
   it("refuses a report for a file the caller can no longer read", async () => {
-    const { app, activity } = await buildHarness(SEED, true);
+    const { app, activity } = await buildHarness(true);
 
     const res = await app.request(
       "/api/v1/recents/touch",
@@ -600,10 +604,7 @@ describe("tag CRUD: error mapping", () => {
     metadata: MetadataService,
     storageOverride?: StorageProvider,
   ) {
-    const server = createFakeSftpgoServer(SEED);
-    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-    const withToken = await withTokenFor(client, "alice", "secret");
-    const storage = storageOverride ?? createSftpgoStorageProvider({ client, withToken });
+    const storage = storageOverride ?? (await homeWith(FILES));
     const principal: Principal = {
       accountId: ACCOUNT_ID,
       identityId: ALICE_IDENTITY_ID,
@@ -621,6 +622,7 @@ describe("tag CRUD: error mapping", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
+      connectionStatus: READY,
       registerRoutes: (groups) => registerMetadataRoutes(groups, { metadata }),
     });
   }

@@ -23,6 +23,7 @@ async function uploadRequest(
   config: OfficeConfig,
   signal: AbortSignal,
   bridgeId = opened.file.id,
+  overwrite = true,
 ): Promise<void> {
   const length = request.headers.get("Content-Length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))))
@@ -46,7 +47,12 @@ async function uploadRequest(
       opened.path,
       path,
       bridgeId,
-      () => opened.actor.storage.upload(path, body, { signal, contentLength: size }),
+      () =>
+        opened.actor.storage.upload(path, body, {
+          signal,
+          contentLength: size,
+          ...(overwrite ? {} : { overwrite: false }),
+        }),
       { size },
     );
   });
@@ -184,12 +190,15 @@ async function putRelative(
         return scope.locks.withFileLock(file.id, async (locked) => {
           const current = await locked.get(deps.clock());
           if (current !== null) throw new WopiError(409, { "X-WOPI-Lock": current });
-          // Recheck at the last possible moment. SFTPGo provides no atomic no-overwrite upload.
+          // Recheck at the last moment so a suggested name can still move on.
           if (!overwrite && (await fileExists(opened.actor, path))) {
             if (relative === null) return null;
             throw new WopiError(409, { "X-WOPI-Lock": "" });
           }
-          await uploadRequest(deps, opened, path, request, config, signal, file.id);
+          // A writer outside fdrive can still take the name before the
+          // publish; `overwrite: false` then refuses it as a `conflict`
+          // (409), since the request body is already spent.
+          await uploadRequest(deps, opened, path, request, config, signal, file.id, overwrite);
           await contentVersion(opened.actor.storage, path, config.maxBytes, signal);
           const fields = mintedFields(deps, config, opened.actor, file, "edit");
           return {

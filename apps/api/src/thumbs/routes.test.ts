@@ -15,12 +15,11 @@ import { registerThumbRoutes, type ThumbFileReader, type ThumbRoutesDeps } from 
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
 const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 
 function createTestLogger(): Logger {
@@ -49,7 +48,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
     rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
-    directoriesWithFiles: overrides.directoriesWithFiles ?? (async () => []),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -183,7 +181,7 @@ describe("GET /api/v1/thumb: real file reader", () => {
       thumbsDir: dir,
       useRealFileReader: true,
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath }),
       }),
@@ -200,7 +198,7 @@ describe("GET /api/v1/thumb", () => {
   it("streams a thumbnail with the expected headers", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -276,7 +274,7 @@ describe("GET /api/v1/thumb", () => {
 
   it("returns 404 when no verified scope covers the requested path", async () => {
     const app = buildApp({
-      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/photos" }],
+      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/photos" }],
     });
 
     const res = await app.request("/api/v1/thumb?path=/videos/clip.jpg&size=256");
@@ -287,7 +285,7 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the file is not indexed", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => null,
       }),
     });
@@ -300,7 +298,7 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the indexed file has no sha256", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile({ sha256: null }),
       }),
     });
@@ -313,7 +311,7 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when no thumbnail has been generated for that size", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => null,
       }),
@@ -327,7 +325,7 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the live read check denies the exact path", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -342,7 +340,7 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the cached thumbnail file is missing from disk", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -363,11 +361,11 @@ describe("GET /api/v1/thumb", () => {
     const app = buildApp(
       {
         indexQueries: fakeIndexQueries({
-          rootIdsByName: async () => ({ sftpgo: 1 }),
+          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
         }),
-        scopes: [{ rootName: "sftpgo", fsPrefix: "/bob", virtualPrefix: "/" }],
+        scopes: [{ rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" }],
       },
       "bob",
     );
@@ -395,7 +393,7 @@ describe("GET /api/v1/thumb", () => {
     };
     const deps: ThumbRoutesDeps = {
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),

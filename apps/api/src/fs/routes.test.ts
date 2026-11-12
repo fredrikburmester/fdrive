@@ -1,18 +1,15 @@
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type { MoveManyResponse } from "@fdrive/contracts";
 import { StorageError, type StorageProvider, withMoveToTrash } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import {
-  createFakeSftpgoServer,
-  createSftpgoClient,
-  createSftpgoStorageProvider,
-  type FakeSeed,
-  type WithToken,
-} from "@fdrive/sftpgo";
+import { createLocalStorage } from "@fdrive/local";
 import { getRequestListener } from "@hono/node-server";
 import type { Logger } from "pino";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { captureRecycleReceipt } from "../activity/trash.js";
 import { createApp } from "../app.js";
@@ -51,11 +48,8 @@ function fakeFolderSizeDeps() {
   };
 }
 
-const FULL_PERMS = ["*"];
-
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -71,17 +65,15 @@ function createTestLogger(): Logger {
   return logger as unknown as Logger;
 }
 
-const SEED: FakeSeed = {
-  users: [
-    { username: "alice", password: "secret", permissions: { "/": FULL_PERMS } },
-    { username: "bob", password: "secret2", permissions: { "/": [] } },
-  ],
-  files: {
-    alice: {
-      "/hello.txt": "hello world",
-      "/dir/nested.txt": "nested contents",
-    },
+/** Each user's files, by path; `null` for a user who may not read or write anything. */
+type Seed = Readonly<Record<string, Readonly<Record<string, string>> | null>>;
+
+const SEED: Seed = {
+  alice: {
+    "/hello.txt": "hello world",
+    "/dir/nested.txt": "nested contents",
   },
+  bob: null,
 };
 
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -89,13 +81,41 @@ const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 
-async function withTokenFor(
-  client: ReturnType<typeof createSftpgoClient>,
-  username: string,
-  password: string,
-): Promise<WithToken> {
-  const token = await client.login({ username, password });
-  return async (fn) => fn(token.accessToken);
+const homes: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+});
+
+/** Local storage over a fresh folder holding `files`. */
+async function seededStorage(files: Readonly<Record<string, string>>): Promise<StorageProvider> {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "fdrive-fs-routes-")));
+  homes.push(home);
+  for (const [path, content] of Object.entries(files)) {
+    const target = join(home, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+  return createLocalStorage({ home });
+}
+
+/** Storage that refuses every call, as it does for a user without permissions. */
+function forbiddenStorage(): StorageProvider {
+  const deny = async (): Promise<never> => {
+    throw new StorageError("forbidden", "permission denied");
+  };
+  return {
+    list: deny,
+    stat: deny,
+    statFile: deny,
+    download: deny,
+    upload: deny,
+    mkdir: deny,
+    move: deny,
+    copy: deny,
+    deleteFile: deny,
+    deleteDir: deny,
+  };
 }
 
 interface Harness {
@@ -106,16 +126,13 @@ interface Harness {
 }
 
 async function buildHarness(
-  seed: FakeSeed = SEED,
+  seed: Seed = SEED,
   username = "alice",
-  password = "secret",
   metadata?: MetadataService,
   activityObservations?: FsRoutesDeps["activityObservations"],
 ) {
-  const server = createFakeSftpgoServer(seed);
-  const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-  const withToken = await withTokenFor(client, username, password);
-  const storage = createSftpgoStorageProvider({ client, withToken });
+  const files = seed[username] ?? null;
+  const storage = files === null ? forbiddenStorage() : await seededStorage(files);
 
   const identityId = username === "alice" ? ALICE_IDENTITY_ID : BOB_IDENTITY_ID;
   const principal: Principal = {
@@ -141,6 +158,7 @@ async function buildHarness(
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -227,6 +245,7 @@ async function buildHarnessWithStorage(
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -299,7 +318,7 @@ describe("GET /fs/list", () => {
 
   it("answers while history comparison is still probing the provider", async () => {
     // Comparison reaches the provider. A listing never waits for it.
-    const { app } = await buildHarness(SEED, "alice", "secret", undefined, {
+    const { app } = await buildHarness(SEED, "alice", undefined, {
       refresh: () => new Promise<void>(() => {}),
     } as unknown as FsRoutesDeps["activityObservations"]);
 
@@ -414,7 +433,7 @@ describe("GET /fs/list", () => {
   });
 
   it("maps a forbidden provider error for a caller without permissions", async () => {
-    const { app } = await buildHarness(SEED, "bob", "secret2");
+    const { app } = await buildHarness(SEED, "bob");
 
     const res = await app.request("/api/v1/fs/list?path=/");
     expect(res.status).toBe(403);
@@ -444,7 +463,7 @@ describe("GET /fs/stat", () => {
       [tag.id],
     );
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    const { app } = await buildHarness(SEED, "alice", "secret", metadata);
+    const { app } = await buildHarness(SEED, "alice", metadata);
     const response = await app.request("/api/v1/fs/stat?path=/hello.txt");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
@@ -452,11 +471,7 @@ describe("GET /fs/stat", () => {
       meta: { tagIds: [tag.id], favorite: true },
     });
 
-    const otherSeed: FakeSeed = {
-      users: [{ username: "bob", password: "secret2", permissions: { "/": FULL_PERMS } }],
-      files: { bob: { "/hello.txt": "Bob's own file" } },
-    };
-    const other = await buildHarness(otherSeed, "bob", "secret2", metadata);
+    const other = await buildHarness({ bob: { "/hello.txt": "Bob's own file" } }, "bob", metadata);
     const otherResponse = await other.app.request("/api/v1/fs/stat?path=/hello.txt");
     expect(otherResponse.status).toBe(200);
     expect(await otherResponse.json()).toMatchObject({
@@ -469,7 +484,7 @@ describe("GET /fs/stat", () => {
   it("never looks up metadata when storage denies stat", async () => {
     const metadata = createMetadataService(createMemoryRepos());
     const decorate = vi.spyOn(metadata, "decorate");
-    const { app } = await buildHarness(SEED, "bob", "secret2", metadata);
+    const { app } = await buildHarness(SEED, "bob", metadata);
     const response = await app.request("/api/v1/fs/stat?path=/hello.txt");
     expect(response.status).toBe(403);
     expect(decorate).not.toHaveBeenCalled();
@@ -611,10 +626,7 @@ describe("GET/HEAD /fs/download", () => {
   });
 
   it("falls back to attachment when inline=1 but the type is not previewable", async () => {
-    const { app, activity } = await buildHarness({
-      ...SEED,
-      files: { alice: { "/data.bin": "binary-ish" } },
-    });
+    const { app, activity } = await buildHarness({ alice: { "/data.bin": "binary-ish" } });
 
     const res = await app.request("/api/v1/fs/download?path=/data.bin&inline=1");
     expect(res.headers.get("content-disposition")).toContain("attachment");
@@ -663,26 +675,23 @@ describe("GET/HEAD /fs/download", () => {
 });
 
 describe("POST /fs/zip", () => {
-  it("closes the upstream HTTP request when the client cancels before ZIP headers", async () => {
-    let upstreamClosed = false;
+  it("aborts the storage's zip when the client cancels before ZIP headers", async () => {
+    let storageAborted = false;
     let markStarted: () => void = () => {};
     const started = new Promise<void>((resolve) => {
       markStarted = resolve;
     });
-    const upstream = createServer((request, response) => {
-      request.resume();
-      response.on("close", () => {
-        upstreamClosed = true;
-      });
-      // Keep headers pending: no response stream exists yet for Hono to cancel.
-      markStarted();
+    // Keep the archive pending: no response stream exists yet for Hono to cancel.
+    const storage = makeStubStorage({
+      zip: (_paths, opts) =>
+        new Promise<never>((_resolve, reject) => {
+          opts?.signal?.addEventListener("abort", () => {
+            storageAborted = true;
+            reject(new StorageError("upstream_unavailable", "zip aborted"));
+          });
+          markStarted();
+        }),
     });
-    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-    const upstreamAddress = upstream.address();
-    if (upstreamAddress === null || typeof upstreamAddress === "string")
-      throw new Error("no upstream port");
-    const client = createSftpgoClient({ baseUrl: `http://127.0.0.1:${upstreamAddress.port}` });
-    const storage = createSftpgoStorageProvider({ client, withToken: (fn) => fn("test-token") });
     const { app } = await buildHarnessWithStorage(storage);
     const api = createServer(getRequestListener(app.fetch));
     await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
@@ -703,15 +712,11 @@ describe("POST /fs/zip", () => {
       await started;
       controller.abort();
       await rejected;
-      await vi.waitFor(() => expect(upstreamClosed).toBe(true), { timeout: 2000 });
+      await vi.waitFor(() => expect(storageAborted).toBe(true), { timeout: 2000 });
     } finally {
       controller.abort();
       api.closeAllConnections();
-      upstream.closeAllConnections();
-      await Promise.all([
-        new Promise<void>((resolve) => api.close(() => resolve())),
-        new Promise<void>((resolve) => upstream.close(() => resolve())),
-      ]);
+      await new Promise<void>((resolve) => api.close(() => resolve()));
     }
   });
 
@@ -1550,11 +1555,17 @@ describe("POST /fs/delete", () => {
   });
 
   it("calls metadata.onTrashed instead of onDeleted when the storage has a trash, but still publishes delete", async () => {
-    const server = createFakeSftpgoServer(SEED);
-    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-    const withToken = await withTokenFor(client, "alice", "secret");
-    const baseStorage = createSftpgoStorageProvider({ client, withToken });
-    const storage = withRecycleFolderTrash(baseStorage, "/.trash");
+    const baseStorage = await seededStorage(SEED.alice ?? {});
+    const storage = withRecycleFolderTrash(
+      withMoveToTrash({
+        storage: baseStorage,
+        trashPath: "/.trash",
+        clock: () => new Date(CLOCK_ISO),
+        onRecycled: captureRecycleReceipt,
+      }),
+      "/.trash",
+      "move",
+    );
     const metadata = createMetadataService(createMemoryRepos());
     const onTrashedSpy = vi.spyOn(metadata, "onTrashed");
     const onDeletedSpy = vi.spyOn(metadata, "onDeleted");

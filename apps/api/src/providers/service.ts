@@ -180,7 +180,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
   async function capabilitiesFor(target: ResolvedProvider): Promise<ProviderCapabilities> {
     const flags = target.module.capabilities;
     // Indexing is per row: only a provider whose files live under one of the
-    // configured index roots has thumbnails, folder sizes and scope mapping.
+    // configured index roots has search, thumbnails and folder sizes.
     const root = target.module.indexRootName?.(target.instance) ?? null;
     const hasRoots = root !== null && deps.environment.indexRootNames.includes(root);
     const trashOn =
@@ -194,8 +194,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       trash: trashOn,
       shares: flags.shares,
       office: flags.office,
+      shareWithPeople: flags.shareWithPeople,
       index: flags.index && hasRoots,
-      scopeMapping: flags.scopeMapping && hasRoots,
     };
   }
 
@@ -371,6 +371,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         config,
         enabled: provider.enabled,
         managedByEnv: provider.managedByEnv,
+        capabilities: module.capabilities,
         identityCount: await deps.repos.identities.countByProvider(provider.id),
         reachable: probe.ok,
         checkedAt: deps.clock().toISOString(),
@@ -381,12 +382,12 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       return Object.values(modules)
         .filter((module) => module.deploymentManaged !== true)
         .map((module) => ({
-        type: module.type as AdminProviderType["type"],
-        label: module.label,
-        configFields: [...module.configFields],
-        credentialFields: [...module.credentialFields],
-        capabilities: module.capabilities,
-      }));
+          type: module.type as AdminProviderType["type"],
+          label: module.label,
+          configFields: [...module.configFields],
+          credentialFields: [...module.credentialFields],
+          capabilities: module.capabilities,
+        }));
     },
     async seedFromEnvironment() {
       const managed = Object.values(modules).filter((module) => module.deploymentManaged === true);

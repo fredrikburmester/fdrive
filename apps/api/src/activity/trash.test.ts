@@ -7,8 +7,8 @@ const TRASH = "/.trash";
 const CLOCK = new Date("2026-09-19T10:00:00.000Z");
 
 /**
- * A provider whose own rule renames deletions into the recycle folder and
- * tells fdrive nothing about where they landed, the way SFTPGo behaves.
+ * A provider whose own server-side rule renames deletions into the recycle
+ * folder and tells fdrive nothing about where they landed (`trash: "native"`).
  */
 function withProviderRule(leavesPerDelete: number): StorageProvider {
   const base = createMemoryStorage();

@@ -6,12 +6,18 @@ import {
   type StorageProvider,
 } from "@fdrive/core";
 import type { Identity, Provider } from "@fdrive/db";
-import { createFakeSftpgoServer, createSftpgoClient, sftpgoModule } from "@fdrive/sftpgo";
+import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import { expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors.js";
+import {
+  localModuleFixture,
+  seedLocalUsers,
+  writeHomeFiles,
+} from "../local/test-fixtures/index.ts";
 import type { IdentityProvider } from "../providers/service.js";
+import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import {
   createIdentityStorageFactory,
   createPinnedStorageFactory,
@@ -56,7 +62,7 @@ const IDENTITY: Identity = {
 function providerRow(id: string, baseUrl: string): Provider {
   return {
     id,
-    type: "sftpgo",
+    type: "webdav",
     baseUrl,
     label: "",
     config: {},
@@ -66,7 +72,33 @@ function providerRow(id: string, baseUrl: string): Provider {
   };
 }
 
-function resolvedFor(provider: Provider, module: ProviderModule = sftpgoModule): IdentityProvider {
+/**
+ * Storage that signs every request with the session's upstream token, the
+ * way a token-minting backend does: `list` and `deleteFile` each send one
+ * request to the instance's address.
+ */
+const tokenModule: ProviderModule = fakeProviderModule({
+  trash: "move",
+  createStorage: (instance, session, ctx) =>
+    makeStubStorage({
+      async list(path) {
+        const token = await session.getToken();
+        await ctx.fetch(`${instance.baseUrl}/list?path=${encodeURIComponent(path)}`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        return [];
+      },
+      async deleteFile(path) {
+        const token = await session.getToken();
+        await ctx.fetch(`${instance.baseUrl}/files?path=${encodeURIComponent(path)}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${token}` },
+        });
+      },
+    }),
+});
+
+function resolvedFor(provider: Provider, module: ProviderModule = tokenModule): IdentityProvider {
   return {
     identity: { ...IDENTITY, providerId: provider.id },
     provider,
@@ -179,8 +211,10 @@ it("leaves storage.trash undefined when no trash settings are configured", async
 });
 
 it("extends native-trash storage with a recycle-folder view when trash is enabled", async () => {
+  // A backend that recycles deletes itself: no production module does this
+  // any more, but the port still allows it.
   const memory = createMemoryStorage({ "/.trash/docs/a.txt/1700000000000000000": "x" });
-  const module: ProviderModule = { ...sftpgoModule, createStorage: () => memory };
+  const module = fakeProviderModule({ trash: "native", createStorage: () => memory });
   const factory = createIdentityStorageFactory({
     providers: {
       forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
@@ -202,7 +236,7 @@ it("extends native-trash storage with a recycle-folder view when trash is enable
 
 it("moves deletes into the recycle folder for a module whose trash strategy is move", async () => {
   const memory = createMemoryStorage({ "/docs/a.txt": "x" });
-  const module: ProviderModule = { ...sftpgoModule, trash: "move", createStorage: () => memory };
+  const module = fakeProviderModule({ trash: "move", createStorage: () => memory });
   const at = new Date("2026-09-10T12:00:00Z");
   const factory = createIdentityStorageFactory({
     providers: {
@@ -223,11 +257,7 @@ it("moves deletes into the recycle folder for a module whose trash strategy is m
 });
 
 it("adds no trash for a module without one even when settings enable it", async () => {
-  const module: ProviderModule = {
-    ...sftpgoModule,
-    trash: "none",
-    createStorage: () => createMemoryStorage(),
-  };
+  const module = fakeProviderModule({ trash: "none", createStorage: () => createMemoryStorage() });
   const factory = createIdentityStorageFactory({
     providers: {
       forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
@@ -280,6 +310,32 @@ it("pins storage to a token fetched once and refuses a foreign provider", async 
   expect(requests).toEqual(["Bearer pinned-token", "Bearer pinned-token"]);
   expect(get).toHaveBeenCalledOnce();
   await expect(factory("identity-a", "provider-b")).rejects.toThrow(/not bound/);
+});
+
+it("gives pinned storage the stored credential and a token it never forgets", async () => {
+  const credential = vi.fn(async () => ({ username: "alice", password: "pw" }));
+  const seen: unknown[] = [];
+  const module = fakeProviderModule({
+    createStorage: (_instance, session) =>
+      makeStubStorage({
+        async list() {
+          seen.push(await session.getCredential());
+          await session.invalidateToken();
+          seen.push(await session.getToken());
+          return [];
+        },
+      }),
+  });
+  const factory = createPinnedStorageFactory({
+    providers: {
+      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
+    },
+    tokenSource: { ...tokenSourceStub("pinned"), credential },
+    fetch: vi.fn(),
+  });
+  await (await factory("identity-a", "provider-a")).list("/");
+  expect(seen).toEqual([{ username: "alice", password: "pw" }, "pinned"]);
+  expect(credential).toHaveBeenCalledWith("identity-a");
 });
 
 it("withRecycleFolderTrash spreads the original provider and adds trash without mutating it", () => {
@@ -359,12 +415,12 @@ it("unavailableStorage rejects every call with the given error and has no trash"
   expect(trashSettingsForStorage(storage)).toBeNull();
 });
 
-it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", async () => {
+it("keeps a WebDAV identity and a local identity on the same path apart", async () => {
   const requests: { host: string; authorization: string | null }[] = [];
-  const sftpgo = createFakeSftpgoServer({
-    users: [{ username: "alice", password: "pw", permissions: { "/": ["*"] } }],
-    files: { alice: { "/shared/a.txt": "from sftpgo" } },
-  });
+  const repos = createMemoryRepos();
+  const local = localModuleFixture(repos);
+  await seedLocalUsers(repos, [{ username: "alice", password: "pw" }]);
+  writeHomeFiles(local.root, "alice", { "/shared/a.txt": "from the local folder" });
   const davUser = { username: "alice", password: "teacup" };
   const dav = createFakeWebdavServer({
     users: [davUser],
@@ -374,16 +430,10 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
   const fetchImpl: typeof globalThis.fetch = async (url, init) => {
     const host = new URL(String(url)).host;
     requests.push({ host, authorization: new Headers(init?.headers).get("authorization") });
-    return host === "dav.test" ? dav.fetch(url, init) : sftpgo.fetch(url, init);
+    return dav.fetch(url, init);
   };
-  const sftpgoRow = providerRow("provider-a", "http://a.test");
-  const davRow: Provider = { ...providerRow("provider-dav", "http://dav.test"), type: "webdav" };
-  const sftpgoToken = (
-    await createSftpgoClient({ baseUrl: "http://a.test", fetch: sftpgo.fetch }).login({
-      username: "alice",
-      password: "pw",
-    })
-  ).accessToken;
+  const localRow: Provider = { ...providerRow("provider-local", "local"), type: "local" };
+  const davRow: Provider = providerRow("provider-dav", "http://dav.test");
   const forIdentity = vi.fn(
     async (identityId: string): Promise<IdentityProvider> =>
       identityId === "identity-dav"
@@ -391,7 +441,7 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
             ...resolvedFor(davRow, webdavModule),
             identity: { ...IDENTITY, id: "identity-dav", providerId: davRow.id },
           }
-        : resolvedFor(sftpgoRow),
+        : resolvedFor(localRow, local.module),
   );
   const tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential"> = {
     sessionFor: (identityId, externalUsername) => ({
@@ -400,10 +450,10 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
         username: externalUsername,
         password: identityId === "identity-dav" ? davUser.password : "pw",
       }),
-      getToken: async () => (identityId === "identity-dav" ? null : sftpgoToken),
+      getToken: async () => null,
       invalidateToken: async () => {},
     }),
-    get: async () => sftpgoToken,
+    get: async () => null,
     credential: async () => ({ password: "pw" }),
   };
   const factory = createIdentityStorageFactory({
@@ -413,25 +463,70 @@ it("keeps a WebDAV identity and an SFTPGo identity on the same path apart", asyn
     clock: () => new Date(0),
   });
   const davStorage = await factory("identity-dav");
-  const sftpgoStorage = await factory("identity-a");
+  const localStorage = await factory("identity-a");
   const text = async (storage: StorageProvider) =>
     new Response((await storage.download("/shared/a.txt")).body).text();
 
   expect(await text(davStorage)).toBe("from webdav");
-  expect(await text(sftpgoStorage)).toBe("from sftpgo");
+  expect(await text(localStorage)).toBe("from the local folder");
   await davStorage.upload("/shared/only-dav.txt", new TextEncoder().encode("x"));
-  await expect(sftpgoStorage.stat("/shared/only-dav.txt")).rejects.toMatchObject({
+  await expect(localStorage.stat("/shared/only-dav.txt")).rejects.toMatchObject({
     kind: "not_found",
   });
 
   const basic = `Basic ${Buffer.from(`${davUser.username}:${davUser.password}`).toString("base64")}`;
-  const davRequests = requests.filter((request) => request.host === "dav.test");
-  const sftpgoRequests = requests.filter((request) => request.host === "a.test");
-  expect(davRequests.length).toBeGreaterThan(0);
-  expect(sftpgoRequests.length).toBeGreaterThan(0);
-  expect(davRequests.length + sftpgoRequests.length).toBe(requests.length);
-  expect(davRequests.every((request) => request.authorization === basic)).toBe(true);
-  expect(sftpgoRequests.every((request) => request.authorization === `Bearer ${sftpgoToken}`)).toBe(
-    true,
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every((request) => request.host === "dav.test")).toBe(true);
+  expect(requests.every((request) => request.authorization === basic)).toBe(true);
+});
+
+it("asks the module to admit the login before building any storage", async () => {
+  const repos = createMemoryRepos();
+  const local = localModuleFixture(repos);
+  await seedLocalUsers(repos, [{ username: "alice", password: "pw", disabled: true }]);
+  const createStorage = vi.spyOn(local.module, "createStorage");
+  const localRow: Provider = { ...providerRow("provider-local", "local"), type: "local" };
+  const deps = {
+    providers: { forIdentity: async () => resolvedFor(localRow, local.module) },
+    tokenSource: tokenSourceStub(null),
+    fetch: vi.fn(),
+    clock: () => new Date(0),
+  };
+
+  // A user an administrator disabled after they signed in stops at once.
+  await expect(createIdentityStorageFactory(deps)("identity-a")).rejects.toMatchObject({
+    kind: "forbidden",
+    message: "this user may not sign in",
+  });
+  await expect(
+    createPinnedStorageFactory(deps)("identity-a", "provider-local"),
+  ).rejects.toMatchObject({ kind: "forbidden" });
+  // So does one whose user was removed.
+  await repos.localUsers.delete("alice");
+  await expect(createIdentityStorageFactory(deps)("identity-a")).rejects.toBeInstanceOf(
+    ApiHttpError,
   );
+  expect(createStorage).not.toHaveBeenCalled();
+
+  await seedLocalUsers(repos, [{ username: "alice", password: "pw" }]);
+  expect(await (await createIdentityStorageFactory(deps)("identity-a")).list("/")).toEqual([]);
+  expect(createStorage).toHaveBeenCalledOnce();
+});
+
+it("passes a failure that is not a storage error out of admission unchanged", async () => {
+  const failure = new Error("users table unreachable");
+  const module = fakeProviderModule({
+    admit: async () => {
+      throw failure;
+    },
+  });
+  const factory = createIdentityStorageFactory({
+    providers: {
+      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a"), module),
+    },
+    tokenSource: tokenSourceStub(),
+    fetch: vi.fn(),
+    clock: () => new Date(0),
+  });
+  await expect(factory("identity-a")).rejects.toBe(failure);
 });

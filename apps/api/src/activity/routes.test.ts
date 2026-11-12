@@ -135,7 +135,7 @@ async function fixture({ watcherEnabled = true } = {}) {
             storage: {
               identityId,
               providerId: randomUUID(),
-              providerType: "sftpgo",
+              providerType: "local",
               label: "Storage",
               retiredAt: null,
             },
@@ -178,13 +178,13 @@ async function fixture({ watcherEnabled = true } = {}) {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/activity",
-      SFTPGO_URL: "http://storage.test",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as unknown as Logger,
     version: "test",
     startedAt: time,
     clock: () => time,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     principalResolver: async () => principal,
     registerRoutes(groups) {
       registerPersonalActivityRoutes(groups, {

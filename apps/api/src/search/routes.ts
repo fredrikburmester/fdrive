@@ -30,7 +30,7 @@ export interface SearchRoutesDeps {
   }>;
   readonly searchService: SearchService;
   readonly imageSearchService: ImageSearchService;
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes" | "status">;
+  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly identities: Pick<IdentityRepo, "get">;
   /** Whether `FDRIVE_EMBED_URL` is configured; `search/status` reports this directly. */
   readonly semanticEnabled: boolean;
@@ -139,15 +139,14 @@ export function registerSearchRoutes(
     const features = await deps.features?.();
     const principal = c.get("principal");
     const identity = await deps.identities.get(principal.identityId);
-    const status =
-      identity === null ? null : await deps.resolver.status(identity, principal.isAdmin);
+    const verified = identity === null ? null : await deps.resolver.verifiedIndexScopes(identity);
     const body: SearchStatusResponse = {
       available:
-        status?.status === "available" &&
+        verified?.available === true &&
         (features === undefined || features.textSearch || features.imageSearch),
       semantic: deps.semanticEnabled && features?.semanticSearch !== false,
       images: deps.imageSearchEnabled && features?.imageSearch !== false,
-      ...(status?.status === "unavailable" ? { reason: status.reason } : {}),
+      ...(verified?.available === false ? { reason: verified.reason } : {}),
     };
     return c.json(body);
   });

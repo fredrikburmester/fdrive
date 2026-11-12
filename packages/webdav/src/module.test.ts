@@ -59,7 +59,6 @@ describe("webdavModule metadata", () => {
       shares: false,
       office: false,
       index: false,
-      scopeMapping: false,
     });
     expect(webdavModule.trash).toBe("move");
     expect(webdavModule.mint).toBeUndefined();

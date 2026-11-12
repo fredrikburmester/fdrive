@@ -42,8 +42,8 @@ beforeAll(async () => {
   observer = createDb(url.toString(), { max: 1 });
   await migrate(first.db);
   await first.db.insert(providers).values([
-    { id: providerId, type: "sftpgo", baseUrl: "http://one" },
-    { id: otherProviderId, type: "sftpgo", baseUrl: "http://two" },
+    { id: providerId, type: "webdav", baseUrl: "http://one" },
+    { id: otherProviderId, type: "webdav", baseUrl: "http://two" },
   ]);
   write = createOfficeWriteScope(first.db);
   writeOther = createOfficeWriteScope(second.db);

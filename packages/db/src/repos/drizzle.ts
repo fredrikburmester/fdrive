@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import {
   accounts,
@@ -8,6 +8,7 @@ import {
   fileTags,
   folderViews,
   identities,
+  localGrants,
   localUsers,
   providers,
   recents,
@@ -38,6 +39,8 @@ import type {
   FolderViewSort,
   Identity,
   IdentityRepo,
+  LocalGrant,
+  LocalGrantRepo,
   LocalUser,
   LocalUserRepo,
   MetadataPathRepo,
@@ -1002,7 +1005,8 @@ function toLocalUser(row: typeof localUsers.$inferSelect): LocalUser {
   };
 }
 
-const sameName = (username: string) => eq(sql`lower(${localUsers.username})`, username.toLowerCase());
+const sameName = (username: string) =>
+  eq(sql`lower(${localUsers.username})`, username.toLowerCase());
 
 export function createLocalUserRepo(db: Db): LocalUserRepo {
   return {
@@ -1049,11 +1053,87 @@ export function createLocalUserRepo(db: Db): LocalUserRepo {
   };
 }
 
+function toLocalGrant(row: typeof localGrants.$inferSelect): LocalGrant {
+  return {
+    id: row.id,
+    ownerUsername: row.ownerUsername,
+    path: row.path,
+    granteeUsername: row.granteeUsername,
+    access: row.access === "write" ? "write" : "read",
+    createdAt: row.createdAt,
+  };
+}
+
+/** `path` itself and everything under it. */
+function atOrUnder(path: string) {
+  return or(
+    eq(localGrants.path, path),
+    sql`starts_with(${localGrants.path}, ${path === "/" ? "/" : `${path}/`})`,
+  );
+}
+
+function createLocalGrantRepo(db: Db): LocalGrantRepo {
+  return {
+    async get(id) {
+      const [row] = await db.select().from(localGrants).where(eq(localGrants.id, id));
+      return row === undefined ? null : toLocalGrant(row);
+    },
+    async listReceived(grantee) {
+      const rows = await db
+        .select()
+        .from(localGrants)
+        .where(eq(localGrants.granteeUsername, grantee))
+        .orderBy(asc(localGrants.createdAt), asc(localGrants.id));
+      return rows.map(toLocalGrant);
+    },
+    async listOwned(owner, path) {
+      const rows = await db
+        .select()
+        .from(localGrants)
+        .where(
+          and(
+            eq(localGrants.ownerUsername, owner),
+            path === undefined ? undefined : eq(localGrants.path, path),
+          ),
+        )
+        .orderBy(asc(localGrants.createdAt), asc(localGrants.id));
+      return rows.map(toLocalGrant);
+    },
+    async put(input) {
+      const [row] = await db
+        .insert(localGrants)
+        .values(input)
+        .onConflictDoUpdate({
+          target: [localGrants.ownerUsername, localGrants.path, localGrants.granteeUsername],
+          set: { access: input.access },
+        })
+        .returning();
+      if (row === undefined) throw new Error("local grant insert returned no row");
+      return toLocalGrant(row);
+    },
+    async delete(id) {
+      await db.delete(localGrants).where(eq(localGrants.id, id));
+    },
+    async movePrefix(owner, from, to) {
+      await db
+        .update(localGrants)
+        .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
+        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+    },
+    async deletePrefix(owner, path) {
+      await db
+        .delete(localGrants)
+        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(path)));
+    },
+  };
+}
+
 /** Builds every `Repos` interface as Drizzle queries against `db`. */
 export function createRepos(db: Db): Repos {
   return {
     providers: createProviderRepo(db),
     localUsers: createLocalUserRepo(db),
+    localGrants: createLocalGrantRepo(db),
     accounts: createAccountRepo(db),
     identities: createIdentityRepo(db),
     credentials: createCredentialRepo(db),

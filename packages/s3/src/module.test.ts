@@ -45,7 +45,6 @@ describe("s3Module", () => {
       shares: false,
       office: false,
       index: false,
-      scopeMapping: false,
     });
     expect(s3Module.trash).toBe("move");
     expect(s3Module.mint).toBeUndefined();

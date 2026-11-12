@@ -46,13 +46,13 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
   return createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
-      SFTPGO_URL: "http://sftpgo.test",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) =>
       registerOfficeSettingsRoutes(groups, {
         service,

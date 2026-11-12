@@ -36,7 +36,6 @@ const PRINCIPAL: Principal = {
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -63,6 +62,7 @@ function buildApp(pingIntervalMs?: number) {
     startedAt: new Date("2024-01-01T00:00:00.000Z"),
     clock,
     principalResolver: async () => PRINCIPAL,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) => {
       registerEventRoutes(groups, {
         bus,

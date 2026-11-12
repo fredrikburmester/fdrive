@@ -18,7 +18,7 @@ it("keeps million-event personal feeds, journeys and historical-name searches in
     const repos = createRepos(connection.db);
     const alice = await repos.accounts.create({ displayName: "Scale A" });
     const bob = await repos.accounts.create({ displayName: "Scale B" });
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://scale.test" });
+    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://scale.test" });
     const identities = [
       await repos.identities.create({
         accountId: alice.id,
@@ -34,7 +34,7 @@ it("keeps million-event personal feeds, journeys and historical-name searches in
     const db = connection.db;
     for (const identity of identities)
       await db.execute(
-        sql`insert into app.activity_storage_identities (identity_id, provider_id, provider_type, label) values (${identity.id}, ${provider.id}, 'sftpgo', 'Scale')`,
+        sql`insert into app.activity_storage_identities (identity_id, provider_id, provider_type, label) values (${identity.id}, ${provider.id}, 'webdav', 'Scale')`,
       );
     await db.execute(sql`insert into app.activity_files (id,identity_id,kind,virtual_path)
       select md5('scale-file-' || n)::uuid, case when n % 2 = 0 then ${identities[0]?.id}::uuid else ${identities[1]?.id}::uuid end, 'file', '/current/' || n || '.txt' from generate_series(0,9999) n`);

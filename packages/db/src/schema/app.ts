@@ -69,6 +69,38 @@ export const localUsers = appSchema.table(
   (table) => [uniqueIndex("local_users_username_lower_unique").on(sql`lower(${table.username})`)],
 );
 
+/**
+ * A folder one local user shares with another. The grantee sees it under
+ * `Shared with me` and reaches it through their own storage; `access`
+ * decides whether they may change what is in it. Rows go with either user.
+ */
+export const localGrants = appSchema.table(
+  "local_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerUsername: text("owner_username")
+      .notNull()
+      .references(() => localUsers.username, { onDelete: "cascade", onUpdate: "cascade" }),
+    /** The folder in the owner's files, a canonical virtual path. */
+    path: text("path").notNull(),
+    granteeUsername: text("grantee_username")
+      .notNull()
+      .references(() => localUsers.username, { onDelete: "cascade", onUpdate: "cascade" }),
+    /** "read" | "write". */
+    access: text("access").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("local_grants_owner_path_grantee_unique").on(
+      table.ownerUsername,
+      table.path,
+      table.granteeUsername,
+    ),
+    index("local_grants_grantee_username_idx").on(table.granteeUsername),
+    check("local_grants_access", sql`${table.access} in ('read', 'write')`),
+  ],
+);
+
 export const accounts = appSchema.table("accounts", {
   id: uuid("id").primaryKey().defaultRandom(),
   displayName: text("display_name"),

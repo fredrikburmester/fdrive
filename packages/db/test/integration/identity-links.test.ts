@@ -57,7 +57,7 @@ beforeAll(async () => {
   await migrate(first.db);
   await first.db
     .insert(providers)
-    .values({ id: providerId, type: "sftpgo", baseUrl: "http://provider" });
+    .values({ id: providerId, type: "webdav", baseUrl: "http://provider" });
   a = createIdentityLinksRepo(first.db);
   b = createIdentityLinksRepo(second.db);
 });
@@ -125,7 +125,6 @@ async function fixture() {
   await first.db.insert(recents).values({ identityId: alice.id, path: "/file", openedAt: at });
   await first.db.insert(shares).values({
     identityId: alice.id,
-    sftpgoShareId: "share",
     name: "Example",
     scope: "read",
     paths: ["/file"],
@@ -512,7 +511,7 @@ describe("provider endpoint binding", () => {
     async (operation) => {
       const repos = createRepos(first.db);
       const row = await repos.providers.ensure({
-        type: "sftpgo",
+        type: "webdav",
         baseUrl: `http://stale-${operation}`,
       });
       const input = {
@@ -538,7 +537,7 @@ describe("provider endpoint binding", () => {
     async (operation) => {
       const repos = createRepos(second.db);
       const row = await repos.providers.ensure({
-        type: "sftpgo",
+        type: "webdav",
         baseUrl: `http://race-${operation}`,
       });
       const input = {

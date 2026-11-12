@@ -80,6 +80,11 @@ export async function toRedirectError(response: Response): Promise<WebdavError> 
   );
 }
 
+/** `url` with every percent-encoding's hex digits in uppercase, as `buildUrl` writes them. */
+function upperPercentEncodings(url: string): string {
+  return url.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase());
+}
+
 /**
  * Performs a fetch call, converting a rejected promise into a "network"
  * `WebdavError` and refused redirects into a "server" one. A stat may
@@ -107,9 +112,16 @@ export async function safeFetch(
     try {
       if (location !== null) target = new URL(location, url).href;
     } catch {}
-    if (target === canonicalCollectionUrl && target === `${url}/`) {
+    // Apache spells percent-encodings in lowercase (`%c3%85`); RFC 3986
+    // makes their case insignificant, so compare in one case and retry our
+    // own spelling.
+    if (
+      target !== undefined &&
+      upperPercentEncodings(target) === canonicalCollectionUrl &&
+      canonicalCollectionUrl === `${url}/`
+    ) {
       await cancelBody(response);
-      return safeFetch(fetchImpl, target, init);
+      return safeFetch(fetchImpl, canonicalCollectionUrl, init);
     }
   }
   if (response.status >= 300 && response.status < 400) {

@@ -1,16 +1,18 @@
-import type { LocalUserRepo } from "@fdrive/db";
+import type { LocalGrantRepo, LocalUserRepo } from "@fdrive/db";
 import type { LocalUsers } from "@fdrive/local";
 import type { SharePasswords } from "../shares/passwords.js";
 
 export interface LocalUserStoreDeps {
   readonly repo: LocalUserRepo;
+  readonly grants: Pick<LocalGrantRepo, "listReceived">;
   readonly passwords: SharePasswords;
 }
 
 /**
- * The local module's view of `app.local_users`: is this password right, is
- * this user still active. A name nobody has still costs one password check,
- * so how long a sign-in takes does not tell which usernames exist.
+ * The local module's view of `app.local_users` and `app.local_grants`: is
+ * this password right, is this user still active, what do others share
+ * with them. A name nobody has still costs one password check, so how long
+ * a sign-in takes does not tell which usernames exist.
  */
 export function createLocalUserStore(deps: LocalUserStoreDeps): LocalUsers {
   let decoy: Promise<string> | undefined;
@@ -34,6 +36,13 @@ export function createLocalUserStore(deps: LocalUserStoreDeps): LocalUsers {
       const user = await deps.repo.get(username);
       if (user === null) return "missing";
       return user.disabled ? "disabled" : "active";
+    },
+    async shared(username) {
+      return (await deps.grants.listReceived(username)).map((grant) => ({
+        owner: grant.ownerUsername,
+        path: grant.path,
+        writable: grant.access === "write",
+      }));
     },
   };
 }
