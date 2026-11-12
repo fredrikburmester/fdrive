@@ -357,7 +357,8 @@ fn note_embed_recovery(ctx: &RootContext) {
 }
 
 /// Open `rel_path` below the root descriptor by descriptor, never following a symlink, so
-/// a directory swapped for a link after the walk cannot redirect the read elsewhere.
+/// a directory swapped for a link after the walk cannot redirect the read elsewhere. Keep the
+/// result alive while anything uses its `path()`: that path names the open descriptor.
 pub fn open_source(ctx: &RootContext, rel_path: &str) -> Result<crate::fsx::OpenedFile> {
     let parts =
         crate::fsx::path_parts(&format!("/{}", rel_path.trim_start_matches('/'))).map_err(anyhow::Error::msg)?;
@@ -812,7 +813,9 @@ pub fn backfill_media(ctx: &Arc<RootContext>, _abs_path: &Path, rel_path: &str, 
     let Some(sha) = ctx.db.with(|c| db::file_content_key(c, ctx.root_id, rel_path))? else {
         return Ok(false);
     };
-    let source = open_source(ctx, rel_path)?.path();
+    // Keep the descriptor open while tools reopen it through its path.
+    let opened = open_source(ctx, rel_path)?;
+    let source = opened.path();
     let (mut ok, skipped) = process_thumbnails(ctx, &source, rel_path, &ext, &sha, stat.size, false);
     if features.image_search && image_embed::is_candidate(&ext) && !skipped {
         ok = process_image_embedding(ctx, rel_path, &sha) && ok;
