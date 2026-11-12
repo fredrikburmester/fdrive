@@ -1,549 +1,762 @@
-import { ManagedShare, PublicShare, ShareEntriesResponse, SharesResponse } from "@fdrive/contracts";
+import {
+  ApiError,
+  ManagedShare,
+  PublicShare,
+  ShareEntriesResponse,
+  SharesResponse,
+} from "@fdrive/contracts";
+import { type ProviderModule, StorageError } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
-import { createMemoryShareRepo } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import { accountsHarness, cookieFrom } from "../accounts/test-fixtures/index.ts";
-import { createApp } from "../app.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { ThumbFileReader } from "../thumbs/serve.ts";
-import { createShareCredentialCodec } from "./credentials.ts";
-import { createShareLimiter } from "./limiter.ts";
-import { capByteStream, contentLengthExceeds, registerSharesRoutes } from "./routes.ts";
-import { createSharesService } from "./service.ts";
-import { sharesHarness } from "./test-fixtures/index.ts";
-
-function fail(name: string): never {
-  throw new Error(`unexpected call to ${name} in this test`);
-}
-
-/** A minimal `IndexQueries` fake covering only the methods the public thumb route touches. */
-function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
-  return {
-    semantic: overrides.semantic ?? (async () => fail("semantic")),
-    fulltext: overrides.fulltext ?? (async () => fail("fulltext")),
-    filename: overrides.filename ?? (async () => fail("filename")),
-    filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
-    fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
-    listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
-    filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
-    directoriesWithFiles: overrides.directoriesWithFiles ?? (async () => []),
-    stats: overrides.stats ?? (async () => fail("stats")),
-    statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
-    fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
-    duplicates: overrides.duplicates ?? (async () => fail("duplicates")),
-    similar: overrides.similar ?? (async () => fail("similar")),
-    recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
-    thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
-    recordMove: overrides.recordMove ?? (async () => fail("recordMove")),
-    recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
-    deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
-    liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
-    searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
-    imageEmbeddingStats: overrides.imageEmbeddingStats ?? (async () => fail("imageEmbeddingStats")),
-    subtreeSize: overrides.subtreeSize ?? (async () => fail("subtreeSize")),
-  };
-}
-
-function makeIndexedFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
-  return {
-    id: 1,
-    rootId: 1,
-    path: "alice/a.docx",
-    name: "a.docx",
-    ext: ".docx",
-    size: 100,
-    mtimeNs: 1n,
-    sha256: "abc123",
-    mime: null,
-    textStatus: "done",
-    textChars: 0,
-    error: null,
-    indexedAt: null,
-    deletedAt: null,
-    ...overrides,
-  };
-}
-
-function fakeFileReader(overrides: Partial<ThumbFileReader> = {}): ThumbFileReader {
-  return {
-    stat: overrides.stat ?? (async () => ({ size: 42 })),
-    readStream:
-      overrides.readStream ??
-      (() =>
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("webp-bytes"));
-            controller.close();
-          },
-        })),
-  };
-}
-
-const ALICE_HOME_SCOPES = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
-
-/** Builds a shares app wired for the public thumb route, on top of the same real fake-SFTPGo-backed harness `sharesHarness` uses. */
-function sharesHarnessWithThumbs(
-  overrides: {
-    indexQueries?: Partial<IndexQueries>;
-    resolver?: Pick<ScopeResolver, "verifiedIndexScopes">;
-    /** `null` explicitly disables the route (the default is `"/thumbs"`, not disabled). */
-    thumbsDir?: string | null;
-    fileReader?: Partial<ThumbFileReader>;
-  } = {},
-) {
-  const h = accountsHarness();
-  const shares = createMemoryShareRepo();
-  const deps = {
-    ...h.deps,
-    tokenSource: h.tokenSource,
-    providers: h.providers,
-    shares,
-    logger: h.logger,
-    clientFor: (_baseUrl: string) => h.client,
-    storageFor: h.storageFactory,
-  };
-  const service = createSharesService(deps);
-  const codec = createShareCredentialCodec(h.master, h.clock);
-  const limiter = createShareLimiter(h.clock);
-  const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = overrides.resolver ?? {
-    verifiedIndexScopes: async () => ({ available: true, scopes: ALICE_HOME_SCOPES }),
-  };
-  const indexQueries = fakeIndexQueries(overrides.indexQueries);
-  const thumbsDir = overrides.thumbsDir === null ? undefined : (overrides.thumbsDir ?? "/thumbs");
-  const fileReader = fakeFileReader(overrides.fileReader);
-  const app = createApp({
-    config: h.config,
-    logger: h.logger,
-    clock: h.clock,
-    version: "test",
-    startedAt: h.clock(),
-    principalResolver: h.auth.principalResolver,
-    registerRoutes: (groups) => {
-      h.auth.registerRoutes(groups);
-      registerSharesRoutes(groups, {
-        service,
-        codec,
-        limiter,
-        config: h.config,
-        indexQueries,
-        resolver,
-        identities: h.repos.identities,
-        thumbsDir,
-        fileReader,
-      });
-    },
-  });
-  async function request(
-    path: string,
-    options: {
-      method?: string;
-      cookie?: string;
-      body?: unknown;
-      headers?: Record<string, string>;
-    } = {},
-  ) {
-    return app.request(path, {
-      method: options.method ?? "GET",
-      headers: {
-        "x-requested-with": "fdrive",
-        ...(options.cookie ? { cookie: options.cookie } : {}),
-        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-        ...options.headers,
-      },
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    });
-  }
-  async function login(username = "alice") {
-    const res = await request("/api/v1/auth/login", {
-      method: "POST",
-      body: { credential: { username, password: `${username}-pass` } },
-    });
-    return cookieFrom(res);
-  }
-  async function create(cookie: string, patch: Record<string, unknown> = {}) {
-    const response = await request("/api/v1/shares", {
-      method: "POST",
-      cookie,
-      body: { name: "Document", paths: ["/a.docx"], scope: "read", ...patch },
-    });
-    if (response.status !== 201) throw new Error(await response.text());
-    return response.json() as Promise<{ id: string; hasPassword: boolean }>;
-  }
-  return { ...h, shares, deps, service, codec, limiter, app, request, login, create };
-}
+import { capByteStream, contentLengthExceeds } from "./routes.ts";
+import { cookieFrom, patchStorage, sharesHarness } from "./test-fixtures/index.ts";
 
 const base = "/api/v1/shares";
-const publicBase = (id: string) => `/api/v1/public/shares/${id}`;
-it("manages only selected session identity shares, preserves password, reconciles and revokes", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const bob = await h.login("bob");
-  const share = await h.create(cookie, { password: "secret" });
-  const path = `${base}/${share.id}`;
-  expect((await h.request(path)).status).toBe(401);
-  expect((await h.request(path, { cookie: bob })).status).toBe(404);
-  expect(
-    (await h.request(path, { cookie, headers: { authorization: "Bearer nope" } })).status,
-  ).toBe(403);
-  const get = ManagedShare.parse(await (await h.request(path, { cookie })).json());
-  expect(get.publicPath).toBe(`/s/${share.id}`);
-  expect(get).not.toHaveProperty("sftpgoShareId");
-  expect(get.presentation).toBe("auto");
-  expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toHaveLength(
-    1,
+const pub = (id: string) => `/api/v1/public/shares/${id}`;
+type Harness = ReturnType<typeof sharesHarness>;
+async function error(response: Response) {
+  return ApiError.parse(await response.json()).error;
+}
+async function metadata(h: Harness, id: string, cookie?: string) {
+  return PublicShare.parse(
+    await (await h.request(pub(id), cookie === undefined ? {} : { cookie })).json(),
   );
-  let response = await h.request(path, {
-    cookie,
-    method: "PATCH",
-    body: { name: "Renamed", presentation: "gallery" },
+}
+async function names(response: Response) {
+  return ShareEntriesResponse.parse(await response.json()).items.map((entry) => entry.name);
+}
+describe("share management", () => {
+  it("manages only the session identity's shares, in the database, and revokes them", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const bob = await h.login("bob");
+    const share = await h.create(cookie, { password: "secret", description: "Quarterly" });
+    const path = `${base}/${share.id}`;
+    expect((await h.request(path)).status).toBe(401);
+    expect((await h.request(path, { cookie: bob })).status).toBe(404);
+    expect(
+      (await h.request(path, { cookie, headers: { authorization: "Bearer nope" } })).status,
+    ).toBe(403);
+    const get = ManagedShare.parse(await (await h.request(path, { cookie })).json());
+    expect(get).toMatchObject({
+      publicPath: `/s/${share.id}`,
+      name: "Document",
+      description: "Quarterly",
+      paths: ["/a.docx"],
+      scope: "read",
+      hasPassword: true,
+      usedDownloads: 0,
+      maxDownloads: 0,
+      presentation: "auto",
+    });
+    expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toEqual([
+      get,
+    ]);
+    expect(
+      SharesResponse.parse(await (await h.request(base, { cookie: bob })).json()).items,
+    ).toEqual([]);
+    let response = await h.request(path, {
+      cookie,
+      method: "PATCH",
+      body: { name: "Renamed", presentation: "gallery", maxDownloads: 3 },
+    });
+    expect(ManagedShare.parse(await response.json())).toMatchObject({
+      name: "Renamed",
+      presentation: "gallery",
+      maxDownloads: 3,
+      hasPassword: true,
+      description: "Quarterly",
+    });
+    response = await h.request(path, { cookie, method: "PATCH", body: { name: "Again" } });
+    expect(ManagedShare.parse(await response.json()).presentation).toBe("gallery");
+    response = await h.request(path, { cookie, method: "PATCH", body: { password: "" } });
+    expect(ManagedShare.parse(await response.json()).hasPassword).toBe(false);
+    response = await h.request(path, { cookie, method: "PATCH", body: { password: "new" } });
+    expect(ManagedShare.parse(await response.json()).hasPassword).toBe(true);
+    expect(
+      (await h.request(path, { cookie, method: "PATCH", body: { allowFrom: [] } })).status,
+    ).toBe(400);
+    expect((await h.request(path, { cookie: bob, method: "DELETE" })).status).toBe(404);
+    expect((await h.request(path, { cookie, method: "DELETE" })).status).toBe(200);
+    expect(await h.shares.get(share.id)).toBeNull();
+    expect((await h.request(pub(share.id))).status).toBe(404);
+    expect((await h.request(path, { cookie, method: "PATCH", body: { name: "x" } })).status).toBe(
+      404,
+    );
+    // Revoking a link never touches what it pointed at.
+    expect(h.read("/a.docx")).toBe("alice data");
   });
-  expect(response.status).toBe(200);
-  const renamed = ManagedShare.parse(await response.json());
-  expect(renamed.hasPassword).toBe(true);
-  expect(renamed.presentation).toBe("gallery");
-  response = await h.request(path, { cookie, method: "PATCH", body: { name: "Renamed again" } });
-  expect(ManagedShare.parse(await response.json()).presentation).toBe("gallery");
-  expect(
-    SharesResponse.parse(await (await h.request(base, { cookie })).json()).items[0]?.presentation,
-  ).toBe("gallery");
-  response = await h.request(path, { cookie, method: "PATCH", body: { password: "" } });
-  expect(ManagedShare.parse(await response.json()).hasPassword).toBe(false);
-  response = await h.request(path, { cookie, method: "PATCH", body: { password: "new" } });
-  expect(ManagedShare.parse(await response.json()).hasPassword).toBe(true);
-  expect((await h.request(path, { cookie, method: "PATCH", body: { allowFrom: [] } })).status).toBe(
-    400,
-  );
-  expect((await h.request(path, { cookie, method: "DELETE" })).status).toBe(200);
-  expect((await h.request(publicBase(share.id))).status).toBe(404);
-  expect(
-    await (
-      await h.client
-        .user((await h.client.login({ username: "alice", password: "alice-pass" })).accessToken)
-        .download("/a.docx")
-    ).body
-      .getReader()
-      .read(),
-  ).toBeDefined();
+
+  it("refuses the Trash and backup folders, missing paths, colliding names and a file to upload into", async () => {
+    const h = sharesHarness({ trashPath: "/.trash" });
+    h.write("/.trash/old.txt", "gone");
+    h.write("/.fdrive-backups/b", "backup");
+    h.write("/one/report.txt", "one");
+    h.write("/two/Report.txt", "two");
+    const cookie = await h.login();
+    const attempt = (body: Record<string, unknown>) =>
+      h.request(base, { cookie, method: "POST", body: { name: "Bad", scope: "read", ...body } });
+    for (const paths of [
+      ["/.trash"],
+      ["/.trash/old.txt"],
+      ["/.fdrive-backups/b"],
+      ["/a.docx", "/.trash"],
+    ])
+      expect((await attempt({ paths })).status, paths.join()).toBe(403);
+    expect((await attempt({ paths: ["/missing.txt"] })).status).toBe(404);
+    // A name segment over 255 bytes fits the request schema but no file system.
+    expect((await attempt({ paths: [`/${"a".repeat(300)}`] })).status).toBe(400);
+    expect((await attempt({ paths: ["/a.docx"], scope: "write" })).status).toBe(400);
+    for (const paths of [
+      ["/one/report.txt", "/two/Report.txt"],
+      ["/one", "/one/report.txt"],
+      ["/", "/a.docx"],
+    ]) {
+      const refused = await attempt({ paths });
+      expect(refused.status, paths.join()).toBe(400);
+      expect((await error(refused)).message).toContain("same name");
+    }
+    const { id } = await h.create(cookie);
+    expect(
+      (
+        await h.request(`${base}/${id}`, {
+          cookie,
+          method: "PATCH",
+          body: { paths: ["/.trash/old.txt"] },
+        })
+      ).status,
+    ).toBe(403);
+    expect((await h.shares.get(id))?.paths).toEqual(["/a.docx"]);
+  });
+
+  it("keeps folders shared with the owner out of every link, as their owner's to share", async () => {
+    const h = sharesHarness({
+      grants: { alice: [{ owner: "bob", path: "/team", writable: true }] },
+    });
+    h.write("/team/plan.txt", "bob's plan", "bob");
+    const cookie = await h.login();
+    const home = await h.create(cookie, { paths: ["/"] });
+    const row = await h.shares.get(home.id);
+    if (row === null) throw new Error("missing row");
+    // The grant is real: alice's own files show bob's folder.
+    const own = await h.storageFactory(row.identityId);
+    expect((await own.list("/")).map((entry) => entry.name)).toContain("Shared with me");
+    expect((await own.list("/Shared with me/team")).map((entry) => entry.name)).toEqual([
+      "plan.txt",
+    ]);
+    const through = (path: string) => encodeURIComponent(path);
+    expect((await names(await h.request(`${pub(home.id)}/entries`))).sort()).toEqual([
+      "a.docx",
+      "report.txt",
+    ]);
+    expect(
+      (await h.request(`${pub(home.id)}/entries?path=${through("/Shared with me")}`)).status,
+    ).toBe(404);
+    expect(
+      (await h.request(`${pub(home.id)}/download?path=${through("/Shared with me/team/plan.txt")}`))
+        .status,
+    ).toBe(404);
+    expect((await h.request(`${pub(home.id)}/archive`)).status).toBe(403);
+    for (const paths of [
+      ["/Shared with me"],
+      ["/Shared with me/team"],
+      ["/Shared with me/team/plan.txt"],
+      ["/a.docx", "/Shared with me/team"],
+    ]) {
+      const refused = await h.request(base, {
+        cookie,
+        method: "POST",
+        body: { name: "Theirs", scope: "read", paths },
+      });
+      expect(refused.status, paths.join()).toBe(403);
+    }
+    const file = await h.create(cookie);
+    expect(
+      (
+        await h.request(`${base}/${file.id}`, {
+          cookie,
+          method: "PATCH",
+          body: { paths: ["/Shared with me/team"], scope: "write" },
+        })
+      ).status,
+    ).toBe(403);
+    // Bob shares his own folder as usual.
+    const bob = await h.login("bob");
+    const team = await h.create(bob, { paths: ["/team"] });
+    expect(await (await h.request(`${pub(team.id)}/download?path=/plan.txt`)).text()).toBe(
+      "bob's plan",
+    );
+  });
+
+  it("refuses download limits past the counter column on create and update", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const overLimit = 2_147_483_648;
+    const created = await h.create(cookie, { maxDownloads: 2_147_483_647 });
+    const path = `${base}/${created.id}`;
+    expect(
+      (
+        await h.request(base, {
+          cookie,
+          method: "POST",
+          body: { name: "Too many", paths: ["/a.docx"], scope: "read", maxDownloads: overLimit },
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await h.request(path, { cookie, method: "PATCH", body: { maxDownloads: overLimit } }))
+        .status,
+    ).toBe(400);
+    expect(ManagedShare.parse(await (await h.request(path, { cookie })).json()).maxDownloads).toBe(
+      2_147_483_647,
+    );
+  });
+
+  it("answers for storage that no longer shares, or cannot be reached, without a share", async () => {
+    let strategy: ProviderModule["shares"] = "owned";
+    const h = sharesHarness({
+      local: (module) => ({
+        ...module,
+        get shares() {
+          return strategy;
+        },
+      }),
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+    strategy = "none";
+    for (const response of [
+      await h.request(base, { cookie }),
+      await h.request(`${base}/${id}`, { cookie }),
+      await h.request(pub(id)),
+      await h.request(`${pub(id)}/download`),
+    ]) {
+      expect(response.status).toBe(400);
+      expect(await error(response)).toMatchObject({
+        kind: "unsupported",
+        details: { capability: "shares" },
+      });
+    }
+    strategy = "owned";
+    vi.spyOn(h.providers, "forIdentity").mockRejectedValue(new Error("private detail"));
+    const unreachable = await h.request(pub(id));
+    expect(unreachable.status).toBe(502);
+    expect(await unreachable.text()).not.toContain("private detail");
+  });
+
+  it("records share create, update and revoke per account without copying any secret", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const bob = await h.login("bob");
+    const share = await h.create(cookie, { password: "hunter2", expiresAt: null });
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      action: "share.create",
+      requested: { path: "/a.docx", permissions: ["read"] },
+    });
+    expect(h.activity.outcomes.at(-1)).toMatchObject({
+      outcome: "success",
+      after: { shareId: share.id },
+    });
+    expect(JSON.stringify(h.activity.operations)).not.toContain("hunter2");
+    expect(JSON.stringify(h.activity.outcomes)).not.toContain("hunter2");
+    // The same path shared by a second account is that account's own event.
+    await h.create(bob);
+    expect(h.activity.operations.at(-1)?.accountId).not.toBe(
+      h.activity.operations.at(-2)?.accountId,
+    );
+    const path = `${base}/${share.id}`;
+    expect(
+      (await h.request(path, { method: "PATCH", cookie, body: { name: "Renamed" } })).status,
+    ).toBe(200);
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      action: "share.update",
+      requested: { shareId: share.id },
+      before: { permissions: ["read"] },
+    });
+    expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
+    expect(h.activity.operations.at(-1)?.action).toBe("share.revoke");
+    expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
+  });
+
+  it("records a refused share as a failure and says nothing private", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    vi.spyOn(h.shares, "insert").mockRejectedValueOnce(new Error("secret DB failure"));
+    const response = await h.request(base, {
+      method: "POST",
+      cookie,
+      body: { name: "Doc", paths: ["/a.docx"], scope: "read" },
+    });
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain("secret");
+    expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "unknown" });
+    expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toEqual(
+      [],
+    );
+  });
 });
-it("does not let unknown share IDs exhaust limiter capacity for a real share", async () => {
-  const h = sharesHarness({ limiterCapacity: 2 });
-  const cookie = await h.login();
-  const share = await h.create(cookie);
 
-  for (const unknownId of [
-    "00000000-0000-4000-8000-000000000002",
-    "00000000-0000-4000-8000-000000000003",
-  ]) {
-    expect((await h.request(publicBase(unknownId))).status).toBe(404);
-  }
-  expect(
-    (
-      await h.request("/api/v1/public/shares/00000000-0000-4000-8000-000000000004/credentials", {
-        method: "DELETE",
-      })
-    ).status,
-  ).toBe(200);
+describe("public shares", () => {
+  it("does not let unknown share IDs exhaust limiter capacity for a real share", async () => {
+    const h = sharesHarness({ limiterCapacity: 2 });
+    const cookie = await h.login();
+    const share = await h.create(cookie);
+    for (const unknownId of [
+      "00000000-0000-4000-8000-000000000002",
+      "00000000-0000-4000-8000-000000000003",
+    ])
+      expect((await h.request(pub(unknownId))).status).toBe(404);
+    expect(
+      (
+        await h.request("/api/v1/public/shares/00000000-0000-4000-8000-000000000004/credentials", {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(200);
+    expect((await h.request(pub(share.id))).status).toBe(200);
+  });
 
-  expect((await h.request(publicBase(share.id))).status).toBe(200);
-});
-it("checks cached limiter state before denied repository traffic and revalidates access", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const credentialShare = await h.create(cookie);
-  const revokedShare = await h.create(cookie);
-  const revokedRow = await h.shares.get(revokedShare.id);
-  if (revokedRow === null) throw new Error("missing share row");
-  const get = vi.spyOn(h.shares, "get");
+  it("checks cached limiter state before denied repository traffic and revalidates access", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const credentialShare = await h.create(cookie);
+    const revokedShare = await h.create(cookie);
+    const revokedRow = await h.shares.get(revokedShare.id);
+    if (revokedRow === null) throw new Error("missing share row");
+    const get = vi.spyOn(h.shares, "get");
 
-  const unknown = publicBase("00000000-0000-4000-8000-000000000005");
-  for (let request = 0; request < 120; request++) {
-    expect((await h.request(unknown)).status).toBe(404);
-  }
-  const afterUnknownLimit = get.mock.calls.length;
-  expect(afterUnknownLimit).toBe(121);
-  expect((await h.request(unknown)).status).toBe(429);
-  expect(get).toHaveBeenCalledTimes(afterUnknownLimit);
+    const unknown = pub("00000000-0000-4000-8000-000000000005");
+    for (let request = 0; request < 120; request++)
+      expect((await h.request(unknown)).status).toBe(404);
+    const afterUnknownLimit = get.mock.calls.length;
+    expect(afterUnknownLimit).toBe(121);
+    expect((await h.request(unknown)).status).toBe(429);
+    expect(get).toHaveBeenCalledTimes(afterUnknownLimit);
 
-  const credentials = `${publicBase(credentialShare.id)}/credentials`;
-  const beforeCredentials = get.mock.calls.length;
-  for (let request = 0; request < 10; request++) {
+    const credentials = `${pub(credentialShare.id)}/credentials`;
+    const beforeCredentials = get.mock.calls.length;
+    for (let request = 0; request < 10; request++)
+      expect(
+        (await h.request(credentials, { method: "POST", body: { password: "guess" } })).status,
+      ).toBe(200);
+    expect(get.mock.calls.length - beforeCredentials).toBe(11);
+    const afterCredentialLimit = get.mock.calls.length;
     expect(
       (await h.request(credentials, { method: "POST", body: { password: "guess" } })).status,
-    ).toBe(200);
-  }
-  expect(get.mock.calls.length - beforeCredentials).toBe(11);
-  const afterCredentialLimit = get.mock.calls.length;
-  expect(
-    (await h.request(credentials, { method: "POST", body: { password: "guess" } })).status,
-  ).toBe(429);
-  expect(get).toHaveBeenCalledTimes(afterCredentialLimit);
+    ).toBe(429);
+    expect(get).toHaveBeenCalledTimes(afterCredentialLimit);
 
-  const revoked = publicBase(revokedShare.id);
-  const beforeRevocation = get.mock.calls.length;
-  expect((await h.request(revoked)).status).toBe(200);
-  expect(get.mock.calls.length - beforeRevocation).toBe(2);
-  await h.shares.removeOwned(revokedRow.identityId, revokedShare.id);
-  expect((await h.request(revoked)).status).toBe(404);
-  expect(get.mock.calls.length - beforeRevocation).toBe(3);
-});
-it("public password cookie is stored unverified, encrypted, scoped; metadata is withheld until it verifies; actual bytes enforce password and expiry", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const { id } = await h.create(cookie, {
-    password: "secret",
-    maxDownloads: 2,
-    description: "Quarterly numbers",
-    expiresAt: new Date(h.clock().getTime() + 86_400_000).toISOString(),
+    const revoked = pub(revokedShare.id);
+    const beforeRevocation = get.mock.calls.length;
+    expect((await h.request(revoked)).status).toBe(200);
+    expect(get.mock.calls.length - beforeRevocation).toBe(2);
+    await h.shares.removeOwned(revokedRow.identityId, revokedShare.id);
+    expect((await h.request(revoked)).status).toBe(404);
+    expect(get.mock.calls.length - beforeRevocation).toBe(3);
   });
-  const path = publicBase(id);
-  const metadata = await h.request(path);
-  expect(metadata.status).toBe(200);
-  // Holding the UUID alone reveals nothing beyond "protected, viewable, not expired".
-  const withheld = {
-    name: "",
-    description: "",
-    layout: "directory",
-    presentation: "auto",
-    fileName: null,
-    hasPassword: true,
-    credentialPresent: false,
-    expiresAt: null,
-    maxDownloads: 0,
-    usedDownloads: 0,
-    unavailableReason: null,
-  };
-  expect(PublicShare.parse(await metadata.json())).toMatchObject(withheld);
-  expect((await h.request(`${path}/download`)).status).toBe(401);
-  let response = await h.request(`${path}/credentials`, {
-    method: "POST",
-    body: { password: "wrong" },
+
+  it("checks the password once, seals only a marker, and withholds details until it verifies", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, {
+      password: "secret",
+      maxDownloads: 2,
+      description: "Quarterly numbers",
+      expiresAt: new Date(h.clock().getTime() + 86_400_000).toISOString(),
+    });
+    const path = pub(id);
+    // Holding the UUID alone reveals nothing beyond "protected, viewable, not expired".
+    const withheld = {
+      name: "",
+      description: "",
+      layout: "directory",
+      presentation: "auto",
+      fileName: null,
+      hasPassword: true,
+      credentialPresent: false,
+      expiresAt: null,
+      maxDownloads: 0,
+      usedDownloads: 0,
+      unavailableReason: null,
+    };
+    expect(await metadata(h, id)).toMatchObject(withheld);
+    const anonymous = await h.request(`${path}/download`);
+    expect(anonymous.status).toBe(401);
+    expect((await error(anonymous)).details).toEqual({ reason: "password" });
+    for (const password of ["nope", "\0".repeat(1024)]) {
+      const wrong = await h.request(`${path}/credentials`, { method: "POST", body: { password } });
+      expect(wrong.status).toBe(401);
+      expect(wrong.headers.get("set-cookie")).toBeNull();
+    }
+    const right = await h.request(`${path}/credentials`, {
+      method: "POST",
+      body: { password: "secret" },
+    });
+    expect(right.status).toBe(200);
+    expect(right.headers.get("set-cookie")).toContain(`Path=${path}`);
+    expect(right.headers.get("set-cookie")).toContain("HttpOnly");
+    const envelope = cookieFrom(right);
+    expect(envelope).not.toContain("secret");
+    expect(await metadata(h, id, envelope)).toMatchObject({
+      name: "Document",
+      description: "Quarterly numbers",
+      layout: "single-file",
+      fileName: "a.docx",
+      hasPassword: true,
+      credentialPresent: true,
+      maxDownloads: 2,
+    });
+    const ranged = await h.request(`${path}/download`, {
+      cookie: envelope,
+      headers: { range: "bytes=1-3" },
+    });
+    expect(ranged.status).toBe(206);
+    expect(await ranged.text()).toBe("lic");
+    expect(ranged.headers.get("content-range")).toBe("bytes 1-3/10");
+    expect(ranged.headers.get("content-disposition")).toContain("attachment");
+    expect(ranged.headers.get("content-disposition")).toContain("a.docx");
+    expect(ranged.headers.get("cache-control")).toBe("no-store");
+    expect(ranged.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(ranged.headers.get("x-content-type-options")).toBe("nosniff");
+
+    // A new password retires every cookie issued for the old one.
+    expect(
+      (await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { password: "other" } }))
+        .status,
+    ).toBe(200);
+    expect((await h.request(`${path}/download`, { cookie: envelope })).status).toBe(401);
+    expect((await metadata(h, id, envelope)).credentialPresent).toBe(false);
+    const renewed = cookieFrom(
+      await h.request(`${path}/credentials`, { method: "POST", body: { password: "other" } }),
+    );
+    expect(await (await h.request(`${path}/download`, { cookie: renewed })).text()).toBe(
+      "alice data",
+    );
+    expect((await metadata(h, id)).unavailableReason).toBe("limit");
+    expect((await h.request(`${path}/archive`, { cookie: renewed })).status).toBe(403);
+
+    // Removing the password opens the link to everyone.
+    expect(
+      (await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { password: "" } }))
+        .status,
+    ).toBe(200);
+    expect(await metadata(h, id)).toMatchObject({ hasPassword: false, name: "Document" });
+    const cleared = await h.request(`${path}/credentials`, { method: "DELETE" });
+    expect(cleared.headers.get("set-cookie")).toContain("Max-Age=0");
   });
-  expect(response.status).toBe(200);
-  let envelope = cookieFrom(response);
-  expect(response.headers.get("set-cookie")).toContain(`Path=${path}`);
-  expect(response.headers.get("set-cookie")).toContain("HttpOnly");
-  expect(envelope).not.toContain("wrong");
-  // A wrong password cookie is no better than none.
-  expect(
-    PublicShare.parse(await (await h.request(path, { cookie: envelope })).json()),
-  ).toMatchObject(withheld);
-  expect((await h.request(`${path}/download`, { cookie: envelope })).status).toBe(401);
-  response = await h.request(`${path}/credentials`, {
-    method: "POST",
-    body: { password: "secret" },
+
+  it("keeps a link carried over from SFTPGo locked to every password until its owner sets one", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    const row = await h.shares.get(id);
+    if (row === null) throw new Error("missing row");
+    // What the migration wrote for a protected SFTPGo link, whose password SFTPGo kept.
+    await h.shares.updateOwned(row.identityId, id, {
+      ...row,
+      passwordHash: "locked$sftpgo",
+      at: h.clock(),
+    });
+    for (const password of ["secret", "", "locked$sftpgo", "sftpgo"])
+      expect(
+        (await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password } })).status,
+        password,
+      ).toBe(401);
+    expect(await metadata(h, id)).toMatchObject({ hasPassword: true, name: "" });
+    expect((await h.request(`${pub(id)}/download`)).status).toBe(401);
+    expect(
+      ManagedShare.parse(await (await h.request(`${base}/${id}`, { cookie })).json()).hasPassword,
+    ).toBe(true);
+    // A rename keeps the lock; a new password lifts it.
+    await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { name: "Renamed" } });
+    expect(await h.shares.passwordHash(id)).toBe("locked$sftpgo");
+    await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { password: "fresh" } });
+    const envelope = cookieFrom(
+      await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password: "fresh" } }),
+    );
+    expect(await (await h.request(`${pub(id)}/download`, { cookie: envelope })).text()).toBe(
+      "alice data",
+    );
   });
-  envelope = cookieFrom(response);
-  expect(
-    PublicShare.parse(await (await h.request(path, { cookie: envelope })).json()),
-  ).toMatchObject({
-    name: "Document",
-    description: "Quarterly numbers",
-    layout: "single-file",
-    fileName: "a.docx",
-    hasPassword: true,
-    credentialPresent: true,
-    maxDownloads: 2,
+
+  it("serves a single file with HEAD, ranges, a 416, and the download limit", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { maxDownloads: 3 });
+    const path = pub(id);
+    expect(await metadata(h, id)).toMatchObject({
+      layout: "single-file",
+      fileName: "a.docx",
+      usedDownloads: 0,
+      maxDownloads: 3,
+      unavailableReason: null,
+    });
+    const head = await h.request(`${path}/download`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe("10");
+    expect(head.headers.get("accept-ranges")).toBe("bytes");
+    expect(head.headers.get("content-disposition")).toContain("a.docx");
+    expect(await head.text()).toBe("");
+    expect((await metadata(h, id)).usedDownloads).toBe(0);
+
+    const full = await h.request(`${path}/download`);
+    expect(full.status).toBe(200);
+    expect(await full.text()).toBe("alice data");
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+
+    const tail = await h.request(`${path}/download`, { headers: { range: "bytes=-4" } });
+    expect(tail.status).toBe(206);
+    expect(tail.headers.get("content-range")).toBe("bytes 6-9/10");
+    expect(await tail.text()).toBe("data");
+
+    // A range past the end is refused before anything is spent.
+    const beyond = await h.request(`${path}/download`, { headers: { range: "bytes=20-" } });
+    expect(beyond.status).toBe(416);
+    expect(beyond.headers.get("content-range")).toBe("bytes */10");
+    expect(await beyond.text()).toBe("");
+    expect((await metadata(h, id)).usedDownloads).toBe(2);
+
+    // A valid multi-range request is answered with the whole file, and counted once.
+    const multi = await h.request(`${path}/download`, {
+      headers: { range: "bytes=0-1,6-7", "if-range": "stale-validator" },
+    });
+    expect(multi.status).toBe(200);
+    expect(multi.headers.get("content-range")).toBeNull();
+    expect(await multi.text()).toBe("alice data");
+    expect((await metadata(h, id)).usedDownloads).toBe(3);
+
+    const refused = await h.request(`${path}/download`);
+    expect(refused.status).toBe(403);
+    expect((await error(refused)).details).toEqual({ reason: "limit" });
+    expect((await metadata(h, id)).unavailableReason).toBe("limit");
   });
-  response = await h.request(`${path}/download`, {
-    cookie: envelope,
-    headers: { range: "bytes=1-3" },
+
+  it("lists a directory share without the hidden folders and serves its children", async () => {
+    const h = sharesHarness({ trashPath: "/.trash" });
+    h.write("/folder/a.txt", "content");
+    h.write("/.trash/old.txt", "gone");
+    h.write("/.fdrive-backups/b", "backup");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/"] });
+    const path = pub(id);
+    expect((await metadata(h, id)).layout).toBe("directory");
+    expect((await names(await h.request(`${path}/entries`))).sort()).toEqual([
+      "a.docx",
+      "folder",
+      "report.txt",
+    ]);
+    expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
+    expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
+    for (const hidden of ["/.trash/old.txt", "/.fdrive-backups/b", "/nope"])
+      expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
+    expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
+    // A file share has no listing, and an archive share no single file.
+    const file = await h.create(cookie);
+    expect((await h.request(`${pub(file.id)}/entries`)).status).toBe(400);
+    const many = await h.create(cookie, { paths: ["/a.docx", "/report.txt"] });
+    expect((await metadata(h, many.id)).layout).toBe("archive");
+    for (const suffix of ["entries", "download"])
+      expect((await h.request(`${pub(many.id)}/${suffix}`)).status, suffix).toBe(400);
   });
-  expect(response.status).toBe(206);
-  expect(await response.text()).toBe("lic");
-  expect(response.headers.get("content-range")).toContain("bytes 1-3/");
-  expect(response.headers.get("content-disposition")).toContain("attachment");
-  expect(response.headers.get("content-disposition")).toContain("a.docx");
-  expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
-  response = await h.request(`${path}/download`, { cookie: envelope });
-  expect(response.status).toBe(200);
-  await response.arrayBuffer();
-  expect(PublicShare.parse(await (await h.request(path)).json()).unavailableReason).toBe("limit");
-  expect((await h.request(`${path}/archive`, { cookie: envelope })).status).toBe(403);
-  response = await h.request(`${path}/credentials`, { method: "DELETE" });
-  expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
-  const exp = await h.create(cookie, {
-    expiresAt: new Date(h.clock().getTime() + 1000).toISOString(),
+
+  it("accepts uploads into an upload share, checked eagerly, and nothing else", async () => {
+    const h = sharesHarness();
+    h.mkdir("/inbox");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, {
+      name: "Send me the contract",
+      paths: ["/inbox"],
+      scope: "write",
+      password: "secret",
+    });
+    const path = pub(id);
+    expect(await metadata(h, id)).toMatchObject({ scope: "write", hasPassword: true, name: "" });
+    expect(
+      (await h.request(`${path}/credentials`, { method: "POST", body: { password: "nope" } }))
+        .status,
+    ).toBe(401);
+    const envelope = cookieFrom(
+      await h.request(`${path}/credentials`, { method: "POST", body: { password: "secret" } }),
+    );
+    // The password was checked when the cookie was issued, so the share reveals itself.
+    expect(await metadata(h, id, envelope)).toMatchObject({
+      name: "Send me the contract",
+      layout: "directory",
+      credentialPresent: true,
+    });
+    expect(
+      (
+        await h.request(`${path}/upload?path=/new.txt`, {
+          method: "PUT",
+          raw: "upload",
+          cookie: envelope,
+        })
+      ).status,
+    ).toBe(200);
+    expect(h.read("/inbox/new.txt")).toBe("upload");
+    expect((await metadata(h, id, envelope)).usedDownloads).toBe(1);
+    expect(
+      (await h.request(`${path}/upload?path=/other.txt`, { method: "PUT", raw: "x" })).status,
+    ).toBe(401);
+    for (const suffix of ["entries", "download", "archive"])
+      expect((await h.request(`${path}/${suffix}`, { cookie: envelope })).status, suffix).toBe(403);
+    const read = await h.create(cookie);
+    expect(
+      (await h.request(`${pub(read.id)}/upload?path=/x.txt`, { method: "PUT", raw: "x" })).status,
+    ).toBe(403);
+    // Several folders have no one place an upload would go.
+    h.mkdir("/outbox");
+    const several = await h.create(cookie, { paths: ["/inbox", "/outbox"], scope: "write" });
+    expect(
+      (await h.request(`${pub(several.id)}/upload?path=/x.txt`, { method: "PUT", raw: "x" }))
+        .status,
+    ).toBe(400);
+    // An unprotected upload share shows everything to anyone with the link.
+    const open = await h.create(cookie, { name: "Open inbox", paths: ["/inbox"], scope: "write" });
+    expect(await metadata(h, open.id)).toMatchObject({
+      name: "Open inbox",
+      credentialPresent: false,
+    });
   });
-  h.now.value = new Date(h.clock().getTime() + 2000);
-  expect(
-    PublicShare.parse(await (await h.request(publicBase(exp.id))).json()).unavailableReason,
-  ).toBe("expired");
-  expect((await h.request(`${publicBase(exp.id)}/download`)).status).toBe(403);
-});
-it("directory listing, child downloads, zip, write-only uploads and multipath isolation", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-  const user = h.client.user(auth.accessToken);
-  await user.mkdir("/folder");
-  await user.upload("/folder/a.txt", new TextEncoder().encode("content"));
-  const directory = await h.create(cookie, { paths: ["/folder"] });
-  const dir = publicBase(directory.id);
-  expect(PublicShare.parse(await (await h.request(dir)).json()).layout).toBe("directory");
-  expect(
-    ShareEntriesResponse.parse(await (await h.request(`${dir}/entries`)).json()).items[0]?.name,
-  ).toBe("a.txt");
-  expect(await (await h.request(`${dir}/download?path=/a.txt`)).text()).toBe("content");
-  const zip = await h.request(`${dir}/archive`);
-  expect(zip.headers.get("content-type")).toBe("application/zip");
-  expect((await zip.arrayBuffer()).byteLength).toBeGreaterThan(0);
-  const multi = await h.create(cookie, { paths: ["/a.docx", "/report.txt"] });
-  expect(PublicShare.parse(await (await h.request(publicBase(multi.id))).json()).layout).toBe(
-    "archive",
-  );
-  for (const suffix of ["entries", "download"])
-    expect((await h.request(`${publicBase(multi.id)}/${suffix}`)).status).toBe(400);
-  const write = await h.create(cookie, { paths: ["/folder"], scope: "write" });
-  const upload = publicBase(write.id);
-  expect(PublicShare.parse(await (await h.request(upload)).json()).layout).toBe("directory");
-  for (const suffix of ["entries", "download", "archive"])
-    expect((await h.request(`${upload}/${suffix}`)).status).toBe(403);
-  expect(
-    (await h.request(`${upload}/upload?path=/new.txt`, { method: "PUT", raw: "upload" })).status,
-  ).toBe(200);
-  expect(await new Response((await user.download("/folder/new.txt")).body).text()).toBe("upload");
-  expect(
-    (await h.request(`${dir}/upload?path=/bad.txt`, { method: "PUT", raw: "bad" })).status,
-  ).toBe(403);
-});
-it("rejects traversal, malformed ranges, CSRF, credentials and rate abuse without data access", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const { id } = await h.create(cookie);
-  const path = publicBase(id);
-  for (const query of ["/../a", "/a//b", "/a\\b", "/a/."])
-    expect((await h.request(`${path}/download?path=${encodeURIComponent(query)}`)).status).toBe(
+
+  it("expires", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, {
+      expiresAt: new Date(h.clock().getTime() + 1000).toISOString(),
+    });
+    expect((await metadata(h, id)).unavailableReason).toBeNull();
+    h.now.value = new Date(h.clock().getTime() + 2000);
+    expect((await metadata(h, id)).unavailableReason).toBe("expired");
+    const refused = await h.request(`${pub(id)}/download`);
+    expect(refused.status).toBe(403);
+    expect((await error(refused)).details).toEqual({ reason: "expired" });
+  });
+
+  it("rejects traversal, malformed ranges, CSRF, credentials and rate abuse without data access", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+    const path = pub(id);
+    for (const query of ["/../a", "/a//b", "/a\\b", "/a/."])
+      expect((await h.request(`${path}/download?path=${encodeURIComponent(query)}`)).status).toBe(
+        400,
+      );
+    expect((await h.request(`${path}/download?path=/a&path=/b`)).status).toBe(400);
+    for (const range of [
+      "bytes=4-2,6-7",
+      "bytes=-0",
+      "bytes=4-2",
+      "bytes=9007199254740993-",
+      "bytes=0-9007199254740993",
+      "nonsense",
+    ])
+      expect((await h.request(`${path}/download`, { headers: { range } })).status, range).toBe(400);
+    expect((await h.request(`${path}/upload?path=/folder/a`, { method: "PUT" })).status).toBe(400);
+    expect((await h.request("/api/v1/public/shares/bad")).status).toBe(400);
+    expect((await h.request(`${path}/credentials`, { method: "POST", raw: "oops" })).status).toBe(
       400,
     );
-  expect((await h.request(`${path}/download?path=/a&path=/b`)).status).toBe(400);
-  for (const range of [
-    "bytes=4-2,6-7",
-    "bytes=-0",
-    "bytes=4-2",
-    "bytes=9007199254740993-",
-    "bytes=0-9007199254740993",
-    "nonsense",
-  ])
-    expect((await h.request(`${path}/download`, { headers: { range } })).status).toBe(400);
-  expect((await h.request(`${path}/upload?path=/folder/a`, { method: "PUT" })).status).toBe(400);
-  expect((await h.request("/api/v1/public/shares/bad")).status).toBe(400);
-  expect((await h.request(`${path}/credentials`, { method: "POST", raw: "oops" })).status).toBe(
-    400,
-  );
-  expect(
-    (await h.request(`${path}/credentials`, { method: "POST", body: { password: 3 } })).status,
-  ).toBe(400);
-  expect(
-    (
-      await h.request(`${path}/credentials`, {
-        method: "POST",
-        body: { password: "secret" },
-        headers: { "sec-fetch-site": "cross-site" },
-      })
-    ).status,
-  ).toBe(403);
-  expect(
-    (
-      await h.request(`${path}/credentials`, {
-        method: "POST",
-        body: { password: "\0".repeat(1024) },
-      })
-    ).status,
-  ).toBe(400);
-  for (let i = 0; i < 10; i++)
-    await h.request(`${path}/credentials`, { method: "POST", body: { password: "x" } });
-  expect(
-    (await h.request(`${path}/credentials`, { method: "POST", body: { password: "x" } })).status,
-  ).toBe(429);
-});
-
-it("ignores a valid multi-range request while preserving public download accounting", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const { id } = await h.create(cookie, { maxDownloads: 2 });
-  const path = publicBase(id);
-
-  const response = await h.request(`${path}/download`, {
-    headers: { range: "bytes=0-1,6-7", "if-range": "stale-validator" },
+    expect(
+      (await h.request(`${path}/credentials`, { method: "POST", body: { password: 3 } })).status,
+    ).toBe(400);
+    expect(
+      (
+        await h.request(`${path}/credentials`, {
+          method: "POST",
+          body: { password: "secret" },
+          headers: { "sec-fetch-site": "cross-site" },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await h.request(`${path}/credentials`, {
+          method: "POST",
+          body: { password: "x".repeat(1025) },
+        })
+      ).status,
+    ).toBe(400);
+    for (let i = 0; i < 10; i++)
+      await h.request(`${path}/credentials`, { method: "POST", body: { password: "x" } });
+    expect(
+      (await h.request(`${path}/credentials`, { method: "POST", body: { password: "x" } })).status,
+    ).toBe(429);
   });
 
-  expect(response.status).toBe(200);
-  expect(response.headers.get("content-range")).toBeNull();
-  expect(await response.text()).toBe("alice data");
-  expect(PublicShare.parse(await (await h.request(path)).json()).usedDownloads).toBe(1);
-});
-it("answers HEAD without a body, serves a suffix range, and 416s a range past the end", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const { id } = await h.create(cookie);
-  const path = publicBase(id);
-
-  const head = await h.request(`${path}/download`, { method: "HEAD" });
-  expect(head.status).toBe(200);
-  expect(head.headers.get("accept-ranges")).toBe("bytes");
-  expect(head.headers.get("content-length")).toBe("10");
-  expect(head.headers.get("content-disposition")).toContain("a.docx");
-  expect(await head.text()).toBe("");
-
-  const tail = await h.request(`${path}/download`, { headers: { range: "bytes=-4" } });
-  expect(tail.status).toBe(206);
-  expect(tail.headers.get("content-range")).toBe("bytes 6-9/10");
-  expect(await tail.text()).toBe("data");
-
-  const beyond = await h.request(`${path}/download`, { headers: { range: "bytes=10-" } });
-  expect(beyond.status).toBe(416);
-  // The share's storage knows the size but does not say so in a 416.
-  expect(beyond.headers.get("content-range")).toBeNull();
-  expect(await beyond.text()).toBe("");
-});
-it("compensates persistence failure, sanitizes compensation failure and reconciles upstream deletions", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-  const user = h.client.user(auth.accessToken);
-  const spy = vi.spyOn(h.shares, "upsert").mockRejectedValueOnce(new Error("secret DB failure"));
-  const response = await h.request(base, {
-    cookie,
-    method: "POST",
-    body: { name: "Bad", paths: ["/a.docx"], scope: "read" },
+  it("bounds a chunked credential body", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(9000));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await h.request(`${pub(id)}/credentials`, { method: "POST", raw: body });
+    expect(res.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect((await h.request(`${pub(id)}/credentials`, { method: "POST" })).status).toBe(400);
   });
-  expect(response.status).toBe(502);
-  expect(await response.text()).not.toContain("secret");
-  expect(await user.shares.list()).toHaveLength(0);
-  spy.mockRestore();
-  const share = await h.create(cookie);
-  const row = await h.shares.get(share.id);
-  if (!row?.sftpgoShareId) throw new Error("row missing");
-  await user.shares.remove(row.sftpgoShareId);
-  expect(SharesResponse.parse(await (await h.request(base, { cookie })).json()).items).toEqual([]);
-  expect(await h.shares.get(share.id)).toBeNull();
-  const gone = await h.create(cookie);
-  const second = await h.shares.get(gone.id);
-  if (!second?.sftpgoShareId) throw new Error("row missing");
-  await user.shares.remove(second.sftpgoShareId);
-  expect((await h.request(`${base}/${gone.id}`, { cookie, method: "DELETE" })).status).toBe(200);
-  vi.spyOn(h.repos.providers, "get").mockResolvedValue(null);
-  expect((await h.request(base, { cookie })).status).toBe(502);
+
+  it("shows a storage failure as unavailable, never as a password error", async () => {
+    const h = sharesHarness({
+      local: patchStorage((storage) => ({
+        ...storage,
+        download: async () => {
+          throw new StorageError("forbidden", "AccessDenied: the owner's key was refused");
+        },
+      })),
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    const envelope = cookieFrom(
+      await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password: "secret" } }),
+    );
+    const failed = await h.request(`${pub(id)}/download`, { cookie: envelope });
+    expect(failed.status).toBe(502);
+    const body = await failed.text();
+    expect(ApiError.parse(JSON.parse(body)).error.kind).toBe("upstream_unavailable");
+    expect(body).not.toContain("AccessDenied");
+    expect((await metadata(h, id, envelope)).usedDownloads).toBe(0);
+  });
+
+  it("is unavailable once its owner may no longer sign in", async () => {
+    let admitted = true;
+    const h = sharesHarness({
+      local: (module) => ({
+        ...module,
+        admit: async () => {
+          if (!admitted) throw new StorageError("forbidden", "this user may not sign in");
+        },
+      }),
+    });
+    const cookie = await h.login();
+    const { id } = await h.create(cookie);
+    admitted = false;
+    for (const suffix of ["", "/download"]) {
+      const response = await h.request(`${pub(id)}${suffix}`);
+      expect(response.status, suffix).toBe(502);
+      expect((await error(response)).kind).toBe("upstream_unavailable");
+    }
+  });
 });
 
 describe("contentLengthExceeds", () => {
-  it("is false when the header is absent", () => {
+  it("is false when the header is absent, at or under the limit, or not a number", () => {
     expect(contentLengthExceeds(undefined, 100)).toBe(false);
-  });
-
-  it("is false when the header is at or under the limit", () => {
     expect(contentLengthExceeds("100", 100)).toBe(false);
     expect(contentLengthExceeds("50", 100)).toBe(false);
+    expect(contentLengthExceeds("not-a-number", 100)).toBe(false);
   });
-
   it("is true when the header exceeds the limit", () => {
     expect(contentLengthExceeds("101", 100)).toBe(true);
-  });
-
-  it("is false for a non-numeric header, deferring to the streaming cap", () => {
-    expect(contentLengthExceeds("not-a-number", 100)).toBe(false);
   });
 });
 
@@ -563,10 +776,7 @@ describe("capByteStream", () => {
       },
     });
   }
-
-  async function drain(
-    stream: ReadableStream<Uint8Array>,
-  ): Promise<{ chunks: Uint8Array[]; error: unknown }> {
+  async function drain(stream: ReadableStream<Uint8Array>) {
     const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
     try {
@@ -588,19 +798,13 @@ describe("capByteStream", () => {
     expect(Buffer.concat(chunks).toString("utf-8")).toBe("abcd");
     expect(cap.exceeded()).toBe(false);
   });
-
   it("errors the wrapped stream and reports exceeded once the total passes the cap", async () => {
     const cap = capByteStream(streamFrom(["abcde", "fghij", "k"]), 8);
+    expect(cap.exceeded()).toBe(false);
     const { error } = await drain(cap.stream);
     expect(error).toBeInstanceOf(Error);
     expect(cap.exceeded()).toBe(true);
   });
-
-  it("reports not exceeded while nothing has been read yet", () => {
-    const cap = capByteStream(streamFrom(["ab"]), 1);
-    expect(cap.exceeded()).toBe(false);
-  });
-
   it("cancels the source reader when the wrapped stream is cancelled from outside", async () => {
     const cancel = vi.fn();
     const source = new ReadableStream<Uint8Array>({
@@ -614,96 +818,6 @@ describe("capByteStream", () => {
     expect(cancel).toHaveBeenCalledWith("consumer gave up");
   });
 });
-
-/** Builds a shares app whose `fdriveShareUploadMaxBytes` is `maxBytes`, to exercise the upload ceiling in `registerSharesRoutes`. */
-function sharesHarnessWithUploadLimit(maxBytes: number) {
-  const h = accountsHarness();
-  const shares = createMemoryShareRepo();
-  const deps = {
-    ...h.deps,
-    tokenSource: h.tokenSource,
-    providers: h.providers,
-    shares,
-    logger: h.logger,
-    clientFor: (_baseUrl: string) => h.client,
-    storageFor: h.storageFactory,
-  };
-  const service = createSharesService(deps);
-  const codec = createShareCredentialCodec(h.master, h.clock);
-  const limiter = createShareLimiter(h.clock);
-  const config = { ...h.config, fdriveShareUploadMaxBytes: maxBytes };
-  const app = createApp({
-    config,
-    logger: h.logger,
-    clock: h.clock,
-    version: "test",
-    startedAt: h.clock(),
-    principalResolver: h.auth.principalResolver,
-    registerRoutes: (groups) => {
-      h.auth.registerRoutes(groups);
-      registerSharesRoutes(groups, {
-        service,
-        codec,
-        limiter,
-        config,
-        indexQueries: {
-          rootIdsByName: async () => ({}),
-          fileByPath: async () => null,
-          thumbnail: async () => null,
-        },
-        resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) },
-        identities: h.repos.identities,
-        thumbsDir: undefined,
-      });
-    },
-  });
-  async function request(
-    path: string,
-    options: {
-      method?: string;
-      cookie?: string;
-      body?: unknown;
-      raw?: string | ReadableStream<Uint8Array>;
-      headers?: Record<string, string>;
-    } = {},
-  ) {
-    const init: RequestInit & { duplex?: "half" } = {
-      method: options.method ?? "GET",
-      headers: {
-        "x-requested-with": "fdrive",
-        ...(options.cookie ? { cookie: options.cookie } : {}),
-        ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-        ...options.headers,
-      },
-      ...(options.body === undefined
-        ? options.raw === undefined
-          ? {}
-          : { body: options.raw }
-        : { body: JSON.stringify(options.body) }),
-    };
-    if (options.raw instanceof ReadableStream) {
-      init.duplex = "half";
-    }
-    return app.request(path, init);
-  }
-  async function login(username = "alice") {
-    const res = await request("/api/v1/auth/login", {
-      method: "POST",
-      body: { credential: { username, password: `${username}-pass` } },
-    });
-    return cookieFrom(res);
-  }
-  async function create(cookie: string, patch: Record<string, unknown> = {}) {
-    const response = await request("/api/v1/shares", {
-      method: "POST",
-      cookie,
-      body: { name: "Document", paths: ["/a.docx"], scope: "read", ...patch },
-    });
-    if (response.status !== 201) throw new Error(await response.text());
-    return response.json() as Promise<{ id: string; hasPassword: boolean }>;
-  }
-  return { ...h, shares, deps, service, codec, limiter, app, request, login, create };
-}
 
 function streamOfZeros(chunkCount: number, chunkSize: number): ReadableStream<Uint8Array> {
   let sent = 0;
@@ -720,650 +834,268 @@ function streamOfZeros(chunkCount: number, chunkSize: number): ReadableStream<Ui
 }
 
 describe("PUT /public/shares/:id/upload byte ceiling", () => {
-  it("rejects an upload whose declared Content-Length exceeds the configured ceiling", async () => {
-    const h = sharesHarnessWithUploadLimit(10);
+  async function inbox(maxBytes: number) {
+    const h = sharesHarness({ config: { fdriveShareUploadMaxBytes: maxBytes } });
+    h.mkdir("/folder");
     const cookie = await h.login();
-    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-    await h.client.user(auth.accessToken).mkdir("/folder");
     const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+    return { h, url: (name: string) => `${pub(id)}/upload?path=/${name}` };
+  }
 
-    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
+  it("rejects an upload whose declared Content-Length exceeds the configured ceiling", async () => {
+    const { h, url } = await inbox(10);
+    const response = await h.request(url("new.txt"), {
       method: "PUT",
       raw: "short body",
       headers: { "content-length": "1000" },
     });
-
     expect(response.status).toBe(413);
-    const body = await response.json();
-    expect(body).toMatchObject({ error: { kind: "payload_too_large" } });
+    expect(await response.json()).toMatchObject({ error: { kind: "payload_too_large" } });
   });
 
-  it("rejects an upload whose actual streamed bytes exceed the ceiling with no Content-Length header", async () => {
-    const h = sharesHarnessWithUploadLimit(10);
-    const cookie = await h.login();
-    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-    await h.client.user(auth.accessToken).mkdir("/folder");
-    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
-
-    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
-      method: "PUT",
-      raw: streamOfZeros(5, 5),
-    });
-
+  it("rejects an upload whose streamed bytes exceed the ceiling with no Content-Length header", async () => {
+    const { h, url } = await inbox(10);
+    const response = await h.request(url("new.txt"), { method: "PUT", raw: streamOfZeros(5, 5) });
     expect(response.status).toBe(413);
   });
 
-  it("allows an upload at or under the configured ceiling", async () => {
-    const h = sharesHarnessWithUploadLimit(1024);
-    const cookie = await h.login();
-    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-    const user = h.client.user(auth.accessToken);
-    await user.mkdir("/folder");
-    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
-
-    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
-      method: "PUT",
-      raw: "small",
-    });
-
-    expect(response.status).toBe(200);
-    expect(await new Response((await user.download("/folder/new.txt")).body).text()).toBe("small");
-  });
-
-  it("uploads an empty body (no request body at all) without wrapping it in a byte cap", async () => {
-    const h = sharesHarnessWithUploadLimit(1024);
-    const cookie = await h.login();
-    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-    const user = h.client.user(auth.accessToken);
-    await user.mkdir("/folder");
-    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
-
-    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/empty.txt`, {
-      method: "PUT",
-    });
-
-    expect(response.status).toBe(200);
-    expect(await new Response((await user.download("/folder/empty.txt")).body).text()).toBe("");
+  it("stores an upload at or under the ceiling, and an empty one", async () => {
+    const { h, url } = await inbox(1024);
+    expect((await h.request(url("new.txt"), { method: "PUT", raw: "small" })).status).toBe(200);
+    expect(h.read("/folder/new.txt")).toBe("small");
+    expect((await h.request(url("empty.txt"), { method: "PUT" })).status).toBe(200);
+    expect(h.read("/folder/empty.txt")).toBe("");
   });
 
   it("does not relabel an unrelated upload failure under the cap as payload_too_large", async () => {
-    const h = sharesHarnessWithUploadLimit(1024);
-    const cookie = await h.login();
-    // No mkdir("/folder"): the shared directory never existed upstream, so the
-    // upload fails for a reason unrelated to the byte cap.
-    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
-
-    const response = await h.request(`/api/v1/public/shares/${id}/upload?path=/new.txt`, {
-      method: "PUT",
-      raw: "small",
-    });
-
+    const { h, url } = await inbox(1024);
+    // The shared folder was replaced by a file after the link was made, so
+    // the upload fails for a reason unrelated to the byte cap.
+    h.remove("/folder");
+    h.write("/folder", "now a file");
+    const response = await h.request(url("new.txt"), { method: "PUT", raw: "small" });
+    expect(response.status).toBeGreaterThanOrEqual(400);
     expect(response.status).not.toBe(413);
   });
 });
 
-describe("GET /public/shares/:id/thumb", () => {
-  it("streams the shared file's own thumbnail with the expected headers", async () => {
-    const fileByPath = vi.fn(async () => makeIndexedFile());
-    const h = sharesHarnessWithThumbs({
+function makeIndexedFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
+  return {
+    id: 1,
+    rootId: 1,
+    path: "alice/a.docx",
+    name: "a.docx",
+    ext: ".docx",
+    size: 100,
+    mtimeNs: 1n,
+    sha256: "abc123",
+    mime: null,
+    textStatus: "done",
+    textChars: 0,
+    error: null,
+    indexedAt: null,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+const ALICE_HOME_SCOPES = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+
+/** A shares app whose public thumb route has an index and a thumbnail cache. */
+function thumbsHarness(
+  overrides: {
+    indexQueries?: Partial<Pick<IndexQueries, "rootIdsByName" | "fileByPath" | "thumbnail">>;
+    resolver?: Pick<ScopeResolver, "verifiedIndexScopes">;
+    /** `null` disables the route (the default is `"/thumbs"`). */
+    thumbsDir?: string | null;
+    fileReader?: Partial<ThumbFileReader>;
+    thumbnailsEnabled?: () => Promise<boolean>;
+  } = {},
+) {
+  const thumbsDir = overrides.thumbsDir === null ? undefined : (overrides.thumbsDir ?? "/thumbs");
+  return sharesHarness({
+    routes: {
       indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath,
+        rootIdsByName: async () => ({ files: 1 }),
+        fileByPath: async () => makeIndexedFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+        ...overrides.indexQueries,
       },
-    });
+      resolver: overrides.resolver ?? {
+        verifiedIndexScopes: async () => ({ available: true, scopes: ALICE_HOME_SCOPES }),
+      },
+      thumbsDir,
+      fileReader: {
+        stat: async () => ({ size: 42 }),
+        readStream: () =>
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("webp-bytes"));
+              controller.close();
+            },
+          }),
+        ...overrides.fileReader,
+      },
+      ...(overrides.thumbnailsEnabled === undefined
+        ? {}
+        : { thumbnailsEnabled: overrides.thumbnailsEnabled }),
+    },
+  });
+}
+
+describe("GET /public/shares/:id/thumb", () => {
+  const thumb = (id: string, query = "path=%2F&size=256") => `${pub(id)}/thumb?${query}`;
+
+  it("streams the shared file's own thumbnail, cacheable for a minute, without spending", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile());
+    const h = thumbsHarness({ indexQueries: { fileByPath } });
     const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
+    const { id } = await h.create(cookie, { maxDownloads: 1 });
+    const res = await h.request(thumb(id));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/webp");
     expect(res.headers.get("content-length")).toBe("42");
-    // The one public share response that is not "no-store": a gallery
-    // re-renders its tiles constantly and the lightbox preloads its
-    // neighbours, and neither is worth anything against a store that keeps
-    // nothing. Bounded to a minute, and "private" so no shared proxy cache
-    // ever holds it.
+    // The one public share response that is not "no-store": bounded to a
+    // minute, and "private" so no shared proxy cache ever holds it.
     expect(res.headers.get("cache-control")).toBe("private, max-age=60");
     expect(res.headers.get("etag")).toBe('"abc123"');
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
     expect(await res.text()).toBe("webp-bytes");
     expect(fileByPath).toHaveBeenCalledWith(1, "alice/a.docx");
-  });
-
-  it("leaves every other public share response on the blanket no-store", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/download?path=%2F`);
-
-    expect(res.headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("defaults path to the shared root when omitted", async () => {
-    const fileByPath = vi.fn(async () => makeIndexedFile());
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath,
-        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
-      },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?size=256`);
-
-    expect(res.status).toBe(200);
-    expect(fileByPath).toHaveBeenCalledWith(1, "alice/a.docx");
+    expect((await h.request(thumb(id, "size=256"))).status).toBe(200);
+    expect((await metadata(h, id)).usedDownloads).toBe(0);
+    expect((await h.request(`${pub(id)}/download`)).headers.get("cache-control")).toBe("no-store");
   });
 
   it("streams a thumbnail for a file inside a directory share", async () => {
     const fileByPath = vi.fn(async () => makeIndexedFile({ path: "alice/folder/photo.jpg" }));
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath,
-        thumbnail: async () => ({ storagePath: "ab/abc123.1024.webp" }),
-      },
-    });
+    const h = thumbsHarness({ indexQueries: { fileByPath } });
+    h.mkdir("/folder");
     const cookie = await h.login();
-    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-    await h.client.user(auth.accessToken).mkdir("/folder");
     const { id } = await h.create(cookie, { paths: ["/folder"] });
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2Fphoto.jpg&size=1024`);
-
-    expect(res.status).toBe(200);
+    expect((await h.request(thumb(id, "path=%2Fphoto.jpg&size=1024"))).status).toBe(200);
     expect(fileByPath).toHaveBeenCalledWith(1, "alice/folder/photo.jpg");
   });
 
-  it("404s when thumbnails are not configured", async () => {
-    const h = sharesHarnessWithThumbs({ thumbsDir: null });
+  it("404s for every malformed request, without saying why", async () => {
+    const h = thumbsHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-    expect((await res.json()) as { error: { kind: string } }).toMatchObject({
-      error: { kind: "not_found" },
-    });
-  });
-
-  it("404s for a size outside THUMB_SIZES", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=512`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for a missing size", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for a repeated path query parameter", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2Fa&path=%2Fb&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for every path SharePath already rejects, instead of adding a second sanitiser", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    for (const path of ["..%2F", "/a/../b", "//", "/a\\b", "C:\\Windows\\win.ini"]) {
-      const res = await h.request(
-        `${publicBase(id)}/thumb?path=${encodeURIComponent(path)}&size=256`,
-      );
-      expect(res.status).toBe(404);
+    for (const query of [
+      "path=%2F&size=512",
+      "path=%2F",
+      "path=%2Fa&path=%2Fb&size=256",
+      ...["..%2F", "/a/../b", "//", "/a\\b", "C:\\Windows\\win.ini"].map(
+        (path) => `path=${encodeURIComponent(path)}&size=256`,
+      ),
+      // `SharePath` allows a segment over 255 bytes; normalization does not.
+      `path=${encodeURIComponent(`/${"a".repeat(300)}.jpg`)}&size=256`,
+    ]) {
+      const res = await h.request(thumb(id, query));
+      expect(res.status, query).toBe(404);
+      expect(await error(res)).toMatchObject({ kind: "not_found" });
     }
+    expect((await h.request(thumb("00000000-0000-4000-8000-000000000000"))).status).toBe(404);
   });
 
-  it("404s for a path segment over 255 bytes, which SharePath allows but normalization rejects", async () => {
-    const h = sharesHarnessWithThumbs();
+  it("404s when thumbnails are off or not configured", async () => {
+    for (const h of [
+      thumbsHarness({ thumbsDir: null }),
+      thumbsHarness({ thumbnailsEnabled: async () => false }),
+    ]) {
+      const { id } = await h.create(await h.login());
+      expect((await h.request(thumb(id))).status).toBe(404);
+    }
+    const on = thumbsHarness({ thumbnailsEnabled: async () => true });
+    const { id } = await on.create(await on.login());
+    expect((await on.request(thumb(id))).status).toBe(200);
+  });
+
+  it("404s for a write share, an archive share, an expired or spent one", async () => {
+    const h = thumbsHarness();
+    h.mkdir("/folder");
     const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(
-      `${publicBase(id)}/thumb?path=${encodeURIComponent(`/${"a".repeat(300)}.jpg`)}&size=256`,
-    );
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for an unknown share", async () => {
-    const h = sharesHarnessWithThumbs();
-
-    const res = await h.request(
-      "/api/v1/public/shares/00000000-0000-4000-8000-000000000000/thumb?path=%2F&size=256",
-    );
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for a write-scope share", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-    await h.client.user(auth.accessToken).mkdir("/folder");
-    const { id } = await h.create(cookie, { paths: ["/folder"], scope: "write" });
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2Fa.jpg&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for an archive share (more than one shared path)", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { paths: ["/a.docx", "/report.txt"] });
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for an expired share", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, {
+    const write = await h.create(cookie, { paths: ["/folder"], scope: "write" });
+    expect((await h.request(thumb(write.id, "path=%2Fa.jpg&size=256"))).status).toBe(404);
+    const archive = await h.create(cookie, { paths: ["/a.docx", "/report.txt"] });
+    expect((await h.request(thumb(archive.id))).status).toBe(404);
+    const spent = await h.create(cookie, { maxDownloads: 1 });
+    await (await h.request(`${pub(spent.id)}/download`)).text();
+    expect((await h.request(thumb(spent.id))).status).toBe(404);
+    const expiring = await h.create(cookie, {
       expiresAt: new Date(h.clock().getTime() + 1000).toISOString(),
     });
     h.now.value = new Date(h.clock().getTime() + 2000);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
+    expect((await h.request(thumb(expiring.id))).status).toBe(404);
   });
 
-  it("404s for a limit-reached share", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { maxDownloads: 1 });
-    await h.request(`${publicBase(id)}/download`);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s for a password-protected share with no credential cookie", async () => {
-    const h = sharesHarnessWithThumbs();
+  it("serves a protected share's thumbnails only to its current password", async () => {
+    const h = thumbsHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie, { password: "secret" });
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
+    const path = pub(id);
+    expect((await h.request(thumb(id))).status).toBe(404);
+    const envelope = cookieFrom(
+      await h.request(`${path}/credentials`, { method: "POST", body: { password: "secret" } }),
+    );
+    expect((await h.request(thumb(id), { cookie: envelope })).status).toBe(200);
+    expect(
+      (await h.request(`${base}/${id}`, { method: "PATCH", cookie, body: { password: "rotated" } }))
+        .status,
+    ).toBe(200);
+    // The old cookie stops serving thumbnails at once.
+    expect((await h.request(thumb(id), { cookie: envelope })).status).toBe(404);
+    const rotated = cookieFrom(
+      await h.request(`${path}/credentials`, { method: "POST", body: { password: "rotated" } }),
+    );
+    expect((await h.request(thumb(id), { cookie: rotated })).status).toBe(200);
+    expect((await h.request(`${base}/${id}`, { method: "DELETE", cookie })).status).toBe(200);
+    expect((await h.request(thumb(id), { cookie: rotated })).status).toBe(404);
   });
 
-  it("404s for a password-protected share with the wrong password", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { password: "secret" });
-    const path = publicBase(id);
-    const credentials = await h.request(`${path}/credentials`, {
-      method: "POST",
-      body: { password: "wrong" },
-    });
-    const envelope = cookieFrom(credentials);
-
-    const res = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
-
-    expect(res.status).toBe(404);
-  });
-
-  it("streams the thumbnail once the correct password cookie is set, and caches the check", async () => {
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath: async () => makeIndexedFile(),
-        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
-      },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { password: "secret" });
-    const path = publicBase(id);
-    const credentials = await h.request(`${path}/credentials`, {
-      method: "POST",
-      body: { password: "secret" },
-    });
-    const envelope = cookieFrom(credentials);
-    const verify = vi.spyOn(h.service, "verifySharePassword");
-
-    const first = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
-    const second = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(verify).toHaveBeenCalledTimes(1);
-  });
-
-  it("404s when the file is not indexed", async () => {
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath: async () => null,
-      },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s when the indexed file has no sha256", async () => {
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath: async () => makeIndexedFile({ sha256: null }),
-      },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s when no thumbnail has been generated for that size", async () => {
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath: async () => makeIndexedFile(),
-        thumbnail: async () => null,
-      },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s when the cached thumbnail file is missing from disk", async () => {
-    const h = sharesHarnessWithThumbs({
-      indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
-        fileByPath: async () => makeIndexedFile(),
-        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
-      },
-      fileReader: {
-        stat: async () => {
-          throw new Error("ENOENT");
+  it("404s when the index has no thumbnail for the file", async () => {
+    const cases: Parameters<typeof thumbsHarness>[0][] = [
+      { indexQueries: { fileByPath: async () => null } },
+      { indexQueries: { fileByPath: async () => makeIndexedFile({ sha256: null }) } },
+      { indexQueries: { thumbnail: async () => null } },
+      { indexQueries: { rootIdsByName: async () => ({}) } },
+      {
+        fileReader: {
+          stat: async () => {
+            throw new Error("ENOENT");
+          },
         },
       },
-    });
+      { resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) } },
+      { resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: [] }) } },
+    ];
+    for (const [index, overrides] of cases.entries()) {
+      const h = thumbsHarness(overrides);
+      const { id } = await h.create(await h.login());
+      expect((await h.request(thumb(id))).status, String(index)).toBe(404);
+    }
+  });
+
+  it("404s when the share or its owner cannot be loaded", async () => {
+    const h = thumbsHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s when the path cannot be resolved to a configured root", async () => {
-    const h = sharesHarnessWithThumbs({
-      indexQueries: { rootIdsByName: async () => ({}) },
+    const load = h.service.publicThumbTarget.bind(h.service);
+    const target = vi.spyOn(h.service, "publicThumbTarget");
+    target.mockRejectedValueOnce(new Error("storage down"));
+    expect((await h.request(thumb(id))).status).toBe(404);
+    // The owner disappears between loading the share and resolving its index.
+    let gone = false;
+    target.mockImplementationOnce(async (...args) => {
+      const loaded = await load(...args);
+      gone = true;
+      return loaded;
     });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
+    const get = h.repos.identities.get.bind(h.repos.identities);
+    vi.spyOn(h.repos.identities, "get").mockImplementation(async (identityId) =>
+      gone ? null : get(identityId),
+    );
+    expect((await h.request(thumb(id))).status).toBe(404);
+    expect(gone).toBe(true);
   });
-
-  it("404s when the owner's verified index scopes are unavailable", async () => {
-    const h = sharesHarnessWithThumbs({
-      resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s when the owner's scopes do not cover the shared path", async () => {
-    const h = sharesHarnessWithThumbs({
-      resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: [] }) },
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-  });
-
-  it("404s when the owning identity no longer exists", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-    // `publicThumbTarget` itself resolves the owner's connection (three
-    // calls to `identities.get`: twice from the service's `owner()`
-    // helper, once from the token source's client resolution) before the
-    // route makes its own separate lookup; only that fourth, route-level
-    // call should see a missing identity here.
-    const original = h.repos.identities.get.bind(h.repos.identities);
-    let calls = 0;
-    vi.spyOn(h.repos.identities, "get").mockImplementation(async (identityId) => {
-      calls += 1;
-      return calls > 3 ? null : original(identityId);
-    });
-
-    const res = await h.request(`${publicBase(id)}/thumb?path=%2F&size=256`);
-
-    expect(res.status).toBe(404);
-    expect(calls).toBe(4);
-  });
-
-  it("404s when verifying the password throws for a reason other than a wrong password", async () => {
-    const h = sharesHarnessWithThumbs();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { password: "secret" });
-    const path = publicBase(id);
-    const credentials = await h.request(`${path}/credentials`, {
-      method: "POST",
-      body: { password: "secret" },
-    });
-    const envelope = cookieFrom(credentials);
-    vi.spyOn(h.service, "verifySharePassword").mockRejectedValueOnce(new Error("upstream down"));
-
-    const res = await h.request(`${path}/thumb?path=%2F&size=256`, { cookie: envelope });
-
-    expect(res.status).toBe(404);
-  });
-});
-
-it("a password-protected upload share withholds its details for everyone: no listing can verify its password", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-  await h.client.user(auth.accessToken).mkdir("/inbox");
-  const { id } = await h.create(cookie, {
-    name: "Send me the contract",
-    paths: ["/inbox"],
-    scope: "write",
-    password: "secret",
-  });
-  const path = publicBase(id);
-  const anonymous = PublicShare.parse(await (await h.request(path)).json());
-  expect(anonymous).toMatchObject({
-    name: "",
-    scope: "write",
-    hasPassword: true,
-    credentialPresent: false,
-  });
-  const envelope = cookieFrom(
-    await h.request(`${path}/credentials`, { method: "POST", body: { password: "secret" } }),
-  );
-  const withCookie = PublicShare.parse(await (await h.request(path, { cookie: envelope })).json());
-  expect(withCookie).toMatchObject({ name: "", scope: "write", credentialPresent: true });
-  // An unprotected share still shows everything to anyone with the link.
-  const open = await h.create(cookie, { name: "Open inbox", paths: ["/inbox"], scope: "write" });
-  expect(PublicShare.parse(await (await h.request(publicBase(open.id))).json())).toMatchObject({
-    name: "Open inbox",
-    credentialPresent: false,
-  });
-});
-it("rotating or removing a share password drops memoized thumbnail verifications at once", async () => {
-  const h = sharesHarnessWithThumbs({
-    indexQueries: {
-      rootIdsByName: async () => ({ sftpgo: 1 }),
-      fileByPath: async () => makeIndexedFile(),
-      thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
-    },
-  });
-  const cookie = await h.login();
-  const { id } = await h.create(cookie, { password: "secret" });
-  const path = publicBase(id);
-  const envelope = cookieFrom(
-    await h.request(`${path}/credentials`, { method: "POST", body: { password: "secret" } }),
-  );
-  const thumb = `${path}/thumb?path=%2F&size=256`;
-  expect((await h.request(thumb, { cookie: envelope })).status).toBe(200);
-  expect(
-    (
-      await h.request(`${base}/${id}`, {
-        method: "PATCH",
-        cookie,
-        body: { password: "rotated" },
-      })
-    ).status,
-  ).toBe(200);
-  // Still within the cache TTL, yet the old password no longer serves thumbnails.
-  expect((await h.request(thumb, { cookie: envelope })).status).toBe(404);
-  const rotated = cookieFrom(
-    await h.request(`${path}/credentials`, { method: "POST", body: { password: "rotated" } }),
-  );
-  expect((await h.request(thumb, { cookie: rotated })).status).toBe(200);
-  expect((await h.request(`${base}/${id}`, { method: "DELETE", cookie })).status).toBe(200);
-  expect((await h.request(thumb, { cookie: rotated })).status).toBe(404);
-});
-
-// SFTPGo stores a share's download limit in `max_tokens`, declared `integer` by
-// its PostgreSQL and MySQL data providers, so anything past signed 32-bit must be
-// refused at the edge instead of being forwarded to a provider that cannot hold it.
-it("refuses download limits past the SFTPGo counter column on create and update", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const overLimit = 2_147_483_648;
-  const created = await h.create(cookie, { maxDownloads: 2_147_483_647 });
-  const path = `${base}/${created.id}`;
-
-  expect(
-    (
-      await h.request(base, {
-        cookie,
-        method: "POST",
-        body: { name: "Too many", paths: ["/a.docx"], scope: "read", maxDownloads: overLimit },
-      })
-    ).status,
-  ).toBe(400);
-  expect(
-    (await h.request(path, { cookie, method: "PATCH", body: { maxDownloads: overLimit } })).status,
-  ).toBe(400);
-  // The boundary itself stays usable, and the rejected update left the share alone.
-  expect(ManagedShare.parse(await (await h.request(path, { cookie })).json()).maxDownloads).toBe(
-    2_147_483_647,
-  );
-});
-
-// A share created before the limit was bounded still lives in SFTPGo, and the
-// update path re-validates the whole merged share, so its stored limit must not
-// turn every later edit into an upstream failure.
-it("still edits a share whose stored download limit predates the bound", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const created = await h.create(cookie, { maxDownloads: 5 });
-  const auth = await h.client.login({ username: "alice", password: "alice-pass" });
-  const user = h.client.user(auth.accessToken);
-  const [stored] = await user.shares.list();
-  if (!stored) throw new Error("Missing seeded share");
-  await user.shares.update(stored.id, {
-    name: stored.name,
-    scope: stored.scope,
-    paths: stored.paths,
-    maxTokens: Number.MAX_SAFE_INTEGER,
-  });
-
-  const path = `${base}/${created.id}`;
-  expect(
-    (await h.request(path, { cookie, method: "PATCH", body: { name: "Renamed" } })).status,
-  ).toBe(200);
-  const after = ManagedShare.parse(await (await h.request(path, { cookie })).json());
-  expect(after.name).toBe("Renamed");
-  expect(after.maxDownloads).toBe(2_147_483_647);
-});
-
-it("records share create, update and revoke per account without copying any secret", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  const bob = await h.login("bob");
-  const share = await h.create(cookie, { password: "hunter2", expiresAt: null });
-  const created = h.activity.outcomes.at(-1);
-  expect(h.activity.operations.at(-1)).toMatchObject({
-    action: "share.create",
-    requested: { path: "/a.docx", permissions: ["read"] },
-  });
-  expect(created).toMatchObject({ outcome: "success", after: { shareId: share.id } });
-  expect(JSON.stringify(h.activity.operations)).not.toContain("hunter2");
-  expect(JSON.stringify(h.activity.outcomes)).not.toContain("hunter2");
-
-  // The same path shared by a second account is that account's own event.
-  await h.create(bob);
-  expect(h.activity.operations.at(-1)?.accountId).not.toBe(h.activity.operations.at(-2)?.accountId);
-
-  const path = `${base}/${share.id}`;
-  expect(
-    (await h.request(path, { method: "PATCH", cookie, body: { name: "Renamed" } })).status,
-  ).toBe(200);
-  expect(h.activity.operations.at(-1)).toMatchObject({
-    action: "share.update",
-    requested: { shareId: share.id },
-    before: { permissions: ["read"] },
-  });
-  expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
-  expect(h.activity.operations.at(-1)?.action).toBe("share.revoke");
-  expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
-});
-
-it("records a refused share as a failure and never as a created share", async () => {
-  const h = sharesHarness();
-  const cookie = await h.login();
-  vi.spyOn(h.service, "create").mockRejectedValueOnce(new Error("mirror unavailable"));
-  expect(
-    (
-      await h.request(base, {
-        method: "POST",
-        cookie,
-        body: { name: "Doc", paths: ["/a.docx"], scope: "read" },
-      })
-    ).status,
-  ).toBe(502);
-  expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "unknown" });
 });

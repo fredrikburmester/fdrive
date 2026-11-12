@@ -1,10 +1,4 @@
-import {
-  isStorageError,
-  joinPath,
-  normalizePath,
-  parseRangeHeader,
-  type StorageProvider,
-} from "@fdrive/core";
+import { joinPath, normalizePath, parseRangeHeader, type StorageProvider } from "@fdrive/core";
 import { isBackupPath } from "../backups/reserved-storage.ts";
 import { ApiHttpError } from "../errors.ts";
 import {
@@ -14,7 +8,9 @@ import {
   type ShareByteRange,
   type ShareDownloadOptions,
   type ShareView,
+  shareCall,
 } from "./access.ts";
+import { guardZipStream, type ShareZipLimits, ShareZipTimeoutError } from "./zip-limits.ts";
 
 /** True when `path` is `root` or lies beneath it. Both canonical. */
 export function isUnder(path: string, root: string): boolean {
@@ -22,23 +18,24 @@ export function isUnder(path: string, root: string): boolean {
 }
 
 /**
- * Runs one storage call for a visitor. A missing path and a path of the
- * wrong kind keep their meaning; every other failure is the owner's
- * storage or credential misbehaving, which a visitor is told nothing about
- * beyond "unavailable": never a password error, never a sign-in prompt.
+ * True when `paths` cannot be one archive: two of them would land on the
+ * same name in it (compared as a case-insensitive file system would), or
+ * one lies inside another, so its files would be in it twice. The archive
+ * names each shared path by its base name, as the storage's zip does.
  */
-export async function storageCall<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error instanceof ApiHttpError || error instanceof RangeNotSatisfiableError) throw error;
-    if (isStorageError(error)) {
-      if (error.kind === "not_found") throw new ApiHttpError("not_found", "Share unavailable");
-      if (error.kind === "bad_request")
-        throw new ApiHttpError("bad_request", "Share operation rejected by storage");
-    }
-    throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
+export function archiveConflict(paths: readonly string[]): boolean {
+  if (paths.length < 2) return false;
+  const names = new Set<string>();
+  for (const path of paths) {
+    if (paths.some((other) => other !== path && isUnder(path, other))) return true;
+    const name = path
+      .slice(path.lastIndexOf("/") + 1)
+      .normalize("NFC")
+      .toLowerCase();
+    if (names.has(name)) return true;
+    names.add(name);
   }
+  return false;
 }
 
 /** The bounded range to ask storage for, or a 416 when `size` cannot satisfy `range`. */
@@ -50,46 +47,89 @@ export function boundedRange(range: ShareByteRange, size: number): { start: numb
     : { start: parsed.start, end: parsed.end };
 }
 
+const LIMIT_REACHED = () =>
+  new ApiHttpError("forbidden", "Share download limit reached", { reason: "limit" });
+
 export interface OwnedShareAccessOptions {
-  readonly storage: Pick<StorageProvider, "list" | "statFile" | "download" | "upload">;
+  /**
+   * The owner's storage as the identity storage factory builds it: its
+   * `zip` already refuses a tree that holds a backup folder.
+   */
+  readonly storage: Pick<StorageProvider, "list" | "statFile" | "download" | "upload" | "zip">;
   readonly view: ShareView;
-  /** Canonical roots hidden from every listing and refused on every read: the owner's Trash. Backup folders always are. */
+  /**
+   * Canonical roots hidden from every listing and refused on every read:
+   * the owner's Trash and the folder of what others share with the owner.
+   * Backup folders always are.
+   */
   readonly restricted: readonly string[];
   /** Spends one download once it has been served; `false` when the limit or expiry refuses it. */
   readonly consume: () => Promise<boolean>;
+  readonly zip: {
+    readonly limits: ShareZipLimits;
+    /** Takes one of this share's archive slots: its release, or `null` when none is free. */
+    readonly acquire: () => (() => void) | null;
+  };
 }
 
 /**
  * A `PublicShareAccess` over the owner's own storage. Every path a visitor
  * names is resolved inside the single shared path and refused outside it or
  * inside a hidden folder; ranges are resolved against the file's size so
- * suffix ranges work and a bad one is a 416; a download counts against the
- * share's budget only after storage has actually answered it. Archives are
- * not served yet.
+ * suffix ranges work and a bad one is a 416; a download or an archive counts
+ * against the share's budget only after storage has actually answered it.
  */
 export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAccess {
   const { storage, view, restricted, consume } = opts;
   const root = view.paths.length === 1 && view.paths[0] !== undefined ? view.paths[0] : null;
   const hidden = (path: string) =>
     isBackupPath(path) || restricted.some((folder) => isUnder(path, folder));
-  function resolve(path: string): string {
-    if (root === null) throw new ApiHttpError("bad_request", "This share is an archive");
-    let target: string;
+  function canonical(path: string): string {
     try {
-      target = path === "/" ? normalizePath(root) : joinPath(root, path);
+      return normalizePath(path);
     } catch {
       throw new ApiHttpError("bad_request", "Invalid shared path");
     }
-    if (!isUnder(target, normalizePath(root)))
+  }
+  function resolve(path: string): string {
+    if (root === null) throw new ApiHttpError("bad_request", "This share is an archive");
+    const base = canonical(root);
+    let target: string;
+    try {
+      target = path === "/" ? base : joinPath(base, path);
+    } catch {
       throw new ApiHttpError("bad_request", "Invalid shared path");
+    }
+    if (!isUnder(target, base)) throw new ApiHttpError("bad_request", "Invalid shared path");
     if (hidden(target)) throw new ApiHttpError("not_found", "Share unavailable");
     return target;
   }
-  const statFile = (path: string) => storageCall(() => storage.statFile(resolve(path)));
+  /**
+   * The shared paths an archive walks. A path that became hidden is gone;
+   * a restricted folder inside a shared folder would ride along with it, so
+   * such a share is refused rather than trusted to skip it; and two paths
+   * that would collide in the archive are refused rather than both written.
+   */
+  function archivePaths(): string[] {
+    const paths = view.paths.map(canonical);
+    if (paths.some(hidden)) throw new ApiHttpError("not_found", "Share unavailable");
+    if (restricted.some((folder) => paths.some((path) => isUnder(folder, path))))
+      throw new ApiHttpError(
+        "forbidden",
+        "A share that holds the Trash or folders shared with its owner can't be downloaded as an archive",
+      );
+    if (archiveConflict(paths))
+      throw new ApiHttpError(
+        "bad_request",
+        "Two shared items overlap or have the same name, so they can't be one archive",
+      );
+    return paths;
+  }
+  const statFile = (path: string) => shareCall(() => storage.statFile(resolve(path)));
   return {
     view,
     async list(path) {
-      const entries = await storageCall(() => storage.list(resolve(path)));
+      const entries = await shareCall(() => storage.list(resolve(path)));
       return entries
         .filter((entry) => !hidden(entry.path))
         .map(({ name, kind, size, modifiedAt }) => ({ name, kind, size, modifiedAt }));
@@ -101,7 +141,7 @@ export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAcce
         options.range === undefined
           ? undefined
           : boundedRange(options.range, (await statFile(path)).size);
-      const result = await storageCall(() =>
+      const result = await shareCall(() =>
         storage.download(target, {
           ...(range === undefined ? {} : { range }),
           ...(options.ifRange === undefined ? {} : { ifRange: options.ifRange }),
@@ -110,18 +150,49 @@ export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAcce
       );
       if (!(await consume())) {
         await result.body.cancel();
-        throw new ApiHttpError("forbidden", "Share download limit reached", { reason: "limit" });
+        throw LIMIT_REACHED();
       }
       return result;
     },
-    async zip() {
-      throw new ApiHttpError("unsupported", "Archive download is not available for this share", {
-        capability: "shares",
-      });
+    async zip(options = {}) {
+      const zip = storage.zip?.bind(storage);
+      if (zip === undefined)
+        throw new ApiHttpError("unsupported", "Archive download is not available for this share", {
+          capability: "zip",
+        });
+      const paths = archivePaths();
+      const release = opts.zip.acquire();
+      if (release === null)
+        throw new ApiHttpError(
+          "rate_limited",
+          "This share is already being downloaded as an archive. Try again shortly.",
+        );
+      const { limits } = opts.zip;
+      const timeout = new AbortController();
+      const timer = setTimeout(() => timeout.abort(new ShareZipTimeoutError()), limits.timeoutMs);
+      timer.unref();
+      const done = () => {
+        clearTimeout(timer);
+        release();
+      };
+      const signal =
+        options.signal === undefined
+          ? timeout.signal
+          : AbortSignal.any([options.signal, timeout.signal]);
+      let source: ReadableStream<Uint8Array> | undefined;
+      try {
+        source = await shareCall(() => zip(paths, { signal }));
+        if (!(await consume())) throw LIMIT_REACHED();
+        return guardZipStream(source, { maxBytes: limits.maxBytes, signal, done });
+      } catch (error) {
+        done();
+        await source?.cancel();
+        throw error;
+      }
     },
     async upload(name, body, options = {}) {
       const target = resolve(`/${name}`);
-      await storageCall(() =>
+      await shareCall(() =>
         storage.upload(target, body, {
           ...(options.contentLength === undefined ? {} : { contentLength: options.contentLength }),
           ...(options.signal === undefined ? {} : { signal: options.signal }),

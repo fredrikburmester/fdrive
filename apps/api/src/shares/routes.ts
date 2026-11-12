@@ -44,17 +44,15 @@ import {
   type ShareByteRange,
   type ShareDownloadOptions,
   type ShareDownloadResult,
+  shareCall,
 } from "./access.ts";
 import {
   SHARE_CREDENTIAL_COOKIE,
   SHARE_CREDENTIAL_SECONDS,
-  type ShareCredential,
   type ShareCredentialCodec,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
-import { createSharePasswordCache } from "./password-cache.ts";
-import { createSharePeekPort } from "./peek-adapter.ts";
-import { type SharesService, shareCall } from "./service.ts";
+import type { SharesService } from "./service.ts";
 
 export async function publicBody<T>(
   schema: z.ZodType<T>,
@@ -225,12 +223,9 @@ export function downloadResponse(result: ShareDownloadResult, name: string): Res
     headers: downloadHeaders(result, name),
   });
 }
-/** The 416 for a range the file cannot satisfy, naming the size when the backend knew it. */
-export function rangeNotSatisfiable(size: number | null): Response {
-  return new Response(null, {
-    status: 416,
-    headers: size === null ? {} : { "Content-Range": `bytes */${size}` },
-  });
+/** The 416 for a range the file cannot satisfy, naming its size. */
+export function rangeNotSatisfiable(size: number): Response {
+  return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
 }
 export function registerSharesRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -253,7 +248,6 @@ export function registerSharesRoutes(
   const base = withoutApiV1Prefix(ROUTES.shares);
   const pub = `${withoutApiV1Prefix(ROUTES.publicShares)}/:id`;
   const thumbFileReader = deps.fileReader ?? createNodeThumbFileReader();
-  const passwordCache = createSharePasswordCache();
   groups.authed.get(base, (c) =>
     shareCall(async () => c.json(await deps.service.list(accountContext(c)))),
   );
@@ -321,8 +315,6 @@ export function registerSharesRoutes(
           expiresAt: share.expiresAt,
         }),
       );
-      // The password may have changed: no memoized verification survives an update.
-      passwordCache.invalidate(shareId(c));
       return c.json(updated);
     }),
   );
@@ -347,7 +339,6 @@ export function registerSharesRoutes(
         },
         () => deps.service.remove(input, shareId(c)),
       );
-      passwordCache.invalidate(shareId(c));
       return c.json({ ok: true });
     }),
   );
@@ -377,10 +368,6 @@ export function registerSharesRoutes(
   });
   function credential(c: Context) {
     return deps.codec.decode(shareId(c), getCookie(c, SHARE_CREDENTIAL_COOKIE));
-  }
-  /** The password cache is keyed by what the cookie carried, whichever form that was. */
-  function credentialKey(provided: ShareCredential): string {
-    return "password" in provided ? provided.password : `verified:${provided.verified}`;
   }
   function credentialCookie(c: Context, value: string, maxAge: number) {
     setCookie(c, SHARE_CREDENTIAL_COOKIE, value, {
@@ -444,18 +431,22 @@ export function registerSharesRoutes(
       // from the share's own shared path instead; the port reads the share
       // at `/` as every other public route does.
       const extensionPath = isSingleFile ? (access.view.paths[0] ?? path) : path;
+      const at = (archive: string) => (isSingleFile ? "/" : archive);
       let result: Awaited<ReturnType<typeof peekArchive>>;
       try {
         result = await peekArchive({
-          storage: createSharePeekPort({ access, isSingleFile }),
+          storage: {
+            statFile: (archive) => access.statFile(at(archive)),
+            download: (archive, options) => access.download(at(archive), options),
+          },
           path: extensionPath,
           maxBytes: deps.config.fdriveArchivePeekMaxBytes ?? DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
           signal: c.req.raw.signal,
         });
       } catch (error) {
-        // The access object has already mapped its backend's failures,
-        // including a wrong password, to `ApiHttpError`; only the peek's
-        // own verdicts on the archive are left to translate.
+        // The access object has already mapped the storage's failures to
+        // `ApiHttpError`; only the peek's own verdicts on the archive are
+        // left to translate.
         if (
           error instanceof UnsupportedPeekFormatError ||
           error instanceof UnreadableArchiveError
@@ -479,10 +470,8 @@ export function registerSharesRoutes(
   );
   // No `createReadAuthorizer` live probe on this route, unlike the authed
   // thumb route: the share itself is the authorization for anything under
-  // it, and a live read probe here would either cost a download token (the
-  // public share API has none for a bare storage check) or need the
-  // owner's own credentials, neither of which a thumbnail should ever
-  // require. Every failure below answers the same bare 404: whether the
+  // it, and a thumbnail comes from the index cache, never from the owner's
+  // storage. Every failure below answers the same bare 404: whether the
   // share does not exist, is a write share, an archive, expired, or
   // limit-reached, whether the password is wrong or missing, whether the
   // path fails to resolve, or whether the file is not indexed, this route
@@ -497,32 +486,21 @@ export function registerSharesRoutes(
     const query = publicThumbQuery(c);
     if (query === null) throw THUMB_NOT_FOUND();
 
-    const id = shareId(c);
     let target: Awaited<ReturnType<SharesService["publicThumbTarget"]>>;
     try {
-      target = await deps.service.publicThumbTarget(id);
+      target = await deps.service.publicThumbTarget(shareId(c), credential(c));
     } catch {
       throw THUMB_NOT_FOUND();
     }
-    if (target.scope !== "read" || target.unavailableReason !== null || target.paths.length !== 1)
-      throw THUMB_NOT_FOUND();
     const sharedRoot = target.paths[0];
-    if (sharedRoot === undefined) throw THUMB_NOT_FOUND();
-
-    if (target.hasPassword) {
-      const provided = credential(c);
-      if (provided === undefined) throw THUMB_NOT_FOUND();
-      let verified = passwordCache.get(id, credentialKey(provided));
-      if (verified === undefined) {
-        try {
-          verified = await deps.service.verifySharePassword(id, provided);
-        } catch {
-          throw THUMB_NOT_FOUND();
-        }
-        passwordCache.set(id, credentialKey(provided), verified);
-      }
-      if (!verified) throw THUMB_NOT_FOUND();
-    }
+    if (
+      target.scope !== "read" ||
+      target.unavailableReason !== null ||
+      !target.unlocked ||
+      target.paths.length !== 1 ||
+      sharedRoot === undefined
+    )
+      throw THUMB_NOT_FOUND();
 
     const virtualPath = query.path === "/" ? sharedRoot : `${sharedRoot}${query.path}`;
     const identity = await deps.identities.get(target.identityId);
@@ -559,7 +537,8 @@ export function registerSharesRoutes(
   });
   // HEAD is registered on its own rather than left to Hono's HEAD-as-GET
   // fallback, which would drop the body without cancelling the stream and
-  // leave the upstream connection open until it drained.
+  // leave the file open until it drained. It answers from a stat: no stream
+  // is opened and nothing is spent from the share's budget.
   const download = (c: Context) =>
     shareCall(async () => {
       const path = publicPath(c);
@@ -571,9 +550,7 @@ export function registerSharesRoutes(
         path === "/"
           ? access.view.paths[0]?.split("/").at(-1) || "download"
           : path.slice(path.lastIndexOf("/") + 1);
-      // A backend that can stat through the share answers HEAD from the
-      // stat: no stream is opened and nothing is spent from its budget.
-      if (c.req.method === "HEAD" && access.statFile !== undefined) {
+      if (c.req.method === "HEAD") {
         const stat = await access.statFile(path);
         return new Response(null, {
           status: 200,
@@ -596,29 +573,25 @@ export function registerSharesRoutes(
         if (error instanceof RangeNotSatisfiableError) return rangeNotSatisfiable(error.size);
         throw error;
       }
-      if (c.req.method === "HEAD") {
-        await result.body.cancel();
-        return new Response(null, {
-          status: result.status,
-          headers: downloadHeaders(result, name),
-        });
-      }
       return downloadResponse(result, name);
     });
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
   groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
-  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, (c) =>
+  // HEAD on its own again: the HEAD-as-GET fallback would start an archive,
+  // spend a download and hold one of the share's archive slots until the
+  // unread stream timed out. It checks access and opens nothing.
+  const archive = (c: Context) =>
     shareCall(async () => {
       const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
-      const body = await access.zip({ signal: c.req.raw.signal });
-      return new Response(body, {
-        headers: {
-          "Content-Type": "application/zip",
-          "Content-Disposition": attachment(`${access.view.name}.zip`),
-        },
-      });
-    }),
-  );
+      const headers = {
+        "Content-Type": "application/zip",
+        "Content-Disposition": attachment(`${access.view.name}.zip`),
+      };
+      if (c.req.method === "HEAD") return new Response(null, { headers });
+      return new Response(await access.zip({ signal: c.req.raw.signal }), { headers });
+    });
+  groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, archive);
+  groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, archive);
   groups.public.put(`${pub}${PUBLIC_SHARE_SUFFIXES.upload}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c, true);

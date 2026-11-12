@@ -6,24 +6,28 @@ import {
 } from "@fdrive/contracts";
 import { normalizePath } from "@fdrive/core";
 import type { ShareRecord, ShareRepo } from "@fdrive/db";
+import { SHARED_WITH_ME } from "@fdrive/local";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import { isBackupPath } from "../backups/reserved-storage.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { PublicShareAccess } from "./access.ts";
+import { shareCall } from "./access.ts";
 import type { ShareCredential } from "./credentials.ts";
 import { type PublicThumbTarget, type ShareLimits, unavailableReason } from "./limits.ts";
-import { isUnder, ownedShareAccess, storageCall } from "./owned-access.ts";
+import { archiveConflict, isUnder, ownedShareAccess } from "./owned-access.ts";
 import type { SharePasswords } from "./passwords.ts";
+import { createShareZipSlots, type ShareZipLimits } from "./zip-limits.ts";
 
 export interface OwnedSharesDeps {
   readonly shares: ShareRepo;
   readonly storageFor: IdentityStorageFactory;
   readonly trashPathFor: (identityId: string) => Promise<string | null>;
   readonly passwords: SharePasswords;
+  readonly zipLimits: ShareZipLimits;
   readonly clock: () => Date;
 }
 
-/** The row is the share: nothing upstream to read. */
+/** The row is the whole share. */
 export function ownedManagedShare(row: ShareRecord): ManagedShare {
   return {
     id: row.id,
@@ -52,14 +56,15 @@ const PASSWORD_REJECTED = () =>
   });
 
 /**
- * Shares fdrive serves itself: rows in `app.shares` with no upstream id,
- * read and written through the owner's own storage. The owner's stored
- * credential is the only way to the bytes, so a share reaches storage only
- * through the identity storage factory, only inside its paths, and only for
- * the operations its scope allows; the password, expiry and download limit
- * are fdrive's to enforce.
+ * Public links fdrive serves itself: rows in `app.shares`, read and written
+ * through the owner's own storage. The owner's stored credential is the only
+ * way to the bytes, so a share reaches storage only through the identity
+ * storage factory, only inside its paths, and only for the operations its
+ * scope allows; the password, expiry and download limit are fdrive's to
+ * enforce.
  */
 export function createOwnedShares(deps: OwnedSharesDeps) {
+  const zipSlots = createShareZipSlots(deps.zipLimits.perShare);
   async function storage(identityId: string) {
     try {
       return await deps.storageFor(identityId);
@@ -67,14 +72,24 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
     }
   }
+  /**
+   * The folders no link may reach: the owner's Trash while it is on, and the
+   * folder that holds what other users share with the owner, which is theirs
+   * to share. The latter only exists while something is shared, but a link
+   * never needs it, so it is kept out always.
+   */
   async function restrictedRoots(identityId: string): Promise<string[]> {
     const trash = await deps.trashPathFor(identityId);
-    return trash === null ? [] : [normalizePath(trash)];
+    return [...(trash === null ? [] : [normalizePath(trash)]), `/${SHARED_WITH_ME}`];
   }
-  /** Every shared path, canonical and outside the Trash and backup folders. */
+  /**
+   * Every shared path, canonical and outside the restricted and backup
+   * folders; several must be able to share one archive, the only way they
+   * are served.
+   */
   async function admittedPaths(identityId: string, paths: readonly string[]): Promise<string[]> {
     const restricted = await restrictedRoots(identityId);
-    return paths.map((path) => {
+    const admitted = paths.map((path) => {
       let canonical: string;
       try {
         canonical = normalizePath(path);
@@ -82,13 +97,22 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
         throw new ApiHttpError("bad_request", "Invalid shared path");
       }
       if (isBackupPath(canonical) || restricted.some((root) => isUnder(canonical, root)))
-        throw new ApiHttpError("forbidden", "The Trash and backup folders can't be shared");
+        throw new ApiHttpError(
+          "forbidden",
+          "The Trash, backup folders and folders shared with you can't be shared",
+        );
       return canonical;
     });
+    if (archiveConflict(admitted))
+      throw new ApiHttpError(
+        "bad_request",
+        "Two shared items overlap or have the same name. Share them from one folder instead.",
+      );
+    return admitted;
   }
   /**
-   * Mirrors the native check: a single-path share must name something that
-   * exists, and an upload share a directory. Many paths are an archive.
+   * A single-path share must name something that exists, and an upload
+   * share a directory. Many paths are an archive.
    */
   async function layout(
     identityId: string,
@@ -97,7 +121,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
   ): Promise<PublicShare["layout"]> {
     const path = paths[0];
     if (path === undefined || paths.length !== 1) return "archive";
-    const stat = await storageCall(async () => (await storage(identityId)).stat(path));
+    const stat = await shareCall(async () => (await storage(identityId)).stat(path));
     if (scope === "write") {
       if (stat.kind !== "dir")
         throw new ApiHttpError("bad_request", "An upload share must name a directory");
@@ -105,8 +129,8 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
     }
     return stat.kind === "dir" ? "directory" : "single-file";
   }
+  /** Whether `credential` was issued for the password the share has now. */
   async function verify(row: ShareRecord, credential: ShareCredential): Promise<boolean> {
-    if (!("verified" in credential)) return false;
     return credential.verified === deps.passwords.version(await deps.shares.passwordHash(row.id));
   }
   return {
@@ -132,7 +156,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       });
       return ownedManagedShare(row);
     },
-    /** A patch is merged onto the row and re-validated as a whole request, as for a native share. */
+    /** A patch is merged onto the row and re-validated as a whole request. */
     async update(row: ShareRecord, patch: UpdateShareRequest): Promise<ManagedShare> {
       const base: CreateShareRequest = {
         name: row.name,
@@ -169,11 +193,12 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
     async remove(row: ShareRecord): Promise<void> {
       await deps.shares.removeOwned(row.identityId, row.id);
     },
-    verify,
     /**
      * The one place the password is checked: wrong is refused now, right
      * earns a marker for the current password that every later request
-     * compares at the cost of one row read, never a hash.
+     * compares at the cost of one row read, never a hash. A hash this
+     * scheme cannot read, such as the one a link carried over from SFTPGo
+     * holds, matches no password until the owner sets a new one.
      */
     async credential(row: ShareRecord, password: string): Promise<ShareCredential> {
       const hash = row.hasPassword ? await deps.shares.passwordHash(row.id) : null;
@@ -238,15 +263,19 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
         },
         restricted,
         consume: async () => (await deps.shares.consume(row.id, deps.clock())) !== null,
+        zip: { limits: deps.zipLimits, acquire: () => zipSlots.acquire(row.id) },
       });
     },
-    thumbTarget(row: ShareRecord): PublicThumbTarget {
+    async thumbTarget(
+      row: ShareRecord,
+      credential: ShareCredential | undefined,
+    ): Promise<PublicThumbTarget> {
       return {
         identityId: row.identityId,
         scope: row.scope,
         paths: [...row.paths],
-        hasPassword: row.hasPassword,
         unavailableReason: unavailableReason(ownedLimits(row), deps.clock()),
+        unlocked: !row.hasPassword || (credential !== undefined && (await verify(row, credential))),
       };
     },
   };
