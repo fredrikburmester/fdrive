@@ -26,7 +26,7 @@ import {
 import type { Route } from "next";
 import Link from "next/link";
 import type { DragEvent } from "react";
-import { useState } from "react";
+import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Breadcrumb,
@@ -58,7 +58,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useIsMobile } from "@/hooks/use-mobile";
 import { getActiveDragPaths, INTERNAL_DND_TYPE, readDraggedPaths } from "@/lib/dnd";
 import type { NewFileKind } from "@/lib/editor/new-file";
-import { breadcrumbLayout } from "@/lib/files/breadcrumb-layout";
+import { type BreadcrumbWidths, breadcrumbLayout } from "@/lib/files/breadcrumb-layout";
 import { LIST_DENSITIES, type ListDensity } from "@/lib/files/density";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
@@ -103,23 +103,31 @@ export interface FilesBreadcrumbProps {
   onInternalDrop?: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
 }
 
-/** The current folder's breadcrumb trail. Desktop collapses the middle when
- * long; below `md` it always truncates from the left instead, keeping only
- * the current folder inline so it is never pushed off narrow screens (see
+/** Shared by the visible crumbs and their hidden measuring copies, so both
+ * take the same width. */
+const CRUMB_CLASS = "max-w-48 truncate rounded-sm px-1";
+
+/** The current folder's breadcrumb trail. Desktop shows every crumb while
+ * the trail fits, truncating long names first and hiding the shallowest
+ * ancestors behind an ellipsis only once names would get too narrow; below
+ * `md` it always truncates from the left instead, keeping only the current
+ * folder inline so it is never pushed off narrow screens (see
  * `breadcrumbLayout`). */
 export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) {
   const isMobile = useIsMobile();
   const crumbs = buildBreadcrumbs(path);
-  const layout = breadcrumbLayout(crumbs, isMobile);
+  const { navRef, measureRef, widths } = useTrailWidths(path, !isMobile);
+  const layout = breadcrumbLayout(crumbs, isMobile, widths);
 
   return (
-    <Breadcrumb className="min-w-0">
+    <Breadcrumb ref={navRef} className="relative min-w-0 flex-1">
       <BreadcrumbList className="min-w-0 flex-nowrap">
         {layout.head.map((crumb, index) => (
           <CrumbRow
             key={crumb.path}
             crumb={crumb}
             isLast={!layout.collapsed && index === layout.head.length - 1}
+            maxWidth={layout.nameMaxWidth}
             onInternalDrop={onInternalDrop}
           />
         ))}
@@ -145,19 +153,108 @@ export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) 
                 key={crumb.path}
                 crumb={crumb}
                 isLast={index === layout.tail.length - 1}
+                maxWidth={layout.nameMaxWidth}
                 onInternalDrop={onInternalDrop}
               />
             ))}
           </>
         )}
       </BreadcrumbList>
+      {!isMobile && (
+        // The whole trail, laid out off to the side with the ellipsis after
+        // Home, for `useTrailWidths` to measure. Names come from CSS
+        // `content` rather than text nodes, so text queries and screen
+        // readers only ever find the visible crumbs.
+        <BreadcrumbList
+          ref={measureRef}
+          aria-hidden="true"
+          className="pointer-events-none invisible absolute top-0 left-0 w-max flex-nowrap"
+        >
+          {crumbs.map((crumb, index) => (
+            <Fragment key={crumb.path}>
+              {index > 0 && <BreadcrumbSeparator />}
+              {index === 1 && (
+                <>
+                  <BreadcrumbItem data-measure="ellipsis">
+                    <BreadcrumbEllipsis />
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                </>
+              )}
+              <BreadcrumbItem data-measure="crumb">
+                <span
+                  data-name={crumb.name}
+                  className={cn(CRUMB_CLASS, "after:content-[attr(data-name)]")}
+                />
+              </BreadcrumbItem>
+            </Fragment>
+          ))}
+        </BreadcrumbList>
+      )}
     </Breadcrumb>
   );
+}
+
+/**
+ * Measures the hidden full trail and the width it has, again whenever
+ * either resizes (the window, the sidebar or inspector opening, web fonts
+ * loading). Runs before paint, so a trail that does not fit never flashes
+ * whole. A measurement is tagged with its `path` and ignored for any other,
+ * so a new folder's trail is never laid out with the previous one's widths.
+ */
+function useTrailWidths(path: string, enabled: boolean) {
+  const navRef = useRef<HTMLElement>(null);
+  const measureRef = useRef<HTMLOListElement>(null);
+  const [measured, setMeasured] = useState<{ path: string; widths: BreadcrumbWidths } | null>(null);
+
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const list = measureRef.current;
+    if (!enabled || nav === null || list === null) {
+      return;
+    }
+    const update = () => setMeasured({ path, widths: measureTrail(nav, list) });
+    update();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(nav);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [path, enabled]);
+
+  return { navRef, measureRef, widths: measured?.path === path ? measured.widths : null };
+}
+
+/** Each measured segment's separator and gaps run from its right edge to
+ * the next segment's left edge. */
+function measureTrail(nav: HTMLElement, list: HTMLOListElement): BreadcrumbWidths {
+  const segments = Array.from(list.querySelectorAll<HTMLElement>("[data-measure]"), (element) => ({
+    kind: element.dataset.measure,
+    rect: element.getBoundingClientRect(),
+  }));
+  const end = list.getBoundingClientRect().right;
+  const spans = segments.map((segment, index) => ({
+    kind: segment.kind,
+    name: segment.rect.width,
+    trailing: (segments[index + 1]?.rect.left ?? end) - segment.rect.right,
+  }));
+  const ellipsis = spans.find((span) => span.kind === "ellipsis");
+  return {
+    available: nav.getBoundingClientRect().width,
+    crumbs: spans
+      .filter((span) => span.kind === "crumb")
+      .map(({ name, trailing }) => ({ name, trailing })),
+    ellipsis: ellipsis ? ellipsis.name + ellipsis.trailing : 0,
+  };
 }
 
 interface CrumbRowProps {
   crumb: BreadcrumbEntry;
   isLast: boolean;
+  /** Truncates the name to this many pixels so the trail fits; `null` keeps it whole. */
+  maxWidth: number | null;
   onInternalDrop?:
     | ((paths: string[], targetPath: string, effect: "move" | "copy") => void)
     | undefined;
@@ -167,8 +264,10 @@ interface CrumbRowProps {
  * non-linked one) accepts an internal drag-and-drop, so dropping a file onto
  * an ancestor moves it up out of the current folder, matching Finder's path
  * bar. */
-function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
+function CrumbRow({ crumb, isLast, maxWidth, onInternalDrop }: CrumbRowProps) {
   const [isDropTarget, setIsDropTarget] = useState(false);
+
+  const style = maxWidth === null ? undefined : { maxWidth };
 
   function handleDragOver(event: DragEvent<HTMLElement>) {
     if (!event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
@@ -207,7 +306,11 @@ function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className="max-w-48 truncate rounded-sm px-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50"
+            style={style}
+            className={cn(
+              CRUMB_CLASS,
+              "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
+            )}
           >
             {crumb.name}
           </BreadcrumbPage>
@@ -218,8 +321,9 @@ function CrumbRow({ crumb, isLast, onInternalDrop }: CrumbRowProps) {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
+            style={style}
             className={cn(
-              "max-w-48 truncate rounded-sm px-1",
+              CRUMB_CLASS,
               "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
             )}
           >

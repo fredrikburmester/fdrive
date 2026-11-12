@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { listing } from "./support/regions.js";
+import { breadcrumb, listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { createViewFolder } from "./support/view-folder.js";
 
@@ -68,6 +68,32 @@ test("clicking the Home breadcrumb returns to root", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/files$/);
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
+});
+
+test("a deep breadcrumb trail stays whole while it fits and hides its shallowest folders when it does not", async ({
+  page,
+}) => {
+  const root = uniqueName("crumbs");
+  const names = [root, "alpha", "bravo", "charlie", "delta"];
+  const headers = { "x-requested-with": "fdrive" };
+  for (let depth = 1; depth <= names.length; depth += 1) {
+    const path = `/${names.slice(0, depth).join("/")}`;
+    expect((await page.request.post("/api/v1/fs/mkdir", { headers, data: { path } })).ok()).toBe(
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/files/${names.join("/")}`);
+
+  const nav = breadcrumb(page);
+  for (const name of ["Home", ...names]) {
+    await expect(nav.getByRole("link", { name, exact: true })).toBeVisible();
+  }
+
+  await page.setViewportSize({ width: 820, height: 900 });
+  await expect(nav.getByRole("link", { name: root, exact: true })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Home", exact: true })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "delta", exact: true })).toBeVisible();
 });
 
 test("the view menu switches to grid and back, and persists across reload", async ({ page }) => {
