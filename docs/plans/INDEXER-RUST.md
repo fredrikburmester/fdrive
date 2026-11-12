@@ -391,8 +391,7 @@ PDFs, office documents, videos), mounted read-only. `tools/perf` stays for end-t
 - **Opportunity cost.** The benefit is mostly packaging; the roadmap waits meanwhile.
 
 **Open questions**
-- Is a Python-free indexer worth it, given that Python stays in those
-  two images?
+- Is a Python-free indexer worth it, given that Python stays in the OCR and Office images?
 - Should decoding of untrusted files move into `ml` later (no database, no mounts)? It would
   make the indexer pure Rust apart from tesseract and ffmpeg, at the cost of sending file bytes
   over HTTP, up to 200 MiB for videos.
