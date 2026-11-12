@@ -42,8 +42,10 @@ function attachedPaths(messages: readonly ChatMessage[]): string[] {
  * about and answers with paths in prose and in code (one written with a
  * single-character "Å"), proposes a move into a `Notes` folder next to the file, drafts a
  * professional version as a new text file, renames the attached files to
- * `groceries` (keeping each extension), and answers a duplicate question in
- * words. After a tool result it confirms in one line.
+ * `groceries` (keeping each extension), answers a duplicate question in
+ * words, and sorts the open folder by listing it and proposing to move its
+ * files into a `Lists` folder there. After any other tool result it confirms
+ * in one line.
  */
 function chatReply(messages: readonly ChatMessage[]) {
   const last = messages.at(-1);
@@ -58,6 +60,19 @@ function chatReply(messages: readonly ChatMessage[]) {
         `${first} is an invoice for 2024; \`${paths[1] ?? "/"}\` is a shopping list. Tax papers go in \`${first.slice(0, first.lastIndexOf("/"))}/Årsbesked\`.`,
       );
     }
+    if (name === "list_folder") {
+      const [header = "", ...lines] = (last.content ?? "").split("\n");
+      const folder = header.slice(0, header.lastIndexOf(":"));
+      const files = lines.flatMap((line) => /^(.+?) \(\d/.exec(line)?.[1] ?? []);
+      return toolCall("call-sort", "move_items", {
+        summary: "Lists go into a Lists folder.",
+        moves: files.map((name) => ({
+          path: `${folder}/${name}`,
+          destination: `${folder}/Lists`,
+          reason: "It is a list.",
+        })),
+      });
+    }
     if (name === "move_items") return textReply("Moved them into Notes.");
     if (name === "write_text_file") return textReply("Saved the professional version next to it.");
     if (name === "rename_items") return textReply("It has its new name.");
@@ -68,6 +83,10 @@ function chatReply(messages: readonly ChatMessage[]) {
   const first = paths[0] ?? "/";
   const folder = first.slice(0, first.lastIndexOf("/"));
   if (question.includes("about")) return toolCall("call-read", "read_file", { path: first });
+  if (question.includes("sort")) {
+    const open = /The person has the folder (\/.*?) open\./.exec(last?.content ?? "")?.[1] ?? "/";
+    return toolCall("call-list", "list_folder", { path: open });
+  }
   if (question.includes("duplicate"))
     return textReply(
       "I cannot compare contents here: the file is not indexed, so I can only go by names.",

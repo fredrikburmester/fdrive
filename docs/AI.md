@@ -23,13 +23,17 @@ shows as missing.
 
 ## Chat
 
-With Chat on, a **Chat** button in the page header (or Cmd+Shift+K, Ctrl+Shift+K elsewhere)
-opens a panel beside the page that stays open while you move between folders and pages. Drop
-files or folders onto it from any listing, or use **Add to chat** from a selection or a row's
-menu, then ask: what the files are about, whether one is a duplicate, whether they can be
-removed, where they should go, for clearer names, or for a more professional version of a text
-file. The assistant reads only what you attached (and what is inside attached folders) and
-answers with links to the files it talks about.
+With Chat on, a chat bubble in the bottom-right corner of a folder (or Cmd+Shift+K,
+Ctrl+Shift+K elsewhere) opens a panel above it that stays open while you move between folders;
+uploads and other activity stack above it. Other pages do not offer chat; the panel comes back
+with the next folder you open. Ask about the folder in view ("sort the files in this folder"),
+or drop files and folders onto the panel or the bubble, or use **Add to chat** from a selection
+or a row's menu, then ask: what the files are about, whether one is
+a duplicate, whether they can be removed, where they should go, for clearer names, or for a
+more professional version of a text file. The assistant reads and proposes changes only to the
+folder you have open when you send a message (the folder itself and everything inside it, shown
+as a chip above the message box) and what you attached (and what is inside attached folders),
+and answers with links to the files it talks about.
 
 When it wants to change something, it shows a card instead: moves grouped by destination that
 you can uncheck or redirect, new names you can uncheck or retype (a name already taken in the
@@ -104,7 +108,9 @@ suggestions, which the person still has to approve; the organizer has no tool th
   `IndexQueries.fileTextPrefix` reads excerpts without touching originals.
 - Chat (`apps/api/src/ai/chat/`, routes under `/api/v1/ai/chats`) is the API side of
   [AI chat](plans/AI-CHAT.md); the panel is not built yet. A chat's *references* (the files and
-  folders a person attached) are the tools' focus; `service.ts` stores transcripts and references
+  folders a person attached), plus the folder the person has open when sending a message (a
+  verified folder outside Trash, stored as that message's `location`, never as a reference),
+  are the tools' focus for that message. `service.ts` stores transcripts and references
   through `AiChatRepo` (`app.ai_chats`, `app.ai_chat_messages`, `app.ai_chat_references`), keeps
   one live provider conversation per active chat in memory (`live.ts`) and rebuilds it from the
   transcript as plain text after a restart (`history.ts`). Read tools (`tools.ts`: `read_file`,

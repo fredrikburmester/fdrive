@@ -53,7 +53,7 @@ export async function referencedArg(deps: DriveToolsDeps, raw: string): Promise<
     throw new AiToolError("That path is in the Trash.");
   if (!isWithin(deps.focus.paths, path))
     throw new AiToolError(
-      `${path} is not ${deps.focus.adjective}; only ${deps.focus.adjective} items and their contents can be used. Ask the person to add it to the chat.`,
+      `${path} is not ${deps.focus.adjective}; only ${deps.focus.adjective} items and their contents can be used. Ask the person to open its folder or add it to the chat.`,
     );
   return path;
 }
