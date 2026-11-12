@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { FileJourneyButton } from "@/components/activity/file-journey-button";
+import { FileActivitySection } from "@/components/activity/file-activity-section";
 import { EntryMetadataSection } from "@/components/metadata/entry-metadata-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -138,7 +138,6 @@ function SingleEntryBody({
           <Icon className="size-16 text-muted-foreground" strokeWidth={1.25} />
         )}
         <p className="max-w-full break-all text-center text-sm font-medium">{entry.name}</p>
-        <FileJourneyButton path={entry.path} />
       </div>
       <Separator />
       <dl className="flex flex-col gap-2 text-sm">
@@ -154,6 +153,7 @@ function SingleEntryBody({
         <p className="text-xs text-muted-foreground">{UPLOAD_TIME_NOTE}</p>
       )}
       <EntryMetadataSection entries={[entry]} />
+      <FileActivitySection path={entry.path} />
     </div>
   );
 }
