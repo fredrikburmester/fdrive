@@ -35,11 +35,27 @@ import {
 } from "@fdrive/core";
 import { ZipFile } from "yazl";
 import { codeOf, mapped } from "./errors.js";
-import { createHome } from "./home.js";
+import { createHome, type Home } from "./home.js";
 
 export interface LocalStorageOptions {
   /** The user's home folder; created on first use. */
   readonly home: string;
+  /**
+   * False for a folder someone else owns (a shared folder): it is never
+   * created, so a folder its owner removed reads as missing.
+   */
+  readonly create?: boolean;
+  /** A folder `home` must really be inside; see `CreateHomeOptions.within`. */
+  readonly within?: string;
+}
+
+/** Storage over one folder, with the folder itself for callers that combine several. */
+export interface LocalStorage extends StorageProvider {
+  readonly home: Home;
+}
+
+export interface MoveOptions {
+  readonly overwrite?: boolean;
 }
 
 /**
@@ -99,29 +115,14 @@ function rangeApplies(ifRange: string | undefined, modifiedAt: Date): boolean {
  * Uploads and copies publish atomically, `overwrite: false` is a real
  * create-if-absent, and moves are one `rename` within a filesystem.
  */
-export function createLocalStorage(options: LocalStorageOptions): StorageProvider {
-  const home = createHome(options.home);
+export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
+  const home = createHome(options.home, {
+    create: options.create ?? true,
+    ...(options.within === undefined ? {} : { within: options.within }),
+  });
 
   async function isHome(at: string): Promise<boolean> {
     return at === (await home.real());
-  }
-
-  /** Creates `target` from the finished `partial`, refusing a name that is taken. */
-  async function publishNew(partial: string, target: string, path: string): Promise<void> {
-    try {
-      await link(partial, target);
-      return;
-    } catch (error) {
-      const code = codeOf(error);
-      if (code === "EEXIST") throw new StorageError("conflict", `target exists: ${path}`);
-      if (code === undefined || !NO_HARD_LINKS.has(code)) throw error;
-    }
-    // Without hard links the check and the rename are two steps, so a
-    // concurrent writer can still take the name between them.
-    if ((await lstatOrNull(target)) !== null) {
-      throw new StorageError("conflict", `target exists: ${path}`);
-    }
-    await rename(partial, target);
   }
 
   async function describe(dir: string, parent: string, name: string): Promise<FileEntry | null> {
@@ -290,35 +291,8 @@ export function createLocalStorage(options: LocalStorageOptions): StorageProvide
     move: (path, target, opts) =>
       mapped(path, async () => {
         const from = await home.entry(path);
-        const to = await home.entry(target);
         if (await isHome(from)) throw new StorageError("not_found", `not found: ${path}`);
-        if (to.startsWith(`${from}${sep}`)) {
-          throw new StorageError("bad_request", `cannot move ${path} into itself`);
-        }
-        const source = await lstat(from);
-        const existing = await lstatOrNull(to);
-        // The same inode under another spelling is a case-only rename on a
-        // case-insensitive disk, not a collision.
-        const same =
-          existing !== null && existing.ino === source.ino && existing.dev === source.dev;
-        if (existing !== null && !same) {
-          if (opts?.overwrite !== true) {
-            throw new StorageError("conflict", `target exists: ${target}`);
-          }
-          if (existing.isDirectory() || source.isDirectory()) {
-            await rm(to, { recursive: true, force: true });
-          }
-        }
-        await mkdir(dirname(to), { recursive: true });
-        try {
-          await rename(from, to);
-        } catch (error) {
-          if (codeOf(error) !== "EXDEV") throw error;
-          // Another filesystem under the same home (a bind mount): copy,
-          // then remove the source only once the copy is complete.
-          await cp(from, to, { recursive: true, preserveTimestamps: true, errorOnExist: true });
-          await rm(from, { recursive: true, force: true });
-        }
+        await moveEntry(from, await home.entry(target), { path, target }, opts);
       }),
 
     copy: (path, target, opts) =>
@@ -326,38 +300,7 @@ export function createLocalStorage(options: LocalStorageOptions): StorageProvide
         if (splitSegments(normalizePath(path)).length === 0) {
           throw new StorageError("not_found", `not found: ${path}`);
         }
-        const from = await home.target(path);
-        const to = await home.entry(target);
-        if (to === from || to.startsWith(`${from}${sep}`)) {
-          throw new StorageError("bad_request", `cannot copy ${path} into itself`);
-        }
-        const source = await stat(from);
-        const existing = await lstatOrNull(to);
-        if (existing !== null && opts?.overwrite === false) {
-          throw new StorageError("conflict", `target exists: ${target}`);
-        }
-        const dir = dirname(to);
-        await mkdir(dir, { recursive: true });
-        if (source.isFile()) {
-          if (existing?.isDirectory() === true) await rm(to, { recursive: true, force: true });
-          const partial = partialIn(dir);
-          try {
-            await copyFile(from, partial, constants.COPYFILE_FICLONE);
-            await utimes(partial, source.atime, source.mtime);
-            await rename(partial, to);
-          } finally {
-            await rm(partial, { force: true });
-          }
-          return;
-        }
-        if (!source.isDirectory()) throw new StorageError("bad_request", `not a file: ${path}`);
-        if (existing !== null && !existing.isDirectory()) await rm(to, { force: true });
-        await cp(from, to, {
-          recursive: true,
-          preserveTimestamps: true,
-          force: true,
-          filter: (src) => !PARTIAL.test(basename(src)),
-        });
+        await copyEntry(await home.target(path), await home.entry(target), { path, target }, opts);
       }),
 
     deleteFile: (path) =>
@@ -388,30 +331,157 @@ export function createLocalStorage(options: LocalStorageOptions): StorageProvide
 
     zip: (paths, opts) =>
       mapped(paths.join(", "), async () => {
-        const signal = opts?.signal;
-        if (signal?.aborted === true) throw aborted(signal);
-        const zip = new ZipFile();
-        const output = zip.outputStream as Readable;
-        // yazl reports a file that vanished mid-zip on the zip itself; an
-        // unhandled "error" there would take the process down.
-        zip.on("error", (error: Error) => output.destroy(error));
+        const items: ZipItem[] = [];
         for (const path of paths) {
-          const at = await home.target(path);
-          const info = await stat(at);
-          const name = basename(normalizePath(path));
-          if (info.isFile()) {
-            zip.addFile(at, name, { mtime: info.mtime, compress: !isPrecompressedEntry(name) });
-          } else if (info.isDirectory()) {
-            await addTree(zip, at, name, info.mtime);
-          }
+          items.push({ at: await home.target(path), name: basename(normalizePath(path)) });
         }
-        zip.end();
-        if (signal !== undefined) addAbortSignal(signal, output);
-        return webStream(output);
+        return zipItems(items, opts?.signal);
       }),
   };
 
-  return storage;
+  return { ...storage, home };
+}
+
+/**
+ * Creates `target` from the finished `partial`, refusing a name that is
+ * taken: the publish step of a create-if-absent upload.
+ */
+async function publishNew(partial: string, target: string, path: string): Promise<void> {
+  try {
+    await link(partial, target);
+  } catch (error) {
+    const code = codeOf(error);
+    if (code === "EEXIST") throw new StorageError("conflict", `target exists: ${path}`);
+    if (code === undefined || !NO_HARD_LINKS.has(code)) throw error;
+    // Without hard links the check and the rename are two steps, so a
+    // concurrent writer can still take the name between them.
+    if ((await lstatOrNull(target)) !== null) {
+      throw new StorageError("conflict", `target exists: ${path}`);
+    }
+    await rename(partial, target);
+    return;
+  }
+  // A hard link raises only a create event, which file watchers such as the
+  // indexer's skip as a file still being written. Opening it for writing and
+  // closing it again raises the "finished writing" event they act on.
+  await (await open(target, "r+")).close();
+}
+
+/** The caller's names for a move or copy, for error messages. */
+interface Names {
+  readonly path: string;
+  readonly target: string;
+}
+
+/**
+ * Moves the entry at `from` to `to`, both real paths already confined by
+ * their homes: one `rename`, which also works between two users' folders on
+ * the same disk. A taken target is a `conflict` unless `overwrite`.
+ */
+export async function moveEntry(
+  from: string,
+  to: string,
+  names: Names,
+  opts?: MoveOptions,
+): Promise<void> {
+  if (to.startsWith(`${from}${sep}`)) {
+    throw new StorageError("bad_request", `cannot move ${names.path} into itself`);
+  }
+  const source = await lstat(from);
+  const existing = await lstatOrNull(to);
+  // The same inode under another spelling is a case-only rename on a
+  // case-insensitive disk, not a collision.
+  const same = existing !== null && existing.ino === source.ino && existing.dev === source.dev;
+  if (existing !== null && !same) {
+    if (opts?.overwrite !== true) {
+      throw new StorageError("conflict", `target exists: ${names.target}`);
+    }
+    if (existing.isDirectory() || source.isDirectory()) {
+      await rm(to, { recursive: true, force: true });
+    }
+  }
+  await mkdir(dirname(to), { recursive: true });
+  try {
+    await rename(from, to);
+  } catch (error) {
+    if (codeOf(error) !== "EXDEV") throw error;
+    // Another filesystem under the same home (a bind mount): copy,
+    // then remove the source only once the copy is complete.
+    await cp(from, to, { recursive: true, preserveTimestamps: true, errorOnExist: true });
+    await rm(from, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Copies `from` (a file or folder, already resolved) to the entry `to`,
+ * keeping modification times; a file is published atomically.
+ */
+export async function copyEntry(
+  from: string,
+  to: string,
+  names: Names,
+  opts?: MoveOptions,
+): Promise<void> {
+  if (to === from || to.startsWith(`${from}${sep}`)) {
+    throw new StorageError("bad_request", `cannot copy ${names.path} into itself`);
+  }
+  const source = await stat(from);
+  const existing = await lstatOrNull(to);
+  if (existing !== null && opts?.overwrite === false) {
+    throw new StorageError("conflict", `target exists: ${names.target}`);
+  }
+  const dir = dirname(to);
+  await mkdir(dir, { recursive: true });
+  if (source.isFile()) {
+    if (existing?.isDirectory() === true) await rm(to, { recursive: true, force: true });
+    const partial = partialIn(dir);
+    try {
+      await copyFile(from, partial, constants.COPYFILE_FICLONE);
+      await utimes(partial, source.atime, source.mtime);
+      await rename(partial, to);
+    } finally {
+      await rm(partial, { force: true });
+    }
+    return;
+  }
+  if (!source.isDirectory()) throw new StorageError("bad_request", `not a file: ${names.path}`);
+  if (existing !== null && !existing.isDirectory()) await rm(to, { force: true });
+  await cp(from, to, {
+    recursive: true,
+    preserveTimestamps: true,
+    force: true,
+    filter: (src) => !PARTIAL.test(basename(src)),
+  });
+}
+
+/** One thing to put in a zip: a resolved file or folder and its name in the archive. */
+export interface ZipItem {
+  readonly at: string;
+  readonly name: string;
+}
+
+/** Streams a zip of `items`; a folder goes in with everything under it. */
+export async function zipItems(
+  items: readonly ZipItem[],
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
+  if (signal?.aborted === true) throw aborted(signal);
+  const zip = new ZipFile();
+  const output = zip.outputStream as Readable;
+  // yazl reports a file that vanished mid-zip on the zip itself; an
+  // unhandled "error" there would take the process down.
+  zip.on("error", (error: Error) => output.destroy(error));
+  for (const { at, name } of items) {
+    const info = await stat(at);
+    if (info.isFile()) {
+      zip.addFile(at, name, { mtime: info.mtime, compress: !isPrecompressedEntry(name) });
+    } else if (info.isDirectory()) {
+      await addTree(zip, at, name, info.mtime);
+    }
+  }
+  zip.end();
+  if (signal !== undefined) addAbortSignal(signal, output);
+  return webStream(output);
 }
 
 /**

@@ -13,5 +13,17 @@ export {
   LOCAL_CREDENTIAL_FIELDS,
   probeRoot,
 } from "./module.js";
-export type { LocalStorageOptions } from "./storage-provider.js";
+export type { SharedFolder, SharedGrant, UserStorageOptions } from "./shared.js";
+export {
+  createUserStorage,
+  namedSharedGrants,
+  SHARED_WITH_ME,
+  sharedFolderNames,
+} from "./shared.js";
+export type {
+  LocalStorage,
+  LocalStorageOptions,
+  MoveOptions,
+  ZipItem,
+} from "./storage-provider.js";
 export { createLocalStorage } from "./storage-provider.js";

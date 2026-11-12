@@ -3,12 +3,17 @@ import { access, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   isStorageError,
+  normalizePath,
   type ProbeResult,
   type ProviderField,
   type ProviderModule,
   StorageError,
+  splitSegments,
 } from "@fdrive/core";
-import { createLocalStorage } from "./storage-provider.js";
+import { isLocalUsername } from "./names.js";
+import { createUserStorage, namedSharedGrants, type SharedGrant } from "./shared.js";
+
+export { isLocalUsername };
 
 /**
  * What checking a local user's password comes to. `ok` carries the name as
@@ -22,13 +27,16 @@ export type LocalUserCheck =
 export type LocalUserStatus = "active" | "disabled" | "missing";
 
 /**
- * The users of local storage. fdrive keeps them; the module only asks
- * whether a password is right and whether a user is still active, so it
- * never learns how they are stored.
+ * The users of local storage and what they share with each other. fdrive
+ * keeps them; the module only asks whether a password is right, whether a
+ * user is still active and which folders others share with them, so it
+ * never learns how any of that is stored.
  */
 export interface LocalUsers {
   verify(username: string, password: string): Promise<LocalUserCheck>;
   status(username: string): Promise<LocalUserStatus>;
+  /** The folders other users share with `username`, oldest share first. */
+  shared(username: string): Promise<readonly SharedGrant[]>;
 }
 
 export interface CreateLocalModuleOptions {
@@ -50,18 +58,6 @@ export const LOCAL_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
   { name: "password", label: "Password", kind: "password", required: true },
 ];
-
-/**
- * A username is a folder name under the root. Starting with a letter or
- * digit keeps every home visible and clear of fdrive's own dotfiles; the
- * rest is the character set SFTPGo allows, so its users carry over.
- */
-const USERNAME = /^[A-Za-z0-9][A-Za-z0-9._@~-]{0,254}$/;
-
-/** True when `username` can name a local user and their home folder. */
-export function isLocalUsername(username: string): boolean {
-  return USERNAME.test(username);
-}
 
 function unavailable(error: unknown): StorageError {
   if (isStorageError(error)) return error;
@@ -99,8 +95,8 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
       trash: true,
       shares: true,
       office: true,
+      shareWithPeople: true,
       index: true,
-      scopeMapping: false,
     },
     // fdrive moves deleted files into the configured folder itself.
     trash: "move",
@@ -152,7 +148,19 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
       if (!isLocalUsername(session.externalUsername)) {
         throw new StorageError("forbidden", "this login has no valid home folder");
       }
-      return createLocalStorage({ home: join(options.root, session.externalUsername) });
+      const username = session.externalUsername;
+      return createUserStorage({
+        home: join(options.root, username),
+        shared: async () =>
+          namedSharedGrants(username, await options.users.shared(username)).map(
+            ({ grant, name }) => ({
+              name,
+              dir: join(options.root, grant.owner, ...splitSegments(normalizePath(grant.path))),
+              ownerHome: join(options.root, grant.owner),
+              writable: grant.writable,
+            }),
+          ),
+      });
     },
   };
 }

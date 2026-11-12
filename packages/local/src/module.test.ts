@@ -12,6 +12,7 @@ import {
   type LocalUsers,
   probeRoot,
 } from "./module.js";
+import { SHARED_WITH_ME, type SharedGrant } from "./shared.js";
 
 const instance = { id: "p1", baseUrl: "http://local.invalid", config: {} };
 const ctx = { fetch: globalThis.fetch };
@@ -30,6 +31,7 @@ afterEach(async () => {
 function users(
   result: LocalUserCheck["result"] | Error,
   status: LocalUserStatus | Error = "active",
+  grants: readonly SharedGrant[] = [],
 ): LocalUsers {
   return {
     verify: vi.fn(async (username: string): Promise<LocalUserCheck> => {
@@ -41,6 +43,7 @@ function users(
       if (status instanceof Error) throw status;
       return status;
     }),
+    shared: vi.fn(async () => grants),
   };
 }
 
@@ -100,16 +103,13 @@ describe("createLocalModule", () => {
         shares: true,
         office: true,
         index: true,
-        scopeMapping: false,
       },
     });
     expect(module.capabilities.shares).toBe(module.shares !== "none");
     expect((await module.probe(instance, ctx)).ok).toBe(true);
     expect(module.indexRootName?.(instance)).toBeNull();
     expect(
-      createLocalModule({ root, users: users("ok"), indexRoot: "files" }).indexRootName?.(
-        instance,
-      ),
+      createLocalModule({ root, users: users("ok"), indexRoot: "files" }).indexRootName?.(instance),
     ).toBe("files");
   });
 
@@ -204,6 +204,22 @@ describe("createLocalModule", () => {
     expect(await bob.list("/")).toEqual([]);
     expect(await kindOf(bob.statFile("/note.txt"))).toBe("not_found");
     expect((await alice.list("/")).map((entry) => entry.name)).toEqual(["note.txt"]);
+  });
+
+  it("shows what others share with a user under Shared with me, skipping odd grants", async () => {
+    const module = createLocalModule({
+      root,
+      users: users("ok", "active", [
+        { owner: "alice", path: "/Projects/../Projects", writable: false },
+        { owner: "bob", path: "/Mine", writable: true },
+        { owner: "../etc", path: "/", writable: true },
+      ]),
+    });
+    const alice = module.createStorage(instance, session("alice"), ctx);
+    await alice.upload("/Projects/plan.txt", bytes("plan"), { mkdirParents: true });
+    const bob = module.createStorage(instance, session("bob"), ctx);
+    expect((await bob.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual(["Projects"]);
+    expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/Projects/x`, bytes("x")))).toBe("forbidden");
   });
 
   it("refuses to build storage for a name that cannot be a home", () => {

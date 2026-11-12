@@ -48,13 +48,38 @@ function outside(path: string): StorageError {
   return new StorageError("forbidden", `outside the home folder: ${path}`);
 }
 
+export interface CreateHomeOptions {
+  /**
+   * Whether a missing folder is created on first use (a user's own home)
+   * or reads as missing (a folder someone shared, which its owner may have
+   * removed). Defaults to true.
+   */
+  readonly create?: boolean;
+  /**
+   * A folder this one must really be inside, links resolved: the owner's
+   * home for a folder they share. Without it, a shared folder its owner
+   * replaced with a link would lead somewhere the owner cannot go themselves.
+   */
+  readonly within?: string;
+}
+
 /** The home folder at `dir`, which need not exist yet. */
-export function createHome(dir: string): Home {
+export function createHome(dir: string, options: CreateHomeOptions = {}): Home {
+  const create = options.create ?? true;
   let ready: Promise<string> | undefined;
+
+  async function resolveHome(): Promise<string> {
+    if (create) await mkdir(dir, { recursive: true });
+    const resolved = await realpath(dir);
+    if (options.within !== undefined && !inside(await realpath(options.within), resolved)) {
+      throw new StorageError("forbidden", "the shared folder is outside its owner's files");
+    }
+    return resolved;
+  }
 
   function real(): Promise<string> {
     if (ready === undefined) {
-      ready = mkdir(dir, { recursive: true }).then(() => realpath(dir));
+      ready = resolveHome();
       // A failure is not cached: the next call tries again, so a home on a
       // disk that was briefly missing recovers without a restart.
       ready.catch(() => {
